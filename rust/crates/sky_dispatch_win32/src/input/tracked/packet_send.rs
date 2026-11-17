@@ -17,7 +17,7 @@ use super::super::scan_code::key_mask;
 use super::super::up_transaction::emit_up_once_with;
 #[cfg(test)]
 use super::super::up_transaction::terminal_up_outcome;
-use super::TrackedKeyState;
+use super::{CleanupAttemptAdmission, TrackedKeyState};
 use crate::clock::QpcTicks;
 use smallvec::SmallVec;
 
@@ -197,19 +197,39 @@ impl TrackedKeyState {
         &mut self,
         logical_mask: u16,
         terminal_qpc_fallback: bool,
-    ) -> SendTransactionOutcome {
+        admission: Option<&mut CleanupAttemptAdmission<'_>>,
+        attempts: &mut u8,
+    ) -> Result<SendTransactionOutcome, String> {
         let packet = PhysicalPacket::new(logical_mask, 0);
         let prepared = match PreparedPhysicalPacket::try_new_with_profile(
             packet,
             &self.instrument_key_profile,
         ) {
             Ok(prepared) => prepared,
-            Err(_) => return invalid_packet_outcome(packet),
+            Err(_) => {
+                self.release_attempts_total = self.release_attempts_total.saturating_add(1);
+                *attempts = attempts.saturating_add(1);
+                return Ok(invalid_packet_outcome(packet));
+            }
         };
+
+        if let Some(admission) = admission {
+            let release_owner = self
+                .release_owner_proof_for_mask(logical_mask)?
+                .ok_or_else(|| {
+                    "tracked release owner proof is missing before safety Up".to_string()
+                })?;
+            admission(logical_mask, &release_owner)?;
+        }
+
+        // Count after admission and immediately before entering the sender. If
+        // the sender unwinds, quarantine diagnostics retain the admitted try.
+        self.release_attempts_total = self.release_attempts_total.saturating_add(1);
+        *attempts = attempts.saturating_add(1);
 
         #[cfg(test)]
         if terminal_qpc_fallback && let Some(emitter) = self.custom_terminal_up_emitter.as_ref() {
-            return terminal_up_outcome(packet, emitter(packet));
+            return Ok(terminal_up_outcome(packet, emitter(packet)));
         }
 
         #[cfg(any(test, feature = "test-support"))]
@@ -225,22 +245,22 @@ impl TrackedKeyState {
             } else {
                 logical_prefix_mask(logical_mask, outcome.evidence.first_inserted)
             };
-            return outcome;
+            return Ok(outcome);
         }
 
         #[cfg(any(test, feature = "test-support"))]
         if let Some(emitter) = self.custom_packet_emitter.as_ref() {
-            return emitter(packet);
+            return Ok(emitter(packet));
         }
 
-        if terminal_qpc_fallback {
+        Ok(if terminal_qpc_fallback {
             send_prepared_terminal_up_once(&prepared, self.qpc_clock)
         } else {
             match self.qpc_clock {
                 Some(clock) => send_prepared_physical_packet_once(&prepared, clock),
                 None => invalid_packet_outcome(packet),
             }
-        }
+        })
     }
 
     pub fn key_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {

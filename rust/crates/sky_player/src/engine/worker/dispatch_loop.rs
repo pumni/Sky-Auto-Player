@@ -10,8 +10,7 @@ use super::{
     WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
     focus_matches, focus_matches_hwnd, load_target_stamp, process_command_control,
     publish_backend_counters, publish_backend_metrics, target_stamp_still_current,
-    verify_final_down_admission, verify_final_musical_up_admission, verify_safety_cleanup_target,
-    wait_for_next_boundary,
+    verify_final_down_admission, verify_final_musical_up_admission, wait_for_next_boundary,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::engine::test_support::PacketSenderAttemptEvidence;
@@ -198,29 +197,26 @@ fn suspend_live_input_for_dispatch(
     #[cfg(any(test, feature = "test-support"))] runtime: &super::WorkerRuntime,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
-    let release_mask = backend.release_obligation_mask();
     let target_hwnd = match expected_target {
         Some(stamp) => stamp.hwnd,
-        None if release_mask == 0 => target.hwnd_for_safety_release(),
-        None => {
-            return Err("target generation unavailable while release obligations remain".into());
-        }
+        None => target.hwnd_for_safety_release(),
     };
-    if release_mask != 0 {
-        let stamp = expected_target.expect("nonempty release mask requires a target stamp");
-        let release_owner = backend
-            .release_owner_proof_for_mask(release_mask)?
-            .ok_or_else(|| "tracked release owner proof is missing".to_string())?;
-        verify_safety_cleanup_target(target, stamp, &release_owner, require_owner_identity)?;
-    }
-    super::cleanup::suspend_scheduler_input(backend, scheduler, target_hwnd, || {
-        let cleanup_qpc = post_cleanup_qpc()?;
-        #[cfg(any(test, feature = "test-support"))]
-        if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
-            hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
-        }
-        Ok(cleanup_qpc)
-    })
+    super::cleanup::suspend_scheduler_input(
+        backend,
+        scheduler,
+        target,
+        expected_target,
+        require_owner_identity,
+        target_hwnd,
+        || {
+            let cleanup_qpc = post_cleanup_qpc()?;
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+                hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
+            }
+            Ok(cleanup_qpc)
+        },
+    )
     .map(|_| ())
 }
 
@@ -230,16 +226,27 @@ pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     scheduler: &mut sky_dispatch_core::executor::DispatchExecutor,
     runtime: &mut super::WorkerRuntime,
+    target: &SessionTarget,
+    expected_target: Option<TargetStamp>,
+    require_owner_identity: bool,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
-    super::cleanup::suspend_scheduler_input(backend, scheduler, target_hwnd, || {
-        let cleanup_qpc = post_cleanup_qpc()?;
-        if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
-            hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
-        }
-        Ok(cleanup_qpc)
-    })
+    super::cleanup::suspend_scheduler_input(
+        backend,
+        scheduler,
+        target,
+        expected_target,
+        require_owner_identity,
+        target_hwnd,
+        || {
+            let cleanup_qpc = post_cleanup_qpc()?;
+            if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+                hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
+            }
+            Ok(cleanup_qpc)
+        },
+    )
     .map(|_| ())
 }
 
@@ -1743,12 +1750,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             {
                 continue;
             }
-            let packet_not_before_qpc = match &action_to_stage {
-                Some(SchedulerAction::Send { timing_window, .. }) => {
-                    timing_window.packet_not_before_qpc
-                }
-                None | Some(SchedulerAction::Finished | SchedulerAction::Wait { .. }) => now_ticks,
-            };
             let mut candidate = match action_to_stage {
                 Some(send_action @ SchedulerAction::Send { .. }) => {
                     match stage_scheduler_action_preserving_due_up(
@@ -1772,29 +1773,15 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     ) {
                         Ok(Some(candidate)) => Some(candidate),
                         Ok(None) => {
-                            if !target.is_valid() {
-                                core.runtime.terminal_error.get_or_insert_with(|| {
+                            core.runtime.terminal_error.get_or_insert_with(|| {
+                                if target.is_valid() {
+                                    "staging rejected the immutable session target".to_string()
+                                } else {
                                     "immutable session target or owner identity was invalidated"
                                         .to_string()
-                                });
-                                break;
-                            }
-                            match wait_after_unstable_target(
-                                now_ticks,
-                                packet_not_before_qpc,
-                                qpc_clock,
-                                &resources.waiter,
-                                interrupt,
-                                &mut core.metrics,
-                                &mut core.runtime.terminal_error,
-                            ) {
-                                WaitBoundary::Due { .. } => continue,
-                                WaitBoundary::Interrupted(_, _, _) => {
-                                    let _ = interrupt.try_take();
-                                    continue;
                                 }
-                                WaitBoundary::Exit => break,
-                            }
+                            });
+                            break;
                         }
                         Err(error) => {
                             core.runtime.terminal_error = Some(error);
@@ -1866,46 +1853,18 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                     .is_some_and(|expected| {
                                         !target_stamp_still_current(target, expected)
                                     });
-                                let controls_allow_wait = matches!(
-                                    final_control_precheck(FinalControlSignals {
-                                        quit_requested,
-                                        skip_requested,
-                                        panic_requested,
-                                        desired_pause,
-                                        supervisor_expired,
-                                        system_power: Some(system_power),
-                                    }),
-                                    FinalControlAdmission::Allowed
-                                );
-                                if target_stale && controls_allow_wait {
-                                    if !target.is_valid() {
-                                        core.runtime.terminal_error.get_or_insert_with(|| {
+                                if target_stale {
+                                    core.runtime.verified_target = None;
+                                    core.runtime.terminal_error.get_or_insert_with(|| {
+                                        if target.is_valid() {
+                                            "staged target stamp no longer matches its immutable session binding"
+                                                .to_string()
+                                        } else {
                                             "immutable session target or owner identity was invalidated"
                                                 .to_string()
-                                        });
-                                        break;
-                                    }
-                                    match wait_after_unstable_target(
-                                        now_ticks,
-                                        candidate.as_ref().map_or(
-                                            packet_not_before_qpc,
-                                            |candidate| {
-                                                candidate.timing_window.packet_not_before_qpc
-                                            },
-                                        ),
-                                        qpc_clock,
-                                        &resources.waiter,
-                                        interrupt,
-                                        &mut core.metrics,
-                                        &mut core.runtime.terminal_error,
-                                    ) {
-                                        WaitBoundary::Due { .. } => continue,
-                                        WaitBoundary::Interrupted(_, _, _) => {
-                                            let _ = interrupt.try_take();
-                                            continue;
                                         }
-                                        WaitBoundary::Exit => break,
-                                    }
+                                    });
+                                    break;
                                 }
                                 continue;
                             }
@@ -2111,22 +2070,30 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         DispatchReplanAction::ContinueImmediately => {}
                         DispatchReplanAction::WaitForModifier => {
                             let now_qpc = qpc_ticks_or_terminal!();
+                            let next_active_up_deadline = resources
+                                .scheduler
+                                .earliest_active_up_due_qpc(resources.playback.epoch)
+                                .map_err(|error| {
+                                    format!("modifier-held active Up deadline failed: {error}")
+                                });
+                            let next_active_up_deadline = match next_active_up_deadline {
+                                Ok(deadline) => deadline,
+                                Err(error) => {
+                                    core.runtime.terminal_error = Some(error);
+                                    break;
+                                }
+                            };
                             match wait_after_modifier_held(
                                 now_qpc,
+                                next_active_up_deadline,
                                 qpc_clock,
                                 &resources.waiter,
                                 interrupt,
                             ) {
-                                Ok(sky_dispatch_win32::wait::WaitOutcome::Deadline) => {}
-                                Ok(sky_dispatch_win32::wait::WaitOutcome::Interrupted) => {
+                                Ok(true) => {
                                     let _ = interrupt.try_take();
                                 }
-                                Ok(sky_dispatch_win32::wait::WaitOutcome::Failed(failure)) => {
-                                    core.runtime.terminal_error = Some(format!(
-                                        "modifier-held replan wait failed: {failure:?}"
-                                    ));
-                                    break;
-                                }
+                                Ok(false) => {}
                                 Err(error) => {
                                     core.runtime.terminal_error = Some(error);
                                     break;

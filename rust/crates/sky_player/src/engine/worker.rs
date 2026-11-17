@@ -18,7 +18,6 @@ pub(crate) use admission::{
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, ensure_preflight_for_target,
     enter_focus_pause, focus_matches, focus_matches_hwnd, load_target_stamp,
     target_stamp_still_current, verify_final_down_admission, verify_final_musical_up_admission,
-    verify_safety_cleanup_target,
 };
 pub(crate) use anomaly_history::AttemptedDispatchAnomalies;
 #[cfg(any(test, feature = "test-support"))]

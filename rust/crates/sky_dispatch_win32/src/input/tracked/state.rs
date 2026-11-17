@@ -147,6 +147,20 @@ impl TrackedKeyState {
     }
 
     #[cfg(any(test, feature = "test-support"))]
+    pub fn set_release_owner_proof_for_test(&mut self, mask: u16, proof: ReleaseOwnerProof) {
+        let mut remaining = mask;
+        while remaining != 0 {
+            let slot = remaining.trailing_zeros() as usize;
+            let bit = 1_u16 << slot;
+            remaining &= !bit;
+            if slot < RELEASE_OWNER_SLOT_COUNT {
+                self.release_owner_ledger.owner_by_slot[slot] = Some(proof.clone());
+                self.release_owner_ledger.conflicted_mask &= !bit;
+            }
+        }
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn conflict_release_owner_proof_for_test(&mut self, mask: u16) {
         self.release_owner_ledger.conflicted_mask |= mask;
     }

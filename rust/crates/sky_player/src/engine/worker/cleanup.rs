@@ -11,6 +11,7 @@ use crate::engine::shared::SystemPowerState;
 use crate::engine::telemetry::{
     NativeTelemetryOutput, SharedMetrics, TelemetryCollector, publish_terminal_metrics,
 };
+use crate::engine::worker::admission::{TargetStamp, verify_safety_cleanup_target};
 use parking_lot::Mutex;
 use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::clock::PlaybackClockState;
@@ -162,14 +163,30 @@ pub(crate) fn record_termination_error(
 pub(crate) fn suspend_scheduler_input(
     backend: &mut TrackedKeyState,
     scheduler: &mut DispatchExecutor,
+    target: &SessionTarget,
+    expected_target: Option<TargetStamp>,
+    require_owner_identity: bool,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
 ) -> Result<usize, String> {
-    let release = backend.release_all(target_hwnd);
-    if !release_state_verified(backend, &release) {
+    let mut release =
+        backend.release_tracked_with_attempt_admission(target_hwnd, |_, release_owner| {
+            let stamp = expected_target.ok_or_else(|| {
+                "target generation unavailable before tracked safety Up".to_string()
+            })?;
+            verify_safety_cleanup_target(target, stamp, release_owner, require_owner_identity)
+        });
+    if let Some(reason) = release.withheld_reason.take() {
+        return Err(format!(
+            "tracked safety cleanup admission withheld: {reason}; outcome={:?}; send_attempts={:?}; probe={:?}",
+            release.release_outcome, release.send_attempts, release.probe_verdict
+        ));
+    }
+    let release_outcome = release.release_outcome;
+    if !release_state_verified(backend, &release_outcome) {
         return Err(format!(
             "release verification failed: {}",
-            describe_release_outcome(backend, &release)
+            describe_release_outcome(backend, &release_outcome)
         ));
     }
     let cleanup_completed_qpc = post_cleanup_qpc()

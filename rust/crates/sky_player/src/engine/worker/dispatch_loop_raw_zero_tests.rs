@@ -917,12 +917,11 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
             .iter()
             .map(|(_, evidence)| u64::from(evidence.attempts))
             .sum();
-        let (owner_authority_arc_clones, generation_checks) =
-            harness.target_proof_counts_for_test();
+        let generation_checks = harness.target_proof_generation_revalidations_for_test();
         let release_identity_arc_clones =
             sky_dispatch_win32::input::release_owner_proof_arc_clone_count_for_test();
         println!(
-            "proof-count label={label} scheduler_evaluations={} qpc_reads={} foreground_queries={} real_GetForegroundWindow={} owner_pid_checks={} process_identity_checks={} GetProcessTimes={} owner_authority_arc_clones={owner_authority_arc_clones} release_identity_arc_clones={release_identity_arc_clones} generation_revalidations={generation_checks} ledger_mask_visits={} sender_attempts={sender_attempts} allocations=0",
+            "proof-count label={label} scheduler_evaluations={} qpc_reads={} foreground_queries={} real_GetForegroundWindow={} owner_pid_checks={} process_identity_checks={} GetProcessTimes={} release_identity_arc_clones={release_identity_arc_clones} generation_revalidations={generation_checks} ledger_mask_visits={} sender_attempts={sender_attempts} allocations=0",
             sky_dispatch_core::executor::scheduler_evaluation_count_for_test(),
             sky_dispatch_win32::clock::qpc_read_count(),
             sky_dispatch_win32::focus::foreground_query_count(),

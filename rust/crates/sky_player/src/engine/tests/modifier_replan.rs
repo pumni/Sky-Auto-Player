@@ -374,7 +374,10 @@ fn owner_invalidation_interrupts_modifier_backoff_and_retains_origin_obligation(
     assert_eq!(snapshot.release_attempts_total, 0);
     assert_eq!(snapshot.active_count, 1);
     assert_eq!(snapshot.possibly_active_count, 0);
-    assert_eq!(snapshot.failed_release_count, 0);
+    assert_eq!(
+        snapshot.failed_release_count, 1,
+        "owner loss withholds terminal Up and quarantines the origin obligation"
+    );
 }
 
 #[test]

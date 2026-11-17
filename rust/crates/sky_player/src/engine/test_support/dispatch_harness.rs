@@ -576,9 +576,9 @@ impl ProductionDispatchTestHarness {
         self.target.reset_proof_operation_counts_for_test();
     }
 
-    pub fn target_proof_counts_for_test(&self) -> (u64, u64) {
+    pub fn target_proof_generation_revalidations_for_test(&self) -> u64 {
         let counts = self.target.proof_operation_counts_for_test();
-        (counts.authority_arc_clones, counts.generation_revalidations)
+        counts.generation_revalidations
     }
 
     pub fn apply_scheduler_resumable_lifecycle_transition_for_test(
@@ -596,10 +596,14 @@ impl ProductionDispatchTestHarness {
         &mut self,
         post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
     ) -> Result<(), String> {
+        let expected_target = crate::engine::worker::load_target_stamp(&self.target);
         crate::engine::worker::apply_scheduler_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
             &mut self.resources.scheduler,
             &mut self.runtime,
+            &self.target,
+            expected_target,
+            self.config.focus.require_focus,
             self.target.hwnd_for_safety_release(),
             post_cleanup_qpc,
         )
@@ -685,6 +689,10 @@ impl ProductionDispatchTestHarness {
         self.target.invalidate_for_test();
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
+    }
+
+    pub fn invalidate_bound_owner_for_test(&self) {
+        self.target.invalidate_owner_identity();
     }
 
     pub fn dispatch_timing_config_for_test(&self) -> Result<DispatchTimingConfigEvidence, String> {

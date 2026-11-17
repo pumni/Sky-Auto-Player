@@ -19,16 +19,21 @@ const MODIFIER_REPLAN_INTERVAL_US: u64 = 1_000;
 /// wakes this wait for controls, lifecycle changes, or owner invalidation.
 fn wait_after_modifier_held(
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    next_active_up_deadline: Option<sky_dispatch_win32::clock::QpcTicks>,
     qpc_clock: sky_dispatch_win32::clock::QpcClock,
     waiter: &sky_dispatch_win32::wait::HybridWaiter,
     interrupt: &sky_dispatch_win32::event::OwnedEvent,
-) -> Result<sky_dispatch_win32::wait::WaitOutcome, String> {
-    let interval = qpc_clock
-        .duration_from_us(MODIFIER_REPLAN_INTERVAL_US)
-        .map_err(|error| format!("modifier replan interval conversion failed: {error:?}"))?;
-    let deadline = now_qpc
-        .checked_add_duration(interval)
-        .map_err(|error| format!("modifier replan deadline overflow: {error}"))?;
+) -> Result<bool, String> {
+    let Some(deadline) = modifier_replan_deadline(
+        now_qpc,
+        next_active_up_deadline,
+        qpc_clock,
+    )? else {
+        // Re-enter the normal scheduler immediately for an already-due Up.
+        // It will either dispatch that Up or take its usual final gate; no
+        // zero-length waiter loop is armed here.
+        return Ok(false);
+    };
     let result = waiter.wait_until_ticks_with_metrics_typed(
         qpc_clock,
         deadline,
@@ -36,12 +41,31 @@ fn wait_after_modifier_held(
         interrupt,
     );
     match result.outcome {
-        outcome @ (sky_dispatch_win32::wait::WaitOutcome::Deadline
-        | sky_dispatch_win32::wait::WaitOutcome::Interrupted) => Ok(outcome),
+        sky_dispatch_win32::wait::WaitOutcome::Deadline => Ok(false),
+        sky_dispatch_win32::wait::WaitOutcome::Interrupted => Ok(true),
         sky_dispatch_win32::wait::WaitOutcome::Failed(failure) => {
             Err(format!("modifier-held replan wait failed: {failure:?}"))
         }
     }
+}
+
+fn modifier_replan_deadline(
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    next_active_up_deadline: Option<sky_dispatch_win32::clock::QpcTicks>,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
+    let interval = qpc_clock
+        .duration_from_us(MODIFIER_REPLAN_INTERVAL_US)
+        .map_err(|error| format!("modifier replan interval conversion failed: {error:?}"))?;
+    let poll_deadline = now_qpc
+        .checked_add_duration(interval)
+        .map_err(|error| format!("modifier replan deadline overflow: {error}"))?;
+    let deadline = match next_active_up_deadline {
+        Some(up_deadline) if up_deadline <= now_qpc => return Ok(None),
+        Some(up_deadline) => poll_deadline.min(up_deadline),
+        None => poll_deadline,
+    };
+    Ok(Some(deadline))
 }
 
 #[cfg(test)]
@@ -68,27 +92,6 @@ fn wait_after_unstable_target(
     local_metrics: &mut super::WorkerMetricsLocal,
     terminal_error: &mut Option<String>,
 ) -> WaitBoundary {
-    wait_after_unstable_target_with_deadline(
-        now_qpc,
-        packet_not_before_qpc,
-        qpc_clock,
-        waiter,
-        interrupt,
-        local_metrics,
-        terminal_error,
-    )
-    .0
-}
-
-fn wait_after_unstable_target_with_deadline(
-    now_qpc: sky_dispatch_win32::clock::QpcTicks,
-    packet_not_before_qpc: sky_dispatch_win32::clock::QpcTicks,
-    qpc_clock: sky_dispatch_win32::clock::QpcClock,
-    waiter: &sky_dispatch_win32::wait::HybridWaiter,
-    interrupt: &sky_dispatch_win32::event::OwnedEvent,
-    local_metrics: &mut super::WorkerMetricsLocal,
-    terminal_error: &mut Option<String>,
-) -> (WaitBoundary, Option<sky_dispatch_win32::clock::QpcTicks>) {
     let retry_deadline = if packet_not_before_qpc > now_qpc {
         packet_not_before_qpc
     } else {
@@ -98,33 +101,30 @@ fn wait_after_unstable_target_with_deadline(
                 *terminal_error = Some(format!(
                     "target replan interval conversion failed: {error:?}"
                 ));
-                return (WaitBoundary::Exit, None);
+                return WaitBoundary::Exit;
             }
         };
         match now_qpc.checked_add_duration(interval) {
             Ok(deadline) => deadline,
             Err(error) => {
                 *terminal_error = Some(format!("target replan deadline overflow: {error}"));
-                return (WaitBoundary::Exit, None);
+                return WaitBoundary::Exit;
             }
         }
     };
 
-    (
-        wait_for_next_boundary(WaitBoundaryInput {
-            deadline: WaitDeadline {
-                physical_target_qpc: Some(retry_deadline),
-                spin_threshold_ticks: DurationTicks::ZERO,
-                qpc_clock,
-            },
-            signals: WaitSignals { waiter, interrupt },
-            mutable: WaitMutable {
-                local_metrics,
-                terminal_error,
-            },
-        }),
-        Some(retry_deadline),
-    )
+    wait_for_next_boundary(WaitBoundaryInput {
+        deadline: WaitDeadline {
+            physical_target_qpc: Some(retry_deadline),
+            spin_threshold_ticks: DurationTicks::ZERO,
+            qpc_clock,
+        },
+        signals: WaitSignals { waiter, interrupt },
+        mutable: WaitMutable {
+            local_metrics,
+            terminal_error,
+        },
+    })
 }
 
 fn evaluate_scheduler_action(
@@ -348,10 +348,260 @@ fn qpc_evidence(value: Option<sky_dispatch_win32::clock::QpcTicks>) -> String {
 
 #[cfg(test)]
 mod scheduler_tests {
-    use super::{SchedulerAction, evaluate_scheduler_action_for_staging};
+    use super::{
+        SchedulerAction, evaluate_scheduler_action_for_staging, modifier_replan_deadline,
+    };
     use crate::engine::test_support::ProductionDispatchTestHarness;
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
     use sky_dispatch_core::time::TimelineTicks;
+    use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
+    use std::num::NonZeroU64;
+
+    #[test]
+    fn modifier_backoff_targets_independent_up_at_controlled_qpc_deadline() {
+        use sky_dispatch_core::executor::DispatchDecision;
+
+        let actions = [
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "modifier-deadline-a-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 19_500,
+                scan_codes: vec![0x16].into(),
+                reason: "modifier-deadline-b-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "modifier-deadline-a-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 40_000,
+                scan_codes: vec![0x16].into(),
+                reason: "modifier-deadline-b-up".into(),
+            },
+        ];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let clock = harness.resources.clock;
+        let epoch = QpcTicks::ZERO;
+        harness
+            .resources
+            .scheduler
+            .on_send_completed_at(0, 1, epoch)
+            .expect("complete A Down at controlled QPC zero");
+
+        let at_19_5ms = epoch
+            .checked_add_duration(clock.duration_from_us(19_500).unwrap())
+            .unwrap();
+        let active_up_deadline = harness
+            .resources
+            .scheduler
+            .earliest_active_up_due_qpc(epoch)
+            .expect("active Up deadline arithmetic")
+            .expect("active A slot");
+        assert_eq!(
+            active_up_deadline,
+            epoch
+                .checked_add_duration(clock.duration_from_us(20_000).unwrap())
+                .unwrap()
+        );
+        assert!(matches!(
+            harness
+                .resources
+                .scheduler
+                .evaluate_at(at_19_5ms, epoch)
+                .expect("19.5-ms scheduler decision"),
+            DispatchDecision::Send {
+                up_mask: 0,
+                down_chord: Some(_),
+                ..
+            }
+        ));
+
+        let deadline = modifier_replan_deadline(at_19_5ms, Some(active_up_deadline), clock)
+            .expect("modifier deadline calculation")
+            .expect("future Up needs an interruptible wait");
+        assert_eq!(deadline, active_up_deadline);
+
+        let at_20ms = active_up_deadline;
+        assert!(matches!(
+            harness
+                .resources
+                .scheduler
+                .evaluate_at(at_20ms, epoch)
+                .expect("20-ms scheduler decision"),
+            DispatchDecision::Send {
+                up_mask: 1,
+                down_chord: Some(_),
+                ..
+            }
+        ));
+        assert_eq!(
+            modifier_replan_deadline(at_20ms, Some(active_up_deadline), clock)
+                .expect("already-due Up calculation"),
+            None,
+            "an already-due Up replans immediately without arming a busy wait"
+        );
+    }
+
+    #[test]
+    fn modifier_backoff_uses_poll_deadline_without_active_up_and_keeps_earlier_up() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+        let now = QpcTicks::from_raw(19_500);
+        let poll = QpcTicks::from_raw(20_500);
+        let due = QpcTicks::from_raw(20_000);
+        assert_eq!(
+            modifier_replan_deadline(now, Some(QpcTicks::from_raw(21_000)), clock)
+                .expect("later Up deadline"),
+            Some(poll)
+        );
+        assert_eq!(
+            modifier_replan_deadline(now, None, clock).expect("no active Up"),
+            Some(poll)
+        );
+        assert_eq!(
+            modifier_replan_deadline(now, Some(due), clock).expect("Up inside poll quantum"),
+            Some(due)
+        );
+    }
+
+    #[test]
+    fn independent_up_deadline_keeps_hold_and_same_key_release_gap_floors() {
+        use sky_dispatch_core::executor::DispatchDecision;
+
+        let independent_actions = [
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "hold-floor-a-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 19_500,
+                scan_codes: vec![0x16].into(),
+                reason: "hold-floor-b-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "hold-floor-a-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 40_000,
+                scan_codes: vec![0x16].into(),
+                reason: "hold-floor-b-up".into(),
+            },
+        ];
+        let hold = ProductionDispatchTestHarness::create_harness(&independent_actions);
+        let clock = hold.resources.clock;
+        let epoch = QpcTicks::ZERO;
+        let down_completion = epoch
+            .checked_add_duration(clock.duration_from_us(5_000).unwrap())
+            .unwrap();
+        let mut hold_scheduler = hold.resources.scheduler;
+        hold_scheduler
+            .on_send_completed_at(0, 1, down_completion)
+            .expect("complete held A Down");
+        let hold_floor_deadline = epoch
+            .checked_add_duration(clock.duration_from_us(22_167).unwrap())
+            .unwrap();
+        assert_eq!(
+            hold_scheduler
+                .earliest_active_up_due_qpc(epoch)
+                .expect("H-floor deadline arithmetic"),
+            Some(hold_floor_deadline),
+            "the independent Up waits for completion + H when that exceeds authored Up"
+        );
+
+        let repeat_actions = [
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "release-gap-first-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "release-gap-first-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 37_167,
+                scan_codes: vec![0x15].into(),
+                reason: "release-gap-repeat-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 60_000,
+                scan_codes: vec![0x15].into(),
+                reason: "release-gap-repeat-up".into(),
+            },
+        ];
+        let repeat = ProductionDispatchTestHarness::create_harness(&repeat_actions);
+        let clock = repeat.resources.clock;
+        let release_gap_us = repeat
+            .dispatch_timing_config_for_test()
+            .expect("release-gap timing configuration")
+            .min_release_gap_us;
+        let mut scheduler = repeat.resources.scheduler;
+        scheduler
+            .on_send_completed_at(0, 1, epoch)
+            .expect("complete first Down");
+        let authored_up = epoch
+            .checked_add_duration(clock.duration_from_us(20_000).unwrap())
+            .unwrap();
+        assert!(matches!(
+            scheduler
+                .evaluate_at(authored_up, epoch)
+                .expect("first Up becomes eligible"),
+            DispatchDecision::Send { up_mask: 1, .. }
+        ));
+        let late_up_completion = epoch
+            .checked_add_duration(clock.duration_from_us(25_000).unwrap())
+            .unwrap();
+        scheduler
+            .on_send_completed_at(1, 0, late_up_completion)
+            .expect("complete first Up late");
+        let authored_repeat = epoch
+            .checked_add_duration(clock.duration_from_us(37_167).unwrap())
+            .unwrap();
+        let release_gap_deadline = late_up_completion
+            .checked_add_duration(
+                clock
+                    .duration_from_us(release_gap_us)
+                    .unwrap(),
+            )
+            .unwrap();
+        assert!(matches!(
+            scheduler
+                .evaluate_at(authored_repeat, epoch)
+                .expect("repeat waits for completion-based G"),
+            DispatchDecision::Wait { deadline_qpc } if deadline_qpc == release_gap_deadline
+        ));
+    }
 
     #[test]
     fn scheduler_deadline_reevaluation_carries_down_metadata_from_evaluation() {

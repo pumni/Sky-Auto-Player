@@ -149,8 +149,8 @@ pub(crate) use down_transaction::emit_down_with;
 pub use down_transaction::{emit_down, emit_down_once, emit_down_once_with};
 pub use modifier_guard::{ModifierKeyObservation, ModifierMask};
 pub use outcome::{
-    PacketPreparationError, PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket,
-    PlatformSendResult, ReleaseAllOutcome, SendEvidence, SendTransactionOutcome,
+    GuardedReleaseOutcome, PacketPreparationError, PacketRetryReason, PhysicalKeyPreflightError,
+    PhysicalPacket, PlatformSendResult, ReleaseAllOutcome, SendEvidence, SendTransactionOutcome,
     SendTransactionStatus, TerminalProbeVerdict, TerminalReleaseEvidence,
     TerminalSendAttemptEvidence,
 };

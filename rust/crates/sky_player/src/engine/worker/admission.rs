@@ -412,14 +412,12 @@ pub(crate) fn final_down_modifier_verdict(backend: &TrackedKeyState) -> FinalDow
     }
 }
 
-/// Apply the common metric bucket and target-authority invalidation for a
-/// rejected final Down. Focus loss is completed by each caller's existing
-/// focus-pause transition, while modifiers leave target authorization intact.
+/// Apply the common metric bucket and cached-preflight reset for a rejected
+/// final Down. Focus loss is completed by each caller's existing focus-pause
+/// transition, while modifiers leave target authorization intact.
 #[inline(always)]
 pub(crate) fn apply_final_down_rejection(
     verdict: FinalDownVerdict,
-    _target: &SessionTarget,
-    _expected: TargetStamp,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
 ) {
@@ -792,7 +790,7 @@ fn verify_final_musical_packet_admission(
         post_focus_control_signals: Some(control_signals),
     });
     if target_hint != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(target_hint, target, expected, runtime, metrics);
+        apply_final_down_rejection(target_hint, runtime, metrics);
         if target_hint == FinalDownVerdict::FocusLost
             && let Err(step) = handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
         {
@@ -814,7 +812,7 @@ fn verify_final_musical_packet_admission(
     if check_modifiers {
         let modifier_verdict = final_down_modifier_verdict(backend);
         if modifier_verdict != FinalDownVerdict::Allowed {
-            apply_final_down_rejection(modifier_verdict, target, expected, runtime, metrics);
+            apply_final_down_rejection(modifier_verdict, runtime, metrics);
             return match modifier_verdict {
                 FinalDownVerdict::ModifierHeld(_) => FinalDownAdmissionResult::ModifierHeld,
                 _ => FinalDownAdmissionResult::Replan,
@@ -833,7 +831,7 @@ fn verify_final_musical_packet_admission(
         post_focus_control_signals: Some(control_signals),
     });
     if fresh_target_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(fresh_target_verdict, target, expected, runtime, metrics);
+        apply_final_down_rejection(fresh_target_verdict, runtime, metrics);
         match fresh_target_verdict {
             FinalDownVerdict::FocusLost => {
                 if let Err(step) =
@@ -875,7 +873,7 @@ fn verify_final_musical_packet_admission(
         }
     };
     if verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(verdict, target, expected, runtime, metrics);
+        apply_final_down_rejection(verdict, runtime, metrics);
         match verdict {
             FinalDownVerdict::LeaseExpired => {
                 return FinalDownAdmissionResult::Terminal("supervisor_lease_expired".to_string());
@@ -892,7 +890,7 @@ fn verify_final_musical_packet_admission(
     let final_target_verdict =
         final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
     if final_target_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(final_target_verdict, target, expected, runtime, metrics);
+        apply_final_down_rejection(final_target_verdict, runtime, metrics);
         match final_target_verdict {
             FinalDownVerdict::FocusLost => {
                 if let Err(step) =
@@ -915,7 +913,7 @@ fn verify_final_musical_packet_admission(
 
     let final_control_verdict = final_down_control_verdict(control_signals);
     if final_control_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(final_control_verdict, target, expected, runtime, metrics);
+        apply_final_down_rejection(final_control_verdict, runtime, metrics);
         return FinalDownAdmissionResult::Replan;
     }
 
@@ -926,7 +924,7 @@ fn verify_final_musical_packet_admission(
     let release_owner = match fresh_final_release_owner_proof(target, expected, require_focus) {
         Ok(proof) => proof,
         Err(verdict) => {
-            apply_final_down_rejection(verdict, target, expected, runtime, metrics);
+            apply_final_down_rejection(verdict, runtime, metrics);
             if verdict == FinalDownVerdict::FocusLost
                 && let Err(step) =
                     handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
@@ -947,13 +945,7 @@ fn verify_final_musical_packet_admission(
     let final_identity_target_verdict =
         final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
     if final_identity_target_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(
-            final_identity_target_verdict,
-            target,
-            expected,
-            runtime,
-            metrics,
-        );
+        apply_final_down_rejection(final_identity_target_verdict, runtime, metrics);
         return match final_identity_target_verdict {
             FinalDownVerdict::OwnerRejected(failure) => {
                 FinalDownAdmissionResult::Terminal(owner_rejection_reason(failure).to_string())
@@ -976,7 +968,7 @@ fn verify_final_musical_packet_admission(
 
     let final_control_verdict = final_down_control_verdict(control_signals);
     if final_control_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(final_control_verdict, target, expected, runtime, metrics);
+        apply_final_down_rejection(final_control_verdict, runtime, metrics);
         return FinalDownAdmissionResult::Replan;
     }
 

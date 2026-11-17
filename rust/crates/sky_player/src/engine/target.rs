@@ -4,7 +4,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct TargetProofOperationCounts {
-    pub(super) authority_arc_clones: u64,
     pub(super) generation_revalidations: u64,
 }
 
@@ -12,7 +11,6 @@ pub(super) struct TargetProofOperationCounts {
 std::thread_local! {
     static TARGET_PROOF_OPERATION_COUNTS: std::cell::Cell<TargetProofOperationCounts> =
         const { std::cell::Cell::new(TargetProofOperationCounts {
-            authority_arc_clones: 0,
             generation_revalidations: 0,
         }) };
 }

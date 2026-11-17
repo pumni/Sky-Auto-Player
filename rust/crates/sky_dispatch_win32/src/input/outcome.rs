@@ -231,6 +231,28 @@ pub struct TerminalReleaseEvidence {
     pub probe_verdict: TerminalProbeVerdict,
 }
 
+/// Result of a tracked cleanup whose caller revalidates the immutable release
+/// origin immediately before each physical Up attempt. A withheld attempt is
+/// reported separately from `send_attempts`, which contains only admitted
+/// sender calls and their raw transport/QPC evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuardedReleaseOutcome {
+    pub release_outcome: ReleaseAllOutcome,
+    pub send_attempts: SmallVec<[TerminalSendAttemptEvidence; 4]>,
+    pub probe_verdict: TerminalProbeVerdict,
+    pub withheld_reason: Option<String>,
+}
+
+impl GuardedReleaseOutcome {
+    pub fn terminal_evidence(&self) -> TerminalReleaseEvidence {
+        TerminalReleaseEvidence {
+            release_outcome: self.release_outcome.clone(),
+            send_attempts: self.send_attempts.clone(),
+            probe_verdict: self.probe_verdict,
+        }
+    }
+}
+
 impl ReleaseAllOutcome {
     pub fn attempted(&self) -> Vec<u16> {
         scan_codes_from_mask(self.attempted_mask)

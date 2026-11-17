@@ -192,6 +192,14 @@ mixed packet's Down gate is temporarily rejected while its independent Up is
 still eligible, the worker stages and admits that Up-only packet through the
 same fresh musical final gate; the rejected Down remains pending.
 
+When final Down admission rejects a held modifier, the worker uses a bounded
+interruptible backoff. Its wake deadline is the earlier of the next modifier
+poll and the earliest active-slot Up deadline. A due Up returns directly to the
+normal scheduler for fresh selection and final admission; no zero-duration
+wait is armed. The active-slot deadline includes the authored Up and H floor,
+and the selector continues to enforce the completion-based G floor before a
+same-key Down.
+
 The fresh foreground-owner query is authoritative even when the published
 focus hint still says focused. A `NotForeground` result enters the existing
 Focus pause transition, clears the verified-target stamp and restoration
@@ -216,6 +224,11 @@ foreground, owner PID, process-identity, lease, power, and control admission.
 Focus recovery continues through its normal cleanup and preflight path.
 Invalidating the session target is terminal and cannot create or transfer a
 preflight stamp.
+
+The focused production target is immutable. A target-stamp failure while
+staging or before a packet wait therefore fails closed; the worker does not
+wait for target publication to recover. The separate bounded resume wait is
+retained for live foreground/focus recovery with the same still-valid target.
 
 Each authored Down onset can cross the syscall boundary at most once. A
 pre-call rejection has no attempt; once the sender reports a syscall attempt,
@@ -268,6 +281,15 @@ before Down. H/G decisions use real sender completion QPC on healthy packets or
 verified cleanup completion QPC after recovery; missing evidence is never
 replaced by a later clock read. Terminal safety Up remains separate from
 musical packet metrics.
+
+Tracked terminal and resumable cleanup repeat the immutable target, origin,
+owner, and process-continuity admission after each retry delay and immediately
+after packet preparation, before entering the physical sender. If admission is
+missing or fails, the remaining Up sends are withheld, their obligations stay
+quarantined, and the result retains only the actual prior sender calls and
+their transport, probe, and QPC evidence. A withheld retry does not increase
+the sender-attempt count. Zero-obligation cleanup performs no proof query or
+syscall. Terminal QPC fallback does not bypass the per-attempt admission.
 
 Latency, envelope, and hold timing samples are qualified only when transport is
 complete and sender QPC evidence is ordered with no timing error. Unqualified
