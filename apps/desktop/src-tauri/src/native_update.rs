@@ -1623,6 +1623,7 @@ mod tests {
         assert_eq!(state.snapshot(), snap8);
     }
 
+    #[cfg(feature = "tauri-test")]
     #[test]
     fn check_persistence_failure_produces_state_persistence_failed_and_performed_ack() {
         use super::UpdateService;

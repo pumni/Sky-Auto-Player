@@ -491,24 +491,8 @@ fn active_for_control_with_physical(
     pending: Option<PlaybackPendingControl>,
     physical: bool,
 ) -> Arc<NativeActivePlayback> {
-    active_for_control_with_player(
-        state,
-        pending,
-        physical,
-        ActivityCoordinator::default(),
-        None,
-    )
-}
-
-fn active_for_control_with_player(
-    state: PlaybackSessionState,
-    pending: Option<PlaybackPendingControl>,
-    physical: bool,
-    activity: ActivityCoordinator,
-    player: Option<Arc<NativeDispatchSession>>,
-) -> Arc<NativeActivePlayback> {
     Arc::new(NativeActivePlayback {
-        activity,
+        activity: ActivityCoordinator::default(),
         session_id: "a".repeat(32),
         prepared_id: "b".repeat(32),
         song_id: "c".repeat(32),
@@ -534,7 +518,7 @@ fn active_for_control_with_player(
         target_hwnd: None,
         state: Mutex::new(state),
         pending: Mutex::new(pending),
-        player,
+        player: None,
         power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
         power_request: Mutex::new(None),
         suspend_resume_registration: Mutex::new(None),
@@ -550,6 +534,21 @@ fn active_for_control_with_player(
         event_delivery_failure: Arc::new(AtomicBool::new(false)),
         presentation: OnceLock::new(),
     })
+}
+
+#[cfg(feature = "tauri-test")]
+fn active_for_control_with_player(
+    state: PlaybackSessionState,
+    pending: Option<PlaybackPendingControl>,
+    physical: bool,
+    activity: ActivityCoordinator,
+    player: Option<Arc<NativeDispatchSession>>,
+) -> Arc<NativeActivePlayback> {
+    let mut fixture = active_for_control_with_physical(state, pending, physical);
+    let active = Arc::get_mut(&mut fixture).expect("fresh playback fixture remains unique");
+    active.activity = activity;
+    active.player = player;
+    fixture
 }
 
 fn prepare_physical_failure_plan(

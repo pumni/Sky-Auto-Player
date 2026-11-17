@@ -710,6 +710,7 @@ mod tests {
     }
 
     #[cfg(windows)]
+    #[cfg(feature = "tauri-test")]
     #[test]
     fn stable_callback_context_routes_current_epoch_and_ignores_retired_epoch() {
         use sky_player::adapter_support::{ActionKind, KeyActionInput, compile_runtime_intents};

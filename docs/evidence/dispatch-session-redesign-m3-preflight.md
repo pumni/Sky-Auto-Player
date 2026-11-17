@@ -20,6 +20,12 @@ foreground HWND/PID to 123/77 before binding and arming. The diagnostic timeout
 still reports the startup snapshot and terminal trigger. No production focus
 check, admission rule, timeout, or checkpoint was changed.
 
+The default workspace test build also exposed Desktop test fixtures that used
+the existing `tauri-test` feature APIs without matching feature gates. The
+control fixture now has a feature-neutral `player: None` construction; the
+Tauri mock-app and callback-pause tests remain enabled under `tauri-test`.
+These are test-only boundaries and do not alter production playback behavior.
+
 Verification performed on the corrected fixture:
 
 ```text
