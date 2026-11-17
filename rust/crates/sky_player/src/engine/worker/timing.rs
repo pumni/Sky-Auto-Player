@@ -222,3 +222,10 @@ mod tests {
         }
     }
 }
+
+// This opt-in experiment uses the shipping Windows waiter and startup
+// calibration selector, but deliberately stops before worker admission or
+// SendInput. It is not run as part of ordinary unit suites.
+#[cfg(all(test, windows))]
+#[path = "timing_guard_ab_benchmark.rs"]
+mod guard_ab_benchmark;

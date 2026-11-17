@@ -105,6 +105,43 @@ is documented append-only in
 The reporting-correction checkpoint authorizes zero further native sessions;
 Smoke, Compare, and Final require separate Leader decisions.
 
+## Issue #666 M4 waiter-only guard A/B
+
+The opt-in offline A/B uses the production Windows `HybridWaiter` and the
+current startup-calibration selector from one clean candidate checkout and one
+`sky_player` test binary. Arm A is an **experimental fixed 1,000 µs** guard;
+Arm B uses the current calibrated selector/fallback. Both pay the same six
+sample calibration probe. Each Quiet and Contention cell has one warm-up per
+arm and six paired runs, alternating AB/BA order. Every run waits on 900
+60-FPS deadlines (15 seconds at 16,667 µs frame intervals). Percentiles use
+nearest rank `sorted[ceil(p*n)-1]`.
+
+Use a new output path outside the checkout. The wrapper refuses a dirty source
+tree, a different branch, or an existing/in-repository output directory; it
+records the exact source SHA/tree, Windows/CPU/toolchain, lockfile hash, test
+binary hash, test command/exit code, raw files, and result JSON:
+
+```powershell
+pwsh -NoProfile -File scripts/run_issue666_m4_guard_ab_offline.ps1 `
+  -OutputRoot "$env:TEMP\issue-666-m4-ab-<candidate-short-sha>"
+```
+
+The output contains `wait-samples.csv`, `wait-runs.csv`, `result.json`,
+`cargo-test.log`, and `run-manifest.json`. It reports wake-to-deadline QPC
+lateness, return-to-observation gap (explicitly **not** sender pre-call),
+waiter spin, worker/process CPU, and contention-worker CPU. It has no executor,
+focus/owner gate, sender, packet, H/G dispatch floor, cleanup, or Prepare/Arm
+timing, so those measures remain null/not measured. It neither calls
+`SendInput` nor qualifies game delivery. Do not describe this same-revision
+guard experiment as an exact-base-versus-candidate A/B; the M1
+baseline-equivalent structural benchmark is a separate evidence class.
+
+Native ReceiveOnly and optional gameplay planning is in
+[`issue-666-m4-native-qualification.json`](evidence/issue-666-m4-native-qualification.json).
+It is planning only and explicitly awaits separate Leader authorization; no
+native input, interactive focus, real suspend/resume, or Sky gameplay session
+is implied by running the offline waiter experiment.
+
 ## Final workload
 
 The Final stage runs these five performance workloads:
@@ -126,6 +163,85 @@ separate approved session budget and one-stage plan before native qualification.
 The existing fail-stop sequence stops on the first failed native case. Do not
 retry failures to complete a matrix. Smoke, Compare, the six AB/BA pairs, metric
 filters, thresholds, and drain timeout keep their defined behavior.
+
+## Issue #666 M3 session ownership checks
+
+The Windows `test-support` suite covers target-generation authority lifetime,
+fresh retained process-creation proof at the musical gate, owner disappearance
+through watchdog wake and tracked cleanup, callback-epoch rundown, presentation
+stall isolation, and bounded join/retirement. Run it with the M3 command set in
+[`issue-666-m3.md`](evidence/issue-666-m3.md). These deterministic mock tests
+do not call real `SendInput`, suspend Windows, or qualify gameplay reception.
+The M3 evidence report maps each lifecycle invariant to its test and states
+which paths still need OS/native qualification.
+
+## Issue #666 integration correction checkpoint
+
+The integrated correctness corrections are recorded in
+[`issue-666-integration.md`](evidence/issue-666-integration.md). The regression
+suite exercises musical Up origin matching at the production worker boundary,
+the desktop supervisor's typed stale-poll consumer, and the narrow proven
+Down-only raw-zero continuation case. These are deterministic Windows tests
+with mock packet senders. They do not call real `SendInput`, manipulate the
+interactive foreground, perform system suspend/resume, or qualify gameplay.
+
+The raw-zero exception is valid only when the sender evidence proves one actual
+Down-only attempt with exact inserted count zero, consistent status/masks,
+ordered QPC evidence, and unchanged target/control state. It consumes that
+attempt without a replay, safety Up, or synthetic H/G completion. Prior
+confirmed H/G floors remain in force. Mixed/Up packets and incomplete, short,
+or contradictory evidence keep the conservative cleanup path and its
+owner-origin policy. Every anomaly remains a terminal error in the final
+outcome, even when safe unattempted notes continue.
+
+Snapshot full/lite parity and schema-25 key-set tests remain separate from the
+playback timing and native qualification profiles. Snapshot compatibility does
+not increase the healthy dispatch allocation budget. The operation counts in
+the evidence are test-hook counts for the actual worker/harness boundary;
+sender QPC and `GetProcessTimes` counts are separately identified from
+production source because the mock does not call those native APIs.
+
+The final musical permit also has deterministic authority-mutex contention
+coverage. A hook pauses after fresh foreground/PID/process verification; a
+supervisor test thread acquires the retained-authority mutex before allowing
+the worker to enter the permit. Down and Up return `Replan` without a packet,
+cursor advance, or obligation clear, then send once after fresh restaging.
+Concurrent target publication and same-HWND ABA keep the old Up origin
+fail-closed. Verified terminal cleanup continues to use its serialized path.
+These tests exercise the production worker/harness with mock senders and a
+test-only lock seam; they do not call real `SendInput`.
+
+## Issue #666 post-integration replan timing correction
+
+The deterministic `sky_player` dispatch tests exercise the actual scheduler,
+staging, final admission, waiter, mock sender, and journal commit helpers. The
+permit-contention regression also runs the same outer replan/wait policy used
+by the worker loop. It holds the retained authority mutex only after fresh
+foreground, PID, and process-continuity admission, then verifies the immediate
+retry and interruptible 1 ms backoff. A separate H/G trace checks floor minus
+one tick, exact floor, and plus one tick, including future-deadline projection
+and wake selection. These tests use a mock sender and do not call native
+`SendInput`, change interactive focus, suspend the system, or measure game
+reception. The trace timings are individual QPC observations from deterministic
+tests, not latency distributions or gameplay qualification. See
+[`issue-666-replan-timing.md`](evidence/issue-666-replan-timing.md) for the
+baseline/candidate operation-count comparison, race trace, and verification
+ledger.
+
+## Issue #666 mid-playback preflight and code-quality correction
+
+The production worker regressions keep a validated A-session preflight stamp
+across early owner-proof Busy and final writer/owner-authority Busy while a
+second authored Down is pending. The probe reports A physically held after the
+first Down, so any accidental all-keys rescan would fail. The tests assert no
+second sender call or journal/cursor mutation during Busy, then verify one B
+attempt, the retained A-origin proof, and A's authored Up. Separate controls
+cover same-HWND generation ABA, focus recovery, and lease expiry. H/G tick-edge
+checks use supplied QPC values; a separate real waiter smoke test covers a
+future deadline wake. These are mock-sender tests and do not establish Sky
+gameplay reception. See
+[`issue-666-preflight-code-quality.md`](evidence/issue-666-preflight-code-quality.md)
+for the exact cases, warning cleanup, and verification ledger.
 
 ## Offline lifecycle and manifest checks
 

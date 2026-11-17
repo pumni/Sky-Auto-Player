@@ -1,4 +1,6 @@
-use super::config::{AdmittedNativeSessionOptions, EffectiveRuntimePolicy, NativeSessionOptions};
+use super::config::{
+    AdmittedNativeSessionOptions, EffectiveRuntimePolicy, NativeScheduleInput, NativeSessionOptions,
+};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
     StartupAbortReason, StartupPhase, SupervisorLeaseState, SystemPowerEndpoint,
@@ -13,6 +15,13 @@ use sky_dispatch_core::accounting::GenerationAccounting;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex as StdMutex};
 use std::time::{Duration, Instant};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OwnerIdentityPollResult {
+    CurrentValid,
+    StaleSuperseded,
+    CurrentInvalid,
+}
 
 fn join_thread_until(
     handle: &mut Option<std::thread::JoinHandle<()>>,
@@ -216,8 +225,6 @@ pub struct NativeDispatchSession {
     supervisor_lease_timeout_ticks: AtomicU64,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
     watchdog_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
-    window_identity_authority:
-        Mutex<Option<(sky_dispatch_win32::focus::WindowIdentityAuthority, u64)>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -255,12 +262,40 @@ impl NativeDispatchSession {
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let min_release_gap_us = options.timing.min_release_gap_us;
-        validate_native_schedule_timing_with_release_gap(
-            &options.schedule,
-            options.timing.min_hold_us,
-            min_release_gap_us,
-            qpc_clock,
-        )?;
+        let (total_us, generation_count) = match &options.schedule {
+            NativeScheduleInput::Raw(schedule) => {
+                #[cfg(any(test, feature = "test-support"))]
+                if let Some(hook) = &options.startup_ordering_hook {
+                    hook.record_raw_schedule_admission_validation();
+                }
+                validate_native_schedule_timing_with_release_gap(
+                    schedule,
+                    options.timing.min_hold_us,
+                    min_release_gap_us,
+                    qpc_clock,
+                )?;
+                (
+                    schedule
+                        .batches
+                        .last()
+                        .map_or(0, |batch| batch.scheduled_us),
+                    schedule.generation_count,
+                )
+            }
+            NativeScheduleInput::Prepared(schedule) => {
+                if !schedule.is_compatible(
+                    qpc_clock.frequency_hz(),
+                    options.timing.min_hold_us,
+                    min_release_gap_us,
+                ) {
+                    return Err(
+                        "prepared dispatch plan no longer matches the QPC domain or H/G timing policy"
+                            .to_string(),
+                    );
+                }
+                (schedule.total_us(), schedule.generation_count())
+            }
+        };
         if !cfg!(windows) && matches!(&options.backend, BackendConfig::Production) {
             return Err("production native dispatch is supported only on Windows".to_string());
         }
@@ -277,12 +312,6 @@ impl NativeDispatchSession {
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let supervisor_lease_timeout_us = options.wait.supervisor_lease_timeout_us;
         let interrupt = power_endpoint.interrupt();
-        let total_us = options
-            .schedule
-            .batches
-            .last()
-            .map_or(0, |batch| batch.scheduled_us);
-        let generation_count = options.schedule.generation_count;
         let observer_enabled = EffectiveRuntimePolicy::for_native(&options).observer_enabled;
         let require_owner_identity =
             options.focus.require_focus && matches!(&options.backend, BackendConfig::Production);
@@ -347,7 +376,6 @@ impl NativeDispatchSession {
             supervisor_lease_timeout_ticks: AtomicU64::new(0),
             thread_handle: Mutex::new(None),
             watchdog_handle: Mutex::new(None),
-            window_identity_authority: Mutex::new(None),
         })
     }
 
@@ -988,6 +1016,61 @@ impl NativeDispatchSession {
         self.bind_window_identity_authority_with_pid(authority, expected_owner_pid)
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn set_window_process_identity_status_for_test(
+        &self,
+        status: sky_dispatch_win32::focus::WindowIdentityContinuity,
+    ) -> bool {
+        let Some((authority, _)) = self.shared.target.owner_authority_snapshot() else {
+            return false;
+        };
+        authority.set_process_identity_status_for_test(status);
+        true
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn window_identity_authority_weak_for_test(
+        &self,
+    ) -> Option<std::sync::Weak<sky_dispatch_win32::focus::WindowIdentityAuthority>> {
+        self.shared
+            .target
+            .owner_authority_snapshot()
+            .map(|(authority, _)| Arc::downgrade(&authority))
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_owner_poll_result_barrier_for_test(
+        &self,
+        reached: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        self.shared
+            .target
+            .set_owner_poll_result_barrier_for_test(reached, resume);
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_owner_close_snapshot_barrier_for_test(
+        &self,
+        reached: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        self.shared
+            .target
+            .set_owner_close_snapshot_barrier_for_test(reached, resume);
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_safety_release_validation_barrier_for_test(
+        &self,
+        reached: Arc<std::sync::Barrier>,
+        resume: Arc<std::sync::Barrier>,
+    ) {
+        self.shared
+            .target
+            .set_safety_release_validation_barrier_for_test(reached, resume);
+    }
+
     fn bind_window_identity_authority_with_pid(
         &self,
         authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
@@ -1000,19 +1083,18 @@ impl NativeDispatchSession {
         if hwnd != identity.hwnd || expected_owner_pid == 0 {
             return Err("window identity HWND does not match the published target".to_string());
         }
-        let mut retained = self.window_identity_authority.lock();
         if authority.continuity() != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
         {
             return Err("window process identity changed during startup binding".to_string());
         }
-        if !self
-            .shared
-            .target
-            .bind_owner_identity(hwnd, generation, expected_owner_pid)
-        {
+        if !self.shared.target.bind_owner_identity_authority(
+            hwnd,
+            generation,
+            expected_owner_pid,
+            Arc::new(authority),
+        ) {
             return Err("window identity could not bind to the current target generation".into());
         }
-        *retained = Some((authority, generation));
         let _ = self.shared.commands.interrupt.signal();
         Ok(())
     }
@@ -1031,35 +1113,60 @@ impl NativeDispatchSession {
 
     /// Poll the retained process object and exact target HWND on the desktop
     /// supervisor thread. This function never runs in the precision suffix.
-    pub fn poll_window_identity_authority(&self) -> bool {
-        let retained = self.window_identity_authority.lock();
-        let Some((authority, bound_generation)) = retained.as_ref() else {
-            return self.shared.target.owner_identity_status(0)
-                == super::target::OwnerIdentityStatus::NotRequired;
+    pub fn poll_window_identity_authority_result(&self) -> OwnerIdentityPollResult {
+        let Some((authority, bound_generation)) = self.shared.target.owner_authority_snapshot()
+        else {
+            return if self.shared.target.owner_identity_status(0)
+                == super::target::OwnerIdentityStatus::NotRequired
+            {
+                OwnerIdentityPollResult::CurrentValid
+            } else {
+                OwnerIdentityPollResult::CurrentInvalid
+            };
         };
         let Some(target) = self.shared.target.load_stable() else {
-            if self.startup_active() {
+            #[cfg(test)]
+            self.shared.target.run_owner_poll_result_hook_for_test();
+            let applied = self.shared.target.invalidate_polled_owner_if_current(
+                &authority,
+                bound_generation,
+                OwnerIdentityFailure::ProcessTerminated,
+            );
+            if applied && self.startup_active() {
                 self.shared
                     .commands
                     .system_power
                     .cancel_prearm(StartupAbortReason::OwnerInvalidated);
             }
-            self.shared.target.invalidate_owner_identity();
             let _ = self.shared.commands.interrupt.signal();
-            return false;
+            return if applied {
+                OwnerIdentityPollResult::CurrentInvalid
+            } else {
+                OwnerIdentityPollResult::StaleSuperseded
+            };
         };
-        if target != (authority.identity().hwnd, *bound_generation) {
-            if self.startup_active() {
-                self.shared
-                    .commands
-                    .system_power
-                    .cancel_prearm(StartupAbortReason::OwnerInvalidated);
-            }
+        if target != (authority.identity().hwnd, bound_generation) {
             let _ = self.shared.commands.interrupt.signal();
-            return false;
+            return OwnerIdentityPollResult::StaleSuperseded;
         }
-        let failure = match authority.continuity() {
-            sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous => return true,
+        let continuity = authority.continuity();
+        #[cfg(test)]
+        self.shared.target.run_owner_poll_result_hook_for_test();
+        let failure = match continuity {
+            sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous => {
+                let current = self
+                    .shared
+                    .target
+                    .polled_owner_is_current(&authority, bound_generation);
+                if !current {
+                    let _ = self.shared.commands.interrupt.signal();
+                }
+                return if current {
+                    OwnerIdentityPollResult::CurrentValid
+                } else {
+                    OwnerIdentityPollResult::StaleSuperseded
+                };
+            }
             sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated => {
                 OwnerIdentityFailure::ProcessTerminated
             }
@@ -1076,28 +1183,50 @@ impl NativeDispatchSession {
                 OwnerIdentityFailure::QueryUnavailable
             }
         };
-        if self.startup_active() {
+        let applied = self.shared.target.invalidate_polled_owner_if_current(
+            &authority,
+            bound_generation,
+            failure,
+        );
+        if applied && self.startup_active() {
             self.shared
                 .commands
                 .system_power
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
-        self.shared.target.invalidate_owner_identity_with(failure);
         let _ = self.shared.commands.interrupt.signal();
-        false
+        if applied {
+            OwnerIdentityPollResult::CurrentInvalid
+        } else {
+            OwnerIdentityPollResult::StaleSuperseded
+        }
+    }
+
+    /// Compatibility wrapper for callers that only need a current-valid bit.
+    /// New supervisor consumers must use the typed result so stale samples are
+    /// not interpreted as current-owner loss.
+    pub fn poll_window_identity_authority(&self) -> bool {
+        self.poll_window_identity_authority_result() == OwnerIdentityPollResult::CurrentValid
     }
 
     /// Release the retained process object exactly once at terminal session
     /// teardown. The caller joins the worker/supervisor before closing it.
     pub fn close_window_identity_authority(&self) {
-        if self.startup_active() {
+        let Some((authority, generation)) = self.shared.target.owner_authority_snapshot() else {
+            return;
+        };
+        #[cfg(test)]
+        self.shared.target.run_owner_close_snapshot_hook_for_test();
+        let closed = self
+            .shared
+            .target
+            .close_owner_authority_if_current(&authority, generation);
+        if closed && self.startup_active() {
             self.shared
                 .commands
                 .system_power
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
-        self.window_identity_authority.lock().take();
-        self.shared.target.invalidate_owner_identity();
     }
 
     /// Publish a transition-only supervisor focus hint. This wakes the worker
@@ -1227,15 +1356,15 @@ impl NativeDispatchSession {
     }
 
     pub fn snapshot_lite(&self) -> EngineProgressSnapshot {
-        let lifecycle = self.shared.lifecycle.lifecycle.load(Ordering::Acquire);
-        let (((elapsed_us, paused), pre_roll_remaining_us), startup) = self.live_projection();
-        let poll_status = self.poll_status(lifecycle, paused, pre_roll_remaining_us, startup);
+        let projection = self.snapshot_projection();
+        let lifecycle = projection.lifecycle;
+        let poll_status = projection.status;
         let status = poll_status.as_str();
-        let local = self.shared.publication.metrics.snapshot.load();
+        let local = &projection.local;
         EngineProgressSnapshot {
-            elapsed_us,
+            elapsed_us: projection.elapsed_us,
             total_us: local.total_us,
-            pre_roll_remaining_us,
+            pre_roll_remaining_us: projection.pre_roll_remaining_us,
             max_lateness_us: local.max_lateness_us,
             late_2ms: local.late_2ms,
             late_5ms: local.late_5ms,
@@ -1278,20 +1407,14 @@ impl NativeDispatchSession {
             recent_latency_samples_available: self.observer_enabled,
             is_running: lifecycle == LIFECYCLE_RUNNING,
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
-            is_paused: paused,
+            is_paused: projection.paused,
             status: status.to_string(),
             terminal_outcome: poll_status.is_terminal().then_some(poll_status),
-            has_terminal_error: self
-                .shared
-                .publication
-                .metrics
-                .terminal_error
-                .lock()
-                .is_some(),
+            has_terminal_error: projection.terminal_error.is_some(),
             active_count: local.active_count as usize,
             possibly_active_count: local.possibly_active_count as usize,
             failed_release_count: local.failed_release_count as usize,
-            last_error: self.shared.publication.metrics.last_error.lock().clone(),
+            last_error: projection.last_error.clone(),
             keys_dropped: local.keys_dropped,
             chord_split_events: local.chord_split_events,
             sendinput_partial_events: local.sendinput_partial_events,

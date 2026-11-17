@@ -830,6 +830,76 @@ mod tests {
             analyze_dispatch_schedule_cancellable(&schedule, config, &AtomicBool::new(false))
                 .expect("QPC-quantized production schedule model");
 
+        assert_eq!(report.packet_count, 4);
+        assert_eq!(report.positive_slack_count, 0);
+        assert_eq!(report.zero_slack_count, 2);
+        assert_eq!(report.negative_slack_count, 2);
+        assert_eq!(
+            report.slack_ticks,
+            TickPercentiles {
+                p50: -1,
+                p95: 0,
+                p99: 0,
+            }
+        );
+        assert_eq!(
+            report
+                .packets
+                .iter()
+                .map(|packet| (
+                    packet.authored_target_ticks,
+                    packet.modeled_ready_ticks,
+                    packet.modeled_sender_completion_ticks,
+                    packet.modeled_worker_free_ticks,
+                    packet.h_floor_displacement_ticks,
+                    packet.g_floor_displacement_ticks,
+                    packet.total_floor_displacement_ticks,
+                    packet.modeled_lateness_ticks,
+                    packet.signed_slack_ticks,
+                    packet.slack_class,
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (0, 0, Some(0), 0, 0, 0, 0, 0, 0, SlackClass::Zero),
+                (
+                    17_168,
+                    17_168,
+                    Some(17_168),
+                    17_168,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SlackClass::Zero,
+                ),
+                (
+                    34_335,
+                    34_336,
+                    Some(34_336),
+                    34_336,
+                    0,
+                    1,
+                    1,
+                    1,
+                    -1,
+                    SlackClass::Negative,
+                ),
+                (
+                    51_502,
+                    51_504,
+                    Some(51_504),
+                    51_504,
+                    2,
+                    0,
+                    2,
+                    2,
+                    -2,
+                    SlackClass::Negative,
+                ),
+            ]
+        );
+
         let repeated_down = &report.packets[2];
         assert_eq!(repeated_down.authored_target_ticks, 34_335);
         assert_eq!(repeated_down.modeled_ready_ticks, 34_336);

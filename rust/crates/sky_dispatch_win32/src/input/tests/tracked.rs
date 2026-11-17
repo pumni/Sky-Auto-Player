@@ -230,7 +230,7 @@ fn deferred_mixed_pre_call_qpc_failure_preserves_only_prior_up_obligation() {
 }
 
 #[test]
-fn deferred_mixed_zero_insert_preserves_only_prior_up_obligation() {
+fn deferred_mixed_zero_insert_keeps_attempted_down_release_obligation() {
     let packet = PhysicalPacket::new(0b01, 0b10);
     let prepared =
         super::super::packet::PreparedPhysicalPacket::try_new(packet).expect("valid Mixed packet");
@@ -271,19 +271,139 @@ fn deferred_mixed_zero_insert_preserves_only_prior_up_obligation() {
         *attempts.lock().expect("packet attempt capture"),
         vec![packet]
     );
-    assert_eq!(state.in_flight_mask, 0);
+    assert_eq!(state.in_flight_mask, packet.up_mask | packet.down_mask);
     assert_eq!(state.active_mask, packet.up_mask);
-    assert_eq!(state.release_obligation_mask(), packet.up_mask);
+    assert_eq!(state.possibly_active_mask, packet.down_mask);
+    assert_eq!(state.failed_release_mask, packet.up_mask);
+    assert_eq!(
+        state.release_obligation_mask(),
+        packet.up_mask | packet.down_mask,
+        "an attempted zero-insertion Down remains a cleanup obligation"
+    );
 
     let cleanup = state.release_terminal_tracked_scope(0);
     assert!(cleanup.release_outcome.released_successfully);
-    assert_eq!(cleanup.release_outcome.attempted_mask, packet.up_mask);
+    assert_eq!(
+        cleanup.release_outcome.attempted_mask,
+        packet.up_mask | packet.down_mask
+    );
     assert_eq!(
         *terminal_packets.lock().expect("terminal packet capture"),
-        vec![PhysicalPacket::new(packet.up_mask, 0)],
-        "zero inserted events must leave the existing Up obligation only"
+        vec![PhysicalPacket::new(packet.up_mask | packet.down_mask, 0)],
+        "cleanup reconciles both the prior Up slot and attempted Down mask"
     );
     assert_eq!(state.release_obligation_mask(), 0);
+}
+
+#[test]
+fn deferred_down_zero_insert_retains_in_flight_until_verified_cleanup() {
+    let packet = PhysicalPacket::new(0, 0b0100);
+    let prepared = super::super::packet::PreparedPhysicalPacket::try_new(packet)
+        .expect("valid prepared Down packet");
+    let mut state = TrackedKeyState::with_packet_emitter(|sent| SendTransactionOutcome {
+        status: SendTransactionStatus::ZeroProgress,
+        evidence: SendEvidence {
+            requested_mask: sent.down_mask,
+            confirmed_mask: 0,
+            skipped_mask: 0,
+            first_inserted: 0,
+            attempts: 1,
+            zero_progress_retries: 0,
+            retry_reason: PacketRetryReason::ZeroProgress,
+            first_win32_error: Some(5),
+            last_win32_error: Some(5),
+            started_ticks: Some(crate::clock::QpcTicks::from_raw(100)),
+            completed_ticks: Some(crate::clock::QpcTicks::from_raw(101)),
+            timing_error: None,
+        },
+    });
+    state.set_emitter(|scan_codes, _| super::super::outcome::PlatformSendResult {
+        requested: scan_codes.len() as u8,
+        inserted: scan_codes.len() as u8,
+        started_ticks: crate::clock::QpcTicks::ZERO,
+        completed_ticks: Some(crate::clock::QpcTicks::ZERO),
+        win32_error: 0,
+        timing_error: None,
+    });
+    state.set_probe(|_, _| super::super::physical::InstrumentPhysicalState::AllUp);
+
+    let outcome = state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&prepared);
+
+    assert_eq!(outcome.status, SendTransactionStatus::ZeroProgress);
+    assert_eq!(outcome.evidence.attempts, 1);
+    assert_eq!(state.in_flight_mask, packet.down_mask);
+    assert_eq!(state.possibly_active_mask, packet.down_mask);
+    assert_eq!(state.release_obligation_mask(), packet.down_mask);
+    let cleanup = state.release_scope(super::super::tracked::ReleaseScope::Tracked, 0);
+    assert!(cleanup.released_successfully);
+    assert_eq!(cleanup.attempted_mask, packet.down_mask);
+    assert_eq!(state.release_obligation_mask(), 0);
+}
+
+#[test]
+fn proven_raw_zero_journal_clear_preserves_another_confirmed_hold() {
+    let successful_calls = Arc::new(AtomicUsize::new(0));
+    let success = prepared_success_emitter(Arc::clone(&successful_calls));
+    let mut state = TrackedKeyState::with_packet_emitter(move |packet| {
+        if packet.down_mask == 0b0010 {
+            SendTransactionOutcome {
+                status: SendTransactionStatus::ZeroProgress,
+                evidence: SendEvidence {
+                    requested_mask: packet.down_mask,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: 0,
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::ZeroProgress,
+                    first_win32_error: Some(5),
+                    last_win32_error: Some(5),
+                    started_ticks: Some(crate::clock::QpcTicks::from_raw(100)),
+                    completed_ticks: Some(crate::clock::QpcTicks::from_raw(101)),
+                    timing_error: None,
+                },
+            }
+        } else {
+            success(packet)
+        }
+    });
+
+    let a_packet = PhysicalPacket::new(0, 0b0001);
+    let a = super::super::packet::PreparedPhysicalPacket::try_new(a_packet).expect("valid A Down");
+    let a_result = state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&a);
+    assert_eq!(a_result.status, SendTransactionStatus::Complete);
+    state
+        .commit_physical_packet(a_packet.down_mask)
+        .expect("commit confirmed A");
+    assert_eq!(state.active_mask, 0b0001);
+    assert_eq!(state.release_obligation_mask(), 0b0001);
+
+    let b_packet = PhysicalPacket::new(0, 0b0010);
+    let b = super::super::packet::PreparedPhysicalPacket::try_new(b_packet).expect("valid B Down");
+    let b_result = state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&b);
+    assert_eq!(b_result.status, SendTransactionStatus::ZeroProgress);
+    assert_eq!(b_result.evidence.first_inserted, 0);
+    assert_eq!(b_result.evidence.attempts, 1);
+
+    // This is the journal state after the raw sender outcome and before the
+    // worker's proven-zero resolution: A remains active while B is both
+    // possibly active and in flight.
+    assert_eq!(state.active_mask, 0b0001);
+    assert_eq!(state.possibly_active_mask, 0b0010);
+    assert_eq!(state.failed_release_mask, 0);
+    assert_eq!(state.in_flight_mask, 0b0010);
+    assert_eq!(state.release_obligation_mask(), 0b0011);
+
+    state
+        .clear_proven_raw_zero_down_attempt(b_packet.down_mask)
+        .expect("resolve only B's proven raw-zero journal bits");
+
+    assert_eq!(state.active_mask, 0b0001);
+    assert_eq!(state.possibly_active_mask, 0);
+    assert_eq!(state.failed_release_mask, 0);
+    assert_eq!(state.in_flight_mask, 0);
+    assert_eq!(state.release_obligation_mask(), 0b0001);
+    assert_eq!(successful_calls.load(Ordering::Relaxed), 1);
 }
 
 #[test]

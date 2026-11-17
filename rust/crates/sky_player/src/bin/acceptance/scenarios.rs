@@ -600,7 +600,7 @@ pub(super) fn production_options_for_fps(
             after_owned_latch,
         );
     NativeSessionOptions {
-        schedule,
+        schedule: schedule.into(),
         backend: BackendConfig::Production,
         profile: DispatchProfile::Production,
         timing: TimingOptions {

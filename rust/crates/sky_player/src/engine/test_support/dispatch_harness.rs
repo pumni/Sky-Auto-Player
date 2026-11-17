@@ -10,9 +10,10 @@ use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
 use crate::engine::worker::{
-    StagedCandidate, StagedControlSignals, StagedDispatchContext, StagedDispatchOutcome,
-    WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
-    dispatch_staged_candidate, stage_candidate,
+    DispatchAttemptOutcome, FinalControlSignals, StagedCandidate, StagedControlSignals,
+    StagedDispatchContext, StagedDispatchOutcome, WorkerResources, WorkerRuntime,
+    WorkerSchedulingGuards, WorkerTimingState, dispatch_staged_candidate,
+    pre_wait_candidate_admission, stage_candidate,
 };
 use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::clock::PlaybackClockState;
@@ -81,12 +82,12 @@ pub struct ProductionDispatchTestHarness {
     pub(crate) timing: WorkerTimingState,
     pub(crate) runtime: WorkerRuntime,
     pub(crate) local_metrics: WorkerMetricsLocal,
-    pub(crate) focus_active: AtomicBool,
+    pub(crate) focus_active: Arc<AtomicBool>,
     pub(crate) target: Arc<SessionTarget>,
-    pub(crate) quit_requested: AtomicBool,
-    pub(crate) skip_requested: AtomicBool,
+    pub(crate) quit_requested: Arc<AtomicBool>,
+    pub(crate) skip_requested: Arc<AtomicBool>,
     pub(crate) panic_requested: AtomicBool,
-    pub(crate) supervisor_expired: SupervisorLeaseState,
+    pub(crate) supervisor_expired: Arc<SupervisorLeaseState>,
     pub(crate) desired_pause: AtomicBool,
     pub(crate) system_power: Arc<SystemPowerState>,
     pub(crate) metrics: SharedMetrics,
@@ -257,12 +258,12 @@ impl ProductionDispatchTestHarness {
             timing,
             runtime,
             local_metrics: WorkerMetricsLocal::default(),
-            focus_active: AtomicBool::new(true),
+            focus_active: Arc::new(AtomicBool::new(true)),
             target,
-            quit_requested: AtomicBool::new(false),
-            skip_requested: AtomicBool::new(false),
+            quit_requested: Arc::new(AtomicBool::new(false)),
+            skip_requested: Arc::new(AtomicBool::new(false)),
             panic_requested: AtomicBool::new(false),
-            supervisor_expired: SupervisorLeaseState::new(QpcTicks::from_raw(1)),
+            supervisor_expired: Arc::new(SupervisorLeaseState::new(QpcTicks::from_raw(1))),
             desired_pause: AtomicBool::new(false),
             system_power: Arc::new(SystemPowerState::default()),
             metrics: SharedMetrics::default(),
@@ -405,6 +406,15 @@ impl ProductionDispatchTestHarness {
         candidate: StagedCandidate,
         with_observer: bool,
     ) -> StagedDispatchOutcome {
+        self.dispatch_staged_candidate_with_reason_for_test(candidate, with_observer)
+            .public_outcome()
+    }
+
+    pub(crate) fn dispatch_staged_candidate_with_reason_for_test(
+        &mut self,
+        candidate: StagedCandidate,
+        with_observer: bool,
+    ) -> DispatchAttemptOutcome {
         let qpc_clock = self.resources.clock;
         let context = StagedDispatchContext {
             target: &self.target,
@@ -430,6 +440,27 @@ impl ProductionDispatchTestHarness {
             &mut self.runtime,
             &mut self.local_metrics,
             with_observer.then_some(&self.observer),
+        )
+    }
+
+    pub fn pre_wait_candidate_admission_for_test(
+        &mut self,
+        candidate: &StagedCandidate,
+    ) -> StagedDispatchOutcome {
+        pre_wait_candidate_admission(
+            candidate,
+            &self.target,
+            self.config.focus.require_focus,
+            &self.focus_active,
+            FinalControlSignals {
+                quit_requested: &self.quit_requested,
+                skip_requested: &self.skip_requested,
+                panic_requested: &self.panic_requested,
+                desired_pause: &self.desired_pause,
+                supervisor_expired: &self.supervisor_expired,
+                system_power: Some(&self.system_power),
+            },
+            &mut self.runtime,
         )
     }
 
@@ -541,6 +572,20 @@ impl ProductionDispatchTestHarness {
         self.resources.backend.release_obligation_mask()
     }
 
+    pub fn reset_target_proof_counts_for_test(&self) {
+        self.target.reset_proof_operation_counts_for_test();
+    }
+
+    pub fn target_proof_counts_for_test(&self) -> (u64, u64, u64, u64) {
+        let counts = self.target.proof_operation_counts_for_test();
+        (
+            counts.authority_arc_clones,
+            counts.authority_mutex_attempts,
+            counts.writer_permit_attempts,
+            counts.generation_revalidations,
+        )
+    }
+
     pub fn apply_scheduler_resumable_lifecycle_transition_for_test(
         &mut self,
     ) -> Result<(), String> {
@@ -608,6 +653,77 @@ impl ProductionDispatchTestHarness {
             + 'static,
     {
         self.runtime.final_gate_post_focus_race_hook = Some(Arc::new(hook));
+    }
+
+    pub fn set_final_gate_before_syscall_hook<F>(&mut self, hook: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.runtime.final_gate_before_syscall_hook = Some(Arc::new(hook));
+    }
+
+    pub fn set_final_gate_before_owner_permit_hook<F>(&mut self, hook: F)
+    where
+        F: Fn() + Send + Sync + 'static,
+    {
+        self.runtime.final_gate_before_owner_permit_hook = Some(Arc::new(hook));
+    }
+
+    /// Enable deterministic foreground and retained owner identity for tests
+    /// that exercise the production focus-required final gate.
+    pub fn configure_focus_owner_for_test(&mut self, hwnd: isize, owner_pid: u32) {
+        self.config.focus.require_focus = true;
+        self.target.require_owner_identity();
+        let (current_hwnd, generation) = self.target.load_stable().expect("test target snapshot");
+        assert_eq!(current_hwnd, hwnd, "focus fixture HWND must be published");
+        #[cfg(feature = "test-support")]
+        assert!(self.target.bind_owner_identity_authority(
+            hwnd,
+            generation,
+            owner_pid,
+            Arc::new(
+                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                    hwnd, owner_pid,
+                )
+            ),
+        ));
+        #[cfg(not(feature = "test-support"))]
+        assert!(self.target.bind_owner_identity(hwnd, generation, owner_pid));
+        sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
+        sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
+    }
+
+    pub fn republish_focus_owner_for_test(&self, hwnd: isize, owner_pid: u32) {
+        let same_hwnd = self
+            .target
+            .load_stable()
+            .is_some_and(|(current_hwnd, _)| current_hwnd == hwnd);
+        let published = if same_hwnd {
+            self.target.republish_same_hwnd(hwnd)
+        } else {
+            self.target.publish_for_test(hwnd)
+        };
+        assert!(published);
+        let (published_hwnd, generation) = self
+            .target
+            .load_stable()
+            .expect("republished test target snapshot");
+        assert_eq!(published_hwnd, hwnd);
+        #[cfg(feature = "test-support")]
+        assert!(self.target.bind_owner_identity_authority(
+            hwnd,
+            generation,
+            owner_pid,
+            Arc::new(
+                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                    hwnd, owner_pid,
+                )
+            ),
+        ));
+        #[cfg(not(feature = "test-support"))]
+        assert!(self.target.bind_owner_identity(hwnd, generation, owner_pid));
+        sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
+        sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
     }
 
     pub fn dispatch_timing_config_for_test(&self) -> Result<DispatchTimingConfigEvidence, String> {
@@ -718,6 +834,7 @@ impl ProductionDispatchTestHarness {
             worker_panicked,
             runtime.terminal_trigger,
             runtime.terminal_error,
+            runtime.attempted_dispatch_anomalies,
             cleanup_observation,
         )
     }

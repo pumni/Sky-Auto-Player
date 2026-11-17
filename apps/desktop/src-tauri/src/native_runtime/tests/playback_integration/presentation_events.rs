@@ -70,6 +70,273 @@ fn presentation_critical_queue_overflow_fails_closed_and_releases() {
 
 #[cfg(feature = "tauri-test")]
 #[test]
+fn disconnected_presentation_consumer_fails_closed() {
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    let mut active = active_for_control(PlaybackSessionState::Playing, None);
+    Arc::get_mut(&mut active)
+        .expect("unshared active session before presenter setup")
+        .event_delivery_failure = events.lock().expect("event hub").failure_flag();
+    let (critical, receiver) = mpsc::sync_channel(PLAYBACK_PRESENTATION_CRITICAL_CAPACITY);
+    drop(receiver);
+    let presentation = Arc::new(NativePlaybackPresentation {
+        critical,
+        queue: Arc::new(Default::default()),
+        worker: Mutex::new(None),
+    });
+    assert!(active.presentation.set(Arc::clone(&presentation)).is_ok());
+
+    let error = presentation
+        .publish_state(&active, PlaybackEventState::Paused, None, None)
+        .expect_err("disconnected lifecycle consumer must reject publication");
+    assert!(error.contains("consumer is unavailable"), "{error}");
+    assert!(presentation.queue.failed.load(Ordering::Acquire));
+    assert!(active.event_delivery_failure.load(Ordering::Acquire));
+    assert!(active.stop_requested.load(Ordering::Acquire));
+    assert_eq!(
+        active.dry_run_terminal_status(),
+        Some(EnginePollStatus::Quit)
+    );
+    events.lock().expect("event hub").close();
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn presentation_consumer_panic_fails_closed_and_releases() {
+    let activity = ActivityCoordinator::default();
+    let player = presentation_projection_session(0, 30_100_000, 30_200_000);
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+    let panic_once = Arc::new(AtomicBool::new(false));
+    let hook_panic_once = Arc::clone(&panic_once);
+    let (panic_sender, panic_receiver) = mpsc::channel();
+    let test_hook: PlaybackPresentationTestHook = Arc::new(move |stage| {
+        if stage == PlaybackPresentationStage::SnapshotProjection
+            && !hook_panic_once.swap(true, Ordering::AcqRel)
+        {
+            panic_sender.send(()).expect("panic hook receiver");
+            panic!("injected presentation projection panic");
+        }
+    });
+    let active = attach_test_presentation(
+        tracked_test_active(Arc::clone(&player), activity.clone()),
+        &events,
+        Arc::clone(&diagnostics_gate),
+        Some(test_hook),
+    );
+    let mut service = NativePlaybackService::new(activity.clone());
+    service.diagnostics_gate = Arc::clone(&diagnostics_gate);
+    *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
+    let service = Arc::new(service);
+    let monitor_active = Arc::clone(&active);
+    let monitor_events = Arc::clone(&events);
+    let monitor_service = Arc::clone(&service);
+    let (activation_sender, activation_receiver) = mpsc::channel();
+    let (monitor_done_sender, monitor_done_receiver) = mpsc::channel();
+    let monitor = thread::spawn(move || {
+        monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+        let _ = monitor_done_sender.send(());
+    });
+    player
+        .arm(500_000)
+        .expect("arm presentation panic test worker");
+    activation_sender
+        .send(PlaybackActivation::Started)
+        .expect("monitor activation receiver");
+    assert!(
+        active
+            .presentation
+            .get()
+            .expect("presentation consumer")
+            .publish_snapshot(&active, 1_000, 0, EnginePollStatus::Playing)
+    );
+    panic_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("injected panic reached snapshot projection");
+    assert!(
+        monitor_done_receiver
+            .recv_timeout(Duration::from_secs(3))
+            .is_ok(),
+        "consumer panic must wake the monitor into fail-closed cleanup"
+    );
+    monitor.join().expect("monitor thread");
+
+    let presentation = active.presentation.get().expect("presentation consumer");
+    assert!(presentation.queue.failed.load(Ordering::Acquire));
+    assert_eq!(
+        presentation.queue.failure_reason().as_deref(),
+        Some("playback presentation consumer panicked")
+    );
+    assert!(active.event_delivery_failure.load(Ordering::Acquire));
+    assert!(wait_for_playback_done(&active, Duration::from_secs(1)));
+    assert!(active.worker_quiescent.load(Ordering::Acquire));
+    assert!(active.release_verified.load(Ordering::Acquire));
+    let terminal = service
+        .status()
+        .expect("failed presentation status")
+        .last_terminal
+        .expect("failed terminal record");
+    assert_eq!(terminal.state, PlaybackSessionState::Failed);
+    drop(
+        activity
+            .reserve_playback("successor-after-presentation-panic")
+            .expect("verified cleanup releases physical activity reservation"),
+    );
+    events.lock().expect("event hub").close();
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn poisoned_presentation_snapshot_slot_fails_closed_and_releases() {
+    let activity = ActivityCoordinator::default();
+    let player = presentation_projection_session(0, 30_100_000, 30_200_000);
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+    let (test_hook, consumer_entered, gate) =
+        blocked_presentation_hook(PlaybackPresentationStage::BeforeWorkSelection);
+    let active = attach_test_presentation(
+        tracked_test_active(Arc::clone(&player), activity.clone()),
+        &events,
+        Arc::clone(&diagnostics_gate),
+        Some(test_hook),
+    );
+    consumer_entered
+        .recv_timeout(Duration::from_secs(2))
+        .expect("consumer held before snapshot-slot inspection");
+    let mut service = NativePlaybackService::new(activity.clone());
+    service.diagnostics_gate = Arc::clone(&diagnostics_gate);
+    *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
+    let service = Arc::new(service);
+    let monitor_active = Arc::clone(&active);
+    let monitor_events = Arc::clone(&events);
+    let monitor_service = Arc::clone(&service);
+    let (activation_sender, activation_receiver) = mpsc::channel();
+    let (monitor_done_sender, monitor_done_receiver) = mpsc::channel();
+    let monitor = thread::spawn(move || {
+        monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+        let _ = monitor_done_sender.send(());
+    });
+    player.arm(500_000).expect("arm poisoned-slot test worker");
+    activation_sender
+        .send(PlaybackActivation::Started)
+        .expect("monitor activation receiver");
+
+    let presentation = active.presentation.get().expect("presentation consumer");
+    let queue = Arc::clone(&presentation.queue);
+    assert!(
+        thread::spawn(move || {
+            let _snapshot = queue
+                .latest_snapshot
+                .lock()
+                .expect("snapshot slot before injected poison");
+            panic!("injected presentation snapshot-slot poison");
+        })
+        .join()
+        .is_err()
+    );
+    release_test_gate(&gate);
+    assert!(
+        monitor_done_receiver
+            .recv_timeout(Duration::from_secs(3))
+            .is_ok(),
+        "poisoned snapshot state must wake the monitor into fail-closed cleanup"
+    );
+    monitor.join().expect("monitor thread");
+
+    assert!(presentation.queue.failed.load(Ordering::Acquire));
+    assert_eq!(
+        presentation.queue.failure_reason().as_deref(),
+        Some("playback presentation snapshot slot was poisoned")
+    );
+    assert!(active.event_delivery_failure.load(Ordering::Acquire));
+    assert!(wait_for_playback_done(&active, Duration::from_secs(1)));
+    assert!(active.worker_quiescent.load(Ordering::Acquire));
+    assert!(active.release_verified.load(Ordering::Acquire));
+    let terminal = service
+        .status()
+        .expect("failed presentation status")
+        .last_terminal
+        .expect("failed terminal record");
+    assert_eq!(terminal.state, PlaybackSessionState::Failed);
+    drop(
+        activity
+            .reserve_playback("successor-after-presentation-poison")
+            .expect("verified cleanup releases physical activity reservation"),
+    );
+    events.lock().expect("event hub").close();
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn terminal_finalize_callback_reports_presentation_failure() {
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+    let panic_once = Arc::new(AtomicBool::new(false));
+    let hook_panic_once = Arc::clone(&panic_once);
+    let test_hook: PlaybackPresentationTestHook = Arc::new(move |stage| {
+        if stage == PlaybackPresentationStage::DiagnosticsProjection
+            && !hook_panic_once.swap(true, Ordering::AcqRel)
+        {
+            panic!("injected finalization diagnostics panic");
+        }
+    });
+    let active = attach_shared_test_presentation(
+        active_for_control(PlaybackSessionState::Playing, None),
+        &events,
+        Arc::clone(&diagnostics_gate),
+        Some(test_hook),
+    );
+    let presentation = active.presentation.get().expect("presentation consumer");
+    let (completion_sender, completion_receiver) = mpsc::channel();
+    presentation
+        .finalize(
+            &active,
+            PlaybackPresentationFinalization {
+                state: PlaybackEventState::Finished,
+                message: None,
+                outcome: Some("finished".into()),
+                publication: PlaybackTerminalPublication::Finished {
+                    outcome: "finished".into(),
+                    message: "Playback finished".into(),
+                },
+            },
+            Box::new(move |result| {
+                completion_sender
+                    .send(result)
+                    .expect("finalization completion receiver");
+            }),
+        )
+        .expect("queue terminal finalization");
+
+    let completion = completion_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("finalization callback completes with an explicit result");
+    assert_eq!(
+        completion.expect_err("injected presentation panic must fail finalization"),
+        "playback presentation panicked during finalization"
+    );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while (!active.event_delivery_failure.load(Ordering::Acquire)
+        || !active.stop_requested.load(Ordering::Acquire))
+        && Instant::now() < deadline
+    {
+        thread::yield_now();
+    }
+    assert!(presentation.queue.failed.load(Ordering::Acquire));
+    assert!(active.event_delivery_failure.load(Ordering::Acquire));
+    assert!(active.stop_requested.load(Ordering::Acquire));
+    assert!(
+        !events
+            .lock()
+            .expect("event hub")
+            .buffered_for_test()
+            .iter()
+            .any(|event| matches!(event, UiEvent::PlaybackFinished { .. }))
+    );
+    events.lock().expect("event hub").close();
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
 fn rapid_playback_sessions_queue_terminal_before_successor_starting() {
     let activity = ActivityCoordinator::default();
     let service = NativePlaybackService::new(activity);

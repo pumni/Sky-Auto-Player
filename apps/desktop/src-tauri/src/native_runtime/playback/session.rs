@@ -1,8 +1,20 @@
 use super::*;
 use sha2::{Digest, Sha256};
 
+fn consume_owner_identity_poll_result(
+    result: sky_player::engine::OwnerIdentityPollResult,
+    identity_authority_invalidated: &mut bool,
+    panic_release: impl FnOnce(),
+) {
+    if result == sky_player::engine::OwnerIdentityPollResult::CurrentInvalid
+        && !*identity_authority_invalidated
+    {
+        *identity_authority_invalidated = true;
+        panic_release();
+    }
+}
+
 pub(in crate::native_runtime) struct NativeDispatchStartupContext<'a> {
-    caller_retained_capacity_bytes: usize,
     startup_cancellation: &'a AtomicBool,
     event_delivery_failure: &'a AtomicBool,
 }
@@ -102,7 +114,7 @@ impl NativePlaybackService {
             #[cfg(test)]
             startup_failure: None,
             #[cfg(test)]
-            startup_compile_test_hook: Mutex::new(None),
+            prepare_compile_test_hook: Mutex::new(None),
             #[cfg(test)]
             settings_invalidation_count: AtomicU64::new(0),
             #[cfg(test)]
@@ -120,9 +132,14 @@ impl NativePlaybackService {
             #[cfg(all(test, feature = "tauri-test"))]
             test_player: None,
             #[cfg(all(test, feature = "tauri-test"))]
+            prepared_player_factory_for_test: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            recommended_plan_caller_capacity_override_for_test: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            recommendation_materialization_test_hook: Mutex::new(None),
+            #[cfg(all(test, feature = "tauri-test"))]
             before_arm_test_hook: None,
             #[cfg(all(test, feature = "tauri-test"))]
-            post_compile_prepublication_test_hook: None,
             #[cfg(all(test, feature = "tauri-test"))]
             monitor_retired_test_hook: None,
         }
@@ -441,16 +458,101 @@ impl NativePlaybackService {
         let fingerprint_song_id = format!("{song_id}\0{plan_identity}");
         let fingerprint =
             plan_fingerprint(&fingerprint_song_id, &config, &schedule, &timing_policy)?;
-        let timing_advisory = self.analyze_timing_variant(
+        let source_action_count = schedule.actions.len();
+        let schedule_duration_us = schedule.duration_us;
+        let qpc_frequency_hz = if config.dry_run {
+            None
+        } else {
+            Some(
+                sky_dispatch_win32::clock::QpcClock::initialize()
+                    .map_err(|error| format!("native QPC Prepare admission failed: {error:?}"))?
+                    .frequency_hz(),
+            )
+        };
+        let other_prepared_capacity_bytes = {
+            let mut prepared = self
+                .prepared
+                .lock()
+                .map_err(|_| "native prepared-plan lock poisoned".to_string())?;
+            prepared.try_reserve(1).map_err(|error| {
+                format!("native prepared-plan cache allocation failed: {error}")
+            })?;
+            prepared_cache_retained_capacity_bytes(&prepared, None)?
+        };
+        let base_caller_retained_capacity_bytes = native_prepare_caller_retained_capacity_bytes(
+            NativePrepareCapacityInput {
+                song: &song,
+                song_id: &song_id,
+                settings_fingerprint: &settings_fingerprint,
+                publication_fingerprint: &publication_fingerprint,
+                source_path: &source_path,
+                source_hash: &source_hash,
+                plan_identity: &plan_identity,
+            },
+            other_prepared_capacity_bytes,
+        )?;
+        let base_runtime_schedule = match self.compile_prepared_schedule(
             &schedule,
-            &config,
-            &timing_policy,
-            &fingerprint,
+            base_caller_retained_capacity_bytes,
             cancelled,
-        );
+        ) {
+            Ok(compiled) => Some(compiled),
+            Err(_error) if config.dry_run => None,
+            Err(error) => {
+                return Err(format!(
+                    "native playback plan could not be prepared: {error}"
+                ));
+            }
+        };
+        let timing_advisory = if let Some(compiled) = &base_runtime_schedule {
+            self.analyze_timing_variant(
+                source_action_count,
+                compiled,
+                &config,
+                &timing_policy,
+                &fingerprint,
+                cancelled,
+            )
+        } else {
+            timing_advisory::unavailable_compiled_variant(
+                source_action_count,
+                &config,
+                &timing_policy,
+                &fingerprint,
+                cancelled,
+                "The dry-run schedule could not be compiled for the offline advisory.",
+            )
+        };
         if cancelled.load(Ordering::Acquire) {
             return Err("playback preparation was superseded by a newer request".into());
         }
+        let prepared_dispatch_schedule = if config.dry_run {
+            None
+        } else {
+            let compiled = base_runtime_schedule
+                .as_ref()
+                .expect("physical Prepare requires a compiled runtime schedule");
+            Some(
+                sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
+                    compiled,
+                    qpc_frequency_hz.expect("physical Prepare requires QPC admission"),
+                    timing_policy.min_hold_us,
+                    timing_policy.min_release_gap_us,
+                    compiled.compile_memory.caller_retained_capacity_bytes,
+                    || {
+                        if cancelled.load(Ordering::Acquire) {
+                            Err("native dispatch materialization cancelled".to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )
+                .map_err(|error| format!("native playback plan preparation failed: {error}"))?,
+            )
+        };
+        let base_dispatch_capacity_bytes = prepared_dispatch_schedule
+            .as_ref()
+            .map_or(0, |plan| plan.memory_metrics().plan_capacity_bytes);
         let admission = if risk.severity == "low" {
             PlaybackAdmission::Ready
         } else {
@@ -459,7 +561,8 @@ impl NativePlaybackService {
         let prepared_id = opaque_native_id()?;
         let base_variant = NativePlaybackVariant {
             config: config.clone(),
-            schedule: schedule.clone(),
+            schedule_duration_us,
+            prepared_schedule: prepared_dispatch_schedule,
             fingerprint: fingerprint.clone(),
             timing_policy: timing_policy.clone(),
             timing_margin_recommendation: timing_margin_recommendation.clone(),
@@ -472,6 +575,7 @@ impl NativePlaybackService {
             plan_fingerprint: fingerprint.clone(),
             timing_advisory: Some(timing_advisory),
         }];
+        let mut dry_run_variant = None;
         if risk.severity != "low" {
             decisions.push(RiskDecisionDto {
                 decision: PlaybackDecision::Proceed,
@@ -507,36 +611,119 @@ impl NativePlaybackService {
                     &recommended_schedule,
                     &recommended_policy,
                 )?;
-                let recommended_timing_advisory = self.analyze_timing_variant(
+                let recommended_action_count = recommended_schedule.actions.len();
+                let base_runtime_schedule_capacity_bytes = base_runtime_schedule
+                    .as_ref()
+                    .map(|compiled| runtime_schedule_capacity_bytes(compiled, cancelled))
+                    .transpose()?
+                    .unwrap_or(0);
+                let recommendation_caller_retained_capacity_bytes = checked_capacity_sum([
+                    other_prepared_capacity_bytes,
+                    base_runtime_schedule_capacity_bytes,
+                    base_dispatch_capacity_bytes,
+                ])?;
+                let recommendation_caller_retained_capacity_bytes =
+                    native_prepare_caller_retained_capacity_bytes(
+                        NativePrepareCapacityInput {
+                            song: &song,
+                            song_id: &song_id,
+                            settings_fingerprint: &settings_fingerprint,
+                            publication_fingerprint: &publication_fingerprint,
+                            source_path: &source_path,
+                            source_hash: &source_hash,
+                            plan_identity: &plan_identity,
+                        },
+                        recommendation_caller_retained_capacity_bytes,
+                    )?;
+                let recommended_compiled = match self.compile_prepared_schedule(
                     &recommended_schedule,
-                    &recommended_config,
-                    &recommended_policy,
-                    &recommended_fingerprint,
+                    recommendation_caller_retained_capacity_bytes,
                     cancelled,
-                );
-                if cancelled.load(Ordering::Acquire) {
-                    return Err("playback preparation was superseded by a newer request".into());
+                ) {
+                    Ok(compiled) => Some(compiled),
+                    Err(error) if cancelled.load(Ordering::Acquire) => {
+                        return Err(format!("playback preparation was cancelled: {error}"));
+                    }
+                    Err(_) => None,
+                };
+                if let Some(recommended_compiled) = recommended_compiled {
+                    let recommended_timing_advisory = self.analyze_timing_variant(
+                        recommended_action_count,
+                        &recommended_compiled,
+                        &recommended_config,
+                        &recommended_policy,
+                        &recommended_fingerprint,
+                        cancelled,
+                    );
+                    let recommended_dispatch = if config.dry_run {
+                        None
+                    } else {
+                        #[cfg(all(test, feature = "tauri-test"))]
+                        if let Some(hook) = self
+                            .recommendation_materialization_test_hook
+                            .lock()
+                            .ok()
+                            .and_then(|mut hook| hook.take())
+                        {
+                            hook();
+                        }
+                        #[cfg(all(test, feature = "tauri-test"))]
+                        let caller_retained_capacity_bytes = self
+                            .recommended_plan_caller_capacity_override_for_test
+                            .unwrap_or(
+                                recommended_compiled
+                                    .compile_memory
+                                    .caller_retained_capacity_bytes,
+                            );
+                        #[cfg(not(all(test, feature = "tauri-test")))]
+                        let caller_retained_capacity_bytes = recommended_compiled
+                            .compile_memory
+                            .caller_retained_capacity_bytes;
+                        match sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
+                            &recommended_compiled,
+                            qpc_frequency_hz.expect("physical recommendation requires QPC admission"),
+                            recommended_policy.min_hold_us,
+                            recommended_policy.min_release_gap_us,
+                            caller_retained_capacity_bytes,
+                            || {
+                                if cancelled.load(Ordering::Acquire) {
+                                    Err("native dispatch materialization cancelled".to_string())
+                                } else {
+                                    Ok(())
+                                }
+                            },
+                        ) {
+                            Ok(prepared) => Some(prepared),
+                            Err(error) if cancelled.load(Ordering::Acquire) => {
+                                return Err(format!("playback preparation was cancelled: {error}"));
+                            }
+                            Err(_) => None,
+                        }
+                    };
+                    if config.dry_run || recommended_dispatch.is_some() {
+                        variants.insert(
+                            PlaybackDecision::UseRecommended,
+                            NativePlaybackVariant {
+                                config: recommended_config.clone(),
+                                schedule_duration_us: recommended_schedule.duration_us,
+                                prepared_schedule: recommended_dispatch,
+                                fingerprint: recommended_fingerprint.clone(),
+                                timing_policy: recommended_policy,
+                                timing_margin_recommendation: timing_margin_recommendation.clone(),
+                            },
+                        );
+                        variant_dtos.push(PlaybackPlanVariantDto {
+                            decision: PlaybackDecision::UseRecommended,
+                            config: recommended_config,
+                            plan_fingerprint: recommended_fingerprint,
+                            timing_advisory: Some(recommended_timing_advisory),
+                        });
+                        decisions.push(RiskDecisionDto {
+                            decision: PlaybackDecision::UseRecommended,
+                            label: "Use recommended settings".into(),
+                        });
+                    }
                 }
-                variants.insert(
-                    PlaybackDecision::UseRecommended,
-                    NativePlaybackVariant {
-                        config: recommended_config.clone(),
-                        schedule: recommended_schedule,
-                        fingerprint: recommended_fingerprint.clone(),
-                        timing_policy: recommended_policy,
-                        timing_margin_recommendation: timing_margin_recommendation.clone(),
-                    },
-                );
-                variant_dtos.push(PlaybackPlanVariantDto {
-                    decision: PlaybackDecision::UseRecommended,
-                    config: recommended_config,
-                    plan_fingerprint: recommended_fingerprint,
-                    timing_advisory: Some(recommended_timing_advisory),
-                });
-                decisions.push(RiskDecisionDto {
-                    decision: PlaybackDecision::UseRecommended,
-                    label: "Use recommended settings".into(),
-                });
             }
             if !config.dry_run {
                 let dry_run_config = PlaybackConfigDto {
@@ -549,37 +736,54 @@ impl NativePlaybackService {
                     &schedule,
                     &timing_policy,
                 )?;
-                let dry_run_timing_advisory = self.analyze_timing_variant(
-                    &schedule,
-                    &dry_run_config,
-                    &timing_policy,
-                    &dry_run_fingerprint,
-                    cancelled,
-                );
+                let dry_run_timing_advisory = if let Some(compiled) = &base_runtime_schedule {
+                    self.analyze_timing_variant(
+                        source_action_count,
+                        compiled,
+                        &dry_run_config,
+                        &timing_policy,
+                        &dry_run_fingerprint,
+                        cancelled,
+                    )
+                } else {
+                    timing_advisory::unavailable_compiled_variant(
+                        source_action_count,
+                        &dry_run_config,
+                        &timing_policy,
+                        &dry_run_fingerprint,
+                        cancelled,
+                        "The dry-run schedule could not be compiled for the offline advisory.",
+                    )
+                };
                 if cancelled.load(Ordering::Acquire) {
                     return Err("playback preparation was superseded by a newer request".into());
                 }
-                variants.insert(
-                    PlaybackDecision::DryRun,
+                dry_run_variant = Some((
                     NativePlaybackVariant {
                         config: dry_run_config.clone(),
-                        schedule: schedule.clone(),
+                        schedule_duration_us,
+                        prepared_schedule: None,
                         fingerprint: dry_run_fingerprint.clone(),
                         timing_policy: timing_policy.clone(),
                         timing_margin_recommendation: timing_margin_recommendation.clone(),
                     },
-                );
-                variant_dtos.push(PlaybackPlanVariantDto {
-                    decision: PlaybackDecision::DryRun,
-                    config: dry_run_config,
-                    plan_fingerprint: dry_run_fingerprint,
-                    timing_advisory: Some(dry_run_timing_advisory),
-                });
-                decisions.push(RiskDecisionDto {
-                    decision: PlaybackDecision::DryRun,
-                    label: "Run a dry-run first".into(),
-                });
+                    PlaybackPlanVariantDto {
+                        decision: PlaybackDecision::DryRun,
+                        config: dry_run_config,
+                        plan_fingerprint: dry_run_fingerprint,
+                        timing_advisory: Some(dry_run_timing_advisory),
+                    },
+                ));
             }
+        }
+        drop(base_runtime_schedule);
+        if let Some((dry_run_variant, dry_run_dto)) = dry_run_variant {
+            variants.insert(PlaybackDecision::DryRun, dry_run_variant);
+            variant_dtos.push(dry_run_dto);
+            decisions.push(RiskDecisionDto {
+                decision: PlaybackDecision::DryRun,
+                label: "Run a dry-run first".into(),
+            });
         }
         let prepared_risk = risk_summary_for_sheet(&risk, sheet_analysis.as_ref(), &config);
         let dto = PreparedPlaybackDto {
@@ -615,24 +819,32 @@ impl NativePlaybackService {
             generation,
             &publication_fingerprint,
         )?;
+        let song_title = song.name;
+        let record = NativePreparedPlan {
+            song_id,
+            generation,
+            settings_fingerprint,
+            song_title,
+            source_path,
+            source_hash,
+            dto: dto.clone(),
+            variants,
+            retained_capacity_bytes: 0,
+        };
+        let mut record = record;
+        record.retained_capacity_bytes = prepared_plan_capacity_bytes(&prepared_id, &record)?;
         let mut prepared = self
             .prepared
             .lock()
             .map_err(|_| "native prepared-plan lock poisoned".to_string())?;
-        prepared.push_back((
-            prepared_id,
-            NativePreparedPlan {
-                song_id,
-                generation,
-                settings_fingerprint,
-                song,
-                source_path,
-                source_hash,
-                dto: dto.clone(),
-                variants,
-            },
-        ));
+        prepared.push_back((prepared_id, record));
         retain_prepared_capacity(&mut prepared);
+        if prepared_cache_retained_capacity_bytes(&prepared, None)?
+            > sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES
+        {
+            prepared.pop_back();
+            return Err("prepared-plan cache exceeds the retained dispatch capacity budget".into());
+        }
         Ok(dto)
     }
 
@@ -702,7 +914,8 @@ impl NativePlaybackService {
 
     fn analyze_timing_variant(
         &self,
-        schedule: &ScheduleMetadata,
+        source_action_count: usize,
+        schedule: &sky_player::adapter_support::RuntimeSchedule,
         config: &PlaybackConfigDto,
         policy: &MaterializedTimingPolicy,
         fingerprint: &str,
@@ -715,7 +928,8 @@ impl NativePlaybackService {
                 .lock()
                 .ok()
                 .and_then(|mut hook| hook.take());
-            timing_advisory::analyze_variant_with_model_hook(
+            timing_advisory::analyze_compiled_variant_with_model_hook(
+                source_action_count,
                 schedule,
                 config,
                 policy,
@@ -729,7 +943,46 @@ impl NativePlaybackService {
             )
         }
         #[cfg(not(test))]
-        timing_advisory::analyze_variant(schedule, config, policy, fingerprint, cancelled)
+        timing_advisory::analyze_compiled_variant(
+            source_action_count,
+            schedule,
+            config,
+            policy,
+            fingerprint,
+            cancelled,
+        )
+    }
+
+    fn compile_prepared_schedule(
+        &self,
+        schedule: &ScheduleMetadata,
+        caller_retained_capacity_bytes: usize,
+        cancelled: &AtomicBool,
+    ) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
+        if cancelled.load(Ordering::Acquire) {
+            return Err("native schedule preparation cancelled".into());
+        }
+        #[cfg(test)]
+        {
+            let hook = self
+                .prepare_compile_test_hook
+                .lock()
+                .ok()
+                .and_then(|hook| hook.clone());
+            if let Some(hook) = hook {
+                return compile_dispatch_schedule_with_checkpoint(
+                    schedule,
+                    caller_retained_capacity_bytes,
+                    cancelled,
+                    |action_count| hook(action_count),
+                );
+            }
+        }
+        compile_dispatch_schedule_with_prepared_capacity(
+            schedule,
+            caller_retained_capacity_bytes,
+            cancelled,
+        )
     }
 
     pub(in crate::native_runtime) fn start(
@@ -814,16 +1067,6 @@ impl NativePlaybackService {
                     .map_err(playback_activity_error)?,
             )
         };
-        let other_prepared_capacity_bytes =
-            prepared_cache_retained_capacity_bytes(&prepared, Some(prepared_index))?;
-        let caller_retained_capacity_bytes = native_start_caller_retained_capacity_bytes(
-            selected_variant,
-            &record.song_id,
-            &record.song.name,
-            &request.prepared_id,
-            &session_id,
-            other_prepared_capacity_bytes,
-        )?;
         let record = prepared
             .remove(prepared_index)
             .expect("prepared record was found above")
@@ -831,13 +1074,11 @@ impl NativePlaybackService {
         drop(prepared);
         let NativePreparedPlan {
             song_id,
-            song,
+            song_title,
             mut variants,
             ..
         } = record;
-        let song_title = song.name;
-        drop(song.notes);
-        let variant = variants
+        let mut variant = variants
             .remove(&selected)
             .expect("selected variant was checked before consuming the plan");
         drop(variants);
@@ -849,21 +1090,24 @@ impl NativePlaybackService {
             Ok((None, None))
         } else {
             let startup_context = NativeDispatchStartupContext {
-                caller_retained_capacity_bytes,
                 startup_cancellation: &startup_cancellation,
                 event_delivery_failure: &event_delivery_failure,
             };
-            self.create_native_player(
-                &variant.schedule,
-                &variant.config,
-                &variant.timing_policy,
-                settings,
-                &startup_context,
-            )
+            match variant.prepared_schedule.take() {
+                Some(prepared_schedule) => self.create_native_player(
+                    prepared_schedule,
+                    &variant.config,
+                    &variant.timing_policy,
+                    settings,
+                    &startup_context,
+                ),
+                None => Err("prepared physical playback plan is missing".to_string()),
+            }
             .and_then(|(player, target)| {
                 let result: Result<_, String> = (|| {
                     #[cfg(all(test, feature = "tauri-test"))]
-                    if self.test_player.is_some() {
+                    if self.test_player.is_some() || self.prepared_player_factory_for_test.is_some()
+                    {
                         return Ok((Some(player.clone()), Some(target)));
                     }
                     (power_request, suspend_resume_registration) =
@@ -892,7 +1136,7 @@ impl NativePlaybackService {
                     prepared_id: request.prepared_id.clone(),
                     song_id: song_id.clone(),
                     title: song_title.clone(),
-                    total_us: variant.schedule.duration_us,
+                    total_us: variant.schedule_duration_us,
                     config: variant.config.clone(),
                     timing_policy: variant.timing_policy.clone(),
                     timing_margin_recommendation: variant.timing_margin_recommendation.clone(),
@@ -1029,7 +1273,7 @@ impl NativePlaybackService {
             prepared_id: request.prepared_id.clone(),
             song_id: song_id.clone(),
             title: song_title.clone(),
-            total_us: variant.schedule.duration_us,
+            total_us: variant.schedule_duration_us,
             config: variant.config.clone(),
             timing_policy: variant.timing_policy.clone(),
             timing_margin_recommendation: variant.timing_margin_recommendation.clone(),
@@ -1330,7 +1574,7 @@ impl NativePlaybackService {
 
     pub(in crate::native_runtime) fn create_native_player(
         &self,
-        schedule: &ScheduleMetadata,
+        prepared_schedule: sky_player::adapter_support::PreparedDispatchSchedule,
         config: &PlaybackConfigDto,
         policy: &MaterializedTimingPolicy,
         settings: &ApplicationSettings,
@@ -1346,44 +1590,12 @@ impl NativePlaybackService {
         {
             return Err("native playback lifecycle delivery is unavailable".into());
         }
-        let runtime_schedule = {
-            #[cfg(test)]
-            {
-                let hook = self
-                    .startup_compile_test_hook
-                    .lock()
-                    .ok()
-                    .and_then(|hook| hook.clone());
-                if let Some(hook) = hook {
-                    compile_dispatch_schedule_with_checkpoint(
-                        schedule,
-                        startup_context.caller_retained_capacity_bytes,
-                        startup_context.startup_cancellation,
-                        |index| hook(index),
-                    )?
-                } else {
-                    compile_dispatch_schedule_with_prepared_capacity(
-                        schedule,
-                        startup_context.caller_retained_capacity_bytes,
-                        startup_context.startup_cancellation,
-                    )?
-                }
-            }
-            #[cfg(not(test))]
-            {
-                compile_dispatch_schedule_with_prepared_capacity(
-                    schedule,
-                    startup_context.caller_retained_capacity_bytes,
-                    startup_context.startup_cancellation,
-                )?
-            }
-        };
-        #[cfg(all(test, feature = "tauri-test"))]
-        if let Some(hook) = &self.post_compile_prepublication_test_hook {
-            hook();
-        }
         if startup_context.startup_cancellation.load(Ordering::Acquire) {
             return Err("native playback startup was cancelled during shutdown".into());
+        }
+        #[cfg(all(test, feature = "tauri-test"))]
+        if let Some(factory) = &self.prepared_player_factory_for_test {
+            return factory(prepared_schedule, config, policy).map(|player| (player, 0));
         }
         #[cfg(all(test, feature = "tauri-test"))]
         if let Some(player) = &self.test_player {
@@ -1431,7 +1643,7 @@ impl NativePlaybackService {
         }
         let player = Arc::new(NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
-                schedule: runtime_schedule,
+                schedule: sky_player::engine::NativeScheduleInput::Prepared(prepared_schedule),
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
@@ -1612,12 +1824,17 @@ impl NativePlaybackService {
                 let focused = sky_dispatch_win32::focus::foreground_window_matches(target);
                 player.set_focus_hint(focused);
             }
-            if last_identity_check.elapsed() >= Duration::from_millis(100) {
-                if let Some(player) = &active.player
-                    && !player.poll_window_identity_authority()
-                {
-                    identity_authority_invalidated = true;
-                    let _ = player.panic_release();
+            if !identity_authority_invalidated
+                && last_identity_check.elapsed() >= Duration::from_millis(100)
+            {
+                if let Some(player) = &active.player {
+                    consume_owner_identity_poll_result(
+                        player.poll_window_identity_authority_result(),
+                        &mut identity_authority_invalidated,
+                        || {
+                            let _ = player.panic_release();
+                        },
+                    );
                 }
                 last_identity_check = Instant::now();
             }
@@ -2121,6 +2338,11 @@ impl NativePlaybackService {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.startup_cancellation.store(true, Ordering::Release);
+        if let Ok(mut publication) = self.prepare_publication.lock()
+            && let Some(active) = publication.active_request.take()
+        {
+            active.store(true, Ordering::Release);
+        }
         let active = self.active.lock().ok().and_then(|slot| slot.clone());
         if let Some(player) = active.as_ref().and_then(|active| active.player.as_ref()) {
             // The worker's own pre-arm Quit latch is the physical-send gate.
@@ -2208,7 +2430,7 @@ impl NativePlaybackServiceHandle {
             #[cfg(test)]
             startup_failure: None,
             #[cfg(test)]
-            startup_compile_test_hook: Mutex::new(None),
+            prepare_compile_test_hook: Mutex::new(None),
             #[cfg(test)]
             settings_invalidation_count: AtomicU64::new(0),
             #[cfg(test)]
@@ -2228,9 +2450,13 @@ impl NativePlaybackServiceHandle {
             #[cfg(all(test, feature = "tauri-test"))]
             test_player: None,
             #[cfg(all(test, feature = "tauri-test"))]
-            before_arm_test_hook: None,
+            prepared_player_factory_for_test: None,
             #[cfg(all(test, feature = "tauri-test"))]
-            post_compile_prepublication_test_hook: None,
+            recommended_plan_caller_capacity_override_for_test: None,
+            #[cfg(all(test, feature = "tauri-test"))]
+            recommendation_materialization_test_hook: Mutex::new(None),
+            #[cfg(all(test, feature = "tauri-test"))]
+            before_arm_test_hook: None,
         };
         service.monitor(active, events, activation);
     }
@@ -2657,6 +2883,7 @@ fn recommended_schedule(
     }
 }
 
+#[cfg(test)]
 pub(super) fn compile_dispatch_schedule(
     schedule: &ScheduleMetadata,
     cancelled: &AtomicBool,
@@ -2676,6 +2903,7 @@ fn compile_dispatch_schedule_with_checkpoint(
     if schedule.actions.len() > sky_player::adapter_support::MAX_COMPILED_ACTIONS {
         return Err("native schedule exceeds compiler action limit".into());
     }
+    checkpoint(0);
     let mut actions = Vec::new();
     actions
         .try_reserve(schedule.actions.len())
@@ -2754,6 +2982,23 @@ fn checked_capacity_sum(values: impl IntoIterator<Item = usize>) -> Result<usize
     })
 }
 
+fn runtime_schedule_capacity_bytes(
+    schedule: &sky_player::adapter_support::RuntimeSchedule,
+    cancelled: &AtomicBool,
+) -> Result<usize, String> {
+    let memory = schedule.memory_metrics_with_checkpoint(|| {
+        if cancelled.load(Ordering::Acquire) {
+            Err("runtime schedule capacity accounting cancelled".to_string())
+        } else {
+            Ok(())
+        }
+    })?;
+    memory
+        .heap_payload_bytes
+        .checked_add(memory.struct_bytes)
+        .ok_or_else(|| "runtime schedule capacity overflow".to_string())
+}
+
 /// Heap payload retained by one source schedule. Struct headers are counted
 /// by the containing prepared variant; allocator metadata is excluded.
 fn schedule_metadata_heap_capacity_bytes(schedule: &ScheduleMetadata) -> Result<usize, String> {
@@ -2787,36 +3032,39 @@ fn schedule_metadata_heap_capacity_bytes(schedule: &ScheduleMetadata) -> Result<
     ])
 }
 
-fn native_start_caller_retained_capacity_bytes(
-    variant: &NativePlaybackVariant,
-    song_id: &String,
-    song_title: &String,
-    prepared_id: &String,
-    session_id: &String,
+struct NativePrepareCapacityInput<'a> {
+    song: &'a sky_app_core::song::Song,
+    song_id: &'a String,
+    settings_fingerprint: &'a String,
+    publication_fingerprint: &'a String,
+    source_path: &'a PathBuf,
+    source_hash: &'a String,
+    plan_identity: &'a String,
+}
+
+fn native_prepare_caller_retained_capacity_bytes(
+    input: NativePrepareCapacityInput<'_>,
     other_prepared_capacity_bytes: usize,
 ) -> Result<usize, String> {
-    // The selected source schedule is counted by the compiler adapter. This
-    // covers the variant header and its other heap strings, the complete
-    // remaining prepared-plan cache payload, and current plus subsequently
-    // cloned active-session identifiers.
-    let copied_session_strings = checked_capacity_sum([
-        song_id.capacity(),
-        song_title.capacity(),
-        song_id.capacity(),
-        song_title.capacity(),
-        song_id.capacity(),
-        prepared_id.capacity(),
-        prepared_id.capacity(),
-        prepared_id.capacity(),
-        session_id.capacity(),
-        session_id.capacity(),
-        variant.fingerprint.capacity(),
-        variant.fingerprint.capacity(),
-    ])?;
+    let note_headers = checked_capacity_bytes(
+        input.song.notes.capacity(),
+        std::mem::size_of::<sky_app_core::song::Note>(),
+    )?;
+    let note_keys = input.song.notes.iter().try_fold(0usize, |total, note| {
+        total
+            .checked_add(note.key.capacity())
+            .ok_or_else(|| "prepared song-key capacity overflow".to_string())
+    })?;
     checked_capacity_sum([
-        std::mem::size_of::<NativePlaybackVariant>(),
-        variant.timing_margin_recommendation.source.capacity(),
-        copied_session_strings,
+        input.song.name.capacity(),
+        note_headers,
+        note_keys,
+        input.song_id.capacity(),
+        input.settings_fingerprint.capacity(),
+        input.publication_fingerprint.capacity(),
+        input.source_path.capacity(),
+        input.source_hash.capacity(),
+        input.plan_identity.capacity(),
         other_prepared_capacity_bytes,
     ])
 }
@@ -2927,15 +3175,6 @@ fn prepared_dto_capacity_bytes(
 }
 
 fn prepared_plan_capacity_bytes(id: &String, record: &NativePreparedPlan) -> Result<usize, String> {
-    let note_headers = checked_capacity_bytes(
-        record.song.notes.capacity(),
-        std::mem::size_of::<sky_app_core::song::Note>(),
-    )?;
-    let note_keys = record.song.notes.iter().try_fold(0usize, |total, note| {
-        total
-            .checked_add(note.key.capacity())
-            .ok_or_else(|| "prepared song-key capacity overflow".to_string())
-    })?;
     let variant_entry_size =
         std::mem::size_of::<(crate::commands::PlaybackDecision, NativePlaybackVariant)>();
     let variant_bucket_count = if record.variants.capacity() == 0 {
@@ -2963,16 +3202,17 @@ fn prepared_plan_capacity_bytes(id: &String, record: &NativePreparedPlan) -> Res
             variant_payloads,
             variant.fingerprint.capacity(),
             variant.timing_margin_recommendation.source.capacity(),
-            schedule_metadata_heap_capacity_bytes(&variant.schedule)?,
+            variant
+                .prepared_schedule
+                .as_ref()
+                .map_or(0, |schedule| schedule.memory_metrics().plan_capacity_bytes),
         ])?;
     }
     checked_capacity_sum([
         id.capacity(),
         record.song_id.capacity(),
         record.settings_fingerprint.capacity(),
-        record.song.name.capacity(),
-        note_headers,
-        note_keys,
+        record.song_title.capacity(),
         record.source_path.capacity(),
         record.source_hash.capacity(),
         variant_map_bytes,
@@ -2993,8 +3233,8 @@ fn prepared_cache_retained_capacity_bytes(
         .iter()
         .enumerate()
         .filter(|(index, _)| Some(*index) != excluded_index)
-        .try_fold(0usize, |total, (_, (id, record))| {
-            let plan_bytes = prepared_plan_capacity_bytes(id, record)?;
+        .try_fold(0usize, |total, (_, (_id, record))| {
+            let plan_bytes = record.retained_capacity_bytes;
             total
                 .checked_add(plan_bytes)
                 .ok_or_else(|| "prepared-cache retained capacity overflow".to_string())
@@ -3017,18 +3257,16 @@ mod preparation_cancellation_tests {
     use crate::app_state::ActivityCoordinator;
     use crate::commands::{PlaybackConfigDto, TimingMarginRecommendationDto};
     use crate::native_runtime::NativeEventHub;
-    use sky_app_core::settings::ApplicationSettings;
     use sky_app_core::song::parse_song_json;
     use sky_app_core::timing::MaterializedTimingPolicy;
     use std::path::PathBuf;
-    use std::sync::atomic::Ordering;
     use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
     use std::time::Duration;
 
     #[cfg(feature = "tauri-test")]
     #[test]
-    fn valid_one_million_single_key_actions_fit_compact_executor_budget() {
+    fn valid_one_million_single_key_actions_fit_prepared_runtime_budget() {
         const ACTION_COUNT: usize = 1_000_000;
         let mut actions = Vec::with_capacity(ACTION_COUNT);
         for index in 0..(ACTION_COUNT / 2) {
@@ -3066,21 +3304,34 @@ mod preparation_cancellation_tests {
         };
         let source_capacity_bytes =
             schedule_metadata_heap_capacity_bytes(&schedule).expect("source schedule capacity");
-        let compiled = compile_dispatch_schedule_with_checkpoint(
+        let qpc_frequency = std::num::NonZeroU64::new(1_000_000).expect("QPC frequency");
+        let baseline_started = std::time::Instant::now();
+        let baseline_compiled = compile_dispatch_schedule_with_checkpoint(
             &schedule,
             0,
             &std::sync::atomic::AtomicBool::new(false),
             |_| {},
         )
-        .expect("one-million-action source fits the compiler phase bound");
-        assert_eq!(compiled.generation_count, (ACTION_COUNT / 2) as u64);
-        let compile_memory = compiled.compile_memory;
-        let schedule_heap_bytes = compiled
+        .expect("baseline-equivalent one-million-action compile");
+        sky_player::adapter_support::validate_min_hold_and_release_gap_feasibility_ticks(
+            &baseline_compiled,
+            0,
+            sky_player::adapter_support::DurationTicks::ZERO,
+            0,
+            sky_player::adapter_support::DurationTicks::ZERO,
+            |microseconds| {
+                Some(sky_player::adapter_support::TimelineTicks::from_raw(
+                    microseconds,
+                ))
+            },
+        )
+        .expect("baseline-equivalent session admission validation");
+        let baseline_compile_memory = baseline_compiled.compile_memory;
+        let baseline_schedule_memory = baseline_compiled
             .memory_metrics()
-            .expect("compiled schedule capacity")
-            .heap_payload_bytes;
-        let executor = sky_player::adapter_support::DispatchExecutor::new(
-            &compiled,
+            .expect("baseline compiled schedule capacity");
+        let baseline_executor = sky_player::adapter_support::DispatchExecutor::new(
+            &baseline_compiled,
             sky_player::adapter_support::DurationTicks::ZERO,
             sky_player::adapter_support::DurationTicks::ZERO,
             |microseconds| {
@@ -3089,31 +3340,87 @@ mod preparation_cancellation_tests {
                 )
             },
         )
-        .expect("production executor construction");
+        .expect("baseline-equivalent worker executor construction");
+        let baseline_executor_memory = baseline_executor
+            .try_memory_metrics()
+            .expect("baseline executor capacity metrics");
+        let baseline_start_compile_validate_and_executor_us =
+            baseline_started.elapsed().as_micros();
+        let baseline_retained_capacity_bytes = baseline_compile_memory
+            .caller_retained_capacity_bytes
+            .checked_add(baseline_schedule_memory.heap_payload_bytes)
+            .and_then(|bytes| bytes.checked_add(baseline_schedule_memory.struct_bytes))
+            .and_then(|bytes| bytes.checked_add(baseline_executor_memory.total_bytes))
+            .expect("baseline source, schedule, and executor capacity");
+        let baseline_peak_capacity_bytes = baseline_compile_memory
+            .phase_peak_capacity_bytes
+            .max(baseline_retained_capacity_bytes);
+        drop(baseline_executor);
+        drop(baseline_compiled);
+
+        let candidate_prepare_started = std::time::Instant::now();
+        let compiled = compile_dispatch_schedule_with_checkpoint(
+            &schedule,
+            0,
+            &std::sync::atomic::AtomicBool::new(false),
+            |_| {},
+        )
+        .expect("candidate one-million-action Prepare compile");
+        assert_eq!(compiled.generation_count, (ACTION_COUNT / 2) as u64);
+        let compile_memory = compiled.compile_memory;
+        let schedule_memory = compiled
+            .memory_metrics()
+            .expect("compiled schedule capacity");
+        let schedule_heap_bytes = schedule_memory.heap_payload_bytes;
+        let schedule_capacity_bytes = schedule_heap_bytes
+            .checked_add(schedule_memory.struct_bytes)
+            .expect("compiled schedule total capacity");
+        let prepared = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
+            &compiled,
+            qpc_frequency,
+            0,
+            0,
+            compile_memory.caller_retained_capacity_bytes,
+        )
+        .expect("one-million-action Prepare materialization");
+        let prepared_memory = prepared.memory_metrics();
+        let candidate_prepare_compile_and_materialize_us =
+            candidate_prepare_started.elapsed().as_micros();
+        drop(compiled);
+        let candidate_start_started = std::time::Instant::now();
+        let executor =
+            sky_player::adapter_support::DispatchExecutor::from_prepared_schedule(prepared);
+        let candidate_start_plan_move_ns = candidate_start_started.elapsed().as_nanos();
         let executor_memory = executor
             .try_memory_metrics()
             .expect("production executor capacity metrics");
-        let retained_capacity_bytes = compile_memory
-            .caller_retained_capacity_bytes
-            .checked_add(schedule_heap_bytes)
-            .and_then(|bytes| bytes.checked_add(executor_memory.total_bytes))
-            .expect("source schedule, compiled schedule and executor capacity");
+        let retained_capacity_bytes = prepared_memory.overlapping_peak_capacity_bytes;
         let startup_peak_capacity_bytes = compile_memory
             .phase_peak_capacity_bytes
-            .max(retained_capacity_bytes);
+            .max(prepared_memory.overlapping_peak_capacity_bytes);
         let budget_bytes = sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES;
         assert!(executor_memory.chord_heap_bytes > 0);
         assert!(retained_capacity_bytes <= budget_bytes);
         assert!(startup_peak_capacity_bytes <= budget_bytes);
+        assert!(baseline_peak_capacity_bytes <= budget_bytes);
         eprintln!(
-            "dispatch_memory workload=valid_one_key actions={ACTION_COUNT} source_schedule_capacity_bytes={source_capacity_bytes} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_capacity_bytes={schedule_heap_bytes} executor_heap_bytes={} executor_struct_bytes={} executor_total_bytes={} schedule_and_executor_retained_capacity_bytes={retained_capacity_bytes} compiler_phase_peak_capacity_bytes={} startup_peak_capacity_bytes={startup_peak_capacity_bytes} policy_bytes={budget_bytes} disposition=admitted_within_combined_budget memory_basis=calculated_size_and_capacity lifetime_model=source_schedule_overlaps_compile_input_output_and_live_executor_construction;compiler_input_and_temp_drop_after_compile complete_application_process_peak=not_measured windows_process_memory=not_measured",
+            "prepared_playback_evidence workload=valid_one_key actions={ACTION_COUNT} source_schedule_capacity_bytes={source_capacity_bytes} baseline_equivalent_start_compile_validate_plus_executor_us={baseline_start_compile_validate_and_executor_us} candidate_prepare_compile_validate_plus_plan_materialization_us={candidate_prepare_compile_and_materialize_us} candidate_start_plan_move_and_session_state_ns={candidate_start_plan_move_ns} baseline_retained_capacity_bytes={baseline_retained_capacity_bytes} baseline_peak_capacity_bytes={baseline_peak_capacity_bytes} candidate_caller_retained_capacity_bytes={} candidate_compiler_input_capacity_bytes={} candidate_compiler_temporary_capacity_bytes={} candidate_compiled_schedule_capacity_bytes={schedule_capacity_bytes} candidate_prepared_plan_capacity_bytes={} candidate_runtime_executor_heap_bytes={} candidate_runtime_executor_struct_bytes={} candidate_runtime_executor_total_bytes={} candidate_prepare_overlapping_peak_capacity_bytes={retained_capacity_bytes} candidate_compiler_phase_peak_capacity_bytes={} candidate_startup_peak_capacity_bytes={startup_peak_capacity_bytes} policy_bytes={budget_bytes} timing_basis=wall_clock_single_offline_run_not_a_gate baseline_basis=baseline-equivalent_raw_compile_validation_plus_executor_path_on_candidate_source candidate_basis=compile_validate_and_prepare_plan_then_move_plan_on_candidate_source start_arm_timing=executor-construction-only native_process_setup_and_real_worker_arm=not_measured memory_basis=calculated_size_and_capacity complete_application_process_peak=not_measured windows_process_memory=not_measured",
             compile_memory.caller_retained_capacity_bytes,
             compile_memory.input_capacity_bytes,
             compile_memory.temporary_capacity_bytes,
+            prepared_memory.plan_capacity_bytes,
             executor_memory.chord_heap_bytes,
             executor_memory.struct_bytes,
             executor_memory.total_bytes,
             compile_memory.phase_peak_capacity_bytes,
+        );
+        eprintln!(
+            "prepared_playback_baseline_detail actions={ACTION_COUNT} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_heap_capacity_bytes={} executor_total_capacity_bytes={} retained_capacity_bytes={baseline_retained_capacity_bytes} peak_capacity_bytes={baseline_peak_capacity_bytes}",
+            baseline_compile_memory.caller_retained_capacity_bytes,
+            baseline_compile_memory.input_capacity_bytes,
+            baseline_compile_memory.temporary_capacity_bytes,
+            baseline_schedule_memory.heap_payload_bytes,
+            baseline_executor_memory.total_bytes,
         );
     }
 
@@ -3168,6 +3475,680 @@ mod preparation_cancellation_tests {
         }
     }
 
+    fn recommendation_input(generation: u64, settings_fingerprint: &str) -> NativePreparedInput {
+        let mut prepared = input(generation, settings_fingerprint);
+        prepared.song_id = "a".repeat(32);
+        prepared.risk.severity = "medium".into();
+        prepared.risk.suggested_hold_frames = Some(1.25);
+        prepared.risk.suggested_tempo_scale = Some(0.9);
+        prepared
+    }
+
+    fn over_limit_recommendation_input(
+        generation: u64,
+        settings_fingerprint: &str,
+    ) -> NativePreparedInput {
+        use sky_app_core::song::{ActionKind as SourceActionKind, KeyAction};
+
+        const PAIR_COUNT: u64 = 25_001;
+        let mut prepared = recommendation_input(generation, settings_fingerprint);
+        let actions = (0..PAIR_COUNT)
+            .flat_map(|index| {
+                let base = index * 40_000;
+                [
+                    KeyAction {
+                        at_us: base,
+                        scan_codes: vec![0x15],
+                        kind: SourceActionKind::Down,
+                        reason: "variant-action-limit-down".into(),
+                    },
+                    KeyAction {
+                        at_us: base + 20_000,
+                        scan_codes: vec![0x15],
+                        kind: SourceActionKind::Up,
+                        reason: "variant-action-limit-up".into(),
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
+        let duration_us = actions.last().expect("last authored action").at_us;
+        prepared.schedule.duration_us = duration_us;
+        prepared.schedule.playback_duration_us = duration_us;
+        prepared.schedule.source_duration_us = duration_us;
+        prepared.schedule.actions = actions;
+        prepared
+    }
+
+    #[cfg(feature = "tauri-test")]
+    fn prepared_mock_player_factory(
+        hook: Arc<sky_player::engine::StartupOrderingHook>,
+        send_calls: Arc<std::sync::atomic::AtomicU64>,
+    ) -> impl Fn(
+        sky_player::adapter_support::PreparedDispatchSchedule,
+        &PlaybackConfigDto,
+        &MaterializedTimingPolicy,
+    ) -> Result<Arc<sky_player::engine::NativeDispatchSession>, String>
+    + Send
+    + Sync
+    + 'static {
+        move |prepared_schedule, config, policy| {
+            use sky_player::engine::{
+                BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions,
+                NativeScheduleInput, NativeSessionOptions, PriorityOptions, TelemetryMode,
+                TelemetryOptions, TestWaitPolicy, TimingOptions, WaitGuardMode, WaitOptions,
+            };
+
+            let mut fault_script = FaultInjectionScript::none();
+            fault_script.send_call_count = Some(Arc::clone(&send_calls));
+            let options = NativeSessionOptions {
+                schedule: NativeScheduleInput::Prepared(prepared_schedule),
+                #[cfg(feature = "tauri-test")]
+                startup_calibration_placement:
+                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
+                #[cfg(feature = "tauri-test")]
+                timing_observer_for_qualification: false,
+                #[cfg(feature = "tauri-test")]
+                modifier_key_state_query_for_test: None,
+                backend: BackendConfig::Mock {
+                    latency_base_us: 0,
+                    latency_per_key_us: 0,
+                    fault_script,
+                },
+                profile: DispatchProfile::MockTest,
+                timing: TimingOptions {
+                    game_fps: config.fps,
+                    min_hold_us: policy.min_hold_us,
+                    min_release_gap_us: policy.min_release_gap_us,
+                    frame_us: policy.frame_us,
+                    frame_base_hold_us: policy.frame_base_hold_us,
+                    timing_margin_us: policy.timing_margin_us,
+                    strict_timing: false,
+                    strict_down_completion_late_us: 2_000,
+                    strict_up_completion_late_us: 2_000,
+                    input_path_warn_us: 300,
+                },
+                focus: FocusOptions {
+                    require_focus: false,
+                    focus_restore_grace_us: policy.focus_restore_grace_us,
+                },
+                wait: WaitOptions {
+                    enable_waitable_timer: true,
+                    enable_event_wait: true,
+                    supervisor_lease_timeout_us: 0,
+                    guard_mode: WaitGuardMode::Frozen,
+                    test_spin_threshold_us: Some(20_000),
+                    test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
+                },
+                telemetry: TelemetryOptions {
+                    mode: TelemetryMode::Off,
+                    capacity: 64,
+                },
+                priority: PriorityOptions {
+                    mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
+                },
+                instrument_key_profile: None,
+                startup_ordering_hook: Some(Arc::clone(&hook)),
+                restore_race_hook: None,
+                focus_pause_hook: None,
+                timer_lifecycle_context: None,
+                prepared_packet_ambiguity_mask: None,
+                preflight_user_held_mask: None,
+            };
+            sky_player::engine::NativeDispatchSession::new(options).map(Arc::new)
+        }
+    }
+
+    #[cfg(all(feature = "tauri-test", windows))]
+    #[test]
+    fn recommended_variant_starts_and_arms_its_prepared_plan() {
+        use crate::commands::{
+            PlaybackDecision, PlaybackDecisionAcceptanceDto, PlaybackStartRequest,
+        };
+        use sky_player::engine::{StartupCheckpoint, StartupOrderingHook};
+
+        let settings = sky_app_core::settings::ApplicationSettings::default();
+        let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let mut service = NativePlaybackService::new(ActivityCoordinator::default());
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
+        let send_calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        service.prepared_player_factory_for_test = Some(Arc::new(prepared_mock_player_factory(
+            Arc::clone(&hook),
+            Arc::clone(&send_calls),
+        )));
+        let compile_checkpoints = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let compile_checkpoints_hook = Arc::clone(&compile_checkpoints);
+        *service
+            .prepare_compile_test_hook
+            .lock()
+            .expect("Prepare compiler hook") = Some(Arc::new(move |action_count| {
+            if action_count == 0 {
+                compile_checkpoints_hook.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            }
+        }));
+
+        let prepared = service
+            .prepare(recommendation_input(1, &fingerprint))
+            .expect("recommended physical Prepare");
+        let recommendation = prepared
+            .variants
+            .iter()
+            .find(|variant| variant.decision == PlaybackDecision::UseRecommended)
+            .expect("recommended DTO variant");
+        assert_eq!(recommendation.config.hold_frames, 1.25);
+        assert_eq!(recommendation.config.tempo_scale, 0.9);
+        let prepare_compile_count = compile_checkpoints.load(std::sync::atomic::Ordering::Acquire);
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let started = service
+            .start(
+                PlaybackStartRequest {
+                    prepared_id: prepared.prepared_id.clone().expect("prepared identity"),
+                    decisions: vec![PlaybackDecisionAcceptanceDto {
+                        decision: PlaybackDecision::UseRecommended,
+                        accepted: true,
+                    }],
+                },
+                &settings,
+                Arc::clone(&events),
+            )
+            .expect("selected recommended Start");
+        assert_eq!(
+            started.config.hold_frames,
+            recommendation.config.hold_frames
+        );
+        assert_eq!(
+            started.config.tempo_scale,
+            recommendation.config.tempo_scale
+        );
+        assert_eq!(started.plan_fingerprint, recommendation.plan_fingerprint);
+        assert_eq!(
+            compile_checkpoints.load(std::sync::atomic::Ordering::Acquire),
+            prepare_compile_count,
+            "Start must not compile the selected variant again"
+        );
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert_eq!(hook.raw_schedule_admission_validation_count(), 0);
+        assert_eq!(hook.raw_schedule_worker_materialization_count(), 0);
+        assert_eq!(hook.prepared_schedule_executor_consumption_count(), 1);
+        assert_eq!(send_calls.load(std::sync::atomic::Ordering::Acquire), 0);
+
+        let player = service
+            .active
+            .lock()
+            .expect("active playback")
+            .as_ref()
+            .and_then(|active| active.player.clone())
+            .expect("prepared player attached to successful Start");
+        player.quit().expect("quit at Armed checkpoint");
+        hook.release_startup_checkpoint();
+        assert!(player.join(Duration::from_secs(5)).expect("worker join"));
+        assert!(service.shutdown(events));
+        assert_eq!(send_calls.load(std::sync::atomic::Ordering::Acquire), 0);
+
+        let mut dry_run_service = NativePlaybackService::new(ActivityCoordinator::default());
+        dry_run_service.recommended_plan_caller_capacity_override_for_test =
+            Some(sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES);
+        let dry_run_prepared = dry_run_service
+            .prepare(recommendation_input(1, &fingerprint))
+            .expect("DryRun remains in the capacity-limited Prepare");
+        let dry_run_variant = dry_run_prepared
+            .variants
+            .iter()
+            .find(|variant| variant.decision == PlaybackDecision::DryRun)
+            .expect("DryRun DTO variant");
+        let dry_run_events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let dry_run_started = dry_run_service
+            .start(
+                PlaybackStartRequest {
+                    prepared_id: dry_run_prepared
+                        .prepared_id
+                        .clone()
+                        .expect("DryRun prepared identity"),
+                    decisions: vec![PlaybackDecisionAcceptanceDto {
+                        decision: PlaybackDecision::DryRun,
+                        accepted: true,
+                    }],
+                },
+                &settings,
+                Arc::clone(&dry_run_events),
+            )
+            .expect("DryRun selection remains startable");
+        assert!(dry_run_started.config.dry_run);
+        assert_eq!(
+            dry_run_started.plan_fingerprint,
+            dry_run_variant.plan_fingerprint
+        );
+        assert!(dry_run_service.shutdown(dry_run_events));
+    }
+
+    #[cfg(all(feature = "tauri-test", windows))]
+    #[test]
+    fn recommendation_capacity_failure_keeps_only_runnable_proceed_and_dry_run() {
+        use crate::commands::{
+            PlaybackDecision, PlaybackDecisionAcceptanceDto, PlaybackStartRequest,
+        };
+        use sky_player::engine::{StartupCheckpoint, StartupOrderingHook};
+
+        let settings = sky_app_core::settings::ApplicationSettings::default();
+        let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let mut service = NativePlaybackService::new(ActivityCoordinator::default());
+        service.recommended_plan_caller_capacity_override_for_test =
+            Some(sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES);
+        let recommendation_materialization_attempted =
+            Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let recommendation_materialization_attempted_hook =
+            Arc::clone(&recommendation_materialization_attempted);
+        *service
+            .recommendation_materialization_test_hook
+            .lock()
+            .expect("recommendation materialization hook") = Some(Arc::new(move || {
+            recommendation_materialization_attempted_hook
+                .store(true, std::sync::atomic::Ordering::Release);
+        }));
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
+        let send_calls = Arc::new(std::sync::atomic::AtomicU64::new(0));
+        service.prepared_player_factory_for_test = Some(Arc::new(prepared_mock_player_factory(
+            Arc::clone(&hook),
+            Arc::clone(&send_calls),
+        )));
+
+        let prepared = service
+            .prepare(recommendation_input(1, &fingerprint))
+            .expect("capacity-limited optional recommendation leaves Prepare valid");
+        assert!(
+            recommendation_materialization_attempted.load(std::sync::atomic::Ordering::Acquire)
+        );
+        let prepared_id = prepared.prepared_id.clone().expect("prepared identity");
+        assert_eq!(
+            prepared
+                .variants
+                .iter()
+                .map(|variant| variant.decision)
+                .collect::<Vec<_>>(),
+            vec![PlaybackDecision::Proceed, PlaybackDecision::DryRun]
+        );
+        assert_eq!(
+            prepared
+                .decisions
+                .iter()
+                .map(|decision| decision.decision)
+                .collect::<Vec<_>>(),
+            vec![PlaybackDecision::Proceed, PlaybackDecision::DryRun]
+        );
+        assert!(
+            prepared
+                .variants
+                .iter()
+                .all(|variant| variant.decision != PlaybackDecision::UseRecommended)
+        );
+        assert!(prepared.variants.iter().any(|variant| {
+            variant.decision == PlaybackDecision::DryRun && variant.config.dry_run
+        }));
+
+        let cache = service.prepared.lock().expect("prepared cache");
+        let record = cache
+            .iter()
+            .find(|(id, _)| id == &prepared_id)
+            .map(|(_, record)| record)
+            .expect("published Proceed record");
+        assert_eq!(
+            record
+                .variants
+                .keys()
+                .copied()
+                .collect::<std::collections::HashSet<_>>(),
+            std::collections::HashSet::from([PlaybackDecision::Proceed, PlaybackDecision::DryRun])
+        );
+        assert!(
+            record
+                .variants
+                .get(&PlaybackDecision::Proceed)
+                .and_then(|variant| variant.prepared_schedule.as_ref())
+                .is_some()
+        );
+        assert!(
+            record
+                .variants
+                .get(&PlaybackDecision::DryRun)
+                .is_some_and(
+                    |variant| variant.config.dry_run && variant.prepared_schedule.is_none()
+                )
+        );
+        assert!(
+            record.retained_capacity_bytes
+                <= sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES
+        );
+        assert!(
+            super::prepared_cache_retained_capacity_bytes(&cache, None).unwrap()
+                <= sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES
+        );
+        drop(cache);
+
+        let events = Arc::new(Mutex::new(NativeEventHub::default()));
+        let started = service
+            .start(
+                PlaybackStartRequest {
+                    prepared_id,
+                    decisions: vec![PlaybackDecisionAcceptanceDto {
+                        decision: PlaybackDecision::Proceed,
+                        accepted: true,
+                    }],
+                },
+                &settings,
+                Arc::clone(&events),
+            )
+            .expect("Proceed remains runnable after optional recommendation omission");
+        assert_eq!(started.config.hold_frames, 1.0);
+        assert_eq!(started.config.tempo_scale, 1.0);
+        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+        assert_eq!(hook.prepared_schedule_executor_consumption_count(), 1);
+        assert_eq!(hook.raw_schedule_worker_materialization_count(), 0);
+        let player = service
+            .active
+            .lock()
+            .expect("active playback")
+            .as_ref()
+            .and_then(|active| active.player.clone())
+            .expect("Proceed session attached");
+        player.quit().expect("quit at Armed checkpoint");
+        hook.release_startup_checkpoint();
+        assert!(player.join(Duration::from_secs(5)).expect("worker join"));
+        assert!(service.shutdown(events));
+        assert_eq!(send_calls.load(std::sync::atomic::Ordering::Acquire), 0);
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn recommended_advisory_uses_recommended_variant_action_work_and_memory_budgets() {
+        use crate::commands::{PlaybackDecision, TimingAdvisoryStatus};
+
+        let settings = sky_app_core::settings::ApplicationSettings::default();
+        let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let prepared = over_limit_recommendation_input(1, &fingerprint);
+        assert_eq!(prepared.schedule.actions.len(), 50_002);
+        let recommended_policy =
+            MaterializedTimingPolicy::from_user_margin(60, 1.25, 800).expect("recommended policy");
+        let recommended_schedule =
+            super::recommended_schedule(&prepared.song, None, 0.9, &recommended_policy)
+                .expect("recommended schedule");
+        assert_eq!(recommended_schedule.actions.len(), 2);
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let result = service
+            .prepare(prepared)
+            .expect("large Proceed and small optional recommendation Prepare");
+        let proceed = result
+            .variants
+            .iter()
+            .find(|variant| variant.decision == PlaybackDecision::Proceed)
+            .expect("Proceed DTO");
+        let proceed_advisory = proceed.timing_advisory.as_ref().expect("Proceed advisory");
+        assert_eq!(proceed_advisory.status, TimingAdvisoryStatus::Unavailable);
+        assert!(
+            proceed_advisory
+                .explanation
+                .contains("50002 authored actions")
+        );
+
+        let recommended = result
+            .variants
+            .iter()
+            .find(|variant| variant.decision == PlaybackDecision::UseRecommended)
+            .expect("recommended DTO remains publishable");
+        let recommended_advisory = recommended
+            .timing_advisory
+            .as_ref()
+            .expect("recommended advisory");
+        assert_ne!(
+            recommended_advisory.status,
+            TimingAdvisoryStatus::Unavailable
+        );
+        assert_eq!(
+            recommended_advisory.plan_fingerprint,
+            recommended.plan_fingerprint
+        );
+        assert_eq!(recommended.config.hold_frames, 1.25);
+        assert_eq!(recommended.config.tempo_scale, 0.9);
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn cancellation_during_recommendation_materialization_fails_whole_prepare() {
+        let settings = sky_app_core::settings::ApplicationSettings::default();
+        let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
+        let shutdown_service = Arc::clone(&service);
+        *service
+            .recommendation_materialization_test_hook
+            .lock()
+            .expect("recommendation materialization hook") = Some(Arc::new(move || {
+            assert!(shutdown_service.shutdown(Arc::new(Mutex::new(NativeEventHub::default()))));
+        }));
+
+        let error = service
+            .prepare(over_limit_recommendation_input(1, &fingerprint))
+            .expect_err("cancellation must reject whole Prepare");
+        assert!(error.contains("cancelled") || error.contains("superseded"));
+        assert!(service.prepared.lock().expect("prepared cache").is_empty());
+    }
+
+    #[cfg(feature = "tauri-test")]
+    #[test]
+    fn supersession_during_recommendation_materialization_fails_old_prepare() {
+        let settings = sky_app_core::settings::ApplicationSettings::default();
+        let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
+        let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
+        let superseding_service = Arc::clone(&service);
+        let superseding_id = Arc::new(Mutex::new(None::<String>));
+        let superseding_id_for_hook = Arc::clone(&superseding_id);
+        let superseding_fingerprint = fingerprint.clone();
+        *service
+            .recommendation_materialization_test_hook
+            .lock()
+            .expect("recommendation materialization hook") = Some(Arc::new(move || {
+            let superseding = superseding_service
+                .prepare(input(1, &superseding_fingerprint))
+                .expect("new Prepare supersedes old request");
+            *superseding_id_for_hook
+                .lock()
+                .expect("superseding prepared identity") = superseding.prepared_id;
+        }));
+
+        let error = service
+            .prepare(over_limit_recommendation_input(1, &fingerprint))
+            .expect_err("superseded request must not publish partial variants");
+        assert!(error.contains("superseded") || error.contains("cancelled"));
+        let superseding_id = superseding_id
+            .lock()
+            .expect("superseding prepared identity")
+            .clone()
+            .expect("superseding Prepare published");
+        let cache = service.prepared.lock().expect("prepared cache");
+        assert_eq!(cache.len(), 1);
+        assert_eq!(
+            cache.front().map(|(id, _)| id.as_str()),
+            Some(superseding_id.as_str())
+        );
+    }
+
+    #[test]
+    fn prepare_publishes_a_plan_that_moves_into_fresh_runtime_state() {
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let compile_checkpoints = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let compile_checkpoints_hook = Arc::clone(&compile_checkpoints);
+        *service
+            .prepare_compile_test_hook
+            .lock()
+            .expect("Prepare compiler hook") = Some(Arc::new(move |action_count| {
+            if action_count == 0 {
+                compile_checkpoints_hook.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+            }
+        }));
+        let prepared_input = input(1, "prepared-runtime");
+        let source_action_count = prepared_input.schedule.actions.len();
+        let baseline_schedule = prepared_input.schedule.clone();
+        let baseline_clock = sky_dispatch_win32::clock::QpcClock::initialize()
+            .expect("baseline-equivalent QPC clock");
+        let baseline_started = std::time::Instant::now();
+        let baseline_compiled = super::compile_dispatch_schedule(
+            &baseline_schedule,
+            &std::sync::atomic::AtomicBool::new(false),
+        )
+        .expect("baseline-equivalent raw schedule compile");
+        let baseline_min_hold = baseline_clock
+            .duration_from_us(prepared_input.timing_policy.min_hold_us)
+            .expect("baseline H conversion");
+        let baseline_release_gap = baseline_clock
+            .duration_from_us(prepared_input.timing_policy.min_release_gap_us)
+            .expect("baseline G conversion");
+        sky_player::adapter_support::validate_min_hold_and_release_gap_feasibility_ticks(
+            &baseline_compiled,
+            prepared_input.timing_policy.min_hold_us,
+            baseline_min_hold,
+            prepared_input.timing_policy.min_release_gap_us,
+            baseline_release_gap,
+            |microseconds| baseline_clock.timeline_from_us(microseconds).ok(),
+        )
+        .expect("baseline-equivalent session admission validation");
+        let baseline_executor = sky_player::adapter_support::DispatchExecutor::new(
+            &baseline_compiled,
+            baseline_min_hold,
+            baseline_release_gap,
+            |microseconds| {
+                baseline_clock
+                    .timeline_from_us(microseconds)
+                    .map_err(|error| format!("{error:?}"))
+            },
+        )
+        .expect("baseline-equivalent executor construction");
+        let baseline_executor_memory = baseline_executor
+            .try_memory_metrics()
+            .expect("baseline executor capacity metrics");
+        let baseline_schedule_memory = baseline_compiled
+            .memory_metrics()
+            .expect("baseline schedule capacity metrics");
+        let baseline_start_compile_validate_plus_executor_us =
+            baseline_started.elapsed().as_micros();
+        let baseline_retained_capacity_bytes = baseline_compiled
+            .compile_memory
+            .caller_retained_capacity_bytes
+            .checked_add(baseline_schedule_memory.heap_payload_bytes)
+            .and_then(|bytes| bytes.checked_add(baseline_schedule_memory.struct_bytes))
+            .and_then(|bytes| bytes.checked_add(baseline_executor_memory.total_bytes))
+            .expect("baseline retained capacity");
+        let baseline_peak_capacity_bytes = baseline_compiled
+            .compile_memory
+            .phase_peak_capacity_bytes
+            .max(baseline_retained_capacity_bytes);
+        drop(baseline_executor);
+        drop(baseline_compiled);
+        drop(baseline_schedule);
+        let prepare_started = std::time::Instant::now();
+        let prepared = service.prepare(prepared_input).expect("physical Prepare");
+        let prepare_elapsed_us = prepare_started.elapsed().as_micros();
+        let runtime_schedule_compile_count =
+            compile_checkpoints.load(std::sync::atomic::Ordering::Acquire);
+        assert!(runtime_schedule_compile_count > 0);
+        let prepared_id = prepared.prepared_id.expect("prepared identity");
+        let mut cache = service.prepared.lock().expect("prepared cache");
+        let record = cache
+            .iter_mut()
+            .find(|(id, _)| id == &prepared_id)
+            .map(|(_, record)| record)
+            .expect("published prepared record");
+        let variant = record
+            .variants
+            .get_mut(&crate::commands::PlaybackDecision::Proceed)
+            .expect("physical proceed variant");
+        let plan = variant
+            .prepared_schedule
+            .take()
+            .expect("Prepare materializes the physical dispatch plan");
+        let metrics = plan.memory_metrics();
+        assert!(plan.has_down());
+        assert_eq!(plan.generation_count(), 1);
+        assert!(metrics.plan_capacity_bytes > 0);
+        assert!(
+            metrics.overlapping_peak_capacity_bytes
+                <= sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES
+        );
+        drop(cache);
+        let start_runtime_started = std::time::Instant::now();
+        let executor = sky_player::adapter_support::DispatchExecutor::from_prepared_schedule(plan);
+        let start_runtime_move_ns = start_runtime_started.elapsed().as_nanos();
+        assert_eq!(executor.active_mask(), 0);
+        assert_eq!(executor.total_chords(), 1);
+        eprintln!(
+            "prepared_playback_evidence workload=short source_actions={source_action_count} baseline_equivalent_start_compile_validate_plus_executor_us={baseline_start_compile_validate_plus_executor_us} candidate_runtime_schedule_compile_count={runtime_schedule_compile_count} candidate_desktop_prepare_wall_us={prepare_elapsed_us} candidate_prepared_executor_move_and_state_init_ns={start_runtime_move_ns} baseline_executor_total_capacity_bytes={} baseline_retained_capacity_bytes={baseline_retained_capacity_bytes} baseline_peak_capacity_bytes={baseline_peak_capacity_bytes} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={} timing_basis=wall_clock_single_offline_run_not_a_gate baseline_basis=raw_compile_validation_plus_executor_on_candidate_source candidate_basis=desktop_prepare_and_prepared_executor_move start_arm_timing=executor-construction-only native_process_setup_and_real_worker_arm=not_measured memory_basis=calculated_size_and_capacity disposition=valid_physical_plan_prepared_and_consumed",
+            baseline_executor_memory.total_bytes,
+            metrics.plan_capacity_bytes,
+            metrics.overlapping_peak_capacity_bytes,
+        );
+    }
+
+    #[test]
+    fn unavailable_offline_advisory_does_not_block_physical_preparation() {
+        use sky_app_core::song::{ActionKind as SourceActionKind, KeyAction};
+
+        const PAIR_COUNT: u64 = 25_001;
+        let service = NativePlaybackService::new(ActivityCoordinator::default());
+        let mut prepared = input(1, "advisory-over-limit");
+        let actions = (0..PAIR_COUNT)
+            .flat_map(|index| {
+                let base = index * 40_000;
+                [
+                    KeyAction {
+                        at_us: base,
+                        scan_codes: vec![0x15],
+                        kind: SourceActionKind::Down,
+                        reason: "advisory-limit-down".into(),
+                    },
+                    KeyAction {
+                        at_us: base + 20_000,
+                        scan_codes: vec![0x15],
+                        kind: SourceActionKind::Up,
+                        reason: "advisory-limit-up".into(),
+                    },
+                ]
+            })
+            .collect::<Vec<_>>();
+        let duration_us = actions.last().expect("last action").at_us;
+        prepared.schedule.duration_us = duration_us;
+        prepared.schedule.playback_duration_us = duration_us;
+        prepared.schedule.source_duration_us = duration_us;
+        prepared.schedule.actions = actions;
+
+        let result = service
+            .prepare(prepared)
+            .expect("advisory limit does not reject a valid physical plan");
+        let prepared_id = result.prepared_id.expect("prepared identity");
+        let variant_dto = result
+            .variants
+            .iter()
+            .find(|variant| variant.decision == crate::commands::PlaybackDecision::Proceed)
+            .expect("physical Proceed variant");
+        assert_eq!(
+            variant_dto
+                .timing_advisory
+                .as_ref()
+                .expect("advisory result")
+                .status,
+            crate::commands::TimingAdvisoryStatus::Unavailable
+        );
+        let cache = service.prepared.lock().expect("prepared cache");
+        let record = cache
+            .iter()
+            .find(|(id, _)| id == &prepared_id)
+            .map(|(_, record)| record)
+            .expect("valid plan remains cached");
+        let plan = record
+            .variants
+            .get(&crate::commands::PlaybackDecision::Proceed)
+            .and_then(|variant| variant.prepared_schedule.as_ref())
+            .expect("valid physical variant remains available");
+        assert_eq!(plan.generation_count(), PAIR_COUNT);
+    }
+
     #[test]
     fn native_schedule_compilation_honors_cancelled_request() {
         let prepared = input(1, "cancelled");
@@ -3179,14 +4160,11 @@ mod preparation_cancellation_tests {
     }
 
     #[test]
-    fn shutdown_cancels_an_in_flight_startup_compiler_and_releases_activity() {
+    fn shutdown_cancels_an_in_flight_prepare_compiler_and_releases_activity() {
         use sky_app_core::song::{ActionKind as SourceActionKind, KeyAction};
 
         let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
-        let settings = ApplicationSettings::default();
-        let fingerprint =
-            super::super::settings_fingerprint(&settings).expect("default settings fingerprint");
-        let mut prepared = input(1, &fingerprint);
+        let mut prepared = input(1, "settings-a");
         let actions = (0..150u64)
             .flat_map(|index| {
                 let base = index * 100_000;
@@ -3210,172 +4188,91 @@ mod preparation_cancellation_tests {
         prepared.schedule.playback_duration_us = prepared.schedule.duration_us;
         prepared.schedule.source_duration_us = prepared.schedule.duration_us;
         prepared.schedule.actions = actions;
-        let prepared = service
-            .prepare(prepared)
-            .expect("prepare physical schedule");
-        let prepared_id = prepared.prepared_id.expect("prepared identity");
-
         let (compiler_entered_tx, compiler_entered_rx) = mpsc::channel();
         let (compiler_release_tx, compiler_release_rx) = mpsc::channel();
         let compiler_release_rx = Mutex::new(compiler_release_rx);
         *service
-            .startup_compile_test_hook
+            .prepare_compile_test_hook
             .lock()
-            .expect("startup compiler hook") = Some(Arc::new(move |action_count| {
+            .expect("Prepare compiler hook") = Some(Arc::new(move |action_count| {
             if action_count == 256 {
                 compiler_entered_tx
                     .send(action_count)
-                    .expect("startup test is waiting at the compiler checkpoint");
+                    .expect("Prepare test is waiting at the compiler checkpoint");
                 compiler_release_rx
                     .lock()
-                    .expect("startup compiler release lock")
+                    .expect("Prepare compiler release lock")
                     .recv()
-                    .expect("startup test releases the compiler checkpoint");
+                    .expect("Prepare test releases the compiler checkpoint");
             }
         }));
 
-        let events = Arc::new(Mutex::new(NativeEventHub::default()));
-        let start_service = Arc::clone(&service);
-        let start_events = Arc::clone(&events);
-        let start_thread = thread::spawn(move || {
-            start_service.start(
-                super::super::NativePlaybackStartRequest {
-                    prepared_id,
-                    decisions: Vec::new(),
-                }
-                .into_public(),
-                &settings,
-                start_events,
-            )
-        });
+        let prepare_service = Arc::clone(&service);
+        let prepare_thread = thread::spawn(move || prepare_service.prepare(prepared));
 
         match compiler_entered_rx.recv_timeout(Duration::from_secs(10)) {
             Ok(256) => {}
             Ok(action_count) => panic!("unexpected compiler checkpoint {action_count}"),
             Err(error) => {
-                let startup_result = start_thread.join().expect("startup thread");
+                let prepare_result = prepare_thread.join().expect("Prepare thread");
                 panic!(
-                    "startup compiler did not reach the in-flight checkpoint: {error}; result={startup_result:?}"
+                    "Prepare compiler did not reach the in-flight checkpoint: {error}; result={prepare_result:?}"
                 );
             }
         }
-        let shutdown_service = Arc::clone(&service);
-        let shutdown_events = Arc::clone(&events);
-        let shutdown_thread = thread::spawn(move || shutdown_service.shutdown(shutdown_events));
-        let cancellation_deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !service.startup_cancellation.load(Ordering::Acquire) {
-            assert!(
-                std::time::Instant::now() < cancellation_deadline,
-                "shutdown did not publish startup cancellation"
-            );
-            thread::yield_now();
-        }
+        assert!(service.shutdown(Arc::new(Mutex::new(NativeEventHub::default()))));
         compiler_release_tx
             .send(())
-            .expect("compiler is paused at its in-flight checkpoint");
+            .expect("Prepare compiler is paused at its in-flight checkpoint");
 
-        let error = start_thread
+        let error = prepare_thread
             .join()
-            .expect("startup thread")
-            .expect_err("shutdown cancels startup compilation");
-        assert!(error.contains("native schedule compilation cancelled"));
-        assert!(shutdown_thread.join().expect("shutdown thread"));
+            .expect("Prepare thread")
+            .expect_err("shutdown cancels Prepare compilation");
+        assert!(error.contains("cancelled"));
+        assert!(service.prepared.lock().expect("prepared cache").is_empty());
         assert!(!service.activity.physical_release_is_quarantined());
         let lease = service
             .activity
-            .reserve_playback("post-startup-cancellation")
-            .expect("startup cancellation releases its physical activity lease");
+            .reserve_playback("post-prepare-cancellation")
+            .expect("Prepare cancellation leaves physical activity available");
         drop(lease);
     }
 
-    #[cfg(feature = "tauri-test")]
     #[test]
-    fn shutdown_after_compilation_before_publication_retires_start_without_dispatch() {
+    fn shutdown_after_prepare_materialization_before_publication_discards_plan() {
         let activity = ActivityCoordinator::default();
-        let mut service = NativePlaybackService::new(activity.clone());
-        let (compiled_tx, compiled_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let release_rx = Mutex::new(release_rx);
-        service.post_compile_prepublication_test_hook = Some(Arc::new(move || {
-            compiled_tx
-                .send(())
-                .expect("test waits for the post-compile barrier");
-            release_rx
-                .lock()
-                .expect("post-compile release lock")
-                .recv()
-                .expect("test releases the post-compile barrier");
+        let service = Arc::new(NativePlaybackService::new(activity.clone()));
+        let entered = Arc::new(Barrier::new(2));
+        let release = Arc::new(Barrier::new(2));
+        let entered_hook = Arc::clone(&entered);
+        let release_hook = Arc::clone(&release);
+        *service
+            .prepare_before_publication_test_hook
+            .lock()
+            .expect("publication hook") = Some(Arc::new(move || {
+            entered_hook.wait();
+            release_hook.wait();
         }));
-        let service = Arc::new(service);
-        let settings = ApplicationSettings::default();
-        let fingerprint =
-            super::super::settings_fingerprint(&settings).expect("settings fingerprint");
-        let prepared = service
-            .prepare(input(1, &fingerprint))
-            .expect("prepare physical plan");
-        let prepared_id = prepared.prepared_id.expect("prepared identity");
 
-        let events = Arc::new(Mutex::new(NativeEventHub::default()));
-        let start_service = Arc::clone(&service);
-        let start_events = Arc::clone(&events);
-        let start_settings = settings.clone();
-        let start_prepared_id = prepared_id.clone();
-        let start_thread = thread::spawn(move || {
-            start_service.start(
-                super::super::NativePlaybackStartRequest {
-                    prepared_id: start_prepared_id,
-                    decisions: Vec::new(),
-                }
-                .into_public(),
-                &start_settings,
-                start_events,
-            )
-        });
+        let prepare_service = Arc::clone(&service);
+        let prepare_thread = thread::spawn(move || prepare_service.prepare(input(1, "settings-a")));
+        entered.wait();
+        assert!(service.shutdown(Arc::new(Mutex::new(NativeEventHub::default()))));
+        release.wait();
 
-        compiled_rx
-            .recv_timeout(Duration::from_secs(10))
-            .expect("compile reaches post-compile/pre-publication barrier");
-        let shutdown_service = Arc::clone(&service);
-        let shutdown_events = Arc::clone(&events);
-        let shutdown_thread = thread::spawn(move || shutdown_service.shutdown(shutdown_events));
-        let cancellation_deadline = std::time::Instant::now() + Duration::from_secs(5);
-        while !service.startup_cancellation.load(Ordering::Acquire) {
-            assert!(
-                std::time::Instant::now() < cancellation_deadline,
-                "shutdown did not accept cancellation at the pre-publication boundary"
-            );
-            thread::yield_now();
-        }
-        release_tx.send(()).expect("release the completed compiler");
-
-        let error = start_thread
+        let error = prepare_thread
             .join()
-            .expect("startup thread")
-            .expect_err("shutdown wins before active publication");
-        assert!(error.contains("native playback startup was cancelled during shutdown"));
-        assert!(shutdown_thread.join().expect("shutdown thread"));
+            .expect("Prepare thread")
+            .expect_err("shutdown wins before Prepare publication");
+        assert!(error.contains("superseded"));
+        assert!(service.prepared.lock().expect("prepared cache").is_empty());
         assert!(!service.activity.physical_release_is_quarantined());
         assert!(service.active.lock().expect("active slot").is_none());
         let lease = activity
-            .reserve_playback("after-cancelled-start")
-            .expect("cancelled startup releases activity ownership");
+            .reserve_playback("after-cancelled-prepare")
+            .expect("cancelled Prepare leaves activity available");
         drop(lease);
-
-        let restart_prepared = service
-            .prepare(input(2, &fingerprint))
-            .expect("shutdown does not silently clear the prepared plan");
-        let restart_error = service
-            .start(
-                super::super::NativePlaybackStartRequest {
-                    prepared_id: restart_prepared.prepared_id.expect("prepared identity"),
-                    decisions: Vec::new(),
-                }
-                .into_public(),
-                &settings,
-                events,
-            )
-            .expect_err("sticky shutdown disables restart");
-        assert!(restart_error.contains("startup was cancelled during shutdown"));
     }
 
     #[test]
@@ -3540,5 +4437,55 @@ mod preparation_cancellation_tests {
         assert_eq!(cache.len(), 1);
         assert_eq!(cache[0].0, prepared_id);
         assert_eq!(cache[0].1.generation, 2);
+    }
+}
+
+#[cfg(test)]
+mod owner_identity_poll_consumer_tests {
+    use super::consume_owner_identity_poll_result;
+    use sky_player::engine::OwnerIdentityPollResult;
+
+    #[test]
+    fn stale_owner_poll_does_not_panic_or_mark_the_active_binding_invalid() {
+        let mut invalidated = false;
+        let mut panic_release_calls = 0;
+        consume_owner_identity_poll_result(
+            OwnerIdentityPollResult::StaleSuperseded,
+            &mut invalidated,
+            || panic_release_calls += 1,
+        );
+
+        assert!(!invalidated);
+        assert_eq!(panic_release_calls, 0);
+    }
+
+    #[test]
+    fn current_valid_owner_poll_does_not_panic() {
+        let mut invalidated = false;
+        let mut panic_release_calls = 0;
+        consume_owner_identity_poll_result(
+            OwnerIdentityPollResult::CurrentValid,
+            &mut invalidated,
+            || panic_release_calls += 1,
+        );
+
+        assert!(!invalidated);
+        assert_eq!(panic_release_calls, 0);
+    }
+
+    #[test]
+    fn current_invalid_owner_poll_panics_once_even_if_polled_again() {
+        let mut invalidated = false;
+        let mut panic_release_calls = 0;
+        for _ in 0..2 {
+            consume_owner_identity_poll_result(
+                OwnerIdentityPollResult::CurrentInvalid,
+                &mut invalidated,
+                || panic_release_calls += 1,
+            );
+        }
+
+        assert!(invalidated);
+        assert_eq!(panic_release_calls, 1);
     }
 }

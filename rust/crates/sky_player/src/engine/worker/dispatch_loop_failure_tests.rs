@@ -1,3 +1,8 @@
+use super::support::{
+    PacketRetryReason, ProductionDispatchTestHarness, SendEvidence, SendTransactionOutcome,
+    SendTransactionStatus, TimelineTicks,
+};
+
 fn sender_failure_record_for_test(
     key_count: usize,
     status: SendTransactionStatus,
@@ -18,8 +23,7 @@ fn sender_failure_record_for_test(
     let clock = harness.resources.clock;
     harness.resources.backend.set_packet_emitter(move |packet| {
         let started = clock.now().expect("sender start QPC");
-        let completed = (status != SendTransactionStatus::ClockFailureAfterSend)
-            .then_some(started);
+        let completed = (status != SendTransactionStatus::ClockFailureAfterSend).then_some(started);
         let confirmed_mask = if inserted_count == 0 {
             0
         } else {
@@ -37,9 +41,7 @@ fn sender_failure_record_for_test(
                 retry_reason: match status {
                     SendTransactionStatus::ZeroProgress => PacketRetryReason::ZeroProgress,
                     SendTransactionStatus::IntegrityLost => {
-                        PacketRetryReason::PartialProgress {
-                            inserted_count,
-                        }
+                        PacketRetryReason::PartialProgress { inserted_count }
                     }
                     _ => PacketRetryReason::None,
                 },
@@ -54,17 +56,17 @@ fn sender_failure_record_for_test(
 
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::StagedDispatchOutcome::Exit
+        super::super::StagedDispatchOutcome::Dispatched
     ));
     let record = harness
         .runtime
-        .terminal_error
-        .as_ref()
-        .expect("terminal sender error record")
+        .attempted_dispatch_anomalies
+        .details()
+        .first()
+        .expect("recovered sender anomaly record")
         .clone();
     let cleanup = harness.finalize_for_test();
-    assert_eq!(cleanup.active_mask, 0);
-    assert_eq!(cleanup.possibly_active_mask, 0);
+    assert_eq!(cleanup.release_obligation_mask, 0);
     record
 }
 
@@ -80,18 +82,13 @@ fn failed_sender_paths_retain_bounded_attempt_and_clock_evidence() {
     assert!(zero.contains("pre_call_qpc=") && zero.contains("completion_qpc="));
 
     let partial = sender_failure_record_for_test(2, SendTransactionStatus::IntegrityLost, 1);
-    assert!(partial.contains(
-        "source_action=0 source_chord=0 up_mask=0x0000 down_mask=0x0003"
-    ));
+    assert!(partial.contains("source_action=0 source_chord=0 up_mask=0x0000 down_mask=0x0003"));
     assert!(partial.contains("requested=2 confirmed_count=1 first_inserted=1"));
     assert!(partial.contains("attempts=1 status=IntegrityLost"));
     assert!(partial.contains("retry_reason=PartialProgress { inserted_count: 1 }"));
 
-    let clock_failure = sender_failure_record_for_test(
-        1,
-        SendTransactionStatus::ClockFailureAfterSend,
-        1,
-    );
+    let clock_failure =
+        sender_failure_record_for_test(1, SendTransactionStatus::ClockFailureAfterSend, 1);
     assert!(clock_failure.contains("status=ClockFailureAfterSend"));
     assert!(clock_failure.contains("completion_qpc=unavailable"));
 }
@@ -130,7 +127,7 @@ fn pre_call_qpc_failure_records_zero_physical_attempts() {
 
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::StagedDispatchOutcome::Exit
+        super::super::StagedDispatchOutcome::Exit
     ));
     assert_eq!(harness.local_metrics.precision_packet_attempts, 0);
     assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 0);
@@ -141,11 +138,13 @@ fn pre_call_qpc_failure_records_zero_physical_attempts() {
         0
     );
     assert_eq!(harness.local_metrics.transport_anomalies, 1);
-    assert!(harness
-        .runtime
-        .terminal_error
-        .as_deref()
-        .is_some_and(|error| error.contains("ClockFailureBeforeSend")));
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("ClockFailureBeforeSend"))
+    );
     let _ = harness.finalize_for_test();
 }
 
@@ -189,7 +188,7 @@ fn suspend_after_sender_return_keeps_musical_attempt_evidence() {
 
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::StagedDispatchOutcome::Exit
+        super::super::StagedDispatchOutcome::Exit
     ));
     assert_eq!(
         harness.runtime.terminal_trigger,
@@ -214,7 +213,9 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
     ] {
         let mut harness = ProductionDispatchTestHarness::new_down_chord(2);
         let _cleanup = harness.configure_mock_cleanup_emitter_for_test();
-        harness.attach_executor_for_test().expect("attach scheduler");
+        harness
+            .attach_executor_for_test()
+            .expect("attach scheduler");
         let chord = harness.current_executor_chord_for_test();
         let candidate = harness
             .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
@@ -246,41 +247,50 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
 
         assert!(matches!(
             harness.dispatch_staged_candidate_for_test(candidate, false),
-            super::StagedDispatchOutcome::Exit
+            super::super::StagedDispatchOutcome::Dispatched
         ));
-        assert_eq!(harness.resources.scheduler.accounting(), accounting_before);
+        assert_ne!(harness.resources.scheduler.accounting(), accounting_before);
+        assert_eq!(harness.resources.scheduler.accounting().activated, 0);
+        assert_eq!(harness.resources.scheduler.accounting().cancelled, 2);
         assert_eq!(
-            harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
-            Some(0)
+            harness
+                .current_executor_chord_for_test()
+                .map(|chord| chord.chord_index),
+            None
         );
-        assert_eq!(harness.resources.backend.in_flight_mask, packet_mask);
+        assert_eq!(harness.resources.backend.in_flight_mask, 0);
         assert_eq!(
             harness.resources.backend.release_obligation_mask() & packet_mask,
-            packet_mask
+            0
         );
-        let error = harness
-            .runtime
-            .terminal_error
-            .as_deref()
-            .expect("terminal sender error");
-        assert!(error.contains("status=IntegrityLost"), "{error}");
-        assert!(error.contains(expected_evidence), "{error}");
+        assert!(
+            harness
+                .runtime
+                .attempted_dispatch_anomalies
+                .details()
+                .first()
+                .is_some_and(|record| {
+                    record.contains("status=IntegrityLost") && record.contains(expected_evidence)
+                })
+        );
         let _ = harness.finalize_for_test();
     }
 }
 
 #[test]
-fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_commit() {
+fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_replay() {
     use sky_dispatch_core::executor::DispatchDecision;
     use sky_dispatch_win32::clock::QpcError;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     for inserted_count in 0..=2_u8 {
         let mut harness = ProductionDispatchTestHarness::new_mixed();
         let packets = harness.configure_mock_packet_sender_for_test(&[0]);
         let _cleanup = harness.configure_mock_cleanup_emitter_for_test();
-        harness.attach_executor_for_test().expect("attach live scheduler");
+        harness
+            .attach_executor_for_test()
+            .expect("attach live scheduler");
         let epoch = harness.resources.playback.epoch;
         let first_now = harness.qpc_now_for_test().expect("first Down QPC");
         let first = harness
@@ -294,7 +304,7 @@ fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_com
         harness.set_mock_sender_start_qpc_for_test(first_now);
         assert!(matches!(
             harness.dispatch_staged_candidate_for_test(first, false),
-            super::StagedDispatchOutcome::Dispatched
+            super::super::StagedDispatchOutcome::Dispatched
         ));
         assert_eq!(
             harness.generation_accounting_for_test().activated,
@@ -371,7 +381,7 @@ fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_com
         harness.set_mock_sender_start_qpc_for_test(mixed_target);
         assert!(matches!(
             harness.dispatch_staged_candidate_for_test(candidate, false),
-            super::StagedDispatchOutcome::Exit
+            super::super::StagedDispatchOutcome::Dispatched
         ));
         assert_eq!(attempts.load(Ordering::Relaxed), 1);
         assert_eq!(harness.local_metrics.precision_packet_attempts, 2);
@@ -382,45 +392,52 @@ fn mixed_post_call_qpc_failure_preserves_transport_journal_without_scheduler_com
             1
         );
         assert_eq!(harness.local_metrics.transport_anomalies, 1);
-        assert_eq!(harness.generation_accounting_for_test(), accounting_before);
+        let accounting_after = harness.generation_accounting_for_test();
+        assert_eq!(accounting_after.total, accounting_before.total);
+        assert_eq!(accounting_after.activated, 1);
+        assert_eq!(accounting_after.cancelled, 2);
+        assert_eq!(accounting_after.active, 0);
         assert_eq!(
-            harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
-            Some(1),
-            "QPC failure cannot advance the production Down cursor"
+            harness
+                .current_executor_chord_for_test()
+                .map(|chord| chord.chord_index),
+            None,
+            "verified cleanup consumes the syscall-attempted B onset exactly once"
         );
-        let obligation = harness.release_obligation_mask_for_test();
-        match inserted_count {
-            0 => {
-                assert_eq!(obligation, 0b01, "zero insertion retains only prior held A");
-                assert_eq!(harness.resources.backend.in_flight_mask, 0);
-                assert_eq!(harness.resources.backend.sendinput_zero_progress_failures, 1);
-                assert_eq!(harness.resources.backend.sendinput_partial_events, 0);
-            }
-            1 | 2 => {
-                assert_eq!(obligation, 0b11, "partial/full insert without completion is uncertain");
-                assert_eq!(harness.resources.backend.in_flight_mask, 0b11);
-                assert_eq!(
-                    harness.resources.backend.sendinput_partial_events,
-                    u64::from(inserted_count == 1)
-                );
-            }
-            _ => unreachable!(),
-        }
-        let error = harness
+        assert_eq!(harness.release_obligation_mask_for_test(), 0);
+        assert_eq!(harness.resources.backend.in_flight_mask, 0);
+        assert_eq!(
+            harness.resources.backend.sendinput_partial_events,
+            u64::from(inserted_count == 1)
+        );
+        assert_eq!(harness.runtime.last_physical_send_completion_qpc, None);
+        let anomaly = harness
             .runtime
-            .terminal_error
-            .as_deref()
+            .attempted_dispatch_anomalies
+            .details()
+            .first()
             .expect("post-call QPC failure record");
-        assert!(error.contains("status=ClockFailureAfterSend"), "{error}");
-        assert!(error.contains("first_inserted="), "{error}");
-        assert!(error.contains("completion_qpc=unavailable"), "{error}");
-        assert_eq!(packets.lock().expect("initial packet capture").len(), 1);
+        assert!(
+            anomaly.contains("status=ClockFailureAfterSend"),
+            "{anomaly}"
+        );
+        assert!(anomaly.contains("first_inserted="), "{anomaly}");
+        assert!(anomaly.contains("completion_qpc=unavailable"), "{anomaly}");
+        assert_eq!(
+            packets.lock().expect("initial packet capture").len(),
+            1,
+            "the original A onset had exactly one healthy packet"
+        );
+        assert!(
+            anomaly.contains("source_action=2 source_chord=1 up_mask=0x0001 down_mask=0x0002"),
+            "the attempted mixed B onset is identified exactly: {anomaly}"
+        );
         let _ = harness.finalize_for_test();
     }
 }
 
 #[test]
-fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
+fn stale_target_does_not_send_origin_up_to_new_generation() {
     use sky_dispatch_core::executor::DispatchDecision;
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 
@@ -456,7 +473,9 @@ fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
     ];
     let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
-    harness.attach_executor_for_test().expect("attach live scheduler");
+    harness
+        .attach_executor_for_test()
+        .expect("attach live scheduler");
     let epoch = harness.resources.playback.epoch;
 
     let first_now = harness.qpc_now_for_test().expect("first Down QPC");
@@ -471,7 +490,7 @@ fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
     harness.set_mock_sender_start_qpc_for_test(first_now);
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(first, false),
-        super::StagedDispatchOutcome::Dispatched
+        super::super::StagedDispatchOutcome::Dispatched
     ));
 
     let mixed_target = epoch
@@ -510,18 +529,6 @@ fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
         .expect("stage mixed candidate")
         .expect("mixed candidate");
     assert_eq!(mixed.packet_masks.down_mask, 0b10);
-    let expected_up_summary = mixed
-        .up_slot_timing_summary
-        .expect("mixed packet retains its Up timing summary");
-    assert!(
-        timing_window.authored_target_qpc < expected_up_summary.authored_target_qpc,
-        "the Down target precedes the Up target in this mixed packet"
-    );
-    let expected_up_window = (
-        expected_up_summary.authored_target_qpc,
-        expected_up_summary.musical_up_not_before_qpc,
-        expected_up_summary.hold_floor_mask,
-    );
     let accounting_before_replan = harness.generation_accounting_for_test();
 
     assert!(harness.target.publish(2), "publish a new target generation");
@@ -530,40 +537,43 @@ fn stale_target_replans_mixed_candidate_to_independent_up_only_packet() {
     );
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(mixed, true),
-        super::StagedDispatchOutcome::Dispatched
+        super::super::StagedDispatchOutcome::Exit
     ));
-
-    let fallback = match harness.observer.pop_front().expect("Up-only observation") {
-        crate::engine::worker::dispatch::observation::DispatchObservation::Down(packet) => packet,
-        other => panic!("expected Up-only packet observation, got {other:?}"),
-    };
-    assert_eq!(fallback.requested_packet, sky_dispatch_win32::input::PhysicalPacket::new(1, 0));
-    assert_eq!(fallback.physical_target_qpc, expected_up_window.0);
-    assert_eq!(
-        fallback.physical_timing_window.packet_not_before_qpc,
-        expected_up_window.1
+    assert!(
+        harness.observer.pop_front().is_none(),
+        "no Up observation without a sender call"
     );
-    assert_eq!(fallback.physical_timing_window.hold_floor_mask, expected_up_window.2);
 
     let captured = packets.lock().expect("mock packet capture");
-    assert_eq!(captured.len(), 2, "stale target sends only the independent Up");
-    assert_eq!(captured[0].0, sky_dispatch_win32::input::PhysicalPacket::new(0, 1));
-    assert_eq!(captured[1].0, sky_dispatch_win32::input::PhysicalPacket::new(1, 0));
-    assert_eq!(harness.generation_accounting_for_test().activated, 1);
-    assert_eq!(harness.generation_accounting_for_test().released, 1);
-    assert_eq!(harness.generation_accounting_for_test().active, 0);
-    assert_eq!(harness.release_obligation_mask_for_test(), 0);
     assert_eq!(
-        harness.current_executor_chord_for_test().map(|chord| chord.chord_index),
+        captured.len(),
+        1,
+        "stale target sends no Up to the new generation"
+    );
+    assert_eq!(
+        captured[0].0,
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 1)
+    );
+    assert_eq!(harness.generation_accounting_for_test().activated, 1);
+    assert_eq!(harness.generation_accounting_for_test().released, 0);
+    assert_eq!(harness.generation_accounting_for_test().active, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0b01);
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|chord| chord.chord_index),
         Some(1),
         "replanning Up-only cannot advance the rejected Down cursor"
     );
     assert_eq!(accounting_before_replan.activated, 1);
     assert_eq!(accounting_before_replan.released, 0);
-    assert_eq!(
-        harness.resources.backend.in_flight_mask,
-        0,
-        "successful Up clears its journal entry"
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| error.contains("musical Up origin owner differs"))
     );
 }
 
@@ -584,7 +594,7 @@ fn unstable_target_retry_wait_is_interruptible_before_deadline() {
     let mut metrics = crate::engine::telemetry::WorkerMetricsLocal::default();
     let mut terminal_error = None;
 
-    let result = super::wait_after_unstable_target(
+    let result = super::super::wait_after_unstable_target(
         now,
         deadline,
         qpc,
@@ -594,6 +604,9 @@ fn unstable_target_retry_wait_is_interruptible_before_deadline() {
         &mut terminal_error,
     );
 
-    assert!(matches!(result, super::WaitBoundary::Interrupted(..)));
+    assert!(matches!(
+        result,
+        super::super::WaitBoundary::Interrupted(..)
+    ));
     assert!(terminal_error.is_none());
 }

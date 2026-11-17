@@ -287,7 +287,17 @@ fn production_staged_worker_1_5_and_15_key_chords_no_alloc() {
 
 #[test]
 fn production_staged_worker_mixed_up_down_packet_no_alloc() {
+    struct ForegroundOverrideReset;
+
+    impl Drop for ForegroundOverrideReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+        }
+    }
+
     let _lock = TEST_LOCK.lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
     let clock = clock();
     let actions = [
         action(0, ActionKind::Down, 0, &[0x15]),
@@ -296,6 +306,7 @@ fn production_staged_worker_mixed_up_down_packet_no_alloc() {
         action(3, ActionKind::Up, 40_000, &[0x16]),
     ];
     let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    harness.configure_focus_owner_for_test(1, 101);
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0, 0]);
     harness
         .attach_executor_for_test()

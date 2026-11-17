@@ -613,6 +613,14 @@ fn event_hub_counts_snapshot_eviction_on_close_and_failed_channel_send() {
         },
         "a snapshot whose channel send fails must be counted as dropped"
     );
+    assert!(
+        failed_hub.delivery_failure().is_some(),
+        "a snapshot send error on the shared channel must remain a lifecycle delivery failure"
+    );
+    assert!(
+        failed_hub.failure_flag().load(Ordering::Acquire),
+        "snapshot delivery errors share the global event-delivery failure flag"
+    );
     failed_hub.close();
 }
 

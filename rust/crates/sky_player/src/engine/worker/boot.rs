@@ -11,7 +11,7 @@ use startup_admission::{
 mod startup_calibration;
 mod telemetry_admission;
 mod timing_admission;
-use super::super::config::{EffectiveRuntimePolicy, StartupCheckpoint};
+use super::super::config::{EffectiveRuntimePolicy, NativeScheduleInput, StartupCheckpoint};
 use super::super::shared::StartupAbortReason;
 use super::super::{
     BackendConfig, DurationTicks, QpcClock, QpcTicks, SharedMetrics, TrackedKeyState,
@@ -25,6 +25,7 @@ use super::{
 use crate::engine::config::{CALIBRATION_SAMPLES, StartupCalibrationPlacement};
 use epoch::compute_playback_epoch;
 use prepare_diagnostics::record_unmatched_up_prepare_diagnostics;
+use sky_dispatch_core::executor::PreparedDispatchSchedule;
 use startup_calibration::{
     StartupCalibrationMeasurement, measure_startup_calibration, select_startup_spin_threshold,
 };
@@ -134,23 +135,28 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     }
     let target = &shared.target;
     let priority_acquired = &shared.publication.priority_acquired;
-    let mut schedule_has_down = false;
-    for (index, packet) in schedule.packets.iter().enumerate() {
-        if index.is_multiple_of(64)
-            && let Some(trigger) = startup_abort_trigger(shared, false)
-        {
-            return finalize_startup_abort(
-                &mut backend,
-                metrics,
-                target.hwnd_for_safety_release(),
-                trigger,
-                format!(
-                    "startup cancelled while classifying schedule: {}",
-                    trigger.as_str()
-                ),
-            );
+    let mut schedule_has_down = match &schedule {
+        NativeScheduleInput::Prepared(prepared) => prepared.has_down(),
+        NativeScheduleInput::Raw(_) => false,
+    };
+    if let NativeScheduleInput::Raw(raw) = &schedule {
+        for (index, packet) in raw.packets.iter().enumerate() {
+            if index.is_multiple_of(64)
+                && let Some(trigger) = startup_abort_trigger(shared, false)
+            {
+                return finalize_startup_abort(
+                    &mut backend,
+                    metrics,
+                    target.hwnd_for_safety_release(),
+                    trigger,
+                    format!(
+                        "startup cancelled while classifying schedule: {}",
+                        trigger.as_str()
+                    ),
+                );
+            }
+            schedule_has_down |= packet.down_mask != 0;
         }
-        schedule_has_down |= packet.down_mask != 0;
     }
     let admission_failure =
         |backend: &mut TrackedKeyState, metrics: &SharedMetrics, primary_error: String| {
@@ -249,48 +255,70 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     ) {
         return admission_failure(&mut backend, metrics, error);
     }
-    let scheduler = match sky_dispatch_core::executor::DispatchExecutor::new_with_cancellation(
-        &schedule,
-        min_hold_ticks,
-        min_release_gap_ticks,
-        |us| {
-            qpc_clock
-                .timeline_from_us(us)
-                .map_err(|error| format!("QPC conversion failure: {error:?}"))
-        },
-        || {
-            startup_checkpoint(
-                shared,
-                config.focus.require_focus && schedule_has_down,
-                StartupCheckpoint::StreamMaterialization,
-                #[cfg(any(test, feature = "test-support"))]
-                startup_hook,
-            )
-            .map_err(|_| "scheduler construction cancelled during startup".to_string())?;
-            Ok(())
-        },
-    ) {
-        Ok(scheduler) => scheduler,
-        Err(error) => {
+    #[cfg(any(test, feature = "test-support"))]
+    let schedule_was_prepared = matches!(&schedule, NativeScheduleInput::Prepared(_));
+    let prepared_schedule = match schedule {
+        NativeScheduleInput::Prepared(prepared)
+            if prepared.is_compatible(
+                qpc_clock.frequency_hz(),
+                config.timing.min_hold_us,
+                config.timing.min_release_gap_us,
+            ) =>
+        {
+            prepared
+        }
+        NativeScheduleInput::Prepared(_) => {
             return admission_failure(
                 &mut backend,
                 metrics,
-                format!("scheduler construction failed: {error}"),
+                "prepared dispatch plan no longer matches the worker QPC domain or H/G policy"
+                    .to_string(),
             );
         }
-    };
-    core.metrics.total_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(
-        scheduler.schedule_end_offset_ticks().as_u64(),
-    )) {
-        Ok(total_us) => total_us,
-        Err(error) => {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                format!("total timeline conversion failed: {error:?}"),
-            );
+        NativeScheduleInput::Raw(raw) => {
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(hook) = startup_hook {
+                hook.record_raw_schedule_worker_materialization();
+            }
+            match PreparedDispatchSchedule::prepare_with_cancellation(
+                &raw,
+                qpc_clock.frequency_hz(),
+                config.timing.min_hold_us,
+                config.timing.min_release_gap_us,
+                raw.compile_memory.caller_retained_capacity_bytes,
+                || {
+                    startup_checkpoint(
+                        shared,
+                        config.focus.require_focus && schedule_has_down,
+                        StartupCheckpoint::StreamMaterialization,
+                        #[cfg(any(test, feature = "test-support"))]
+                        startup_hook,
+                    )
+                    .map_err(|_| "scheduler construction cancelled during startup".to_string())
+                },
+            ) {
+                Ok(prepared) => prepared,
+                Err(error) => {
+                    return admission_failure(
+                        &mut backend,
+                        metrics,
+                        format!("scheduler construction failed: {error}"),
+                    );
+                }
+            }
         }
     };
+    if prepared_schedule
+        .memory_metrics()
+        .overlapping_peak_capacity_bytes
+        > sky_dispatch_core::model::MAX_RETAINED_DISPATCH_BYTES
+    {
+        return admission_failure(
+            &mut backend,
+            metrics,
+            "prepared dispatch plan exceeds the retained capacity budget".to_string(),
+        );
+    }
     let telemetry = match try_new_worker_telemetry(&effective_policy) {
         Ok(telemetry) => std::sync::Arc::new(parking_lot::Mutex::new(telemetry)),
         Err(error) => {
@@ -302,8 +330,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         }
     };
     if let Err(error) = record_unmatched_up_prepare_diagnostics(
-        &schedule,
-        qpc_clock,
+        &prepared_schedule,
         &telemetry,
         || {
             startup_checkpoint(
@@ -323,6 +350,24 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             format!("unmatched Up Prepare diagnostics failed: {error}"),
         );
     }
+    let scheduler =
+        sky_dispatch_core::executor::DispatchExecutor::from_prepared_schedule(prepared_schedule);
+    #[cfg(any(test, feature = "test-support"))]
+    if schedule_was_prepared && let Some(hook) = startup_hook {
+        hook.record_prepared_schedule_executor_consumption();
+    }
+    core.metrics.total_us = match qpc_clock.duration_to_us(DurationTicks::from_raw(
+        scheduler.schedule_end_offset_ticks().as_u64(),
+    )) {
+        Ok(total_us) => total_us,
+        Err(error) => {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                format!("total timeline conversion failed: {error:?}"),
+            );
+        }
+    };
     if let Err(error) = core.errors.abort_counts.try_reserve(6) {
         return admission_failure(
             &mut backend,
@@ -450,6 +495,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
 
     let start_thread_cpu_us = current_thread_cpu_time_us();
     let start_process_cpu_us = current_process_cpu_time_us();
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = startup_hook {
+        hook.record_startup_cpu_baseline(start_thread_cpu_us, start_process_cpu_us);
+    }
     worker_timing.start_wall_time_us = initial_now_us;
     worker_timing.start_thread_cpu_us = start_thread_cpu_us;
     worker_timing.start_process_cpu_us = start_process_cpu_us;
@@ -467,6 +516,13 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         let pending = super::dispatch::PendingObservationQueue::default();
         core.observer.pending = Some(pending.clone());
         let observer_timing = core.timing.expect("worker timing initialized");
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(hook) = startup_hook {
+            hook.record_observer_cpu_baseline(
+                observer_timing.start_thread_cpu_us,
+                observer_timing.start_process_cpu_us,
+            );
+        }
         core.observer.runtime = match super::ObserverRuntime::start(
             pending,
             qpc_clock,
@@ -751,6 +807,19 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         );
     }
 
+    // Capture playback CPU attribution after every pre-arm gate but before
+    // the selected epoch QPC sample. The observer keeps its earlier copied
+    // startup pair, which describes its own lifetime.
+    let playback_start_thread_cpu_us = current_thread_cpu_time_us();
+    let playback_start_process_cpu_us = current_process_cpu_time_us();
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = startup_hook {
+        hook.record_playback_cpu_baseline(
+            playback_start_thread_cpu_us,
+            playback_start_process_cpu_us,
+        );
+    }
+
     let epoch_base = match qpc_clock.now() {
         Ok(now) => now,
         Err(error) => {
@@ -761,6 +830,10 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = startup_hook {
+        hook.record_epoch_qpc_sample_completed();
+    }
     let (epoch_qpc, playback, epoch_wall_us) = match compute_playback_epoch(
         qpc_clock,
         epoch_base,
@@ -775,8 +848,8 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     if let Some(timing) = core.timing.as_mut() {
         timing.start_wall_time_us = epoch_wall_us;
         timing.last_cpu_metrics_sample_us = epoch_wall_us;
-        timing.start_thread_cpu_us = current_thread_cpu_time_us();
-        timing.start_process_cpu_us = current_process_cpu_time_us();
+        timing.start_thread_cpu_us = playback_start_thread_cpu_us;
+        timing.start_process_cpu_us = playback_start_process_cpu_us;
     }
 
     shared

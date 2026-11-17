@@ -1,4 +1,5 @@
 use super::telemetry::TelemetryMode;
+use sky_dispatch_core::executor::PreparedDispatchSchedule;
 use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, MaterializedInstrumentKeyProfile};
 use sky_dispatch_win32::mmcss::PriorityMode;
@@ -165,6 +166,9 @@ pub(crate) type FinalGateRaceHook = Arc<
         + Sync,
 >;
 
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) type FinalGateBeforeSyscallHook = Arc<dyn Fn() + Send + Sync>;
+
 /// Deliberate session profiles. The profile owns backend/policy selection so
 /// callers do not compose a contradictory matrix of booleans.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -210,8 +214,22 @@ pub enum BackendConfig {
     },
 }
 
+/// Schedule admission input for a native session. Existing callers may keep
+/// supplying a validated raw runtime schedule; production desktop playback
+/// supplies the tick-domain plan materialized during Prepare.
+pub enum NativeScheduleInput {
+    Raw(RuntimeSchedule),
+    Prepared(PreparedDispatchSchedule),
+}
+
+impl From<RuntimeSchedule> for NativeScheduleInput {
+    fn from(schedule: RuntimeSchedule) -> Self {
+        Self::Raw(schedule)
+    }
+}
+
 pub struct NativeSessionOptions {
-    pub schedule: RuntimeSchedule,
+    pub schedule: NativeScheduleInput,
     pub backend: BackendConfig,
     pub profile: DispatchProfile,
     pub timing: TimingOptions,
@@ -255,6 +273,7 @@ pub(crate) struct AdmittedNativeSessionOptions {
 #[derive(Debug, Default)]
 pub struct StartupOrderingHook {
     sequence: AtomicU64,
+    cpu_baseline_trace: std::sync::Mutex<CpuBaselineOrderingTrace>,
     pub(crate) first_physical_send_started: AtomicU64,
     pub(crate) boot_delay_us: AtomicU64,
     release_floor_control_enabled: AtomicBool,
@@ -275,6 +294,9 @@ pub struct StartupOrderingHook {
     interrupted_wait_count: AtomicU64,
     interrupted_wait_evidence: std::sync::Mutex<Option<InterruptedWaitEvidence>>,
     pub(crate) unmatched_up_prepare_count: AtomicU64,
+    raw_schedule_admission_validation_count: AtomicU64,
+    raw_schedule_worker_materialization_count: AtomicU64,
+    prepared_schedule_executor_consumption_count: AtomicU64,
     watchdog_hold: AtomicBool,
     watchdog_waiting: AtomicBool,
     startup_checkpoint: AtomicU8,
@@ -293,6 +315,24 @@ pub struct StartupOrderingHook {
     pub(crate) hol: hol::HolStallController,
     scheduling_threads:
         std::sync::Mutex<(Option<std::thread::ThreadId>, Option<std::thread::ThreadId>)>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct CpuBaselineOrderingTrace {
+    next_sequence: u64,
+    pub(crate) startup: Option<(u64, u64, u64)>,
+    pub(crate) observer: Option<(u64, u64, u64)>,
+    pub(crate) playback: Option<(u64, u64, u64)>,
+    pub(crate) epoch_qpc_sample_completed: Option<u64>,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+#[derive(Clone, Copy)]
+enum CpuBaselineDestination {
+    Startup,
+    Observer,
+    Playback,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -324,6 +364,56 @@ pub enum StartupCheckpoint {
 
 #[cfg(any(test, feature = "test-support"))]
 impl StartupOrderingHook {
+    fn record_cpu_baseline_pair(&self, pair: (u64, u64), destination: CpuBaselineDestination) {
+        if let Ok(mut trace) = self.cpu_baseline_trace.lock() {
+            trace.next_sequence = trace.next_sequence.saturating_add(1);
+            let sequence = trace.next_sequence;
+            let event = Some((sequence, pair.0, pair.1));
+            match destination {
+                CpuBaselineDestination::Startup => trace.startup = event,
+                CpuBaselineDestination::Observer => trace.observer = event,
+                CpuBaselineDestination::Playback => trace.playback = event,
+            }
+        }
+    }
+
+    pub(crate) fn record_startup_cpu_baseline(&self, thread_cpu_us: u64, process_cpu_us: u64) {
+        self.record_cpu_baseline_pair(
+            (thread_cpu_us, process_cpu_us),
+            CpuBaselineDestination::Startup,
+        );
+    }
+
+    pub(crate) fn record_observer_cpu_baseline(&self, thread_cpu_us: u64, process_cpu_us: u64) {
+        self.record_cpu_baseline_pair(
+            (thread_cpu_us, process_cpu_us),
+            CpuBaselineDestination::Observer,
+        );
+    }
+
+    pub(crate) fn record_playback_cpu_baseline(&self, thread_cpu_us: u64, process_cpu_us: u64) {
+        self.record_cpu_baseline_pair(
+            (thread_cpu_us, process_cpu_us),
+            CpuBaselineDestination::Playback,
+        );
+    }
+
+    pub(crate) fn record_epoch_qpc_sample_completed(&self) {
+        if let Ok(mut trace) = self.cpu_baseline_trace.lock() {
+            trace.next_sequence = trace.next_sequence.saturating_add(1);
+            let sequence = trace.next_sequence;
+            trace.epoch_qpc_sample_completed = Some(sequence);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn cpu_baseline_trace_for_test(&self) -> CpuBaselineOrderingTrace {
+        self.cpu_baseline_trace
+            .lock()
+            .map(|trace| *trace)
+            .unwrap_or_default()
+    }
+
     pub(crate) fn record_unmatched_up_prepare(&self, intent_count: usize) {
         self.unmatched_up_prepare_count.fetch_add(
             u64::try_from(intent_count).unwrap_or(u64::MAX),

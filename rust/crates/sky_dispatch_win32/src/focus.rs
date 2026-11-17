@@ -252,6 +252,11 @@ pub use window_identity::terminate_receive_only_sink_process_for_test;
 pub use window_identity::{
     WindowIdentity, WindowIdentityAuthority, WindowIdentityContinuity, retain_window_identity,
 };
+#[cfg(feature = "test-support")]
+pub use window_identity::{
+    get_process_times_call_count_for_test, process_identity_check_count_for_test,
+    reset_process_identity_counts_for_test,
+};
 
 /// Result of the control-plane integrity comparison used to identify a
 /// likely Windows UIPI block before a physical session is armed.
@@ -849,6 +854,7 @@ mod tests {
             },
             image_identity,
             process_handle: Some(process as isize),
+            process_identity_test_override: std::sync::atomic::AtomicU8::new(u8::MAX),
         };
         assert_eq!(
             authority.process_continuity(),

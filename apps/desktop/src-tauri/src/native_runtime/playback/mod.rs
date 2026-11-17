@@ -45,7 +45,21 @@ pub(super) use session::{
 };
 
 #[cfg(test)]
-pub(super) type StartupCompileTestHook = Arc<dyn Fn(usize) + Send + Sync>;
+pub(super) type PrepareCompileTestHook = Arc<dyn Fn(usize) + Send + Sync>;
+
+#[cfg(all(test, feature = "tauri-test"))]
+pub(super) type PreparedPlaybackPlayerFactory = Arc<
+    dyn Fn(
+            sky_player::adapter_support::PreparedDispatchSchedule,
+            &PlaybackConfigDto,
+            &MaterializedTimingPolicy,
+        ) -> Result<Arc<NativeDispatchSession>, String>
+        + Send
+        + Sync,
+>;
+
+#[cfg(all(test, feature = "tauri-test"))]
+pub(super) type PrepareRecommendationMaterializationTestHook = Arc<dyn Fn() + Send + Sync>;
 
 /// Application-side playback control plane.  The realtime worker remains in
 /// `sky_player`; this service owns prepared-plan admission, the single active
@@ -64,7 +78,7 @@ pub(super) struct NativePlaybackService {
     #[cfg(test)]
     pub(super) startup_failure: Option<String>,
     #[cfg(test)]
-    pub(super) startup_compile_test_hook: Mutex<Option<StartupCompileTestHook>>,
+    pub(super) prepare_compile_test_hook: Mutex<Option<PrepareCompileTestHook>>,
     #[cfg(test)]
     pub(super) settings_invalidation_count: AtomicU64,
     #[cfg(test)]
@@ -82,9 +96,14 @@ pub(super) struct NativePlaybackService {
     #[cfg(all(test, feature = "tauri-test"))]
     pub(super) test_player: Option<Arc<NativeDispatchSession>>,
     #[cfg(all(test, feature = "tauri-test"))]
-    pub(super) before_arm_test_hook: Option<PlaybackBeforeArmTestHook>,
+    pub(super) prepared_player_factory_for_test: Option<PreparedPlaybackPlayerFactory>,
     #[cfg(all(test, feature = "tauri-test"))]
-    pub(super) post_compile_prepublication_test_hook: Option<PlaybackPostCompileTestHook>,
+    pub(super) recommended_plan_caller_capacity_override_for_test: Option<usize>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    pub(super) recommendation_materialization_test_hook:
+        Mutex<Option<PrepareRecommendationMaterializationTestHook>>,
+    #[cfg(all(test, feature = "tauri-test"))]
+    pub(super) before_arm_test_hook: Option<PlaybackBeforeArmTestHook>,
     #[cfg(all(test, feature = "tauri-test"))]
     pub(super) monitor_retired_test_hook: Option<PlaybackRetiredTestHook>,
 }
@@ -118,22 +137,22 @@ pub(super) struct DiagnosticsPublicationGate {
     pub(super) state: Mutex<DiagnosticsPublicationState>,
 }
 
-#[derive(Clone)]
 pub(super) struct NativePreparedPlan {
     pub(super) song_id: String,
     pub(super) generation: u64,
     pub(super) settings_fingerprint: String,
-    pub(super) song: Song,
+    pub(super) song_title: String,
     pub(super) source_path: PathBuf,
     pub(super) source_hash: String,
     pub(super) dto: PreparedPlaybackDto,
     pub(super) variants: HashMap<PlaybackDecision, NativePlaybackVariant>,
+    pub(super) retained_capacity_bytes: usize,
 }
 
-#[derive(Clone)]
 pub(super) struct NativePlaybackVariant {
     pub(super) config: PlaybackConfigDto,
-    pub(super) schedule: ScheduleMetadata,
+    pub(super) schedule_duration_us: u64,
+    pub(super) prepared_schedule: Option<sky_player::adapter_support::PreparedDispatchSchedule>,
     pub(super) fingerprint: String,
     pub(super) timing_policy: MaterializedTimingPolicy,
     pub(super) timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,

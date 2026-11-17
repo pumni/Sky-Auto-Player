@@ -1,6 +1,163 @@
 use super::support::*;
 use super::*;
 
+fn assert_snapshot_common_projection(
+    full: &crate::engine::EngineSnapshot,
+    lite: &crate::engine::EngineProgressSnapshot,
+) {
+    // These APIs independently sample QPC; tiny clock advancement between
+    // calls is expected even though both derive from the same source snapshot
+    // logic. Keep exact parity for lifecycle and counters, with a narrow bound
+    // for the two time-varying projection fields.
+    const PROJECTION_SAMPLE_DRIFT_US: u64 = 5_000;
+    assert!(
+        full.elapsed_us.abs_diff(lite.elapsed_us) <= PROJECTION_SAMPLE_DRIFT_US,
+        "snapshot projection elapsed_us drift: full={} lite={}",
+        full.elapsed_us,
+        lite.elapsed_us,
+    );
+    assert!(
+        full.pre_roll_remaining_us
+            .abs_diff(lite.pre_roll_remaining_us)
+            <= PROJECTION_SAMPLE_DRIFT_US,
+        "snapshot projection pre_roll_remaining_us drift: full={} lite={}",
+        full.pre_roll_remaining_us,
+        lite.pre_roll_remaining_us,
+    );
+    macro_rules! same_fields {
+        ($($field:ident),+ $(,)?) => {$(
+            assert_eq!(full.$field, lite.$field, "snapshot projection field {}", stringify!($field));
+        )+};
+    }
+    same_fields!(
+        total_us,
+        max_lateness_us,
+        late_2ms,
+        late_5ms,
+        late_10ms,
+        max_sendinput_pre_call_lateness_us,
+        precision_packet_attempts,
+        pre_call_qpc_unavailable_attempts,
+        sendinput_completion_qpc_unavailable_attempts,
+        authored_lateness_samples,
+        max_authored_lateness_ticks,
+        max_authored_lateness_abs_ticks,
+        physical_floor_displacement_samples,
+        max_physical_floor_displacement_ticks,
+        residual_lateness_samples,
+        max_residual_lateness_ticks,
+        max_residual_lateness_abs_ticks,
+        hol_delay_lower_bound_samples,
+        max_hol_delay_lower_bound_ticks,
+        unattributed_lateness_samples,
+        max_unattributed_lateness_ticks,
+        sendinput_envelope_samples,
+        max_sendinput_envelope_ticks,
+        overdue_packet_observations,
+        transport_anomalies,
+        timing_arithmetic_anomalies,
+        pre_call_lt_250us,
+        pre_call_250_500us,
+        pre_call_500_750us,
+        pre_call_750_1000us,
+        pre_call_1000_1500us,
+        pre_call_1500_2000us,
+        pre_call_ge_2000us,
+        pre_call_late_2ms,
+        pre_call_late_5ms,
+        pre_call_late_10ms,
+        release_max_us,
+        release_late_2ms,
+        recent_latencies_us,
+        recent_latency_samples_available,
+        is_running,
+        is_finished,
+        is_paused,
+        status,
+        active_count,
+        possibly_active_count,
+        failed_release_count,
+        last_error,
+        keys_dropped,
+        chord_split_events,
+        sendinput_partial_events,
+        sendinput_zero_progress_failures,
+        chords_rejected,
+        authored_conflict_events,
+        authored_chords_rejected,
+        authored_keys_rejected,
+        missed_down_boundaries,
+        missed_down_keys,
+        missed_unobserved_backlog_boundaries,
+        missed_physical_window_boundaries,
+        final_gate_control_rejections,
+        final_gate_target_changes,
+        final_gate_focus_losses,
+        final_gate_lease_expirations,
+        final_sender_window_expirations,
+        release_floor_infeasible_boundaries,
+        hold_floor_delay_boundaries,
+        max_hold_floor_delay_us,
+        release_floor_delay_boundaries,
+        max_release_floor_delay_us,
+        max_missed_lateness_ticks,
+        keys_inserted_before_failure,
+        keys_rolled_back,
+        rollback_residue_keys,
+        production_forensics_available,
+        production_forensics_version,
+        production_hold_pair_samples,
+        production_min_hold_start_after_down_completion_ticks,
+        production_hold_floor_violation_count,
+        production_release_floor_samples,
+        production_min_down_start_after_up_completion_ticks,
+        production_release_floor_violation_count,
+        production_same_key_overlap_forensics_count,
+        production_anchor_overwrite_count,
+        production_unmatched_up_count,
+        production_anomaly_ring_overwrite_count,
+        production_forensics_anomaly_count,
+        input_path_degraded,
+        sendinput_path_degraded,
+        core_post_send_degraded,
+        post_send_metrics_available,
+        observer_degraded,
+        wait_path_degraded,
+        sendinput_warn_threshold_us,
+        core_post_send_warn_threshold_us,
+        observer_warn_threshold_us,
+        wait_warn_threshold_us,
+        sendinput_degraded_samples,
+        core_post_send_degraded_samples,
+        observer_degraded_samples,
+        wait_degraded_samples,
+        wait_backend_failures,
+        wait_clock_failures,
+        wait_interrupted_count,
+        sendinput_window_bad_count,
+        core_post_send_window_bad_count,
+        observer_window_bad_count,
+        wait_window_bad_count,
+        sendinput_window_sample_count,
+        core_post_send_window_sample_count,
+        observer_window_sample_count,
+        wait_window_sample_count,
+        timeline_rebase_count,
+        timeline_rebase_total_us,
+        timeline_rebase_max_us,
+        dispatch_occupancy_max_us,
+        core_post_send_max_us,
+        wake_to_send_max_us,
+        observer_duration_max_us,
+        observer_dropped_samples,
+        observer_queue_high_watermark,
+        recovered_zero_progress_but_late,
+        recovered_zero_progress_retries,
+        recovered_partial_up_retries,
+    );
+    assert_eq!(full.terminal_error.is_some(), lite.has_terminal_error);
+}
+
 #[test]
 fn engine_snapshots_project_always_on_timing_with_trace_on_and_off() {
     for telemetry_mode in [TelemetryMode::Ring, TelemetryMode::Off] {
@@ -27,6 +184,7 @@ fn engine_snapshots_project_always_on_timing_with_trace_on_and_off() {
 
         let lite = session.snapshot_lite();
         let full = session.snapshot();
+        assert_snapshot_common_projection(&full, &lite);
         assert_eq!(lite.precision_packet_attempts, 2);
         assert_eq!(full.precision_packet_attempts, 2);
         assert_eq!(lite.authored_lateness_samples, 2);
@@ -181,9 +339,11 @@ fn progress_snapshot_advances_during_idle_gap_with_telemetry_off() {
 
     let first_lite = session.snapshot_lite();
     let first_full = session.snapshot();
+    assert_snapshot_common_projection(&first_full, &first_lite);
     std::thread::sleep(Duration::from_millis(100));
     let second_lite = session.snapshot_lite();
     let second_full = session.snapshot();
+    assert_snapshot_common_projection(&second_full, &second_lite);
 
     assert!(second_lite.elapsed_us > first_lite.elapsed_us);
     assert!(second_full.elapsed_us > first_full.elapsed_us);
@@ -247,6 +407,7 @@ fn progress_snapshot_freezes_for_manual_pause_and_resumes_afterward() {
         std::thread::sleep(Duration::from_millis(2));
     }
     let paused_at = session.snapshot_lite().elapsed_us;
+    assert_snapshot_common_projection(&session.snapshot(), &session.snapshot_lite());
     let paused_sample_deadline = Instant::now() + Duration::from_millis(100);
     while Instant::now() < paused_sample_deadline {
         std::thread::sleep(Duration::from_millis(2));
@@ -378,6 +539,7 @@ fn startup_failure_does_not_publish_ready_boundary() {
     assert_eq!(session.snapshot().startup_latency_us, None);
     assert_eq!(session.snapshot().status, EnginePollStatus::Error.as_str());
     assert_eq!(session.snapshot().outcome.as_deref(), Some("error"));
+    assert_snapshot_common_projection(&session.snapshot(), &session.snapshot_lite());
     assert_eq!(send_calls.load(Ordering::SeqCst), 0);
     assert_eq!(full_release_calls.load(Ordering::SeqCst), 0);
 }
@@ -403,6 +565,7 @@ fn startup_failure_prevents_dispatch_ready_publication() {
     assert_eq!(session.snapshot().startup_latency_us, None);
     assert_eq!(session.snapshot().status, EnginePollStatus::Error.as_str());
     assert_eq!(session.snapshot().outcome.as_deref(), Some("error"));
+    assert_snapshot_common_projection(&session.snapshot(), &session.snapshot_lite());
 }
 
 #[test]
@@ -454,7 +617,7 @@ fn worker_takes_runtime_schedule_only_once() {
     assert!(worker.take_schedule_for_test().is_ok());
     assert!(matches!(
         worker.take_schedule_for_test(),
-        Err("worker runtime schedule was already consumed")
+        Err("worker runtime plan was already consumed")
     ));
 }
 
@@ -1103,7 +1266,7 @@ fn termination_error_aggregation_preserves_primary_and_secondary_errors() {
 }
 
 #[test]
-fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
+fn persistent_zero_progress_down_is_not_replayed_and_next_unattempted_chord_is_sent() {
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
@@ -1136,6 +1299,7 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("valid fault-injection schedule");
+    let send_input_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
     let script = FaultInjectionScript {
         entries: vec![
             (
@@ -1153,6 +1317,7 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
                 },
             ),
         ],
+        send_input_capture: Some(Arc::clone(&send_input_capture)),
         ..FaultInjectionScript::default()
     };
     let session = NativeDispatchSession::new(test_session_options(
@@ -1170,8 +1335,11 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, "error", "zero progress must be terminal");
-    assert_eq!(snapshot.precision_packet_attempts, 1);
+    assert_eq!(
+        snapshot.status, "error",
+        "zero progress snapshot: {snapshot:?}"
+    );
+    assert_eq!(snapshot.precision_packet_attempts, 3);
     assert_eq!(snapshot.sendinput_zero_progress_failures, 1);
     assert_eq!(snapshot.sendinput_partial_events, 0);
     assert_eq!(snapshot.transport_anomalies, 1);
@@ -1180,9 +1348,69 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
         snapshot
             .terminal_error
             .as_deref()
-            .is_some_and(|error| !error.starts_with("clean completion contract failed:")),
-        "transport fault identity must survive finalization: {snapshot:?}"
+            .is_some_and(|error| error.starts_with("clean completion contract failed:"))
     );
+    assert_eq!(snapshot.generation_accounting.cancelled, 1);
+    assert_eq!(snapshot.generation_accounting.released, 1);
+    let send_calls = send_input_capture.lock().expect("mock SendInput capture");
+    assert_eq!(
+        send_calls.len(),
+        5,
+        "one attempted Down, two tracked cleanup Ups, and the later Down/Up"
+    );
+    assert!(matches!(
+        send_calls.first(),
+        Some(MockSendInputCapture::Packet {
+            packet: PhysicalPacket {
+                up_mask: 0,
+                down_mask: 1
+            },
+            status: sky_dispatch_win32::input::SendTransactionStatus::ZeroProgress,
+            attempts: 1,
+            ..
+        })
+    ));
+    assert_eq!(
+        &send_calls[1..3],
+        &[
+            MockSendInputCapture::SingleEmitter {
+                scan_codes: vec![0x15],
+                key_up: true,
+            },
+            MockSendInputCapture::SingleEmitter {
+                scan_codes: vec![0x15],
+                key_up: true,
+            },
+        ]
+    );
+    assert!(
+        matches!(
+            send_calls.get(3),
+            Some(MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 2
+                },
+                status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
+                attempts: 1,
+                ..
+            })
+        ),
+        "the authored second Down is sent after the first onset was attempted and cleanup verified"
+    );
+    assert!(matches!(
+        send_calls.get(4),
+        Some(MockSendInputCapture::Packet {
+            packet: PhysicalPacket {
+                up_mask: 2,
+                down_mask: 0
+            },
+            status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
+            attempts: 1,
+            ..
+        })
+    ));
+    drop(send_calls);
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
             .expect("valid telemetry JSON");
@@ -1190,12 +1418,19 @@ fn persistent_zero_progress_down_aborts_before_the_next_authored_chord() {
     assert!(
         !records
             .iter()
-            .any(|record| { record["event_index"] == 2 && record["runtime_outcome"] == "sent" })
+            .any(|record| { record["source_action_index"] == 0 && record["sent_count"] != 0 }),
+        "attempted zero-progress onset must not publish a successful packet"
+    );
+    assert!(
+        records
+            .iter()
+            .any(|record| { record["source_action_index"] == 2 && record["sent_count"] == 1 }),
+        "later authored Down send must remain visible"
     );
 }
 
 #[test]
-fn post_send_qpc_failure_is_snapshotted_without_reconstructed_completion() {
+fn post_send_qpc_failure_is_reconciled_without_reconstructed_completion() {
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::qpc_failure_after_send();
     fault_script.send_call_count = Some(Arc::clone(&send_calls));
@@ -1214,7 +1449,10 @@ fn post_send_qpc_failure_is_snapshotted_without_reconstructed_completion() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, "error");
+    assert_eq!(
+        snapshot.status, "error",
+        "post-send QPC snapshot: {snapshot:?}"
+    );
     assert_eq!(snapshot.precision_packet_attempts, 1);
     assert_eq!(snapshot.pre_call_qpc_unavailable_attempts, 0);
     assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 1);
@@ -1228,11 +1466,16 @@ fn post_send_qpc_failure_is_snapshotted_without_reconstructed_completion() {
     assert_eq!(snapshot.sendinput_partial_events, 0);
     assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
     assert!(
-        snapshot
-            .terminal_error
-            .as_deref()
-            .is_some_and(|error| error.contains("ClockFailureAfterSend"))
+        snapshot.terminal_error.as_deref().is_some_and(
+            |error| error.contains("earlier SendInput QPC timing evidence unavailable")
+        ),
+        "the anomaly remains fail-closed for final session outcome: {snapshot:?}"
     );
+    assert!(snapshot.secondary_errors.iter().any(|error| {
+        error.contains("post-call attempted anomaly")
+            && error.contains("ClockFailureAfterSend")
+            && error.contains("completion_qpc=unavailable")
+    }));
     assert_eq!(
         send_calls.load(Ordering::SeqCst),
         2,
@@ -1243,7 +1486,7 @@ fn post_send_qpc_failure_is_snapshotted_without_reconstructed_completion() {
 }
 
 #[test]
-fn invalid_sender_qpc_order_is_snapshotted_without_qualified_timing_samples() {
+fn invalid_sender_qpc_order_is_reconciled_without_qualified_timing_samples() {
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::invalid_qpc_order_after_send();
     fault_script.send_call_count = Some(Arc::clone(&send_calls));
@@ -1262,7 +1505,10 @@ fn invalid_sender_qpc_order_is_snapshotted_without_qualified_timing_samples() {
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, "error");
+    assert_eq!(
+        snapshot.status, "error",
+        "invalid-QPC-order snapshot: {snapshot:?}"
+    );
     assert_eq!(snapshot.precision_packet_attempts, 1);
     assert_eq!(snapshot.pre_call_qpc_unavailable_attempts, 0);
     assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 0);
@@ -1279,7 +1525,16 @@ fn invalid_sender_qpc_order_is_snapshotted_without_qualified_timing_samples() {
         snapshot
             .terminal_error
             .as_deref()
-            .is_some_and(|error| error.contains("invalid QPC ordering"))
+            .is_some_and(|error| error.starts_with("clean completion contract failed:")),
+        "an anomaly cannot publish a clean completion: {snapshot:?}"
+    );
+    assert!(
+        snapshot.secondary_errors.iter().any(|error| {
+            error.contains("post-call attempted anomaly")
+                && error.contains("pre_call_qpc=")
+                && error.contains("completion_qpc=")
+        }),
+        "invalid sender QPC evidence should remain visible: {snapshot:?}"
     );
     assert_eq!(send_calls.load(Ordering::SeqCst), 2);
     assert_eq!(snapshot.active_count, 0);

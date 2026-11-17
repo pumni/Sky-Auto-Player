@@ -19,12 +19,13 @@ pub use config::StartupCalibrationPlacement;
 pub use config::TestWaitPolicy;
 use config::WorkerConfig;
 pub use config::{
-    BackendConfig, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, FocusOptions, NativeSessionOptions,
-    PriorityOptions, TelemetryOptions, TimingOptions, WaitGuardMode, WaitOptions,
+    BackendConfig, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, FocusOptions, NativeScheduleInput,
+    NativeSessionOptions, PriorityOptions, TelemetryOptions, TimingOptions, WaitGuardMode,
+    WaitOptions,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use config::{RestoreRaceHook, StartupCheckpoint, StartupOrderingHook};
-pub use session::{NativeDispatchSession, SystemPowerSnapshot};
+pub use session::{NativeDispatchSession, OwnerIdentityPollResult, SystemPowerSnapshot};
 pub use shared::SystemPowerEndpoint;
 #[cfg(any(test, feature = "test-support"))]
 pub use shared::SystemPowerState;

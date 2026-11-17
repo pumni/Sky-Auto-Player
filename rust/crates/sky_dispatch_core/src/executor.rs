@@ -5,6 +5,7 @@
 //! and physical H/G timing floors.
 
 use smallvec::SmallVec;
+use std::num::NonZeroU64;
 
 use crate::accounting::{GenerationAccounting, GenerationCounters};
 use crate::model::{GenerationId, KeyRegistry, KeySlot, MAX_KEYS, RuntimeSchedule};
@@ -13,6 +14,23 @@ mod memory;
 pub use memory::MAX_EXECUTOR_BYTES;
 pub(crate) use memory::checked_executor_storage_bytes;
 use memory::{reserve_executor_chords, reserve_executor_intents};
+
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    static SCHEDULER_EVALUATION_COUNT: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn reset_scheduler_evaluation_count_for_test() {
+    SCHEDULER_EVALUATION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub fn scheduler_evaluation_count_for_test() -> u64 {
+    SCHEDULER_EVALUATION_COUNT.with(std::cell::Cell::get)
+}
 
 /// Per-slot musical ownership state for the 15 instrument keys.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,6 +160,109 @@ struct DownChordHeaderTicks {
     intent_count: usize,
 }
 
+struct DownArena {
+    chords: Vec<DownChordHeaderTicks>,
+    intents: Vec<DownIntentTicks>,
+}
+
+#[derive(Clone, Copy)]
+enum DownArenaTimestampKind {
+    Chord,
+    PairedUp,
+}
+
+/// Shared compact-arena construction for prepared plans and fresh raw
+/// executors. Callers retain their own validation, tick conversion, and
+/// cancellation policy around this storage mechanism.
+fn build_down_arena<C, F>(
+    schedule: &RuntimeSchedule,
+    mut checkpoint: C,
+    checkpoint_first_chord: bool,
+    checkpoint_after_count: bool,
+    count_changed_error: &'static str,
+    check_actual_capacity: bool,
+    mut timestamp_ticks: F,
+) -> Result<DownArena, String>
+where
+    C: FnMut() -> Result<(), String>,
+    F: FnMut(u64, DownArenaTimestampKind) -> Result<TimelineTicks, String>,
+{
+    let chord_count = schedule.down_chords.len();
+    let mut intent_count = 0usize;
+    for (index, chord) in schedule.down_chords.iter().enumerate() {
+        if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL)
+            && (checkpoint_first_chord || index != 0)
+        {
+            checkpoint()?;
+        }
+        intent_count = intent_count
+            .checked_add(chord.intents.len())
+            .ok_or_else(|| "executor Down intent count overflow".to_string())?;
+    }
+    checked_executor_storage_bytes(chord_count, intent_count)?;
+    if checkpoint_after_count {
+        checkpoint()?;
+    }
+
+    let mut chords = Vec::new();
+    reserve_executor_chords(&mut chords, chord_count)?;
+    let mut intents = Vec::new();
+    reserve_executor_intents(&mut intents, intent_count)?;
+
+    for (index, chord) in schedule.down_chords.iter().enumerate() {
+        if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL)
+            && (checkpoint_first_chord || index != 0)
+        {
+            checkpoint()?;
+        }
+        let scheduled_ticks = timestamp_ticks(chord.scheduled_us, DownArenaTimestampKind::Chord)?;
+        let intent_start = intents.len();
+        for intent in &chord.intents {
+            let paired_up_offset_ticks =
+                timestamp_ticks(intent.paired_up_offset_us, DownArenaTimestampKind::PairedUp)?;
+            intents.push(DownIntentTicks {
+                generation_id: intent.generation_id,
+                key_slot: intent.key_slot,
+                scan_code: intent.scan_code,
+                source_action_index: intent.source_action_index,
+                reason_id: intent.reason_id,
+                paired_up_offset_ticks,
+                paired_up_offset_us: intent.paired_up_offset_us,
+                paired_up_source_action_index: intent.paired_up_source_action_index,
+            });
+        }
+        let intent_len = intents
+            .len()
+            .checked_sub(intent_start)
+            .ok_or_else(|| "executor Down intent range underflow".to_string())?;
+        let range_end = intent_start
+            .checked_add(intent_len)
+            .ok_or_else(|| "executor Down intent range overflow".to_string())?;
+        if range_end != intents.len() || range_end > intents.capacity() {
+            return Err("executor Down intent range exceeds reserved arena".to_string());
+        }
+        chords.push(DownChordHeaderTicks {
+            chord_index: chord.chord_index,
+            scheduled_ticks,
+            scheduled_us: chord.scheduled_us,
+            down_mask: chord.down_mask,
+            source_action_index: chord.source_action_index,
+            reason_id: chord.reason_id,
+            intent_start,
+            intent_count: intent_len,
+        });
+    }
+
+    if intents.len() != intent_count {
+        return Err(count_changed_error.to_string());
+    }
+    if check_actual_capacity {
+        checked_executor_storage_bytes(chords.capacity(), intents.capacity())?;
+    }
+
+    Ok(DownArena { chords, intents })
+}
+
 /// Absolute-QPC decision made by the production scheduler.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DispatchDecision<'a> {
@@ -218,6 +339,323 @@ pub struct ExecutorMemoryMetrics {
     pub total_bytes: usize,
 }
 
+/// Authored metadata for an Up intent that has no paired Down generation.
+/// This is prepared before Arm so startup does not walk every action merely
+/// to produce the existing stale-metadata diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreparedUnmatchedUpMetadata {
+    pub source_action_index: u32,
+    pub scheduled_ticks: TimelineTicks,
+    pub suppressed_intent_count: usize,
+}
+
+/// Capacity evidence for an immutable dispatch plan and its overlapping
+/// construction phase. Values describe allocated capacities, not process RSS.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PreparedDispatchMemoryMetrics {
+    pub chord_count: usize,
+    pub chord_capacity: usize,
+    pub intent_count: usize,
+    pub intent_capacity: usize,
+    pub unmatched_up_count: usize,
+    pub unmatched_up_capacity: usize,
+    pub plan_capacity_bytes: usize,
+    pub overlapping_peak_capacity_bytes: usize,
+}
+
+/// Immutable, QPC-domain dispatch materialization produced during Prepare.
+/// It contains only the fixed dispatch representation and the metadata needed
+/// to initialize a fresh session; cursor, slots, epoch, and transport state
+/// are created separately by `DispatchExecutor::from_prepared_schedule`.
+#[derive(Debug)]
+pub struct PreparedDispatchSchedule {
+    down_chords: Vec<DownChordHeaderTicks>,
+    down_intents: Vec<DownIntentTicks>,
+    schedule_end_offset_ticks: TimelineTicks,
+    schedule_end_offset_us: u64,
+    key_registry: KeyRegistry,
+    total_generations: u64,
+    qpc_frequency_hz: NonZeroU64,
+    min_hold_us: u64,
+    min_release_gap_us: u64,
+    min_hold_ticks: DurationTicks,
+    min_release_gap_ticks: DurationTicks,
+    total_us: u64,
+    packet_count: usize,
+    has_down: bool,
+    unmatched_up_metadata: Vec<PreparedUnmatchedUpMetadata>,
+    memory_metrics: PreparedDispatchMemoryMetrics,
+}
+
+impl PreparedDispatchSchedule {
+    /// Compile a `RuntimeSchedule` into the immutable QPC-relative physical
+    /// representation used by a later session. The conversion rounds up in
+    /// the same way as `QpcClock::timeline_from_us`.
+    pub fn prepare(
+        schedule: &RuntimeSchedule,
+        qpc_frequency_hz: NonZeroU64,
+        min_hold_us: u64,
+        min_release_gap_us: u64,
+        caller_retained_capacity_bytes: usize,
+    ) -> Result<Self, String> {
+        Self::prepare_with_cancellation(
+            schedule,
+            qpc_frequency_hz,
+            min_hold_us,
+            min_release_gap_us,
+            caller_retained_capacity_bytes,
+            || Ok(()),
+        )
+    }
+
+    /// Cancellable form used by the desktop Prepare path and by raw-schedule
+    /// admission. Checkpoints are bounded by the number of authored packets.
+    pub fn prepare_with_cancellation(
+        schedule: &RuntimeSchedule,
+        qpc_frequency_hz: NonZeroU64,
+        min_hold_us: u64,
+        min_release_gap_us: u64,
+        caller_retained_capacity_bytes: usize,
+        mut checkpoint: impl FnMut() -> Result<(), String>,
+    ) -> Result<Self, String> {
+        checkpoint()?;
+        let qpc_to_ticks = |microseconds| {
+            let numerator = (microseconds as u128)
+                .checked_mul(qpc_frequency_hz.get() as u128)
+                .and_then(|value| value.checked_add(999_999))?;
+            u64::try_from(numerator / 1_000_000)
+                .ok()
+                .map(TimelineTicks::from_raw)
+        };
+        let min_hold_ticks = qpc_to_ticks(min_hold_us)
+            .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
+            .ok_or_else(|| "prepared hold-floor conversion overflow".to_string())?;
+        let min_release_gap_ticks = qpc_to_ticks(min_release_gap_us)
+            .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
+            .ok_or_else(|| "prepared release-gap conversion overflow".to_string())?;
+        crate::validation::validate_min_hold_and_release_gap_feasibility_ticks_with_checkpoint(
+            schedule,
+            min_hold_us,
+            min_hold_ticks,
+            min_release_gap_us,
+            min_release_gap_ticks,
+            qpc_to_ticks,
+            || checkpoint().map_err(|_| crate::validation::ScheduleTimingError::Cancelled),
+        )
+        .map_err(|error| format!("prepared native schedule admission failed: {error}"))?;
+        checkpoint()?;
+
+        let chord_count = schedule.down_chords.len();
+        let DownArena {
+            chords: down_chords,
+            intents: down_intents,
+        } = build_down_arena(
+            schedule,
+            &mut checkpoint,
+            true,
+            false,
+            "executor Down intent count changed during preparation",
+            false,
+            |microseconds, kind| {
+                qpc_to_ticks(microseconds).ok_or_else(|| match kind {
+                    DownArenaTimestampKind::Chord => {
+                        format!(
+                            "scheduled timestamp conversion failed for chord at {microseconds}us"
+                        )
+                    }
+                    DownArenaTimestampKind::PairedUp => {
+                        format!("paired Up offset timestamp conversion failed at {microseconds}us")
+                    }
+                })
+            },
+        )?;
+        let intent_count = down_intents.len();
+
+        let mut unmatched_up_count = 0usize;
+        for (index, batch) in schedule.batches.iter().enumerate() {
+            if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
+                checkpoint()?;
+            }
+            if batch.kind != crate::model::ActionKind::Up {
+                continue;
+            }
+            let start = usize::try_from(batch.intent_start)
+                .map_err(|_| "prepared unmatched-Up intent range overflow")?;
+            let end = start
+                .checked_add(usize::from(batch.intent_len))
+                .ok_or("prepared unmatched-Up intent range overflow")?;
+            let intents = schedule
+                .intents
+                .get(start..end)
+                .ok_or("prepared unmatched-Up intent range is invalid")?;
+            if intents
+                .iter()
+                .any(|intent| intent.generation_id() == crate::model::NO_GENERATION_ID)
+            {
+                unmatched_up_count = unmatched_up_count
+                    .checked_add(1)
+                    .ok_or_else(|| "prepared unmatched-Up count overflow".to_string())?;
+            }
+        }
+        let mut unmatched_up_metadata = Vec::new();
+        unmatched_up_metadata
+            .try_reserve_exact(unmatched_up_count)
+            .map_err(|error| format!("prepared unmatched-Up allocation failed: {error}"))?;
+        for (index, batch) in schedule.batches.iter().enumerate() {
+            if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
+                checkpoint()?;
+            }
+            if batch.kind != crate::model::ActionKind::Up {
+                continue;
+            }
+            let start = usize::try_from(batch.intent_start)
+                .map_err(|_| "prepared unmatched-Up intent range overflow")?;
+            let end = start
+                .checked_add(usize::from(batch.intent_len))
+                .ok_or("prepared unmatched-Up intent range overflow")?;
+            let intents = schedule
+                .intents
+                .get(start..end)
+                .ok_or("prepared unmatched-Up intent range is invalid")?;
+            let suppressed_intent_count = intents
+                .iter()
+                .filter(|intent| intent.generation_id() == crate::model::NO_GENERATION_ID)
+                .count();
+            if suppressed_intent_count != 0 {
+                unmatched_up_metadata.push(PreparedUnmatchedUpMetadata {
+                    source_action_index: batch.source_action_index,
+                    scheduled_ticks: qpc_to_ticks(batch.scheduled_us).ok_or_else(|| {
+                        format!(
+                            "unmatched Up timestamp conversion failed at {}us",
+                            batch.scheduled_us
+                        )
+                    })?,
+                    suppressed_intent_count,
+                });
+            }
+        }
+        checkpoint()?;
+
+        let schedule_memory = schedule.memory_metrics_with_checkpoint(checkpoint)?;
+        let schedule_bytes = schedule_memory
+            .heap_payload_bytes
+            .checked_add(schedule_memory.struct_bytes)
+            .ok_or_else(|| "runtime schedule capacity overflow".to_string())?;
+        let chord_bytes = down_chords
+            .capacity()
+            .checked_mul(std::mem::size_of::<DownChordHeaderTicks>())
+            .ok_or_else(|| "prepared chord capacity overflow".to_string())?;
+        let intent_bytes = down_intents
+            .capacity()
+            .checked_mul(std::mem::size_of::<DownIntentTicks>())
+            .ok_or_else(|| "prepared intent capacity overflow".to_string())?;
+        let unmatched_up_bytes = unmatched_up_metadata
+            .capacity()
+            .checked_mul(std::mem::size_of::<PreparedUnmatchedUpMetadata>())
+            .ok_or_else(|| "prepared unmatched-Up capacity overflow".to_string())?;
+        let plan_capacity_bytes = chord_bytes
+            .checked_add(intent_bytes)
+            .and_then(|bytes| bytes.checked_add(unmatched_up_bytes))
+            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .ok_or_else(|| "prepared plan capacity overflow".to_string())?;
+        let overlapping_peak_capacity_bytes = caller_retained_capacity_bytes
+            .checked_add(schedule_bytes)
+            .and_then(|bytes| bytes.checked_add(plan_capacity_bytes))
+            .ok_or_else(|| "prepared startup capacity overflow".to_string())?
+            .max(schedule.compile_memory.phase_peak_capacity_bytes);
+        if overlapping_peak_capacity_bytes > crate::model::MAX_RETAINED_DISPATCH_BYTES {
+            return Err(format!(
+                "prepared playback capacity ({overlapping_peak_capacity_bytes} bytes) exceeds the {} byte retained-dispatch budget",
+                crate::model::MAX_RETAINED_DISPATCH_BYTES
+            ));
+        }
+        let total_us = schedule
+            .batches
+            .last()
+            .map_or(0, |batch| batch.scheduled_us);
+        let memory_metrics = PreparedDispatchMemoryMetrics {
+            chord_count,
+            chord_capacity: down_chords.capacity(),
+            intent_count,
+            intent_capacity: down_intents.capacity(),
+            unmatched_up_count,
+            unmatched_up_capacity: unmatched_up_metadata.capacity(),
+            plan_capacity_bytes,
+            overlapping_peak_capacity_bytes,
+        };
+        Ok(Self {
+            down_chords,
+            down_intents,
+            schedule_end_offset_ticks: qpc_to_ticks(schedule.schedule_end_offset_us)
+                .ok_or_else(|| "schedule end offset timestamp conversion overflow".to_string())?,
+            schedule_end_offset_us: schedule.schedule_end_offset_us,
+            key_registry: schedule.key_registry.clone(),
+            total_generations: schedule.generation_count,
+            qpc_frequency_hz,
+            min_hold_us,
+            min_release_gap_us,
+            min_hold_ticks,
+            min_release_gap_ticks,
+            total_us,
+            packet_count: schedule.packets.len(),
+            has_down: !schedule.down_chords.is_empty(),
+            unmatched_up_metadata,
+            memory_metrics,
+        })
+    }
+
+    pub fn is_compatible(
+        &self,
+        qpc_frequency_hz: NonZeroU64,
+        min_hold_us: u64,
+        min_release_gap_us: u64,
+    ) -> bool {
+        self.qpc_frequency_hz == qpc_frequency_hz
+            && self.min_hold_us == min_hold_us
+            && self.min_release_gap_us == min_release_gap_us
+    }
+
+    pub fn qpc_frequency_hz(&self) -> NonZeroU64 {
+        self.qpc_frequency_hz
+    }
+
+    pub fn min_hold_us(&self) -> u64 {
+        self.min_hold_us
+    }
+
+    pub fn min_release_gap_us(&self) -> u64 {
+        self.min_release_gap_us
+    }
+
+    pub fn total_us(&self) -> u64 {
+        self.total_us
+    }
+
+    pub fn generation_count(&self) -> u64 {
+        self.total_generations
+    }
+
+    pub fn packet_count(&self) -> usize {
+        self.packet_count
+    }
+
+    pub fn has_down(&self) -> bool {
+        self.has_down
+    }
+
+    pub fn unmatched_up_metadata(&self) -> &[PreparedUnmatchedUpMetadata] {
+        &self.unmatched_up_metadata
+    }
+
+    pub fn memory_metrics(&self) -> PreparedDispatchMemoryMetrics {
+        self.memory_metrics
+    }
+
+    pub fn schedule_end_offset_us(&self) -> u64 {
+        self.schedule_end_offset_us
+    }
+}
+
 /// Timing and authored metadata for an active key slot being released.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UpSlotTiming {
@@ -250,6 +688,37 @@ pub struct UpSlotTimingSummary {
 }
 
 impl DispatchExecutor {
+    /// Create fresh mutable session state from a plan prepared before Arm.
+    /// The authored arrays are moved without rebuilding or reallocating.
+    pub fn from_prepared_schedule(plan: PreparedDispatchSchedule) -> Self {
+        let PreparedDispatchSchedule {
+            down_chords,
+            down_intents,
+            schedule_end_offset_ticks,
+            schedule_end_offset_us,
+            key_registry,
+            total_generations,
+            min_hold_ticks,
+            min_release_gap_ticks,
+            ..
+        } = plan;
+        Self {
+            down_chords,
+            down_intents,
+            schedule_end_offset_ticks,
+            schedule_end_offset_us,
+            key_registry,
+            chord_cursor: 0,
+            slots: [MusicalSlot::default(); MAX_KEYS],
+            resume_barrier_qpc: None,
+            min_hold_ticks,
+            min_release_gap_ticks,
+            counters: GenerationCounters::default(),
+            total_generations,
+            activated_generations: 0,
+        }
+    }
+
     /// Construct a new 15-slot executor from a validated `RuntimeSchedule`.
     pub fn new<F, E>(
         schedule: &RuntimeSchedule,
@@ -283,82 +752,31 @@ impl DispatchExecutor {
         E: std::fmt::Display,
         C: FnMut() -> Result<(), String>,
     {
-        let chord_count = schedule.down_chords.len();
-        let mut intent_count = 0usize;
-        for (idx, chord) in schedule.down_chords.iter().enumerate() {
-            if idx != 0 && idx % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
-                checkpoint()?;
-            }
-            intent_count = intent_count
-                .checked_add(chord.intents.len())
-                .ok_or_else(|| "executor Down intent count overflow".to_string())?;
-        }
-        checked_executor_storage_bytes(chord_count, intent_count)?;
-
-        checkpoint()?;
-
-        let mut down_chords = Vec::new();
-        reserve_executor_chords(&mut down_chords, chord_count)?;
-        let mut down_intents = Vec::new();
-        reserve_executor_intents(&mut down_intents, intent_count)?;
-
-        for (idx, chord) in schedule.down_chords.iter().enumerate() {
-            if idx != 0 && idx % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
-                checkpoint()?;
-            }
-            let scheduled_ticks = us_to_ticks(chord.scheduled_us).map_err(|e| {
-                format!(
-                    "scheduled timestamp conversion failed for chord at {}us: {e}",
-                    chord.scheduled_us
-                )
-            })?;
-            let intent_start = down_intents.len();
-            for intent in &chord.intents {
-                let paired_up_offset_ticks =
-                    us_to_ticks(intent.paired_up_offset_us).map_err(|e| {
+        let DownArena {
+            chords: down_chords,
+            intents: down_intents,
+        } = build_down_arena(
+            schedule,
+            &mut checkpoint,
+            false,
+            true,
+            "executor Down intent count changed during compilation",
+            true,
+            |microseconds, kind| {
+                us_to_ticks(microseconds).map_err(|error| match kind {
+                    DownArenaTimestampKind::Chord => {
                         format!(
-                            "paired Up offset timestamp conversion failed at {}us: {e}",
-                            intent.paired_up_offset_us
+                            "scheduled timestamp conversion failed for chord at {microseconds}us: {error}"
                         )
-                    })?;
-                down_intents.push(DownIntentTicks {
-                    generation_id: intent.generation_id,
-                    key_slot: intent.key_slot,
-                    scan_code: intent.scan_code,
-                    source_action_index: intent.source_action_index,
-                    reason_id: intent.reason_id,
-                    paired_up_offset_ticks,
-                    paired_up_offset_us: intent.paired_up_offset_us,
-                    paired_up_source_action_index: intent.paired_up_source_action_index,
-                });
-            }
-            let intent_count = down_intents
-                .len()
-                .checked_sub(intent_start)
-                .ok_or_else(|| "executor Down intent range underflow".to_string())?;
-            let range_end = intent_start
-                .checked_add(intent_count)
-                .ok_or_else(|| "executor Down intent range overflow".to_string())?;
-            if range_end != down_intents.len() || range_end > down_intents.capacity() {
-                return Err("executor Down intent range exceeds reserved arena".to_string());
-            }
-            down_chords.push(DownChordHeaderTicks {
-                chord_index: chord.chord_index,
-                scheduled_ticks,
-                scheduled_us: chord.scheduled_us,
-                down_mask: chord.down_mask,
-                source_action_index: chord.source_action_index,
-                reason_id: chord.reason_id,
-                intent_start,
-                intent_count,
-            });
-        }
-
-        if down_intents.len() != intent_count {
-            return Err("executor Down intent count changed during compilation".to_string());
-        }
-        checked_executor_storage_bytes(down_chords.capacity(), down_intents.capacity())?;
-
+                    }
+                    DownArenaTimestampKind::PairedUp => {
+                        format!(
+                            "paired Up offset timestamp conversion failed at {microseconds}us: {error}"
+                        )
+                    }
+                })
+            },
+        )?;
         checkpoint()?;
 
         let schedule_end_offset_ticks =
@@ -604,6 +1022,8 @@ impl DispatchExecutor {
         now_qpc: QpcTicks,
         epoch_qpc: QpcTicks,
     ) -> Result<DispatchDecision<'_>, TimeArithmeticError> {
+        #[cfg(any(test, feature = "test-support"))]
+        SCHEDULER_EVALUATION_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         let mut up_ready_mask = 0u16;
         let mut earliest_active_up_due_qpc: Option<QpcTicks> = None;
         let mut up_packet_not_before_qpc: Option<QpcTicks> = None;
@@ -953,6 +1373,81 @@ impl DispatchExecutor {
         Ok(active_count)
     }
 
+    /// Consume the current authored Down chord after an attempted packet was
+    /// reconciled by verified safety cleanup. The attempted onset is cancelled
+    /// exactly once; the completion timestamp belongs to cleanup and is already
+    /// represented by the resume barrier installed by `on_verified_cleanup_at`.
+    /// No sender completion is inferred for the attempted musical packet.
+    pub fn consume_attempted_down_after_verified_cleanup(
+        &mut self,
+        source_action_index: u32,
+        down_mask: u16,
+    ) -> Result<(), String> {
+        if self.active_mask() != 0 {
+            return Err(
+                "attempted Down cannot be consumed before active slots are cleaned up".into(),
+            );
+        }
+        if self.resume_barrier_qpc.is_none() {
+            return Err(
+                "attempted Down cannot be consumed without a verified cleanup barrier".into(),
+            );
+        }
+        self.checked_attempted_down_cursor_transition(
+            source_action_index,
+            down_mask,
+            "attempted Down",
+        )
+    }
+
+    /// Consume a Down-only onset after one internally consistent raw-zero
+    /// transport result. No completion QPC or cleanup barrier is created:
+    /// the packet was attempted once, while unrelated active slots and their
+    /// existing H/G floors remain live.
+    pub fn consume_attempted_down_after_proven_raw_zero(
+        &mut self,
+        source_action_index: u32,
+        down_mask: u16,
+    ) -> Result<(), String> {
+        if down_mask == 0 || self.active_mask() & down_mask != 0 {
+            return Err("proven-zero Down overlaps an active musical slot".into());
+        }
+        self.checked_attempted_down_cursor_transition(
+            source_action_index,
+            down_mask,
+            "proven-zero Down",
+        )
+    }
+
+    fn checked_attempted_down_cursor_transition(
+        &mut self,
+        source_action_index: u32,
+        down_mask: u16,
+        context: &'static str,
+    ) -> Result<(), String> {
+        let chord = self
+            .current_chord()
+            .ok_or_else(|| format!("{context} chord cursor is exhausted"))?;
+        if chord.source_action_index != source_action_index || chord.down_mask != down_mask {
+            return Err(format!(
+                "{context} identity does not match current chord: source_action={} down_mask={:#06x}, current_source_action={} current_down_mask={:#06x}",
+                source_action_index, down_mask, chord.source_action_index, chord.down_mask,
+            ));
+        }
+        let next_cancelled = self
+            .counters
+            .cancelled
+            .checked_add(chord.intents.len() as u64)
+            .ok_or_else(|| format!("cancelled counter overflow while consuming {context}"))?;
+        let next_cursor = self
+            .chord_cursor
+            .checked_add(1)
+            .ok_or_else(|| format!("Down chord cursor overflow while consuming {context}"))?;
+        self.counters.cancelled = next_cancelled;
+        self.chord_cursor = next_cursor;
+        Ok(())
+    }
+
     /// Cancel every remaining generation after the terminal cleanup attempt.
     /// Scheduled generations are included because terminal shutdown cannot resume.
     pub fn cancel_remaining_generations_for_terminal_shutdown(&mut self) -> Result<u64, String> {
@@ -1112,3 +1607,6 @@ mod absolute_tests;
 mod scale_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod arena_oracle_tests;

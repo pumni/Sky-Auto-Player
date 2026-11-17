@@ -1,7 +1,8 @@
 use super::{
-    OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED, OUTCOME_SYSTEM_SUSPENDED,
-    TerminalTrigger, TrackedKeyState, WorkerMetricsLocal, WorkerSchedulingGuards,
-    current_process_cpu_time_us, current_thread_cpu_time_us, publish_backend_metrics,
+    AttemptedDispatchAnomalies, OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED,
+    OUTCOME_SYSTEM_SUSPENDED, TerminalTrigger, TrackedKeyState, WorkerMetricsLocal,
+    WorkerSchedulingGuards, current_process_cpu_time_us, current_thread_cpu_time_us,
+    publish_backend_metrics,
 };
 use crate::engine::shared::SessionTarget;
 use crate::engine::shared::SharedProgressClock;
@@ -39,6 +40,7 @@ pub(super) struct FinalizeState {
     pub(super) abort_counts: HashMap<&'static str, u64>,
     pub(super) terminal_error: Option<String>,
     pub(super) secondary_errors: Vec<String>,
+    pub(super) attempted_dispatch_anomalies: AttemptedDispatchAnomalies,
     pub(super) last_published_error: Option<String>,
     pub(super) terminal_trigger: Option<TerminalTrigger>,
 }

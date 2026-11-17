@@ -9,9 +9,10 @@ use super::{
     NativePlaybackPresentation, NativePlaybackService, NativePlaybackStartRequest,
     NativePreparedInput, PLAYBACK_PRESENTATION_CRITICAL_CAPACITY, PlaybackActivation,
     PlaybackActiveStatusDto, PlaybackHandoffDecision, PlaybackPendingControl,
-    PlaybackPresentationMetrics, PlaybackTerminalPublication, PlaybackTerminalStatusDto,
-    SENDER_TRACE_CAPTURE_CAPACITY, SenderTraceState, TerminalReleaseEvidence, TerminalRetirement,
-    TestSeams, WorkerQuiescenceProof, calibration_budget, compute_catalog_source_fingerprint,
+    PlaybackPresentationFinalization, PlaybackPresentationMetrics, PlaybackTerminalPublication,
+    PlaybackTerminalStatusDto, SENDER_TRACE_CAPTURE_CAPACITY, SenderTraceState,
+    TerminalReleaseEvidence, TerminalRetirement, TestSeams, WorkerQuiescenceProof,
+    calibration_budget, compute_catalog_source_fingerprint,
     compute_catalog_source_static_fingerprint, decide_playback_handoff, diagnostics_backend_status,
     opaque_native_id, percentile_ms, physical_startup_failure, plan_fingerprint,
     population_sigma_ms, publish_calibration_cache, publish_diagnostics_snapshot_for_active,
@@ -127,7 +128,7 @@ fn projection_session_with_down(
     let player = Arc::new(
         NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
-                schedule,
+                schedule: schedule.into(),
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
@@ -694,7 +695,7 @@ fn native_handoff_test_player(
     Arc::new(
         NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
-                schedule,
+                schedule: schedule.into(),
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,

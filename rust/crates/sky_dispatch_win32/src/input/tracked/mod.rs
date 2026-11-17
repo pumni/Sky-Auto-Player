@@ -3,6 +3,7 @@ mod packet_send;
 mod preflight;
 mod state;
 
+use super::ReleaseOwnerProof;
 use super::profile::MaterializedInstrumentKeyProfile;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -51,12 +52,61 @@ pub enum ReleaseScope {
     FullInstrument,
 }
 
+const RELEASE_OWNER_SLOT_COUNT: usize = 15;
+
+struct ReleaseOwnerLedger {
+    owner_by_slot: [Option<ReleaseOwnerProof>; RELEASE_OWNER_SLOT_COUNT],
+    conflicted_mask: u16,
+}
+
+impl Default for ReleaseOwnerLedger {
+    fn default() -> Self {
+        Self {
+            owner_by_slot: std::array::from_fn(|_| None),
+            conflicted_mask: 0,
+        }
+    }
+}
+
 #[cfg(test)]
 std::thread_local! {
     static TEST_RELEASE_SLEEP_COUNT_VALUE: std::cell::Cell<usize> = const {
         std::cell::Cell::new(0)
     };
 }
+
+#[cfg(any(test, feature = "test-support"))]
+std::thread_local! {
+    static TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) struct TestReleaseOwnerLedgerVisitCount;
+
+#[cfg(any(test, feature = "test-support"))]
+impl TestReleaseOwnerLedgerVisitCount {
+    pub(crate) fn store(&self, value: u64, _ordering: std::sync::atomic::Ordering) {
+        TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE.set(value);
+    }
+
+    pub(crate) fn load(&self, _ordering: std::sync::atomic::Ordering) -> u64 {
+        TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE.get()
+    }
+
+    pub(crate) fn increment(&self) {
+        TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE.set(
+            TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE
+                .get()
+                .saturating_add(1),
+        );
+    }
+}
+
+#[cfg(any(test, feature = "test-support"))]
+pub(crate) static TEST_RELEASE_OWNER_LEDGER_VISITS: TestReleaseOwnerLedgerVisitCount =
+    TestReleaseOwnerLedgerVisitCount;
 
 #[cfg(test)]
 pub(crate) struct TestReleaseSleepCount;
@@ -92,6 +142,7 @@ fn release_retry_sleep(_ms: u64) {
 #[derive(Default)]
 pub struct TrackedKeyState {
     pub(crate) instrument_key_profile: MaterializedInstrumentKeyProfile,
+    release_owner_ledger: ReleaseOwnerLedger,
     pub active_mask: u16,
     pub possibly_active_mask: u16,
     pub failed_release_mask: u16,

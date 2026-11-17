@@ -38,7 +38,7 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
     let player = Arc::new(
         NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
-                schedule,
+                schedule: schedule.into(),
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
@@ -344,13 +344,29 @@ fn blocked_snapshot_projection_past_lease_keeps_supervisor_live() {
     assert!(metrics.snapshot_coalesced > 0);
     assert!(metrics.snapshot_dropped >= metrics.snapshot_coalesced);
 
+    let skip = service
+        .command(
+            "playback.skip",
+            active.session_id.clone(),
+            Arc::clone(&events),
+        )
+        .expect("skip remains available while snapshot projection is blocked");
+    assert!(skip.accepted);
+
     release_test_gate(&gate);
-    player.quit().expect("quit late-Down test worker");
     assert!(done_receiver.recv_timeout(Duration::from_secs(5)).is_ok());
     monitor.join().expect("monitor thread");
     assert!(active.worker_quiescent.load(Ordering::Acquire));
     assert!(active.release_verified.load(Ordering::Acquire));
     assert!(wait_for_playback_done(&active, Duration::from_secs(2)));
+    assert_eq!(
+        service
+            .status()
+            .expect("skipped playback status")
+            .last_terminal
+            .and_then(|terminal| terminal.outcome),
+        Some("skipped".into())
+    );
     events.lock().expect("event hub").close();
 }
 

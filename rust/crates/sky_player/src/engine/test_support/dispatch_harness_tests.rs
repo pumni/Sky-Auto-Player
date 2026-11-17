@@ -652,7 +652,7 @@ fn live_scheduler_final_down_gate_rejects_target_lease_and_control_without_commi
 }
 
 #[test]
-fn live_scheduler_partial_chord_send_is_not_replayed_and_remains_owned_for_cleanup() {
+fn live_scheduler_partial_chord_send_is_not_replayed_and_consumed_after_cleanup() {
     use crate::engine::worker::{FinalizeTestObservation, StagedDispatchOutcome};
     use std::sync::{Arc, Mutex};
 
@@ -695,7 +695,7 @@ fn live_scheduler_partial_chord_send_is_not_replayed_and_remains_owned_for_clean
 
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Exit
+        StagedDispatchOutcome::Dispatched
     ));
     let attempts = packet_attempts
         .lock()
@@ -704,14 +704,17 @@ fn live_scheduler_partial_chord_send_is_not_replayed_and_remains_owned_for_clean
     assert_eq!(attempts[0].up_mask, 0);
     assert_eq!(attempts[0].down_mask.count_ones(), 2);
     drop(attempts);
-    assert_eq!(harness.generation_accounting_for_test(), before);
-    assert_eq!(harness.current_executor_chord_for_test(), chord);
-    let obligation = harness.release_obligation_mask_for_test();
-    assert_eq!(obligation, 0b11);
+    let accounting = harness.generation_accounting_for_test();
+    assert_eq!(accounting.total, before.total);
+    assert_eq!(accounting.activated, 0);
+    assert_eq!(accounting.cancelled, 2);
+    assert_eq!(harness.current_executor_chord_for_test(), None);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert!(harness.runtime.attempted_dispatch_anomalies.details()[0].contains("attempts=1"));
 
     let mut observation = FinalizeTestObservation::default();
     let _ = harness.finalize_worker_for_test(false, &mut observation);
-    assert_eq!(observation.attempted_mask, obligation);
+    assert_eq!(observation.attempted_mask, 0);
     assert_eq!(observation.release_obligation_mask, 0);
     assert_eq!(
         cleanup.lock().expect("partial cleanup capture").as_slice(),

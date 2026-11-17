@@ -26,6 +26,39 @@ use std::time::{Duration, Instant};
 
 pub(super) use super::{NativeTelemetrySummary, TestWaitPolicy, config};
 
+#[test]
+fn native_session_rejects_prepared_plan_from_another_qpc_domain() {
+    let schedule = support::startup_boundary_schedule();
+    let prepared = super::super::adapter_support::PreparedDispatchSchedule::prepare(
+        &schedule,
+        std::num::NonZeroU64::new(1).expect("nonzero fixture QPC frequency"),
+        500,
+        17_167,
+        0,
+    )
+    .expect("fixture plan is valid in its prepared domain");
+    let mut options = support::test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.schedule = super::NativeScheduleInput::Prepared(prepared);
+
+    let result = super::NativeDispatchSession::new_with_power_endpoint(
+        options,
+        super::SystemPowerEndpoint::new().expect("test power endpoint"),
+    );
+    let error = match result {
+        Ok(_) => panic!("a QPC-domain mismatch must be rejected before session creation"),
+        Err(error) => error,
+    };
+    assert!(error.contains("prepared dispatch plan no longer matches the QPC domain"));
+}
+
 mod startup_admission;
 mod support;
 mod telemetry_metrics;

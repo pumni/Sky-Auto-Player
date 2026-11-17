@@ -251,7 +251,17 @@ pub struct RuntimeScheduleMemoryMetrics {
 }
 
 impl RuntimeSchedule {
+    /// Calculate retained vector capacities without cancellation checkpoints.
     pub fn memory_metrics(&self) -> Result<RuntimeScheduleMemoryMetrics, String> {
+        self.memory_metrics_with_checkpoint(|| Ok(()))
+    }
+
+    /// Calculate retained vector capacities while checking cancellation during
+    /// the only element-wise part of accounting, the reason-string table walk.
+    pub fn memory_metrics_with_checkpoint(
+        &self,
+        mut checkpoint: impl FnMut() -> Result<(), String>,
+    ) -> Result<RuntimeScheduleMemoryMetrics, String> {
         let packets = self
             .packets
             .capacity()
@@ -277,12 +287,15 @@ impl RuntimeSchedule {
             .capacity()
             .checked_mul(std::mem::size_of::<String>())
             .ok_or_else(|| "schedule reason table capacity size overflow".to_string())?;
-        let reason_text_capacity_bytes =
-            self.reason_table.iter().try_fold(0usize, |total, reason| {
-                total
-                    .checked_add(reason.capacity())
-                    .ok_or_else(|| "schedule reason text capacity size overflow".to_string())
-            })?;
+        let mut reason_text_capacity_bytes = 0usize;
+        for (index, reason) in self.reason_table.iter().enumerate() {
+            if index % 4_096 == 0 {
+                checkpoint()?;
+            }
+            reason_text_capacity_bytes = reason_text_capacity_bytes
+                .checked_add(reason.capacity())
+                .ok_or_else(|| "schedule reason text capacity size overflow".to_string())?;
+        }
         let heap_payload_bytes = [
             packets,
             batches,

@@ -741,7 +741,7 @@ mod tests {
             )
             .expect("callback-test runtime schedule");
             NativeSessionOptions {
-                schedule,
+                schedule: schedule.into(),
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,

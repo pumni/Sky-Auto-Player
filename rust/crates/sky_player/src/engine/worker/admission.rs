@@ -5,12 +5,17 @@ use crate::engine::shared::{
     SessionTarget, SharedProgressClock, SupervisorLeaseAdmission, SupervisorLeaseAgeProof,
     SupervisorLeaseState,
 };
-use crate::engine::target::OwnerIdentityStatus;
+use crate::engine::target::{
+    OwnerAuthorityReadError, OwnerIdentityStatus, ReleaseOwnerPermitError,
+};
 use crate::engine::telemetry::WorkerMetricsLocal;
+use parking_lot::MutexGuard;
 use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::{QpcError, QpcTicks};
-use sky_dispatch_win32::input::{ModifierKeyObservation, ModifierMask, PhysicalKeyPreflightError};
+use sky_dispatch_win32::input::{
+    ModifierKeyObservation, ModifierMask, PhysicalKeyPreflightError, ReleaseOwnerProof,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,6 +134,7 @@ pub(crate) fn focus_matches(require_focus: bool, focus_active: &AtomicBool) -> b
 pub(crate) enum OwnerAdmissionFailure {
     Mismatch,
     QueryUnavailable,
+    ProofBusy,
     IdentityAbsent,
     IdentityStale,
     ProcessTerminated,
@@ -266,23 +272,6 @@ pub(crate) fn final_down_fresh_target_admission(
     } else {
         0
     };
-    if target.require_focus {
-        match sky_dispatch_win32::focus::foreground_window_owner_matches(
-            target.expected.hwnd,
-            owner_pid,
-        ) {
-            sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => {}
-            sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => {
-                return FinalDownVerdict::FocusLost;
-            }
-            sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::Mismatch);
-            }
-            sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::QueryUnavailable);
-            }
-        }
-    }
     #[cfg(any(test, feature = "test-support"))]
     if let (Some(hook), Some(control), Some(system_power)) = (
         target.post_focus_race_hook,
@@ -433,6 +422,8 @@ pub(crate) fn final_down_modifier_verdict(backend: &TrackedKeyState) -> FinalDow
 #[inline(always)]
 pub(crate) fn apply_final_down_rejection(
     verdict: FinalDownVerdict,
+    target: &SessionTarget,
+    expected: TargetStamp,
     runtime: &mut WorkerRuntime,
     local_metrics: &mut WorkerMetricsLocal,
 ) {
@@ -450,15 +441,30 @@ pub(crate) fn apply_final_down_rejection(
 
     match verdict {
         FinalDownVerdict::ControlRejected => runtime.verified_target = None,
+        FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProofBusy) => {
+            retain_current_preflight_for_retry(target, expected, runtime);
+        }
         FinalDownVerdict::TargetChanged
         | FinalDownVerdict::OwnerRejected(_)
         | FinalDownVerdict::LeaseExpired
-        | FinalDownVerdict::LeaseUnproven => {
-            runtime.verified_target = None;
-        }
+        | FinalDownVerdict::LeaseUnproven => runtime.verified_target = None,
         FinalDownVerdict::Allowed
         | FinalDownVerdict::ModifierHeld(_)
         | FinalDownVerdict::FocusLost => {}
+    }
+}
+
+/// A transient owner-lock miss says nothing about the startup physical-key
+/// scan. Retain only the exact, already validated target stamp when that same
+/// HWND/generation is still published; never create or transfer a stamp.
+#[inline(always)]
+fn retain_current_preflight_for_retry(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    runtime: &mut WorkerRuntime,
+) {
+    if runtime.verified_target != Some(expected) || !target_stamp_still_current(target, expected) {
+        runtime.verified_target = None;
     }
 }
 
@@ -466,6 +472,7 @@ pub(crate) fn owner_rejection_reason(failure: OwnerAdmissionFailure) -> &'static
     match failure {
         OwnerAdmissionFailure::Mismatch => "prepared_down_owner_mismatch",
         OwnerAdmissionFailure::QueryUnavailable => "prepared_down_owner_query_unavailable",
+        OwnerAdmissionFailure::ProofBusy => "prepared_down_owner_proof_busy",
         OwnerAdmissionFailure::IdentityAbsent => "prepared_down_owner_identity_absent",
         OwnerAdmissionFailure::IdentityStale => "prepared_down_owner_identity_stale",
         OwnerAdmissionFailure::ProcessTerminated => "prepared_down_owner_process_terminated",
@@ -473,8 +480,107 @@ pub(crate) fn owner_rejection_reason(failure: OwnerAdmissionFailure) -> &'static
     }
 }
 
-pub(crate) fn modifier_guard_rejection_step(mask: ModifierMask) -> DispatchStep {
-    DispatchStep::Terminate(format!("physical_modifier_held:{:02X}", mask.bits()))
+fn fresh_final_release_owner_proof(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+) -> Result<ReleaseOwnerProof, FinalDownVerdict> {
+    let release_owner = target
+        .try_release_owner_proof_for_generation(expected.hwnd, expected.generation)
+        .map_err(|error| match error {
+            OwnerAuthorityReadError::Busy => {
+                FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProofBusy)
+            }
+            OwnerAuthorityReadError::Status(OwnerIdentityStatus::Stale)
+                if !target.is_current(expected.hwnd, expected.generation) =>
+            {
+                FinalDownVerdict::TargetChanged
+            }
+            OwnerAuthorityReadError::Status(status) => {
+                FinalDownVerdict::OwnerRejected(owner_status_failure(status))
+            }
+        })?;
+
+    if !require_focus {
+        return Ok(release_owner);
+    }
+    if expected.hwnd == 0 {
+        return Err(FinalDownVerdict::FocusLost);
+    }
+    let Some(owner_pid) = release_owner.owner_pid().filter(|pid| *pid != 0) else {
+        return Err(FinalDownVerdict::OwnerRejected(
+            OwnerAdmissionFailure::IdentityAbsent,
+        ));
+    };
+    match sky_dispatch_win32::focus::foreground_window_owner_matches(expected.hwnd, owner_pid) {
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => {}
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => {
+            return Err(FinalDownVerdict::FocusLost);
+        }
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
+            return Err(FinalDownVerdict::OwnerRejected(
+                OwnerAdmissionFailure::Mismatch,
+            ));
+        }
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => {
+            return Err(FinalDownVerdict::OwnerRejected(
+                OwnerAdmissionFailure::QueryUnavailable,
+            ));
+        }
+    }
+    if target.owner_process_identity_required() {
+        let Some(authority) = release_owner.authority() else {
+            return Err(FinalDownVerdict::OwnerRejected(
+                OwnerAdmissionFailure::IdentityAbsent,
+            ));
+        };
+        if authority.identity().hwnd != expected.hwnd || authority.identity().owner_pid != owner_pid
+        {
+            return Err(FinalDownVerdict::OwnerRejected(
+                OwnerAdmissionFailure::Mismatch,
+            ));
+        }
+        match authority.verify_final_process_identity(expected.hwnd, owner_pid) {
+            sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous => {}
+            sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated => {
+                return Err(FinalDownVerdict::OwnerRejected(
+                    OwnerAdmissionFailure::ProcessTerminated,
+                ));
+            }
+            sky_dispatch_win32::focus::WindowIdentityContinuity::OwnerMismatch => {
+                return Err(FinalDownVerdict::OwnerRejected(
+                    OwnerAdmissionFailure::Mismatch,
+                ));
+            }
+            sky_dispatch_win32::focus::WindowIdentityContinuity::WindowUnavailable
+            | sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessIdentityMismatch => {
+                return Err(FinalDownVerdict::OwnerRejected(
+                    OwnerAdmissionFailure::IdentityDrift,
+                ));
+            }
+            sky_dispatch_win32::focus::WindowIdentityContinuity::QueryUnavailable => {
+                return Err(FinalDownVerdict::OwnerRejected(
+                    OwnerAdmissionFailure::QueryUnavailable,
+                ));
+            }
+        }
+    }
+    Ok(release_owner)
+}
+
+fn owner_status_failure(status: OwnerIdentityStatus) -> OwnerAdmissionFailure {
+    match status {
+        OwnerIdentityStatus::NotRequired
+        | OwnerIdentityStatus::Missing
+        | OwnerIdentityStatus::Bound(_) => OwnerAdmissionFailure::IdentityAbsent,
+        OwnerIdentityStatus::Stale => OwnerAdmissionFailure::IdentityStale,
+        OwnerIdentityStatus::ProcessTerminated => OwnerAdmissionFailure::ProcessTerminated,
+        OwnerIdentityStatus::OwnerMismatch => OwnerAdmissionFailure::Mismatch,
+        OwnerIdentityStatus::WindowUnavailable | OwnerIdentityStatus::ProcessIdentityMismatch => {
+            OwnerAdmissionFailure::IdentityDrift
+        }
+        OwnerIdentityStatus::QueryUnavailable => OwnerAdmissionFailure::QueryUnavailable,
+    }
 }
 
 pub(crate) fn enter_focus_pause(
@@ -504,9 +610,6 @@ pub(crate) fn handle_final_focus_loss(
     runtime: &mut super::WorkerRuntime,
     progress_clock: &SharedProgressClock,
 ) -> Result<(), DispatchStep> {
-    if !runtime.musical_physical_commit_started {
-        return Err(DispatchStep::TerminateStatic("focus_lost_during_preroll"));
-    }
     let focus_ticks = qpc_clock
         .now()
         .map_err(|error| DispatchStep::Terminate(format!("QPC failure: {error:?}")))?;
@@ -534,16 +637,108 @@ pub(crate) fn target_stamp_still_current(target: &SessionTarget, expected: Targe
     target.is_current(expected.hwnd, expected.generation)
 }
 
-#[derive(Debug, PartialEq, Eq)]
-pub(crate) enum FinalDownAdmissionResult {
-    Allowed,
+/// Validate retained ownership before invoking the tracked safety-release
+/// path after a post-call anomaly. This intentionally does not require current
+/// foreground focus: safety Up is a distinct ownership-verified path.
+pub(crate) fn verify_safety_cleanup_target<'a>(
+    target: &'a SessionTarget,
+    expected: TargetStamp,
+    release_owner: &sky_dispatch_win32::input::ReleaseOwnerProof,
+    require_owner_identity: bool,
+) -> Result<parking_lot::MutexGuard<'a, ()>, String> {
+    if release_owner.target_hwnd() != expected.hwnd
+        || release_owner.target_generation() != expected.generation
+    {
+        return Err("tracked safety cleanup origin target generation drifted".into());
+    }
+    if !target_stamp_still_current(target, expected) {
+        return Err("target HWND/generation changed before tracked safety cleanup".into());
+    }
+    if require_owner_identity
+        || target.owner_process_identity_required()
+        || release_owner.owner_pid().is_some()
+    {
+        let owner_pid = match target.owner_identity_status(expected.generation) {
+            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => owner_pid,
+            OwnerIdentityStatus::Bound(_) | OwnerIdentityStatus::NotRequired => {
+                return Err("tracked safety cleanup has no bound target owner PID".into());
+            }
+            OwnerIdentityStatus::Missing => {
+                return Err("tracked safety cleanup target owner identity is missing".into());
+            }
+            OwnerIdentityStatus::Stale => {
+                return Err("tracked safety cleanup target owner identity is stale".into());
+            }
+            OwnerIdentityStatus::ProcessTerminated => {
+                return Err("tracked safety cleanup target process terminated".into());
+            }
+            OwnerIdentityStatus::OwnerMismatch => {
+                return Err("tracked safety cleanup target owner mismatched".into());
+            }
+            OwnerIdentityStatus::WindowUnavailable => {
+                return Err("tracked safety cleanup target window is unavailable".into());
+            }
+            OwnerIdentityStatus::ProcessIdentityMismatch => {
+                return Err("tracked safety cleanup process identity drifted".into());
+            }
+            OwnerIdentityStatus::QueryUnavailable => {
+                return Err("tracked safety cleanup target owner query is unavailable".into());
+            }
+        };
+        if release_owner.owner_pid() != Some(owner_pid) {
+            return Err("tracked safety cleanup origin owner PID changed".into());
+        }
+        if target.owner_process_identity_required() {
+            let origin_authority = release_owner.authority().ok_or_else(|| {
+                "tracked safety cleanup origin process authority is missing".to_string()
+            })?;
+            let authority = match target.try_owner_authority_for_generation(expected.generation) {
+                Ok(authority) => authority,
+                Err(OwnerAuthorityReadError::Busy) => {
+                    return Err("tracked safety cleanup owner proof is busy".into());
+                }
+                Err(OwnerAuthorityReadError::Status(_)) => {
+                    return Err("tracked safety cleanup retained owner proof is unavailable".into());
+                }
+            };
+            if !std::sync::Arc::ptr_eq(origin_authority, &authority)
+                || origin_authority.continuity()
+                    != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+                || origin_authority.identity().owner_pid != owner_pid
+                || origin_authority.identity().hwnd != expected.hwnd
+            {
+                return Err(
+                    "tracked safety cleanup origin process proof is no longer current".into(),
+                );
+            }
+            #[cfg(test)]
+            target.run_safety_release_validation_hook_for_test();
+        }
+    }
+    let release_permit = target
+        .lock_current_release_owner_proof(release_owner)
+        .ok_or_else(|| {
+            "tracked safety cleanup origin owner proof changed during validation".to_string()
+        })?;
+    if !target_stamp_still_current(target, expected) {
+        return Err("target HWND/generation changed during tracked safety proof".into());
+    }
+    Ok(release_permit)
+}
+
+pub(crate) enum FinalDownAdmissionResult<'a> {
+    Allowed {
+        release_owner: ReleaseOwnerProof,
+        permit: MutexGuard<'a, ()>,
+    },
     Replan,
+    PermitBusy,
     Terminal(String),
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn verify_final_down_admission(
-    target: &SessionTarget,
+pub(crate) fn verify_final_down_admission<'a>(
+    target: &'a SessionTarget,
     expected: TargetStamp,
     require_focus: bool,
     focus_active: &AtomicBool,
@@ -555,7 +750,72 @@ pub(crate) fn verify_final_down_admission(
     playback: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     metrics: &mut WorkerMetricsLocal,
-) -> FinalDownAdmissionResult {
+) -> FinalDownAdmissionResult<'a> {
+    verify_final_musical_packet_admission(
+        target,
+        expected,
+        require_focus,
+        focus_active,
+        control_signals,
+        lease_timeout_ticks,
+        qpc_clock,
+        progress_clock,
+        backend,
+        playback,
+        runtime,
+        metrics,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn verify_final_musical_up_admission<'a>(
+    target: &'a SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+    lease_timeout_ticks: DurationTicks,
+    qpc_clock: QpcClock,
+    progress_clock: &SharedProgressClock,
+    backend: &TrackedKeyState,
+    playback: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    metrics: &mut WorkerMetricsLocal,
+) -> FinalDownAdmissionResult<'a> {
+    verify_final_musical_packet_admission(
+        target,
+        expected,
+        require_focus,
+        focus_active,
+        control_signals,
+        lease_timeout_ticks,
+        qpc_clock,
+        progress_clock,
+        backend,
+        playback,
+        runtime,
+        metrics,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn verify_final_musical_packet_admission<'a>(
+    target: &'a SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+    lease_timeout_ticks: DurationTicks,
+    qpc_clock: QpcClock,
+    progress_clock: &SharedProgressClock,
+    backend: &TrackedKeyState,
+    playback: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    metrics: &mut WorkerMetricsLocal,
+    check_modifiers: bool,
+) -> FinalDownAdmissionResult<'a> {
     if final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
         return FinalDownAdmissionResult::Replan;
     }
@@ -571,33 +831,30 @@ pub(crate) fn verify_final_down_admission(
         post_focus_control_signals: Some(control_signals),
     });
     if target_hint != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(target_hint, runtime, metrics);
+        apply_final_down_rejection(target_hint, target, expected, runtime, metrics);
         if target_hint == FinalDownVerdict::FocusLost
             && let Err(step) = handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
         {
             return match step {
                 DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
-                DispatchStep::TerminateStatic(err) => {
-                    FinalDownAdmissionResult::Terminal(err.to_string())
-                }
             };
         }
         return FinalDownAdmissionResult::Replan;
     }
 
-    let modifier_verdict = final_down_modifier_verdict(backend);
-    if modifier_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(modifier_verdict, runtime, metrics);
-        match modifier_verdict {
-            FinalDownVerdict::ModifierHeld(mask) => {
-                return match modifier_guard_rejection_step(mask) {
-                    DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
-                    DispatchStep::TerminateStatic(err) => {
-                        FinalDownAdmissionResult::Terminal(err.to_string())
-                    }
-                };
-            }
-            _ => return FinalDownAdmissionResult::Replan,
+    // Model state changes at the final boundary before checking modifiers and
+    // making the fresh foreground/owner proof. This keeps musical Up and Down
+    // packets from relying on a focus stamp sampled before a wait.
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = runtime.final_gate_before_syscall_hook.as_ref() {
+        hook();
+    }
+
+    if check_modifiers {
+        let modifier_verdict = final_down_modifier_verdict(backend);
+        if modifier_verdict != FinalDownVerdict::Allowed {
+            apply_final_down_rejection(modifier_verdict, target, expected, runtime, metrics);
+            return FinalDownAdmissionResult::Replan;
         }
     }
 
@@ -612,7 +869,7 @@ pub(crate) fn verify_final_down_admission(
         post_focus_control_signals: Some(control_signals),
     });
     if fresh_target_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(fresh_target_verdict, runtime, metrics);
+        apply_final_down_rejection(fresh_target_verdict, target, expected, runtime, metrics);
         match fresh_target_verdict {
             FinalDownVerdict::FocusLost => {
                 if let Err(step) =
@@ -620,9 +877,6 @@ pub(crate) fn verify_final_down_admission(
                 {
                     return match step {
                         DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
-                        DispatchStep::TerminateStatic(err) => {
-                            FinalDownAdmissionResult::Terminal(err.to_string())
-                        }
                     };
                 }
             }
@@ -657,7 +911,7 @@ pub(crate) fn verify_final_down_admission(
         }
     };
     if verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(verdict, runtime, metrics);
+        apply_final_down_rejection(verdict, target, expected, runtime, metrics);
         match verdict {
             FinalDownVerdict::LeaseExpired => {
                 return FinalDownAdmissionResult::Terminal("supervisor_lease_expired".to_string());
@@ -669,5 +923,125 @@ pub(crate) fn verify_final_down_admission(
         }
     }
 
-    FinalDownAdmissionResult::Allowed
+    // A publication or focus/control race after the fresh OS identity query
+    // must still fail before the caller reaches the prepared sender.
+    let final_target_verdict =
+        final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
+    if final_target_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(final_target_verdict, target, expected, runtime, metrics);
+        match final_target_verdict {
+            FinalDownVerdict::FocusLost => {
+                if let Err(step) =
+                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
+                {
+                    return match step {
+                        DispatchStep::Terminate(error) => FinalDownAdmissionResult::Terminal(error),
+                    };
+                }
+            }
+            FinalDownVerdict::OwnerRejected(failure) => {
+                return FinalDownAdmissionResult::Terminal(
+                    owner_rejection_reason(failure).to_string(),
+                );
+            }
+            _ => {}
+        }
+        return FinalDownAdmissionResult::Replan;
+    }
+
+    let final_control_verdict = final_down_control_verdict(control_signals);
+    if final_control_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(final_control_verdict, target, expected, runtime, metrics);
+        return FinalDownAdmissionResult::Replan;
+    }
+
+    // Keep the retained process object alive in the session target and query
+    // its creation-time proof after lease/control checks, immediately before
+    // the final atomic target check and sender boundary. Lock contention is a
+    // pre-call rejection for this packet; it does not consume an onset.
+    let release_owner = match fresh_final_release_owner_proof(target, expected, require_focus) {
+        Ok(proof) => proof,
+        Err(verdict) => {
+            apply_final_down_rejection(verdict, target, expected, runtime, metrics);
+            if verdict == FinalDownVerdict::FocusLost
+                && let Err(step) =
+                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
+            {
+                return match step {
+                    DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
+                };
+            }
+            return match verdict {
+                FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProofBusy) => {
+                    FinalDownAdmissionResult::PermitBusy
+                }
+                FinalDownVerdict::OwnerRejected(failure) => {
+                    FinalDownAdmissionResult::Terminal(owner_rejection_reason(failure).to_string())
+                }
+                _ => FinalDownAdmissionResult::Replan,
+            };
+        }
+    };
+
+    let final_identity_target_verdict =
+        final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
+    if final_identity_target_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(
+            final_identity_target_verdict,
+            target,
+            expected,
+            runtime,
+            metrics,
+        );
+        return match final_identity_target_verdict {
+            FinalDownVerdict::OwnerRejected(failure) => {
+                FinalDownAdmissionResult::Terminal(owner_rejection_reason(failure).to_string())
+            }
+            FinalDownVerdict::FocusLost => {
+                if let Err(step) =
+                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
+                {
+                    match step {
+                        DispatchStep::Terminate(error) => {
+                            return FinalDownAdmissionResult::Terminal(error);
+                        }
+                    }
+                }
+                FinalDownAdmissionResult::Replan
+            }
+            _ => FinalDownAdmissionResult::Replan,
+        };
+    }
+
+    let final_control_verdict = final_down_control_verdict(control_signals);
+    if final_control_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(final_control_verdict, target, expected, runtime, metrics);
+        return FinalDownAdmissionResult::Replan;
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(hook) = runtime.final_gate_before_owner_permit_hook.as_ref() {
+        hook();
+    }
+    let permit = match target.try_lock_current_release_owner_proof(&release_owner) {
+        Ok(permit) => permit,
+        Err(error) => {
+            return match error {
+                ReleaseOwnerPermitError::WriterBusy
+                | ReleaseOwnerPermitError::OwnerAuthorityBusy => {
+                    retain_current_preflight_for_retry(target, expected, runtime);
+                    FinalDownAdmissionResult::PermitBusy
+                }
+                ReleaseOwnerPermitError::NotCurrent => {
+                    runtime.verified_target = None;
+                    FinalDownAdmissionResult::Replan
+                }
+            };
+        }
+    };
+
+    FinalDownAdmissionResult::Allowed {
+        release_owner,
+        permit,
+    }
 }

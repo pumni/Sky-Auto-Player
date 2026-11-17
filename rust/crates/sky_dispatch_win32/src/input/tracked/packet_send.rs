@@ -41,17 +41,13 @@ fn packet_outcome_proves_zero_transport(
                 && evidence.retry_reason == PacketRetryReason::None
         }
         SendTransactionStatus::ZeroProgress => {
-            evidence.attempts <= 1
+            evidence.attempts == 0
                 && matches!(
                     evidence.retry_reason,
                     PacketRetryReason::None | PacketRetryReason::ZeroProgress
                 )
         }
-        SendTransactionStatus::ClockFailureAfterSend => {
-            evidence.attempts == 1
-                && evidence.timing_error.is_some()
-                && evidence.retry_reason == PacketRetryReason::None
-        }
+        SendTransactionStatus::PreparationRejected => evidence.attempts == 0,
         _ => false,
     }
 }
@@ -105,8 +101,12 @@ impl TrackedKeyState {
             let outcome = self.apply_test_packet_ambiguity(packet, outcome);
             let outcome =
                 self.apply_packet_outcome_with_commit_policy(packet, outcome, defer_journal_commit);
-            if defer_journal_commit && packet_outcome_proves_zero_transport(packet, outcome) {
+            if defer_journal_commit
+                && packet_outcome_proves_zero_transport(packet, outcome)
+                && (packet.down_mask == 0 || outcome.evidence.attempts == 0)
+            {
                 self.in_flight_mask = previous_in_flight_mask;
+                self.clear_unobligated_release_owners(packet.up_mask | packet.down_mask);
             }
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
@@ -148,8 +148,12 @@ impl TrackedKeyState {
         let outcome = self.apply_test_packet_ambiguity(packet, outcome);
         let outcome =
             self.apply_packet_outcome_with_commit_policy(packet, outcome, defer_journal_commit);
-        if defer_journal_commit && packet_outcome_proves_zero_transport(packet, outcome) {
+        if defer_journal_commit
+            && packet_outcome_proves_zero_transport(packet, outcome)
+            && (packet.down_mask == 0 || outcome.evidence.attempts == 0)
+        {
             self.in_flight_mask = previous_in_flight_mask;
+            self.clear_unobligated_release_owners(packet.up_mask | packet.down_mask);
         }
         #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
@@ -637,6 +641,17 @@ impl TrackedKeyState {
         self.send_prepared_physical_packet_view_with_commit_policy(prepared.as_view(), true)
     }
 
+    /// Worker-owned final-boundary sender which freezes the release origin
+    /// before the syscall can create an in-flight or uncertain Down obligation.
+    pub fn send_prepared_physical_packet_at_final_boundary_deferred_commit_with_release_owner(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+        release_owner: &crate::input::ReleaseOwnerProof,
+    ) -> SendTransactionOutcome {
+        self.remember_release_owner_for_down(prepared.packet().down_mask, Some(release_owner));
+        self.send_prepared_physical_packet_at_final_boundary_deferred_commit(prepared)
+    }
+
     /// Complete the transport half of a packet transaction after the
     /// scheduler state commit has succeeded.
     pub fn commit_physical_packet(&mut self, packet_mask: u16) -> Result<(), String> {
@@ -647,6 +662,7 @@ impl TrackedKeyState {
             ));
         }
         self.in_flight_mask = 0;
+        self.clear_unobligated_release_owners(packet_mask);
         Ok(())
     }
 
@@ -693,6 +709,13 @@ impl TrackedKeyState {
                     "physical packet made zero progress: {} events requested",
                     packet.event_count()
                 ));
+                if outcome.evidence.attempts != 0 && packet.down_mask != 0 {
+                    // A zero raw insertion count does not prove a Down was not
+                    // observed by the target. Keep a conservative release
+                    // obligation until the independent safety probe reconciles it.
+                    self.active_mask &= !packet.down_mask;
+                    self.possibly_active_mask |= packet.down_mask;
+                }
             }
             SendTransactionStatus::PreparationRejected => {
                 self.chords_rejected = self.chords_rejected.saturating_add(1);
@@ -759,6 +782,9 @@ impl TrackedKeyState {
         }
         if !defer_journal_commit {
             self.in_flight_mask &= !(packet.up_mask | packet.down_mask);
+        }
+        if !defer_journal_commit {
+            self.clear_unobligated_release_owners(packet.up_mask | packet.down_mask);
         }
         outcome
     }

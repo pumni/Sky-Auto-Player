@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 enum SchedulerAction {
     Finished,
     Wait {
@@ -13,6 +13,21 @@ enum SchedulerAction {
 
 const UNSTABLE_TARGET_REPLAN_INTERVAL_US: u64 = 1_000;
 
+#[cfg(test)]
+thread_local! {
+    static SCHEDULER_EVALUATION_COUNT: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn reset_scheduler_evaluation_count_for_test() {
+    SCHEDULER_EVALUATION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn scheduler_evaluation_count_for_test() -> u64 {
+    SCHEDULER_EVALUATION_COUNT.with(std::cell::Cell::get)
+}
+
 fn wait_after_unstable_target(
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
     packet_not_before_qpc: sky_dispatch_win32::clock::QpcTicks,
@@ -22,6 +37,27 @@ fn wait_after_unstable_target(
     local_metrics: &mut super::WorkerMetricsLocal,
     terminal_error: &mut Option<String>,
 ) -> WaitBoundary {
+    wait_after_unstable_target_with_deadline(
+        now_qpc,
+        packet_not_before_qpc,
+        qpc_clock,
+        waiter,
+        interrupt,
+        local_metrics,
+        terminal_error,
+    )
+    .0
+}
+
+fn wait_after_unstable_target_with_deadline(
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    packet_not_before_qpc: sky_dispatch_win32::clock::QpcTicks,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+    local_metrics: &mut super::WorkerMetricsLocal,
+    terminal_error: &mut Option<String>,
+) -> (WaitBoundary, Option<sky_dispatch_win32::clock::QpcTicks>) {
     let retry_deadline = if packet_not_before_qpc > now_qpc {
         packet_not_before_qpc
     } else {
@@ -31,30 +67,33 @@ fn wait_after_unstable_target(
                 *terminal_error = Some(format!(
                     "target replan interval conversion failed: {error:?}"
                 ));
-                return WaitBoundary::Exit;
+                return (WaitBoundary::Exit, None);
             }
         };
         match now_qpc.checked_add_duration(interval) {
             Ok(deadline) => deadline,
             Err(error) => {
                 *terminal_error = Some(format!("target replan deadline overflow: {error}"));
-                return WaitBoundary::Exit;
+                return (WaitBoundary::Exit, None);
             }
         }
     };
 
-    wait_for_next_boundary(WaitBoundaryInput {
-        deadline: WaitDeadline {
-            physical_target_qpc: Some(retry_deadline),
-            spin_threshold_ticks: DurationTicks::ZERO,
-            qpc_clock,
-        },
-        signals: WaitSignals { waiter, interrupt },
-        mutable: WaitMutable {
-            local_metrics,
-            terminal_error,
-        },
-    })
+    (
+        wait_for_next_boundary(WaitBoundaryInput {
+            deadline: WaitDeadline {
+                physical_target_qpc: Some(retry_deadline),
+                spin_threshold_ticks: DurationTicks::ZERO,
+                qpc_clock,
+            },
+            signals: WaitSignals { waiter, interrupt },
+            mutable: WaitMutable {
+                local_metrics,
+                terminal_error,
+            },
+        }),
+        Some(retry_deadline),
+    )
 }
 
 fn evaluate_scheduler_action(
@@ -62,6 +101,8 @@ fn evaluate_scheduler_action(
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
 ) -> Result<SchedulerAction, String> {
+    #[cfg(test)]
+    SCHEDULER_EVALUATION_COUNT.with(|count| count.set(count.get().saturating_add(1)));
     match executor
         .evaluate_at(now_qpc, epoch_qpc)
         .map_err(|error| format!("scheduler eligibility arithmetic failure: {error}"))?
@@ -82,30 +123,31 @@ fn evaluate_scheduler_action(
     }
 }
 
-fn project_scheduler_action_for_staging(
+fn evaluate_scheduler_action_for_staging(
     executor: &sky_dispatch_core::executor::DispatchExecutor,
-    action: SchedulerAction,
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
 ) -> Result<
     (
+        SchedulerAction,
         sky_dispatch_win32::clock::QpcTicks,
         Option<SchedulerAction>,
     ),
     String,
 > {
+    let action = evaluate_scheduler_action(executor, now_qpc, epoch_qpc)?;
     match action {
-        send @ SchedulerAction::Send { .. } => Ok((now_qpc, Some(send))),
-        SchedulerAction::Finished => Ok((now_qpc, None)),
+        send @ SchedulerAction::Send { .. } => Ok((action, now_qpc, Some(send))),
+        SchedulerAction::Finished => Ok((action, now_qpc, None)),
         SchedulerAction::Wait { deadline_qpc } if deadline_qpc > now_qpc => {
             let at_deadline = evaluate_scheduler_action(executor, deadline_qpc, epoch_qpc)?;
             let action_to_stage = match at_deadline {
                 send @ SchedulerAction::Send { .. } => Some(send),
                 SchedulerAction::Wait { .. } | SchedulerAction::Finished => None,
             };
-            Ok((deadline_qpc, action_to_stage))
+            Ok((action, deadline_qpc, action_to_stage))
         }
-        SchedulerAction::Wait { .. } => Ok((now_qpc, None)),
+        SchedulerAction::Wait { .. } => Ok((action, now_qpc, None)),
     }
 }
 
@@ -117,23 +159,17 @@ struct SchedulerStageAdmission<'a> {
     control_signals: FinalControlSignals<'a>,
 }
 
-struct UpOnlyTargetReplanAdmission<'a> {
-    target_stale: bool,
-    staging: SchedulerStageAdmission<'a>,
-}
-
-fn stage_up_only_after_target_replan(
+fn stage_up_only_after_mixed_replan(
     up_mask: u16,
     timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
-    admission: UpOnlyTargetReplanAdmission<'_>,
+    admission: SchedulerStageAdmission<'_>,
     resources: &mut super::WorkerResources,
     runtime: &mut super::WorkerRuntime,
 ) -> Result<Option<StagedCandidate>, String> {
     if up_mask == 0
-        || !admission.target_stale
-        || !focus_matches(admission.staging.require_focus, admission.staging.focus_active)
+        || !focus_matches(admission.require_focus, admission.focus_active)
         || !matches!(
-            final_control_precheck(admission.staging.control_signals),
+            final_control_precheck(admission.control_signals),
             FinalControlAdmission::Allowed
         )
     {
@@ -144,8 +180,8 @@ fn stage_up_only_after_target_replan(
         up_mask,
         None,
         timing_window,
-        admission.staging.capture_up_slot_timings,
-        admission.staging.target,
+        admission.capture_up_slot_timings,
+        admission.target,
         resources,
         runtime,
     )?
@@ -210,13 +246,10 @@ fn stage_scheduler_action_preserving_due_up(
         runtime,
     )? {
         Some(candidate) => Ok(Some(candidate)),
-        None if has_down && up_mask != 0 => stage_up_only_after_target_replan(
+        None if has_down && up_mask != 0 => stage_up_only_after_mixed_replan(
             up_mask,
             timing_window,
-            UpOnlyTargetReplanAdmission {
-                target_stale: true,
-                staging: admission,
-            },
+            admission,
             resources,
             runtime,
         ),
@@ -224,29 +257,25 @@ fn stage_scheduler_action_preserving_due_up(
     }
 }
 
-fn stage_up_only_for_stale_mixed_candidate(
+fn stage_up_only_for_mixed_replan(
     candidate: &StagedCandidate,
     staging: SchedulerStageAdmission<'_>,
     resources: &mut super::WorkerResources,
     runtime: &mut super::WorkerRuntime,
 ) -> Result<Option<StagedCandidate>, String> {
-    let Some(expected) = candidate.preflight_target else {
+    if candidate.target_stamp.is_none() {
         return Ok(None);
-    };
-    stage_up_only_after_target_replan(
+    }
+    stage_up_only_after_mixed_replan(
         candidate.up_mask,
         candidate.timing_window,
-        UpOnlyTargetReplanAdmission {
-            target_stale: candidate.packet_masks.down_mask != 0
-                && !target_stamp_still_current(staging.target, expected),
-            staging,
-        },
+        staging,
         resources,
         runtime,
     )
 }
 
-fn pre_wait_candidate_admission(
+pub(crate) fn pre_wait_candidate_admission(
     candidate: &StagedCandidate,
     target: &SessionTarget,
     require_focus: bool,
@@ -254,9 +283,9 @@ fn pre_wait_candidate_admission(
     control_signals: FinalControlSignals<'_>,
     runtime: &mut super::WorkerRuntime,
 ) -> StagedDispatchOutcome {
-    if candidate.packet_masks.down_mask != 0 {
+    if candidate.packet_masks.down_mask != 0 || candidate.packet_masks.up_mask != 0 {
         let expected = candidate
-            .preflight_target
+            .target_stamp
             .expect("target stamp checked in staging");
         if !target_stamp_still_current(target, expected)
             || !focus_matches(require_focus, focus_active)
@@ -288,7 +317,7 @@ fn qpc_evidence(value: Option<sky_dispatch_win32::clock::QpcTicks>) -> String {
 
 #[cfg(test)]
 mod scheduler_tests {
-    use super::{SchedulerAction, evaluate_scheduler_action, project_scheduler_action_for_staging};
+    use super::{SchedulerAction, evaluate_scheduler_action_for_staging};
     use crate::engine::test_support::ProductionDispatchTestHarness;
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
     use sky_dispatch_core::time::TimelineTicks;
@@ -313,22 +342,18 @@ mod scheduler_tests {
         ];
         let harness = ProductionDispatchTestHarness::create_harness(&actions);
         let epoch = harness.resources.playback.epoch;
-        let initial = evaluate_scheduler_action(&harness.resources.scheduler, epoch, epoch)
-            .expect("initial scheduler evaluation");
+        let (initial, staging_target, staged) = evaluate_scheduler_action_for_staging(
+            &harness.resources.scheduler,
+            epoch,
+            epoch,
+        )
+        .expect("scheduler staging decision");
         let SchedulerAction::Wait { deadline_qpc } = initial else {
             panic!("expected a wait before the authored Down deadline");
         };
         let expected = harness
             .current_executor_chord_for_test()
             .expect("authored Down metadata");
-
-        let (staging_target, staged) = project_scheduler_action_for_staging(
-            &harness.resources.scheduler,
-            SchedulerAction::Wait { deadline_qpc },
-            epoch,
-            epoch,
-        )
-        .expect("deadline projection");
 
         assert_eq!(staging_target, deadline_qpc);
         let Some(SchedulerAction::Send { down_chord, .. }) = staged else {

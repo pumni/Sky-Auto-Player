@@ -1,4 +1,5 @@
 mod admission;
+mod anomaly_history;
 mod boot;
 mod cleanup;
 mod control;
@@ -16,8 +17,10 @@ mod wait;
 pub(crate) use admission::{
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, ensure_preflight_for_target,
     enter_focus_pause, focus_matches, focus_matches_hwnd, load_target_stamp,
-    target_stamp_still_current, verify_final_down_admission,
+    target_stamp_still_current, verify_final_down_admission, verify_final_musical_up_admission,
+    verify_safety_cleanup_target,
 };
+pub(crate) use anomaly_history::AttemptedDispatchAnomalies;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cleanup::FinalizeTestObservation;
 #[cfg(test)]
@@ -36,12 +39,15 @@ pub(super) use dispatch::DispatchStep;
 pub(crate) use dispatch::ObserverRuntime;
 pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 #[cfg(any(test, feature = "test-support"))]
+pub(crate) use dispatch_loop::DispatchAttemptOutcome;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_scheduler_resumable_lifecycle_transition_for_test;
 #[cfg(any(test, feature = "test-support"))]
 pub use dispatch_loop::{StagedCandidate, StagedDispatchOutcome};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::{
-    StagedControlSignals, StagedDispatchContext, dispatch_staged_candidate, stage_candidate,
+    StagedControlSignals, StagedDispatchContext, dispatch_staged_candidate,
+    pre_wait_candidate_admission, stage_candidate,
 };
 
 #[cfg(any(test, feature = "test-support"))]
@@ -73,7 +79,6 @@ pub(crate) use wait::{
 
 use super::shared::SessionShared;
 use super::*;
-use sky_dispatch_core::model::RuntimeSchedule;
 #[cfg(any(test, feature = "test-support"))]
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
@@ -118,6 +123,7 @@ pub(crate) fn finalize_worker_for_test(
     worker_panicked: bool,
     terminal_trigger: Option<TerminalTrigger>,
     terminal_error: Option<String>,
+    attempted_dispatch_anomalies: AttemptedDispatchAnomalies,
     cleanup_observation: &mut cleanup::FinalizeTestObservation,
 ) -> u8 {
     let telemetry_output = parking_lot::Mutex::new(None);
@@ -143,6 +149,7 @@ pub(crate) fn finalize_worker_for_test(
                 abort_counts: HashMap::new(),
                 terminal_error,
                 secondary_errors: Vec::new(),
+                attempted_dispatch_anomalies,
                 last_published_error: None,
                 terminal_trigger,
             },
@@ -194,6 +201,10 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_gate_post_focus_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_post_lease_race_hook: Option<super::config::FinalGateRaceHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) final_gate_before_syscall_hook: Option<super::config::FinalGateBeforeSyscallHook>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) final_gate_before_owner_permit_hook: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(test)]
     pub(crate) final_lease_qpc_sample_count_for_test: u64,
     #[cfg(test)]
@@ -205,16 +216,17 @@ pub(crate) struct WorkerRuntime {
     /// Measured completion boundary of the most recent physical sender
     /// transaction, retained so sequential HOL evidence survives queue drops.
     pub(crate) last_physical_send_completion_qpc: Option<QpcTicks>,
-    pub(crate) previous_sendinput_completion_qpc: Option<QpcTicks>,
-    pub(crate) previous_sender_completion_known: bool,
     last_dispatch_deadline_target_qpc: Option<QpcTicks>,
     pub(crate) terminal_error: Option<String>,
     pub(crate) terminal_trigger: Option<TerminalTrigger>,
     pub(crate) manual_pause_suspension_pending: bool,
     /// True only after the first successful authored musical commit. A
-    /// final foreground mismatch before that point is startup failure, not a
-    /// pause/rebase event.
-    pub(crate) musical_physical_commit_started: bool,
+    /// syscall attempt crosses the pre-roll boundary even when its transport
+    /// evidence is anomalous; that onset is reconciled and never replayed.
+    pub(crate) musical_physical_attempt_started: bool,
+    /// Attempted transport anomalies remain a terminal error latch while
+    /// allowing verified cleanup and later, never-attempted notes to proceed.
+    pub(crate) attempted_dispatch_anomalies: AttemptedDispatchAnomalies,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
 }
 
@@ -225,6 +237,11 @@ impl WorkerRuntime {
             verified_target,
             ..Self::default()
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn verified_target_for_test(&self) -> Option<TargetStamp> {
+        self.verified_target
     }
 }
 
@@ -371,7 +388,7 @@ pub(super) fn update_deferred_worker_metrics(
 }
 
 pub(super) struct Worker<'a> {
-    schedule: Option<RuntimeSchedule>,
+    schedule: Option<NativeScheduleInput>,
     config: WorkerConfig,
     shared: &'a SessionShared,
     epoch_qpc: QpcTicks,
@@ -457,14 +474,14 @@ impl<'a> Worker<'a> {
         }
     }
 
-    fn take_schedule(&mut self) -> Result<RuntimeSchedule, &'static str> {
+    fn take_schedule(&mut self) -> Result<NativeScheduleInput, &'static str> {
         self.schedule
             .take()
-            .ok_or("worker runtime schedule was already consumed")
+            .ok_or("worker runtime plan was already consumed")
     }
 
     #[cfg(test)]
-    pub(super) fn take_schedule_for_test(&mut self) -> Result<RuntimeSchedule, &'static str> {
+    pub(super) fn take_schedule_for_test(&mut self) -> Result<NativeScheduleInput, &'static str> {
         self.take_schedule()
     }
 

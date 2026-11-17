@@ -5,6 +5,8 @@ use thiserror::Error;
 use crate::model::{ActionKind, GenerationId, MAX_KEYS, NO_GENERATION_ID, RuntimeSchedule};
 use crate::time::{DurationTicks, TimelineTicks};
 
+const VALIDATION_CHECKPOINT_INTERVAL: usize = 4_096;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ScheduleTimingError {
     #[error("schedule and timing configuration exceed supported timestamp range")]
@@ -51,6 +53,8 @@ pub enum ScheduleTimingError {
     },
     #[error("schedule contains an invalid compiled batch range for packet {packet_index}")]
     InvalidBatchRange { packet_index: usize },
+    #[error("schedule validation cancelled")]
+    Cancelled,
     #[error(
         "schedule ends with an open musical generation for scan code {scan_code}: down action {down_source_action_index} at {down_scheduled_us}us"
     )]
@@ -144,10 +148,34 @@ pub fn validate_min_hold_and_release_gap_feasibility_ticks<F>(
     effective_min_hold_ticks: DurationTicks,
     min_release_gap_us: u64,
     min_release_gap_ticks: DurationTicks,
-    mut microseconds_to_ticks: F,
+    microseconds_to_ticks: F,
 ) -> Result<(), ScheduleTimingError>
 where
     F: FnMut(u64) -> Option<TimelineTicks>,
+{
+    validate_min_hold_and_release_gap_feasibility_ticks_with_checkpoint(
+        schedule,
+        effective_min_hold_us,
+        effective_min_hold_ticks,
+        min_release_gap_us,
+        min_release_gap_ticks,
+        microseconds_to_ticks,
+        || Ok(()),
+    )
+}
+
+pub(crate) fn validate_min_hold_and_release_gap_feasibility_ticks_with_checkpoint<F, C>(
+    schedule: &RuntimeSchedule,
+    effective_min_hold_us: u64,
+    effective_min_hold_ticks: DurationTicks,
+    min_release_gap_us: u64,
+    min_release_gap_ticks: DurationTicks,
+    mut microseconds_to_ticks: F,
+    mut checkpoint: C,
+) -> Result<(), ScheduleTimingError>
+where
+    F: FnMut(u64) -> Option<TimelineTicks>,
+    C: FnMut() -> Result<(), ScheduleTimingError>,
 {
     let last_scheduled_us = schedule
         .batches
@@ -161,6 +189,9 @@ where
     let mut last_release_by_slot: [Option<ReleaseBoundary>; MAX_KEYS] = [None; MAX_KEYS];
 
     for (packet_index, packet) in schedule.packets.iter().enumerate() {
+        if packet_index % VALIDATION_CHECKPOINT_INTERVAL == 0 {
+            checkpoint()?;
+        }
         let batch_start = usize::try_from(packet.first_batch_index)
             .map_err(|_| ScheduleTimingError::InvalidBatchRange { packet_index })?;
         let batch_len = usize::from(packet.batch_count);

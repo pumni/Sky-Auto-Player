@@ -15,15 +15,12 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
     #[cfg(any(test, feature = "test-support"))]
     let _command_timing_cleanup = CommandTimingCleanup(&_shared.commands.command_timing);
     #[cfg(any(test, feature = "test-support"))]
-    let (focus_loss_fault, wait_fault) = match &worker.config.backend {
-        BackendConfig::Production => (false, false),
-        BackendConfig::Mock { fault_script, .. } => (
-            fault_script.focus_loss_after_due_before_send,
-            fault_script.wait_failure,
-        ),
+    let wait_fault = match &worker.config.backend {
+        BackendConfig::Production => false,
+        BackendConfig::Mock { fault_script, .. } => fault_script.wait_failure,
     };
     #[cfg(not(any(test, feature = "test-support")))]
-    let (focus_loss_fault, wait_fault) = (false, false);
+    let wait_fault = false;
 
     let exit_code = boot::initialize(worker, wait_fault);
     if exit_code != 0 {
@@ -39,7 +36,7 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
         }
         return exit_code;
     }
-    let worker_result = dispatch_loop::dispatch(worker, focus_loss_fault);
+    let worker_result = dispatch_loop::dispatch(worker);
     worker.finalize(worker_result)
 }
 
@@ -77,6 +74,9 @@ impl Worker<'_> {
                 abort_counts: std::mem::take(&mut core.errors.abort_counts),
                 terminal_error: std::mem::take(&mut core.runtime.terminal_error),
                 secondary_errors: std::mem::take(&mut core.errors.secondary),
+                attempted_dispatch_anomalies: std::mem::take(
+                    &mut core.runtime.attempted_dispatch_anomalies,
+                ),
                 last_published_error: std::mem::take(&mut core.errors.last_published),
                 terminal_trigger: core.runtime.terminal_trigger.take(),
             },
