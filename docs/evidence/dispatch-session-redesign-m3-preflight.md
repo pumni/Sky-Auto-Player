@@ -83,9 +83,9 @@ Validate the two manifests and immutable artifact inventories before requesting
 native-run approval:
 
 ```powershell
-Import-Module scripts/dispatch_qualification_profiles.psm1 -Force
-Import-Module scripts/dispatch_harness_manifest.psm1 -Force
+Import-Module -Name (Resolve-Path 'scripts/dispatch_qualification_profiles.psm1').Path -Force
 $runnerIdentity = Get-DispatchSessionRedesignM3RunnerIdentity -RunnerRoot (Get-Location).Path
+Import-Module -Name (Resolve-Path 'scripts/dispatch_harness_manifest.psm1').Path -Force
 foreach ($manifestPath in @(
   (Join-Path $baselineOutput 'manifest.json'),
   (Join-Path $candidateOutput 'manifest.json')

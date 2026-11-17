@@ -155,6 +155,27 @@ record each manifest and binary SHA-256. The builder performs immutable checks
 as part of each build. Candidate source must equal the current pushed branch
 HEAD; baseline and candidate source trees must be clean detached worktrees.
 
+Capture the runner identity before importing the manifest module, which loads
+the profile module in its own scope:
+
+```powershell
+Import-Module -Name (Resolve-Path 'scripts/dispatch_qualification_profiles.psm1').Path -Force
+$runnerIdentity = Get-DispatchSessionRedesignM3RunnerIdentity -RunnerRoot (Get-Location).Path
+Import-Module -Name (Resolve-Path 'scripts/dispatch_harness_manifest.psm1').Path -Force
+foreach ($manifestPath in @(
+  (Join-Path $baselineOutput 'manifest.json'),
+  (Join-Path $candidateOutput 'manifest.json')
+)) {
+  $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+  Assert-DispatchSessionRedesignM3ManifestIdentity -Manifest $manifest `
+    -ExpectedRole $manifest.source_role -RepositoryRoot (Get-Location).Path | Out-Null
+  Assert-DispatchSessionRedesignM3RunnerProvenance -Manifest $manifest `
+    -RunnerIdentity $runnerIdentity -RunnerRoot (Get-Location).Path | Out-Null
+  Assert-ImmutableHarnessManifestIntegrity -Manifest $manifest `
+    -ManifestPath $manifestPath | Out-Null
+}
+```
+
 The executable plan is one guarded `Final` stage. Its mapping is:
 
 | Order | Scenario / workload | Load | FPS | Margin | Sample | Role | Sessions |
