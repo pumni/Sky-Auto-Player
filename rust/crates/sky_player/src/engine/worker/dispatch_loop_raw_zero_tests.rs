@@ -734,12 +734,12 @@ fn raw_zero_candidate_owner_drift_after_identity_query_fails_before_sender() {
     let packets = harness.configure_mock_packet_sender_for_test(&[0]);
     harness.attach_executor_for_test().expect("attach executor");
 
-    // Rebind in the gap after the fresh process continuity query but before
-    // the final writer permit. Even though this sender is configured to
-    // report raw zero, the stale candidate must never cross the packet edge.
+    // Invalidate the one-time target at the final admission hook. Even though
+    // this sender is configured to report raw zero, the candidate must never
+    // cross the packet edge.
     let target = Arc::clone(&harness.target);
-    harness.set_final_gate_before_owner_permit_hook(move || {
-        assert!(target.republish_same_hwnd(1));
+    harness.set_final_gate_before_syscall_hook(move || {
+        target.invalidate_for_test();
     });
     let candidate = harness
         .stage_candidate_for_test(
@@ -755,7 +755,7 @@ fn raw_zero_candidate_owner_drift_after_identity_query_fails_before_sender() {
     );
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Replan
+        StagedDispatchOutcome::Exit
     );
     assert!(packets.lock().expect("mock packet capture").is_empty());
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
@@ -917,13 +917,12 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
             .iter()
             .map(|(_, evidence)| u64::from(evidence.attempts))
             .sum();
-        let (target_arc_clones, authority_mutex, writer_permit, generation_checks) =
+        let (owner_authority_arc_clones, generation_checks) =
             harness.target_proof_counts_for_test();
-        let proof_arc_clones =
+        let release_identity_arc_clones =
             sky_dispatch_win32::input::release_owner_proof_arc_clone_count_for_test();
-        let arc_clones = target_arc_clones + proof_arc_clones;
         println!(
-            "proof-count label={label} scheduler_evaluations={} qpc_reads={} foreground_queries={} real_GetForegroundWindow={} owner_pid_checks={} process_identity_checks={} GetProcessTimes={} authority_arc_clones={arc_clones} target_arc_clones={target_arc_clones} release_proof_arc_clones={proof_arc_clones} authority_mutex_attempts={authority_mutex} writer_permit_attempts={writer_permit} generation_revalidations={generation_checks} ledger_mask_visits={} sender_attempts={sender_attempts} allocations=0",
+            "proof-count label={label} scheduler_evaluations={} qpc_reads={} foreground_queries={} real_GetForegroundWindow={} owner_pid_checks={} process_identity_checks={} GetProcessTimes={} owner_authority_arc_clones={owner_authority_arc_clones} release_identity_arc_clones={release_identity_arc_clones} generation_revalidations={generation_checks} ledger_mask_visits={} sender_attempts={sender_attempts} allocations=0",
             sky_dispatch_core::executor::scheduler_evaluation_count_for_test(),
             sky_dispatch_win32::clock::qpc_read_count(),
             sky_dispatch_win32::focus::foreground_query_count(),
@@ -1130,8 +1129,8 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     report_counts("mixed-to-up-only", &fallback, &fallback_packets);
     let _ = fallback.finalize_for_test();
 
-    // A continuity result followed by a generation change rejects the permit
-    // before the mock packet boundary. No sender call is counted.
+    // Target invalidation at final admission rejects the candidate before
+    // the mock packet boundary. No sender call is counted.
     let actions = [
         raw_zero_action(740, ActionKind::Down, 0, &[0x15]),
         raw_zero_action(741, ActionKind::Up, 100_000, &[0x15]),
@@ -1144,8 +1143,8 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     blocked.attach_executor_for_test().unwrap();
     blocked.set_mock_sender_start_qpc_for_test(epoch);
     let target = Arc::clone(&blocked.target);
-    blocked.set_final_gate_before_owner_permit_hook(move || {
-        assert!(target.republish_same_hwnd(1));
+    blocked.set_final_gate_before_syscall_hook(move || {
+        target.invalidate_for_test();
     });
     enable_fresh_lease(&mut blocked, epoch);
     reset_counts(&blocked);
@@ -1163,7 +1162,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     );
     assert_eq!(
         blocked.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Replan
+        StagedDispatchOutcome::Exit
     );
     report_counts("blocked-generation-replan", &blocked, &blocked_packets);
     assert!(blocked_packets.lock().expect("packet capture").is_empty());

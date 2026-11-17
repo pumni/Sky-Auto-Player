@@ -140,7 +140,6 @@ fn worker_final_gate_rechecks_retained_process_identity_before_down() {
         } else {
             assert!(snapshot.terminal_error.is_none());
         }
-        session.close_window_identity_authority();
     }
 }
 
@@ -445,82 +444,6 @@ fn bind_synthetic_owner(session: &NativeDispatchSession, hwnd: isize, pid: u32) 
 
 #[cfg(feature = "test-support")]
 #[test]
-fn stale_owner_poll_failure_cannot_invalidate_rebinding_or_block_final_admission() {
-    struct ForegroundReset;
-    impl Drop for ForegroundReset {
-        fn drop(&mut self) {
-            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
-            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
-        }
-    }
-
-    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
-    let _foreground_reset = ForegroundReset;
-    let (session, hook, send_calls) = checkpointed_session(
-        ownership_review_schedule(100_000),
-        StartupCheckpoint::FirstDownCommitted,
-        1,
-        true,
-    );
-    bind_synthetic_owner(&session, 123, 77);
-    assert!(session.set_window_process_identity_status_for_test(
-        sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated,
-    ));
-
-    let query_complete = Arc::new(std::sync::Barrier::new(2));
-    let allow_apply = Arc::new(std::sync::Barrier::new(2));
-    session.set_owner_poll_result_barrier_for_test(
-        Arc::clone(&query_complete),
-        Arc::clone(&allow_apply),
-    );
-
-    let poll_result = std::thread::scope(|scope| {
-        let poll_session = &session;
-        let poll = scope.spawn(move || poll_session.poll_window_identity_authority_result());
-        query_complete.wait();
-        bind_synthetic_owner(&session, 456, 88);
-        allow_apply.wait();
-        poll.join().expect("supervisor poll thread")
-    });
-    assert_eq!(
-        poll_result,
-        crate::engine::OwnerIdentityPollResult::StaleSuperseded,
-        "the stale A poll is distinguished from a current-owner failure"
-    );
-    let authority_b = session
-        .window_identity_authority_weak_for_test()
-        .expect("B authority remains retained");
-    assert!(authority_b.upgrade().is_some());
-    assert_eq!(
-        session.poll_window_identity_authority_result(),
-        crate::engine::OwnerIdentityPollResult::CurrentValid,
-        "B's own continuous authority remains Bound after stale A failure"
-    );
-
-    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
-    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(88)));
-    session
-        .arm(0)
-        .expect("startup was not cancelled by stale A result");
-    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
-    assert_eq!(send_calls.load(Ordering::Acquire), 1);
-    hook.release_startup_checkpoint();
-    assert!(
-        session
-            .join(Duration::from_secs(5))
-            .expect("bounded worker join")
-    );
-
-    let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, EnginePollStatus::Finished.as_str());
-    assert_eq!(snapshot.precision_packet_attempts, 2);
-    assert_eq!(send_calls.load(Ordering::Acquire), 2);
-    assert_eq!(snapshot.final_release_obligation_mask, 0);
-    assert!(authority_b.upgrade().is_some());
-}
-
-#[cfg(feature = "test-support")]
-#[test]
 fn current_owner_poll_failure_still_fails_closed_before_first_down() {
     struct ForegroundReset;
     impl Drop for ForegroundReset {
@@ -568,42 +491,7 @@ fn current_owner_poll_failure_still_fails_closed_before_first_down() {
 
 #[cfg(feature = "test-support")]
 #[test]
-fn late_authority_close_cannot_clear_a_newly_bound_generation() {
-    let (session, _, _) = checkpointed_session(
-        ownership_review_schedule(100_000),
-        StartupCheckpoint::FirstDownCommitted,
-        1,
-        true,
-    );
-    bind_synthetic_owner(&session, 123, 77);
-    let close_snapshot = Arc::new(std::sync::Barrier::new(2));
-    let allow_close = Arc::new(std::sync::Barrier::new(2));
-    session.set_owner_close_snapshot_barrier_for_test(
-        Arc::clone(&close_snapshot),
-        Arc::clone(&allow_close),
-    );
-
-    std::thread::scope(|scope| {
-        let closing_session = &session;
-        let close = scope.spawn(move || closing_session.close_window_identity_authority());
-        close_snapshot.wait();
-        bind_synthetic_owner(&session, 456, 88);
-        allow_close.wait();
-        close.join().expect("authority close thread");
-    });
-
-    let authority_b = session
-        .window_identity_authority_weak_for_test()
-        .expect("new authority remains retained");
-    assert!(authority_b.upgrade().is_some());
-    assert_eq!(
-        session.poll_window_identity_authority_result(),
-        crate::engine::OwnerIdentityPollResult::CurrentValid
-    );
-}
-
-#[cfg(feature = "test-support")]
-fn assert_terminal_owner_rebind_is_withheld(republish_same_hwnd: bool) {
+fn target_replacement_after_arm_invalidates_session_and_never_rebinds() {
     struct ForegroundReset;
     impl Drop for ForegroundReset {
         fn drop(&mut self) {
@@ -627,22 +515,18 @@ fn assert_terminal_owner_rebind_is_withheld(republish_same_hwnd: bool) {
     assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
     assert_eq!(send_calls.load(Ordering::Acquire), 1);
 
-    let (new_hwnd, new_pid) = if republish_same_hwnd {
-        assert!(session.republish_target_generation_for_revalidation(123));
-        (123, 77)
-    } else {
-        session.set_target_hwnd(456);
-        (456, 88)
-    };
+    session.set_target_hwnd(456);
+    let replacement_binding = session.bind_window_identity_authority_for_test(
+        sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(456, 88),
+        88,
+    );
+    assert!(
+        replacement_binding.is_err(),
+        "a live session cannot bind a new owner"
+    );
     session
-        .bind_window_identity_authority_for_test(
-            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
-                new_hwnd, new_pid,
-            ),
-            new_pid,
-        )
-        .expect("bind replacement owner");
-    session.quit().expect("terminal Stop/Quit request");
+        .quit()
+        .expect("terminal stop after target invalidation");
     hook.release_startup_checkpoint();
     assert!(
         session
@@ -655,120 +539,8 @@ fn assert_terminal_owner_rebind_is_withheld(republish_same_hwnd: bool) {
     assert_eq!(send_calls.load(Ordering::Acquire), 1);
     assert_eq!(snapshot.final_release_obligation_mask, 1);
     assert_eq!(snapshot.release_attempts_total, 0);
-    assert!(snapshot.terminal_error.as_deref().is_some_and(|error| {
-        error.contains("origin target generation drifted")
-            || error.contains("origin owner proof changed")
-    }));
+    assert!(snapshot.terminal_error.is_some());
 }
-
-#[cfg(feature = "test-support")]
-#[test]
-fn terminal_cleanup_never_releases_a_tracked_key_through_a_rebound_owner() {
-    assert_terminal_owner_rebind_is_withheld(false);
-    assert_terminal_owner_rebind_is_withheld(true);
-}
-
-#[cfg(feature = "test-support")]
-#[test]
-fn resumable_manual_pause_cleanup_does_not_borrow_rebound_owner_proof() {
-    struct ForegroundReset;
-    impl Drop for ForegroundReset {
-        fn drop(&mut self) {
-            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
-            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
-        }
-    }
-
-    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
-    let _foreground_reset = ForegroundReset;
-    let (session, hook, send_calls) = checkpointed_session(
-        ownership_review_schedule(5_000_000),
-        StartupCheckpoint::FirstDownCommitted,
-        1,
-        true,
-    );
-    bind_synthetic_owner(&session, 123, 77);
-    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
-    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
-    session.arm(0).expect("session arm");
-    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
-    assert_eq!(send_calls.load(Ordering::Acquire), 1);
-
-    session.pause().expect("manual pause request");
-    bind_synthetic_owner(&session, 456, 88);
-    hook.release_startup_checkpoint();
-    assert!(
-        session
-            .join(Duration::from_secs(5))
-            .expect("bounded worker join")
-    );
-
-    let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
-    assert_eq!(send_calls.load(Ordering::Acquire), 1);
-    assert_eq!(snapshot.final_release_obligation_mask, 1);
-    assert_eq!(snapshot.release_attempts_total, 0);
-    assert!(snapshot.terminal_error.as_deref().is_some_and(|error| {
-        error.contains("manual pause suspension failed")
-            && error.contains("origin target generation drifted")
-    }));
-}
-
-#[cfg(feature = "test-support")]
-#[test]
-fn concurrent_generation_change_during_release_proof_withholds_syscall() {
-    struct ForegroundReset;
-    impl Drop for ForegroundReset {
-        fn drop(&mut self) {
-            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
-            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
-        }
-    }
-
-    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
-    let _foreground_reset = ForegroundReset;
-    let (session, hook, send_calls) = checkpointed_session(
-        ownership_review_schedule(5_000_000),
-        StartupCheckpoint::FirstDownCommitted,
-        1,
-        true,
-    );
-    bind_synthetic_owner(&session, 123, 77);
-    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
-    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
-    session.arm(0).expect("session arm");
-    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
-
-    let proof_started = Arc::new(std::sync::Barrier::new(2));
-    let allow_proof_to_finish = Arc::new(std::sync::Barrier::new(2));
-    session.set_safety_release_validation_barrier_for_test(
-        Arc::clone(&proof_started),
-        Arc::clone(&allow_proof_to_finish),
-    );
-    session.quit().expect("terminal Stop/Quit request");
-    hook.release_startup_checkpoint();
-
-    proof_started.wait();
-    bind_synthetic_owner(&session, 456, 88);
-    allow_proof_to_finish.wait();
-    assert!(
-        session
-            .join(Duration::from_secs(5))
-            .expect("bounded worker join")
-    );
-
-    let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
-    assert_eq!(send_calls.load(Ordering::Acquire), 1);
-    assert_eq!(snapshot.final_release_obligation_mask, 1);
-    assert_eq!(snapshot.release_attempts_total, 0);
-    assert!(
-        snapshot.terminal_error.as_deref().is_some_and(|error| {
-            error.contains("origin owner proof changed during validation")
-        })
-    );
-}
-
 #[cfg(feature = "test-support")]
 #[test]
 fn zero_release_obligation_needs_no_owner_or_safety_syscall() {
@@ -2085,6 +1857,9 @@ fn skip_panic_suspend_target_owner_and_lease_stops_win_ready_to_armed() {
     for (kind, expected_status, expected_trigger) in cases {
         let (session, hook, send_calls) =
             checkpointed_session(startup_boundary_schedule(), checkpoint, 2, false);
+        if kind == "target" {
+            session.set_target_hwnd(123);
+        }
         session.arm(100_000).expect("worker arm request");
         assert!(
             hook.wait_for_startup_checkpoint(Duration::from_secs(5)),

@@ -530,7 +530,7 @@ fn production_scheduler_lifecycle_matrix_cleans_accepted_downs() {
                     .expect("focus cleanup through live scheduler");
             }
             "target_generation" => {
-                harness.target.publish(2);
+                harness.target.invalidate_for_test();
                 harness
                     .apply_scheduler_resumable_lifecycle_transition_for_test()
                     .expect("target generation cleanup through live scheduler");
@@ -627,7 +627,7 @@ fn live_scheduler_final_down_gate_rejects_target_lease_and_control_without_commi
         let before_accounting = harness.generation_accounting_for_test();
 
         match rejection {
-            "target_generation" => assert!(harness.target.publish(2)),
+            "target_generation" => harness.target.invalidate_for_test(),
             "supervisor_lease" => {
                 harness.supervisor_expired.latch_expired();
             }

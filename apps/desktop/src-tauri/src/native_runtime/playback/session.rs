@@ -83,7 +83,6 @@ impl NativeActivePlayback {
     pub(in crate::native_runtime) fn release_power_resources(&self) {
         if let Some(player) = &self.player {
             player.deactivate_system_power();
-            player.close_window_identity_authority();
         }
         self.release_power_request();
         if let Ok(mut owner) = self.suspend_resume_registration.lock()

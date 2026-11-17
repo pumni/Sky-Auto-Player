@@ -203,8 +203,6 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_gate_post_lease_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_before_syscall_hook: Option<super::config::FinalGateBeforeSyscallHook>,
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) final_gate_before_owner_permit_hook: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(test)]
     pub(crate) final_lease_qpc_sample_count_for_test: u64,
     #[cfg(test)]
