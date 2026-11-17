@@ -12,7 +12,7 @@ if ($parseErrors.Count -ne 0) {
     throw ('qualify_dispatch_core.ps1 parser errors: ' + (($parseErrors | ForEach-Object Message) -join '; '))
 }
 
-foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1', 'native_acceptance_sink.ps1', 'dispatch_harness_manifest.psm1', 'dispatch_qualification_profiles.psm1', 'dispatch_qualification_report.psm1')) {
+foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1', 'native_acceptance_sink.ps1', 'dispatch_harness_manifest.psm1', 'dispatch_qualification_profiles.psm1', 'dispatch_qualification_report.psm1', 'dispatch_qualification_orchestration.psm1')) {
     $path = Join-Path $PSScriptRoot $scriptName
     $scriptTokens = $null
     $scriptErrors = $null
@@ -467,6 +467,7 @@ if ($qualifierSource -notmatch "ValidateSet\('Canary', 'Smoke', 'Compare', 'Fina
 
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Force
 if (-not (Get-Command Get-DispatchCleanupM3Profile -ErrorAction SilentlyContinue)) {
     throw 'DispatchCleanupM3 profile helper must remain available after manifest module initialization'
 }
@@ -1431,13 +1432,152 @@ if ($sessionM3Projection.CandidateLabel -ne 'DispatchSessionRedesignM3-Candidate
     $sessionM3Projection.ManifestParameters.guard_mode -ne 'frozen') {
     throw 'DispatchSessionRedesignM3 report labels, manifest count, observer, or waiter provenance changed'
 }
+
+Set-StrictMode -Version Latest
+$collectionFixtures = @(
+    [pscustomobject]@{ name = 'zero'; value = $null; expected = 0 },
+    [pscustomobject]@{ name = 'one'; value = 'mixed-up-down'; expected = 1 },
+    [pscustomobject]@{ name = 'many'; value = @('Quiet', 'Contention', 'Safety'); expected = 3 }
+)
+foreach ($fixture in $collectionFixtures) {
+    $collection = ConvertTo-DispatchQualificationCollection -Value $fixture.value
+    if ($collection.Items -isnot [object[]] -or $collection.Length -ne $fixture.expected -or
+        $collection.Items.Length -ne $fixture.expected) {
+        throw ('StrictMode collection normalization failed for cardinality ' + $fixture.name)
+    }
+}
+
+$offlineOrder = [System.Collections.Generic.List[string]]::new()
+$offlineCalls = [System.Collections.Generic.List[object]]::new()
+$offlineCandidateIdentity = [pscustomobject]@{ role = 'Candidate'; validated = $true }
+$offlineBaselineIdentity = [pscustomobject]@{ role = 'Baseline'; validated = $true }
+$offlineFinal = Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionM3Profile `
+    -Pairs 6 -TimingMarginUs 500 -SampleSeconds 15 `
+    -OnPlan {
+        param($plan)
+        $offlineOrder.Add('plan')
+    } -InvokeCase {
+        param($case)
+        $offlineOrder.Add('case')
+        $identity = if ($case.role -eq 'control') { $offlineBaselineIdentity } else { $offlineCandidateIdentity }
+        if (-not $identity.validated) { throw 'offline Final attempted a case with an unvalidated synthetic identity' }
+        $offlineCalls.Add([pscustomobject]@{ case = $case; identity_role = $identity.role })
+        [pscustomobject]@{ case_exit_code = 0; status = 'PASS'; identity_role = $identity.role }
+    }
+$offlinePlan = $offlineFinal.Plan
+$offlinePerformanceCases = [object[]]@($offlinePlan.Cases | Where-Object phase -eq 'performance')
+if ($offlinePlan.Cases -isnot [object[]] -or $offlinePlan.PlannedSessionCount -ne 32 -or
+    $offlinePlan.CandidateSessionCount -ne 20 -or $offlinePlan.ControlSessionCount -ne 12 -or
+    $offlineFinal.Execution.AttemptedSessionCount -ne 32 -or
+    $offlineFinal.Execution.StoppedAtFirstNonPass -or $offlineCalls.Count -ne 32 -or
+    $offlineOrder.Count -ne 33 -or $offlineOrder[0] -ne 'plan' -or $offlineOrder[1] -ne 'case' -or
+    $offlinePlan.Cases[0].phase -ne 'canary' -or
+    $offlinePlan.Cases[0].scenario -ne 'canonical-single' -or
+    $offlinePlan.Cases[0].workload -ne 'canonical-single' -or
+    $offlinePlan.Cases[0].role -ne 'candidate' -or
+    (@($offlinePlan.Cases | Select-Object -Skip 1 -First 7 | ForEach-Object { $_.id }) -join '|') -ne ($expectedSafetyIds -join '|') -or
+    $offlinePerformanceCases.Length -ne 24) {
+    throw 'offline top-level M3 Final control path lost its 32-case plan, candidate/baseline counts, canary, safety order, or invocation order'
+}
+for ($caseIndex = 0; $caseIndex -lt $offlinePlan.Cases.Length; $caseIndex++) {
+    if ($offlineCalls[$caseIndex].case.id -ne $offlinePlan.Cases[$caseIndex].id) {
+        throw ('offline M3 Final invoked a case out of plan order at index ' + $caseIndex)
+    }
+}
+if (@($offlineCalls | Where-Object identity_role -eq 'Candidate').Length -ne 20 -or
+    @($offlineCalls | Where-Object identity_role -eq 'Baseline').Length -ne 12) {
+    throw 'offline M3 Final did not route exactly 20 candidate and 12 baseline cases to their validated identities'
+}
+foreach ($load in @('Quiet', 'Contention')) {
+    [object[]]$cellCases = @($offlinePerformanceCases | Where-Object load -eq $load)
+    if ($cellCases.Length -ne 12) { throw ('offline M3 Final plan has an invalid ' + $load + ' cell size') }
+    for ($pair = 1; $pair -le 6; $pair++) {
+        $pairId = 'mixed-up-down/' + $load + '/' + ('{0:D2}' -f $pair)
+        [object[]]$pairCases = @($cellCases | Where-Object pair_id -eq $pairId)
+        $expectedOrder = if ($pair % 2 -eq 1) { 'AB' } else { 'BA' }
+        $expectedRoles = if ($expectedOrder -eq 'AB') { 'control,candidate' } else { 'candidate,control' }
+        if ($pairCases.Length -ne 2 -or
+            (@($pairCases | ForEach-Object { $_.pair_order } | Select-Object -Unique) -join '') -ne $expectedOrder -or
+            (@($pairCases | ForEach-Object { $_.role }) -join ',') -ne $expectedRoles -or
+            (@($pairCases | ForEach-Object { $_.historical }) -join ',') -ne $(if ($expectedOrder -eq 'AB') { 'True,False' } else { 'False,True' })) {
+            throw ('offline M3 Final pair mapping/order is invalid for ' + $pairId)
+        }
+    }
+}
+
+$firstFailureCalls = [System.Collections.Generic.List[object]]::new()
+$firstFailure = Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionM3Profile `
+    -Pairs 6 -TimingMarginUs 500 -SampleSeconds 15 -InvokeCase {
+        param($case)
+        $firstFailureCalls.Add($case)
+        [pscustomobject]@{ case_exit_code = 1; status = 'FAIL' }
+    }
+if (-not $firstFailure.Execution.StoppedAtFirstNonPass -or
+    $firstFailure.Execution.AttemptedSessionCount -ne 1 -or
+    $firstFailureCalls.Count -ne 1 -or
+    $firstFailureCalls[0].phase -ne 'canary' -or
+    $firstFailureCalls[0].scenario -ne 'canonical-single') {
+    throw 'offline M3 Final first-case failure did not stop before the second case'
+}
+
+$zeroAttemptCalls = [System.Collections.Generic.List[object]]::new()
+$zeroAttemptError = $null
+try {
+    [void](Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionM3Profile `
+        -Pairs 5 -TimingMarginUs 500 -SampleSeconds 15 -InvokeCase {
+            param($case)
+            $zeroAttemptCalls.Add($case)
+            [pscustomobject]@{ case_exit_code = 0; status = 'PASS' }
+        })
+} catch { $zeroAttemptError = $_ }
+if ($null -eq $zeroAttemptError -or $zeroAttemptCalls.Count -ne 0) {
+    throw 'offline M3 Final pre-case planning failure did not preserve zero attempts'
+}
+$offlineFailureRoot = Join-Path $env:TEMP ('m3-runner-failure-contract-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $offlineFailureRoot | Out-Null
+try {
+    $zeroFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $zeroAttemptError `
+        -RunId 'offline-zero-attempts' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
+        -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount $zeroAttemptCalls.Count `
+        -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath
+    Write-QualificationRunnerFailureArtifacts -Artifacts $zeroFailureArtifacts -EvidenceRoot $offlineFailureRoot `
+        -CommandRows ([System.Collections.Generic.List[string]]::new())
+    $zeroSummary = Get-Content -LiteralPath (Join-Path $offlineFailureRoot 'summary.json') -Raw | ConvertFrom-Json
+    $zeroFailures = Get-Content -LiteralPath (Join-Path $offlineFailureRoot 'failures.json') -Raw | ConvertFrom-Json
+    $zeroErrorDetail = Get-Content -LiteralPath (Join-Path $offlineFailureRoot 'runner-error.json') -Raw | ConvertFrom-Json
+    $zeroMarkdown = Get-Content -LiteralPath (Join-Path $offlineFailureRoot 'summary.md') -Raw
+    $zeroSummaryKeys = @($zeroSummary.PSObject.Properties.Name) -join '|'
+    if ($zeroSummary.run_count -ne 0 -or $zeroSummary.disposition -ne 'runner failed before completing protocol' -or
+        @($zeroSummary.failures).Length -ne 1 -or @($zeroFailures).Length -ne 1 -or
+        $zeroFailures[0].status -ne 'RUNNER_FAILURE' -or
+        $zeroSummaryKeys -ne 'schema_version|run_id|stage|source_revision|source_tree_sha|run_count|failures|disposition' -or
+        [string]::IsNullOrWhiteSpace([string]$zeroErrorDetail.script_path) -or
+        [int]$zeroErrorDetail.line_number -le 0 -or
+        [string]::IsNullOrWhiteSpace([string]$zeroErrorDetail.script_stack_trace) -or
+        [string]::IsNullOrWhiteSpace([string]$zeroErrorDetail.exception_to_string) -or
+        $zeroMarkdown -notmatch 'NotRun') {
+        throw 'offline pre-case runner failure did not write accurate zero-attempt summary and exception evidence'
+    }
+} finally {
+    $safeTempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+    $safeFailureRoot = [System.IO.Path]::GetFullPath($offlineFailureRoot)
+    if (-not $safeFailureRoot.StartsWith($safeTempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'refusing to clean offline runner failure fixtures outside the temporary directory'
+    }
+    Remove-Item -LiteralPath $offlineFailureRoot -Recurse -Force
+}
+
 $sessionM3Runner = Get-Content -LiteralPath $runnerPath -Raw
+$sessionM3Orchestration = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Raw
 if ($sessionM3Runner -notmatch 'if \(\$isDispatchSessionRedesignM3 -and \$Stage -ne ''Final''\)' -or
-    $sessionM3Runner -notmatch '(?s)if \(\$isDispatchSessionRedesignM3\)\s*\{\s*\$canary = Invoke-NativeCase' -or
-    -not $sessionM3Runner.Contains('Invoke-NativeCaseFailStopSequence -Cases $finalSafetyCases') -or
-    $sessionM3Runner -notmatch 'Invoke-PairedWorkloads @\(\$dispatchSessionRedesignM3\.PerformanceCase\.Workload\)' -or
-    $sessionM3Runner -notmatch '@\(\$dispatchSessionRedesignM3\.SafetyCases\)\.Count') {
-    throw 'DispatchSessionRedesignM3 executable plan is missing its single Final gate, canary-first order, safety fail-stop, or paired phase'
+    -not $sessionM3Runner.Contains('Invoke-DispatchSessionRedesignM3FinalControlPath') -or
+    -not $sessionM3Runner.Contains('[string[]]$performanceWorkloads') -or
+    $sessionM3Runner -match '\$performanceWorkloads\.Count' -or
+    -not $sessionM3Runner.Contains('New-QualificationRunnerFailureArtifacts') -or
+    -not $sessionM3Orchestration.Contains('New-DispatchSessionRedesignM3FinalPlan') -or
+    -not $sessionM3Orchestration.Contains('Invoke-DispatchSessionRedesignM3FinalPlan') -or
+    -not (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Raw).Contains('scripts/dispatch_qualification_orchestration.psm1')) {
+    throw 'DispatchSessionRedesignM3 Final path is missing the typed-plan dispatcher, fail-stop runner, or provenance inventory'
 }
 
 Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')

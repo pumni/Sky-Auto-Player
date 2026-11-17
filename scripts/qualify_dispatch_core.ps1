@@ -24,6 +24,7 @@ Import-Module (Join-Path $PSScriptRoot 'dispatch_pair_screen.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Force
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
@@ -40,6 +41,7 @@ $caseRunner = Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'
 $manifestBuilder = Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1'
 $manifestValidator = Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1'
 $reportProjectionModule = Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1'
+$orchestrationModule = Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1'
 $candidateManifestPath = [System.IO.Path]::GetFullPath($CandidateManifest)
 $controlManifestPath = if ($ControlManifest) { [System.IO.Path]::GetFullPath($ControlManifest) } else { $null }
 $evidenceRoot = [System.IO.Path]::GetFullPath($OutputRoot)
@@ -56,6 +58,7 @@ $tree = $null
 $runnerIdentity = $null
 $exitCode = 0
 $stoppedAtFirstNativeFailure = $false
+$runnerFailureArtifacts = $null
 
 function Get-Sha256 {
     param([string]$Path)
@@ -1119,7 +1122,7 @@ try {
         }
     }
 
-    $scenarios = @(
+    [string[]]$scenarios = @(
         'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'release-gap-stress',
         'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary',
         'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change', 'owner-mismatch',
@@ -1127,78 +1130,88 @@ try {
         'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
         'lease-age-watchdog-delayed', 'noncanonical-profile'
     )
-    if ($isDispatchSessionRedesignM3) { $scenarios = @($dispatchSessionRedesignM3.SafetyScenarios) }
-    $performanceWorkloads = if ($Stage -eq 'Compare') {
-        @('dense-alternating', 'mixed-up-down', 'canonical-max-chord')
+    if ($isDispatchSessionRedesignM3) { $scenarios = [string[]]@($dispatchSessionRedesignM3.SafetyScenarios) }
+    [string[]]$performanceWorkloads = @()
+    if ($Stage -eq 'Compare') {
+        $performanceWorkloads = [string[]]@('dense-alternating', 'mixed-up-down', 'canonical-max-chord')
     } elseif ($isDispatchSessionRedesignM3) {
-        @($dispatchSessionRedesignM3.PerformanceCase.Workload)
+        $performanceWorkloads = [string[]]@($dispatchSessionRedesignM3.PerformanceCase.Workload)
     } else {
-        @('dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
-    }
-    $plannedSessionCount = switch ($Stage) {
-        'Canary' { 1 }
-        'Smoke' { $scenarios.Count }
-        'Compare' { $performanceWorkloads.Count * 2 * 6 * 2 }
-        'Final' { if ($isDispatchSessionRedesignM3) { @($dispatchSessionRedesignM3.CanaryCase).Count + @($dispatchSessionRedesignM3.SafetyCases).Count + ($performanceWorkloads.Count * 2 * $dispatchSessionRedesignM3.PerformanceCase.PairCount * 2) } else { ($performanceWorkloads.Count * 2 * 6 * 2) + ($scenarios.Count * 2) + 2 } }
-    }
-    $plannedControlSessionCount = if ($Stage -in @('Compare', 'Final')) { $performanceWorkloads.Count * 2 * 6 } else { 0 }
-    $plannedCandidateSessionCount = $plannedSessionCount - $plannedControlSessionCount
-    $plannedWorkload = if ($Stage -eq 'Canary') { 'canonical-single' } elseif ($Stage -eq 'Smoke') { 'safety-smoke' } else { $performanceWorkloads -join ',' }
-    Write-Output ('PLAN profile=' + $QualificationProfile + ' workload=' + $plannedWorkload + ' candidate-role=Candidate case-margin-us=' + $TimingMarginUs + ' performance-margin-us=' + $candidate.performance_timing_margin_us + ' safety-margin-us=' + $candidate.safety_timing_margin_us + ' sessions=' + $plannedCandidateSessionCount)
-    if ($Stage -in @('Compare', 'Final')) {
-        Write-Output ('PLAN control-role=Baseline case-margin-us=' + $TimingMarginUs + ' performance-margin-us=' + $control.performance_timing_margin_us + ' safety-margin-us=' + $control.safety_timing_margin_us + ' sessions=' + $plannedControlSessionCount)
+        $performanceWorkloads = [string[]]@('dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
     }
 
     if ($isDispatchSessionRedesignM3) {
-        $canary = Invoke-NativeCase -Scenario $dispatchSessionRedesignM3.CanaryCase.Scenario -Workload $dispatchSessionRedesignM3.CanaryCase.Workload `
-            -Role 'candidate' -HarnessManifest $candidate -Load $dispatchSessionRedesignM3.CanaryCase.Load `
-            -CellId ('m3/canary/' + $dispatchSessionRedesignM3.CanaryCase.Id + '/' + $dispatchSessionRedesignM3.CanaryCase.Load + '/' + $dispatchSessionRedesignM3.CanaryCase.GameFps + 'fps') -PairId '' -Order '' `
-            -Margin $dispatchSessionRedesignM3.CanaryCase.TimingMarginUs -Fps $dispatchSessionRedesignM3.CanaryCase.GameFps -Sample $dispatchSessionRedesignM3.CanaryCase.SampleSeconds -Historical $false
-        if ($canary.case_exit_code -ne 0 -or $canary.status -ne 'PASS') {
-            $script:stoppedAtFirstNativeFailure = $true
-        } else {
-            $finalSafetyCases = @($dispatchSessionRedesignM3.SafetyCases)
-            $sequenceResult = Invoke-NativeCaseFailStopSequence -Cases $finalSafetyCases -InvokeCase {
-                param($case)
-                Invoke-NativeCase -Scenario $case.scenario -Workload $case.workload -Role 'candidate' `
-                    -HarnessManifest $candidate -Load $case.load `
-                    -CellId ('m3/safety/' + $case.id + '/' + $case.load + '/' + $case.gamefps + 'fps') -PairId '' -Order '' `
-                    -Margin $case.TimingMarginUs -Fps $case.GameFps -Sample $case.SampleSeconds -Historical $false
+        $m3FinalControlPath = Invoke-DispatchSessionRedesignM3FinalControlPath `
+            -Profile $dispatchSessionRedesignM3 -Pairs $Pairs -TimingMarginUs $TimingMarginUs `
+            -SampleSeconds $SampleSeconds -OnPlan {
+                param($plan)
+                $plannedWorkload = $plan.PerformanceWorkloads -join ','
+                Write-Output ('PLAN profile=' + $QualificationProfile + ' workload=' + $plannedWorkload + ' candidate-role=Candidate case-margin-us=' + $TimingMarginUs + ' performance-margin-us=' + $candidate.performance_timing_margin_us + ' safety-margin-us=' + $candidate.safety_timing_margin_us + ' sessions=' + $plan.CandidateSessionCount)
+                Write-Output ('PLAN control-role=Baseline case-margin-us=' + $TimingMarginUs + ' performance-margin-us=' + $control.performance_timing_margin_us + ' safety-margin-us=' + $control.safety_timing_margin_us + ' sessions=' + $plan.ControlSessionCount)
+            } -InvokeCase {
+                param($plannedCase)
+                $caseManifest = if ($plannedCase.role -eq 'control') { $control } else { $candidate }
+                Invoke-NativeCase -Scenario $plannedCase.scenario -Workload $plannedCase.workload `
+                    -Role $plannedCase.role -HarnessManifest $caseManifest -Load $plannedCase.load `
+                    -CellId $plannedCase.cell_id -PairId $plannedCase.pair_id -Order $plannedCase.pair_order `
+                    -Margin $plannedCase.margin -Fps $plannedCase.fps -Sample $plannedCase.sample `
+                    -Historical $plannedCase.historical
             }
-            if ($sequenceResult.stopped_at_first_native_failure) { $script:stoppedAtFirstNativeFailure = $true }
-            if (-not $sequenceResult.stopped_at_first_native_failure -and $script:exitCode -eq 0) {
-                Invoke-PairedWorkloads @($dispatchSessionRedesignM3.PerformanceCase.Workload)
-            }
-        }
-    } elseif ($Stage -eq 'Canary') {
-        $canaryWorkload = if ($isDispatchCleanupM3) { 'canonical-single' } else { 'frame-snapshot-canary-v1' }
-        $canaryCell = if ($isDispatchCleanupM3) { 'dispatch-cleanup-m3-canary-quiet' } else { 'frame-snapshot-canary' }
-        [void](Invoke-NativeCase -Scenario 'canonical-single' -Workload $canaryWorkload -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId $canaryCell -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false)
-    } elseif ($Stage -eq 'Smoke') {
-        $sequenceResult = Invoke-NativeCaseFailStopSequence -Cases $scenarios -InvokeCase {
-            param($scenario)
-            Invoke-NativeCase -Scenario $scenario -Workload 'safety-smoke' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'safety-smoke' -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false
-        }
-        if ($sequenceResult.stopped_at_first_native_failure) { $script:stoppedAtFirstNativeFailure = $true }
-    } elseif ($Stage -eq 'Compare') {
-        Invoke-PairedWorkloads $performanceWorkloads
+        $m3FinalPlan = $m3FinalControlPath.Plan
+        $m3Execution = $m3FinalControlPath.Execution
+        [string[]]$scenarios = $m3FinalPlan.SafetyScenarios
+        [string[]]$performanceWorkloads = $m3FinalPlan.PerformanceWorkloads
+        $plannedSessionCount = [int]$m3FinalPlan.PlannedSessionCount
+        $plannedControlSessionCount = [int]$m3FinalPlan.ControlSessionCount
+        $plannedCandidateSessionCount = [int]$m3FinalPlan.CandidateSessionCount
+        if ($m3Execution.StoppedAtFirstNonPass) { $script:stoppedAtFirstNativeFailure = $true }
     } else {
-        Invoke-PairedWorkloads $performanceWorkloads
-        if ($script:exitCode -eq 0) {
-            $finalSafetyCases = @(
-                foreach ($load in @('Quiet', 'Contention')) {
-                    foreach ($scenario in $scenarios) {
-                        [pscustomobject]@{ scenario = $scenario; workload = 'safety-smoke'; cell_id = 'final-safety-' + $load.ToLowerInvariant(); load = $load; margin = if ($QualificationProfile -in @('FrameSnapshot', 'DispatchCleanupM3')) { $candidate.safety_timing_margin_us } else { $TimingMarginUs }; fps = 60 }
-                    }
-                }
-                [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-60fps-margin-0'; cell_id = 'boundary-safety'; load = 'Quiet'; margin = 0; fps = 60 }
-                [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-120fps-margin-500'; cell_id = 'boundary-safety'; load = 'Quiet'; margin = 500; fps = 120 }
-            )
-            $sequenceResult = Invoke-NativeCaseFailStopSequence -Cases $finalSafetyCases -InvokeCase {
-                param($case)
-                Invoke-NativeCase -Scenario $case.scenario -Workload $case.workload -Role 'candidate' -HarnessManifest $candidate -Load $case.load -CellId $case.cell_id -PairId '' -Order '' -Margin $case.margin -Fps $case.fps -Sample 0 -Historical $false
+        $plannedSessionCount = switch ($Stage) {
+            'Canary' { 1 }
+            'Smoke' { $scenarios.Length }
+            'Compare' { $performanceWorkloads.Length * 2 * 6 * 2 }
+            'Final' { ($performanceWorkloads.Length * 2 * 6 * 2) + ($scenarios.Length * 2) + 2 }
+        }
+        $plannedControlSessionCount = if ($Stage -in @('Compare', 'Final')) { $performanceWorkloads.Length * 2 * 6 } else { 0 }
+        $plannedCandidateSessionCount = $plannedSessionCount - $plannedControlSessionCount
+        $plannedWorkload = if ($Stage -eq 'Canary') { 'canonical-single' } elseif ($Stage -eq 'Smoke') { 'safety-smoke' } else { $performanceWorkloads -join ',' }
+        Write-Output ('PLAN profile=' + $QualificationProfile + ' workload=' + $plannedWorkload + ' candidate-role=Candidate case-margin-us=' + $TimingMarginUs + ' performance-margin-us=' + $candidate.performance_timing_margin_us + ' safety-margin-us=' + $candidate.safety_timing_margin_us + ' sessions=' + $plannedCandidateSessionCount)
+        if ($Stage -in @('Compare', 'Final')) {
+            Write-Output ('PLAN control-role=Baseline case-margin-us=' + $TimingMarginUs + ' performance-margin-us=' + $control.performance_timing_margin_us + ' safety-margin-us=' + $control.safety_timing_margin_us + ' sessions=' + $plannedControlSessionCount)
+        }
+    }
+
+    if (-not $isDispatchSessionRedesignM3) {
+        if ($Stage -eq 'Canary') {
+            $canaryWorkload = if ($isDispatchCleanupM3) { 'canonical-single' } else { 'frame-snapshot-canary-v1' }
+            $canaryCell = if ($isDispatchCleanupM3) { 'dispatch-cleanup-m3-canary-quiet' } else { 'frame-snapshot-canary' }
+            [void](Invoke-NativeCase -Scenario 'canonical-single' -Workload $canaryWorkload -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId $canaryCell -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false)
+        } elseif ($Stage -eq 'Smoke') {
+            $sequenceResult = Invoke-NativeCaseFailStopSequence -Cases $scenarios -InvokeCase {
+                param($scenario)
+                Invoke-NativeCase -Scenario $scenario -Workload 'safety-smoke' -Role 'candidate' -HarnessManifest $candidate -Load 'Quiet' -CellId 'safety-smoke' -PairId '' -Order '' -Margin $TimingMarginUs -Fps 60 -Sample 0 -Historical $false
             }
             if ($sequenceResult.stopped_at_first_native_failure) { $script:stoppedAtFirstNativeFailure = $true }
+        } elseif ($Stage -eq 'Compare') {
+            Invoke-PairedWorkloads $performanceWorkloads
+        } else {
+            Invoke-PairedWorkloads $performanceWorkloads
+            if ($script:exitCode -eq 0) {
+                $finalSafetyCases = @(
+                    foreach ($load in @('Quiet', 'Contention')) {
+                        foreach ($scenario in $scenarios) {
+                            [pscustomobject]@{ scenario = $scenario; workload = 'safety-smoke'; cell_id = 'final-safety-' + $load.ToLowerInvariant(); load = $load; margin = if ($QualificationProfile -in @('FrameSnapshot', 'DispatchCleanupM3')) { $candidate.safety_timing_margin_us } else { $TimingMarginUs }; fps = 60 }
+                        }
+                    }
+                    [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-60fps-margin-0'; cell_id = 'boundary-safety'; load = 'Quiet'; margin = 0; fps = 60 }
+                    [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-120fps-margin-500'; cell_id = 'boundary-safety'; load = 'Quiet'; margin = 500; fps = 120 }
+                )
+                $sequenceResult = Invoke-NativeCaseFailStopSequence -Cases $finalSafetyCases -InvokeCase {
+                    param($case)
+                    Invoke-NativeCase -Scenario $case.scenario -Workload $case.workload -Role 'candidate' -HarnessManifest $candidate -Load $case.load -CellId $case.cell_id -PairId '' -Order '' -Margin $case.margin -Fps $case.fps -Sample 0 -Historical $false
+                }
+                if ($sequenceResult.stopped_at_first_native_failure) { $script:stoppedAtFirstNativeFailure = $true }
+            }
         }
     }
 
@@ -1521,14 +1534,16 @@ try {
     $builderHash = Get-Sha256 $manifestBuilder
     $validatorHash = Get-Sha256 $manifestValidator
     $reportProjectionHash = Get-Sha256 $reportProjectionModule
+    $orchestrationModuleHash = Get-Sha256 $orchestrationModule
     Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $evidenceRoot 'qualify_dispatch_core.ps1')
     Copy-Item -LiteralPath $caseRunner -Destination (Join-Path $evidenceRoot 'run_native_acceptance_case.ps1')
     Copy-Item -LiteralPath $manifestBuilder -Destination (Join-Path $evidenceRoot 'build_dispatch_core_harness.ps1')
     Copy-Item -LiteralPath $manifestValidator -Destination (Join-Path $evidenceRoot 'dispatch_harness_manifest.psm1')
     Copy-Item -LiteralPath $reportProjectionModule -Destination (Join-Path $evidenceRoot 'dispatch_qualification_report.psm1')
+    Copy-Item -LiteralPath $orchestrationModule -Destination (Join-Path $evidenceRoot 'dispatch_qualification_orchestration.psm1')
     $commandRows.Insert(0, 'pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -QualificationProfile ' + $QualificationProfile + ' -Stage ' + $Stage + ' -CandidateManifest <candidate-manifest>' + $(if ($controlManifestPath) { ' -ControlManifest <control-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs ' + $TimingMarginUs } else { '' }) + ' -OutputRoot <evidence-root>')
     $commandRows | Set-Content -LiteralPath (Join-Path $evidenceRoot 'commands.txt') -Encoding UTF8
-    $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; manifest_validator_sha256 = $validatorHash; report_projection_sha256 = $reportProjectionHash; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null }; comparison = $comparisonDescription }
+    $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; manifest_validator_sha256 = $validatorHash; report_projection_sha256 = $reportProjectionHash; orchestration_module_sha256 = $orchestrationModuleHash; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null }; comparison = $comparisonDescription }
     $metadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'provenance.json') -Encoding UTF8
     [ordered]@{
         schema_version = 1
@@ -1556,17 +1571,34 @@ try {
         builder_sha256 = $builderHash
         manifest_validator_sha256 = $validatorHash
         report_projection_sha256 = $reportProjectionHash
+        orchestration_module_sha256 = $orchestrationModuleHash
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'manifest.json') -Encoding UTF8
 } catch {
-    $failureRows.Add([pscustomobject]@{ scenario = 'runner'; workload = $null; role = $null; cell_id = $null; pair_id = $null; exit_code = 2; status = 'RUNNER_FAILURE'; reason = $_.Exception.Message; evidence_directory = $evidenceRoot })
+    $runnerFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $_ `
+        -RunId $runId -Stage $Stage -SourceRevision $head -SourceTreeSha $tree `
+        -AttemptedSessionCount $runRows.Count -EvidenceRoot $evidenceRoot `
+        -ExistingFailures $failureRows.ToArray() -FallbackScriptPath $PSCommandPath
+    $failureRows.Clear()
+    foreach ($failure in $runnerFailureArtifacts.FailureRows) { $failureRows.Add($failure) }
+    Write-QualificationRunnerFailureArtifacts -Artifacts $runnerFailureArtifacts `
+        -EvidenceRoot $evidenceRoot -CommandRows $commandRows
     $exitCode = 2
-    Write-Output ('RUNNER FAILURE: ' + $_.Exception.Message)
+    Write-Output ('RUNNER FAILURE: ' + $runnerFailureArtifacts.ErrorDetail.message)
+    Write-Output ('RUNNER ERROR LOCATION: ' + $runnerFailureArtifacts.ErrorDetail.script_path + ':' + $runnerFailureArtifacts.ErrorDetail.line_number)
+    Write-Output ('RUNNER STACK TRACE: ' + $runnerFailureArtifacts.ErrorDetail.script_stack_trace)
 } finally {
     if (Test-Path -LiteralPath $evidenceRoot) {
         if (-not (Test-Path -LiteralPath (Join-Path $evidenceRoot 'summary.json'))) {
-            [ordered]@{ schema_version = 1; run_id = $runId; stage = $Stage; source_revision = $head; source_tree_sha = $tree; run_count = $runRows.Count; failures = $failureRows.ToArray(); disposition = 'runner failed before completing protocol' } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.json') -Encoding UTF8
+            $summary = if ($null -ne $runnerFailureArtifacts) { $runnerFailureArtifacts.Summary } else {
+                [ordered]@{ schema_version = 1; run_id = $runId; stage = $Stage; source_revision = $head; source_tree_sha = $tree; run_count = $runRows.Count; failures = $failureRows.ToArray(); disposition = 'runner failed before completing protocol' }
+            }
+            $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.json') -Encoding UTF8
             $failureRows | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'failures.json') -Encoding UTF8
             $commandRows | Set-Content -LiteralPath (Join-Path $evidenceRoot 'commands.txt') -Encoding UTF8
+            if ($null -ne $runnerFailureArtifacts) {
+                $runnerFailureArtifacts.ErrorDetail | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'runner-error.json') -Encoding UTF8
+                Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.md') -Value $runnerFailureArtifacts.SummaryMarkdown -Encoding UTF8
+            }
         }
         $hashLines = @(Get-ChildItem -LiteralPath $evidenceRoot -Recurse -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } | Sort-Object FullName | ForEach-Object {
             (Get-Sha256 $_.FullName) + '  ' + [System.IO.Path]::GetRelativePath($evidenceRoot, $_.FullName)
@@ -1578,7 +1610,9 @@ try {
     }
 }
 
-Write-Output ('SUMMARY ' + (Join-Path $evidenceRoot 'summary.md'))
+    if (Test-Path -LiteralPath (Join-Path $evidenceRoot 'summary.md')) {
+        Write-Output ('SUMMARY ' + (Join-Path $evidenceRoot 'summary.md'))
+    }
 Write-Output ('EVIDENCE ' + $evidenceRoot)
 if (Test-Path -LiteralPath $zipPath) { Write-Output ('ARCHIVE ' + $zipPath) }
 exit $exitCode

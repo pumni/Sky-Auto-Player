@@ -36,12 +36,14 @@ function Get-DispatchSessionRedesignM3Profile {
             'scripts/qualify_dispatch_core.ps1',
             'scripts/run_native_acceptance_case.ps1',
             'scripts/dispatch_qualification_report.psm1',
+            'scripts/dispatch_qualification_orchestration.psm1',
             'scripts/dispatch_pair_screen.psm1',
             'scripts/native_acceptance_sink.ps1',
             'scripts/test_qualify_dispatch_core_contracts.ps1',
             'docs/playback-verification.md',
             'docs/evidence/dispatch-session-redesign-plan.md',
-            'docs/evidence/dispatch-session-redesign-m3-preflight.md'
+            'docs/evidence/dispatch-session-redesign-m3-preflight.md',
+            'docs/evidence/dispatch-session-redesign-m3-runner-correction.md'
         )
     }
 }
