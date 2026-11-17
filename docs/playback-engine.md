@@ -52,29 +52,38 @@ Prepare rather than treating the recommendation as unavailable.
 
 `Start` rechecks the prepared ID and settings identity, selects the requested
 variant, and moves its plan into native session creation. It does not compile,
-walk, or validate the authored schedule. Worker boot checks the plan's QPC and
-H/G compatibility, moves its arrays into a new `DispatchExecutor`, and creates
-fresh cursor, slot, epoch, barrier, and transport state for that playback. A
-replay therefore begins with empty session state while reusing only immutable
-schedule data. Dry-run variants do not require a physical QPC plan; their
-advisory remains offline and cannot block a valid dry-run.
+walk, or materialize the authored schedule. Native session admission checks the
+plan against the current QPC frequency and H/G policy; worker boot repeats that
+compatibility gate before moving the prepared arrays into a new
+`DispatchExecutor`. Worker boot also checks the retained-capacity budget before
+dispatch. Each playback creates fresh cursor, slot, epoch, barrier, and
+transport state, so replay begins with empty session state while reusing only
+immutable schedule data. Dry-run variants do not require a physical QPC plan;
+their advisory remains offline and cannot block a valid dry-run.
 
-`NativeScheduleInput::Raw` remains the safe admission path for Rust callers
-that still provide a `RuntimeSchedule`: session admission validates its timing
-policy, and worker boot validates and materializes it again with cancellation
-checkpoints before creating the executor. Desktop production entry points
-provide `NativeScheduleInput::Prepared`. A prepared
-plan whose QPC frequency or H/G policy no longer matches the worker is rejected
-before dispatch.
+`NativeSessionOptions` accepts only `PreparedDispatchSchedule`. The former
+`NativeScheduleInput::Raw` worker route has been removed. Rust callers that
+compile or receive a `RuntimeSchedule` prepare it before constructing native
+session options, using the same QPC frequency, H/G values, retained-capacity
+accounting, and overflow checks. They may use the cancellable preparation
+variant when the caller can be interrupted. The worker never materializes a
+`RuntimeSchedule`. The timing advisory
+continues to analyze the shared compiled `RuntimeSchedule` before native
+preparation; its offline `DispatchExecutor::new_with_cancellation` call remains
+separate from the production worker route and keeps its independent oracle.
 
 Schedule compilation, timing validation, QPC conversion, and arena creation
-run during cancellable Prepare. The remaining prepared worker construction
-moves the already allocated arrays and initializes fixed-size state. Startup
-still emits existing per-batch telemetry rows for unmatched Up metadata to
-preserve schema 25; that diagnostics-only loop is proportional to the number
-of unmatched-Up batches, which is zero for ordinary valid songs. See the
-[M1 evidence record](evidence/issue-666-m1.md) for modeled-capacity and timing
-scope.
+run during cancellable Prepare. Worker startup only checks compatibility and
+budget, moves the already allocated arrays, and initializes fixed-size state.
+Startup still emits existing per-batch telemetry rows for unmatched Up
+metadata to preserve schema 25; that diagnostics-only loop is proportional to
+the number of unmatched-Up batches, which is zero for ordinary valid songs.
+The compatibility `elapsed_us` snapshot field is derived from the shared
+session clock projection; the unused worker-local duplicate has been removed.
+Schema 25 keys, values, QPC provenance, and missing-sample semantics are
+unchanged. See the [M1 evidence record](evidence/issue-666-m1.md) for
+modeled-capacity and timing scope and the [M2 evidence record](evidence/dispatch-session-redesign-m2.md)
+for caller migration and compatibility decisions.
 
 The [dispatch-session redesign M1 evidence](evidence/dispatch-session-redesign-m1.md)
 records the isolated baseline/candidate operation counts for the fixed-target

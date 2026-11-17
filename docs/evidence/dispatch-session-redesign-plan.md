@@ -60,7 +60,7 @@ Nếu phát hiện phải đổi hành vi playback, ranh giới an toàn, API/sc
 
 ## 4. M2 — Một đường Prepare và dọn các phần không còn caller
 
-**Trạng thái: chờ Leader giao sau M1.** Đây là lát cắt toàn pipeline plan → worker → công cụ và phần tương thích, gồm sửa caller và xóa đường cũ cùng đợt.
+**Trạng thái: Leader đã giao sau khi nghiệm thu M1; M2 implementation đang chờ review.** Caller map, compatibility decisions, kiểm tra và giới hạn chứng cứ được ghi tại [M2 evidence](dispatch-session-redesign-m2.md). Đây là lát cắt toàn pipeline plan → worker → công cụ và phần tương thích, gồm sửa caller và xóa đường cũ cùng đợt.
 
 - Worker nhận đúng một loại plan đã chuẩn bị. Chuyển Desktop, Native API, acceptance scenarios, examples và test helpers về cùng hàm chuẩn bị. Thay `NativeScheduleInput::Raw` tại ranh giới worker. Nếu còn cam kết Rust thực sự cần nhận `RuntimeSchedule`, adapter thuần chuyển sang prepared trước worker và dùng cùng kiểm tra H/G, QPC, budget, cancellation. So lại mã `DispatchExecutor::new_with_cancellation` và Timing Advisory. Advisory có caller sống và oracle riêng. Chỉ gom phần dựng arena chung khi có oracle độc lập cho chuyển đổi tick, workload ngắn/lớn, capacity, lỗi và cancellation.
 - Thu hẹp bề mặt Win32 sender. Canonical musical path tiếp tục dùng đúng hợp đồng one-attempt, còn safety Up giữ chức năng của mình. Rà wrapper `*_with_start`, `poll_window_identity_authority() -> bool`, helper raw/retarget và các API nối mock/qualification theo compiler + caller map. Chuyển callsite có hành vi còn cần, xóa wrapper và test chỉ bảo vệ API đã bỏ sau khi đã chuyển hành vi. Tách API thật sự dùng ở test/qualification vào ranh giới phù hợp. Đừng giữ wrapper chỉ để test chính wrapper.

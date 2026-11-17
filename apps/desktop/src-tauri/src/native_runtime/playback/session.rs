@@ -1642,7 +1642,7 @@ impl NativePlaybackService {
         }
         let player = Arc::new(NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
-                schedule: sky_player::engine::NativeScheduleInput::Prepared(prepared_schedule),
+                schedule: prepared_schedule,
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
@@ -1673,7 +1673,6 @@ impl NativePlaybackService {
                     enable_event_wait: true,
                     supervisor_lease_timeout_us:
                         sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
-                    guard_mode: sky_player::engine::WaitGuardMode::default(),
                     #[cfg(feature = "tauri-test")]
                     test_spin_threshold_us: None,
                     #[cfg(feature = "tauri-test")]
@@ -3533,14 +3532,14 @@ mod preparation_cancellation_tests {
         move |prepared_schedule, config, policy| {
             use sky_player::engine::{
                 BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions,
-                NativeScheduleInput, NativeSessionOptions, PriorityOptions, TelemetryMode,
-                TelemetryOptions, TestWaitPolicy, TimingOptions, WaitGuardMode, WaitOptions,
+                NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions,
+                TestWaitPolicy, TimingOptions, WaitOptions,
             };
 
             let mut fault_script = FaultInjectionScript::none();
             fault_script.send_call_count = Some(Arc::clone(&send_calls));
             let options = NativeSessionOptions {
-                schedule: NativeScheduleInput::Prepared(prepared_schedule),
+                schedule: prepared_schedule,
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
@@ -3574,7 +3573,6 @@ mod preparation_cancellation_tests {
                     enable_waitable_timer: true,
                     enable_event_wait: true,
                     supervisor_lease_timeout_us: 0,
-                    guard_mode: WaitGuardMode::Frozen,
                     test_spin_threshold_us: Some(20_000),
                     test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
                 },
@@ -3666,8 +3664,6 @@ mod preparation_cancellation_tests {
             "Start must not compile the selected variant again"
         );
         assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
-        assert_eq!(hook.raw_schedule_admission_validation_count(), 0);
-        assert_eq!(hook.raw_schedule_worker_materialization_count(), 0);
         assert_eq!(hook.prepared_schedule_executor_consumption_count(), 1);
         assert_eq!(send_calls.load(std::sync::atomic::Ordering::Acquire), 0);
 
@@ -3842,7 +3838,6 @@ mod preparation_cancellation_tests {
         assert_eq!(started.config.tempo_scale, 1.0);
         assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
         assert_eq!(hook.prepared_schedule_executor_consumption_count(), 1);
-        assert_eq!(hook.raw_schedule_worker_materialization_count(), 0);
         let player = service
             .active
             .lock()
@@ -4443,20 +4438,6 @@ mod preparation_cancellation_tests {
 mod owner_identity_poll_consumer_tests {
     use super::consume_owner_identity_poll_result;
     use sky_player::engine::OwnerIdentityPollResult;
-
-    #[test]
-    fn stale_owner_poll_does_not_panic_or_mark_the_active_binding_invalid() {
-        let mut invalidated = false;
-        let mut panic_release_calls = 0;
-        consume_owner_identity_poll_result(
-            OwnerIdentityPollResult::StaleSuperseded,
-            &mut invalidated,
-            || panic_release_calls += 1,
-        );
-
-        assert!(!invalidated);
-        assert_eq!(panic_release_calls, 0);
-    }
 
     #[test]
     fn current_valid_owner_poll_does_not_panic() {

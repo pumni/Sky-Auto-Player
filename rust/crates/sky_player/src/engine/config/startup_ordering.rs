@@ -14,29 +14,9 @@ pub(crate) struct InterruptedWaitEvidence {
 }
 
 impl StartupOrderingHook {
-    pub fn raw_schedule_admission_validation_count(&self) -> u64 {
-        self.raw_schedule_admission_validation_count
-            .load(Ordering::Acquire)
-    }
-
-    pub fn raw_schedule_worker_materialization_count(&self) -> u64 {
-        self.raw_schedule_worker_materialization_count
-            .load(Ordering::Acquire)
-    }
-
     pub fn prepared_schedule_executor_consumption_count(&self) -> u64 {
         self.prepared_schedule_executor_consumption_count
             .load(Ordering::Acquire)
-    }
-
-    pub(crate) fn record_raw_schedule_admission_validation(&self) {
-        self.raw_schedule_admission_validation_count
-            .fetch_add(1, Ordering::AcqRel);
-    }
-
-    pub(crate) fn record_raw_schedule_worker_materialization(&self) {
-        self.raw_schedule_worker_materialization_count
-            .fetch_add(1, Ordering::AcqRel);
     }
 
     pub(crate) fn record_prepared_schedule_executor_consumption(&self) {
@@ -65,12 +45,12 @@ impl StartupOrderingHook {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn interrupted_wait_count(&self) -> u64 {
         self.interrupted_wait_count.load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn last_interrupted_wait_evidence(&self) -> Option<InterruptedWaitEvidence> {
         self.interrupted_wait_evidence
             .lock()

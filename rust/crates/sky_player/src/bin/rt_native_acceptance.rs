@@ -382,10 +382,19 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots); let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(args.scenario, plan.profile.as_ref(), &expected_down, &expected_up);
     let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
-    let (mut options, modifier_query_count, modifier_held_latch) = modifier_guard::native_session_options(
-        plan.schedule, plan.profile, args.timing_margin_us, args.scenario, args.game_fps,
-    );
-    options.wait.guard_mode = args.guard_mode;
+    let (mut options, modifier_query_count, modifier_held_latch) =
+        match modifier_guard::native_session_options(
+            plan.schedule,
+            plan.profile,
+            args.timing_margin_us,
+            args.scenario,
+            args.game_fps,
+        ) {
+            Ok(options) => options,
+            Err(error) => {
+                return write_report(&args, Verdict::Inconclusive, &error, json!({}));
+            }
+        };
     options.startup_calibration_placement = match args.calibration_placement {
         CalibrationPlacement::Baseline => sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
         CalibrationPlacement::Candidate => sky_player::engine::StartupCalibrationPlacement::AfterSchedulingGuards,

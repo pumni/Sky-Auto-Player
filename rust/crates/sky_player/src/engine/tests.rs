@@ -46,7 +46,7 @@ fn native_session_rejects_prepared_plan_from_another_qpc_domain() {
             fault_script: FaultInjectionScript::none(),
         },
     );
-    options.schedule = super::NativeScheduleInput::Prepared(prepared);
+    options.schedule = prepared;
 
     let result = super::NativeDispatchSession::new_with_power_endpoint(
         options,

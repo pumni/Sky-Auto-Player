@@ -386,7 +386,7 @@ pub(super) fn update_deferred_worker_metrics(
 }
 
 pub(super) struct Worker<'a> {
-    schedule: Option<NativeScheduleInput>,
+    schedule: Option<sky_dispatch_core::executor::PreparedDispatchSchedule>,
     config: WorkerConfig,
     shared: &'a SessionShared,
     epoch_qpc: QpcTicks,
@@ -472,14 +472,18 @@ impl<'a> Worker<'a> {
         }
     }
 
-    fn take_schedule(&mut self) -> Result<NativeScheduleInput, &'static str> {
+    fn take_schedule(
+        &mut self,
+    ) -> Result<sky_dispatch_core::executor::PreparedDispatchSchedule, &'static str> {
         self.schedule
             .take()
             .ok_or("worker runtime plan was already consumed")
     }
 
     #[cfg(test)]
-    pub(super) fn take_schedule_for_test(&mut self) -> Result<NativeScheduleInput, &'static str> {
+    pub(super) fn take_schedule_for_test(
+        &mut self,
+    ) -> Result<sky_dispatch_core::executor::PreparedDispatchSchedule, &'static str> {
         self.take_schedule()
     }
 

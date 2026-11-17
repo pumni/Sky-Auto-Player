@@ -177,7 +177,6 @@ pub(super) struct RunArgs {
     pub(super) focus_restore_request: Option<PathBuf>,
     pub(super) hol_stall_us: u64,
     pub(super) hol_cycles: Option<u32>,
-    pub(super) guard_mode: sky_dispatch_win32::wait::WaitGuardMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -411,7 +410,9 @@ where
     if !allow_real_input {
         return Err("--allow-real-input is required".to_string());
     }
-    let guard_mode = match guard_mode {
+    // Keep the historical CLI/environment input accepted for qualification
+    // harness compatibility. Runtime wait guard policy is fixed to Frozen.
+    let _compatibility_only_guard_mode = match guard_mode {
         Some(mode) => mode,
         None => match std::env::var("SHIPPING_WAIT") {
             Ok(val) => sky_dispatch_win32::wait::WaitGuardMode::parse(&val).unwrap_or_default(),
@@ -437,7 +438,6 @@ where
         focus_restore_request,
         hol_stall_us,
         hol_cycles,
-        guard_mode,
     };
     let probe_count = [
         run.focus_probe_ready.is_some(),
@@ -469,4 +469,44 @@ where
         );
     }
     Ok(ParsedCommand::Run(Box::new(run)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ParsedCommand, parse_args};
+
+    fn args(guard_mode: &str) -> Vec<String> {
+        [
+            "run",
+            "--allow-real-input",
+            "--run-id",
+            "wait-guard-compatibility",
+            "--sink-ready",
+            "sink-ready.json",
+            "--sink-events",
+            "sink-events.jsonl",
+            "--target-hwnd",
+            "123",
+            "--scenario",
+            "canonical-single",
+            "--evidence",
+            "evidence.json",
+            "--guard-mode",
+            guard_mode,
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect()
+    }
+
+    #[test]
+    fn frozen_guard_cli_input_remains_accepted_for_harness_compatibility() {
+        assert!(matches!(parse_args(args("frozen")), Ok(ParsedCommand::Run(_))));
+    }
+
+    #[test]
+    fn retired_adaptive_guard_cli_input_is_rejected() {
+        let error = parse_args(args("adaptive")).expect_err("adaptive mode is retired");
+        assert!(error.contains("adaptive guard mode is retired"));
+    }
 }

@@ -1,6 +1,4 @@
-use super::config::{
-    AdmittedNativeSessionOptions, EffectiveRuntimePolicy, NativeScheduleInput, NativeSessionOptions,
-};
+use super::config::{AdmittedNativeSessionOptions, EffectiveRuntimePolicy, NativeSessionOptions};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
     StartupAbortReason, StartupPhase, SupervisorLeaseState, SystemPowerEndpoint,
@@ -19,7 +17,6 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OwnerIdentityPollResult {
     CurrentValid,
-    StaleSuperseded,
     CurrentInvalid,
 }
 
@@ -155,35 +152,6 @@ fn wait_for_watchdog_release_or_completion(
     }
 }
 
-pub(crate) fn validate_native_schedule_timing_with_release_gap(
-    schedule: &sky_dispatch_core::model::RuntimeSchedule,
-    effective_min_hold_us: u64,
-    min_release_gap_us: u64,
-    qpc_clock: QpcClock,
-) -> Result<(), String> {
-    sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility(
-        schedule,
-        effective_min_hold_us,
-        min_release_gap_us,
-    )
-    .map_err(|error| format!("native schedule admission failed: {error}"))?;
-    let effective_min_hold_ticks = qpc_clock
-        .duration_from_us(effective_min_hold_us)
-        .map_err(|error| format!("native hold-floor conversion failed: {error:?}"))?;
-    let min_release_gap_ticks = qpc_clock
-        .duration_from_us(min_release_gap_us)
-        .map_err(|error| format!("native release-gap conversion failed: {error:?}"))?;
-    sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility_ticks(
-        schedule,
-        effective_min_hold_us,
-        effective_min_hold_ticks,
-        min_release_gap_us,
-        min_release_gap_ticks,
-        |microseconds| qpc_clock.timeline_from_us(microseconds).ok(),
-    )
-    .map_err(|error| format!("native tick-domain admission failed: {error}"))
-}
-
 pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<(), String> {
     let expected_min_hold_us = timing
         .frame_base_hold_us
@@ -262,40 +230,18 @@ impl NativeDispatchSession {
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let min_release_gap_us = options.timing.min_release_gap_us;
-        let (total_us, generation_count) = match &options.schedule {
-            NativeScheduleInput::Raw(schedule) => {
-                #[cfg(any(test, feature = "test-support"))]
-                if let Some(hook) = &options.startup_ordering_hook {
-                    hook.record_raw_schedule_admission_validation();
-                }
-                validate_native_schedule_timing_with_release_gap(
-                    schedule,
-                    options.timing.min_hold_us,
-                    min_release_gap_us,
-                    qpc_clock,
-                )?;
-                (
-                    schedule
-                        .batches
-                        .last()
-                        .map_or(0, |batch| batch.scheduled_us),
-                    schedule.generation_count,
-                )
-            }
-            NativeScheduleInput::Prepared(schedule) => {
-                if !schedule.is_compatible(
-                    qpc_clock.frequency_hz(),
-                    options.timing.min_hold_us,
-                    min_release_gap_us,
-                ) {
-                    return Err(
-                        "prepared dispatch plan no longer matches the QPC domain or H/G timing policy"
-                            .to_string(),
-                    );
-                }
-                (schedule.total_us(), schedule.generation_count())
-            }
-        };
+        if !options.schedule.is_compatible(
+            qpc_clock.frequency_hz(),
+            options.timing.min_hold_us,
+            min_release_gap_us,
+        ) {
+            return Err(
+                "prepared dispatch plan no longer matches the QPC domain or H/G timing policy"
+                    .to_string(),
+            );
+        }
+        let total_us = options.schedule.total_us();
+        let generation_count = options.schedule.generation_count();
         if !cfg!(windows) && matches!(&options.backend, BackendConfig::Production) {
             return Err("production native dispatch is supported only on Windows".to_string());
         }

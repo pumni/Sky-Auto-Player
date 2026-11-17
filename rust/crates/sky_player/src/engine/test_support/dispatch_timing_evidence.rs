@@ -43,7 +43,7 @@ impl crate::engine::config::StartupOrderingHook {
         ));
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn up_only_sender_attempt_evidence(&self) -> Option<(Option<u64>, u64, u64)> {
         *self
             .up_only_sender_attempt_qpc_ticks

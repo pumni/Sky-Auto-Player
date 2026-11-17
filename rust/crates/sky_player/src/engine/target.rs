@@ -296,6 +296,7 @@ impl SessionTarget {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn invalidate_owner_identity(&self) {
         self.invalidate_owner_identity_with(OwnerIdentityFailure::ProcessTerminated);
     }
@@ -381,6 +382,7 @@ impl OwnerIdentityStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "test-support")]
     use std::sync::Arc;
 
     #[test]

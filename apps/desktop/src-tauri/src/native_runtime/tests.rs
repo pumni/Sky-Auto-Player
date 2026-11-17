@@ -36,6 +36,21 @@ use crate::commands::{
     CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest,
 };
 
+fn prepare_test_schedule(
+    schedule: &sky_player::adapter_support::RuntimeSchedule,
+    timing: &sky_player::engine::TimingOptions,
+) -> sky_player::adapter_support::PreparedDispatchSchedule {
+    let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
+    sky_player::adapter_support::PreparedDispatchSchedule::prepare(
+        schedule,
+        qpc.frequency_hz(),
+        timing.min_hold_us,
+        timing.min_release_gap_us,
+        schedule.compile_memory.caller_retained_capacity_bytes,
+    )
+    .expect("prepare native test schedule before session admission")
+}
+
 #[cfg(feature = "tauri-test")]
 type PlaybackPresentationTestGate = Arc<(Mutex<bool>, Condvar)>;
 use crate::power_lifecycle::PowerLifecycleDiagnostics;
@@ -125,10 +140,23 @@ fn projection_session_with_down(
         &sky_app_core::song::SKY_SCAN_CODES,
     )
     .expect("terminal projection schedule");
+    let timing = TimingOptions {
+        game_fps: 60,
+        min_hold_us: 17_467,
+        min_release_gap_us: 17_467,
+        frame_us: 16_667,
+        frame_base_hold_us: 16_667,
+        timing_margin_us: 800,
+        strict_timing: false,
+        strict_down_completion_late_us: 2_000,
+        strict_up_completion_late_us: 2_000,
+        input_path_warn_us: 300,
+    };
+    let schedule = prepare_test_schedule(&schedule, &timing);
     let player = Arc::new(
         NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
-                schedule: schedule.into(),
+                schedule,
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
@@ -142,18 +170,7 @@ fn projection_session_with_down(
                     fault_script: FaultInjectionScript::none(),
                 },
                 profile: DispatchProfile::MockTest,
-                timing: TimingOptions {
-                    game_fps: 60,
-                    min_hold_us: 17_467,
-                    min_release_gap_us: 17_467,
-                    frame_us: 16_667,
-                    frame_base_hold_us: 16_667,
-                    timing_margin_us: 800,
-                    strict_timing: false,
-                    strict_down_completion_late_us: 2_000,
-                    strict_up_completion_late_us: 2_000,
-                    input_path_warn_us: 300,
-                },
+                timing,
                 focus: FocusOptions {
                     require_focus: false,
                     focus_restore_grace_us: 100_000,
@@ -162,7 +179,6 @@ fn projection_session_with_down(
                     enable_waitable_timer: true,
                     enable_event_wait: true,
                     supervisor_lease_timeout_us,
-                    guard_mode: sky_player::engine::WaitGuardMode::default(),
                     test_spin_threshold_us: None,
                     test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
                 },
@@ -691,11 +707,24 @@ fn native_handoff_test_player(
         &sky_app_core::song::SKY_SCAN_CODES,
     )
     .expect("handoff test schedule");
+    let timing = TimingOptions {
+        game_fps: 60,
+        min_hold_us: 17_467,
+        min_release_gap_us: 17_467,
+        frame_us: 16_667,
+        frame_base_hold_us: 16_667,
+        timing_margin_us: 800,
+        strict_timing: false,
+        strict_down_completion_late_us: 2_000,
+        strict_up_completion_late_us: 2_000,
+        input_path_warn_us: 300,
+    };
+    let schedule = prepare_test_schedule(&schedule, &timing);
     fault_script.send_input_capture = Some(capture);
     Arc::new(
         NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
-                schedule: schedule.into(),
+                schedule,
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
@@ -708,18 +737,7 @@ fn native_handoff_test_player(
                     fault_script,
                 },
                 profile: DispatchProfile::MockTest,
-                timing: TimingOptions {
-                    game_fps: 60,
-                    min_hold_us: 17_467,
-                    min_release_gap_us: 17_467,
-                    frame_us: 16_667,
-                    frame_base_hold_us: 16_667,
-                    timing_margin_us: 800,
-                    strict_timing: false,
-                    strict_down_completion_late_us: 2_000,
-                    strict_up_completion_late_us: 2_000,
-                    input_path_warn_us: 300,
-                },
+                timing,
                 focus: FocusOptions {
                     require_focus: false,
                     focus_restore_grace_us: 100_000,
@@ -728,7 +746,6 @@ fn native_handoff_test_player(
                     enable_waitable_timer: true,
                     enable_event_wait: true,
                     supervisor_lease_timeout_us: 0,
-                    guard_mode: sky_player::engine::WaitGuardMode::default(),
                     test_spin_threshold_us: None,
                     test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
                 },

@@ -8,7 +8,6 @@ pub(crate) struct EffectiveRuntimePolicy {
     pub(crate) strict_failure_policy: bool,
     pub(crate) observer_enabled: bool,
     pub(crate) production_wait: bool,
-    pub(crate) wait_guard_mode: sky_dispatch_win32::wait::WaitGuardMode,
     pub(crate) telemetry_mode: TelemetryMode,
     pub(crate) telemetry_capacity: usize,
 }
@@ -33,7 +32,6 @@ impl EffectiveRuntimePolicy {
             strict_failure_policy: strict_timing,
             observer_enabled,
             production_wait: wait.production_wait_policy(backend_is_production),
-            wait_guard_mode: wait.guard_mode,
             telemetry_mode,
             telemetry_capacity,
         }
@@ -105,7 +103,6 @@ mod tests {
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
-            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::Frozen,
             test_spin_threshold_us: None,
             test_wait_policy,
         }
@@ -152,10 +149,23 @@ mod tests {
         test_wait_policy: TestWaitPolicy,
         telemetry_mode: TelemetryMode,
     ) -> NativeSessionOptions {
+        let timing = TimingOptions {
+            strict_timing,
+            ..WorkerConfig::default().timing
+        };
+        let schedule = sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15])
+            .expect("empty schedule with one allowed key");
+        let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
+        let schedule = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
+            &schedule,
+            qpc.frequency_hz(),
+            timing.min_hold_us,
+            timing.min_release_gap_us,
+            schedule.compile_memory.caller_retained_capacity_bytes,
+        )
+        .expect("prepared empty schedule");
         NativeSessionOptions {
-            schedule: sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15])
-                .expect("empty schedule with one allowed key")
-                .into(),
+            schedule,
             backend: if backend_is_production {
                 BackendConfig::Production
             } else {
@@ -166,10 +176,7 @@ mod tests {
                 }
             },
             profile,
-            timing: TimingOptions {
-                strict_timing,
-                ..WorkerConfig::default().timing
-            },
+            timing,
             focus: FocusOptions {
                 require_focus: false,
                 focus_restore_grace_us: 100_000,

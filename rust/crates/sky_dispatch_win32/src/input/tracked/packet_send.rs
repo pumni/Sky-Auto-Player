@@ -2,6 +2,8 @@ use super::super::down_transaction::emit_down_once_with;
 use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
+#[cfg(test)]
+use super::super::packet::send_prepared_physical_packet_view_once_with_start;
 use super::super::packet::{
     PreparedPacketView, PreparedPhysicalPacket, invalid_packet_outcome,
     send_prepared_physical_packet_once, send_prepared_physical_packet_once_with_start,
@@ -412,7 +414,7 @@ impl TrackedKeyState {
     /// Send one validated physical packet using the caller's authoritative
     /// QPC start boundary. The timestamp is reused by the transport; it is
     /// never resampled after the final admission gate.
-    pub fn send_physical_packet_with_start(
+    fn send_physical_packet_with_start(
         &mut self,
         packet: PhysicalPacket,
         started_ticks: QpcTicks,
@@ -511,7 +513,8 @@ impl TrackedKeyState {
     /// Send a packet whose fixed Win32 payload was built before the precision
     /// boundary.  State reconciliation remains identical to the legacy packet
     /// wrapper; only payload construction moves out of the final path.
-    pub fn send_prepared_physical_packet_with_start(
+    #[cfg(test)]
+    pub(crate) fn send_prepared_physical_packet_with_start(
         &mut self,
         prepared: &PreparedPhysicalPacket,
         started_ticks: QpcTicks,
@@ -519,7 +522,8 @@ impl TrackedKeyState {
         self.send_prepared_physical_packet_view_with_start(prepared.as_view(), started_ticks)
     }
 
-    pub fn send_prepared_physical_packet_view_with_start(
+    #[cfg(test)]
+    fn send_prepared_physical_packet_view_with_start(
         &mut self,
         prepared: PreparedPacketView<'_>,
         started_ticks: QpcTicks,
@@ -566,11 +570,7 @@ impl TrackedKeyState {
                     );
                 };
                 self.in_flight_mask |= packet.up_mask | packet.down_mask;
-                super::super::packet::send_prepared_physical_packet_view_once_with_start(
-                    prepared,
-                    clock,
-                    started_ticks,
-                )
+                send_prepared_physical_packet_view_once_with_start(prepared, clock, started_ticks)
             }
             #[cfg(not(any(test, feature = "test-support")))]
             {
@@ -598,11 +598,7 @@ impl TrackedKeyState {
                     );
                 };
                 self.in_flight_mask |= packet.up_mask | packet.down_mask;
-                super::super::packet::send_prepared_physical_packet_view_once_with_start(
-                    prepared,
-                    clock,
-                    started_ticks,
-                )
+                send_prepared_physical_packet_view_once_with_start(prepared, clock, started_ticks)
             }
         };
         #[cfg(any(test, feature = "test-support"))]
