@@ -692,6 +692,7 @@ pub(crate) fn verify_safety_cleanup_target(
 
 pub(crate) enum FinalDownAdmissionResult {
     Allowed { release_owner: ReleaseOwnerProof },
+    ModifierHeld,
     Replan,
     Terminal(String),
 }
@@ -814,7 +815,10 @@ fn verify_final_musical_packet_admission(
         let modifier_verdict = final_down_modifier_verdict(backend);
         if modifier_verdict != FinalDownVerdict::Allowed {
             apply_final_down_rejection(modifier_verdict, target, expected, runtime, metrics);
-            return FinalDownAdmissionResult::Replan;
+            return match modifier_verdict {
+                FinalDownVerdict::ModifierHeld(_) => FinalDownAdmissionResult::ModifierHeld,
+                _ => FinalDownAdmissionResult::Replan,
+            };
         }
     }
 

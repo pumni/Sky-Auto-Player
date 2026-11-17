@@ -12,6 +12,37 @@ enum SchedulerAction {
 }
 
 const UNSTABLE_TARGET_REPLAN_INTERVAL_US: u64 = 1_000;
+const MODIFIER_REPLAN_INTERVAL_US: u64 = 1_000;
+
+/// Sleep for one modifier re-evaluation quantum without changing musical
+/// deadlines or using the precision spin phase. The shared interrupt event
+/// wakes this wait for controls, lifecycle changes, or owner invalidation.
+fn wait_after_modifier_held(
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+) -> Result<sky_dispatch_win32::wait::WaitOutcome, String> {
+    let interval = qpc_clock
+        .duration_from_us(MODIFIER_REPLAN_INTERVAL_US)
+        .map_err(|error| format!("modifier replan interval conversion failed: {error:?}"))?;
+    let deadline = now_qpc
+        .checked_add_duration(interval)
+        .map_err(|error| format!("modifier replan deadline overflow: {error}"))?;
+    let result = waiter.wait_until_ticks_with_metrics_typed(
+        qpc_clock,
+        deadline,
+        DurationTicks::ZERO,
+        interrupt,
+    );
+    match result.outcome {
+        outcome @ (sky_dispatch_win32::wait::WaitOutcome::Deadline
+        | sky_dispatch_win32::wait::WaitOutcome::Interrupted) => Ok(outcome),
+        sky_dispatch_win32::wait::WaitOutcome::Failed(failure) => {
+            Err(format!("modifier-held replan wait failed: {failure:?}"))
+        }
+    }
+}
 
 #[cfg(test)]
 thread_local! {

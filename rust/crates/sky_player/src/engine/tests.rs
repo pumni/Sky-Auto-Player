@@ -59,6 +59,7 @@ fn native_session_rejects_prepared_plan_from_another_qpc_domain() {
     assert!(error.contains("prepared dispatch plan no longer matches the QPC domain"));
 }
 
+mod modifier_replan;
 mod startup_admission;
 mod support;
 mod telemetry_metrics;

@@ -351,6 +351,7 @@ pub enum StagedDispatchOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DispatchAttemptOutcome {
     Dispatched,
+    ModifierHeld,
     Replan,
     Exit,
 }
@@ -360,6 +361,7 @@ impl DispatchAttemptOutcome {
     pub(crate) fn public_outcome(self) -> StagedDispatchOutcome {
         match self {
             Self::Dispatched => StagedDispatchOutcome::Dispatched,
+            Self::ModifierHeld => StagedDispatchOutcome::Replan,
             Self::Replan => StagedDispatchOutcome::Replan,
             Self::Exit => StagedDispatchOutcome::Exit,
         }
@@ -379,18 +381,19 @@ pub(crate) struct StagedControlSignals<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DispatchReplanAction {
     ContinueImmediately,
+    WaitForModifier,
     Exit,
 }
 
 struct DispatchReplanWaitContext<'a> {
     target: &'a SessionTarget,
     control_signals: FinalControlSignals<'a>,
+    modifier_held: bool,
 }
 
 /// Apply the worker-loop policy after final packet admission requests replan.
-/// A target invalidation is terminal. Other rejected candidates re-enter the
-/// worker state machine immediately so controls and focus recovery are read
-/// again before any wait or packet attempt.
+/// A target invalidation is terminal. Modifier-only rejection waits are used
+/// only after any independent due Up fallback has been dispatched.
 fn dispatch_replan_action(context: DispatchReplanWaitContext<'_>) -> DispatchReplanAction {
     let controls_allow_wait = matches!(
         final_control_precheck(context.control_signals),
@@ -401,6 +404,9 @@ fn dispatch_replan_action(context: DispatchReplanWaitContext<'_>) -> DispatchRep
     }
     if !context.target.is_valid() {
         return DispatchReplanAction::Exit;
+    }
+    if context.modifier_held {
+        return DispatchReplanAction::WaitForModifier;
     }
     DispatchReplanAction::ContinueImmediately
 }
@@ -623,7 +629,10 @@ pub(crate) fn dispatch_staged_candidate(
             local_metrics,
         ) {
             FinalDownAdmissionResult::Allowed { release_owner } => release_owner,
-            FinalDownAdmissionResult::Replan => {
+            admission_result @ (FinalDownAdmissionResult::Replan
+            | FinalDownAdmissionResult::ModifierHeld) => {
+                let modifier_held =
+                    matches!(admission_result, FinalDownAdmissionResult::ModifierHeld);
                 match stage_up_only_for_mixed_replan(
                     &candidate,
                     SchedulerStageAdmission {
@@ -663,7 +672,13 @@ pub(crate) fn dispatch_staged_candidate(
                             observer,
                         );
                     }
-                    Ok(None) => return DispatchAttemptOutcome::Replan,
+                    Ok(None) => {
+                        return if modifier_held {
+                            DispatchAttemptOutcome::ModifierHeld
+                        } else {
+                            DispatchAttemptOutcome::Replan
+                        };
+                    }
                     Err(error) => {
                         runtime.terminal_error = Some(error);
                         return DispatchAttemptOutcome::Exit;
@@ -710,6 +725,8 @@ pub(crate) fn dispatch_staged_candidate(
             local_metrics,
         ) {
             FinalDownAdmissionResult::Allowed { release_owner } => release_owner,
+            // Musical Up admission explicitly does not query modifiers.
+            FinalDownAdmissionResult::ModifierHeld => return DispatchAttemptOutcome::Replan,
             FinalDownAdmissionResult::Replan => return DispatchAttemptOutcome::Replan,
             FinalDownAdmissionResult::Terminal(error) => {
                 runtime.terminal_error = Some(gate_rejection_record(&candidate, &error));
@@ -2051,9 +2068,71 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             supervisor_expired,
                             system_power: Some(system_power),
                         },
+                        modifier_held: false,
                     });
                     match replan_action {
                         DispatchReplanAction::ContinueImmediately => {}
+                        DispatchReplanAction::WaitForModifier => {
+                            unreachable!("generic replans cannot request modifier-specific backoff")
+                        }
+                        DispatchReplanAction::Exit => {
+                            if !target.is_valid() {
+                                core.runtime.terminal_error.get_or_insert_with(|| {
+                                    "immutable session target or owner identity was invalidated"
+                                        .to_string()
+                                });
+                            }
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                DispatchAttemptOutcome::ModifierHeld => {
+                    core.runtime.last_dispatch_deadline_wake_qpc = None;
+                    core.runtime.last_dispatch_deadline_target_qpc = None;
+                    super::dispatch::publish_pending_wait_observation(
+                        &mut core.runtime,
+                        core.observer.pending.as_ref(),
+                        &mut core.metrics,
+                    );
+                    let replan_action = dispatch_replan_action(DispatchReplanWaitContext {
+                        target,
+                        control_signals: FinalControlSignals {
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                            supervisor_expired,
+                            system_power: Some(system_power),
+                        },
+                        modifier_held: true,
+                    });
+                    match replan_action {
+                        DispatchReplanAction::ContinueImmediately => {}
+                        DispatchReplanAction::WaitForModifier => {
+                            let now_qpc = qpc_ticks_or_terminal!();
+                            match wait_after_modifier_held(
+                                now_qpc,
+                                qpc_clock,
+                                &resources.waiter,
+                                interrupt,
+                            ) {
+                                Ok(sky_dispatch_win32::wait::WaitOutcome::Deadline) => {}
+                                Ok(sky_dispatch_win32::wait::WaitOutcome::Interrupted) => {
+                                    let _ = interrupt.try_take();
+                                }
+                                Ok(sky_dispatch_win32::wait::WaitOutcome::Failed(failure)) => {
+                                    core.runtime.terminal_error = Some(format!(
+                                        "modifier-held replan wait failed: {failure:?}"
+                                    ));
+                                    break;
+                                }
+                                Err(error) => {
+                                    core.runtime.terminal_error = Some(error);
+                                    break;
+                                }
+                            }
+                        }
                         DispatchReplanAction::Exit => {
                             if !target.is_valid() {
                                 core.runtime.terminal_error.get_or_insert_with(|| {
