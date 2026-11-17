@@ -388,8 +388,9 @@ struct DispatchReplanWaitContext<'a> {
 }
 
 /// Apply the worker-loop policy after final packet admission requests replan.
-/// A fixed target has no publisher contention; unstable targets retain the
-/// existing interruptible re-evaluation policy.
+/// A target invalidation is terminal. Other rejected candidates re-enter the
+/// worker state machine immediately so controls and focus recovery are read
+/// again before any wait or packet attempt.
 fn dispatch_replan_action(context: DispatchReplanWaitContext<'_>) -> DispatchReplanAction {
     let controls_allow_wait = matches!(
         final_control_precheck(context.control_signals),
@@ -1177,6 +1178,12 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             }) {
                 break;
             }
+            if !target.is_valid() {
+                core.runtime.terminal_error.get_or_insert_with(|| {
+                    "immutable session target or owner identity was invalidated".to_string()
+                });
+                break;
+            }
 
             let now_ticks = qpc_ticks_or_terminal!();
             let focus_ok = focus_matches(config.focus.require_focus, focus_active);
@@ -1748,6 +1755,13 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     ) {
                         Ok(Some(candidate)) => Some(candidate),
                         Ok(None) => {
+                            if !target.is_valid() {
+                                core.runtime.terminal_error.get_or_insert_with(|| {
+                                    "immutable session target or owner identity was invalidated"
+                                        .to_string()
+                                });
+                                break;
+                            }
                             match wait_after_unstable_target(
                                 now_ticks,
                                 packet_not_before_qpc,
@@ -1847,6 +1861,13 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                     FinalControlAdmission::Allowed
                                 );
                                 if target_stale && controls_allow_wait {
+                                    if !target.is_valid() {
+                                        core.runtime.terminal_error.get_or_insert_with(|| {
+                                            "immutable session target or owner identity was invalidated"
+                                                .to_string()
+                                        });
+                                        break;
+                                    }
                                     match wait_after_unstable_target(
                                         now_ticks,
                                         candidate.as_ref().map_or(
@@ -1877,15 +1898,24 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 }
                 if wait_target_qpc > now_ticks {
                     #[cfg(any(test, feature = "test-support"))]
+                    if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                        hook.visit_startup_checkpoint(
+                            super::super::config::StartupCheckpoint::DispatchWait,
+                        );
+                    }
+                    #[cfg(any(test, feature = "test-support"))]
                     if candidate
                         .as_ref()
                         .is_some_and(|candidate| candidate.packet_masks.down_mask != 0)
                         && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
                         && let Some(candidate) = candidate.as_ref()
                     {
-                        hook.record_down_window_before_physical_wait(
+                        hook.record_down_window(
                             candidate.timing_window.authored_target_qpc.as_u64(),
                             candidate.timing_window.packet_not_before_qpc.as_u64(),
+                        );
+                        hook.visit_startup_checkpoint(
+                            super::super::config::StartupCheckpoint::PhysicalWait,
                         );
                     }
                     let authored_target_ticks = candidate.as_ref().map_or_else(
@@ -2024,7 +2054,15 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     });
                     match replan_action {
                         DispatchReplanAction::ContinueImmediately => {}
-                        DispatchReplanAction::Exit => break,
+                        DispatchReplanAction::Exit => {
+                            if !target.is_valid() {
+                                core.runtime.terminal_error.get_or_insert_with(|| {
+                                    "immutable session target or owner identity was invalidated"
+                                        .to_string()
+                                });
+                            }
+                            break;
+                        }
                     }
                     continue;
                 }

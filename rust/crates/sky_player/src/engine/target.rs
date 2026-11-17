@@ -86,7 +86,7 @@ impl SessionTarget {
     /// Publish the initial HWND only. A second, different HWND invalidates
     /// this session instead of changing its destination.
     pub(super) fn set_initial_target(&self, hwnd: isize) -> bool {
-        if hwnd == 0 || self.target_invalidated.load(Ordering::Acquire) {
+        if hwnd == 0 || !self.is_valid() {
             self.invalidate_target();
             return false;
         }
@@ -115,11 +115,12 @@ impl SessionTarget {
     }
 
     /// The session identity cannot change after binding. Runtime gates only
-    /// need this monotonic invalidation read between their initial stamp check
-    /// and the syscall boundary.
+    /// need these monotonic invalidation latches between their initial stamp
+    /// check and the syscall boundary.
     #[inline(always)]
     pub(super) fn is_valid(&self) -> bool {
         !self.target_invalidated.load(Ordering::Acquire)
+            && self.owner_failure.load(Ordering::Acquire) == OwnerIdentityFailure::None as u32
     }
 
     pub(super) fn require_owner_identity(&self) {
@@ -314,7 +315,7 @@ impl SessionTarget {
     pub(super) fn load_stable(&self) -> Option<(isize, u64)> {
         #[cfg(any(test, feature = "test-support"))]
         record_target_stamp_read();
-        if self.target_invalidated.load(Ordering::Acquire) {
+        if !self.is_valid() {
             return None;
         }
         // A focus-free session uses the zero target as its stable sentinel.

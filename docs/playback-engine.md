@@ -292,12 +292,27 @@ publish a replacement, including when Windows reuses the same numeric HWND.
 Production startup binds the target and process authority before Arm. Public
 DTOs and telemetry schema do not change.
 
+For production sessions with `require_focus`, `Arm` revalidates that the
+nonzero HWND/generation, bound PID, and retained process authority all match
+and that the authority reports continuous identity before it launches a
+worker. Missing, mismatched, failed, or late proof irreversibly closes
+admission; proof arriving afterward cannot start or rebind that session.
+Focus-free sessions and the explicit mock test path keep their existing
+admission behavior. Desktop and native acceptance both bind through
+`NativeDispatchSession` before calling `Arm`.
+
 The supervisor polls the retained process object without a writer or owner
 mutex. Continuous identity leaves the binding usable. Any continuity failure
 sets a one-way terminal failure latch, cancels pre-Arm startup when applicable,
-and wakes the worker. Later polls cannot clear that failure or bind a new
-owner. The desktop monitor turns `CurrentInvalid` into panic-release; every
-packet still performs its fresh foreground query and process-identity check.
+and wakes the worker. Target replacement and owner failure are terminal worker
+conditions: the worker checks the latch before staging and before selecting its
+next note, and an interruptible deadline wait returns promptly so the worker
+can finish without a supervisor `quit` or `panic_release` call. Later polls
+cannot clear the failure or bind a new owner. The desktop monitor may also
+request panic-release after `CurrentInvalid`; that request does not provide the
+worker's terminal-completion guarantee. Every packet still performs its fresh
+foreground query and process-identity check. A focus-only loss with the same
+live HWND/PID/process authority remains a recoverable Focus pause.
 The process-authority `Arc` is not cloned for each packet. Per-key release
 proofs share a small identity object that owns it. The authority remains alive
 through worker/watchdog cleanup and drops with the session target after the

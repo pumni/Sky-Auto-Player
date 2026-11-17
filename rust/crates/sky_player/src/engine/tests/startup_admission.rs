@@ -117,9 +117,8 @@ fn worker_final_gate_rechecks_retained_process_identity_before_down() {
                 77,
             )
             .expect("bind target owner proof");
-        assert!(session.set_window_process_identity_status_for_test(identity_status));
-
         session.arm(0).expect("session arm");
+        assert!(session.set_window_process_identity_status_for_test(identity_status));
         assert!(
             session
                 .join(Duration::from_secs(5))
@@ -477,7 +476,7 @@ fn current_owner_poll_failure_still_fails_closed_before_first_down() {
     hook.release_startup_checkpoint();
     assert!(
         session
-            .join(Duration::from_secs(5))
+            .join(Duration::from_millis(750))
             .expect("bounded worker join")
     );
 
@@ -491,7 +490,121 @@ fn current_owner_poll_failure_still_fails_closed_before_first_down() {
 
 #[cfg(feature = "test-support")]
 #[test]
-fn target_replacement_after_arm_invalidates_session_and_never_rebinds() {
+fn target_replacement_during_long_physical_wait_autonomously_stops_held_origin() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+    let (session, hook, send_calls) = checkpointed_session(
+        ownership_review_schedule(5_000_000),
+        StartupCheckpoint::DispatchWait,
+        2,
+        true,
+    );
+    bind_synthetic_owner(&session, 123, 77);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
+    session.arm(0).expect("session arm");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
+    assert_eq!(send_calls.load(Ordering::Acquire), 1);
+
+    session.set_target_hwnd(456);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(88)));
+    let replacement_binding = session.bind_window_identity_authority_for_test(
+        sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(456, 88),
+        88,
+    );
+    assert!(
+        replacement_binding.is_err(),
+        "a live session cannot bind a new owner"
+    );
+    hook.release_startup_checkpoint();
+    assert!(
+        session
+            .join(Duration::from_millis(750))
+            .expect("bounded worker join")
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
+    assert_eq!(snapshot.precision_packet_attempts, 1);
+    assert_eq!(send_calls.load(Ordering::Acquire), 1);
+    assert_eq!(snapshot.final_release_obligation_mask, 1);
+    assert_eq!(snapshot.release_attempts_total, 0);
+    assert!(snapshot.terminal_error.is_some());
+    assert!(
+        hook.interrupted_wait_count() > 0,
+        "the native worker's long wait woke on invalidation"
+    );
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn owner_identity_loss_during_long_wait_wakes_worker_and_preserves_release_obligation() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+    let (session, hook, send_calls) = checkpointed_session(
+        ownership_review_schedule(5_000_000),
+        StartupCheckpoint::DispatchWait,
+        2,
+        true,
+    );
+    bind_synthetic_owner(&session, 123, 77);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
+    session.arm(0).expect("session arm");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
+    assert_eq!(send_calls.load(Ordering::Acquire), 1);
+
+    assert!(session.set_window_process_identity_status_for_test(
+        sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated,
+    ));
+    assert_eq!(
+        session.poll_window_identity_authority_result(),
+        crate::engine::OwnerIdentityPollResult::CurrentInvalid
+    );
+    hook.release_startup_checkpoint();
+    assert!(
+        session
+            .join(Duration::from_millis(750))
+            .expect("bounded worker join")
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
+    assert_eq!(snapshot.precision_packet_attempts, 1);
+    assert_eq!(
+        send_calls.load(Ordering::Acquire),
+        1,
+        "no musical or cleanup Up after owner loss"
+    );
+    assert_eq!(snapshot.final_release_obligation_mask, 1);
+    assert_eq!(snapshot.release_attempts_total, 0);
+    assert!(snapshot.terminal_error.is_some());
+    assert!(
+        hook.interrupted_wait_count() > 0,
+        "the process poll wakes the physical wait"
+    );
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn same_hwnd_owner_aba_is_terminal_and_never_sends_origin_up_to_replacement() {
     struct ForegroundReset;
     impl Drop for ForegroundReset {
         fn drop(&mut self) {
@@ -515,32 +628,236 @@ fn target_replacement_after_arm_invalidates_session_and_never_rebinds() {
     assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
     assert_eq!(send_calls.load(Ordering::Acquire), 1);
 
-    session.set_target_hwnd(456);
-    let replacement_binding = session.bind_window_identity_authority_for_test(
-        sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(456, 88),
-        88,
+    // Windows may reuse the numeric HWND for a different process. The old
+    // retained identity reports drift while foreground reports the new PID.
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(88)));
+    assert!(session.set_window_process_identity_status_for_test(
+        sky_dispatch_win32::focus::WindowIdentityContinuity::OwnerMismatch,
+    ));
+    assert_eq!(
+        session.poll_window_identity_authority_result(),
+        crate::engine::OwnerIdentityPollResult::CurrentInvalid
     );
-    assert!(
-        replacement_binding.is_err(),
-        "a live session cannot bind a new owner"
-    );
-    session
-        .quit()
-        .expect("terminal stop after target invalidation");
     hook.release_startup_checkpoint();
     assert!(
         session
-            .join(Duration::from_secs(5))
+            .join(Duration::from_millis(750))
             .expect("bounded worker join")
     );
 
     let snapshot = session.snapshot();
     assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
-    assert_eq!(send_calls.load(Ordering::Acquire), 1);
+    assert_eq!(snapshot.precision_packet_attempts, 1);
+    assert_eq!(
+        send_calls.load(Ordering::Acquire),
+        1,
+        "replacement owner never receives Up"
+    );
     assert_eq!(snapshot.final_release_obligation_mask, 1);
     assert_eq!(snapshot.release_attempts_total, 0);
     assert!(snapshot.terminal_error.is_some());
 }
+
+#[cfg(feature = "test-support")]
+#[test]
+fn target_invalidated_before_scheduler_staging_finishes_without_input() {
+    let (session, hook, send_calls) = checkpointed_session(
+        ownership_review_schedule(100_000),
+        StartupCheckpoint::ArmedPublished,
+        1,
+        true,
+    );
+    bind_synthetic_owner(&session, 123, 77);
+    session.arm(0).expect("session arm");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
+
+    session.set_target_hwnd(456);
+    hook.release_startup_checkpoint();
+    assert!(
+        session
+            .join(Duration::from_millis(750))
+            .expect("bounded worker join")
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
+    assert_eq!(snapshot.precision_packet_attempts, 0);
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert!(snapshot.terminal_error.is_some());
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn stop_skip_panic_and_suspend_interrupt_staged_long_wait_before_input() {
+    let cases = [
+        ("stop", EnginePollStatus::Quit),
+        ("skip", EnginePollStatus::Skipped),
+        ("panic", EnginePollStatus::Error),
+        ("suspend", EnginePollStatus::SystemSuspended),
+    ];
+    let long_wait_schedule = sky_dispatch_core::compile::compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 710,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "long-wait-control-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 711,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "long-wait-control-up".into(),
+            },
+        ],
+        &[0x15],
+    )
+    .expect("valid long-wait control schedule");
+
+    for (control, expected_status) in cases {
+        let (session, hook, send_calls) = checkpointed_session(
+            long_wait_schedule.clone(),
+            StartupCheckpoint::DispatchWait,
+            1,
+            false,
+        );
+        session.arm(0).expect("session arm");
+        assert!(
+            hook.wait_for_startup_checkpoint(Duration::from_secs(2)),
+            "{control}"
+        );
+        assert_eq!(send_calls.load(Ordering::Acquire), 0);
+
+        match control {
+            "stop" => session.quit().expect("stop request"),
+            "skip" => session.skip().expect("skip request"),
+            "panic" => session.panic_release().expect("panic release request"),
+            "suspend" => assert!(session.notify_system_power(true)),
+            _ => unreachable!(),
+        }
+        hook.release_startup_checkpoint();
+        assert!(
+            session
+                .join(Duration::from_millis(750))
+                .expect("bounded worker join")
+        );
+
+        let snapshot = session.snapshot();
+        assert_eq!(snapshot.status, expected_status.as_str(), "{control}");
+        assert_eq!(snapshot.precision_packet_attempts, 0, "{control}");
+        assert_eq!(send_calls.load(Ordering::Acquire), 0, "{control}");
+        assert_eq!(snapshot.final_release_obligation_mask, 0, "{control}");
+        assert!(
+            hook.interrupted_wait_count() > 0,
+            "{control} wakes the real wait"
+        );
+    }
+}
+
+#[cfg(all(feature = "test-support", windows))]
+#[test]
+fn production_require_focus_arm_rejects_missing_failed_wrong_or_late_owner_proof() {
+    fn production_session() -> NativeDispatchSession {
+        let schedule = sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15])
+            .expect("empty production admission schedule");
+        let mut options = test_session_options(schedule, 1, BackendConfig::Production);
+        options.focus.require_focus = true;
+        NativeDispatchSession::new(options).expect("production focus session admission")
+    }
+
+    let missing_target = production_session();
+    assert!(missing_target.arm(0).is_err());
+    assert_eq!(
+        missing_target.spawn_handles_present_for_test(),
+        (false, false)
+    );
+
+    let missing_owner = production_session();
+    missing_owner.set_target_hwnd(123);
+    assert!(missing_owner.arm(0).is_err());
+    assert_eq!(
+        missing_owner.spawn_handles_present_for_test(),
+        (false, false)
+    );
+    assert!(
+        missing_owner
+            .bind_window_identity_authority_for_test(
+                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
+                77,
+            )
+            .is_err(),
+        "proof arriving after rejected Arm cannot reopen admission"
+    );
+    assert_eq!(
+        missing_owner.spawn_handles_present_for_test(),
+        (false, false)
+    );
+
+    let wrong_owner = production_session();
+    wrong_owner.set_target_hwnd(123);
+    assert!(
+        wrong_owner
+            .bind_window_identity_authority_for_test(
+                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 88),
+                77,
+            )
+            .is_err()
+    );
+    assert!(wrong_owner.arm(0).is_err());
+    assert_eq!(wrong_owner.spawn_handles_present_for_test(), (false, false));
+
+    let failed_owner = production_session();
+    failed_owner.set_target_hwnd(123);
+    failed_owner
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
+            77,
+        )
+        .expect("bind exact test authority");
+    assert!(failed_owner.set_window_process_identity_status_for_test(
+        sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated,
+    ));
+    assert!(failed_owner.arm(0).is_err());
+    assert_eq!(
+        failed_owner.spawn_handles_present_for_test(),
+        (false, false)
+    );
+}
+
+#[cfg(all(feature = "test-support", windows))]
+#[test]
+fn production_require_focus_arm_accepts_exact_continuous_bound_owner() {
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15])
+        .expect("empty production admission schedule");
+    let mut options = test_session_options(schedule, 1, BackendConfig::Production);
+    options.focus.require_focus = true;
+    let session = NativeDispatchSession::new(options).expect("production focus session admission");
+    session.set_target_hwnd(123);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
+            77,
+        )
+        .expect("bind exact continuous test identity");
+
+    session
+        .arm(0)
+        .expect("bound target passes production Arm admission");
+    assert!(session.spawn_handles_present_for_test().0);
+    assert!(
+        session
+            .join(Duration::from_secs(5))
+            .expect("bounded worker join")
+    );
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Finished.as_str());
+    assert_eq!(snapshot.precision_packet_attempts, 0);
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+}
+
 #[cfg(feature = "test-support")]
 #[test]
 fn zero_release_obligation_needs_no_owner_or_safety_syscall() {

@@ -1,4 +1,4 @@
-use super::{StartupCheckpoint, StartupOrderingHook};
+use super::StartupOrderingHook;
 use std::sync::atomic::Ordering;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -85,15 +85,6 @@ impl StartupOrderingHook {
         self.down_not_before_qpc_ticks
             .store(not_before, Ordering::Relaxed);
         self.down_window_sequence.fetch_add(1, Ordering::Release);
-    }
-
-    pub(crate) fn record_down_window_before_physical_wait(
-        &self,
-        authored_target: u64,
-        not_before: u64,
-    ) {
-        self.record_down_window(authored_target, not_before);
-        self.visit_startup_checkpoint(StartupCheckpoint::PhysicalWait);
     }
 
     pub(crate) fn record_interrupted_wait(&self, evidence: InterruptedWaitEvidence) {

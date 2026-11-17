@@ -30,8 +30,16 @@ fn target_integrity_admission_precedes_focus_and_session_arm() {
     let session = create
         .find("NativeDispatchSession::new_with_power_endpoint")
         .expect("native session construction");
+    let target_binding = create
+        .find("player.set_target_hwnd(target)")
+        .expect("fixed HWND binding");
+    let owner_binding = create
+        .find("player.bind_window_identity_authority(owner_authority)?")
+        .expect("retained owner identity binding");
     assert!(integrity < focus);
     assert!(integrity < session);
+    assert!(session < target_binding);
+    assert!(target_binding < owner_binding);
 
     let arm = source.find("player.arm(0)").expect("physical session arm");
     let create_call = source
@@ -40,6 +48,10 @@ fn target_integrity_admission_precedes_focus_and_session_arm() {
     let supervisor_spawn = source
         .find("let spawn_result = thread::Builder::new()")
         .expect("supervisor thread must be spawned before worker activation");
+    assert!(
+        owner_binding < arm,
+        "the same NativeDispatchSession owner proof must be bound before Arm"
+    );
     assert!(create_call < arm);
     assert!(supervisor_spawn < arm);
 }

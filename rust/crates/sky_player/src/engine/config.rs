@@ -360,6 +360,8 @@ pub enum StartupCheckpoint {
     PrepareDiagnosticChunk = 14,
     #[cfg(any(test, feature = "test-support"))]
     PhysicalWait = 16,
+    #[cfg(any(test, feature = "test-support"))]
+    DispatchWait = 17,
 }
 
 #[cfg(any(test, feature = "test-support"))]
