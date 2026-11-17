@@ -1,5 +1,5 @@
 ﻿param(
-    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')]
+    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3')]
     [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
 [ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
@@ -33,23 +33,29 @@ Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
+$isDispatchSessionRedesignM3 = $QualificationProfile -eq 'DispatchSessionRedesignM3'
+$isDispatchSessionM3 = $isDispatchCleanupM3 -or $isDispatchSessionRedesignM3
 $dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
+$dispatchSessionRedesignM3 = if ($isDispatchSessionRedesignM3) { Get-DispatchSessionRedesignM3Profile } else { $null }
 $m3TimingFloors = if ($isDispatchCleanupM3) {
     Get-DispatchCleanupM3TimingFloors -Scenario $Scenario -GameFps $GameFps -TimingMarginUs $TimingMarginUs
+} elseif ($isDispatchSessionRedesignM3) {
+    Assert-DispatchSessionRedesignM3SessionIdentity -Scenario $Scenario -Workload $Workload `
+        -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds
 } else { $null }
-if ($isDispatchCleanupM3) {
+if ($isDispatchSessionM3) {
     if (-not $HarnessPath -or -not $HarnessManifestPath -or -not $OutputRoot) {
-        throw 'DispatchCleanupM3 requires explicit immutable binary, manifest, and external evidence paths'
+        throw ($QualificationProfile + ' requires explicit immutable binary, manifest, and external evidence paths')
     }
     if ($QpcReadCountingEvidenceOnly) {
-        throw 'DispatchCleanupM3 does not permit qpc-read-counting outside a separately approved evidence protocol'
+        throw ($QualificationProfile + ' does not permit qpc-read-counting outside a separately approved evidence protocol')
     }
     if (-not (Test-DispatchM3PathOutside -Path $OutputRoot -RepositoryRoot $root)) {
-        throw 'DispatchCleanupM3 native evidence output root must be outside the repository checkout'
+        throw ($QualificationProfile + ' native evidence output root must be outside the repository checkout')
     }
 }
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
-$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')
+$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3')
 $receiveOnlyObserverVersion = if ($qualifiedProfile) {
     'scheduler-receiveonly-queue-v3-compat3'
 } else {
@@ -91,9 +97,9 @@ $report = $null
 $windowIntegrity = $false
 $resultCode = 2
 $head = $null
-$profileBaseRevision = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineRevision } elseif ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } else { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' }
-$profileBaseTree = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineTree } elseif ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } else { 'f554c41b23a3969d02ed29842d4178f6143c9d86' }
-$profileBranch = if ($isDispatchCleanupM3) { $dispatchCleanupM3.CandidateLineageBranch } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } else { 'refactor/scheduler-single-owner-20261112' }
+$profileBaseRevision = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineRevision } elseif ($isDispatchSessionRedesignM3) { $dispatchSessionRedesignM3.BaselineRevision } elseif ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } else { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' }
+$profileBaseTree = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineTree } elseif ($isDispatchSessionRedesignM3) { $dispatchSessionRedesignM3.BaselineTree } elseif ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } else { 'f554c41b23a3969d02ed29842d4178f6143c9d86' }
+$profileBranch = if ($isDispatchCleanupM3) { $dispatchCleanupM3.CandidateLineageBranch } elseif ($isDispatchSessionRedesignM3) { $dispatchSessionRedesignM3.CandidateLineageBranch } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } else { 'refactor/scheduler-single-owner-20261112' }
 
 Add-Type -TypeDefinition @"
 using System.Runtime.InteropServices;
@@ -394,6 +400,27 @@ try {
                 throw 'DispatchCleanupM3 manifest source identity differs from the exact detached worktree'
             }
             Assert-ImmutableHarnessManifestIntegrity -Manifest $harnessManifest -ManifestPath $HarnessManifestPath | Out-Null
+        } elseif ($isDispatchSessionRedesignM3) {
+            $expectedRole = [string]$harnessManifest.source_role
+            if ($expectedRole -notin @('Baseline', 'Candidate')) { throw 'DispatchSessionRedesignM3 manifest source role is invalid' }
+            Assert-DispatchSessionRedesignM3ManifestIdentity -Manifest $harnessManifest -ExpectedRole $expectedRole -RepositoryRoot $root | Out-Null
+            $m3RunnerIdentity = Get-DispatchSessionRedesignM3RunnerIdentity -RunnerRoot $root
+            if ($m3RunnerIdentity.revision -ne $head -or $m3RunnerIdentity.tree -ne $sourceTree) {
+                throw 'DispatchSessionRedesignM3 runner identity changed during native case preflight'
+            }
+            Assert-DispatchSessionRedesignM3RunnerProvenance -Manifest $harnessManifest -RunnerIdentity $m3RunnerIdentity -RunnerRoot $root | Out-Null
+            $manifestSourceRoot = [System.IO.Path]::GetFullPath([string]$harnessManifest.source_root)
+            if (-not (Test-DispatchM3PathOutside -Path $evidenceRoot -RepositoryRoot $manifestSourceRoot)) {
+                throw 'DispatchSessionRedesignM3 native evidence output must be outside the immutable source checkout'
+            }
+            $m3SourceIdentity = Assert-DispatchSessionRedesignM3SourceCheckout -SourceRoot $manifestSourceRoot -SourceRole $expectedRole -RunnerRoot $root
+            if ($m3SourceIdentity.revision -ne $harnessManifest.source_revision -or
+                $m3SourceIdentity.tree -ne $harnessManifest.source_tree_sha -or
+                $m3SourceIdentity.checkout.git_dir -ne $harnessManifest.source_checkout_identity.git_dir -or
+                $m3SourceIdentity.checkout.git_common_dir -ne $harnessManifest.source_checkout_identity.git_common_dir) {
+                throw 'DispatchSessionRedesignM3 manifest source identity differs from the exact detached worktree'
+            }
+            Assert-ImmutableHarnessManifestIntegrity -Manifest $harnessManifest -ManifestPath $HarnessManifestPath | Out-Null
         } elseif ($qualifiedProfile) {
             $manifestSourceRoot = [System.IO.Path]::GetFullPath([string]$harnessManifest.source_root)
             if ($QualificationProfile -eq 'FrameSnapshot') {
@@ -453,8 +480,8 @@ try {
         if ($harnessManifest.guard_mode -eq 'adaptive') {
             throw 'adaptive guard mode is retired (#646); only frozen manifests are accepted for qualification'
         }
-        $expectedSourceBranch = if (($qualifiedProfile -and $harnessManifest.source_role -eq 'Baseline') -or $isDispatchCleanupM3) { '' } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
-        $expectedWorkloadVersion = if ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
+        $expectedSourceBranch = if (($qualifiedProfile -and $harnessManifest.source_role -eq 'Baseline') -or $isDispatchSessionM3) { '' } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
+        $expectedWorkloadVersion = if ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($isDispatchSessionRedesignM3) { $dispatchSessionRedesignM3.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
         $sourceIdentityAllowed = if ($isDispatchCleanupM3) {
             $true
         } elseif ($qualifiedProfile) {
@@ -489,6 +516,10 @@ try {
         if ($isDispatchCleanupM3) {
             if ([string]::IsNullOrWhiteSpace($Workload)) { throw 'DispatchCleanupM3 native cases require an explicit workload identity' }
             Assert-DispatchCleanupM3SessionIdentity -Scenario $Scenario -Workload $Workload -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds | Out-Null
+        } elseif ($isDispatchSessionRedesignM3) {
+            if ([string]::IsNullOrWhiteSpace($Workload)) { throw 'DispatchSessionRedesignM3 native cases require an explicit workload identity' }
+            Assert-DispatchSessionRedesignM3SessionIdentity -Scenario $Scenario -Workload $Workload `
+                -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds | Out-Null
         }
     }
     $sessionId = (Get-Process -Id $PID).SessionId
@@ -533,7 +564,7 @@ try {
         runner_source_branch = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'runner_source_branch' } else { $null }
         candidate_lineage_branch = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'candidate_lineage_branch' } else { $null }
         candidate_lineage_tip_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'candidate_lineage_tip_revision' } else { $null }
-        runner_script_provenance = if ($isDispatchCleanupM3 -and $harnessManifest) { @($harnessManifest.runner_script_provenance) } else { $null }
+        runner_script_provenance = if ($isDispatchSessionM3 -and $harnessManifest) { @($harnessManifest.runner_script_provenance) } else { $null }
         scenario = $Scenario
         calibration_placement = $CalibrationPlacement.ToLowerInvariant()
         cpu_contention = [bool]$CpuContention
@@ -547,15 +578,16 @@ try {
         sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
         hol_stall_us = $HolStallUs
         hol_cycles = $HolCycles
-        expected_hold_us = if ($isDispatchCleanupM3) { [long]$m3TimingFloors.expected_hold_us } else { [long][Math]::Ceiling(1000000.0 / $GameFps) * 2 + $TimingMarginUs }
-        expected_release_gap_us = if ($isDispatchCleanupM3) { [long]$m3TimingFloors.expected_release_gap_us } else { [long][Math]::Ceiling(1000000.0 / $GameFps) + $TimingMarginUs }
+        expected_hold_us = if ($isDispatchSessionM3) { [long]$m3TimingFloors.expected_hold_us } else { [long][Math]::Ceiling(1000000.0 / $GameFps) * 2 + $TimingMarginUs }
+        expected_release_gap_us = if ($isDispatchSessionM3) { [long]$m3TimingFloors.expected_release_gap_us } else { [long][Math]::Ceiling(1000000.0 / $GameFps) + $TimingMarginUs }
         profile = 'production'
         cargo_profile = if ($harnessManifest) { $harnessManifest.cargo_profile } else { 'legacy-checkout-release' }
         cargo_features = if ($harnessManifest) { @($harnessManifest.cargo_features) } else { @() }
+        cargo_lock_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'cargo_lock_sha256' } else { $null }
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
-        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'FrameSnapshot') { if ($harnessManifest.source_role -eq 'Baseline') { 'FrameSnapshot-Baseline' } else { 'FrameSnapshot-Candidate' } } elseif ($QualificationProfile -eq 'DispatchCleanupM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchCleanupM3-Baseline' } else { 'DispatchCleanupM3-Candidate' } } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'FrameSnapshot') { if ($harnessManifest.source_role -eq 'Baseline') { 'FrameSnapshot-Baseline' } else { 'FrameSnapshot-Candidate' } } elseif ($QualificationProfile -eq 'DispatchCleanupM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchCleanupM3-Baseline' } else { 'DispatchCleanupM3-Candidate' } } elseif ($QualificationProfile -eq 'DispatchSessionRedesignM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchSessionRedesignM3-Baseline' } else { 'DispatchSessionRedesignM3-Candidate' } } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
         harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
         harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
         harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }
@@ -599,7 +631,7 @@ try {
         sink_process_image_path = $pwshExecutablePath
         foreground_permission_granted_to_sink = [bool]$foregroundPermissionGranted
     }
-    if ($isDispatchCleanupM3) {
+    if ($isDispatchSessionM3) {
         $runConfig['workload'] = $Workload
         $runConfig['workload_version'] = $harnessManifest.workload_version
         $runConfig['session_seed'] = $null
@@ -760,7 +792,7 @@ try {
     $invocation = [ordered]@{
         run_id = $runId
         qualification_profile = $QualificationProfile
-        workload = if ($isDispatchCleanupM3) { $Workload } else { $null }
+        workload = if ($isDispatchSessionM3) { $Workload } else { $null }
         source_revision = $head
         source_tree_sha = $sourceTree
         source_tree_clean = $sourceTreeClean
@@ -769,12 +801,12 @@ try {
         runner_source_branch = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'runner_source_branch' } else { $null }
         candidate_lineage_branch = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'candidate_lineage_branch' } else { $null }
         candidate_lineage_tip_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'candidate_lineage_tip_revision' } else { $null }
-        runner_script_provenance = if ($isDispatchCleanupM3 -and $harnessManifest) { @($harnessManifest.runner_script_provenance) } else { $null }
-        workload_version = if ($isDispatchCleanupM3 -and $harnessManifest) { $harnessManifest.workload_version } else { $null }
+        runner_script_provenance = if ($isDispatchSessionM3 -and $harnessManifest) { @($harnessManifest.runner_script_provenance) } else { $null }
+        workload_version = if ($isDispatchSessionM3 -and $harnessManifest) { $harnessManifest.workload_version } else { $null }
         session_seed = $null
-        seed_mode = if ($isDispatchCleanupM3) { 'none; deterministic workload definitions do not accept a PRNG seed' } else { $null }
-        configured_H_us = if ($isDispatchCleanupM3) { [long]$m3TimingFloors.configured_H_us } else { $null }
-        configured_G_us = if ($isDispatchCleanupM3) { [long]$m3TimingFloors.configured_G_us } else { $null }
+        seed_mode = if ($isDispatchSessionM3) { 'none; deterministic workload definitions do not accept a PRNG seed' } else { $null }
+        configured_H_us = if ($isDispatchSessionM3) { [long]$m3TimingFloors.configured_H_us } else { $null }
+        configured_G_us = if ($isDispatchSessionM3) { [long]$m3TimingFloors.configured_G_us } else { $null }
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_source_role = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'source_role' } else { $null }
@@ -783,7 +815,7 @@ try {
         performance_timing_margin_us = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'performance_timing_margin_us' } else { $null }
         safety_timing_margin_us = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'safety_timing_margin_us' } else { $null }
         harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
-        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'FrameSnapshot') { if ($harnessManifest.source_role -eq 'Baseline') { 'FrameSnapshot-Baseline' } else { 'FrameSnapshot-Candidate' } } elseif ($QualificationProfile -eq 'DispatchCleanupM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchCleanupM3-Baseline' } else { 'DispatchCleanupM3-Candidate' } } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'FrameSnapshot') { if ($harnessManifest.source_role -eq 'Baseline') { 'FrameSnapshot-Baseline' } else { 'FrameSnapshot-Candidate' } } elseif ($QualificationProfile -eq 'DispatchCleanupM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchCleanupM3-Baseline' } else { 'DispatchCleanupM3-Candidate' } } elseif ($QualificationProfile -eq 'DispatchSessionRedesignM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchSessionRedesignM3-Baseline' } else { 'DispatchSessionRedesignM3-Candidate' } } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
         harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
         harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
         harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }

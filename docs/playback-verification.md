@@ -105,6 +105,109 @@ is documented append-only in
 The reporting-correction checkpoint authorizes zero further native sessions;
 Smoke, Compare, and Final require separate Leader decisions.
 
+## DispatchSessionRedesignM3 preflight (native runs on hold)
+
+`DispatchSessionRedesignM3` reuses the immutable harness builder, manifest
+validator, per-case runner, observer reader, and paired report path. It leaves
+the historical `DispatchCleanupM3` pins unchanged. The baseline is
+`d0f65e7c412041a6d502f81f469872198db7adc5` / tree
+`19aae9e41bc667a2f991001ed105b6ffdebb8bc6`. The candidate source is the exact
+clean HEAD of `refactor/dispatch-session-redesign`; the runner checkout must be
+that same pushed branch tip. Both roles use Rust/Cargo 1.99.1, MSVC host and
+target `x86_64-pc-windows-msvc`, `dist`, exactly `real-input-acceptance`,
+`Cargo.lock` with `--locked`, Frozen waiter behavior, 500 µs performance and
+safety margins, the V3 Compat3 ReceiveOnly observer, timer and event waits,
+`PriorityMode::Auto`, ring telemetry capacity 1,024, and the same 60 FPS mixed
+workload. The two generated manifests record Cargo.lock path/hash; Final rejects
+different lock hashes. Neither `qpc-read-counting` nor a separate observer-off
+run is part of this plan. Timing-observer on/off remains recorded per
+invocation; this profile uses observer-on for both roles.
+
+Use a Windows 11 interactive host with an unlocked desktop, the verified sink
+foreground, and the exact pinned toolchain. Before any native session, confirm
+that OS and target details identify the approved machine. Put detached
+worktrees, Cargo targets, manifests, binaries, logs, and evidence under a new
+directory outside the checkout. From a clean, pushed branch tip, prepare the
+source checkouts and immutable harnesses:
+
+```powershell
+$m3Root = Join-Path $env:TEMP 'sky-auto-player-dispatch-session-redesign-m3'
+$baselineSource = Join-Path $m3Root 'baseline-source'
+$candidateSource = Join-Path $m3Root 'candidate-source'
+$baselineOutput = Join-Path $m3Root 'baseline-harness'
+$candidateOutput = Join-Path $m3Root 'candidate-harness'
+git worktree add --detach $baselineSource d0f65e7c412041a6d502f81f469872198db7adc5
+$candidateRevision = (git rev-parse HEAD).Trim()
+git worktree add --detach $candidateSource $candidateRevision
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile DispatchSessionRedesignM3 -SourceRole Baseline `
+  -SourceRoot $baselineSource -OutputRoot $baselineOutput
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile DispatchSessionRedesignM3 -SourceRole Candidate `
+  -SourceRoot $candidateSource -OutputRoot $candidateOutput
+```
+
+Before requesting authorization, verify both `manifest.json` files with
+`Assert-DispatchSessionRedesignM3ManifestIdentity`,
+`Assert-DispatchSessionRedesignM3RunnerProvenance`, and
+`Assert-ImmutableHarnessManifestIntegrity`; compare their Cargo.lock hashes and
+record each manifest and binary SHA-256. The builder performs immutable checks
+as part of each build. Candidate source must equal the current pushed branch
+HEAD; baseline and candidate source trees must be clean detached worktrees.
+
+The executable plan is one guarded `Final` stage. Its mapping is:
+
+| Order | Scenario / workload | Load | FPS | Margin | Sample | Role | Sessions |
+|---|---|---|---:|---:|---:|---|---:|
+| 1 | `canonical-single` / `canonical-single` | Quiet | 60 | 500 µs | untimed | Candidate | 1 |
+| 2–6 | `focus-loss`, `stop-cleanup`, `pause-resume`, `owner-process-termination`, `target-hwnd-change` / `safety-smoke` | Quiet | 60 | 500 µs | untimed | Candidate | 5 |
+| 7 | `near-minimum-retrigger` / `near-minimum-retrigger` | Quiet | 60 | 500 µs | untimed | Candidate | 1 |
+| 8 | `near-minimum-retrigger` / `near-minimum-retrigger` | Quiet | 120 | 500 µs | untimed | Candidate | 1 |
+| 9–32 | `mixed-up-down` / `mixed-up-down` | Quiet, Contention | 60 | 500 µs | 15 s | Baseline + Candidate | 24 |
+
+Within each performance cell, six pairs alternate AB then BA; both roles finish
+before a pair is counted. The runner completes the canary first, runs safety
+cases sequentially and stops at the first non-PASS result, then begins paired
+performance only if all preceding candidate cases pass. The cap is 32 sessions
+(20 Candidate, 12 Baseline). A failure, inconclusive result, wrong-target
+attempt, timing-floor violation, chord/order anomaly, unknown release, or
+nonzero residual release obligation stops the matrix immediately. Do not retry
+a failed case or continue to another phase.
+
+The command below is **approval-gated**. Do not run it until the Leader has
+approved the exact mapping and both validated manifests on the PR. That command
+starts the first ReceiveOnly canary and can start native sessions:
+
+```powershell
+pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 `
+  -Stage Final -QualificationProfile DispatchSessionRedesignM3 `
+  -CandidateManifest (Join-Path $candidateOutput 'manifest.json') `
+  -ControlManifest (Join-Path $baselineOutput 'manifest.json') `
+  -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 `
+  -OutputRoot (Join-Path $m3Root 'native-evidence')
+```
+
+Timing uses QPC values and preserves availability/provenance. `D` is the
+authored physical target, `E` the final physical not-before point after H/G,
+`W` the waiter return/handoff when present, `S` the sender pre-call sample, and
+`C` the SendInput completion sample. Existing trace metrics provide `E−D`
+(`floor_displacement`), `S−E` (`residual_lateness`), `S−W`
+(`waiter_to_pre_call`), and `C−S` (`sender_envelope`); timer arm/return and
+deadline-crossing samples remain separate. The report retains p50/p95/p99/max,
+raw and short SendInput outcomes, H/G, chord/order and cleanup counters, final
+release obligations, worker/process CPU, spin sample availability, observer
+loss, QPC frequency, missing-QPC counts, timer provenance and unknown values.
+Missing W/QPC or observer loss is counted and is not imputed as zero. Stop to
+verified release is represented by the Stop cleanup case and its final release
+obligation and sink reconciliation evidence.
+
+The startup regression was caused by the test fixture omitting foreground
+authority setup while production correctly rechecked foreground before
+`ArmedPublished`. The fixture now locks the foreground test seam, sets HWND/PID
+123/77 explicitly, and resets it with scoped cleanup; production focus checks
+are unchanged. The Windows-specific mock and ReceiveOnly suites do not establish
+real Sky gameplay reception, and this preparation has run no native sessions.
+
 ## Issue #666 M4 waiter-only guard A/B
 
 The opt-in offline A/B uses the production Windows `HybridWaiter` and the

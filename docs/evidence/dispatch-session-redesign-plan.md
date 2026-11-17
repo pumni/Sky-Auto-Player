@@ -72,7 +72,7 @@ Nếu phát hiện phải đổi hành vi playback, ranh giới an toàn, API/sc
 
 ## 5. M3 — Đo đường deadline và qualification
 
-**Trạng thái: chờ Leader giao sau M2.** Giao toàn bộ đo timing, tối ưu phần cận syscall đã định, xác minh Windows và chốt báo cáo.
+**Trạng thái: M2 đã ACCEPTED; Leader giao M3 preparation/instrumentation. Native runs vẫn HOLD.** Chỉ chạy native sau khi Leader duyệt exact case mapping/runner và cả hai manifest trên PR.
 
 1. Lấy timing baseline đúng commit/tree ở đầu kế hoạch và candidate exact SHA, cùng toolchain, build profile, features, workload và máy. Dùng provenance hiện có. Nếu runner lịch sử hard-pin nhánh/baseline khác, trình Leader cấu hình mới ngắn gọn dùng lại runner/validator hiện tại. Giữ nguyên các pins cũ và ranh giới ReceiveOnly; tránh tạo bộ test framework song song. M3 chỉ chạy native sau khi Leader xác nhận mapping case/runner và cả hai manifest đúng.
 2. Đo authored target D, eligibility E sau sàn H/G, wake/handoff W, QPC pre-call S, completion C. Báo `E−D`, `S−E`, `S−W` khi có W thật, `C−S`, Stop → release, số raw/short, H/G, chord/order, cleanup, CPU/spin, missing/dropped. Báo p50/p95/p99/max. p99.9 có thể báo như mô tả nếu có raw sample và mẫu đủ, đi kèm count; dữ liệu không đủ ghi unavailable. Thiếu QPC hoặc observer loss ghi rõ và loại khỏi phân phối cần chứng cứ, theo validator hiện hành. Tách provenance observer-off và observer-on. `qpc-read-counting` chỉ để đếm hoạt động trong phân tích riêng.
@@ -81,7 +81,7 @@ Nếu phát hiện phải đổi hành vi playback, ranh giới an toàn, API/sc
 
 ### Đề cương native để chuẩn bị
 
-- **ReceiveOnly Windows**, desktop tương tác đã mở khóa, sink có identity và foreground theo runbook. Candidate Canary `canonical-single` một phiên. Tối đa bảy lượt safety candidate: mất/khôi phục focus, Stop khi đang chờ, pause/resume barrier, process exit, target invalidation và hai kiểm tra retrigger/timing ở 60/120 FPS. Chạy safety trước paired performance.
+- **ReceiveOnly Windows**, desktop tương tác đã mở khóa, sink có identity và foreground theo runbook. Candidate Canary `canonical-single` một phiên. Tối đa bảy lượt safety candidate theo mapping trong [runbook](../playback-verification.md#dispatchsessionredesignm3-preflight-native-runs-on-hold): `focus-loss`, `stop-cleanup`, `pause-resume`, `owner-process-termination`, `target-hwnd-change`, và `near-minimum-retrigger` tại 60/120 FPS. Chạy canary, rồi safety trước paired performance; fail-stop tại lỗi đầu tiên.
 - **A/B mục tiêu:** một workload `mixed-up-down`, Quiet và Contention. Mỗi cell sáu cặp AB/BA luân phiên, 15 giây mỗi lượt, cùng 60 FPS và margin 500 µs cho hai bản. Tổng 24 lượt đo, tối đa **32 phiên ReceiveOnly** kể cả Canary và safety. Đây là đề cương cho lệnh giao M3, không phải lệnh chạy theo PR mới mở. Tên case và manifest mapping dùng hợp đồng runner. Dừng tại lỗi an toàn đầu tiên. Phân biệt Failed, Inconclusive và chưa chạy. Leader quyết định thêm lượt nếu bằng chứng còn thiếu.
 - Raw artifacts, binaries, manifest và command logs để ngoài checkout. Commit chỉ tóm tắt và hash/link có thể kiểm. Sky gameplay thực và OS suspend/resume thực do người vận hành thực hiện trong đợt riêng nếu cần xác nhận sản phẩm. Kết quả ReceiveOnly chỉ xác minh Windows/sink. Muốn kết luận giảm nốt hụt trong Sky phải có bản nhạc/đoạn đã map, cấu hình FPS và đối chiếu số nốt nhận được. Khi không có phép đo đó, ghi rõ game reception chưa kiểm.
 

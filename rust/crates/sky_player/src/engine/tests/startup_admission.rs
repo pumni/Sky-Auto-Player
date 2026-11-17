@@ -661,6 +661,18 @@ fn same_hwnd_owner_aba_is_terminal_and_never_sends_origin_up_to_replacement() {
 #[cfg(feature = "test-support")]
 #[test]
 fn target_invalidated_before_scheduler_staging_finishes_without_input() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
     let (session, hook, send_calls) = checkpointed_session(
         ownership_review_schedule(100_000),
         StartupCheckpoint::ArmedPublished,
@@ -669,7 +681,13 @@ fn target_invalidated_before_scheduler_staging_finishes_without_input() {
     );
     bind_synthetic_owner(&session, 123, 77);
     session.arm(0).expect("session arm");
-    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
+    if !hook.wait_for_startup_checkpoint(Duration::from_secs(2)) {
+        let snapshot = session.snapshot();
+        panic!(
+            "ArmedPublished checkpoint not reached: status={} trigger={:?} terminal_error={:?}",
+            snapshot.status, snapshot.terminal_trigger_reason, snapshot.terminal_error
+        );
+    }
 
     session.set_target_hwnd(456);
     hook.release_startup_checkpoint();
