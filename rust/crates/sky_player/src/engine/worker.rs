@@ -73,7 +73,8 @@ pub(crate) use timing::{
 };
 pub use wait::WaitObservation;
 pub(crate) use wait::{
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, wait_for_next_boundary,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, record_wait_failure,
+    wait_for_next_boundary,
 };
 
 use super::shared::SessionShared;
@@ -252,8 +253,6 @@ pub(super) struct WorkerErrorState {
 #[derive(Clone, Copy)]
 pub(crate) struct WorkerTimingState {
     pub(super) strict_timing: bool,
-    #[allow(dead_code)]
-    pub(super) timing_margin_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
@@ -282,7 +281,6 @@ impl WorkerTimingState {
     pub(crate) fn create_test_timing() -> Self {
         Self {
             strict_timing: false,
-            timing_margin_ticks: DurationTicks::ZERO,
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,

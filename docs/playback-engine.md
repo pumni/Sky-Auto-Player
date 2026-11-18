@@ -198,7 +198,10 @@ poll and the earliest active-slot Up deadline. A due Up returns directly to the
 normal scheduler for fresh selection and final admission; no zero-duration
 wait is armed. The active-slot deadline includes the authored Up and H floor,
 and the selector continues to enforce the completion-based G floor before a
-same-key Down.
+same-key Down. The deadline wait retains its typed wake and timer evidence and
+attributes the wake to the next packet only when that packet contains an Up at
+the same release deadline. Maintenance polls stay out of the musical wait
+observer stream; their interruptions and backend failures remain counted.
 
 The fresh foreground-owner query is authoritative even when the published
 focus hint still says focused. A `NotForeground` result enters the existing

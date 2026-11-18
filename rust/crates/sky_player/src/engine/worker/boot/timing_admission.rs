@@ -22,9 +22,6 @@ pub(super) fn convert(
     let min_release_gap_ticks = qpc_clock
         .duration_from_us(config.timing.min_release_gap_us)
         .map_err(|error| format!("minimum release-gap conversion failed: {error:?}"))?;
-    let timing_margin_ticks = qpc_clock
-        .duration_from_us(config.timing.timing_margin_us)
-        .map_err(|error| format!("timing-margin conversion failed: {error:?}"))?;
     let strict_down_completion_late_ticks = qpc_clock
         .duration_from_us(config.timing.strict_down_completion_late_us)
         .map_err(|error| format!("strict note-on threshold conversion failed: {error:?}"))?;
@@ -73,7 +70,6 @@ pub(super) fn convert(
         min_release_gap_ticks,
         worker_timing: WorkerTimingState {
             strict_timing: effective_policy.strict_failure_policy,
-            timing_margin_ticks,
             strict_down_completion_late_ticks,
             strict_up_completion_late_ticks,
             focus_restore_grace_ticks,

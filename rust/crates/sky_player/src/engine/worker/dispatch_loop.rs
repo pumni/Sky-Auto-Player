@@ -9,8 +9,9 @@ use super::{
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, WaitBoundary, WaitBoundaryInput,
     WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
     focus_matches, focus_matches_hwnd, load_target_stamp, process_command_control,
-    publish_backend_counters, publish_backend_metrics, target_stamp_still_current,
-    verify_final_down_admission, verify_final_musical_up_admission, wait_for_next_boundary,
+    publish_backend_counters, publish_backend_metrics, record_wait_failure,
+    target_stamp_still_current, verify_final_down_admission, verify_final_musical_up_admission,
+    wait_for_next_boundary,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::engine::test_support::PacketSenderAttemptEvidence;
@@ -1182,6 +1183,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             .as_mut()
             .expect("worker resources initialized");
         let qpc_clock = resources.clock;
+        let mut pending_modifier_up_deadline_wake: Option<(
+            sky_dispatch_win32::clock::QpcTicks,
+            sky_dispatch_win32::clock::QpcTicks,
+        )> = None;
         while core.runtime.terminal_error.is_none() {
             // A deadline-wake sample belongs to exactly one physical send.
             // Re-entering the non-precision loop clears any stale sample
@@ -1797,6 +1802,13 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     .map_or(scheduler_wait_target_qpc, |candidate| {
                         scheduler_wait_target_qpc.max(candidate.timing_window.packet_not_before_qpc)
                     });
+            // Carry an Up-deadline wake for one selector pass only, and attach
+            // it only to a packet with an Up at that exact release deadline.
+            attribute_modifier_up_deadline_wake(
+                pending_modifier_up_deadline_wake.take(),
+                candidate.as_ref(),
+                &mut core.runtime,
+            );
             if wait_target_qpc > now_ticks {
                 if let Some(staged_candidate) = candidate.as_ref() {
                     let control_signals = FinalControlSignals {
@@ -1817,6 +1829,25 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     ) {
                         StagedDispatchOutcome::Dispatched => {}
                         StagedDispatchOutcome::Replan => {
+                            let target_stale = candidate
+                                .as_ref()
+                                .and_then(|candidate| candidate.target_stamp)
+                                .is_some_and(|expected| {
+                                    !target_stamp_still_current(target, expected)
+                                });
+                            if target_stale {
+                                core.runtime.verified_target = None;
+                                core.runtime.terminal_error.get_or_insert_with(|| {
+                                    if target.is_valid() {
+                                        "staged target stamp no longer matches its immutable session binding"
+                                            .to_string()
+                                    } else {
+                                        "immutable session target or owner identity was invalidated"
+                                            .to_string()
+                                    }
+                                });
+                                break;
+                            }
                             let fallback = match stage_up_only_for_mixed_replan(
                                 staged_candidate,
                                 SchedulerStageAdmission {
@@ -2010,8 +2041,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             ) {
                 DispatchAttemptOutcome::Dispatched => continue,
                 DispatchAttemptOutcome::Replan => {
-                    core.runtime.last_dispatch_deadline_wake_qpc = None;
-                    core.runtime.last_dispatch_deadline_target_qpc = None;
                     super::dispatch::publish_pending_wait_observation(
                         &mut core.runtime,
                         core.observer.pending.as_ref(),
@@ -2047,8 +2076,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     continue;
                 }
                 DispatchAttemptOutcome::ModifierHeld => {
-                    core.runtime.last_dispatch_deadline_wake_qpc = None;
-                    core.runtime.last_dispatch_deadline_target_qpc = None;
                     super::dispatch::publish_pending_wait_observation(
                         &mut core.runtime,
                         core.observer.pending.as_ref(),
@@ -2083,21 +2110,58 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                     break;
                                 }
                             };
-                            match wait_after_modifier_held(
+                            let modifier_wait = wait_after_modifier_held(
                                 now_qpc,
                                 next_active_up_deadline,
                                 qpc_clock,
-                                &resources.waiter,
-                                interrupt,
-                            ) {
-                                Ok(true) => {
-                                    let _ = interrupt.try_take();
-                                }
-                                Ok(false) => {}
+                                |clock, deadline, spin_threshold| {
+                                    resources.waiter.wait_until_ticks_with_metrics_typed(
+                                        clock,
+                                        deadline,
+                                        spin_threshold,
+                                        interrupt,
+                                    )
+                                },
+                            );
+                            let modifier_wait = match modifier_wait {
+                                Ok(wait) => wait,
                                 Err(error) => {
                                     core.runtime.terminal_error = Some(error);
                                     break;
                                 }
+                            };
+                            let interrupted = matches!(
+                                modifier_wait,
+                                ModifierWaitResult::Waited {
+                                    result: sky_dispatch_win32::wait::WaitResult {
+                                        outcome: sky_dispatch_win32::wait::WaitOutcome::Interrupted,
+                                        ..
+                                    },
+                                    ..
+                                }
+                            );
+                            match account_modifier_wait_result(
+                                modifier_wait,
+                                &mut core.runtime,
+                                core.observer.pending.as_ref(),
+                                &mut core.metrics,
+                                resources.playback.epoch,
+                            ) {
+                                Ok(Some(wake)) => {
+                                    pending_modifier_up_deadline_wake = Some(wake);
+                                }
+                                Ok(None) => {}
+                                Err(failure) => {
+                                    record_wait_failure(
+                                        failure,
+                                        &mut core.metrics,
+                                        &mut core.runtime.terminal_error,
+                                    );
+                                    break;
+                                }
+                            }
+                            if interrupted {
+                                let _ = interrupt.try_take();
                             }
                         }
                         DispatchReplanAction::Exit => {

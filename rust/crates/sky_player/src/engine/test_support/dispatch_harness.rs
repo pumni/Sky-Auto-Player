@@ -239,9 +239,6 @@ impl ProductionDispatchTestHarness {
         progress_clock.publish(&resources.playback);
 
         let mut timing = WorkerTimingState::create_test_timing();
-        timing.timing_margin_ticks = clock
-            .duration_from_us(DISPATCH_MARGIN_US)
-            .map_err(|error| format!("Timing Margin conversion failed: {error:?}"))?;
         timing.effective_spin_threshold_ticks = clock
             .duration_from_us(20_000)
             .map_err(|error| format!("test spin threshold conversion failed: {error:?}"))?;

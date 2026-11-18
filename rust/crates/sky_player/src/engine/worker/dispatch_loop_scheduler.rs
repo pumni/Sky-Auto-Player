@@ -14,6 +14,23 @@ enum SchedulerAction {
 const UNSTABLE_TARGET_REPLAN_INTERVAL_US: u64 = 1_000;
 const MODIFIER_REPLAN_INTERVAL_US: u64 = 1_000;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModifierWaitPurpose {
+    Poll,
+    ActiveUpDeadline,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ModifierWaitResult {
+    AlreadyDue,
+    Waited {
+        purpose: ModifierWaitPurpose,
+        deadline_qpc: sky_dispatch_win32::clock::QpcTicks,
+        planned_wait_ticks: DurationTicks,
+        result: sky_dispatch_win32::wait::WaitResult,
+    },
+}
+
 /// Sleep for one modifier re-evaluation quantum without changing musical
 /// deadlines or using the precision spin phase. The shared interrupt event
 /// wakes this wait for controls, lifecycle changes, or owner invalidation.
@@ -21,9 +38,12 @@ fn wait_after_modifier_held(
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
     next_active_up_deadline: Option<sky_dispatch_win32::clock::QpcTicks>,
     qpc_clock: sky_dispatch_win32::clock::QpcClock,
-    waiter: &sky_dispatch_win32::wait::HybridWaiter,
-    interrupt: &sky_dispatch_win32::event::OwnedEvent,
-) -> Result<bool, String> {
+    wait: impl FnOnce(
+        sky_dispatch_win32::clock::QpcClock,
+        sky_dispatch_win32::clock::QpcTicks,
+        DurationTicks,
+    ) -> sky_dispatch_win32::wait::WaitResult,
+) -> Result<ModifierWaitResult, String> {
     let Some(deadline) = modifier_replan_deadline(
         now_qpc,
         next_active_up_deadline,
@@ -32,20 +52,113 @@ fn wait_after_modifier_held(
         // Re-enter the normal scheduler immediately for an already-due Up.
         // It will either dispatch that Up or take its usual final gate; no
         // zero-length waiter loop is armed here.
-        return Ok(false);
+        return Ok(ModifierWaitResult::AlreadyDue);
     };
-    let result = waiter.wait_until_ticks_with_metrics_typed(
-        qpc_clock,
-        deadline,
-        DurationTicks::ZERO,
-        interrupt,
+    let planned_wait_ticks = deadline
+        .checked_duration_since(now_qpc)
+        .map_err(|error| format!("modifier replan planned-wait arithmetic failed: {error}"))?;
+    let purpose = if next_active_up_deadline == Some(deadline) {
+        ModifierWaitPurpose::ActiveUpDeadline
+    } else {
+        ModifierWaitPurpose::Poll
+    };
+    let result = wait(qpc_clock, deadline, DurationTicks::ZERO);
+    Ok(ModifierWaitResult::Waited {
+        purpose,
+        deadline_qpc: deadline,
+        planned_wait_ticks,
+        result,
+    })
+}
+
+fn account_modifier_wait_result(
+    wait: ModifierWaitResult,
+    runtime: &mut super::WorkerRuntime,
+    observer: Option<&super::dispatch::PendingObservationQueue>,
+    local_metrics: &mut super::WorkerMetricsLocal,
+    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
+) -> Result<Option<(
+    sky_dispatch_win32::clock::QpcTicks,
+    sky_dispatch_win32::clock::QpcTicks,
+)>, sky_dispatch_win32::wait::WaitFailure> {
+    let ModifierWaitResult::Waited {
+        purpose,
+        deadline_qpc,
+        planned_wait_ticks,
+        result,
+    } = wait
+    else {
+        return Ok(None);
+    };
+    let active_up_wait = purpose == ModifierWaitPurpose::ActiveUpDeadline;
+    let deadline_ticks = sky_dispatch_core::time::TimelineTicks::from_raw(
+        deadline_qpc
+            .as_u64()
+            .saturating_sub(epoch_qpc.as_u64()),
     );
     match result.outcome {
-        sky_dispatch_win32::wait::WaitOutcome::Deadline => Ok(false),
-        sky_dispatch_win32::wait::WaitOutcome::Interrupted => Ok(true),
-        sky_dispatch_win32::wait::WaitOutcome::Failed(failure) => {
-            Err(format!("modifier-held replan wait failed: {failure:?}"))
+        sky_dispatch_win32::wait::WaitOutcome::Deadline => {
+            if !active_up_wait {
+                // Polls are maintenance waits; keep them out of the musical
+                // observer stream while still inspecting their typed outcome.
+                return Ok(None);
+            }
+            super::dispatch::publish_pending_wait_observation(runtime, observer, local_metrics);
+            runtime.pending_wait_observation = super::dispatch::record_wait_attempt(
+                observer,
+                Some(result),
+                deadline_qpc,
+                planned_wait_ticks,
+                deadline_ticks,
+                epoch_qpc,
+                None,
+                local_metrics,
+            );
+            // The wait is complete evidence in its own right. Publishing here
+            // prevents an unrelated later packet from inheriting its timer data.
+            super::dispatch::publish_pending_wait_observation(runtime, observer, local_metrics);
+            Ok(result
+                .wake_qpc
+                .map(|wake_qpc| (deadline_qpc, wake_qpc)))
         }
+        sky_dispatch_win32::wait::WaitOutcome::Interrupted => {
+            local_metrics.wait_interrupted_count =
+                local_metrics.wait_interrupted_count.saturating_add(1);
+            if active_up_wait {
+                super::dispatch::publish_interrupted_physical_wait(
+                    runtime,
+                    observer,
+                    local_metrics,
+                    result,
+                    deadline_qpc,
+                    planned_wait_ticks,
+                    deadline_ticks,
+                    epoch_qpc,
+                );
+            }
+            Ok(None)
+        }
+        sky_dispatch_win32::wait::WaitOutcome::Failed(failure) => Err(failure),
+    }
+}
+
+fn attribute_modifier_up_deadline_wake(
+    pending_wake: Option<(
+        sky_dispatch_win32::clock::QpcTicks,
+        sky_dispatch_win32::clock::QpcTicks,
+    )>,
+    candidate: Option<&StagedCandidate>,
+    runtime: &mut super::WorkerRuntime,
+) {
+    let Some((up_deadline_qpc, wake_qpc)) = pending_wake else {
+        return;
+    };
+    if candidate.is_some_and(|candidate| {
+        candidate.packet_masks.up_mask != 0
+            && candidate.timing_window.musical_up_not_before_qpc == up_deadline_qpc
+    }) {
+        runtime.last_dispatch_deadline_wake_qpc = Some(wake_qpc);
+        runtime.last_dispatch_deadline_target_qpc = Some(up_deadline_qpc);
     }
 }
 
@@ -266,7 +379,6 @@ fn stage_scheduler_action_preserving_due_up(
     else {
         return Ok(None);
     };
-    let has_down = down_chord.is_some();
     match stage_candidate(
         up_mask,
         down_chord,
@@ -277,13 +389,6 @@ fn stage_scheduler_action_preserving_due_up(
         runtime,
     )? {
         Some(candidate) => Ok(Some(candidate)),
-        None if has_down && up_mask != 0 => stage_up_only_after_mixed_replan(
-            up_mask,
-            timing_window,
-            admission,
-            resources,
-            runtime,
-        ),
         None => Ok(None),
     }
 }
@@ -349,13 +454,269 @@ fn qpc_evidence(value: Option<sky_dispatch_win32::clock::QpcTicks>) -> String {
 #[cfg(test)]
 mod scheduler_tests {
     use super::{
-        SchedulerAction, evaluate_scheduler_action_for_staging, modifier_replan_deadline,
+        ModifierWaitPurpose, ModifierWaitResult, SchedulerAction,
+        account_modifier_wait_result, attribute_modifier_up_deadline_wake,
+        evaluate_scheduler_action_for_staging, modifier_replan_deadline, wait_after_modifier_held,
     };
+    use crate::engine::telemetry::WorkerMetricsLocal;
     use crate::engine::test_support::ProductionDispatchTestHarness;
+    use crate::engine::worker::WorkerRuntime;
+    use crate::engine::worker::dispatch::observation::DispatchObservation;
+    use crate::engine::worker::dispatch::observer::PendingObservationQueue;
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
-    use sky_dispatch_core::time::TimelineTicks;
+    use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
+    use sky_dispatch_win32::wait::{WaitFailure, WaitOutcome, WaitResult};
     use std::num::NonZeroU64;
+
+    fn controlled_wait_result(
+        outcome: WaitOutcome,
+        wake_qpc: Option<QpcTicks>,
+    ) -> WaitResult {
+        WaitResult {
+            outcome,
+            wake_qpc,
+            spin_ticks: DurationTicks::from_raw(7),
+            timer_return_qpc: Some(QpcTicks::from_raw(20_007)),
+            timer_arm_target_qpc: Some(QpcTicks::from_raw(20_000)),
+            timer_arm_qpc: Some(QpcTicks::from_raw(19_800)),
+            timer_arm_generation: Some(4),
+            timer_return_generation: Some(4),
+        }
+    }
+
+    #[test]
+    fn modifier_up_deadline_wait_preserves_typed_wait_evidence() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+        let now = QpcTicks::from_raw(19_500);
+        let up_deadline = QpcTicks::from_raw(20_000);
+        let expected = controlled_wait_result(
+            WaitOutcome::Deadline,
+            Some(QpcTicks::from_raw(20_010)),
+        );
+        let waited = wait_after_modifier_held(
+            now,
+            Some(up_deadline),
+            clock,
+            |actual_clock, deadline, spin| {
+                assert_eq!(actual_clock, clock);
+                assert_eq!(deadline, up_deadline);
+                assert_eq!(spin, DurationTicks::ZERO);
+                expected
+            },
+        )
+        .expect("typed Up deadline wait");
+        assert_eq!(
+            waited,
+            ModifierWaitResult::Waited {
+                purpose: ModifierWaitPurpose::ActiveUpDeadline,
+                deadline_qpc: up_deadline,
+                planned_wait_ticks: DurationTicks::from_raw(500),
+                result: expected,
+            }
+        );
+
+        let queue = PendingObservationQueue::default();
+        let mut runtime = WorkerRuntime::default();
+        let mut metrics = WorkerMetricsLocal::default();
+        assert_eq!(
+            account_modifier_wait_result(
+                waited,
+                &mut runtime,
+                Some(&queue),
+                &mut metrics,
+                QpcTicks::ZERO,
+            )
+            .expect("account Up wait"),
+            Some((up_deadline, QpcTicks::from_raw(20_010)))
+        );
+        assert_eq!(metrics.spin_observation_expected_samples, 1);
+        assert_eq!(metrics.spin_observation_missing_samples, 0);
+        match queue.pop_front().expect("authored Up wait observation") {
+            DispatchObservation::Wait(wait) => {
+                assert_eq!(wait.outcome, WaitOutcome::Deadline);
+                assert_eq!(wait.wake_qpc, Some(QpcTicks::from_raw(20_010)));
+                assert_eq!(wait.physical_target_qpc, up_deadline);
+                assert_eq!(wait.planned_wait_ticks, DurationTicks::from_raw(500));
+                assert_eq!(wait.timer_return_qpc, Some(QpcTicks::from_raw(20_007)));
+                assert_eq!(wait.timer_arm_target_qpc, Some(up_deadline));
+                assert_eq!(wait.timer_arm_qpc, Some(QpcTicks::from_raw(19_800)));
+                assert_eq!(wait.timer_arm_generation, Some(4));
+                assert_eq!(wait.timer_return_generation, Some(4));
+            }
+            other => panic!("expected wait evidence, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn modifier_poll_waits_stay_out_of_musical_observer_but_count_interrupts_and_failures() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+        let now = QpcTicks::from_raw(19_500);
+        let poll_deadline = QpcTicks::from_raw(20_500);
+        let poll = wait_after_modifier_held(now, None, clock, |_, deadline, spin| {
+            assert_eq!(deadline, poll_deadline);
+            assert_eq!(spin, DurationTicks::ZERO);
+            controlled_wait_result(WaitOutcome::Interrupted, None)
+        })
+        .expect("poll wait");
+        assert!(matches!(
+            poll,
+            ModifierWaitResult::Waited {
+                purpose: ModifierWaitPurpose::Poll,
+                deadline_qpc,
+                ..
+            } if deadline_qpc == poll_deadline
+        ));
+        let queue = PendingObservationQueue::default();
+        let mut runtime = WorkerRuntime::default();
+        let mut metrics = WorkerMetricsLocal::default();
+        assert_eq!(
+            account_modifier_wait_result(
+                poll,
+                &mut runtime,
+                Some(&queue),
+                &mut metrics,
+                QpcTicks::ZERO,
+            ),
+            Ok(None)
+        );
+        assert_eq!(metrics.wait_interrupted_count, 1);
+        assert_eq!(metrics.spin_observation_expected_samples, 0);
+        assert_eq!(queue.len(), 0, "maintenance poll must not enter wait observer");
+
+        let failure = wait_after_modifier_held(now, None, clock, |_, deadline, _| {
+            assert_eq!(deadline, poll_deadline);
+            controlled_wait_result(
+                WaitOutcome::Failed(WaitFailure::TimerWait { win32_error: 5 }),
+                None,
+            )
+        })
+        .expect("typed poll failure");
+        assert_eq!(
+            account_modifier_wait_result(
+                failure,
+                &mut runtime,
+                Some(&queue),
+                &mut metrics,
+                QpcTicks::ZERO,
+            ),
+            Err(WaitFailure::TimerWait { win32_error: 5 })
+        );
+    }
+
+    #[test]
+    fn already_due_modifier_up_does_not_arm_wait_or_poll_observer() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+        let now = QpcTicks::from_raw(20_000);
+        let waited = wait_after_modifier_held(now, Some(now), clock, |_, _, _| {
+            panic!("already-due Up must not arm a zero-length wait")
+        })
+        .expect("already-due Up");
+        assert_eq!(waited, ModifierWaitResult::AlreadyDue);
+        let mut runtime = WorkerRuntime::default();
+        let mut metrics = WorkerMetricsLocal::default();
+        assert_eq!(
+            account_modifier_wait_result(waited, &mut runtime, None, &mut metrics, now),
+            Ok(None)
+        );
+        assert_eq!(metrics.spin_observation_expected_samples, 0);
+    }
+
+    #[test]
+    fn modifier_up_wait_without_observer_counts_missing_evidence_and_interrupted_up_is_typed() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
+        let now = QpcTicks::from_raw(19_500);
+        let deadline = QpcTicks::from_raw(20_000);
+        let waited = wait_after_modifier_held(now, Some(deadline), clock, |_, _, _| {
+            controlled_wait_result(WaitOutcome::Deadline, Some(deadline))
+        })
+        .expect("observer-off Up wait");
+        let mut runtime = WorkerRuntime::default();
+        let mut metrics = WorkerMetricsLocal::default();
+        assert_eq!(
+            account_modifier_wait_result(waited, &mut runtime, None, &mut metrics, QpcTicks::ZERO),
+            Ok(Some((deadline, deadline)))
+        );
+        assert_eq!(metrics.spin_observation_expected_samples, 1);
+        assert_eq!(metrics.spin_observation_missing_samples, 1);
+
+        let interrupted = wait_after_modifier_held(now, Some(deadline), clock, |_, _, _| {
+            controlled_wait_result(WaitOutcome::Interrupted, None)
+        })
+        .expect("interrupted Up wait");
+        assert_eq!(
+            account_modifier_wait_result(
+                interrupted,
+                &mut runtime,
+                None,
+                &mut metrics,
+                QpcTicks::ZERO,
+            ),
+            Ok(None)
+        );
+        assert_eq!(metrics.wait_interrupted_count, 1);
+        assert_eq!(metrics.spin_observation_expected_samples, 2);
+        assert_eq!(metrics.spin_observation_missing_samples, 2);
+    }
+
+    #[test]
+    fn modifier_up_wake_is_attached_only_to_the_matching_up_deadline_packet() {
+        let actions = [
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: vec![0x15].into(),
+                reason: "wake-attribution-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 20_000,
+                scan_codes: vec![0x15].into(),
+                reason: "wake-attribution-up".into(),
+            },
+        ];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let epoch = harness.resources.playback.epoch;
+        harness
+            .resources
+            .scheduler
+            .on_send_completed_at(0, 1, epoch)
+            .expect("commit first Down");
+        let deadline = epoch
+            .checked_add_duration(harness.resources.clock.duration_from_us(20_000).unwrap())
+            .unwrap();
+        let candidate = harness
+            .stage_candidate_for_test(
+                1,
+                None,
+                TimelineTicks::from_raw(20_000),
+            )
+            .expect("stage release at its deadline")
+            .expect("Up candidate");
+        assert_eq!(candidate.timing_window.musical_up_not_before_qpc, deadline);
+
+        let wake = epoch
+            .checked_add_duration(harness.resources.clock.duration_from_us(20_010).unwrap())
+            .unwrap();
+        let mut runtime = WorkerRuntime::default();
+        attribute_modifier_up_deadline_wake(Some((deadline, wake)), Some(&candidate), &mut runtime);
+        assert_eq!(runtime.last_dispatch_deadline_target_qpc, Some(deadline));
+        assert_eq!(runtime.last_dispatch_deadline_wake_qpc, Some(wake));
+
+        let mut unrelated_runtime = WorkerRuntime::default();
+        let mismatched_deadline = deadline
+            .checked_add_duration(DurationTicks::from_raw(1))
+            .unwrap();
+        attribute_modifier_up_deadline_wake(
+            Some((mismatched_deadline, wake)),
+            Some(&candidate),
+            &mut unrelated_runtime,
+        );
+        assert_eq!(unrelated_runtime.last_dispatch_deadline_target_qpc, None);
+        assert_eq!(unrelated_runtime.last_dispatch_deadline_wake_qpc, None);
+    }
 
     #[test]
     fn modifier_backoff_targets_independent_up_at_controlled_qpc_deadline() {

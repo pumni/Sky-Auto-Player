@@ -285,6 +285,7 @@ fn up_start_below_down_completion_hold_floor_is_a_forensics_anomaly() {
     let anomaly = forensics.latest_anomaly_for_test().expect("hold anomaly");
     assert_eq!(anomaly.kind, 9);
     assert_eq!(anomaly.slot, 0);
+    assert_eq!(anomaly.source_action_index, 17);
     assert_eq!(anomaly.mask, 1);
     assert_eq!(anomaly.target_ticks, 120);
     assert_eq!(anomaly.observed_ticks, 124);
@@ -335,9 +336,36 @@ fn next_down_start_below_up_completion_frame_floor_is_an_anomaly() {
         .latest_anomaly_for_test()
         .expect("release anomaly");
     assert_eq!(anomaly.kind, 7);
+    assert_eq!(anomaly.source_action_index, 17);
     assert_eq!(anomaly.observed_ticks, 139);
     assert_eq!(anomaly.aux_ticks, 130);
     assert_eq!(anomaly.delta_ticks, 9);
+}
+
+#[test]
+fn anomaly_ring_overwrite_scalar_counts_test_only_detail_eviction() {
+    let mut forensics = ProductionHoldForensics::default();
+    forensics.set_timing_policies(DurationTicks::from_raw(20), DurationTicks::from_raw(10));
+    let mut metrics = WorkerMetricsLocal::default();
+
+    for index in 0..33u64 {
+        let target = 100 + index * 10;
+        observe(
+            &mut forensics,
+            PhysicalPacket::new(1, 0),
+            target,
+            target + 1,
+            target + 2,
+            SendTransactionStatus::Complete,
+            &mut metrics,
+        );
+    }
+
+    assert_eq!(metrics.production_forensics_anomaly_count, 33);
+    assert_eq!(metrics.production_anomaly_ring_overwrite_count, 1);
+    let anomaly = forensics.latest_anomaly_for_test().expect("latest anomaly");
+    assert_eq!(anomaly.kind, 4);
+    assert_eq!(anomaly.source_action_index, 17);
 }
 
 #[test]
