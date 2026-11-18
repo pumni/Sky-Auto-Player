@@ -1360,6 +1360,8 @@ fn poisoned_retirement_slot_keeps_unverified_release_failed() {
 #[cfg(feature = "tauri-test")]
 #[test]
 fn recovery_focus_loss_preserves_needs_up_without_a_raw_attempt() {
+    let _send_lock = recovery_test_send_lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let (service, active, _authority) =
         quarantined_recovery_fixture("focus-lost-recovery", true, 0x0001, 0);
     reset_recovery_test_raw_sends();
@@ -1383,6 +1385,7 @@ fn recovery_focus_loss_preserves_needs_up_without_a_raw_attempt() {
 #[cfg(feature = "tauri-test")]
 #[test]
 fn recovery_from_focus_free_session_still_checks_origin_and_never_replays_probe_only_residual() {
+    let _send_lock = recovery_test_send_lock();
     let (service, active, _authority) =
         quarantined_recovery_fixture("focus-free-recovery", false, 0x0001, 0);
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
@@ -1409,6 +1412,7 @@ fn recovery_from_focus_free_session_still_checks_origin_and_never_replays_probe_
 #[cfg(feature = "tauri-test")]
 #[test]
 fn recovery_process_death_keeps_original_residual_and_never_sends() {
+    let _send_lock = recovery_test_send_lock();
     let (service, active, authority) =
         quarantined_recovery_fixture("dead-origin-recovery", false, 0x0001, 0);
     authority.set_process_identity_status_for_test(
@@ -1433,6 +1437,7 @@ fn recovery_process_death_keeps_original_residual_and_never_sends() {
 #[cfg(feature = "tauri-test")]
 #[test]
 fn recovery_owner_drift_keeps_original_residual_and_never_sends() {
+    let _send_lock = recovery_test_send_lock();
     let (service, active, authority) =
         quarantined_recovery_fixture("drifted-origin-recovery", false, 0x0001, 0);
     authority.set_process_identity_status_for_test(
@@ -1458,6 +1463,7 @@ fn recovery_owner_drift_keeps_original_residual_and_never_sends() {
 #[cfg(feature = "tauri-test")]
 #[test]
 fn recovery_attempt_does_not_retry_after_a_full_transport_and_inconclusive_probe() {
+    let _send_lock = recovery_test_send_lock();
     let (service, active, _authority) =
         quarantined_recovery_fixture("qpc-failed-recovery", false, 0x0001, 0);
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
