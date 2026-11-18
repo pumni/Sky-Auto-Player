@@ -4,16 +4,15 @@ locale: en
 slug: how-it-works
 title: How Sky Auto Player Works
 description: >-
-  Learn how Sky Auto Player reads sheet files, schedules notes with frame-aligned timing,
-  and sends keystrokes through the Windows SendInput API — without touching the game.
+  Learn how Sky Auto Player prepares a sheet, schedules notes, and sends keyboard input
+  through the Windows SendInput API.
 summary: >-
-  Sky Auto Player reads user-provided sheet files, schedules every note against a timing
-  model, and delivers keystrokes through the Windows SendInput API. It never reads game
-  memory, modifies game files, or injects code.
+  Sky Auto Player prepares user-provided sheets and schedules them in a native Windows
+  desktop player. Sender timing and game-side sampling are separate.
 category: getting-started
 order: 1
 published: '2026-08-08'
-updated: '2026-08-08'
+updated: '2026-11-18'
 draft: false
 showDiagram: true
 related:
@@ -22,87 +21,56 @@ related:
   - security-boundaries
 evidence:
   - category: architecture
-    label: Four-layer architecture overview
+    label: System architecture
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/architecture.md
   - category: security
-    label: Security mandates (SendInput only, no game tampering)
+    label: Security policy
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/SECURITY.md
-  - category: implementation
-    label: README — workflow and technical summary
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
   - category: architecture
-    label: Playback engine architecture
+    label: Playback engine contract
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md
 ---
 
-## What the software does
+## What it does
 
-Sky Auto Player reads a music sheet file that you provide, schedules every note, chord, and
-hold against a timing model, and delivers keystrokes to the active window through the Windows
-`SendInput` API — the same channel used by any standard keyboard macro. It does not
-read game memory, inspect game files, modify the game, inject code, or attach a debugger.
+Sky Auto Player reads a sheet file you provide, prepares its notes and chords,
+and schedules keyboard input for the Windows desktop. The game observes that
+input on its own schedule, so sender timing cannot guarantee which frame
+registers a note.
 
-The intended workflow is:
+A typical workflow is:
 
-1. Export a sheet from the [Sky Music editor](https://specy.github.io/skyMusic/) as JSON, `.skysheet`, or JSON-compatible TXT.
-2. Import the file through the desktop Library.
-3. Launch Sky Auto Player, select the song, switch to the game, and press your play hotkey.
+1. Export a sheet from the [Sky Music editor](https://specy.github.io/skyMusic/) as JSON, **.skysheet**, or JSON-compatible TXT.
+2. Import it through the desktop Library.
+3. Select the song, switch to Sky, and start playback with the configured control.
 
-The packaged `Sky-Auto-Player.exe` is the canonical and only supported Tauri desktop GUI. It
-provides the Library, Song Detail, Player Dock, Diagnostics, Settings, and Update surfaces.
+The supported desktop application is the Tauri app for Windows 11. It provides
+the Library, Song Detail, Player Dock, Diagnostics, Settings, and Update
+surfaces.
 
-Sky Auto Player sends keystrokes; the game observes them on its own schedule. The timing
-precision on the game side depends on Windows scheduling, the game's input sampling rate, and
-your hardware — not on the player itself.
+## From sheet to playback
 
-## How note scheduling works
+The desktop prepares and validates a sheet before playback begins. A native
+Rust worker then dispatches the prepared schedule against QPC deadlines. A
+fixed 15-slot executor tracks key holds and same-key release gaps. A healthy
+chord is sent as one prepared packet; when independent releases and new notes
+are due together, releases are ordered before new presses.
 
-Sky Auto Player does not replay a fixed sequence of delays. Instead, it schedules each note
-as an event on a timeline that advances against the sheet's tempo and the FPS you configure
-inside Sky. The core loop:
+Before each musical packet, the native sender checks the current foreground
+window and the retained target identity. A foreground event is only a hint to
+recheck focus. The Tauri shell coordinates pause and stop, joins the worker,
+and records retirement before publishing the result to the UI.
 
-- **Contiguous chord batches** — all notes in a chord are submitted in one `SendInput` call to
-  minimise sender-side skew between keys in the same chord.
-- **Hold and compatibility diagnostics** — the planner can report conversion or sustain
-  loss, and the sender applies physical hold floors. These floors describe sender policy.
-- **Hold-frame alignment** — the hold duration is expressed as 1.0, 1.25, or 1.5 game frames
-  at the FPS you select. The default is 1.0 frames.
-- **QPC timing** — the production sender uses a calibrated Frozen wake guard and QPC deadline
-  checks. Windows and the game sample input independently, so sender timing cannot guarantee
-  that the game registers every note or sustain.
+For the exact timing, cleanup, and recovery rules, see the
+[playback engine contract](https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md).
 
-Compatibility and risk diagnostics are available during preparation so users can review
-conversion or sustain limitations before playback.
+## Scope and limitations
 
-## Architecture overview
+Sky Auto Player sends ordinary Windows keyboard input through SendInput. It
+does not control the game's own input sampling loop or guarantee an in-game
+result. The full security boundary, including prohibited process and input
+techniques, is defined in the [security policy](https://github.com/pumni/Sky-Auto-Player/blob/main/SECURITY.md).
 
-The code follows a four-layer design:
-
-| Layer              | Responsibility                                                                    |
-| ------------------ | --------------------------------------------------------------------------------- |
-| **Domain**         | Pure timing models, schedules, and profiles. No I/O.                              |
-| **Orchestration**  | Scheduler and coordinator. No wall-clock or SendInput.                            |
-| **Infrastructure** | Focus tracking, hotkey listener, real-time sleeper, MMCSS registration.           |
-| **Platform**       | Windows backend: `SendInput`, waitable timer, MMCSS. Only place Win32 types live. |
-
-A Rust timing worker owns compilation, dispatch, focus, `SendInput` calls, cleanup, and native
-telemetry. The Tauri/React shell renders the desktop UI and native Rust application services own
-settings, catalog, playback, diagnostics, updates, and calibration. The production desktop uses
-the native command router and has no auxiliary process or fallback path.
-
-## What Sky Auto Player does not do
-
-- Read or write game memory
-- Modify, patch, or inspect game files
-- Inject DLLs or attach a debugger to any process
-- Install keyboard/input hooks (`SetWindowsHookEx`, `WH_KEYBOARD*`, etc.). One
-  audited out-of-context foreground watcher emits hints only and cannot authorize key sends.
-- Bypass anti-cheat systems
-- Guarantee in-game timing accuracy — sender-side timing is optimised, but the game decides
-  when to register keystrokes
-
-## Limitations
-
-- Windows 10 and 11 (64-bit) only. MMCSS real-time scheduling is a Windows API.
-- Automated playback may conflict with Sky's Terms of Service. Use responsibly and at your own risk.
-- Sky Auto Player is an unofficial community project, not affiliated with or endorsed by thatgamecompany.
+Automated playback may conflict with Sky's Terms of Service. Sky Auto Player is
+an unofficial community project and is not affiliated with or endorsed by
+thatgamecompany.

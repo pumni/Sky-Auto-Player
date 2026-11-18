@@ -8,7 +8,6 @@ Windows 11 Tauri 2/React desktop with Rust-native sheet playback for Sky.
   file tampering, keyboard/input hooks, injection, debugger attach, or
   anti-cheat bypass. The audited out-of-context foreground WinEvent adapter
   is a hint source only; see [SECURITY.md](SECURITY.md).
-  See [SECURITY.md](SECURITY.md).
 - Keep domain/orchestration separate from Win32 effects. Preserve native
   timing, focus, and cleanup; browser mocks do not qualify native timing.
   For related work read [architecture](docs/architecture.md) and

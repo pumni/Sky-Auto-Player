@@ -58,7 +58,7 @@ Each state has one owner and each module has a focused invariant:
 
 - `sky_app_core` owns pure application and domain policy (parsing, validation, sheet models).
 - `sky_native_adapters` encapsulates concrete filesystem, process, and Win32 host adapters.
-- `sky_player` owns session lifecycle, worker admission/control, QPC-based timing, target/focus gates, telemetry publication, and cleanup.
+- **sky_player** owns the playback worker, target authority, admission/control, QPC timing, telemetry, and worker cleanup. **sky_desktop_shell** owns playback-service orchestration, ordered worker join and retirement, post-join recovery coordination, and UI publication.
 - `sky_dispatch_core` owns pure schedule and action policy.
 - `sky_dispatch_win32` owns Windows wait, focus, priority, and `SendInput` boundaries.
 - `sky_desktop_shell` (`apps/desktop/src-tauri`) owns Tauri command decoding, delivery DTO translation, and the Rust-owned `UpdateService` policy boundary. It contains no song scheduling, risk analysis, persisted-settings migration, or realtime dispatch algorithms.
@@ -140,32 +140,26 @@ song file -> pure Rust parser/planner -> native playback adapter
 Playback ownership and realtime behavior are specified in
 [playback-engine.md](playback-engine.md); native and gameplay qualification is
 specified in [playback-verification.md](playback-verification.md). This overview
-records only the repository boundary: `sky_player` owns playback lifecycle and
-orchestration, `sky_dispatch_core` owns musical scheduling policy, and
-`sky_dispatch_win32` owns physical Windows effects. Dry-run playback does not
-reach the physical input backend.
+records only the repository boundary: the Tauri shell owns
+playback-service orchestration and ordered retirement; **sky_player** owns the
+native worker, timing, and sender admission; **sky_dispatch_core** owns musical
+scheduling policy; and **sky_dispatch_win32** owns Windows physical effects.
+Dry-run playback does not reach the physical input backend.
 
 ## Calibration and update boundaries
 
-Calibration is coordinated by the native application and measures through the
-out-of-process Rust calibration executable. Evidence is bounded, validated for
-schema, host, protocol, provenance, buckets, quantiles, and timing envelope
-before atomic cache publication. Prepared playback is invalidated after an
-admitted successful publication.
+Calibration is coordinated by the native application and measured by the
+out-of-process Rust calibration executable. Evidence is validated before
+atomic cache publication; a successful admitted publication invalidates
+prepared playback. See the calibration source and tests for current evidence
+requirements.
 
-The Rust `UpdateService` owns stable/beta authority selection, bounded update
-state/progress, playback admission, and the Tauri updater lifecycle. React
-never receives endpoint, key, artifact, or downgrade policy data. Production
-authority is fixed to the dedicated v4 stable/beta metadata paths; missing
-metadata or missing/invalid v4 updater trust material fails closed. Production
-Authenticode uses the governed `unsigned-zero-budget` policy; no provider
-credentials are required, and qualification rejects signed or unexpected PE state.
-The packaged previous-v4 to candidate-v4 fixture is test-only and consumes the
-exact installer/signature bytes re-downloaded from a release draft.
-The retired v3 transaction/recovery implementation is preserved in Git history
-and the `v3-maintenance` line; it is not part of the current workspace or
-product graph.
-
+The Rust UpdateService coordinates update state and invokes the Tauri updater.
+Release authority, signing, artifact integrity, and packaging requirements
+remain owned by [release authority](v4-release-authority.md) and
+[distribution](distribution-and-update.md). React does not receive updater
+secrets or release policy. The packaged previous-v4 to candidate-v4 fixture
+remains test-only.
 ## Unsafe boundary and test seams
 
 Production unsafe Rust is limited to the reviewed platform boundaries below.

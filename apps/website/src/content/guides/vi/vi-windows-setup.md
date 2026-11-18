@@ -4,14 +4,14 @@ locale: vi
 slug: windows-setup
 title: Cài Đặt Windows và Lần Khởi Động Đầu Tiên
 description: >-
-  Hướng dẫn từng bước cài đặt Sky Auto Player trên Windows 10 hoặc 11: tải installer Tauri,
+  Hướng dẫn từng bước cài đặt Sky Auto Player trên Windows 11: tải installer Tauri,
   cài đặt, thêm bài hát và cấu hình hotkey.
 summary: >-
   Tải installer Tauri NSIS canonical, cài cho current user và nhập sheet qua Library desktop.
 category: getting-started
 order: 3
 published: '2026-08-08'
-updated: '2026-08-08'
+updated: '2026-11-18'
 draft: false
 related:
   - sheet-formats
@@ -28,7 +28,7 @@ evidence:
 
 ## Yêu cầu hệ thống
 
-- Windows 10 hoặc 11, 64-bit
+- Windows 11, 64-bit
 - Không cần developer toolchain hay scripting runtime riêng — bản đóng gói chạy độc lập
 - Không cần quyền quản trị viên cho cài đặt current-user
 - Không có installer toàn hệ thống hoặc service
