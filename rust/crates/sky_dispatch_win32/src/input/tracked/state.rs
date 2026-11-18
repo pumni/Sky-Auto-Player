@@ -49,6 +49,55 @@ impl TrackedKeyState {
         Self::default()
     }
 
+    /// Reconstruct a terminal release journal for the one post-join recovery
+    /// owner. Recovery accepts only a complete, disjoint residual and the
+    /// original immutable process authority; it cannot bind a replacement
+    /// target or infer a profile from the current layout.
+    pub fn from_terminal_release_residual(
+        profile: [super::super::profile::PhysicalKey; sky_dispatch_core::model::MAX_KEYS],
+        owner: ReleaseOwnerProof,
+        outstanding_mask: u16,
+        needs_up_mask: u16,
+        needs_probe_mask: u16,
+    ) -> Result<Self, String> {
+        let valid_mask = super::super::scan_code::FULL_INSTRUMENT_MASK;
+        if outstanding_mask & !valid_mask != 0
+            || needs_up_mask & !valid_mask != 0
+            || needs_probe_mask & !valid_mask != 0
+            || needs_up_mask & needs_probe_mask != 0
+            || needs_up_mask | needs_probe_mask != outstanding_mask
+        {
+            return Err("terminal release residual masks are inconsistent".into());
+        }
+        let authority = owner.authority().ok_or_else(|| {
+            "terminal release residual has no process identity authority".to_string()
+        })?;
+        let owner_pid = owner
+            .owner_pid()
+            .ok_or_else(|| "terminal release residual has no original owner PID".to_string())?;
+        if owner.target_hwnd() == 0
+            || owner.target_generation() == 0
+            || owner_pid == 0
+            || authority.identity().hwnd != owner.target_hwnd()
+            || authority.identity().owner_pid != owner_pid
+        {
+            return Err(
+                "terminal release residual origin proof is incomplete or inconsistent".into(),
+            );
+        }
+        let validated = super::super::profile::InstrumentKeyProfile::try_from_spec(
+            super::super::profile::InstrumentKeyProfileSpec { keys: profile },
+        )
+        .map_err(|error| format!("terminal release profile is invalid: {error}"))?;
+        let mut state = Self::with_profile(
+            super::super::profile::MaterializedInstrumentKeyProfile::from_validated(validated),
+        );
+        state.session_release_owner = Some(owner);
+        state.failed_release_mask = needs_up_mask;
+        state.needs_probe_mask = needs_probe_mask;
+        Ok(state)
+    }
+
     /// Return every key mask that still carries a release obligation.
     pub fn release_obligation_mask(&self) -> u16 {
         self.active_mask

@@ -16,7 +16,9 @@ the game samples.
 
 - **SendInput only:** All physical gameplay input uses the public Win32
   `SendInput` API. The engine never accesses game memory, injects DLLs,
-  installs hooks, or bypasses anti-cheat boundaries. See [SECURITY.md](../SECURITY.md).
+  installs keyboard/input hooks, or bypasses anti-cheat boundaries. The
+  audited foreground WinEvent callback is a coalesced hint only and never
+  authorizes a send. See [SECURITY.md](../SECURITY.md).
 - **Single 15-slot executor:** Musical playback is driven by a single
   15-slot executor ([`DispatchExecutor`](../rust/crates/sky_dispatch_core/src/executor.rs)).
   There are no independent dual cursors for Down and Up events.

@@ -92,7 +92,8 @@ Một Rust timing worker sở hữu vòng lặp dispatch: biên dịch lịch n�
 - Đọc hay ghi bộ nhớ của process khác
 - Sửa đổi, vá lỗi, hay kiểm tra file game
 - Inject DLL hay attach debugger vào bất kỳ process nào
-- Cài đặt Windows hook (`SetWindowsHookEx`, v.v.)
+- Cài đặt keyboard/input hook (`SetWindowsHookEx`, `WH_KEYBOARD*`, v.v.). Một
+  foreground watcher out-of-context đã được audit chỉ phát hint, không cấp quyền gửi phím.
 - Bypass hệ thống chống gian lận
 - Đảm bảo độ chính xác timing về phía game — timing phía sender được tối ưu, nhưng game
   quyết định khi nào đăng ký phím

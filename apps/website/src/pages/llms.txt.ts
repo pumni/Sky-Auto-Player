@@ -40,7 +40,7 @@ export function GET() {
 
 - The application is a Windows music playback helper, not a game modification tool.
 - It reads user-provided song files and simulates keyboard input through the Windows SendInput API only.
-- It does not read game memory, modify game files, inject code, install hooks, or bypass anti-cheat systems.
+- It does not read game memory, modify game files, inject code, install keyboard/input hooks, or bypass anti-cheat systems. One audited out-of-context foreground event watcher publishes hints only and cannot authorize input.
 - Source code: https://github.com/pumni/Sky-Auto-Player (GPL-3.0)
 `;
   return new Response(body, {

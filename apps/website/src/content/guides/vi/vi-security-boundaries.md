@@ -47,10 +47,16 @@ Sky Auto Player **không bao giờ**:
 - Sửa đổi, vá lỗi, hay kiểm tra file game
 - Inject DLL vào bất kỳ process nào
 - Attach debugger vào bất kỳ process nào
-- Cài đặt Windows hook (`SetWindowsHookEx`, `SetWinEventHook`, v.v.) cho bất kỳ mục tiêu nào
+- Cài đặt keyboard/input hook (`SetWindowsHookEx`, `WH_KEYBOARD*`, v.v.)
 - Bypass hệ thống chống gian lận
 
 Các hạn chế này áp dụng cho tất cả code trong repository — không chỉ code nhắm mục tiêu vào game.
+
+Ngoại lệ duy nhất là adapter đã được audit tại
+`rust/crates/sky_dispatch_win32/src/focus/foreground_watcher.rs`. Adapter này
+chỉ đăng ký `EVENT_SYSTEM_FOREGROUND` với `WINEVENT_OUTOFCONTEXT`; callback chỉ
+phát hint HWND và không cấp quyền gửi input. Hook in-context và keyboard/input
+hook vẫn bị cấm.
 
 ### 2. Chỉ dùng SendInput
 

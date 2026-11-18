@@ -95,7 +95,8 @@ the native command router and has no auxiliary process or fallback path.
 - Read or write game memory
 - Modify, patch, or inspect game files
 - Inject DLLs or attach a debugger to any process
-- Install Windows hooks (`SetWindowsHookEx`, etc.)
+- Install keyboard/input hooks (`SetWindowsHookEx`, `WH_KEYBOARD*`, etc.). One
+  audited out-of-context foreground watcher emits hints only and cannot authorize key sends.
 - Bypass anti-cheat systems
 - Guarantee in-game timing accuracy — sender-side timing is optimised, but the game decides
   when to register keystrokes

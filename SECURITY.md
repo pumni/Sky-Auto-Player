@@ -18,12 +18,17 @@ Sky Auto Player **never**:
 
 - modifies or patches game files;
 - reads or writes another process's memory;
-- installs Windows hooks (`SetWindowsHookEx`, `SetWinEventHook`, etc.), regardless of target;
+- installs keyboard/input hooks (`SetWindowsHookEx`, `WH_KEYBOARD*`, and similar);
 - injects DLLs or code into another process;
 - attaches a debugger to another process;
 - bypasses anti-cheat or interferes with anti-cheat operation.
 
-The hook prohibition applies to input/keyboard hooks as well as game-targeted hooks.
+The only hook exception is the audited Win32 adapter at
+`rust/crates/sky_dispatch_win32/src/focus/foreground_watcher.rs`. It registers
+exactly `EVENT_SYSTEM_FOREGROUND` with `WINEVENT_OUTOFCONTEXT`; its callback
+publishes a coalesced HWND hint only. The hint does not authorize input or
+change the immutable target. In-context hooks, keyboard hooks, and hooks that
+observe or synthesize input remain forbidden.
 
 ### 2. `SendInput` only for gameplay input
 
@@ -52,7 +57,7 @@ ReceiveOnly sink.
 ## Auditing
 
 The mandates above are enforced by review and by the Rust xtask security audit, which scans the
-native product source for forbidden hooks, process-memory APIs, remote-thread/debug tooling,
+native product source for forbidden input hooks, process-memory APIs, remote-thread/debug tooling,
 legacy input APIs, and disallowed Win32 surfaces. It also enforces the explicit approved
 `windows_sys` module boundary. New references fail the audit.
 Historical exceptions, if any, are recorded in `.config/security_audit_baseline.json` with their

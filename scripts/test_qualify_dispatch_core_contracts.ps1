@@ -430,7 +430,7 @@ try { Assert-FrameSnapshotManifestIdentity -Manifest $wrongFramePinnedHash -Expe
 if (-not $wrongFrameHashRejected) { throw 'FrameSnapshot accepted a baseline source tree hash other than the pinned tree' }
 
 $frameBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
-$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3'\)"
+$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle'\)"
 if ($frameBuilderSource -notmatch $m3ProfileSet -or
     $acceptanceSource -notmatch $m3ProfileSet) {
     throw 'FrameSnapshot profile is missing from an immutable build or case-runner boundary'
@@ -1578,7 +1578,7 @@ if ($sessionRedesignRunner -notmatch 'if \(\$isSessionRedesignProfile -and \$Sta
     -not $sessionRedesignRunner.Contains('[string[]]$performanceWorkloads') -or
     $sessionRedesignRunner -match '\$performanceWorkloads\.Count' -or
     -not $sessionRedesignRunner.Contains('New-QualificationRunnerFailureArtifacts') -or
-    -not $sessionRedesignBuilder.Contains('schema_version = if ($isSessionRedesignProfile) { $sessionRedesignProfile.HarnessManifestSchemaVersion } else { 1 }') -or
+    -not $sessionRedesignBuilder.Contains('schema_version = if ($isSessionRedesignProfile) { $sessionRedesignProfile.HarnessManifestSchemaVersion } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.HarnessManifestSchemaVersion } else { 1 }') -or
     $sessionRedesignManifestValidator -notmatch "schema_version.*profile\.HarnessManifestSchemaVersion" -or
     -not $sessionRedesignOrchestration.Contains('New-DispatchSessionRedesignM3FinalPlan') -or
     -not $sessionRedesignOrchestration.Contains('Invoke-DispatchSessionRedesignM3FinalPlan') -or
@@ -1586,5 +1586,25 @@ if ($sessionRedesignRunner -notmatch 'if \(\$isSessionRedesignProfile -and \$Sta
     throw 'DispatchSessionRedesignM3 Final path is missing the typed-plan dispatcher, fail-stop runner, or provenance inventory'
 }
 
+$playbackCoreProfileSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Raw
+$playbackCoreBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
+$playbackCoreManifestSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Raw
+$playbackCoreRunnerSource = Get-Content -LiteralPath $runnerPath -Raw
+if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -or
+    -not $playbackCoreProfileSource.Contains("BaselineRevision = '2544daa13eb23fdf03bd922e65b96fcffaba421c'") -or
+    -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = 'refactor/playback-core-lifecycle'") -or
+    -not $playbackCoreProfileSource.Contains("'near-minimum-retrigger'") -or
+    -not $playbackCoreBuilderSource.Contains('Assert-PlaybackCoreLifecycleSourceCheckout') -or
+    -not $playbackCoreBuilderSource.Contains("['qualification_plan'] = [ordered]@{") -or
+    -not $playbackCoreBuilderSource.Contains("cargo_lock_sha256") -or
+    -not $playbackCoreManifestSource.Contains('Assert-PlaybackCoreLifecycleManifestIdentity') -or
+    -not $playbackCoreManifestSource.Contains('Assert-PlaybackCoreLifecycleRunnerProvenance') -or
+    -not $playbackCoreRunnerSource.Contains('[switch]$PlanOnly') -or
+    -not $playbackCoreRunnerSource.Contains('native_attempts=0 target_capture=NOT_RUN') -or
+    -not $playbackCoreRunnerSource.Contains('PlaybackCoreLifecycle native execution is disabled')) {
+    throw 'PlaybackCoreLifecycle exact-source manifests, workload matrix, immutable provenance, or no-send dry-run boundary is incomplete'
+}
+
 Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 schema-v2 provenance inventory, mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
+Write-Output 'PASS: PlaybackCoreLifecycle exact baseline/candidate provenance, Windows dist manifest, workload plan, and no-send runner dry check contract pass'
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

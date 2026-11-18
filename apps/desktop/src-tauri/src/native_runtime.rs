@@ -61,7 +61,7 @@ use sky_player::adapter_support::{ActionKind as DispatchActionKind, KeyActionInp
 use sky_player::engine::{
     BackendConfig, DispatchProfile, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot,
     FocusOptions, NativeDispatchSession, NativeSessionOptions, PriorityOptions, TelemetryMode,
-    TelemetryOptions, TimingOptions, WaitOptions,
+    TelemetryOptions, TimingOptions, WaitOptions, WorkerTerminalResult,
 };
 use smallvec::SmallVec;
 use std::collections::{BTreeSet, HashMap, VecDeque};

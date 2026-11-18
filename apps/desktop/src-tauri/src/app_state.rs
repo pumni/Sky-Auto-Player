@@ -4,6 +4,7 @@ use crate::ui_events::UiEvent;
 #[cfg(any(test, feature = "tauri-test"))]
 use sky_native_adapters::AppPaths;
 use sky_native_adapters::AppResources;
+use sky_player::engine::TerminalReleaseResidual;
 #[cfg(any(test, feature = "tauri-test"))]
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -29,6 +30,9 @@ impl Default for ActivityCoordinator {
 struct ActivityState {
     physical_playback: Option<String>,
     physical_release_quarantined: bool,
+    quarantined_session_id: Option<String>,
+    recovery_owner_session_id: Option<String>,
+    quarantined_release_residual: Option<TerminalReleaseResidual>,
     calibration_active: bool,
     update_installing: bool,
     closing: bool,
@@ -165,27 +169,126 @@ impl ActivityCoordinator {
     }
 
     fn release_playback(&self, session_id: &str) {
-        if let Ok(mut state) = self.state.lock()
-            && state.physical_playback.as_deref() == Some(session_id)
-        {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.physical_playback.as_deref() == Some(session_id) {
             state.physical_playback = None;
         }
     }
 
     pub(crate) fn quarantine_playback(&self, session_id: &str) -> bool {
-        let Ok(mut state) = self.state.lock() else {
-            return false;
-        };
-        if state
-            .physical_playback
-            .as_deref()
-            .is_some_and(|current| current != session_id)
-        {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.quarantined_session_id.as_deref() == Some(session_id) {
+            return true;
+        }
+        if state.physical_playback.as_deref() != Some(session_id) {
             return false;
         }
         state.physical_playback = None;
         state.physical_release_quarantined = true;
+        state.quarantined_session_id = Some(session_id.to_string());
+        state.recovery_owner_session_id = None;
+        state.quarantined_release_residual = None;
         true
+    }
+
+    pub(crate) fn store_quarantined_release_residual(
+        &self,
+        session_id: &str,
+        residual: TerminalReleaseResidual,
+    ) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.quarantined_session_id.as_deref() != Some(session_id)
+            || state.recovery_owner_session_id.is_some()
+            || residual.outstanding_mask == 0
+            || residual.needs_up_mask & residual.needs_probe_mask != 0
+            || (residual.needs_up_mask | residual.needs_probe_mask) != residual.outstanding_mask
+        {
+            return false;
+        }
+        state.quarantined_release_residual = Some(residual);
+        true
+    }
+
+    pub(crate) fn claim_quarantined_release_residual(
+        &self,
+        session_id: &str,
+    ) -> Option<TerminalReleaseResidual> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !state.physical_release_quarantined
+            || state.quarantined_session_id.as_deref() != Some(session_id)
+            || state.recovery_owner_session_id.is_some()
+        {
+            return None;
+        }
+        let residual = state.quarantined_release_residual.clone()?;
+        state.recovery_owner_session_id = Some(session_id.to_string());
+        Some(residual)
+    }
+
+    pub(crate) fn update_quarantined_release_residual(
+        &self,
+        session_id: &str,
+        residual: TerminalReleaseResidual,
+    ) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.recovery_owner_session_id.as_deref() != Some(session_id)
+            || state.quarantined_session_id.as_deref() != Some(session_id)
+            || residual.needs_up_mask & residual.needs_probe_mask != 0
+            || (residual.needs_up_mask | residual.needs_probe_mask) != residual.outstanding_mask
+        {
+            return false;
+        }
+        state.quarantined_release_residual = Some(residual);
+        true
+    }
+
+    pub(crate) fn finish_quarantined_recovery(
+        &self,
+        session_id: &str,
+        verified_residual: &TerminalReleaseResidual,
+    ) -> bool {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.recovery_owner_session_id.as_deref() != Some(session_id)
+            || state.quarantined_session_id.as_deref() != Some(session_id)
+            || verified_residual.outstanding_mask != 0
+            || verified_residual.needs_up_mask != 0
+            || verified_residual.needs_probe_mask != 0
+        {
+            return false;
+        }
+        state.physical_release_quarantined = false;
+        state.quarantined_session_id = None;
+        state.recovery_owner_session_id = None;
+        state.quarantined_release_residual = None;
+        true
+    }
+
+    pub(crate) fn abandon_quarantined_recovery(&self, session_id: &str) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if state.recovery_owner_session_id.as_deref() == Some(session_id) {
+            state.recovery_owner_session_id = None;
+        }
     }
 
     pub(crate) fn physical_release_is_quarantined(&self) -> bool {
@@ -493,6 +596,7 @@ impl AppState {
 mod tests {
     use super::{ActivityCoordinator, ActivityReservationError, AppState, TestSeams};
     use sky_native_adapters::AppPaths;
+    use sky_player::engine::TerminalReleaseResidual;
     use std::sync::{Arc, Barrier, Mutex, mpsc};
     use std::thread;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -636,6 +740,54 @@ mod tests {
             activity.reserve_update().map(|_| ()),
             Err(ActivityReservationError::PhysicalReleaseUnverified)
         );
+    }
+
+    #[test]
+    fn quarantined_residual_has_one_session_scoped_recovery_owner() {
+        let activity = ActivityCoordinator::default();
+        let lease = activity
+            .reserve_playback("recovery-session")
+            .expect("playback reservation");
+        assert!(lease.quarantine());
+        let profile = sky_dispatch_win32::input::InstrumentKeyProfileSpec::canonical().keys;
+        let residual = TerminalReleaseResidual {
+            outstanding_mask: 0x0005,
+            needs_up_mask: 0x0001,
+            needs_probe_mask: 0x0004,
+            owner: None,
+            profile,
+        };
+        assert!(activity.store_quarantined_release_residual("recovery-session", residual.clone(),));
+        assert!(
+            activity
+                .claim_quarantined_release_residual("stale-session")
+                .is_none()
+        );
+        let claimed = activity
+            .claim_quarantined_release_residual("recovery-session")
+            .expect("session recovery claim");
+        assert_eq!(claimed.outstanding_mask, 0x0005);
+        assert!(
+            activity
+                .claim_quarantined_release_residual("recovery-session")
+                .is_none()
+        );
+
+        activity.abandon_quarantined_recovery("recovery-session");
+        let residual = activity
+            .claim_quarantined_release_residual("recovery-session")
+            .expect("a failed bounded attempt keeps the residual claimable");
+        assert!(!activity.finish_quarantined_recovery("recovery-session", &residual));
+        let verified_residual = TerminalReleaseResidual {
+            outstanding_mask: 0,
+            needs_up_mask: 0,
+            needs_probe_mask: 0,
+            owner: residual.owner.clone(),
+            profile: residual.profile,
+        };
+        assert!(activity.finish_quarantined_recovery("recovery-session", &verified_residual));
+        assert!(!activity.physical_release_is_quarantined());
+        assert!(activity.reserve_playback("successor").is_ok());
     }
 
     #[test]

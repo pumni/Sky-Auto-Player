@@ -47,10 +47,16 @@ Sky Auto Player **never**:
 - Modifies, patches, or inspects game files
 - Injects DLLs into any process
 - Attaches a debugger to any process
-- Installs Windows hooks (`SetWindowsHookEx`, `SetWinEventHook`, or similar) on any target
+- Installs keyboard/input hooks (`SetWindowsHookEx`, `WH_KEYBOARD*`, or similar)
 - Bypasses anti-cheat systems
 
 These restrictions apply to all code in the repository — not just code that targets the game.
+
+The only exception is the audited adapter at
+`rust/crates/sky_dispatch_win32/src/focus/foreground_watcher.rs`. It registers
+only `EVENT_SYSTEM_FOREGROUND` with `WINEVENT_OUTOFCONTEXT`; the callback emits
+an HWND hint and cannot authorize input. In-context and keyboard/input hooks
+remain forbidden.
 
 ### 2. SendInput only
 

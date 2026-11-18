@@ -1,4 +1,20 @@
 use super::*;
+use sky_player::engine::WorkerTerminalResult;
+
+#[cfg(test)]
+thread_local! {
+    static RECOVERY_TEST_RAW_SENDS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(in crate::native_runtime) fn reset_recovery_test_raw_sends() {
+    RECOVERY_TEST_RAW_SENDS.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(in crate::native_runtime) fn recovery_test_raw_sends() -> u64 {
+    RECOVERY_TEST_RAW_SENDS.with(std::cell::Cell::get)
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(in crate::native_runtime) enum TerminalReleaseEvidence {
@@ -189,16 +205,37 @@ pub(in crate::native_runtime) fn terminal_publication_after_worker(
     }
 }
 
-pub(in crate::native_runtime) fn terminal_retirement_after_worker(
+pub(in crate::native_runtime) fn terminal_retirement_after_worker_with_result(
     status: EnginePollStatus,
     snapshot: &EngineSnapshot,
     physical: bool,
+    worker_result: Option<&WorkerTerminalResult>,
 ) -> TerminalRetirement {
-    let release = terminal_release_evidence_after_startup(physical, snapshot);
+    let release = worker_result.map_or_else(
+        || terminal_release_evidence_after_startup(physical, snapshot),
+        |result| {
+            if !physical {
+                TerminalReleaseEvidence::NotRequired
+            } else if result.residual.outstanding_mask == 0 {
+                TerminalReleaseEvidence::Verified { obligation_mask: 0 }
+            } else {
+                TerminalReleaseEvidence::Unverified {
+                    obligation_mask: result.residual.outstanding_mask,
+                    detail: format!(
+                        "worker terminal result retained release residual (needs_up=0x{:04x}, needs_probe=0x{:04x})",
+                        result.residual.needs_up_mask,
+                        result.residual.needs_probe_mask,
+                    ),
+                }
+            }
+        },
+    );
     let publication = terminal_publication_after_worker(
         status,
         &release,
-        snapshot.terminal_error.as_deref(),
+        worker_result
+            .and_then(|result| result.terminal_error.as_deref())
+            .or(snapshot.terminal_error.as_deref()),
         snapshot.last_error.as_deref(),
         snapshot.terminal_trigger_reason.as_deref(),
         snapshot.failed_release_count as u64,
@@ -210,18 +247,29 @@ pub(in crate::native_runtime) fn terminal_retirement_after_worker(
     }
 }
 
+#[cfg(test)]
 pub(in crate::native_runtime) fn decide_playback_handoff(
     joined: &Result<bool, String>,
     status: Option<EnginePollStatus>,
     snapshot: Option<&EngineSnapshot>,
     physical: bool,
 ) -> PlaybackHandoffDecision {
+    decide_playback_handoff_with_result(joined, status, snapshot, physical, None)
+}
+
+pub(in crate::native_runtime) fn decide_playback_handoff_with_result(
+    joined: &Result<bool, String>,
+    status: Option<EnginePollStatus>,
+    snapshot: Option<&EngineSnapshot>,
+    physical: bool,
+    worker_result: Option<&WorkerTerminalResult>,
+) -> PlaybackHandoffDecision {
     if !matches!(joined, Ok(true)) {
         return PlaybackHandoffDecision::AwaitQuiescence;
     }
     match (status, snapshot) {
         (Some(status), Some(snapshot)) if status.is_terminal() => PlaybackHandoffDecision::Retire(
-            terminal_retirement_after_worker(status, snapshot, physical),
+            terminal_retirement_after_worker_with_result(status, snapshot, physical, worker_result),
         ),
         (Some(status), None) if !physical && status.is_terminal() => {
             let publication = match status {
@@ -392,8 +440,16 @@ pub(in crate::native_runtime) fn release_terminal_ownership(
     active: &Arc<NativeActivePlayback>,
     retirement: TerminalRetirement,
 ) -> Result<(), String> {
+    *active
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = match &retirement.publication {
+        PlaybackTerminalPublication::Finished { .. } => PlaybackSessionState::Finished,
+        PlaybackTerminalPublication::Failed { .. } => PlaybackSessionState::Failed,
+    };
+    commit_terminal_status(active_slot, last_terminal, active, &retirement)?;
     release_terminal_resources(active, &retirement)?;
-    clear_terminal_ownership(active_slot, last_terminal, active, retirement)
+    retire_active_slot(active_slot, last_terminal, active)
 }
 
 pub(in crate::native_runtime) fn release_terminal_resources(
@@ -405,12 +461,12 @@ pub(in crate::native_runtime) fn release_terminal_resources(
     active
         .pending
         .lock()
-        .map_err(|_| "native playback control lock poisoned".to_string())?
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .take();
     let lease = active
         .activity_lease
         .lock()
-        .map_err(|_| "native playback activity lock poisoned".to_string())?
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .take();
     let release_verified = match &retirement.release {
         TerminalReleaseEvidence::Unverified { .. } => {
@@ -420,6 +476,21 @@ pub(in crate::native_runtime) fn release_terminal_resources(
             let quarantined = lease_quarantined || coordinator_quarantined;
             if !quarantined {
                 return Err("physical release quarantine could not be established".into());
+            }
+            if active.physical
+                && let Some(result) = active
+                    .terminal_result
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_ref()
+                && result.residual.outstanding_mask != 0
+                && !active
+                    .activity
+                    .store_quarantined_release_residual(&active.session_id, result.residual.clone())
+            {
+                return Err(
+                    "terminal release residual could not be committed to its quarantine".into(),
+                );
             }
             false
         }
@@ -434,28 +505,253 @@ pub(in crate::native_runtime) fn release_terminal_resources(
     Ok(())
 }
 
-pub(in crate::native_runtime) fn clear_terminal_ownership(
+/// Give the single post-join recovery owner one bounded cleanup-drain
+/// invocation. Any unresolved journal is written back to ActivityCoordinator
+/// before ownership is relinquished, so a later attempt cannot invent or
+/// broaden its origin/profile/masks.
+pub(in crate::native_runtime) fn recover_quarantined_release_once(
+    active: &NativeActivePlayback,
+    last_terminal: &Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
+) -> Result<(), String> {
+    if !active.worker_quiescent.load(Ordering::Acquire) {
+        return Err("release recovery requires a joined worker".into());
+    }
+    let Some(residual) = active
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+    else {
+        return Ok(());
+    };
+    let Some(origin) = residual.owner.as_ref() else {
+        let _ = active
+            .activity
+            .update_quarantined_release_residual(&active.session_id, residual);
+        active
+            .activity
+            .abandon_quarantined_recovery(&active.session_id);
+        return Err("quarantined residual has no original owner proof".into());
+    };
+    let Some(authority) = origin.authority().cloned() else {
+        let _ = active
+            .activity
+            .update_quarantined_release_residual(&active.session_id, residual);
+        active
+            .activity
+            .abandon_quarantined_recovery(&active.session_id);
+        return Err("quarantined residual has no retained process authority".into());
+    };
+    let Some(owner_pid) = origin.owner_pid() else {
+        let _ = active
+            .activity
+            .update_quarantined_release_residual(&active.session_id, residual);
+        active
+            .activity
+            .abandon_quarantined_recovery(&active.session_id);
+        return Err("quarantined residual has no original owner PID".into());
+    };
+    let foreground_required = origin.foreground_required();
+    let target_hwnd = origin.target_hwnd();
+    let mut tracked =
+        match sky_dispatch_win32::input::TrackedKeyState::from_terminal_release_residual(
+            residual.profile,
+            origin.clone(),
+            residual.outstanding_mask,
+            residual.needs_up_mask,
+            residual.needs_probe_mask,
+        ) {
+            Ok(tracked) => tracked,
+            Err(error) => {
+                let _ = active
+                    .activity
+                    .update_quarantined_release_residual(&active.session_id, residual);
+                active
+                    .activity
+                    .abandon_quarantined_recovery(&active.session_id);
+                return Err(error);
+            }
+        };
+    #[cfg(test)]
+    tracked.set_emitter(|scan_codes, _| {
+        RECOVERY_TEST_RAW_SENDS.with(|count| count.set(count.get().saturating_add(1)));
+        sky_dispatch_win32::input::PlatformSendResult {
+            requested: scan_codes.len() as u8,
+            inserted: scan_codes.len() as u8,
+            started_ticks: sky_dispatch_win32::clock::QpcTicks::ZERO,
+            completed_ticks: Some(sky_dispatch_win32::clock::QpcTicks::ZERO),
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    tracked.set_probe(|_, _| sky_dispatch_win32::input::InstrumentPhysicalState::Inconclusive);
+    let drain = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tracked.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+            target_hwnd,
+            |mask, proof| {
+                if mask == 0 || !proof.same_owner(origin) {
+                    return Err("recovery release owner differs from the journal origin".into());
+                }
+                if authority.verify_final_process_identity(target_hwnd, owner_pid)
+                    != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+                {
+                    return Err("original process identity is no longer continuous".into());
+                }
+                if foreground_required
+                    && !matches!(
+                        sky_dispatch_win32::focus::foreground_window_owner_matches(
+                            target_hwnd,
+                            owner_pid,
+                        ),
+                        sky_dispatch_win32::focus::ForegroundOwnerMatch::Match
+                    )
+                {
+                    return Err(
+                        "original window is no longer foreground-owned by its process".into(),
+                    );
+                }
+                Ok(())
+            },
+            || {
+                if authority.continuity()
+                    != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+                {
+                    return Err("original process/window identity is no longer continuous".into());
+                }
+                let foreground = !foreground_required
+                    || matches!(
+                        sky_dispatch_win32::focus::foreground_window_owner_matches(
+                            target_hwnd,
+                            owner_pid,
+                        ),
+                        sky_dispatch_win32::focus::ForegroundOwnerMatch::Match
+                    );
+                Ok(sky_dispatch_win32::input::CleanupDrainDecision {
+                    // A recovery Up is permitted only in the exact original
+                    // foreground. Terminal QPC fallback remains finite.
+                    terminal_requested: foreground,
+                    origin_foreground: foreground,
+                })
+            },
+        )
+    }));
+    let updated = terminal_residual_from_tracked(&tracked, &residual);
+    let verified = matches!(&drain, Ok(outcome) if outcome.release_outcome.released_successfully
+        && outcome.release_outcome.stuck_mask == 0
+        && !outcome.release_outcome.verification_inconclusive
+        && updated.outstanding_mask == 0);
+    if verified {
+        if active
+            .activity
+            .finish_quarantined_recovery(&active.session_id, &updated)
+        {
+            active.release_verified.store(true, Ordering::Release);
+            let mut terminal = last_terminal
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(terminal) = terminal
+                .as_mut()
+                .filter(|terminal| terminal.session_id == active.session_id)
+            {
+                terminal.terminal_release_verified = Some(true);
+                terminal.release_obligation_mask = Some(0);
+            }
+            return Ok(());
+        }
+        active
+            .activity
+            .abandon_quarantined_recovery(&active.session_id);
+        return Err("recovery owner lost its session quarantine before commit".into());
+    }
+
+    let stored = active
+        .activity
+        .update_quarantined_release_residual(&active.session_id, updated);
+    active
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+    if !stored {
+        return Err("unresolved recovery residual could not be re-committed".into());
+    }
+    match drain {
+        Ok(outcome) => Err(format!(
+            "release recovery remains quarantined (needs_up=0x{:04x}, needs_probe=0x{:04x}, verdict={:?}, withheld={:?})",
+            outcome.needs_up_mask,
+            outcome.needs_probe_mask,
+            outcome.probe_verdict,
+            outcome.withheld_reason,
+        )),
+        Err(_) => Err("release recovery panicked; journal remains quarantined".into()),
+    }
+}
+
+fn terminal_residual_from_tracked(
+    tracked: &sky_dispatch_win32::input::TrackedKeyState,
+    prior: &sky_player::engine::TerminalReleaseResidual,
+) -> sky_player::engine::TerminalReleaseResidual {
+    let outstanding_mask = tracked.release_obligation_mask();
+    sky_player::engine::TerminalReleaseResidual {
+        outstanding_mask,
+        needs_up_mask: tracked.needs_up_mask(),
+        needs_probe_mask: tracked.needs_probe_mask,
+        owner: prior.owner.clone(),
+        profile: std::array::from_fn(|slot| tracked.instrument_key_profile().physical_key(slot)),
+    }
+}
+
+fn commit_terminal_status(
     active_slot: &Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
     last_terminal: &Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
     active: &Arc<NativeActivePlayback>,
-    retirement: TerminalRetirement,
+    retirement: &TerminalRetirement,
 ) -> Result<(), String> {
-    let mut slot = active_slot
+    let slot = active_slot
         .lock()
-        .map_err(|_| "native active-playback lock poisoned".to_string())?;
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut terminal_slot = last_terminal
         .lock()
-        .map_err(|_| "native terminal-session lock poisoned".to_string())?;
-    if !slot
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if slot
         .as_ref()
-        .is_some_and(|current| Arc::ptr_eq(current, active))
+        .is_some_and(|current| !Arc::ptr_eq(current, active))
     {
         return Err("playback retirement no longer owns the active slot".into());
     }
+    if slot.is_none()
+        && !terminal_slot
+            .as_ref()
+            .is_some_and(|terminal| terminal.session_id == active.session_id)
+    {
+        return Err("playback retirement no longer owns its session id".into());
+    }
 
-    let terminal_status = playback_terminal_status(active, &retirement);
-    *slot = None;
+    let terminal_status = playback_terminal_status(active, retirement);
     *terminal_slot = Some(terminal_status);
+    Ok(())
+}
+
+fn retire_active_slot(
+    active_slot: &Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
+    last_terminal: &Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
+    active: &Arc<NativeActivePlayback>,
+) -> Result<(), String> {
+    let mut slot = active_slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let terminal_slot = last_terminal
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if slot
+        .as_ref()
+        .is_some_and(|current| !Arc::ptr_eq(current, active))
+    {
+        return Err("playback retirement no longer owns the active slot".into());
+    }
+    if !terminal_slot
+        .as_ref()
+        .is_some_and(|terminal| terminal.session_id == active.session_id)
+    {
+        return Err("terminal state was not committed for the retiring session".into());
+    }
+    *slot = None;
     active.done.store(true, Ordering::Release);
     Ok(())
 }
@@ -464,29 +760,14 @@ pub(in crate::native_runtime) fn terminal_presentation_completion(
     active_slot: Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
     last_terminal: Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
     active: Arc<NativeActivePlayback>,
-    mut retirement: TerminalRetirement,
+    retirement: TerminalRetirement,
     terminal_state: PlaybackSessionState,
     #[cfg(all(test, feature = "tauri-test"))] retired_hook: Option<PlaybackRetiredTestHook>,
 ) -> PlaybackPresentationCompletion {
+    let _ = (active_slot, last_terminal, retirement, terminal_state);
     Box::new(move |presentation_result| {
         if presentation_result.is_err() {
             active.event_delivery_failure.store(true, Ordering::Release);
-        }
-        if set_playback_state(&active, terminal_state).is_err() {
-            retirement.publication = PlaybackTerminalPublication::Failed {
-                code: "playback_state_update_failed".into(),
-                message: "Playback terminal state could not be committed.".into(),
-            };
-            active.stop_requested.store(true, Ordering::Release);
-            active.event_delivery_failure.store(true, Ordering::Release);
-        }
-        loop {
-            if clear_terminal_ownership(&active_slot, &last_terminal, &active, retirement.clone())
-                .is_ok()
-            {
-                break;
-            }
-            thread::sleep(PLAYBACK_JOIN_RETRY_INTERVAL);
         }
         #[cfg(all(test, feature = "tauri-test"))]
         if let Some(hook) = retired_hook {

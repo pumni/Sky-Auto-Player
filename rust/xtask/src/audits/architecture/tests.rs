@@ -320,7 +320,7 @@ fn adapter_dependency_boundary_rejects_player_and_non_windows_dispatch_edges() {
 fn architecture_allowlist_is_loaded_and_current_tree_passes() {
     let root = repo::root();
     let allowlist = load_architecture_allowlist(&root).unwrap();
-    assert_eq!(allowlist.len(), 22);
+    assert_eq!(allowlist.len(), 23);
     let rule_counts = allowlist.keys().fold(
         BTreeMap::<&str, usize>::new(),
         |mut counts, (_, rule, _)| {
@@ -330,7 +330,7 @@ fn architecture_allowlist_is_loaded_and_current_tree_passes() {
     );
     assert_eq!(rule_counts.get("dispatch_function_lines"), Some(&1));
     assert_eq!(rule_counts.get("production_glob_import"), Some(&2));
-    assert_eq!(rule_counts.get("unsafe_boundary"), Some(&19));
+    assert_eq!(rule_counts.get("unsafe_boundary"), Some(&20));
     assert!(
         ["regular_module_lines", "facade_lines", "context_fields"]
             .iter()

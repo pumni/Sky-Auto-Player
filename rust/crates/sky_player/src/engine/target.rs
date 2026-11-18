@@ -161,11 +161,12 @@ impl SessionTarget {
             return false;
         }
         self.owner_identity_required.store(true, Ordering::Release);
-        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new(
+        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
             hwnd,
             generation,
             Some(owner_pid),
             None,
+            self.foreground_required(),
         ) else {
             return false;
         };
@@ -189,11 +190,12 @@ impl SessionTarget {
         self.owner_identity_required.store(true, Ordering::Release);
         self.owner_process_identity_required
             .store(true, Ordering::Release);
-        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new(
+        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
             hwnd,
             generation,
             Some(owner_pid),
             Some(authority),
+            self.foreground_required(),
         ) else {
             return false;
         };
@@ -254,11 +256,12 @@ impl SessionTarget {
         if let Some(owner) = self.owner.get() {
             return Ok(owner.clone());
         }
-        sky_dispatch_win32::input::ReleaseOwnerProof::new(
+        sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
             expected_hwnd,
             expected_generation,
             None,
             None,
+            self.foreground_required(),
         )
         .ok_or(OwnerAuthorityReadError::Status(OwnerIdentityStatus::Stale))
     }

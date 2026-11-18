@@ -1146,6 +1146,7 @@ impl NativePlaybackService {
                     state: Mutex::new(PlaybackSessionState::Starting),
                     pending: Mutex::new(None),
                     player: None,
+                    terminal_result: Mutex::new(None),
                     power_lifecycle: power_lifecycle.clone(),
                     power_request: Mutex::new(power_request.take()),
                     suspend_resume_registration: Mutex::new(suspend_resume_registration.take()),
@@ -1207,7 +1208,12 @@ impl NativePlaybackService {
                                 message: presentation_error.clone(),
                             },
                         };
-                        let _ = release_terminal_resources(&failed_active, &retirement);
+                        let _ = release_terminal_ownership(
+                            &self.active,
+                            &self.last_terminal,
+                            &failed_active,
+                            retirement.clone(),
+                        );
                         let completed = terminal_presentation_completion(
                             self.active.clone(),
                             self.last_terminal.clone(),
@@ -1241,7 +1247,12 @@ impl NativePlaybackService {
                         message: message.into(),
                     },
                 };
-                let _ = release_terminal_resources(&failed_active, &retirement);
+                let _ = release_terminal_ownership(
+                    &self.active,
+                    &self.last_terminal,
+                    &failed_active,
+                    retirement.clone(),
+                );
                 let completed = terminal_presentation_completion(
                     self.active.clone(),
                     self.last_terminal.clone(),
@@ -1283,6 +1294,7 @@ impl NativePlaybackService {
             state: Mutex::new(PlaybackSessionState::Starting),
             pending: Mutex::new(None),
             player,
+            terminal_result: Mutex::new(None),
             power_lifecycle: power_lifecycle.clone(),
             power_request: Mutex::new(power_request),
             suspend_resume_registration: Mutex::new(suspend_resume_registration),
@@ -1378,7 +1390,12 @@ impl NativePlaybackService {
                         message: error.clone(),
                     },
                 };
-                let _ = release_terminal_resources(&active, &retirement);
+                let _ = release_terminal_ownership(
+                    &self.active,
+                    &self.last_terminal,
+                    &active,
+                    retirement.clone(),
+                );
                 let completed = terminal_presentation_completion(
                     self.active.clone(),
                     self.last_terminal.clone(),
@@ -1415,7 +1432,12 @@ impl NativePlaybackService {
                     message: error.clone(),
                 },
             };
-            let _ = release_terminal_resources(&active, &retirement);
+            let _ = release_terminal_ownership(
+                &self.active,
+                &self.last_terminal,
+                &active,
+                retirement.clone(),
+            );
             let completed = terminal_presentation_completion(
                 self.active.clone(),
                 self.last_terminal.clone(),
@@ -1483,7 +1505,12 @@ impl NativePlaybackService {
                 release: TerminalReleaseEvidence::NotRequired,
                 publication,
             };
-            let _ = release_terminal_resources(&active, &retirement);
+            let _ = release_terminal_ownership(
+                &self.active,
+                &self.last_terminal,
+                &active,
+                retirement.clone(),
+            );
             let completed = terminal_presentation_completion(
                 self.active.clone(),
                 self.last_terminal.clone(),
@@ -1744,7 +1771,12 @@ impl NativePlaybackService {
                     },
                 };
                 let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
-                let _ = release_terminal_resources(&active, &retirement);
+                let _ = release_terminal_ownership(
+                    &self.active,
+                    &self.last_terminal,
+                    &active,
+                    retirement.clone(),
+                );
                 let completed = terminal_presentation_completion(
                     self.active.clone(),
                     self.last_terminal.clone(),
@@ -1782,6 +1814,13 @@ impl NativePlaybackService {
             }
         }
 
+        // WinEvent is only a quick transition hint. The periodic exact
+        // foreground poll remains active as a loss/reorder/message-loop
+        // fallback, and the worker keeps its own fresh final admission.
+        let foreground_watcher =
+            sky_dispatch_win32::focus::foreground_watcher::ForegroundWatcher::start().ok();
+        let mut last_foreground_poll = Instant::now();
+
         let mut last_snapshot = Instant::now();
         let mut last_identity_check = Instant::now();
         let mut last_event_state = PlaybackEventState::Starting;
@@ -1818,10 +1857,21 @@ impl NativePlaybackService {
             if let Some(player) = &active.player
                 && let Some(target) = active.target_hwnd
             {
-                // The supervisor owns only a transition hint. The worker
-                // still performs its fresh exact-HWND final admission.
-                let focused = sky_dispatch_win32::focus::foreground_window_matches(target);
-                player.set_focus_hint(focused);
+                if let Some(hint) = foreground_watcher
+                    .as_ref()
+                    .and_then(|watcher| watcher.take_hint())
+                {
+                    player.set_focus_hint(hint.hwnd == Some(target));
+                }
+                let loop_failed = foreground_watcher
+                    .as_ref()
+                    .is_some_and(|watcher| watcher.polling_fallback_required());
+                if loop_failed || last_foreground_poll.elapsed() >= Duration::from_millis(100) {
+                    player.set_focus_hint(sky_dispatch_win32::focus::foreground_window_matches(
+                        target,
+                    ));
+                    last_foreground_poll = Instant::now();
+                }
             }
             if !identity_authority_invalidated
                 && last_identity_check.elapsed() >= Duration::from_millis(100)
@@ -1956,7 +2006,26 @@ impl NativePlaybackService {
                 .map(|player| player.poll_state().status)
                 .or(terminal_status);
             let snapshot = active.player.as_ref().map(|player| player.snapshot());
-            match decide_playback_handoff(&joined, status, snapshot.as_ref(), active.physical) {
+            let worker_result = if matches!(joined, Ok(true)) {
+                active
+                    .player
+                    .as_ref()
+                    .and_then(|player| player.terminal_result())
+            } else {
+                None
+            };
+            if let Some(result) = worker_result.as_ref()
+                && let Ok(mut stored) = active.terminal_result.lock()
+            {
+                *stored = Some(result.clone());
+            }
+            match decide_playback_handoff_with_result(
+                &joined,
+                status,
+                snapshot.as_ref(),
+                active.physical,
+                worker_result.as_ref(),
+            ) {
                 PlaybackHandoffDecision::Retire(mut retirement) => {
                     active.worker_quiescent.store(true, Ordering::Release);
                     if let Some(error) = join_error.take() {
@@ -2028,29 +2097,32 @@ impl NativePlaybackService {
             );
         }
         let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
-        let mut retirement_notice_published = false;
-        loop {
-            match release_terminal_resources(&active, &retirement) {
-                Ok(()) => break,
-                Err(error) => {
-                    if !event_delivery_failed && !retirement_notice_published {
-                        retirement_notice_published = publish_active_playback_state(
-                            &events,
-                            &active,
-                            PlaybackEventState::Stopping,
-                            Some(format!(
-                                "The native worker is quiescent, but session retirement is still pending ({error})."
-                            )),
-                            None,
-                        )
-                        .is_ok();
-                        if !retirement_notice_published {
-                            event_delivery_failed = true;
-                        }
-                    }
-                    thread::sleep(PLAYBACK_JOIN_RETRY_INTERVAL);
-                }
-            }
+        if let Err(error) = release_terminal_ownership(
+            &self.active,
+            &self.last_terminal,
+            &active,
+            retirement.clone(),
+        ) {
+            // The UI queue no longer owns retirement. Keep this supervisor
+            // nonblocking and fail closed if a poisoned control-plane lock
+            // prevents the session-id commit.
+            active.event_delivery_failure.store(true, Ordering::Release);
+            active.stop_requested.store(true, Ordering::Release);
+            let _ = publish_active_playback_state(
+                &events,
+                &active,
+                PlaybackEventState::Stopping,
+                Some(format!(
+                    "Session retirement could not be committed ({error})."
+                )),
+                None,
+            );
+        }
+        if active.done.load(Ordering::Acquire) && !active.release_verified.load(Ordering::Acquire) {
+            // The worker has joined and quarantine/terminal status are already
+            // committed. Recovery now exclusively owns the saved residual and
+            // gets one bounded cleanup drain before terminal UI publication.
+            let _ = recover_quarantined_release_once(&active, &self.last_terminal);
         }
         let completed = terminal_presentation_completion(
             self.active.clone(),

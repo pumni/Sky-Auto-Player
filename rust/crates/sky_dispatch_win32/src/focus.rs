@@ -1,5 +1,7 @@
 //! Minimal foreground-window query used by the worker's fresh focus check.
 
+pub mod foreground_watcher;
+
 #[cfg(feature = "test-support")]
 use std::cell::Cell;
 #[cfg(feature = "test-support")]

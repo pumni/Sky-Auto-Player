@@ -24,13 +24,14 @@ pub(super) use presentation::{
 pub(super) use presentation::{native_event_delivery_failure, publish_playback_snapshot};
 pub(super) use retirement::{
     DryRunTerminalRequest, PlaybackActivation, PlaybackHandoffDecision, TerminalReleaseEvidence,
-    TerminalRetirement, WorkerQuiescenceProof, decide_playback_handoff, physical_startup_failure,
-    publish_terminal_event, release_terminal_ownership, release_terminal_resources,
-    terminal_presentation_completion,
+    TerminalRetirement, WorkerQuiescenceProof, decide_playback_handoff_with_result,
+    physical_startup_failure, publish_terminal_event, recover_quarantined_release_once,
+    release_terminal_ownership, terminal_presentation_completion,
 };
 #[cfg(test)]
 pub(super) use retirement::{
-    publish_retirement_barrier, publish_terminal_poll_result, terminal_publication_after_worker,
+    decide_playback_handoff, publish_retirement_barrier, publish_terminal_poll_result,
+    recovery_test_raw_sends, reset_recovery_test_raw_sends, terminal_publication_after_worker,
     terminal_release_evidence, terminal_release_evidence_after_startup,
 };
 pub(super) use session::{
@@ -267,6 +268,9 @@ pub(super) struct NativeActivePlayback {
     pub(super) state: Mutex<PlaybackSessionState>,
     pub(super) pending: Mutex<Option<PlaybackPendingControl>>,
     pub(super) player: Option<Arc<NativeDispatchSession>>,
+    /// Typed terminal result captured after join. It is retained with this
+    /// session until terminal status and any release residual are committed.
+    pub(super) terminal_result: Mutex<Option<WorkerTerminalResult>>,
     pub(super) power_lifecycle: Arc<PowerLifecycleDiagnostics>,
     pub(super) power_request: Mutex<Option<SystemRequiredPowerRequest>>,
     pub(super) suspend_resume_registration: Mutex<Option<SuspendResumeRegistration>>,

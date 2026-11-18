@@ -48,7 +48,9 @@ sky_desktop_shell
 shell, `sky_player`, or concrete filesystem/network/process implementations.
 Effects are composed by the shell and outer adapter crates. The only physical
 keyboard input boundary is Windows `SendInput`; the application does not read
-or modify another process, inject code, install hooks, or bypass anti-cheat.
+or modify another process, inject code, install keyboard/input hooks, or bypass
+anti-cheat. The Win32 adapter has one narrowly scoped out-of-context foreground
+WinEvent hint source; it never grants sender admission.
 
 ### Module ownership
 
@@ -175,7 +177,7 @@ validation, and updater policy remain safe Rust.
 
 | Module                                                                                                                                                                | Unsafe operation                                                        | Safety invariant                                                                                                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `rust/crates/sky_dispatch_win32/src/{calibration,clock,cpu,event,focus,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; owned handles are closed by their owner and physical input uses `SendInput` only.     |
+| `rust/crates/sky_dispatch_win32/src/{calibration,clock,cpu,event,focus,focus/foreground_watcher,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; the foreground callback is out-of-context and hint-only; owned handles are closed by their owner. |
 | `rust/crates/sky_native_adapters/src/lib.rs`                                                                                                                          | `MoveFileExW` atomic settings replacement                               | NUL-terminated source and destination buffers stay live through the synchronous replace call.                                     |
 | `apps/desktop/src-tauri/src/{power_lifecycle,single_instance,windows_caption,windows_icon}.rs`                                                                             | Power registration, process/window APIs, and window callbacks/resources | Callback context lifetime, process access limits, UI-thread HWND lifetime, and owned handles are checked at these platform edges. |
 

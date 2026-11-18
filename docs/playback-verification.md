@@ -235,6 +235,48 @@ authority setup while production correctly rechecked foreground before
 are unchanged. The Windows-specific mock and ReceiveOnly suites do not establish
 real Sky gameplay reception, and this preparation has run no native sessions.
 
+## PlaybackCoreLifecycle exact-source preparation
+
+`PlaybackCoreLifecycle` adds an exact manifest profile for the playback-core
+redesign without changing the historical profile pins. It binds baseline
+`2544daa13eb23fdf03bd922e65b96fcffaba421c` and tree
+`155882714df131ddc9b9985133a1f0611736b7cd` to the clean pushed candidate tip
+on `refactor/playback-core-lifecycle`. Manifests record the Rust/Cargo version,
+Windows MSVC target, `dist` profile, `real-input-acceptance` feature,
+`rust/Cargo.lock` SHA-256, output binary SHA-256, source/runner checkout
+identity, and the qualification plan. Candidate and baseline builds must share
+the exact runner scripts and lockfile.
+
+The planned performance matrix has six paired AB/BA runs in each Quiet and
+Contention cell for `mixed-up-down`, `dense-alternating`,
+`canonical-max-chord`, `near-minimum-retrigger`, and `long-idle`. Reports retain
+p50/p95/p99/max and raw counts for eligible-to-pre-call,
+wait-to-pre-call, pre-call-to-completion, Stop-to-Up-to-verified-release,
+worker CPU/spin, raw Up calls, and worker-joined-to-next-Start. The manifest
+marks target identity `NOT_RUN`; an owner-selected target HWND, PID and retained
+process identity are required only for a later authorized run. Planned safety
+scenarios are also marked `NOT_RUN` until that authorization is given.
+
+Build each immutable harness outside the checkout. The baseline source must be
+a detached worktree at the pinned SHA; the candidate source is the clean pushed
+branch checkout:
+
+```powershell
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile PlaybackCoreLifecycle -SourceRole Baseline `
+  -SourceRoot <detached-baseline-worktree> -OutputRoot <baseline-output>
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile PlaybackCoreLifecycle -SourceRole Candidate `
+  -SourceRoot <clean-candidate-checkout> -OutputRoot <candidate-output>
+```
+
+Validate both manifests with `Assert-PlaybackCoreLifecycleManifestIdentity`
+and `Assert-ImmutableHarnessManifestIntegrity`. The qualification runner's
+`-PlanOnly` mode validates the exact pair and prints the matrix with
+`native_attempts=0`; without `-PlanOnly`, this profile refuses native execution.
+Manifest creation and plan-only validation do not start ReceiveOnly, send input,
+or qualify gameplay.
+
 ## Issue #666 M4 waiter-only guard A/B
 
 The opt-in offline A/B uses the production Windows `HybridWaiter` and the

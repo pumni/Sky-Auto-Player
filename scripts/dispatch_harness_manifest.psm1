@@ -331,6 +331,189 @@ function Assert-DispatchSessionRedesignM3ManifestIdentity {
     $true
 }
 
+function Assert-PlaybackCoreLifecycleManifestIdentity {
+    param(
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)] [ValidateSet('Baseline', 'Candidate')] [string]$ExpectedRole,
+        [string]$RepositoryRoot
+    )
+
+    $profile = Get-PlaybackCoreLifecycleProfile
+    $sourceRevision = [string](Get-ManifestProperty $Manifest 'source_revision')
+    $sourceTree = [string](Get-ManifestProperty $Manifest 'source_tree_sha')
+    $candidateRevision = [string](Get-ManifestProperty $Manifest 'candidate_source_revision')
+    $candidateTree = [string](Get-ManifestProperty $Manifest 'candidate_source_tree_sha')
+    $expectedRevision = if ($ExpectedRole -eq 'Baseline') { $profile.BaselineRevision } else { $candidateRevision }
+    $expectedTree = if ($ExpectedRole -eq 'Baseline') { $profile.BaselineTree } else { $candidateTree }
+    $expectedBranch = if ($ExpectedRole -eq 'Baseline') { '' } else { $profile.CandidateLineageBranch }
+    $sourceRoot = [string](Get-ManifestProperty $Manifest 'source_root')
+    $runnerRoot = [string](Get-ManifestProperty $Manifest 'runner_source_root')
+    $sourceCheckout = Get-ManifestProperty $Manifest 'source_checkout_identity'
+    $runnerCheckout = Get-ManifestProperty $Manifest 'runner_source_checkout_identity'
+    $runnerRevision = [string](Get-ManifestProperty $Manifest 'runner_source_revision')
+    $runnerTree = [string](Get-ManifestProperty $Manifest 'runner_source_tree_sha')
+    $runnerBranch = [string](Get-ManifestProperty $Manifest 'runner_source_branch')
+    $lineageTip = [string](Get-ManifestProperty $Manifest 'candidate_lineage_tip_revision')
+    $outputRoot = [string](Get-ManifestProperty $Manifest 'output_root')
+    $cargoTargetDir = [string](Get-ManifestProperty $Manifest 'cargo_target_dir')
+    $cargoLockPath = [string](Get-ManifestProperty $Manifest 'cargo_lock_path')
+    $cargoLockSha256 = [string](Get-ManifestProperty $Manifest 'cargo_lock_sha256')
+    $scriptProvenance = @(Get-ManifestProperty $Manifest 'runner_script_provenance')
+    $expectedRunnerPaths = @($profile.RunnerProvenancePaths)
+    $targetIdentity = Get-ManifestProperty $Manifest 'target_identity'
+    $qualificationPlan = Get-ManifestProperty $Manifest 'qualification_plan'
+
+    if ((Get-ManifestProperty $Manifest 'schema_version') -ne $profile.HarnessManifestSchemaVersion -or
+        (Get-ManifestProperty $Manifest 'qualification_profile') -ne $profile.Name -or
+        (Get-ManifestProperty $Manifest 'workload_version') -ne $profile.WorkloadVersion -or
+        (Get-ManifestProperty $Manifest 'source_role') -ne $ExpectedRole -or
+        $sourceRevision -ne $expectedRevision -or $sourceTree -ne $expectedTree -or
+        (Get-ManifestProperty $Manifest 'source_branch') -ne $expectedBranch -or
+        -not [bool](Get-ManifestProperty $Manifest 'source_tree_clean') -or
+        -not [bool](Get-ManifestProperty $Manifest 'clean_build') -or
+        (Get-ManifestProperty $Manifest 'base_source_revision') -ne $profile.BaselineRevision -or
+        (Get-ManifestProperty $Manifest 'base_source_tree_sha') -ne $profile.BaselineTree -or
+        (Get-ManifestProperty $Manifest 'baseline_source_revision') -ne $profile.BaselineRevision -or
+        (Get-ManifestProperty $Manifest 'baseline_source_tree_sha') -ne $profile.BaselineTree -or
+        $candidateRevision -notmatch '^[0-9a-f]{40}$' -or $candidateTree -notmatch '^[0-9a-f]{40}$' -or
+        $runnerRevision -ne $candidateRevision -or $runnerTree -ne $candidateTree -or
+        $runnerBranch -ne $profile.CandidateLineageBranch -or $lineageTip -ne $candidateRevision -or
+        (Get-ManifestProperty $Manifest 'candidate_lineage_branch') -ne $profile.CandidateLineageBranch -or
+        -not [bool](Get-ManifestProperty $Manifest 'candidate_lineage_verified') -or
+        -not [bool](Get-ManifestProperty $Manifest 'runner_source_clean') -or
+        (Get-ManifestProperty $Manifest 'cargo_profile') -ne $profile.CargoProfile -or
+        @((Get-ManifestProperty $Manifest 'cargo_features')).Count -ne 1 -or
+        @((Get-ManifestProperty $Manifest 'cargo_features'))[0] -ne $profile.RequiredFeatures[0] -or
+        [bool](Get-ManifestProperty $Manifest 'qpc_read_counting') -or
+        (Get-ManifestProperty $Manifest 'observer_mode') -ne 'qualification-on' -or
+        (Get-ManifestProperty $Manifest 'receiveonly_observer_mode') -ne $profile.ObserverMode -or
+        (Get-ManifestProperty $Manifest 'receiveonly_observer_version') -ne $profile.ObserverVersion -or
+        (Get-ManifestProperty $Manifest 'receiveonly_observer_schema_version') -ne $profile.ObserverSchemaVersion -or
+        (Get-ManifestProperty $Manifest 'receiveonly_observer_event_schema_version') -ne $profile.ObserverEventSchemaVersion -or
+        (Get-ManifestProperty $Manifest 'guard_mode') -ne 'frozen' -or
+        (Get-ManifestProperty $Manifest 'performance_timing_margin_us') -ne $profile.PerformanceTimingMarginUs -or
+        (Get-ManifestProperty $Manifest 'safety_timing_margin_us') -ne $profile.SafetyTimingMarginUs -or
+        (Get-ManifestProperty $Manifest 'target') -ne $profile.Target -or
+        (Get-ManifestProperty $Manifest 'target_identity_status') -ne 'NOT_RUN' -or
+        (Get-ManifestProperty $targetIdentity 'application') -ne $profile.TargetIdentity.application -or
+        (Get-ManifestProperty $targetIdentity 'capture_status') -ne 'NOT_RUN' -or
+        [string](Get-ManifestProperty $Manifest 'rustc_version') -notmatch ('(?m)^release: ' + [regex]::Escape($profile.RustVersion) + '\r?$') -or
+        [string](Get-ManifestProperty $Manifest 'rustc_version') -notmatch ('(?m)^host: ' + [regex]::Escape($profile.Target) + '\r?$') -or
+        [string](Get-ManifestProperty $Manifest 'cargo_version') -notmatch ('^cargo ' + [regex]::Escape($profile.CargoVersion) + '(?:\s|$)') -or
+        (Get-ManifestProperty $Manifest 'cargo_clean_exit_code') -ne 0 -or
+        (Get-ManifestProperty $Manifest 'cargo_build_exit_code') -ne 0 -or
+        (Get-ManifestProperty $Manifest 'binary_name') -ne 'rt-native-acceptance.exe' -or
+        [string](Get-ManifestProperty $Manifest 'binary_sha256') -notmatch '^[0-9a-f]{64}$' -or
+        [string](Get-ManifestProperty $Manifest 'builder_script_sha256') -notmatch '^[0-9a-f]{64}$' -or
+        [string]::IsNullOrWhiteSpace($sourceRoot) -or -not [System.IO.Path]::IsPathRooted($sourceRoot) -or
+        (Get-ManifestProperty $sourceCheckout 'root') -ne $sourceRoot -or
+        (Get-ManifestProperty $sourceCheckout 'top_level') -ne $sourceRoot -or
+        (Get-ManifestProperty $sourceCheckout 'revision') -ne $expectedRevision -or
+        (Get-ManifestProperty $sourceCheckout 'tree') -ne $expectedTree -or
+        (Get-ManifestProperty $sourceCheckout 'branch') -ne $expectedBranch -or
+        -not [bool](Get-ManifestProperty $sourceCheckout 'clean') -or
+        [string]::IsNullOrWhiteSpace($runnerRoot) -or -not [System.IO.Path]::IsPathRooted($runnerRoot) -or
+        (Get-ManifestProperty $runnerCheckout 'root') -ne $runnerRoot -or
+        (Get-ManifestProperty $runnerCheckout 'top_level') -ne $runnerRoot -or
+        (Get-ManifestProperty $runnerCheckout 'revision') -ne $runnerRevision -or
+        (Get-ManifestProperty $runnerCheckout 'tree') -ne $runnerTree -or
+        (Get-ManifestProperty $runnerCheckout 'branch') -ne $runnerBranch -or
+        -not [bool](Get-ManifestProperty $runnerCheckout 'clean') -or
+        [string]::IsNullOrWhiteSpace($outputRoot) -or -not [System.IO.Path]::IsPathRooted($outputRoot) -or
+        [string]::IsNullOrWhiteSpace($cargoTargetDir) -or -not [System.IO.Path]::IsPathRooted($cargoTargetDir) -or
+        [string]::IsNullOrWhiteSpace($cargoLockPath) -or -not [System.IO.Path]::IsPathRooted($cargoLockPath) -or
+        $cargoLockSha256 -notmatch '^[0-9a-f]{64}$' -or
+        [string](Get-ManifestProperty $qualificationPlan 'pair_order') -ne $profile.PairOrder -or
+        (Get-ManifestProperty $qualificationPlan 'pair_count') -ne $profile.PairCount -or
+        (Get-ManifestProperty $qualificationPlan 'sample_seconds') -ne $profile.SampleSeconds -or
+        $scriptProvenance.Count -ne $expectedRunnerPaths.Count) {
+        throw ('PlaybackCoreLifecycle ' + $ExpectedRole + ' manifest profile, source, runner, target, workload, or build identity is invalid')
+    }
+
+    foreach ($checkout in @($sourceCheckout, $runnerCheckout)) {
+        foreach ($key in @('root', 'top_level', 'git_dir', 'git_common_dir', 'revision', 'tree', 'branch', 'clean')) {
+            if ($null -eq (Get-ManifestProperty $checkout $key)) { throw ('PlaybackCoreLifecycle checkout identity omitted ' + $key) }
+        }
+    }
+    foreach ($path in @($outputRoot, $cargoTargetDir)) {
+        if (-not (Test-DispatchM3PathOutside -Path $path -RepositoryRoot $runnerRoot) -or
+            -not (Test-DispatchM3PathOutside -Path $path -RepositoryRoot $sourceRoot)) {
+            throw 'PlaybackCoreLifecycle outputs must remain outside the runner and source checkouts'
+        }
+    }
+    if ($ExpectedRole -eq 'Baseline' -and
+        -not (Test-DispatchM3PathOutside -Path $sourceRoot -RepositoryRoot $runnerRoot)) {
+        throw 'PlaybackCoreLifecycle baseline must be a separate detached worktree'
+    }
+    if ($ExpectedRole -eq 'Candidate' -and $sourceRoot -ne $runnerRoot) {
+        throw 'PlaybackCoreLifecycle candidate source must be the exact runner checkout'
+    }
+    $expectedCargoLockPath = [System.IO.Path]::GetFullPath((Join-Path $sourceRoot 'rust\Cargo.lock'))
+    if (-not [string]::Equals([System.IO.Path]::GetFullPath($cargoLockPath), $expectedCargoLockPath, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not (Test-Path -LiteralPath $cargoLockPath -PathType Leaf) -or
+        (Get-FileSha256 $cargoLockPath) -ne $cargoLockSha256) {
+        throw 'PlaybackCoreLifecycle Cargo.lock path or SHA-256 does not match the immutable source checkout'
+    }
+    if ($RepositoryRoot -and -not (Test-DispatchM3PathOutside -Path $outputRoot -RepositoryRoot $RepositoryRoot)) {
+        throw 'PlaybackCoreLifecycle evidence output root must be outside the repository checkout'
+    }
+
+    $actualPaths = @($scriptProvenance | ForEach-Object { [string](Get-ManifestProperty $_ 'source_path') })
+    if (@($actualPaths | Select-Object -Unique).Count -ne $expectedRunnerPaths.Count -or
+        (@(Compare-Object -ReferenceObject $expectedRunnerPaths -DifferenceObject $actualPaths -SyncWindow 0)).Count -ne 0) {
+        throw 'PlaybackCoreLifecycle runner script provenance inventory is incomplete or unexpected'
+    }
+    foreach ($entry in $scriptProvenance) {
+        $sourcePath = [string](Get-ManifestProperty $entry 'source_path')
+        $evidencePath = [string](Get-ManifestProperty $entry 'evidence_path')
+        $sha = [string](Get-ManifestProperty $entry 'sha256')
+        if ($sha -notmatch '^[0-9a-f]{64}$' -or
+            $evidencePath -ne ('runner-provenance/' + $sourcePath.Replace('/', '\')) -or
+            [System.IO.Path]::IsPathRooted($sourcePath) -or $sourcePath -match '(^|[\\/])\.\.([\\/]|$)') {
+            throw ('PlaybackCoreLifecycle runner provenance entry is invalid: ' + $sourcePath)
+        }
+    }
+    $builderProvenance = @($scriptProvenance | Where-Object { (Get-ManifestProperty $_ 'source_path') -eq 'scripts/build_dispatch_core_harness.ps1' })
+    if ($builderProvenance.Count -ne 1 -or
+        [string](Get-ManifestProperty $builderProvenance[0] 'sha256') -ne [string](Get-ManifestProperty $Manifest 'builder_script_sha256')) {
+        throw 'PlaybackCoreLifecycle builder hash differs from runner provenance inventory'
+    }
+    $true
+}
+
+function Assert-PlaybackCoreLifecycleRunnerProvenance {
+    param(
+        [Parameter(Mandatory)] $Manifest,
+        [Parameter(Mandatory)] $RunnerIdentity,
+        [Parameter(Mandatory)] [string]$RunnerRoot
+    )
+    $root = Get-DispatchM3PathIdentity $RunnerRoot
+    if ([string](Get-ManifestProperty $Manifest 'runner_source_revision') -ne [string]$RunnerIdentity.revision -or
+        [string](Get-ManifestProperty $Manifest 'runner_source_tree_sha') -ne [string]$RunnerIdentity.tree -or
+        [string](Get-ManifestProperty $Manifest 'runner_source_branch') -ne [string]$RunnerIdentity.branch -or
+        [string](Get-ManifestProperty $Manifest 'runner_source_root') -ne $root -or
+        [string](Get-ManifestProperty $Manifest 'candidate_lineage_tip_revision') -ne [string]$RunnerIdentity.candidate_lineage_tip_revision -or
+        [string](Get-ManifestProperty $Manifest 'candidate_lineage_branch') -ne $RunnerIdentity.candidate_lineage_branch -or
+        -not [bool]$RunnerIdentity.clean -or -not [bool]$RunnerIdentity.candidate_lineage_verified) {
+        throw 'PlaybackCoreLifecycle manifest runner differs from the clean pushed candidate checkout'
+    }
+    $runnerCheckout = Get-ManifestProperty $Manifest 'runner_source_checkout_identity'
+    foreach ($key in @('top_level', 'git_dir', 'git_common_dir')) {
+        if ([string](Get-ManifestProperty $runnerCheckout $key) -ne [string](Get-ManifestProperty $RunnerIdentity.checkout $key)) {
+            throw ('PlaybackCoreLifecycle runner checkout ' + $key + ' differs from its manifest')
+        }
+    }
+    foreach ($entry in @(Get-ManifestProperty $Manifest 'runner_script_provenance')) {
+        $relativePath = [string](Get-ManifestProperty $entry 'source_path')
+        $scriptPath = Join-Path $root ($relativePath.Replace('/', '\'))
+        if (-not (Test-Path -LiteralPath $scriptPath -PathType Leaf) -or
+            (Get-FileSha256 $scriptPath) -ne [string](Get-ManifestProperty $entry 'sha256')) {
+            throw ('PlaybackCoreLifecycle runner provenance mismatch: ' + $relativePath)
+        }
+    }
+    $true
+}
+
 function Assert-DispatchSessionRedesignM3RunnerProvenance {
     param(
         [Parameter(Mandatory)] $Manifest,
@@ -487,6 +670,35 @@ function Assert-ImmutableHarnessManifestIntegrity {
             }
         }
     }
+    if ((Get-ManifestProperty $Manifest 'qualification_profile') -eq 'PlaybackCoreLifecycle') {
+        Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $Manifest -ExpectedRole ([string](Get-ManifestProperty $Manifest 'source_role')) | Out-Null
+        $manifestOutputRoot = [System.IO.Path]::GetFullPath([string](Get-ManifestProperty $Manifest 'output_root'))
+        if (-not [string]::Equals($manifestOutputRoot, [System.IO.Path]::GetDirectoryName($manifestFullPath), [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw 'PlaybackCoreLifecycle output_root must be the immutable manifest and binary directory'
+        }
+        foreach ($entry in @(Get-ManifestProperty $Manifest 'runner_script_provenance')) {
+            $relativePath = [string](Get-ManifestProperty $entry 'evidence_path')
+            $fullProvenancePath = [System.IO.Path]::GetFullPath((Join-Path $manifestRoot ($relativePath.Replace('/', '\'))))
+            $provenancePrefix = [System.IO.Path]::GetFullPath((Join-Path $manifestRoot 'runner-provenance')).TrimEnd('\') + '\'
+            if (-not $fullProvenancePath.StartsWith($provenancePrefix, [System.StringComparison]::OrdinalIgnoreCase) -or
+                -not (Test-Path -LiteralPath $fullProvenancePath -PathType Leaf)) {
+                throw ('PlaybackCoreLifecycle runner provenance is missing or outside its evidence root: ' + $relativePath)
+            }
+            $sha = Get-FileSha256 $fullProvenancePath
+            if ($sha -ne [string](Get-ManifestProperty $entry 'sha256')) {
+                throw ('PlaybackCoreLifecycle runner provenance hash mismatch: ' + $relativePath)
+            }
+            $expected[$relativePath.Replace('\', '/')] = $sha
+        }
+        $runnerRoot = [string](Get-ManifestProperty $Manifest 'runner_source_root')
+        $sourceRoot = [string](Get-ManifestProperty $Manifest 'source_root')
+        foreach ($path in @($manifestRoot, $actualBinaryPath, (Join-Path $manifestRoot 'build.log'), (Join-Path $manifestRoot 'clean.log'))) {
+            if (-not (Test-DispatchM3PathOutside -Path $path -RepositoryRoot $runnerRoot) -or
+                -not (Test-DispatchM3PathOutside -Path $path -RepositoryRoot $sourceRoot)) {
+                throw 'PlaybackCoreLifecycle immutable evidence must remain outside runner and source checkouts'
+            }
+        }
+    }
     if ((Get-FileSha256 (Join-Path $manifestRoot 'build_dispatch_core_harness.ps1')) -ne
         [string](Get-ManifestProperty $Manifest 'builder_script_sha256')) {
         throw 'immutable harness builder copy does not match its manifest source hash'
@@ -629,4 +841,4 @@ function Assert-C1TimedControlProvenance {
     $true
 }
 
-Export-ModuleMember -Function Get-ManifestProperty, Assert-C1TimedControlProvenance, Assert-FrameSnapshotManifestIdentity, Assert-DispatchCleanupM3ManifestIdentity, Assert-DispatchCleanupM3RunnerProvenance, Assert-DispatchSessionRedesignM3ManifestIdentity, Assert-DispatchSessionRedesignM3RunnerProvenance, Assert-ImmutableHarnessManifestIntegrity
+Export-ModuleMember -Function Get-ManifestProperty, Assert-C1TimedControlProvenance, Assert-FrameSnapshotManifestIdentity, Assert-DispatchCleanupM3ManifestIdentity, Assert-DispatchCleanupM3RunnerProvenance, Assert-DispatchSessionRedesignM3ManifestIdentity, Assert-DispatchSessionRedesignM3RunnerProvenance, Assert-PlaybackCoreLifecycleManifestIdentity, Assert-PlaybackCoreLifecycleRunnerProvenance, Assert-ImmutableHarnessManifestIntegrity

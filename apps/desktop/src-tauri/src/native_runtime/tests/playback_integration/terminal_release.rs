@@ -804,6 +804,221 @@ fn terminal_handoff_uses_worker_result_and_release_evidence_after_join() {
     ));
 }
 
+#[cfg(feature = "tauri-test")]
+fn quarantined_recovery_fixture(
+    session_id: &str,
+    foreground_required: bool,
+    needs_up_mask: u16,
+    needs_probe_mask: u16,
+) -> (
+    NativePlaybackService,
+    Arc<NativeActivePlayback>,
+    Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>,
+) {
+    use sky_player::engine::{
+        TerminalReleaseResidual, WorkerTerminalCause, WorkerTerminalOutcome, WorkerTerminalResult,
+    };
+
+    let activity = ActivityCoordinator::default();
+    let service = NativePlaybackService::new(activity.clone());
+    let mut active = active_for_control_with_physical(PlaybackSessionState::Stopping, None, true);
+    let active_mut = Arc::get_mut(&mut active).expect("unique recovery fixture active slot");
+    active_mut.activity = activity.clone();
+    active_mut.session_id = session_id.to_string();
+    let hwnd = 0x7788;
+    let owner_pid = 0x1199;
+    let authority =
+        sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(hwnd, owner_pid);
+    let authority = Arc::new(authority);
+    let owner = sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
+        hwnd,
+        17,
+        Some(owner_pid),
+        Some(Arc::clone(&authority)),
+        foreground_required,
+    )
+    .expect("recovery owner proof");
+    let materialized = sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical();
+    let profile = std::array::from_fn(|slot| materialized.physical_key(slot));
+    let outstanding_mask = needs_up_mask | needs_probe_mask;
+    *active_mut.terminal_result.lock().expect("typed result") = Some(WorkerTerminalResult {
+        outcome: WorkerTerminalOutcome::Error,
+        cause: WorkerTerminalCause::SenderAnomaly,
+        terminal_error: Some("injected terminal sender anomaly".into()),
+        residual: TerminalReleaseResidual {
+            outstanding_mask,
+            needs_up_mask,
+            needs_probe_mask,
+            owner: Some(owner),
+            profile,
+        },
+    });
+    active_mut.worker_quiescent.store(true, Ordering::Release);
+    *active_mut.activity_lease.lock().expect("activity lease") = Some(
+        activity
+            .reserve_playback(session_id)
+            .expect("reserve recovery session"),
+    );
+    *service.active.lock().expect("active slot") = Some(Arc::clone(&active));
+    release_terminal_ownership(
+        &service.active,
+        &service.last_terminal,
+        &active,
+        TerminalRetirement {
+            quiescence: WorkerQuiescenceProof::WorkerJoined,
+            release: TerminalReleaseEvidence::Unverified {
+                obligation_mask: outstanding_mask,
+                detail: "injected unverified release".into(),
+            },
+            publication: PlaybackTerminalPublication::Failed {
+                code: "terminal_release_unverified".into(),
+                message: "release remains quarantined".into(),
+            },
+        },
+    )
+    .expect("joined session commits terminal quarantine");
+    (service, active, authority)
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_focus_loss_preserves_needs_up_without_a_raw_attempt() {
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("focus-lost-recovery", true, 0x0001, 0);
+    reset_recovery_test_raw_sends();
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("focus-required recovery waits for original foreground");
+    assert!(error.contains("needs_up=0x0001"));
+    assert_eq!(recovery_test_raw_sends(), 0);
+    assert!(service.activity.physical_release_is_quarantined());
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("failed recovery retains its residual");
+    assert_eq!(residual.needs_up_mask, 0x0001);
+    assert_eq!(residual.needs_probe_mask, 0);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_focus_free_mock_uses_origin_policy_and_never_replays_probe_only_residual() {
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("focus-free-recovery", false, 0x0001, 0);
+    reset_recovery_test_raw_sends();
+
+    let _ = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("synthetic probe remains inconclusive and quarantined");
+    assert_eq!(recovery_test_raw_sends(), 1);
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("probe-only residual stays quarantined");
+    assert_eq!(residual.needs_up_mask, 0);
+    assert_eq!(residual.needs_probe_mask, 0x0001);
+    assert_eq!(residual.outstanding_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_process_death_keeps_original_residual_and_never_sends() {
+    let (service, active, authority) =
+        quarantined_recovery_fixture("dead-origin-recovery", false, 0x0001, 0);
+    authority.set_process_identity_status_for_test(
+        sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated,
+    );
+    reset_recovery_test_raw_sends();
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("dead process origin cannot be recovered");
+    assert!(error.contains("identity is no longer continuous"));
+    assert_eq!(recovery_test_raw_sends(), 0);
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("dead-origin residual remains available");
+    assert_eq!(residual.needs_up_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_owner_drift_keeps_original_residual_and_never_sends() {
+    let (service, active, authority) =
+        quarantined_recovery_fixture("drifted-origin-recovery", false, 0x0001, 0);
+    authority.set_process_identity_status_for_test(
+        sky_dispatch_win32::focus::WindowIdentityContinuity::OwnerMismatch,
+    );
+    reset_recovery_test_raw_sends();
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("owner drift cannot authorize recovery");
+    assert!(error.contains("identity is no longer continuous"));
+    assert_eq!(recovery_test_raw_sends(), 0);
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("drifted-origin residual remains quarantined");
+    assert_eq!(residual.needs_up_mask, 0x0001);
+    assert_eq!(residual.needs_probe_mask, 0);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_qpc_failure_is_bounded_and_keeps_release_quarantined() {
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("qpc-failed-recovery", false, 0x0001, 0);
+    reset_recovery_test_raw_sends();
+    sky_dispatch_win32::clock::set_qpc_now_fault_for_test(true);
+    let result = recover_quarantined_release_once(&active, &service.last_terminal);
+    sky_dispatch_win32::clock::set_qpc_now_fault_for_test(false);
+
+    let error = result.expect_err("QPC failure cannot verify a physical release");
+    assert!(error.contains("remains quarantined"));
+    assert!(recovery_test_raw_sends() <= 4);
+    assert!(service.activity.physical_release_is_quarantined());
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("QPC-failed recovery preserves the origin journal");
+    assert_eq!(residual.outstanding_mask, 0x0001);
+    assert_eq!(residual.needs_up_mask | residual.needs_probe_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_cannot_claim_a_residual_before_worker_quiescence() {
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("not-yet-joined-recovery", false, 0x0001, 0);
+    active.worker_quiescent.store(false, Ordering::Release);
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("recovery must wait for worker join");
+    assert!(error.contains("requires a joined worker"));
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("a pre-join failure must not take recovery ownership");
+    assert_eq!(residual.outstanding_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
 #[test]
 fn joined_worker_with_unverified_release_quarantines_future_physical_activity() {
     let activity = ActivityCoordinator::default();

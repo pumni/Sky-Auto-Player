@@ -624,11 +624,12 @@ pub(crate) fn dispatch_staged_candidate(
             );
             return DispatchAttemptOutcome::Exit;
         }
-        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new(
+        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
             expected_target.hwnd,
             expected_target.generation,
             None,
             None,
+            config.focus.require_focus,
         ) else {
             runtime.terminal_error =
                 Some("session release owner proof could not bind to the packet target".to_string());
