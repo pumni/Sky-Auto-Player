@@ -12,7 +12,7 @@ if ($parseErrors.Count -ne 0) {
     throw ('qualify_dispatch_core.ps1 parser errors: ' + (($parseErrors | ForEach-Object Message) -join '; '))
 }
 
-foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1', 'native_acceptance_sink.ps1', 'dispatch_harness_manifest.psm1', 'dispatch_qualification_profiles.psm1', 'dispatch_qualification_report.psm1', 'dispatch_qualification_orchestration.psm1')) {
+foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1', 'native_acceptance_sink.ps1', 'dispatch_harness_manifest.psm1', 'dispatch_qualification_profiles.psm1', 'dispatch_qualification_report.psm1', 'dispatch_qualification_orchestration.psm1', 'lib/playback_core_lifecycle_collector.psm1')) {
     $path = Join-Path $PSScriptRoot $scriptName
     $scriptTokens = $null
     $scriptErrors = $null
@@ -186,6 +186,7 @@ try {
     $sinkReady = [pscustomobject]@{
         schema_version = 3; event_schema_version = 3; run_id = $runId; role = 'ReceiveOnly'
         sink_kind = 'SkyAutoPlayer.NativeAcceptanceSink'; title = 'Sky Auto Player — Native Acceptance Sink'
+        target_class = 'project-owned-non-game-receive-only'; target_name = 'Sky Auto Player — Native Acceptance Sink'; game_target = $false
         process = 'native_acceptance_sink.ps1'; input_policy = 'receives_only; benchmark must use SendInput'
         pid = 17; hwnd = 42; event_log_id = $observerReady.event_log_id
         process_start_time_filetime = $identityProcessStart
@@ -193,6 +194,21 @@ try {
         observer_queue_capacity = 32768; observer_qpc_frequency_hz = 10000000
     }
     Assert-SinkIdentity -Record $sinkReady -SessionId 1 -ExpectedObserverVersion $observerVersion
+    $wrongTargetClass = $sinkReady | Select-Object *
+    $wrongTargetClass.target_class = 'game'
+    $wrongTargetClassRejected = $false
+    try { Assert-SinkIdentity -Record $wrongTargetClass -SessionId 1 -ExpectedObserverVersion $observerVersion } catch { $wrongTargetClassRejected = $true }
+    if (-not $wrongTargetClassRejected) { throw 'ReceiveOnly sink accepted game target class metadata' }
+    $gameTargetMarked = $sinkReady | Select-Object *
+    $gameTargetMarked.game_target = $true
+    $gameTargetRejected = $false
+    try { Assert-SinkIdentity -Record $gameTargetMarked -SessionId 1 -ExpectedObserverVersion $observerVersion } catch { $gameTargetRejected = $true }
+    if (-not $gameTargetRejected) { throw 'ReceiveOnly sink accepted game_target=true metadata' }
+    $missingGameTarget = $sinkReady | Select-Object *
+    [void]$missingGameTarget.PSObject.Properties.Remove('game_target')
+    $missingGameTargetRejected = $false
+    try { Assert-SinkIdentity -Record $missingGameTarget -SessionId 1 -ExpectedObserverVersion $observerVersion } catch { $missingGameTargetRejected = $true }
+    if (-not $missingGameTargetRejected) { throw 'ReceiveOnly sink accepted missing game_target identity' }
 
     $wrongIdentityMode = $observerHeader | Select-Object *
     $wrongIdentityMode.observer_mode = 'SchedulerQueuedV2'
@@ -1590,6 +1606,8 @@ $playbackCoreProfileSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '
 $playbackCoreBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
 $playbackCoreManifestSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Raw
 $playbackCoreRunnerSource = Get-Content -LiteralPath $runnerPath -Raw
+$playbackCoreCollectorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'lib/playback_core_lifecycle_collector.psm1') -Raw
+$playbackCoreCaseRunnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
 if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -or
     -not $playbackCoreProfileSource.Contains("BaselineRevision = '2544daa13eb23fdf03bd922e65b96fcffaba421c'") -or
     -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = 'refactor/playback-core-lifecycle'") -or
@@ -1601,10 +1619,92 @@ if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -
     -not $playbackCoreManifestSource.Contains('Assert-PlaybackCoreLifecycleRunnerProvenance') -or
     -not $playbackCoreRunnerSource.Contains('[switch]$PlanOnly') -or
     -not $playbackCoreRunnerSource.Contains('native_attempts=0 target_capture=NOT_RUN') -or
-    -not $playbackCoreRunnerSource.Contains('PlaybackCoreLifecycle native execution is disabled')) {
+    -not $playbackCoreRunnerSource.Contains('[switch]$OwnerApprovedReceiveOnlyRun') -or
+    -not $playbackCoreRunnerSource.Contains('repository owner explicitly approves this Windows machine, target receiver, and physical input scope') -or
+    -not $playbackCoreProfileSource.Contains("target_class = 'project-owned-non-game-receive-only'") -or
+    -not $playbackCoreRunnerSource.Contains('New-PlaybackCoreLifecycleMeasurementReport') -or
+    -not $playbackCoreRunnerSource.Contains("'lifecycle-metrics.json'") -or
+    -not $playbackCoreProfileSource.Contains("'scripts/lib/playback_core_lifecycle_collector.psm1'") -or
+    -not $playbackCoreCollectorSource.Contains('project-owned-non-game-receive-only') -or
+    -not $playbackCoreCollectorSource.Contains('manifest_sha256') -or
+    -not $playbackCoreCollectorSource.Contains('game_target') -or
+    -not $playbackCoreCaseRunnerSource.Contains('requires -OwnerApprovedReceiveOnlyRun')) {
     throw 'PlaybackCoreLifecycle exact-source manifests, workload matrix, immutable provenance, or no-send dry-run boundary is incomplete'
 }
 
+Import-Module (Join-Path $PSScriptRoot 'lib/playback_core_lifecycle_collector.psm1') -Force
+$pclValidSafetyIdentity = Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'stop-cleanup' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0
+$pclValidPerformanceIdentity = Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'mixed-up-down' -Workload 'mixed-up-down' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 15
+if ($pclValidSafetyIdentity.configured_H_us -ne 17167 -or $pclValidSafetyIdentity.configured_G_us -ne 17167 -or
+    $pclValidPerformanceIdentity.workload -ne 'mixed-up-down') {
+    throw 'PlaybackCoreLifecycle case identity did not preserve its 60 FPS/500 us workload configuration'
+}
+$pclInvalidCaseRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'timing-margin-sweep' -Workload 'boundary-60fps-margin-0' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0) } catch { $pclInvalidCaseRejected = $true }
+if (-not $pclInvalidCaseRejected) { throw 'PlaybackCoreLifecycle accepted a case outside its exact profile matrix' }
+$pclRevision = '1111111111111111111111111111111111111111'
+$pclTree = '2222222222222222222222222222222222222222'
+$pclManifestHash = 'a' * 64
+$pclBinaryHash = 'b' * 64
+$pclMachine = 'qualification-contract-machine'
+$pclBootUtc = '2026-11-19T00:00:00.0000000Z'
+$pclTargetIdentity = [pscustomobject]@{
+    role = 'ReceiveOnly'; sink_kind = 'SkyAutoPlayer.NativeAcceptanceSink'
+    target_class = 'project-owned-non-game-receive-only'; target_name = 'Sky Auto Player — Native Acceptance Sink'
+    game_target = $false; title = 'Sky Auto Player — Native Acceptance Sink'; process = 'native_acceptance_sink.ps1'
+    input_policy = 'receives_only; benchmark must use SendInput'; pid = 17; hwnd = 42
+    process_start_time_filetime = 134100000000000000; event_log_id = 'pcl-contract-log'
+}
+$pclLifecycleMeasurement = [pscustomobject]@{
+    schema_version = 1; qpc_frequency_hz = 10000000; session_arm_qpc_ticks = 100
+    stop_requested_qpc_ticks = 150; worker_joined_qpc_ticks = 180; verified_release_qpc_ticks = 190
+    verified_release_requires_join_clean_journal_and_validated_receiveonly_up = $true; raw_up_call_count = 2
+}
+$pclRows = @(
+    [pscustomobject]@{ sequence_index = 0; run_id = 'pcl-candidate-stop'; role = 'candidate'; source_revision = $pclRevision; source_tree_sha = $pclTree; manifest_sha256 = $pclManifestHash; harness_sha256 = $pclBinaryHash; scenario = 'stop-cleanup'; status = 'PASS'; case_exit_code = 0; lifecycle_measurement = $pclLifecycleMeasurement; target_identity = $pclTargetIdentity; machine_name = $pclMachine; os_boot_time_utc = $pclBootUtc; case_launch_qpc_ticks = 10; case_launch_qpc_frequency_hz = 10000000 },
+    [pscustomobject]@{ sequence_index = 1; run_id = 'pcl-baseline-next'; role = 'control'; source_revision = '3333333333333333333333333333333333333333'; source_tree_sha = '4444444444444444444444444444444444444444'; manifest_sha256 = 'c' * 64; harness_sha256 = 'd' * 64; scenario = 'mixed-up-down'; status = 'PASS'; case_exit_code = 0; lifecycle_measurement = $null; target_identity = $pclTargetIdentity; machine_name = $pclMachine; os_boot_time_utc = $pclBootUtc; case_launch_qpc_ticks = 220; case_launch_qpc_frequency_hz = 10000000 },
+    [pscustomobject]@{ sequence_index = 2; run_id = 'pcl-candidate-next'; role = 'candidate'; source_revision = $pclRevision; source_tree_sha = $pclTree; manifest_sha256 = $pclManifestHash; harness_sha256 = $pclBinaryHash; scenario = 'mixed-up-down'; status = 'PASS'; case_exit_code = 0; lifecycle_measurement = ([pscustomobject]@{ schema_version = 1; qpc_frequency_hz = 10000000; session_arm_qpc_ticks = 300; worker_joined_qpc_ticks = 500 }); target_identity = $pclTargetIdentity; machine_name = $pclMachine; os_boot_time_utc = $pclBootUtc; case_launch_qpc_ticks = 300; case_launch_qpc_frequency_hz = 10000000 }
+)
+$pclReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
+if ($pclReport.status -ne 'COMPLETE' -or
+    $pclReport.stop_to_verified_release_us.status -ne 'COMPLETE' -or
+    $pclReport.stop_to_verified_release_us.statistics.p50 -ne 4 -or
+    $pclReport.worker_joined_to_next_start_us.statistics.p50 -ne 4 -or
+    $pclReport.raw_up_call_count.statistics.p50 -ne 2 -or
+    $pclReport.source_identity.manifest_sha256 -ne $pclManifestHash) {
+    throw 'PlaybackCoreLifecycle fake measurements did not produce provenance-bearing verified release, next-start, and raw Up statistics'
+}
+$pclWrongTargetRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
+$pclWrongTargetRows[1].target_identity = $pclTargetIdentity | Select-Object *
+$pclWrongTargetRows[1].target_identity.game_target = $true
+$pclWrongTargetRejected = $false
+try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongTargetRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclWrongTargetRejected = $true }
+if (-not $pclWrongTargetRejected) { throw 'PlaybackCoreLifecycle collector accepted game_target=true' }
+$pclWrongClassRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
+$pclWrongClassRows[0].target_identity = $pclTargetIdentity | Select-Object *
+$pclWrongClassRows[0].target_identity.target_class = 'Sky'
+$pclWrongClassRejected = $false
+try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongClassRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclWrongClassRejected = $true }
+if (-not $pclWrongClassRejected) { throw 'PlaybackCoreLifecycle collector accepted a Sky target class' }
+$pclMissingGameTargetRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
+$pclMissingGameTargetRows[0].target_identity = $pclTargetIdentity | Select-Object *
+[void]$pclMissingGameTargetRows[0].target_identity.PSObject.Properties.Remove('game_target')
+$pclMissingGameTargetRejected = $false
+try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclMissingGameTargetRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclMissingGameTargetRejected = $true }
+if (-not $pclMissingGameTargetRejected) { throw 'PlaybackCoreLifecycle collector accepted missing game_target identity' }
+$pclWrongHashRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
+$pclWrongHashRows[0].manifest_sha256 = 'e' * 64
+$pclWrongHashRejected = $false
+try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongHashRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclWrongHashRejected = $true }
+if (-not $pclWrongHashRejected) { throw 'PlaybackCoreLifecycle collector accepted a candidate manifest hash mismatch' }
+$pclIncompleteRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
+$pclIncompleteRows[0].lifecycle_measurement = $pclLifecycleMeasurement | Select-Object *
+$pclIncompleteRows[0].lifecycle_measurement.verified_release_requires_join_clean_journal_and_validated_receiveonly_up = $false
+$pclIncompleteReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclIncompleteRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
+if ($pclIncompleteReport.status -ne 'INCOMPLETE' -or $pclIncompleteReport.stop_to_verified_release_us.status -ne 'INCOMPLETE') {
+    throw 'PlaybackCoreLifecycle collector did not fail closed when verified-release proof was absent'
+}
+
 Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 schema-v2 provenance inventory, mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
-Write-Output 'PASS: PlaybackCoreLifecycle exact baseline/candidate provenance, Windows dist manifest, workload plan, and no-send runner dry check contract pass'
+Write-Output 'PASS: PlaybackCoreLifecycle exact baseline/candidate provenance, owner-gated ReceiveOnly workflow, fake lifecycle collector metrics, fail-closed target identity, and PlanOnly dry-run contracts pass'
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

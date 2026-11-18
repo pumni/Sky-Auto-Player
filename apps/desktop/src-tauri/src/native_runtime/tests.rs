@@ -33,6 +33,8 @@ use super::{
     PlaybackPresentationTestHook, native_event_delivery_failure, playback_event_state,
     playback_health_from_snapshot, publish_playback_snapshot,
 };
+#[cfg(feature = "tauri-test")]
+use super::{recovery_test_probe_calls, set_recovery_test_probe_result};
 use crate::app_state::ActivityCoordinator;
 use crate::commands::{
     CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest,
@@ -680,7 +682,26 @@ fn prepare_dry_run_plan(
 fn native_handoff_test_player(
     hook: Arc<sky_player::engine::StartupOrderingHook>,
     capture: Arc<Mutex<Vec<sky_player::engine::MockSendInputCapture>>>,
+    fault_script: sky_player::engine::FaultInjectionScript,
+) -> Arc<NativeDispatchSession> {
+    native_handoff_test_player_with_focus(hook, capture, fault_script, false)
+}
+
+#[cfg(feature = "tauri-test")]
+fn native_handoff_focus_required_test_player(
+    hook: Arc<sky_player::engine::StartupOrderingHook>,
+    capture: Arc<Mutex<Vec<sky_player::engine::MockSendInputCapture>>>,
+    fault_script: sky_player::engine::FaultInjectionScript,
+) -> Arc<NativeDispatchSession> {
+    native_handoff_test_player_with_focus(hook, capture, fault_script, true)
+}
+
+#[cfg(feature = "tauri-test")]
+fn native_handoff_test_player_with_focus(
+    hook: Arc<sky_player::engine::StartupOrderingHook>,
+    capture: Arc<Mutex<Vec<sky_player::engine::MockSendInputCapture>>>,
     mut fault_script: sky_player::engine::FaultInjectionScript,
+    require_focus: bool,
 ) -> Arc<NativeDispatchSession> {
     use sky_player::adapter_support::{
         ActionKind as DispatchActionKind, KeyActionInput, compile_runtime_intents,
@@ -743,7 +764,7 @@ fn native_handoff_test_player(
                 profile: DispatchProfile::MockTest,
                 timing,
                 focus: FocusOptions {
-                    require_focus: false,
+                    require_focus,
                     focus_restore_grace_us: 100_000,
                 },
                 wait: WaitOptions {

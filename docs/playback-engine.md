@@ -79,8 +79,10 @@ The tracked key journal is written before calling **SendInput**. Only journaled
 keys may be released. The journal distinguishes:
 
 - **needs_up**: a key still needs a transport-qualified safety Up.
-- **needs_probe**: transport already attempted its Up, but release is not yet
-  verified.
+- **needs_probe**: a foreground-qualified Up was transported, but release is
+  not yet verified. A bounded terminal Up sent while the origin is in the
+  background is retained as raw sender evidence and leaves the original
+  **needs_up** obligation intact; it cannot become probe-only evidence.
 
 Worker cleanup is bounded to at most four raw Up calls per drain. Retries apply
 only to **needs_up**; **needs_probe** can be probed but never causes another Up.

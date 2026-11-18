@@ -943,8 +943,9 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
 
     let _send_lock = recovery_test_send_lock();
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
-    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
-    sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+    set_recovery_test_probe_result(None);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
 
     let activity = ActivityCoordinator::default();
     let mut service = NativePlaybackService::new(activity.clone());
@@ -953,10 +954,11 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
     service.diagnostics_gate = Arc::clone(&diagnostics_gate);
     let hook = Arc::new(StartupOrderingHook::default());
     hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
-    let player = native_handoff_test_player(
+    let captures = Arc::new(Mutex::new(Vec::<MockSendInputCapture>::new()));
+    let player = native_handoff_focus_required_test_player(
         Arc::clone(&hook),
-        Arc::new(Mutex::new(Vec::<MockSendInputCapture>::new())),
-        FaultInjectionScript::persistent_release(),
+        Arc::clone(&captures),
+        FaultInjectionScript::none(),
     );
     player.bind_initial_target_for_test(123);
     player
@@ -995,6 +997,10 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
         .expect("monitor activation");
     assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
 
+    // The original target loses foreground only after a complete Down. Stop
+    // then permits the worker's one bounded background safety Up.
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
     hook.arm_startup_checkpoint(StartupCheckpoint::TerminalCleanup, 1);
     let ack = service
         .command(
@@ -1026,6 +1032,31 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
     assert!(active.worker_quiescent.load(Ordering::Acquire));
     assert!(active.done.load(Ordering::Acquire));
     assert!(activity.physical_release_is_quarantined());
+    let worker_terminal = player
+        .terminal_result()
+        .expect("worker publishes the retained release journal");
+    assert_eq!(worker_terminal.residual.needs_up_mask, 1);
+    assert_eq!(worker_terminal.residual.needs_probe_mask, 0);
+    let worker_calls = captures.lock().expect("mock sender capture").clone();
+    assert_eq!(
+        worker_calls.len(),
+        2,
+        "one Down and one background safety Up"
+    );
+    assert!(matches!(
+        worker_calls[0],
+        MockSendInputCapture::Packet { packet, .. } if packet.down_mask == 1
+    ));
+    assert!(
+        matches!(
+            &worker_calls[1],
+            MockSendInputCapture::SingleEmitter {
+                scan_codes,
+                key_up: true,
+            } if scan_codes == &[0x15]
+        ),
+        "background terminal cleanup must make one raw Up call: {worker_calls:?}"
+    );
     assert_eq!(
         service
             .status()
@@ -1038,12 +1069,15 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
     assert_eq!(
         recovery_test_raw_sends(),
         0,
-        "background Stop must not send Up"
+        "post-join recovery must wait for exact foreground return"
     );
 
     // The monitor must have transferred recovery ownership before it returned.
     // A later exact foreground poll should trigger one attempt even though the
     // real desktop foreground and WinEvent hook are not used by this fixture.
+    set_recovery_test_probe_result(Some(
+        sky_dispatch_win32::input::InstrumentPhysicalState::AllUp,
+    ));
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
     let deadline = Instant::now() + Duration::from_secs(2);
@@ -1051,19 +1085,35 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
         thread::sleep(Duration::from_millis(10));
     }
     assert_eq!(recovery_test_raw_sends(), 1);
+    assert_eq!(
+        recovery_test_probe_calls(),
+        1,
+        "one admitted Up is probed once"
+    );
     thread::sleep(Duration::from_millis(150));
     assert_eq!(
         recovery_test_raw_sends(),
         1,
         "polls do not replay the same edge"
     );
-    assert!(activity.physical_release_is_quarantined());
-    assert!(matches!(
-        activity.reserve_playback("successor-after-monitor-recovery"),
-        Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
-    ));
+    assert!(!activity.physical_release_is_quarantined());
+    assert_eq!(
+        service
+            .status()
+            .expect("recovered terminal status")
+            .last_terminal
+            .expect("recovered terminal result")
+            .terminal_release_verified,
+        Some(true)
+    );
+    drop(
+        activity
+            .reserve_playback("successor-after-verified-recovery")
+            .expect("verified foreground Up and AllUp probe release quarantine"),
+    );
 
     service.post_join_recovery.shutdown();
+    set_recovery_test_probe_result(None);
     sky_dispatch_win32::focus::set_foreground_window_for_test(None);
     sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
 }
@@ -1362,8 +1412,11 @@ fn poisoned_retirement_slot_keeps_unverified_release_failed() {
 fn recovery_focus_loss_preserves_needs_up_without_a_raw_attempt() {
     let _send_lock = recovery_test_send_lock();
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    set_recovery_test_probe_result(None);
     let (service, active, _authority) =
         quarantined_recovery_fixture("focus-lost-recovery", true, 0x0001, 0);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x9999));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x2222)));
     reset_recovery_test_raw_sends();
 
     let error = recover_quarantined_release_once(&active, &service.last_terminal)
@@ -1380,6 +1433,43 @@ fn recovery_focus_loss_preserves_needs_up_without_a_raw_attempt() {
     service
         .activity
         .abandon_quarantined_recovery(&active.session_id);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_final_foreground_loss_after_admission_keeps_needs_up_and_quarantine() {
+    let _send_lock = recovery_test_send_lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    set_recovery_test_probe_result(None);
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("final-focus-loss-recovery", true, 0x0001, 0);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x1199)));
+    sky_dispatch_win32::focus::set_foreground_owner_match_sequence_for_test(Some(&[
+        true, true, false,
+    ]));
+    reset_recovery_test_raw_sends();
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("the final exact foreground query must withhold recovery Up");
+    assert!(error.contains("needs_up=0x0001"));
+    assert_eq!(recovery_test_raw_sends(), 0);
+    assert_eq!(recovery_test_probe_calls(), 0);
+    assert!(service.activity.physical_release_is_quarantined());
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("failed final check retains the original recovery journal");
+    assert_eq!(residual.needs_up_mask, 0x0001);
+    assert_eq!(residual.needs_probe_mask, 0);
+    assert_eq!(residual.outstanding_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+    sky_dispatch_win32::focus::set_foreground_owner_match_sequence_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
 }
 
 #[cfg(feature = "tauri-test")]

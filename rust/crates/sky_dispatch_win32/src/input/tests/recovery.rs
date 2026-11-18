@@ -47,6 +47,7 @@ fn custom_emitter_without_probe_never_synthesizes_held() {
 }
 
 #[test]
+#[cfg(feature = "test-support")]
 fn release_owner_proof_retains_the_original_foreground_policy() {
     let authority = Arc::new(crate::focus::WindowIdentityAuthority::synthetic_for_test(
         77, 91,
@@ -70,6 +71,7 @@ fn release_owner_proof_retains_the_original_foreground_policy() {
 }
 
 #[test]
+#[cfg(feature = "test-support")]
 fn recovery_journal_reconstruction_preserves_only_the_supplied_residual() {
     let hwnd = 78;
     let owner_pid = 92;

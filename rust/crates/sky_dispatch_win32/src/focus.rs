@@ -5,6 +5,8 @@ pub mod foreground_watcher;
 #[cfg(feature = "test-support")]
 use std::cell::Cell;
 #[cfg(feature = "test-support")]
+use std::cell::RefCell;
+#[cfg(feature = "test-support")]
 use std::sync::Mutex;
 #[cfg(feature = "test-support")]
 use std::sync::atomic::AtomicU64;
@@ -16,6 +18,9 @@ thread_local! {
     static FOREGROUND_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
     static REAL_FOREGROUND_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
     static OWNER_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
+    static FOREGROUND_OWNER_MATCH_SEQUENCE: RefCell<Option<(Vec<bool>, usize)>> = const {
+        RefCell::new(None)
+    };
 }
 
 #[cfg(feature = "test-support")]
@@ -95,6 +100,15 @@ pub fn set_foreground_owner_for_test(owner: Option<Option<u32>>) {
     TEST_FOREGROUND_OWNER.store(encoded, Ordering::Release);
 }
 
+/// Supply exact foreground match results to this test thread. Once the finite
+/// sequence is exhausted, the normal foreground override is used again.
+#[cfg(feature = "test-support")]
+pub fn set_foreground_owner_match_sequence_for_test(sequence: Option<&[bool]>) {
+    FOREGROUND_OWNER_MATCH_SEQUENCE.with(|state| {
+        *state.borrow_mut() = sequence.map(|values| (values.to_vec(), 0));
+    });
+}
+
 #[cfg(feature = "test-support")]
 pub fn window_identity_authority_drop_count_for_test() -> u64 {
     WINDOW_IDENTITY_AUTHORITY_DROP_COUNT.load(Ordering::Acquire)
@@ -153,6 +167,20 @@ pub fn foreground_window_owner_matches(
     target_hwnd: isize,
     expected_owner_pid: u32,
 ) -> ForegroundOwnerMatch {
+    #[cfg(feature = "test-support")]
+    if let Some(matches) = FOREGROUND_OWNER_MATCH_SEQUENCE.with(|state| {
+        let mut state = state.borrow_mut();
+        let (sequence, index) = state.as_mut()?;
+        let matched = *sequence.get(*index)?;
+        *index = index.saturating_add(1);
+        Some(matched)
+    }) {
+        return if matches {
+            ForegroundOwnerMatch::Match
+        } else {
+            ForegroundOwnerMatch::NotForeground
+        };
+    }
     if target_hwnd == 0 || expected_owner_pid == 0 {
         return ForegroundOwnerMatch::OwnerQueryUnavailable;
     }

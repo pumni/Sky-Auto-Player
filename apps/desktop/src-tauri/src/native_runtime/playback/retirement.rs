@@ -7,6 +7,15 @@ static RECOVERY_TEST_RAW_SENDS: std::sync::atomic::AtomicU64 = std::sync::atomic
 #[cfg(test)]
 static RECOVERY_TEST_SEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(feature = "tauri-test")]
+static RECOVERY_TEST_PROBE_RESULT: Mutex<
+    Option<sky_dispatch_win32::input::InstrumentPhysicalState>,
+> = Mutex::new(None);
+
+#[cfg(feature = "tauri-test")]
+static RECOVERY_TEST_PROBE_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 #[cfg(test)]
 pub(in crate::native_runtime) fn reset_recovery_test_raw_sends() {
     RECOVERY_TEST_RAW_SENDS.store(0, Ordering::Release);
@@ -22,6 +31,21 @@ pub(in crate::native_runtime) fn recovery_test_send_lock() -> std::sync::MutexGu
     RECOVERY_TEST_SEND_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+pub(in crate::native_runtime) fn set_recovery_test_probe_result(
+    result: Option<sky_dispatch_win32::input::InstrumentPhysicalState>,
+) {
+    *RECOVERY_TEST_PROBE_RESULT
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = result;
+    RECOVERY_TEST_PROBE_CALLS.store(0, Ordering::Release);
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+pub(in crate::native_runtime) fn recovery_test_probe_calls() -> u64 {
+    RECOVERY_TEST_PROBE_CALLS.load(Ordering::Acquire)
 }
 
 #[derive(Default)]
@@ -893,7 +917,17 @@ pub(in crate::native_runtime) fn recover_quarantined_release_once(
     // probe. Only Tauri test fixtures replace it with an inconclusive seam so
     // tests can never turn a synthetic owner HWND into Win32 release proof.
     #[cfg(feature = "tauri-test")]
-    tracked.set_probe(|_, _| sky_dispatch_win32::input::InstrumentPhysicalState::Inconclusive);
+    {
+        let probe_result = RECOVERY_TEST_PROBE_RESULT
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+            .unwrap_or(sky_dispatch_win32::input::InstrumentPhysicalState::Inconclusive);
+        tracked.set_probe(move |_, _| {
+            RECOVERY_TEST_PROBE_CALLS.fetch_add(1, Ordering::AcqRel);
+            probe_result.clone()
+        });
+    }
     let drain = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         tracked.release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
             target_hwnd,

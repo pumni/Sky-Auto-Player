@@ -18,6 +18,7 @@
     [string]$HarnessPath,
     [string]$HarnessManifestPath,
     [string]$OutputRoot,
+    [switch]$OwnerApprovedReceiveOnlyRun,
     [ValidateRange(15, 15)]
     [int]$SampleSeconds,
     [ValidateSet(60, 120)]
@@ -43,6 +44,9 @@ $sessionTimingFloors = if ($isDispatchCleanupM3) {
     Get-DispatchCleanupM3TimingFloors -Scenario $Scenario -GameFps $GameFps -TimingMarginUs $TimingMarginUs
 } elseif ($isSessionRedesignProfile) {
     Assert-DispatchSessionRedesignM3SessionIdentity -Scenario $Scenario -Workload $Workload `
+        -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds
+} elseif ($isPlaybackCoreLifecycle) {
+    Assert-PlaybackCoreLifecycleSessionIdentity -Scenario $Scenario -Workload $Workload `
         -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds
 } else { $null }
 if ($usesSessionQualificationContracts) {
@@ -129,7 +133,16 @@ function Assert-SinkIdentity {
     if ($Record.schema_version -ne 3 -or $Record.event_schema_version -ne 3 -or $Record.run_id -ne $runId -or $Record.role -ne 'ReceiveOnly') {
         throw 'receive-only sink ready record schema, role, or run ID mismatch'
     }
-    if ($Record.sink_kind -ne 'SkyAutoPlayer.NativeAcceptanceSink' -or $Record.title -ne 'Sky Auto Player — Native Acceptance Sink' -or $Record.process -ne 'native_acceptance_sink.ps1' -or $Record.input_policy -ne 'receives_only; benchmark must use SendInput') {
+    $gameTargetProperty = $Record.PSObject.Properties['game_target']
+    if ($Record.sink_kind -ne 'SkyAutoPlayer.NativeAcceptanceSink' -or
+        $Record.target_class -ne 'project-owned-non-game-receive-only' -or
+        $Record.target_name -ne 'Sky Auto Player — Native Acceptance Sink' -or
+        $null -eq $gameTargetProperty -or
+        $gameTargetProperty.Value -isnot [bool] -or
+        $gameTargetProperty.Value -ne $false -or
+        $Record.title -ne 'Sky Auto Player — Native Acceptance Sink' -or
+        $Record.process -ne 'native_acceptance_sink.ps1' -or
+        $Record.input_policy -ne 'receives_only; benchmark must use SendInput') {
         throw 'ready record does not identify the project-owned receive-only sink'
     }
     if ($Record.pid -le 0 -or $Record.hwnd -le 0 -or $Record.event_log_id.Length -eq 0 -or $Record.process_start_time_filetime -le 0) {
@@ -347,6 +360,9 @@ function Assert-PathOutsideRepository {
 }
 
 try {
+    if ($isPlaybackCoreLifecycle -and -not $OwnerApprovedReceiveOnlyRun) {
+        throw 'PlaybackCoreLifecycle native case requires -OwnerApprovedReceiveOnlyRun after explicit owner approval of this Windows machine and project-owned receiver'
+    }
     if (-not [Environment]::UserInteractive) {
         throw 'Windows is not interactive; refusing physical acceptance'
     }
@@ -543,6 +559,10 @@ try {
             if ([string]::IsNullOrWhiteSpace($Workload)) { throw 'DispatchSessionRedesignM3 native cases require an explicit workload identity' }
             Assert-DispatchSessionRedesignM3SessionIdentity -Scenario $Scenario -Workload $Workload `
                 -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds | Out-Null
+        } elseif ($isPlaybackCoreLifecycle) {
+            if ([string]::IsNullOrWhiteSpace($Workload)) { throw 'PlaybackCoreLifecycle native cases require an explicit workload identity' }
+            Assert-PlaybackCoreLifecycleSessionIdentity -Scenario $Scenario -Workload $Workload `
+                -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds | Out-Null
         }
     }
     $sessionId = (Get-Process -Id $PID).SessionId
@@ -579,6 +599,7 @@ try {
     $rustVersion = (& rustc --version).Trim()
     $runConfig = [ordered]@{
         run_id = $runId
+        owner_approved_receive_only_run = [bool]$OwnerApprovedReceiveOnlyRun
         source_revision = $head
         source_tree_sha = $sourceTree
         source_tree_clean = $sourceTreeClean
@@ -610,7 +631,7 @@ try {
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
-        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'FrameSnapshot') { if ($harnessManifest.source_role -eq 'Baseline') { 'FrameSnapshot-Baseline' } else { 'FrameSnapshot-Candidate' } } elseif ($QualificationProfile -eq 'DispatchCleanupM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchCleanupM3-Baseline' } else { 'DispatchCleanupM3-Candidate' } } elseif ($QualificationProfile -eq 'DispatchSessionRedesignM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchSessionRedesignM3-Baseline' } else { 'DispatchSessionRedesignM3-Candidate' } } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'FrameSnapshot') { if ($harnessManifest.source_role -eq 'Baseline') { 'FrameSnapshot-Baseline' } else { 'FrameSnapshot-Candidate' } } elseif ($QualificationProfile -eq 'DispatchCleanupM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchCleanupM3-Baseline' } else { 'DispatchCleanupM3-Candidate' } } elseif ($QualificationProfile -eq 'DispatchSessionRedesignM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchSessionRedesignM3-Baseline' } else { 'DispatchSessionRedesignM3-Candidate' } } elseif ($QualificationProfile -eq 'PlaybackCoreLifecycle') { if ($harnessManifest.source_role -eq 'Baseline') { 'PlaybackCoreLifecycle-Baseline' } else { 'PlaybackCoreLifecycle-Candidate' } } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
         harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
         harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
         harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }
@@ -649,6 +670,9 @@ try {
         receiveonly_observer_version = $receiveOnlyObserverVersion
         sink_pid = [int]$sink.pid
         sink_hwnd = [long]$sink.hwnd
+        sink_target_class = [string]$sink.target_class
+        sink_target_name = [string]$sink.target_name
+        sink_game_target = [bool]$sink.game_target
         sink_event_log_id = $sink.event_log_id
         sink_process_start_time_filetime = [long]$sink.process_start_time_filetime
         sink_process_image_path = $pwshExecutablePath
@@ -662,6 +686,8 @@ try {
         $runConfig['configured_H_us'] = [long]$sessionTimingFloors.configured_H_us
         $runConfig['configured_G_us'] = [long]$sessionTimingFloors.configured_G_us
     }
+    $runConfig['machine_name'] = [Environment]::MachineName
+    $runConfig['os_boot_time_utc'] = $operatingSystem.LastBootUpTime.ToUniversalTime().ToString('O')
     $runConfig | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $runConfigPath -Encoding UTF8
     Copy-Item -LiteralPath $PSCommandPath -Destination (Join-Path $runDir 'runner.ps1')
 
@@ -863,6 +889,23 @@ try {
         status = $report.status
         reason = $report.reason
         event_log_id = $sink.event_log_id
+        owner_approved_receive_only_run = [bool]$OwnerApprovedReceiveOnlyRun
+        target_identity = [ordered]@{
+            role = [string]$sink.role
+            sink_kind = [string]$sink.sink_kind
+            target_class = [string]$sink.target_class
+            target_name = [string]$sink.target_name
+            game_target = [bool]$sink.game_target
+            title = [string]$sink.title
+            process = [string]$sink.process
+            input_policy = [string]$sink.input_policy
+            pid = [int]$sink.pid
+            hwnd = [long]$sink.hwnd
+            process_start_time_filetime = [long]$sink.process_start_time_filetime
+            event_log_id = [string]$sink.event_log_id
+        }
+        machine_name = [Environment]::MachineName
+        os_boot_time_utc = $operatingSystem.LastBootUpTime.ToUniversalTime().ToString('O')
         foreground_permission_granted_to_sink = [bool]$foregroundPermissionGranted
         cursor_sequence_before_arm = $cursor
         cursor_offset_before_arm = [long]$details.sink_cursor_offset_before_arm

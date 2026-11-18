@@ -100,9 +100,11 @@ function Get-PlaybackCoreLifecycleProfile {
             'worker-joined-to-next-start-us'
         )
         TargetIdentity = [ordered]@{
-            application = 'Sky'
+            target_class = 'project-owned-non-game-receive-only'
+            target_name = 'Sky Auto Player — Native Acceptance Sink'
+            game_target = $false
             capture_status = 'NOT_RUN'
-            required_at_run = 'owner-selected target HWND, PID, and retained process identity'
+            required_at_run = 'owner-approved exact project-owned ReceiveOnly HWND, PID, and retained process identity'
         }
         RunnerProvenancePaths = @(
             'scripts/build_dispatch_core_harness.ps1',
@@ -114,6 +116,7 @@ function Get-PlaybackCoreLifecycleProfile {
             'scripts/dispatch_qualification_orchestration.psm1',
             'scripts/dispatch_pair_screen.psm1',
             'scripts/native_acceptance_sink.ps1',
+            'scripts/lib/playback_core_lifecycle_collector.psm1',
             'scripts/test_qualify_dispatch_core_contracts.ps1',
             'docs/playback-verification.md'
         )

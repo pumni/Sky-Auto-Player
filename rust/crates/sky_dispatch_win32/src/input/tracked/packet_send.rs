@@ -19,6 +19,7 @@ use crate::clock::QpcTicks;
 
 pub(super) struct CleanupSendContext<'a, 'b> {
     pub(super) terminal_qpc_fallback: &'a mut bool,
+    pub(super) allow_background_terminal_up: bool,
     pub(super) admission: Option<&'a mut CleanupAttemptAdmission<'b>>,
     pub(super) drain_control:
         &'a mut dyn FnMut() -> Result<super::super::outcome::CleanupDrainDecision, String>,
@@ -198,15 +199,14 @@ impl TrackedKeyState {
 
         let drain_decision = (context.drain_control)()?;
         *context.terminal_qpc_fallback |= drain_decision.terminal_requested;
-        if !*context.terminal_qpc_fallback && !drain_decision.origin_foreground {
+        let background_terminal = context.allow_background_terminal_up
+            && drain_decision.terminal_requested
+            && !drain_decision.origin_foreground;
+        if !drain_decision.origin_foreground && !background_terminal {
             return Err("tracked cleanup origin is not foreground".into());
         }
-        *context.background_terminal_drain |=
-            drain_decision.terminal_requested && !drain_decision.origin_foreground;
-        if *context.terminal_qpc_fallback
-            && !drain_decision.origin_foreground
-            && context.raw_up_invocations != 0
-        {
+        *context.background_terminal_drain |= background_terminal;
+        if background_terminal && context.raw_up_invocations != 0 {
             return Err("background terminal Up budget already used".into());
         }
 

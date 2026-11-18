@@ -101,6 +101,27 @@ Run the qualification contract tests and PlanOnly dry checks with
 configuration and reports zero native attempts. It does not execute the sink or
 send input.
 
+The runnable Final protocol keeps six alternating AB/BA pairs for each of the
+five workloads in both Quiet and Contention, followed by the eight candidate
+safety scenarios. It requires the explicit
+**-OwnerApprovedReceiveOnlyRun** switch. Use that switch only after the
+repository owner has approved the exact Windows machine, the project-owned
+receiver, and the physical input scope. The runner rejects a missing or
+misidentified receiver, including any target marked as a game. Do not run this
+command as part of routine source verification.
+
+    pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -Stage Final -QualificationProfile PlaybackCoreLifecycle -CandidateManifest <candidate-manifest> -ControlManifest <baseline-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 -OwnerApprovedReceiveOnlyRun -OutputRoot <evidence-root>
+
+After an authorized run, **lifecycle-metrics.json** records candidate source,
+tree, manifest and binary hashes with machine/boot and receiver identity. It
+reports stop-request to verified-release latency only when worker join, a clean
+release journal, and validated ReceiveOnly Up evidence are present. The
+worker-joined to next-start interval uses the immediately following native
+case process launch QPC and includes inter-case harness setup. Raw Up call
+counts retain their source stop-cleanup run IDs. Missing evidence is reported
+as **INCOMPLETE** and fails the qualification summary; PlanOnly does not
+produce native lifecycle measurements.
+
 Native ReceiveOnly requires a later owner decision and an explicitly controlled,
 safe receiver. Do not substitute gameplay for the ReceiveOnly harness.
 PlanOnly, mocks, builds, and desktop tests are not gameplay acceptance.

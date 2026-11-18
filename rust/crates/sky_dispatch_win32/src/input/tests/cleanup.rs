@@ -995,12 +995,79 @@ fn terminal_background_drain_sends_one_best_effort_up_and_keeps_probe_residual()
     assert_eq!(probe_calls.load(Ordering::Acquire), 0);
     assert_eq!(outcome.release_outcome.attempts, 1);
     assert!(!outcome.release_outcome.released_successfully);
-    assert!(outcome.release_outcome.verification_inconclusive);
-    assert_eq!(outcome.needs_up_mask, 0);
-    assert_eq!(outcome.needs_probe_mask, 1);
+    assert!(!outcome.release_outcome.verification_inconclusive);
+    assert_eq!(outcome.needs_up_mask, 1);
+    assert_eq!(outcome.needs_probe_mask, 0);
     assert_eq!(backend.release_obligation_mask(), 1);
+    assert_eq!(backend.needs_up_mask(), 1);
+    assert_eq!(backend.needs_probe_mask, 0);
     assert_eq!(outcome.send_attempts.len(), 1);
     assert_eq!(outcome.send_attempts[0].raw_calls, 1);
+    assert_eq!(outcome.send_attempts[0].requested_events, 1);
+    assert_eq!(outcome.send_attempts[0].inserted_events, 1);
+}
+
+#[test]
+fn recovery_final_foreground_loss_with_qpc_fallback_withholds_raw_up() {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 112;
+    let raw_calls = Arc::new(AtomicUsize::new(0));
+    let raw_calls_for_emitter = Arc::clone(&raw_calls);
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 1;
+    state.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 70, None, None).expect("recovery origin"),
+    );
+    state.set_terminal_up_emitter_for_test(move |_| {
+        raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        unreachable!("recovery must withhold Up after its final foreground check fails")
+    });
+    state.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+
+    let drain_samples = Cell::new(0usize);
+    let admission_calls = Cell::new(0usize);
+    let outcome = state
+        .release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+            TARGET,
+            |mask, proof| {
+                admission_calls.set(admission_calls.get() + 1);
+                assert_eq!(mask, 1);
+                assert_eq!(proof.target_hwnd(), TARGET);
+                Ok(())
+            },
+            || {
+                let sample = drain_samples.get();
+                drain_samples.set(sample + 1);
+                Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: sample == 0,
+                })
+            },
+            1,
+        );
+
+    assert_eq!(
+        drain_samples.get(),
+        2,
+        "outer and final foreground checks run"
+    );
+    assert_eq!(admission_calls.get(), 1);
+    assert_eq!(raw_calls.load(Ordering::Acquire), 0);
+    assert!(outcome.send_attempts.is_empty());
+    assert_eq!(outcome.needs_up_mask, 1);
+    assert_eq!(outcome.needs_probe_mask, 0);
+    assert_eq!(outcome.release_outcome.stuck_mask, 1);
+    assert!(!outcome.release_outcome.released_successfully);
+    assert_eq!(state.release_obligation_mask(), 1);
+    assert_eq!(state.needs_up_mask(), 1);
+    assert_eq!(state.needs_probe_mask, 0);
+    assert_eq!(
+        outcome.withheld_reason.as_deref(),
+        Some("tracked cleanup origin is not foreground")
+    );
 }
 
 #[test]

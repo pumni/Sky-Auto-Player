@@ -18,20 +18,8 @@ impl TrackedKeyState {
         &mut self,
         target_hwnd: isize,
     ) -> TerminalReleaseEvidence {
-        self.release_scope_with_qpc_fallback(target_hwnd, true, None, None, 4)
+        self.release_scope_with_qpc_fallback(target_hwnd, true, false, None, None, 4)
             .terminal_evidence()
-    }
-
-    /// Release this session's tracked obligations while revalidating their
-    /// frozen origin immediately before every sender attempt, including after
-    /// each retry delay. A rejected admission stops the retry loop and returns
-    /// all evidence accumulated by prior admitted attempts.
-    pub fn release_tracked_with_attempt_admission(
-        &mut self,
-        target_hwnd: isize,
-        mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
-    ) -> GuardedReleaseOutcome {
-        self.release_scope_with_qpc_fallback(target_hwnd, false, Some(&mut admission), None, 4)
     }
 
     /// Resumable cleanup shares its retry/probe reducer with terminal cleanup.
@@ -46,21 +34,30 @@ impl TrackedKeyState {
         self.release_scope_with_qpc_fallback(
             target_hwnd,
             false,
+            true,
             Some(&mut admission),
             Some(&mut drain_control),
             4,
         )
     }
 
-    /// Terminal counterpart to `release_tracked_with_attempt_admission`.
+    /// Terminal cleanup with explicit per-attempt origin admission.
     /// Terminal QPC fallback remains available, but never bypasses the fresh
     /// per-attempt origin admission.
-    pub fn release_terminal_tracked_scope_with_attempt_admission(
+    #[cfg(test)]
+    pub(crate) fn release_terminal_tracked_scope_with_attempt_admission(
         &mut self,
         target_hwnd: isize,
         mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
     ) -> GuardedReleaseOutcome {
-        self.release_scope_with_qpc_fallback(target_hwnd, true, Some(&mut admission), None, 4)
+        self.release_scope_with_qpc_fallback(
+            target_hwnd,
+            true,
+            false,
+            Some(&mut admission),
+            None,
+            4,
+        )
     }
 
     /// Terminal cleanup with a fresh origin/foreground decision at each drain
@@ -74,6 +71,7 @@ impl TrackedKeyState {
     ) -> GuardedReleaseOutcome {
         self.release_scope_with_qpc_fallback(
             target_hwnd,
+            true,
             true,
             Some(&mut admission),
             Some(&mut drain_control),
@@ -95,6 +93,7 @@ impl TrackedKeyState {
         self.release_scope_with_qpc_fallback(
             target_hwnd,
             true,
+            false,
             Some(&mut admission),
             Some(&mut drain_control),
             max_raw_up_calls.clamp(1, 4),
@@ -105,6 +104,7 @@ impl TrackedKeyState {
         &mut self,
         target_hwnd: isize,
         mut terminal_qpc_fallback: bool,
+        allow_background_terminal_up: bool,
         mut admission: Option<&mut CleanupAttemptAdmission<'_>>,
         mut drain_control: Option<
             &mut dyn FnMut() -> Result<super::super::outcome::CleanupDrainDecision, String>,
@@ -194,11 +194,13 @@ impl TrackedKeyState {
                 None => default_drain_control().expect("default drain control is infallible"),
             };
             terminal_qpc_fallback |= drain_decision.terminal_requested;
-            if !terminal_qpc_fallback && !drain_decision.origin_foreground {
+            let background_terminal = allow_background_terminal_up
+                && drain_decision.terminal_requested
+                && !drain_decision.origin_foreground;
+            if !drain_decision.origin_foreground && !background_terminal {
                 withheld_reason = Some("tracked cleanup origin is not foreground".into());
                 break;
             }
-            let background_terminal = terminal_qpc_fallback && !drain_decision.origin_foreground;
             background_terminal_drain |= background_terminal;
             if background_terminal && raw_up_invocations != 0 {
                 break;
@@ -243,6 +245,7 @@ impl TrackedKeyState {
                     prepared,
                     super::packet_send::CleanupSendContext {
                         terminal_qpc_fallback: &mut terminal_qpc_fallback,
+                        allow_background_terminal_up,
                         admission: attempt_admission,
                         drain_control: drain_control_callback,
                         background_terminal_drain: &mut background_terminal_drain,
@@ -287,7 +290,17 @@ impl TrackedKeyState {
                     terminal_qpc_fallback = true;
                 }
 
-                if raw_transport_complete {
+                if background_terminal_drain && emitted.evidence.attempts != 0 {
+                    // Background terminal transport is retained as sender
+                    // evidence only. It cannot discharge the original Up
+                    // obligation or create a foreground-qualified probe-only
+                    // residual.
+                    self.active_mask &= !previous_needs_up;
+                    self.possibly_active_mask &= !previous_needs_up;
+                    self.failed_release_mask |= previous_needs_up;
+                    self.in_flight_mask &= !previous_needs_up;
+                    self.needs_probe_mask &= !previous_needs_up;
+                } else if raw_transport_complete {
                     self.active_mask &= !previous_needs_up;
                     self.possibly_active_mask &= !previous_needs_up;
                     self.failed_release_mask &= !previous_needs_up;
@@ -383,7 +396,7 @@ impl TrackedKeyState {
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn release_all(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
-        self.release_scope_with_qpc_fallback(target_hwnd, false, None, None, 4)
+        self.release_scope_with_qpc_fallback(target_hwnd, false, false, None, None, 4)
             .release_outcome
     }
 }
