@@ -365,7 +365,7 @@ fn up_only_timing_window(
     Ok(timing_window)
 }
 
-fn stage_scheduler_action_preserving_due_up(
+fn stage_scheduler_send_candidate(
     action: SchedulerAction,
     admission: SchedulerStageAdmission<'_>,
     resources: &mut super::WorkerResources,
@@ -379,7 +379,7 @@ fn stage_scheduler_action_preserving_due_up(
     else {
         return Ok(None);
     };
-    match stage_candidate(
+    stage_candidate(
         up_mask,
         down_chord,
         timing_window,
@@ -387,10 +387,7 @@ fn stage_scheduler_action_preserving_due_up(
         admission.target,
         resources,
         runtime,
-    )? {
-        Some(candidate) => Ok(Some(candidate)),
-        None => Ok(None),
-    }
+    )
 }
 
 fn stage_up_only_for_mixed_replan(

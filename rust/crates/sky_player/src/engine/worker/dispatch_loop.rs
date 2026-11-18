@@ -1757,7 +1757,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             }
             let mut candidate = match action_to_stage {
                 Some(send_action @ SchedulerAction::Send { .. }) => {
-                    match stage_scheduler_action_preserving_due_up(
+                    match stage_scheduler_send_candidate(
                         send_action,
                         SchedulerStageAdmission {
                             target,

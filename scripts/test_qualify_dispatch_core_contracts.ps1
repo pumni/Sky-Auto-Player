@@ -1333,36 +1333,36 @@ try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario canonical-single
 if (-not $badM3GRejected) { throw 'DispatchCleanupM3 accepted a release gap different from frame interval plus margin' }
 $m3NegativeContractCount++
 
-$sessionM3Profile = Get-DispatchSessionRedesignM3Profile
-if ($sessionM3Profile.BaselineRevision -ne 'd0f65e7c412041a6d502f81f469872198db7adc5' -or
-    $sessionM3Profile.BaselineTree -ne '19aae9e41bc667a2f991001ed105b6ffdebb8bc6' -or
-    $sessionM3Profile.CandidateLineageBranch -ne 'refactor/dispatch-session-redesign' -or
-    $sessionM3Profile.Target -ne 'x86_64-pc-windows-msvc' -or
-    $sessionM3Profile.RustVersion -ne '1.99.1' -or $sessionM3Profile.CargoVersion -ne '1.99.1' -or
-    $sessionM3Profile.CargoProfile -ne 'dist' -or
-    @($sessionM3Profile.RequiredFeatures).Count -ne 1 -or $sessionM3Profile.RequiredFeatures[0] -ne 'real-input-acceptance' -or
-    $sessionM3Profile.PerformanceTimingMarginUs -ne 500 -or $sessionM3Profile.SafetyTimingMarginUs -ne 500 -or
-    $sessionM3Profile.ObserverMode -ne 'SchedulerQueuedV3Compat3' -or
-    @($sessionM3Profile.SafetyCases).Count -ne 7 -or @($sessionM3Profile.SafetyScenarios).Count -ne 7) {
+$sessionRedesignProfile = Get-DispatchSessionRedesignM3Profile
+if ($sessionRedesignProfile.BaselineRevision -ne 'd0f65e7c412041a6d502f81f469872198db7adc5' -or
+    $sessionRedesignProfile.BaselineTree -ne '19aae9e41bc667a2f991001ed105b6ffdebb8bc6' -or
+    $sessionRedesignProfile.CandidateLineageBranch -ne 'refactor/dispatch-session-redesign' -or
+    $sessionRedesignProfile.Target -ne 'x86_64-pc-windows-msvc' -or
+    $sessionRedesignProfile.RustVersion -ne '1.99.1' -or $sessionRedesignProfile.CargoVersion -ne '1.99.1' -or
+    $sessionRedesignProfile.CargoProfile -ne 'dist' -or
+    @($sessionRedesignProfile.RequiredFeatures).Count -ne 1 -or $sessionRedesignProfile.RequiredFeatures[0] -ne 'real-input-acceptance' -or
+    $sessionRedesignProfile.PerformanceTimingMarginUs -ne 500 -or $sessionRedesignProfile.SafetyTimingMarginUs -ne 500 -or
+    $sessionRedesignProfile.ObserverMode -ne 'SchedulerQueuedV3Compat3' -or
+    @($sessionRedesignProfile.SafetyCases).Count -ne 7 -or @($sessionRedesignProfile.SafetyScenarios).Count -ne 7) {
     throw 'DispatchSessionRedesignM3 profile differs from the pinned baseline, Windows toolchain, immutable build, or seven-case safety plan'
 }
-if ($sessionM3Profile.CanaryCase.Scenario -ne 'canonical-single' -or
-    $sessionM3Profile.CanaryCase.Workload -ne 'canonical-single' -or
-    $sessionM3Profile.CanaryCase.Load -ne 'Quiet' -or
-    $sessionM3Profile.PerformanceCase.Scenario -ne 'mixed-up-down' -or
-    $sessionM3Profile.PerformanceCase.Workload -ne 'mixed-up-down' -or
-    (@($sessionM3Profile.PerformanceCase.LoadCells) -join '|') -ne 'Quiet|Contention' -or
-    $sessionM3Profile.PerformanceCase.GameFps -ne 60 -or
-    $sessionM3Profile.PerformanceCase.TimingMarginUs -ne 500 -or
-    $sessionM3Profile.PerformanceCase.PairCount -ne 6 -or
-    $sessionM3Profile.PerformanceCase.SampleSeconds -ne 15) {
+if ($sessionRedesignProfile.CanaryCase.Scenario -ne 'canonical-single' -or
+    $sessionRedesignProfile.CanaryCase.Workload -ne 'canonical-single' -or
+    $sessionRedesignProfile.CanaryCase.Load -ne 'Quiet' -or
+    $sessionRedesignProfile.PerformanceCase.Scenario -ne 'mixed-up-down' -or
+    $sessionRedesignProfile.PerformanceCase.Workload -ne 'mixed-up-down' -or
+    (@($sessionRedesignProfile.PerformanceCase.LoadCells) -join '|') -ne 'Quiet|Contention' -or
+    $sessionRedesignProfile.PerformanceCase.GameFps -ne 60 -or
+    $sessionRedesignProfile.PerformanceCase.TimingMarginUs -ne 500 -or
+    $sessionRedesignProfile.PerformanceCase.PairCount -ne 6 -or
+    $sessionRedesignProfile.PerformanceCase.SampleSeconds -ne 15) {
     throw 'DispatchSessionRedesignM3 canary or paired workload mapping differs from the approved run proposal'
 }
 $expectedSafetyIds = @('focus-loss', 'stop-cleanup', 'pause-resume', 'owner-process-termination', 'target-hwnd-change', 'near-minimum-retrigger@60', 'near-minimum-retrigger@120')
-if ((@($sessionM3Profile.SafetyScenarios) -join '|') -ne ($expectedSafetyIds -join '|')) {
+if ((@($sessionRedesignProfile.SafetyScenarios) -join '|') -ne ($expectedSafetyIds -join '|')) {
     throw 'DispatchSessionRedesignM3 safety case order or IDs differ from the proposed seven sessions'
 }
-foreach ($safetyCase in $sessionM3Profile.SafetyCases) {
+foreach ($safetyCase in $sessionRedesignProfile.SafetyCases) {
     $expectedWorkload = if ($safetyCase.Scenario -eq 'near-minimum-retrigger') { 'near-minimum-retrigger' } else { 'safety-smoke' }
     $expectedFps = if ($safetyCase.Id -eq 'near-minimum-retrigger@120') { 120 } else { 60 }
     if ($safetyCase.Workload -ne $expectedWorkload -or $safetyCase.Load -ne 'Quiet' -or
@@ -1378,7 +1378,7 @@ if ($floors60.frame_us -ne 16667 -or $floors60.configured_H_us -ne 17167 -or $fl
     throw 'DispatchSessionRedesignM3 H/G floors differ from ceiling frame interval plus the fixed 500 us margin'
 }
 Assert-QualificationTimingMargin -RequestedStage Final -Profile DispatchSessionRedesignM3 -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
-$sessionM3Valid = @(
+$sessionRedesignValidCases = @(
     @{ scenario = 'canonical-single'; workload = 'canonical-single'; margin = 500; fps = 60; sample = 0 },
     @{ scenario = 'focus-loss'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 0 },
     @{ scenario = 'stop-cleanup'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 0 },
@@ -1389,11 +1389,11 @@ $sessionM3Valid = @(
     @{ scenario = 'near-minimum-retrigger'; workload = 'near-minimum-retrigger'; margin = 500; fps = 120; sample = 0 },
     @{ scenario = 'mixed-up-down'; workload = 'mixed-up-down'; margin = 500; fps = 60; sample = 15 }
 )
-foreach ($case in $sessionM3Valid) {
+foreach ($case in $sessionRedesignValidCases) {
     Assert-DispatchSessionRedesignM3SessionIdentity -Scenario $case.scenario -Workload $case.workload `
         -TimingMarginUs $case.margin -GameFps $case.fps -SampleSeconds $case.sample | Out-Null
 }
-$sessionM3Invalid = @(
+$sessionRedesignInvalidCases = @(
     @{ name = 'performance zero margin'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; margin = 0; fps = 60; sample = 15 },
     @{ name = 'performance wrong workload'; scenario = 'mixed-up-down'; workload = 'dense-alternating'; margin = 500; fps = 60; sample = 15 },
     @{ name = 'performance wrong fps'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; margin = 500; fps = 120; sample = 15 },
@@ -1404,32 +1404,32 @@ $sessionM3Invalid = @(
     @{ name = 'unsupported case'; scenario = 'suspend-resume'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 0 },
     @{ name = 'canary wrong fps'; scenario = 'canonical-single'; workload = 'canonical-single'; margin = 500; fps = 120; sample = 0 }
 )
-foreach ($case in $sessionM3Invalid) {
+foreach ($case in $sessionRedesignInvalidCases) {
     $rejected = $false
     try { Assert-DispatchSessionRedesignM3SessionIdentity -Scenario $case.scenario -Workload $case.workload -TimingMarginUs $case.margin -GameFps $case.fps -SampleSeconds $case.sample | Out-Null } catch { $rejected = $true }
     if (-not $rejected) { throw ('DispatchSessionRedesignM3 accepted invalid session ' + $case.name) }
 }
-$sessionM3Projection = New-QualificationReportProjection -Profile DispatchSessionRedesignM3 `
-    -Candidate ([pscustomobject]@{ qualification_profile = 'DispatchSessionRedesignM3'; workload_version = $sessionM3Profile.WorkloadVersion; performance_timing_margin_us = 500; safety_timing_margin_us = 500; observer_mode = 'qualification-on'; guard_mode = 'frozen'; receiveonly_observer_mode = 'SchedulerQueuedV3Compat3'; receiveonly_observer_version = $sessionM3Profile.ObserverVersion }) `
+$sessionRedesignProjection = New-QualificationReportProjection -Profile DispatchSessionRedesignM3 `
+    -Candidate ([pscustomobject]@{ qualification_profile = 'DispatchSessionRedesignM3'; workload_version = $sessionRedesignProfile.WorkloadVersion; performance_timing_margin_us = 500; safety_timing_margin_us = 500; observer_mode = 'qualification-on'; guard_mode = 'frozen'; receiveonly_observer_mode = 'SchedulerQueuedV3Compat3'; receiveonly_observer_version = $sessionRedesignProfile.ObserverVersion }) `
     -Control ([pscustomobject]@{ qualification_profile = 'DispatchSessionRedesignM3'; performance_timing_margin_us = 500; safety_timing_margin_us = 500 }) `
     -Stage Final -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 `
-    -SafetyScenarios $sessionM3Profile.SafetyScenarios -PerformanceWorkloads @('mixed-up-down')
-if ($sessionM3Projection.StageSummary.planned_session_count -ne 32 -or
-    $sessionM3Projection.StageSummary.candidate_session_count -ne 20 -or
-    $sessionM3Projection.StageSummary.control_session_count -ne 12 -or
-    $sessionM3Projection.StageSummary.safety_timing_margin_us -ne 500 -or
-    $sessionM3Projection.StageSummary.performance_timing_margin_us -ne 500 -or
-    $sessionM3Projection.StageSummary.game_fps_summary -ne 'varies by session (60, 120 FPS)' -or
-    $sessionM3Projection.StageSummary.configured_H_G_summary -ne '60 FPS H=G=17,167 us; 120 FPS H=G=8,834 us' -or
-    -not $sessionM3Projection.StageSummary.timed_performance_samples -or
-    $sessionM3Projection.StageSummary.timed_performance_sample_seconds -ne 15) {
+    -SafetyScenarios $sessionRedesignProfile.SafetyScenarios -PerformanceWorkloads @('mixed-up-down')
+if ($sessionRedesignProjection.StageSummary.planned_session_count -ne 32 -or
+    $sessionRedesignProjection.StageSummary.candidate_session_count -ne 20 -or
+    $sessionRedesignProjection.StageSummary.control_session_count -ne 12 -or
+    $sessionRedesignProjection.StageSummary.safety_timing_margin_us -ne 500 -or
+    $sessionRedesignProjection.StageSummary.performance_timing_margin_us -ne 500 -or
+    $sessionRedesignProjection.StageSummary.game_fps_summary -ne 'varies by session (60, 120 FPS)' -or
+    $sessionRedesignProjection.StageSummary.configured_H_G_summary -ne '60 FPS H=G=17,167 us; 120 FPS H=G=8,834 us' -or
+    -not $sessionRedesignProjection.StageSummary.timed_performance_samples -or
+    $sessionRedesignProjection.StageSummary.timed_performance_sample_seconds -ne 15) {
     throw 'DispatchSessionRedesignM3 report projection lost its session count, timing, workload, FPS, or sample provenance'
 }
-if ($sessionM3Projection.CandidateLabel -ne 'DispatchSessionRedesignM3-Candidate' -or
-    $sessionM3Projection.ControlLabel -ne 'DispatchSessionRedesignM3-Baseline' -or
-    $sessionM3Projection.ManifestParameters.planned_session_count -ne 32 -or
-    $sessionM3Projection.ManifestParameters.observer_mode -ne 'qualification-on' -or
-    $sessionM3Projection.ManifestParameters.guard_mode -ne 'frozen') {
+if ($sessionRedesignProjection.CandidateLabel -ne 'DispatchSessionRedesignM3-Candidate' -or
+    $sessionRedesignProjection.ControlLabel -ne 'DispatchSessionRedesignM3-Baseline' -or
+    $sessionRedesignProjection.ManifestParameters.planned_session_count -ne 32 -or
+    $sessionRedesignProjection.ManifestParameters.observer_mode -ne 'qualification-on' -or
+    $sessionRedesignProjection.ManifestParameters.guard_mode -ne 'frozen') {
     throw 'DispatchSessionRedesignM3 report labels, manifest count, observer, or waiter provenance changed'
 }
 
@@ -1451,7 +1451,7 @@ $offlineOrder = [System.Collections.Generic.List[string]]::new()
 $offlineCalls = [System.Collections.Generic.List[object]]::new()
 $offlineCandidateIdentity = [pscustomobject]@{ role = 'Candidate'; validated = $true }
 $offlineBaselineIdentity = [pscustomobject]@{ role = 'Baseline'; validated = $true }
-$offlineFinal = Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionM3Profile `
+$offlineFinal = Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionRedesignProfile `
     -Pairs 6 -TimingMarginUs 500 -SampleSeconds 15 `
     -OnPlan {
         param($plan)
@@ -1506,7 +1506,7 @@ foreach ($load in @('Quiet', 'Contention')) {
 }
 
 $firstFailureCalls = [System.Collections.Generic.List[object]]::new()
-$firstFailure = Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionM3Profile `
+$firstFailure = Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionRedesignProfile `
     -Pairs 6 -TimingMarginUs 500 -SampleSeconds 15 -InvokeCase {
         param($case)
         $firstFailureCalls.Add($case)
@@ -1523,7 +1523,7 @@ if (-not $firstFailure.Execution.StoppedAtFirstNonPass -or
 $zeroAttemptCalls = [System.Collections.Generic.List[object]]::new()
 $zeroAttemptError = $null
 try {
-    [void](Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionM3Profile `
+    [void](Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionRedesignProfile `
         -Pairs 5 -TimingMarginUs 500 -SampleSeconds 15 -InvokeCase {
             param($case)
             $zeroAttemptCalls.Add($case)
@@ -1567,15 +1567,15 @@ try {
     Remove-Item -LiteralPath $offlineFailureRoot -Recurse -Force
 }
 
-$sessionM3Runner = Get-Content -LiteralPath $runnerPath -Raw
-$sessionM3Orchestration = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Raw
-if ($sessionM3Runner -notmatch 'if \(\$isDispatchSessionRedesignM3 -and \$Stage -ne ''Final''\)' -or
-    -not $sessionM3Runner.Contains('Invoke-DispatchSessionRedesignM3FinalControlPath') -or
-    -not $sessionM3Runner.Contains('[string[]]$performanceWorkloads') -or
-    $sessionM3Runner -match '\$performanceWorkloads\.Count' -or
-    -not $sessionM3Runner.Contains('New-QualificationRunnerFailureArtifacts') -or
-    -not $sessionM3Orchestration.Contains('New-DispatchSessionRedesignM3FinalPlan') -or
-    -not $sessionM3Orchestration.Contains('Invoke-DispatchSessionRedesignM3FinalPlan') -or
+$sessionRedesignRunner = Get-Content -LiteralPath $runnerPath -Raw
+$sessionRedesignOrchestration = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Raw
+if ($sessionRedesignRunner -notmatch 'if \(\$isSessionRedesignProfile -and \$Stage -ne ''Final''\)' -or
+    -not $sessionRedesignRunner.Contains('Invoke-DispatchSessionRedesignM3FinalControlPath') -or
+    -not $sessionRedesignRunner.Contains('[string[]]$performanceWorkloads') -or
+    $sessionRedesignRunner -match '\$performanceWorkloads\.Count' -or
+    -not $sessionRedesignRunner.Contains('New-QualificationRunnerFailureArtifacts') -or
+    -not $sessionRedesignOrchestration.Contains('New-DispatchSessionRedesignM3FinalPlan') -or
+    -not $sessionRedesignOrchestration.Contains('Invoke-DispatchSessionRedesignM3FinalPlan') -or
     -not (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Raw).Contains('scripts/dispatch_qualification_orchestration.psm1')) {
     throw 'DispatchSessionRedesignM3 Final path is missing the typed-plan dispatcher, fail-stop runner, or provenance inventory'
 }

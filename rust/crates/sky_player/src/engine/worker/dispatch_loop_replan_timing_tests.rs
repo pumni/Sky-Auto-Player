@@ -47,7 +47,7 @@ pub(super) fn stage_from_worker_outer_evaluation(
         .expect("worker scheduler evaluation");
     assert!(matches!(action, super::super::SchedulerAction::Send { .. }));
     let send_action = action_to_stage.expect("due scheduler action stages a packet");
-    let candidate = super::super::stage_scheduler_action_preserving_due_up(
+    let candidate = super::super::stage_scheduler_send_candidate(
         send_action,
         super::super::SchedulerStageAdmission {
             target: &harness.target,

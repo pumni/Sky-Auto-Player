@@ -84,7 +84,7 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
         super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc > up_eval_qpc
     ));
     assert_eq!(up_projection_evaluations, 2, "now plus deadline projection");
-    let up = super::super::stage_scheduler_action_preserving_due_up(
+    let up = super::super::stage_scheduler_send_candidate(
         projected_up.expect("Up projects to a due action at its scheduler deadline"),
         super::super::SchedulerStageAdmission {
             target: &harness.target,
@@ -168,7 +168,7 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
         super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc > down_b_eval_qpc
     ));
     assert_eq!(g_projection_evaluations, 2);
-    let down_b = super::super::stage_scheduler_action_preserving_due_up(
+    let down_b = super::super::stage_scheduler_send_candidate(
         projected_down_b.expect("Down B projects to its G deadline"),
         super::super::SchedulerStageAdmission {
             target: &harness.target,
