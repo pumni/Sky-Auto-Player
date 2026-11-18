@@ -57,7 +57,8 @@ is the sole current profile for this lifecycle refactor.
   **2544daa13eb23fdf03bd922e65b96fcffaba421c**, tree
   **155882714df131ddc9b9985133a1f0611736b7cd**.
 - Candidate source and tree: the exact clean, pushed candidate commit and its
-  Git tree. Rebuild its manifest after the final documentation commit.
+  Git tree. Rebuild its manifest after the last relevant source or
+  documentation change; a manifest from an earlier SHA is not reusable.
 - Toolchain: Rust and Cargo 1.99.1, Windows MSVC, target
   **x86_64-pc-windows-msvc**, profile **dist**, feature
   **real-input-acceptance**, and locked dependencies.
@@ -71,8 +72,8 @@ under Quiet and Contention. Workloads are **mixed-up-down**,
 **dense-alternating**, **canonical-max-chord**, **near-minimum-retrigger**, and
 **long-idle**. Performance statistics are p50, p95, p99, and max. Record
 eligible-to-pre-call, wait-to-pre-call, pre-call-to-completion,
-Stop-to-Up-to-verified-release, worker CPU, worker spin, raw-Up call count,
-and worker-joined-to-next-start. Safety scenarios are focus loss, owner
+Stop-to-worker-verified-release, worker CPU, worker spin, raw-Up syscall count,
+and worker-joined-to-next-playback-Start. Safety scenarios are focus loss, owner
 mismatch, owner process termination, pause/resume, suspend/resume, Stop
 cleanup, Skip cleanup, and supervisor lease expiry. Timing and safety margins
 are both 500 microseconds.
@@ -113,14 +114,30 @@ command as part of routine source verification.
     pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -Stage Final -QualificationProfile PlaybackCoreLifecycle -CandidateManifest <candidate-manifest> -ControlManifest <baseline-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 -OwnerApprovedReceiveOnlyRun -OutputRoot <evidence-root>
 
 After an authorized run, **lifecycle-metrics.json** records candidate source,
-tree, manifest and binary hashes with machine/boot and receiver identity. It
-reports stop-request to verified-release latency only when worker join, a clean
-release journal, and validated ReceiveOnly Up evidence are present. The
-worker-joined to next-start interval uses the immediately following native
-case process launch QPC and includes inter-case harness setup. Raw Up call
-counts retain their source stop-cleanup run IDs. Missing evidence is reported
-as **INCOMPLETE** and fails the qualification summary; PlanOnly does not
-produce native lifecycle measurements.
+tree, manifest and binary hashes with machine/boot and receiver identity.
+Stop-to-release latency ends at a worker-side QPC sample taken after terminal
+release verification, probe, and journal reconciliation. Worker join, a clean
+journal, and validated ReceiveOnly Up evidence qualify the sample, but later
+telemetry extraction and receiver event-log settling do not extend its
+duration. The separate post-join report/receiver-settling QPC is diagnostic.
+
+Worker-joined-to-next-Start uses the immediately following timed native case's
+worker QPC observation after its Ready-to-Armed publication. The collector
+binds both native session run IDs, scenario/source/manifest/binary identities,
+machine and boot identity, and matching Windows QPC frequency. A parent-side
+QPC sampled before launching the child process is retained only as
+`worker_joined_to_runner_pre_next_process_launch_us` diagnostic data; it cannot
+complete the playback Start metric. Missing successor Armed evidence, clock
+mismatch, or identity mismatch leaves the required metric **INCOMPLETE**.
+
+Raw Up syscall count sums
+`TerminalSendAttemptEvidence.raw_calls` for the worker terminal cleanup. It
+does not use `ReleaseAllOutcome.attempts`, which counts admitted cleanup
+attempts before the sender call. A withheld attempt or a pre-send failure adds
+zero raw calls; unavailable raw evidence remains missing instead of becoming
+zero. Raw counts retain their stop-cleanup run IDs. Any unavailable mandatory
+metric marks the lifecycle report **INCOMPLETE**; PlanOnly does not produce
+native lifecycle measurements.
 
 Native ReceiveOnly requires a later owner decision and an explicitly controlled,
 safe receiver. Do not substitute gameplay for the ReceiveOnly harness.

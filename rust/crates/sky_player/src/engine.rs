@@ -24,6 +24,8 @@ pub use config::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use config::{RestoreRaceHook, StartupCheckpoint, StartupOrderingHook};
+#[cfg(feature = "real-input-acceptance")]
+pub use session::NativeAcceptanceLifecycleEvidence;
 pub use session::{NativeDispatchSession, OwnerIdentityPollResult, SystemPowerSnapshot};
 pub use shared::SystemPowerEndpoint;
 #[cfg(any(test, feature = "test-support"))]

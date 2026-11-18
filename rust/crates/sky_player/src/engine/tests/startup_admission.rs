@@ -1,6 +1,49 @@
 use super::support::*;
 use super::*;
 
+#[cfg(feature = "real-input-acceptance")]
+#[test]
+fn native_acceptance_start_evidence_tracks_worker_armed_publication() {
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("acceptance observation session");
+
+    assert_eq!(
+        session
+            .native_acceptance_lifecycle_evidence()
+            .playback_armed_qpc_ticks,
+        None,
+        "pre-arm caller time is not a playback admission timestamp"
+    );
+    session.arm(0).expect("session arm request");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+    let armed_ticks = session
+        .native_acceptance_lifecycle_evidence()
+        .playback_armed_qpc_ticks
+        .expect("worker QPC recorded after successful Armed publication");
+    assert!(armed_ticks > 0);
+
+    session.quit().expect("quit at Armed barrier");
+    hook.release_startup_checkpoint();
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let terminal_evidence = session.native_acceptance_lifecycle_evidence();
+    assert_eq!(
+        terminal_evidence.playback_armed_qpc_ticks,
+        Some(armed_ticks)
+    );
+    assert_eq!(terminal_evidence.raw_up_syscall_count, Some(0));
+}
+
 #[cfg(feature = "test-support")]
 #[test]
 fn playback_cpu_baselines_precede_epoch_qpc_without_rebasing_observer_metrics() {

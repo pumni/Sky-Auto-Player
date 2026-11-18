@@ -423,7 +423,9 @@ fn run_windows(args: RunArgs) -> i32 {
     };
     let lifecycle_qpc_frequency_hz =
         sky_dispatch_win32::clock::qpc_frequency_checked().ok();
-    let session_arm_qpc_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
+    // This parent-process sample precedes NativeDispatchSession::arm; retain
+    // it only as a harness diagnostic, never as playback admission evidence.
+    let acceptance_pre_arm_qpc_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
         .ok()
         .map(|ticks| ticks.as_u64());
     #[cfg(feature = "qpc-read-counting")]
@@ -621,6 +623,7 @@ fn run_windows(args: RunArgs) -> i32 {
         .then(|| sky_dispatch_win32::clock::qpc_now_ticks_checked().ok())
         .flatten()
         .map(|ticks| ticks.as_u64());
+    let lifecycle_evidence = session.native_acceptance_lifecycle_evidence();
     #[cfg(feature = "qpc-read-counting")]
     let qpc_read_count = Some(qpc_read_count());
     #[cfg(not(feature = "qpc-read-counting"))]
@@ -680,29 +683,24 @@ fn run_windows(args: RunArgs) -> i32 {
         (None, None, None) => (Vec::new(), None),
         _ => inconclusive!("focus probe evidence paths are incomplete", snapshot_json(&snapshot)),
     };
-    let verified_release_qpc_ticks = if args.scenario == Scenario::StopCleanup
-        && stop_requested_qpc_ticks.is_some()
-        && joined
-        && sink_drain_failure.is_none()
-        && !sink_events.is_empty()
-        && snapshot.final_release_obligation_mask == 0
-        && snapshot.release_outcome.as_ref().is_some_and(|outcome| {
-            outcome.released_successfully
-                && outcome.stuck_mask == 0
-                && !outcome.verification_inconclusive
-                && !outcome.transport_anomaly
-        })
-    {
+    // This diagnostic intentionally marks post-join telemetry/log settling;
+    // it is separate from the worker-recorded physical release boundary.
+    let post_join_report_and_receiveonly_validation_completed_qpc_ticks =
         sky_dispatch_win32::clock::qpc_now_ticks_checked()
             .ok()
-            .map(|ticks| ticks.as_u64())
-    } else {
-        None
-    };
-    let raw_up_call_count = snapshot
-        .release_outcome
-        .as_ref()
-        .map_or(0, |outcome| outcome.attempts);
+            .map(|ticks| ticks.as_u64());
+    let release_sample_gate_proof_complete = args.scenario == Scenario::StopCleanup
+        && stop_requested_qpc_ticks.is_some()
+        && lifecycle_evidence.worker_release_verified_qpc_ticks.is_some()
+        && joined
+        && worker_joined_qpc_ticks.is_some_and(|joined_ticks| {
+            lifecycle_evidence
+                .worker_release_verified_qpc_ticks
+                .is_some_and(|release_ticks| joined_ticks >= release_ticks)
+        })
+        && snapshot.final_release_obligation_mask == 0
+        && sink_drain_failure.is_none()
+        && sink_events.iter().any(|event| event.kind == "key_release");
     let down_sender_attempt_count = acceptance_hook
         .as_deref()
         .map(|hook| hook.down_sender_attempt_count());
@@ -713,14 +711,20 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("qpc_read_count_available".to_string(), json!(qpc_read_count.is_some()));
         object.insert("qpc_read_count".to_string(), json!(qpc_read_count));
         object.insert("lifecycle_measurement".to_string(), json!({
-            "schema_version": 1,
+            "schema_version": 2,
+            "native_session_identity": { "run_id": args.run_id, "scenario": args.scenario.label() },
+            "qpc_clock_source": "Windows QueryPerformanceCounter",
+            "playback_admission_event": "system_power_ready_to_armed_publication",
             "qpc_frequency_hz": lifecycle_qpc_frequency_hz,
-            "session_arm_qpc_ticks": session_arm_qpc_ticks,
+            "acceptance_pre_arm_qpc_ticks_diagnostic": acceptance_pre_arm_qpc_ticks,
+            "playback_armed_qpc_ticks": lifecycle_evidence.playback_armed_qpc_ticks,
             "stop_requested_qpc_ticks": stop_requested_qpc_ticks,
             "worker_joined_qpc_ticks": worker_joined_qpc_ticks,
-            "verified_release_qpc_ticks": verified_release_qpc_ticks,
-            "verified_release_requires_join_clean_journal_and_validated_receiveonly_up": true,
-            "raw_up_call_count": raw_up_call_count,
+            "worker_release_verified_qpc_ticks": lifecycle_evidence.worker_release_verified_qpc_ticks,
+            "post_join_report_and_receiveonly_validation_completed_qpc_ticks": post_join_report_and_receiveonly_validation_completed_qpc_ticks,
+            "release_sample_gate_proof_complete": release_sample_gate_proof_complete,
+            "raw_up_syscall_count": lifecycle_evidence.raw_up_syscall_count,
+            "raw_up_syscall_count_source": "sum of worker TerminalSendAttemptEvidence.raw_calls",
         }));
         object.insert("native_timing_telemetry".to_string(), timing_telemetry);
         object.insert("native_timing_telemetry_available".to_string(), json!(timing_telemetry_available));

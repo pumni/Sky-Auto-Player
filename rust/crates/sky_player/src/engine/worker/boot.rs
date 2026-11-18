@@ -847,6 +847,15 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             "worker could not atomically publish the Armed epoch".to_string(),
         );
     }
+    // Capture the actual successor session's successful Ready-to-Armed
+    // admission boundary on the worker QPC clock. This acceptance-only
+    // observation follows the publication CAS; it is not a process-launch or
+    // caller-side arm timestamp. A failed QPC read leaves the metric absent.
+    #[cfg(feature = "real-input-acceptance")]
+    metrics.playback_armed_qpc_ticks.store(
+        qpc_clock.now().map_or(0, |ticks| ticks.as_u64()),
+        Ordering::Release,
+    );
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = startup_hook {
         hook.visit_startup_checkpoint(StartupCheckpoint::ArmedPublished);

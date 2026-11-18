@@ -9,6 +9,10 @@ use super::{
 use parking_lot::Mutex;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::QpcError;
+#[cfg(any(test, feature = "real-input-acceptance"))]
+use sky_dispatch_win32::input::GuardedReleaseOutcome;
+#[cfg(feature = "real-input-acceptance")]
+use sky_dispatch_win32::input::TerminalProbeVerdict;
 use sky_dispatch_win32::input::TerminalReleaseEvidence;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
@@ -16,6 +20,15 @@ use std::sync::atomic::Ordering;
 
 enum TerminalCleanupFailure {
     Panicked(Box<dyn std::any::Any + Send>),
+}
+
+#[cfg(any(test, feature = "real-input-acceptance"))]
+fn terminal_raw_up_syscall_count(outcome: &GuardedReleaseOutcome) -> u64 {
+    outcome
+        .send_attempts
+        .iter()
+        .map(|attempt| u64::from(attempt.raw_calls))
+        .sum()
 }
 
 pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
@@ -143,6 +156,29 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.release_outcome.clone());
         let release_verified = release_state_verified(&backend, &outcome.release_outcome);
+        #[cfg(feature = "real-input-acceptance")]
+        {
+            metrics.terminal_release_raw_up_syscall_count.store(
+                terminal_raw_up_syscall_count(outcome),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            metrics
+                .terminal_release_raw_up_syscall_count_available
+                .store(true, std::sync::atomic::Ordering::Release);
+            if release_verified
+                && outcome.needs_up_mask == 0
+                && outcome.needs_probe_mask == 0
+                && matches!(outcome.probe_verdict, TerminalProbeVerdict::AllUp)
+            {
+                // This worker-side QPC sample follows cleanup's terminal
+                // probe and journal reconciliation. It deliberately precedes
+                // telemetry extraction and external ReceiveOnly log settling.
+                let release_ticks = qpc_clock.now().map_or(0, |ticks| ticks.as_u64());
+                metrics
+                    .terminal_release_verified_qpc_ticks
+                    .store(release_ticks, std::sync::atomic::Ordering::Release);
+            }
+        }
         if !release_verified {
             let evidence = outcome.terminal_evidence();
             record_termination_error(
@@ -598,5 +634,71 @@ fn describe_terminal_release_evidence(evidence: &TerminalReleaseEvidence) -> Str
 fn record_finalization_event(trace: &Option<Arc<Mutex<Vec<&'static str>>>>, event: &'static str) {
     if let Some(trace) = trace {
         trace.lock().push(event);
+    }
+}
+
+#[cfg(test)]
+mod acceptance_raw_up_count_tests {
+    use super::terminal_raw_up_syscall_count;
+    use sky_dispatch_win32::input::{
+        GuardedReleaseOutcome, ReleaseAllOutcome, TerminalProbeVerdict, TerminalSendAttemptEvidence,
+    };
+    use smallvec::SmallVec;
+
+    fn evidence(
+        raw_calls: u8,
+        requested_events: u8,
+        inserted_events: u8,
+    ) -> TerminalSendAttemptEvidence {
+        TerminalSendAttemptEvidence {
+            raw_calls,
+            requested_events,
+            inserted_events,
+            win32_error: None,
+            started_ticks: None,
+            completed_ticks: None,
+            qpc_error: None,
+        }
+    }
+
+    fn cleanup_outcome(
+        admitted_attempts: u8,
+        send_attempts: Vec<TerminalSendAttemptEvidence>,
+        withheld_reason: Option<&str>,
+    ) -> GuardedReleaseOutcome {
+        GuardedReleaseOutcome {
+            release_outcome: ReleaseAllOutcome {
+                attempted_mask: 0,
+                transport_anomaly: true,
+                released_successfully: false,
+                stuck_mask: 1,
+                verification_inconclusive: true,
+                attempts: admitted_attempts,
+            },
+            send_attempts: SmallVec::from_vec(send_attempts),
+            probe_verdict: TerminalProbeVerdict::Inconclusive(1),
+            withheld_reason: withheld_reason.map(str::to_owned),
+            needs_up_mask: 1,
+            needs_probe_mask: 0,
+        }
+    }
+
+    #[test]
+    fn acceptance_raw_up_count_uses_only_recorded_raw_syscalls() {
+        let withheld = cleanup_outcome(4, Vec::new(), Some("authority changed"));
+        assert_eq!(terminal_raw_up_syscall_count(&withheld), 0);
+
+        let pre_send_failure = cleanup_outcome(1, vec![evidence(0, 1, 0)], None);
+        assert_eq!(terminal_raw_up_syscall_count(&pre_send_failure), 0);
+
+        let mut raw_zero_evidence = evidence(1, 1, 0);
+        raw_zero_evidence.win32_error = Some(5);
+        let raw_zero = cleanup_outcome(1, vec![raw_zero_evidence], None);
+        assert_eq!(terminal_raw_up_syscall_count(&raw_zero), 1);
+
+        let mut ambiguous_evidence = evidence(1, 2, 1);
+        ambiguous_evidence.win32_error = Some(5);
+        let ambiguous_sender_failure = cleanup_outcome(1, vec![ambiguous_evidence], None);
+        assert_eq!(terminal_raw_up_syscall_count(&ambiguous_sender_failure), 1);
     }
 }

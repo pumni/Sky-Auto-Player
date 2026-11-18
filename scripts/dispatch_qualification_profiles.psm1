@@ -93,11 +93,11 @@ function Get-PlaybackCoreLifecycleProfile {
             'eligible-to-pre-call-us',
             'wait-to-pre-call-us',
             'pre-call-to-completion-us',
-            'stop-to-up-to-verified-release-us',
+            'stop-to-worker-release-verified-us',
             'worker-cpu-us',
             'worker-spin-us',
-            'raw-up-call-count',
-            'worker-joined-to-next-start-us'
+            'raw-up-syscall-count',
+            'worker-joined-to-next-playback-start-us'
         )
         TargetIdentity = [ordered]@{
             target_class = 'project-owned-non-game-receive-only'

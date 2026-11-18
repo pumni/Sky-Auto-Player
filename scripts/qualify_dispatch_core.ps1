@@ -711,8 +711,10 @@ function Invoke-NativeCase {
     $commandText = $commandText.Replace($sessionRoot, '<sessions-root>')
     $script:commandRows.Add($commandText)
     $started = [DateTimeOffset]::UtcNow.ToString('O')
-    $caseLaunchQpcTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
-    $caseLaunchQpcFrequency = [System.Diagnostics.Stopwatch]::Frequency
+    # Parent-side diagnostic only. The native successor's actual Armed
+    # publication QPC is reported in lifecycle_measurement by the worker.
+    $runnerPreChildProcessLaunchQpcTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $runnerPreChildProcessLaunchQpcFrequency = [System.Diagnostics.Stopwatch]::Frequency
     $output = @(& (Get-Command pwsh.exe).Source @args 2>&1)
     $caseExit = $LASTEXITCODE
     $ended = [DateTimeOffset]::UtcNow.ToString('O')
@@ -875,8 +877,8 @@ function Invoke-NativeCase {
         target_identity = Get-OptionalProperty $invocation 'target_identity'
         machine_name = Get-OptionalProperty $caseRunConfig 'machine_name'
         os_boot_time_utc = Get-OptionalProperty $caseRunConfig 'os_boot_time_utc'
-        case_launch_qpc_ticks = $caseLaunchQpcTicks
-        case_launch_qpc_frequency_hz = $caseLaunchQpcFrequency
+        runner_pre_child_process_launch_qpc_ticks = $runnerPreChildProcessLaunchQpcTicks
+        runner_pre_child_process_launch_qpc_frequency_hz = $runnerPreChildProcessLaunchQpcFrequency
         report = $report
         runner_output = if ($caseDirectory) { $text.Replace($caseDirectory, '<evidence-directory>').Replace($evidenceRoot, '<evidence-root>') } else { $text }
     }

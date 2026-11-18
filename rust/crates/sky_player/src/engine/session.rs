@@ -20,6 +20,18 @@ pub enum OwnerIdentityPollResult {
     CurrentInvalid,
 }
 
+/// Lifecycle evidence exported only to the explicitly enabled native
+/// acceptance executable. QPC values are observed by the playback worker;
+/// caller-side process launch and post-join reporting timestamps are not
+/// substituted for these event boundaries.
+#[cfg(feature = "real-input-acceptance")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeAcceptanceLifecycleEvidence {
+    pub playback_armed_qpc_ticks: Option<u64>,
+    pub worker_release_verified_qpc_ticks: Option<u64>,
+    pub raw_up_syscall_count: Option<u64>,
+}
+
 fn join_thread_until(
     handle: &mut Option<std::thread::JoinHandle<()>>,
     started: Instant,
@@ -402,6 +414,33 @@ impl NativeDispatchSession {
     /// Effective same-key release floor admitted for this session.
     pub fn effective_min_release_gap_us(&self) -> u64 {
         self.effective_min_release_gap_us
+    }
+
+    /// Read the per-session worker evidence used by the native qualification
+    /// binary. Missing QPC or sender evidence remains `None` and must not be
+    /// interpreted as a zero-duration release or zero-syscall success.
+    #[cfg(feature = "real-input-acceptance")]
+    pub fn native_acceptance_lifecycle_evidence(&self) -> NativeAcceptanceLifecycleEvidence {
+        let metrics = &self.shared.publication.metrics;
+        let nonzero_ticks = |ticks: u64| (ticks != 0).then_some(ticks);
+        NativeAcceptanceLifecycleEvidence {
+            playback_armed_qpc_ticks: nonzero_ticks(
+                metrics.playback_armed_qpc_ticks.load(Ordering::Acquire),
+            ),
+            worker_release_verified_qpc_ticks: nonzero_ticks(
+                metrics
+                    .terminal_release_verified_qpc_ticks
+                    .load(Ordering::Acquire),
+            ),
+            raw_up_syscall_count: metrics
+                .terminal_release_raw_up_syscall_count_available
+                .load(Ordering::Acquire)
+                .then(|| {
+                    metrics
+                        .terminal_release_raw_up_syscall_count
+                        .load(Ordering::Acquire)
+                }),
+        }
     }
 
     fn live_projection(&self) -> (((u64, bool), u64), super::shared::StartupSnapshot) {

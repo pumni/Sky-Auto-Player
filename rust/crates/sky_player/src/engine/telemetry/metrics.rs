@@ -639,6 +639,19 @@ pub(crate) struct SharedMetrics {
     pub(crate) terminal_release_outcome: Mutex<Option<ReleaseAllOutcome>>,
     pub(crate) terminal_release_obligation_mask: AtomicU32,
     pub(crate) terminal_release_attempts_total: AtomicU64,
+    /// Acceptance-only QPC sampled immediately after a successful Armed
+    /// publication. Zero means the optional observation was unavailable.
+    #[cfg(feature = "real-input-acceptance")]
+    pub(crate) playback_armed_qpc_ticks: AtomicU64,
+    /// Acceptance-only worker timestamp sampled after terminal release
+    /// verification, before telemetry publication or receiver log settling.
+    #[cfg(feature = "real-input-acceptance")]
+    pub(crate) terminal_release_verified_qpc_ticks: AtomicU64,
+    /// Sum of TerminalSendAttemptEvidence.raw_calls, never ReleaseAllOutcome.attempts.
+    #[cfg(feature = "real-input-acceptance")]
+    pub(crate) terminal_release_raw_up_syscall_count: AtomicU64,
+    #[cfg(feature = "real-input-acceptance")]
+    pub(crate) terminal_release_raw_up_syscall_count_available: AtomicBool,
     #[cfg(test)]
     pub(crate) publish_count: AtomicU64,
 }
