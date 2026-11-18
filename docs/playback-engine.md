@@ -63,8 +63,13 @@ these floors do not promise which game frame samples a key.
 
 A musical onset is attempted at most once. The worker commits a musical action
 only from valid transport and QPC completion evidence. A packet with a
-transport anomaly is not replayed. It terminates or replans according to the
-current control outcome while preserving any journaled obligation for cleanup.
+transport anomaly is not replayed. The first anomalous SendInput or required
+QPC sender attempt terminates musical playback without replaying the attempted
+onset. The worker reconciles only the exact journaled physical obligations
+through bounded safety cleanup. A proven raw-zero Down creates no new physical
+release obligation, but still terminates musical playback. Pre-send
+control/admission replans are separate; they do not resume playback after a
+sender anomaly.
 Required QPC samples and the production waiter policy remain part of the
 timing contract.
 
