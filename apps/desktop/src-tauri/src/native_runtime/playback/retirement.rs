@@ -582,6 +582,10 @@ pub(in crate::native_runtime) fn recover_quarantined_release_once(
             timing_error: None,
         }
     });
+    // The production recovery path keeps the adapter's real bounded physical
+    // probe. Only Tauri test fixtures replace it with an inconclusive seam so
+    // tests can never turn a synthetic owner HWND into Win32 release proof.
+    #[cfg(feature = "tauri-test")]
     tracked.set_probe(|_, _| sky_dispatch_win32::input::InstrumentPhysicalState::Inconclusive);
     let drain = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         tracked.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
