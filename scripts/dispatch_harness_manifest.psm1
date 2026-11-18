@@ -361,6 +361,7 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
     $scriptProvenance = @(Get-ManifestProperty $Manifest 'runner_script_provenance')
     $expectedRunnerPaths = @($profile.RunnerProvenancePaths)
     $targetIdentity = Get-ManifestProperty $Manifest 'target_identity'
+    $targetGameTarget = Get-ManifestProperty $targetIdentity 'game_target'
     $qualificationPlan = Get-ManifestProperty $Manifest 'qualification_plan'
 
     if ((Get-ManifestProperty $Manifest 'schema_version') -ne $profile.HarnessManifestSchemaVersion -or
@@ -395,8 +396,11 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
         (Get-ManifestProperty $Manifest 'safety_timing_margin_us') -ne $profile.SafetyTimingMarginUs -or
         (Get-ManifestProperty $Manifest 'target') -ne $profile.Target -or
         (Get-ManifestProperty $Manifest 'target_identity_status') -ne 'NOT_RUN' -or
-        (Get-ManifestProperty $targetIdentity 'application') -ne $profile.TargetIdentity.application -or
+        (Get-ManifestProperty $targetIdentity 'target_class') -ne $profile.TargetIdentity.target_class -or
+        (Get-ManifestProperty $targetIdentity 'target_name') -ne $profile.TargetIdentity.target_name -or
+        $null -eq $targetGameTarget -or $targetGameTarget -isnot [bool] -or $targetGameTarget -ne $false -or
         (Get-ManifestProperty $targetIdentity 'capture_status') -ne 'NOT_RUN' -or
+        (Get-ManifestProperty $targetIdentity 'required_at_run') -ne $profile.TargetIdentity.required_at_run -or
         [string](Get-ManifestProperty $Manifest 'rustc_version') -notmatch ('(?m)^release: ' + [regex]::Escape($profile.RustVersion) + '\r?$') -or
         [string](Get-ManifestProperty $Manifest 'rustc_version') -notmatch ('(?m)^host: ' + [regex]::Escape($profile.Target) + '\r?$') -or
         [string](Get-ManifestProperty $Manifest 'cargo_version') -notmatch ('^cargo ' + [regex]::Escape($profile.CargoVersion) + '(?:\s|$)') -or

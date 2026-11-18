@@ -1617,6 +1617,10 @@ if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -
     -not $playbackCoreBuilderSource.Contains("cargo_lock_sha256") -or
     -not $playbackCoreManifestSource.Contains('Assert-PlaybackCoreLifecycleManifestIdentity') -or
     -not $playbackCoreManifestSource.Contains('Assert-PlaybackCoreLifecycleRunnerProvenance') -or
+    -not $playbackCoreManifestSource.Contains("Get-ManifestProperty `$targetIdentity 'target_class'") -or
+    -not $playbackCoreManifestSource.Contains("Get-ManifestProperty `$targetIdentity 'target_name'") -or
+    $playbackCoreManifestSource.Contains("Get-ManifestProperty `$targetIdentity 'application'") -or
+    -not $playbackCoreManifestSource.Contains("`$targetGameTarget -isnot [bool]") -or
     -not $playbackCoreRunnerSource.Contains('[switch]$PlanOnly') -or
     -not $playbackCoreRunnerSource.Contains('native_attempts=0 target_capture=NOT_RUN') -or
     -not $playbackCoreRunnerSource.Contains('[switch]$OwnerApprovedReceiveOnlyRun') -or
