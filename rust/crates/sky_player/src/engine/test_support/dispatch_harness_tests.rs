@@ -2,6 +2,41 @@
 
 use super::*;
 
+struct ForegroundTestReset;
+
+impl Drop for ForegroundTestReset {
+    fn drop(&mut self) {
+        sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+        sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+    }
+}
+
+fn dispatch_owned_down_for_cleanup(harness: &mut ProductionDispatchTestHarness) {
+    let epoch = harness.qpc_now_for_test().expect("cleanup test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor cleanup test clock");
+    harness.configure_focus_owner_for_test(1, 77);
+    harness.configure_mock_packet_sender_for_test(&[]);
+    harness
+        .attach_executor_for_test()
+        .expect("attach cleanup executor");
+    let down = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage owned Down")
+        .expect("owned Down candidate");
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(down, false),
+        crate::engine::worker::StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+}
+
 fn wait_until_qpc(clock: QpcClock, deadline: QpcTicks) {
     loop {
         let now = clock.now().expect("production scheduler test QPC");
@@ -200,6 +235,91 @@ fn test_support_resumable_cleanup_releases_and_cancels_live_scheduler_state() {
         .scheduler
         .check_invariants()
         .expect("scheduler cleanup invariants");
+}
+
+#[test]
+fn terminal_cleanup_revalidates_owner_after_first_incomplete_attempt() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundTestReset;
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    dispatch_owned_down_for_cleanup(&mut harness);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    let target = Arc::clone(&harness.target);
+    let probes = Arc::new(AtomicUsize::new(0));
+    let probe_count = Arc::clone(&probes);
+    harness.resources.backend.set_probe(move |_, _| {
+        if probe_count.fetch_add(1, Ordering::AcqRel) == 0 {
+            target.invalidate_owner_identity();
+        }
+        InstrumentPhysicalState::Held(vec![0x15].into())
+    });
+
+    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let _outcome = harness.finalize_worker_for_test(false, &mut observation);
+
+    assert_eq!(cleanup.lock().expect("terminal cleanup capture").len(), 1);
+    assert_eq!(observation.terminal_release_attempts, 1);
+    assert_eq!(observation.total_release_attempts, 1);
+    assert_eq!(observation.release_obligation_mask, 1);
+    assert_eq!(
+        observation
+            .terminal_cleanup_evidence
+            .as_ref()
+            .unwrap()
+            .send_attempts
+            .len(),
+        1
+    );
+    assert_eq!(
+        observation
+            .terminal_cleanup_evidence
+            .as_ref()
+            .unwrap()
+            .release_outcome
+            .attempts,
+        1
+    );
+    assert!(observation.terminal_error.is_some());
+    assert!(
+        observation
+            .secondary_errors
+            .iter()
+            .any(|error| error.contains("target HWND/generation changed"))
+    );
+}
+
+#[test]
+fn resumable_cleanup_revalidates_owner_after_first_incomplete_attempt_and_quarantines() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundTestReset;
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    dispatch_owned_down_for_cleanup(&mut harness);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    let target = Arc::clone(&harness.target);
+    let probes = Arc::new(AtomicUsize::new(0));
+    let probe_count = Arc::clone(&probes);
+    harness.resources.backend.set_probe(move |_, _| {
+        if probe_count.fetch_add(1, Ordering::AcqRel) == 0 {
+            target.invalidate_owner_identity();
+        }
+        InstrumentPhysicalState::Held(vec![0x15].into())
+    });
+
+    let error = harness
+        .apply_scheduler_resumable_lifecycle_transition_for_test()
+        .expect_err("owner invalidation must withhold the retry");
+    assert!(error.contains("target HWND/generation changed"), "{error}");
+    assert_eq!(cleanup.lock().expect("resumable cleanup capture").len(), 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    assert_eq!(harness.resume_barrier_qpc_for_test(), None);
+
+    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let _outcome = harness.finalize_worker_for_test(false, &mut observation);
+    assert_eq!(
+        cleanup.lock().expect("terminal quarantine capture").len(),
+        1
+    );
+    assert_eq!(observation.release_obligation_mask, 1);
 }
 
 #[test]
@@ -421,7 +541,7 @@ fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
 }
 
 #[test]
-fn production_scheduler_lifecycle_matrix_cleans_accepted_downs() {
+fn production_scheduler_lifecycle_matrix_releases_or_quarantines_accepted_downs() {
     use crate::engine::worker::{FinalizeTestObservation, StagedDispatchOutcome};
     use sky_dispatch_win32::input::PlatformSendResult;
     use std::sync::{Arc, Mutex};
@@ -530,10 +650,22 @@ fn production_scheduler_lifecycle_matrix_cleans_accepted_downs() {
                     .expect("focus cleanup through live scheduler");
             }
             "target_generation" => {
-                harness.target.publish(2);
-                harness
+                harness.target.invalidate_for_test();
+                let error = harness
                     .apply_scheduler_resumable_lifecycle_transition_for_test()
-                    .expect("target generation cleanup through live scheduler");
+                    .expect_err("invalid immutable target must withhold safety Up");
+                assert!(error.contains("target generation unavailable"), "{error}");
+                assert!(
+                    cleanup
+                        .lock()
+                        .expect("invalid target cleanup capture")
+                        .is_empty()
+                );
+                assert_eq!(harness.release_obligation_mask_for_test(), 1);
+                assert_eq!(harness.resources.backend.failed_release_mask, 1);
+                assert_eq!(harness.resources.backend.release_attempts_total, 0);
+                assert_eq!(harness.resume_barrier_qpc_for_test(), None);
+                continue;
             }
             "partial_cleanup" => {
                 let partial_calls = Arc::new(Mutex::new(0usize));
@@ -627,7 +759,7 @@ fn live_scheduler_final_down_gate_rejects_target_lease_and_control_without_commi
         let before_accounting = harness.generation_accounting_for_test();
 
         match rejection {
-            "target_generation" => assert!(harness.target.publish(2)),
+            "target_generation" => harness.target.invalidate_for_test(),
             "supervisor_lease" => {
                 harness.supervisor_expired.latch_expired();
             }

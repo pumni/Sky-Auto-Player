@@ -9,8 +9,8 @@ use super::{
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, WaitBoundary, WaitBoundaryInput,
     WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
     focus_matches, focus_matches_hwnd, load_target_stamp, process_command_control,
-    publish_backend_counters, publish_backend_metrics, target_stamp_still_current,
-    verify_final_down_admission, verify_final_musical_up_admission, verify_safety_cleanup_target,
+    publish_backend_counters, publish_backend_metrics, record_wait_failure,
+    target_stamp_still_current, verify_final_down_admission, verify_final_musical_up_admission,
     wait_for_next_boundary,
 };
 #[cfg(any(test, feature = "test-support"))]
@@ -198,36 +198,26 @@ fn suspend_live_input_for_dispatch(
     #[cfg(any(test, feature = "test-support"))] runtime: &super::WorkerRuntime,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
-    let release_mask = backend.release_obligation_mask();
     let target_hwnd = match expected_target {
         Some(stamp) => stamp.hwnd,
-        None if release_mask == 0 => target.hwnd_for_safety_release(),
-        None => {
-            return Err("target generation unavailable while release obligations remain".into());
-        }
+        None => target.hwnd_for_safety_release(),
     };
-    let _release_permit = if release_mask != 0 {
-        let stamp = expected_target.expect("nonempty release mask requires a target stamp");
-        let release_owner = backend
-            .release_owner_proof_for_mask(release_mask)?
-            .ok_or_else(|| "tracked release owner proof is missing".to_string())?;
-        Some(verify_safety_cleanup_target(
-            target,
-            stamp,
-            &release_owner,
-            require_owner_identity,
-        )?)
-    } else {
-        None
-    };
-    super::cleanup::suspend_scheduler_input(backend, scheduler, target_hwnd, || {
-        let cleanup_qpc = post_cleanup_qpc()?;
-        #[cfg(any(test, feature = "test-support"))]
-        if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
-            hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
-        }
-        Ok(cleanup_qpc)
-    })
+    super::cleanup::suspend_scheduler_input(
+        backend,
+        scheduler,
+        target,
+        expected_target,
+        require_owner_identity,
+        target_hwnd,
+        || {
+            let cleanup_qpc = post_cleanup_qpc()?;
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+                hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
+            }
+            Ok(cleanup_qpc)
+        },
+    )
     .map(|_| ())
 }
 
@@ -237,16 +227,27 @@ pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     scheduler: &mut sky_dispatch_core::executor::DispatchExecutor,
     runtime: &mut super::WorkerRuntime,
+    target: &SessionTarget,
+    expected_target: Option<TargetStamp>,
+    require_owner_identity: bool,
     target_hwnd: isize,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
-    super::cleanup::suspend_scheduler_input(backend, scheduler, target_hwnd, || {
-        let cleanup_qpc = post_cleanup_qpc()?;
-        if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
-            hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
-        }
-        Ok(cleanup_qpc)
-    })
+    super::cleanup::suspend_scheduler_input(
+        backend,
+        scheduler,
+        target,
+        expected_target,
+        require_owner_identity,
+        target_hwnd,
+        || {
+            let cleanup_qpc = post_cleanup_qpc()?;
+            if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+                hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
+            }
+            Ok(cleanup_qpc)
+        },
+    )
     .map(|_| ())
 }
 
@@ -305,7 +306,6 @@ fn proven_raw_zero_down_only(
 }
 
 fn raw_zero_continuation_is_safe(
-    expected_target: TargetStamp,
     target: &SessionTarget,
     require_focus: bool,
     focus_active: &AtomicBool,
@@ -314,7 +314,7 @@ fn raw_zero_continuation_is_safe(
     let Some(system_power) = control_signals.system_power else {
         return false;
     };
-    target_stamp_still_current(target, expected_target)
+    target.is_valid()
         && focus_matches(require_focus, focus_active)
         && !control_signals.quit_requested.load(Ordering::Acquire)
         && !control_signals.skip_requested.load(Ordering::Acquire)
@@ -359,8 +359,8 @@ pub enum StagedDispatchOutcome {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DispatchAttemptOutcome {
     Dispatched,
+    ModifierHeld,
     Replan,
-    PermitBusy,
     Exit,
 }
 
@@ -369,7 +369,8 @@ impl DispatchAttemptOutcome {
     pub(crate) fn public_outcome(self) -> StagedDispatchOutcome {
         match self {
             Self::Dispatched => StagedDispatchOutcome::Dispatched,
-            Self::Replan | Self::PermitBusy => StagedDispatchOutcome::Replan,
+            Self::ModifierHeld => StagedDispatchOutcome::Replan,
+            Self::Replan => StagedDispatchOutcome::Replan,
             Self::Exit => StagedDispatchOutcome::Exit,
         }
     }
@@ -388,166 +389,34 @@ pub(crate) struct StagedControlSignals<'a> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DispatchReplanAction {
     ContinueImmediately,
-    WaitCompleted,
+    WaitForModifier,
     Exit,
-}
-
-#[cfg(test)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct DispatchReplanWaitTrace {
-    retry_from_qpc: sky_dispatch_win32::clock::QpcTicks,
-    deadline_qpc: sky_dispatch_win32::clock::QpcTicks,
-    interrupted: bool,
-}
-
-#[cfg(test)]
-thread_local! {
-    static LAST_DISPATCH_REPLAN_WAIT: std::cell::Cell<Option<DispatchReplanWaitTrace>> = const { std::cell::Cell::new(None) };
-}
-
-#[cfg(test)]
-fn last_dispatch_replan_wait_for_test() -> Option<DispatchReplanWaitTrace> {
-    LAST_DISPATCH_REPLAN_WAIT.with(std::cell::Cell::get)
 }
 
 struct DispatchReplanWaitContext<'a> {
     target: &'a SessionTarget,
-    expected_target: Option<TargetStamp>,
-    retry_deadline_qpc: sky_dispatch_win32::clock::QpcTicks,
-    require_focus: bool,
-    focus_active: &'a AtomicBool,
     control_signals: FinalControlSignals<'a>,
-    qpc_clock: sky_dispatch_win32::clock::QpcClock,
-    waiter: &'a sky_dispatch_win32::wait::HybridWaiter,
-    interrupt: &'a sky_dispatch_win32::event::OwnedEvent,
-    local_metrics: &'a mut super::WorkerMetricsLocal,
-    terminal_error: &'a mut Option<String>,
+    modifier_held: bool,
 }
 
 /// Apply the worker-loop policy after final packet admission requests replan.
-/// One current-owner permit miss receives one immediate full scheduler
-/// re-evaluation; continued contention takes an interruptible 1 ms backoff.
-/// All other replan causes retain the existing unstable-target policy.
-fn wait_after_dispatch_replan(
-    outcome: DispatchAttemptOutcome,
-    permit_busy_retry_allowed: bool,
-    permit_busy_retry_pending: &mut bool,
-    context: DispatchReplanWaitContext<'_>,
-) -> DispatchReplanAction {
-    #[cfg(test)]
-    LAST_DISPATCH_REPLAN_WAIT.with(|trace| trace.set(None));
-
-    let is_permit_busy = matches!(outcome, DispatchAttemptOutcome::PermitBusy);
+/// A target invalidation is terminal. Modifier-only rejection waits are used
+/// only after any independent due Up fallback has been dispatched.
+fn dispatch_replan_action(context: DispatchReplanWaitContext<'_>) -> DispatchReplanAction {
     let controls_allow_wait = matches!(
         final_control_precheck(context.control_signals),
         FinalControlAdmission::Allowed
     );
     if !controls_allow_wait {
-        *permit_busy_retry_pending = false;
         return DispatchReplanAction::ContinueImmediately;
     }
-
-    let target_stale = context
-        .expected_target
-        .is_some_and(|expected| !target_stamp_still_current(context.target, expected));
-    let focus_current = focus_matches(context.require_focus, context.focus_active);
-    if is_permit_busy && !target_stale && focus_current {
-        if !permit_busy_retry_allowed {
-            *permit_busy_retry_pending = true;
-            return DispatchReplanAction::ContinueImmediately;
-        }
-        *permit_busy_retry_pending = false;
-        let replan_now = match context.qpc_clock.now() {
-            Ok(now) => now,
-            Err(error) => {
-                *context.terminal_error = Some(format!("target replan QPC unavailable: {error:?}"));
-                return DispatchReplanAction::Exit;
-            }
-        };
-        return wait_after_dispatch_replan_deadline(
-            replan_now,
-            replan_now,
-            context.qpc_clock,
-            context.waiter,
-            context.interrupt,
-            context.local_metrics,
-            context.terminal_error,
-        );
+    if !context.target.is_valid() {
+        return DispatchReplanAction::Exit;
     }
-
-    *permit_busy_retry_pending = false;
-    let replan_now = match context.qpc_clock.now() {
-        Ok(now) => now,
-        Err(error) => {
-            *context.terminal_error = Some(format!("target replan QPC unavailable: {error:?}"));
-            return DispatchReplanAction::Exit;
-        }
-    };
-    wait_after_dispatch_replan_deadline(
-        replan_now,
-        if target_stale {
-            context.retry_deadline_qpc
-        } else {
-            replan_now
-        },
-        context.qpc_clock,
-        context.waiter,
-        context.interrupt,
-        context.local_metrics,
-        context.terminal_error,
-    )
-}
-
-fn wait_after_dispatch_replan_deadline(
-    now_qpc: sky_dispatch_win32::clock::QpcTicks,
-    retry_deadline_qpc: sky_dispatch_win32::clock::QpcTicks,
-    qpc_clock: sky_dispatch_win32::clock::QpcClock,
-    waiter: &sky_dispatch_win32::wait::HybridWaiter,
-    interrupt: &sky_dispatch_win32::event::OwnedEvent,
-    local_metrics: &mut super::WorkerMetricsLocal,
-    terminal_error: &mut Option<String>,
-) -> DispatchReplanAction {
-    let (boundary, deadline_qpc) = wait_after_unstable_target_with_deadline(
-        now_qpc,
-        retry_deadline_qpc,
-        qpc_clock,
-        waiter,
-        interrupt,
-        local_metrics,
-        terminal_error,
-    );
-    match boundary {
-        WaitBoundary::Due { .. } => {
-            if deadline_qpc.is_none() {
-                return DispatchReplanAction::Exit;
-            }
-            #[cfg(test)]
-            LAST_DISPATCH_REPLAN_WAIT.with(|trace| {
-                trace.set(deadline_qpc.map(|deadline_qpc| DispatchReplanWaitTrace {
-                    retry_from_qpc: now_qpc,
-                    deadline_qpc,
-                    interrupted: false,
-                }))
-            });
-            DispatchReplanAction::WaitCompleted
-        }
-        WaitBoundary::Interrupted(_, _, _) => {
-            let _ = interrupt.try_take();
-            if deadline_qpc.is_none() {
-                return DispatchReplanAction::Exit;
-            }
-            #[cfg(test)]
-            LAST_DISPATCH_REPLAN_WAIT.with(|trace| {
-                trace.set(deadline_qpc.map(|deadline_qpc| DispatchReplanWaitTrace {
-                    retry_from_qpc: now_qpc,
-                    deadline_qpc,
-                    interrupted: true,
-                }))
-            });
-            DispatchReplanAction::WaitCompleted
-        }
-        WaitBoundary::Exit => DispatchReplanAction::Exit,
+    if context.modifier_held {
+        return DispatchReplanAction::WaitForModifier;
     }
+    DispatchReplanAction::ContinueImmediately
 }
 
 pub(crate) struct StagedDispatchContext<'a> {
@@ -588,7 +457,7 @@ pub(crate) fn stage_candidate(
                 "instrument key preflight failed before SendInput: {error}"
             ));
         }
-        if !target_stamp_still_current(target, target_stamp) {
+        if !target.is_valid() {
             runtime.verified_target = None;
             return Ok(None);
         }
@@ -752,7 +621,7 @@ pub(crate) fn dispatch_staged_candidate(
     } else {
         None
     };
-    let (release_owner, release_permit) = if has_down {
+    let release_owner = if has_down {
         match verify_final_down_admission(
             target,
             expected_target,
@@ -767,12 +636,11 @@ pub(crate) fn dispatch_staged_candidate(
             runtime,
             local_metrics,
         ) {
-            FinalDownAdmissionResult::Allowed {
-                release_owner,
-                permit,
-            } => (release_owner, permit),
-            replan @ (FinalDownAdmissionResult::Replan | FinalDownAdmissionResult::PermitBusy) => {
-                let permit_busy = matches!(replan, FinalDownAdmissionResult::PermitBusy);
+            FinalDownAdmissionResult::Allowed { release_owner } => release_owner,
+            admission_result @ (FinalDownAdmissionResult::Replan
+            | FinalDownAdmissionResult::ModifierHeld) => {
+                let modifier_held =
+                    matches!(admission_result, FinalDownAdmissionResult::ModifierHeld);
                 match stage_up_only_for_mixed_replan(
                     &candidate,
                     SchedulerStageAdmission {
@@ -813,8 +681,8 @@ pub(crate) fn dispatch_staged_candidate(
                         );
                     }
                     Ok(None) => {
-                        return if permit_busy {
-                            DispatchAttemptOutcome::PermitBusy
+                        return if modifier_held {
+                            DispatchAttemptOutcome::ModifierHeld
                         } else {
                             DispatchAttemptOutcome::Replan
                         };
@@ -864,11 +732,9 @@ pub(crate) fn dispatch_staged_candidate(
             runtime,
             local_metrics,
         ) {
-            FinalDownAdmissionResult::Allowed {
-                release_owner,
-                permit,
-            } => (release_owner, permit),
-            FinalDownAdmissionResult::PermitBusy => return DispatchAttemptOutcome::PermitBusy,
+            FinalDownAdmissionResult::Allowed { release_owner } => release_owner,
+            // Musical Up admission explicitly does not query modifiers.
+            FinalDownAdmissionResult::ModifierHeld => return DispatchAttemptOutcome::Replan,
             FinalDownAdmissionResult::Replan => return DispatchAttemptOutcome::Replan,
             FinalDownAdmissionResult::Terminal(error) => {
                 runtime.terminal_error = Some(gate_rejection_record(&candidate, &error));
@@ -959,7 +825,6 @@ pub(crate) fn dispatch_staged_candidate(
 
     if system_power.system_suspend_terminal() {
         runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
-        drop(release_permit);
         return DispatchAttemptOutcome::Exit;
     }
     if send_result.evidence.attempts == 0 {
@@ -967,7 +832,6 @@ pub(crate) fn dispatch_staged_candidate(
             "SendInput rejected before syscall; authored onset remains unattempted: {}",
             sender_failure_record(&candidate, &send_result),
         ));
-        drop(release_permit);
         return DispatchAttemptOutcome::Exit;
     }
 
@@ -981,7 +845,6 @@ pub(crate) fn dispatch_staged_candidate(
         runtime.last_physical_send_completion_qpc = None;
 
         let Some(expected_target) = candidate.target_stamp else {
-            drop(release_permit);
             runtime.verified_target = None;
             runtime.terminal_error = Some(format!(
                 "post-call anomaly has no retained target stamp; release remains pending: {anomaly_record}"
@@ -990,7 +853,6 @@ pub(crate) fn dispatch_staged_candidate(
         };
         if proven_raw_zero_down_only(&candidate, send_result)
             && raw_zero_continuation_is_safe(
-                expected_target,
                 target,
                 config.focus.require_focus,
                 focus_active,
@@ -1007,7 +869,6 @@ pub(crate) fn dispatch_staged_candidate(
                     chord.down_mask,
                 )
             {
-                drop(release_permit);
                 let _ = suspend_live_input_for_dispatch(
                     &mut resources.backend,
                     &mut resources.scheduler,
@@ -1027,7 +888,6 @@ pub(crate) fn dispatch_staged_candidate(
                 .backend
                 .clear_proven_raw_zero_down_attempt(chord.down_mask)
             {
-                drop(release_permit);
                 let _ = suspend_live_input_for_dispatch(
                     &mut resources.backend,
                     &mut resources.scheduler,
@@ -1043,10 +903,8 @@ pub(crate) fn dispatch_staged_candidate(
                 ));
                 return DispatchAttemptOutcome::Exit;
             }
-            drop(release_permit);
             return DispatchAttemptOutcome::Dispatched;
         }
-        drop(release_permit);
         if let Err(error) = suspend_live_input_for_dispatch(
             &mut resources.backend,
             &mut resources.scheduler,
@@ -1097,8 +955,6 @@ pub(crate) fn dispatch_staged_candidate(
         }
         return DispatchAttemptOutcome::Dispatched;
     }
-
-    drop(release_permit);
 
     let Some(completion_qpc) = send_result.evidence.completed_ticks else {
         runtime.terminal_error = Some(format!(
@@ -1327,9 +1183,11 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             .as_mut()
             .expect("worker resources initialized");
         let qpc_clock = resources.clock;
-        let mut permit_busy_retry_pending = false;
+        let mut pending_modifier_up_deadline_wake: Option<(
+            sky_dispatch_win32::clock::QpcTicks,
+            sky_dispatch_win32::clock::QpcTicks,
+        )> = None;
         while core.runtime.terminal_error.is_none() {
-            let permit_busy_retry_allowed = std::mem::take(&mut permit_busy_retry_pending);
             // A deadline-wake sample belongs to exactly one physical send.
             // Re-entering the non-precision loop clears any stale sample
             // after interrupts, replans, command transitions, or failures.
@@ -1347,6 +1205,12 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     terminal_trigger: &mut core.runtime.terminal_trigger,
                 },
             }) {
+                break;
+            }
+            if !target.is_valid() {
+                core.runtime.terminal_error.get_or_insert_with(|| {
+                    "immutable session target or owner identity was invalidated".to_string()
+                });
                 break;
             }
 
@@ -1891,15 +1755,9 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             {
                 continue;
             }
-            let packet_not_before_qpc = match &action_to_stage {
-                Some(SchedulerAction::Send { timing_window, .. }) => {
-                    timing_window.packet_not_before_qpc
-                }
-                None | Some(SchedulerAction::Finished | SchedulerAction::Wait { .. }) => now_ticks,
-            };
             let mut candidate = match action_to_stage {
                 Some(send_action @ SchedulerAction::Send { .. }) => {
-                    match stage_scheduler_action_preserving_due_up(
+                    match stage_scheduler_send_candidate(
                         send_action,
                         SchedulerStageAdmission {
                             target,
@@ -1920,22 +1778,15 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     ) {
                         Ok(Some(candidate)) => Some(candidate),
                         Ok(None) => {
-                            match wait_after_unstable_target(
-                                now_ticks,
-                                packet_not_before_qpc,
-                                qpc_clock,
-                                &resources.waiter,
-                                interrupt,
-                                &mut core.metrics,
-                                &mut core.runtime.terminal_error,
-                            ) {
-                                WaitBoundary::Due { .. } => continue,
-                                WaitBoundary::Interrupted(_, _, _) => {
-                                    let _ = interrupt.try_take();
-                                    continue;
+                            core.runtime.terminal_error.get_or_insert_with(|| {
+                                if target.is_valid() {
+                                    "staging rejected the immutable session target".to_string()
+                                } else {
+                                    "immutable session target or owner identity was invalidated"
+                                        .to_string()
                                 }
-                                WaitBoundary::Exit => break,
-                            }
+                            });
+                            break;
                         }
                         Err(error) => {
                             core.runtime.terminal_error = Some(error);
@@ -1951,6 +1802,13 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     .map_or(scheduler_wait_target_qpc, |candidate| {
                         scheduler_wait_target_qpc.max(candidate.timing_window.packet_not_before_qpc)
                     });
+            // Carry an Up-deadline wake for one selector pass only, and attach
+            // it only to a packet with an Up at that exact release deadline.
+            attribute_modifier_up_deadline_wake(
+                pending_modifier_up_deadline_wake.take(),
+                candidate.as_ref(),
+                &mut core.runtime,
+            );
             if wait_target_qpc > now_ticks {
                 if let Some(staged_candidate) = candidate.as_ref() {
                     let control_signals = FinalControlSignals {
@@ -1971,6 +1829,25 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     ) {
                         StagedDispatchOutcome::Dispatched => {}
                         StagedDispatchOutcome::Replan => {
+                            let target_stale = candidate
+                                .as_ref()
+                                .and_then(|candidate| candidate.target_stamp)
+                                .is_some_and(|expected| {
+                                    !target_stamp_still_current(target, expected)
+                                });
+                            if target_stale {
+                                core.runtime.verified_target = None;
+                                core.runtime.terminal_error.get_or_insert_with(|| {
+                                    if target.is_valid() {
+                                        "staged target stamp no longer matches its immutable session binding"
+                                            .to_string()
+                                    } else {
+                                        "immutable session target or owner identity was invalidated"
+                                            .to_string()
+                                    }
+                                });
+                                break;
+                            }
                             let fallback = match stage_up_only_for_mixed_replan(
                                 staged_candidate,
                                 SchedulerStageAdmission {
@@ -2007,39 +1884,18 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                     .is_some_and(|expected| {
                                         !target_stamp_still_current(target, expected)
                                     });
-                                let controls_allow_wait = matches!(
-                                    final_control_precheck(FinalControlSignals {
-                                        quit_requested,
-                                        skip_requested,
-                                        panic_requested,
-                                        desired_pause,
-                                        supervisor_expired,
-                                        system_power: Some(system_power),
-                                    }),
-                                    FinalControlAdmission::Allowed
-                                );
-                                if target_stale && controls_allow_wait {
-                                    match wait_after_unstable_target(
-                                        now_ticks,
-                                        candidate.as_ref().map_or(
-                                            packet_not_before_qpc,
-                                            |candidate| {
-                                                candidate.timing_window.packet_not_before_qpc
-                                            },
-                                        ),
-                                        qpc_clock,
-                                        &resources.waiter,
-                                        interrupt,
-                                        &mut core.metrics,
-                                        &mut core.runtime.terminal_error,
-                                    ) {
-                                        WaitBoundary::Due { .. } => continue,
-                                        WaitBoundary::Interrupted(_, _, _) => {
-                                            let _ = interrupt.try_take();
-                                            continue;
+                                if target_stale {
+                                    core.runtime.verified_target = None;
+                                    core.runtime.terminal_error.get_or_insert_with(|| {
+                                        if target.is_valid() {
+                                            "staged target stamp no longer matches its immutable session binding"
+                                                .to_string()
+                                        } else {
+                                            "immutable session target or owner identity was invalidated"
+                                                .to_string()
                                         }
-                                        WaitBoundary::Exit => break,
-                                    }
+                                    });
+                                    break;
                                 }
                                 continue;
                             }
@@ -2049,15 +1905,24 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 }
                 if wait_target_qpc > now_ticks {
                     #[cfg(any(test, feature = "test-support"))]
+                    if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                        hook.visit_startup_checkpoint(
+                            super::super::config::StartupCheckpoint::DispatchWait,
+                        );
+                    }
+                    #[cfg(any(test, feature = "test-support"))]
                     if candidate
                         .as_ref()
                         .is_some_and(|candidate| candidate.packet_masks.down_mask != 0)
                         && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
                         && let Some(candidate) = candidate.as_ref()
                     {
-                        hook.record_down_window_before_physical_wait(
+                        hook.record_down_window(
                             candidate.timing_window.authored_target_qpc.as_u64(),
                             candidate.timing_window.packet_not_before_qpc.as_u64(),
+                        );
+                        hook.visit_startup_checkpoint(
+                            super::super::config::StartupCheckpoint::PhysicalWait,
                         );
                     }
                     let authored_target_ticks = candidate.as_ref().map_or_else(
@@ -2166,8 +2031,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 progress_clock: &shared.publication.progress_clock,
                 metrics,
             };
-            let candidate_target_stamp = candidate.target_stamp;
-            let candidate_retry_deadline = candidate.timing_window.packet_not_before_qpc;
             match dispatch_staged_candidate(
                 candidate,
                 ctx,
@@ -2177,43 +2040,139 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 core.observer.pending.as_ref(),
             ) {
                 DispatchAttemptOutcome::Dispatched => continue,
-                outcome @ (DispatchAttemptOutcome::Replan | DispatchAttemptOutcome::PermitBusy) => {
-                    core.runtime.last_dispatch_deadline_wake_qpc = None;
-                    core.runtime.last_dispatch_deadline_target_qpc = None;
+                DispatchAttemptOutcome::Replan => {
                     super::dispatch::publish_pending_wait_observation(
                         &mut core.runtime,
                         core.observer.pending.as_ref(),
                         &mut core.metrics,
                     );
-                    let replan_action = wait_after_dispatch_replan(
-                        outcome,
-                        permit_busy_retry_allowed,
-                        &mut permit_busy_retry_pending,
-                        DispatchReplanWaitContext {
-                            target,
-                            expected_target: candidate_target_stamp,
-                            retry_deadline_qpc: candidate_retry_deadline,
-                            require_focus: config.focus.require_focus,
-                            focus_active,
-                            control_signals: FinalControlSignals {
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power: Some(system_power),
-                            },
-                            qpc_clock,
-                            waiter: &resources.waiter,
-                            interrupt,
-                            local_metrics: &mut core.metrics,
-                            terminal_error: &mut core.runtime.terminal_error,
+                    let replan_action = dispatch_replan_action(DispatchReplanWaitContext {
+                        target,
+                        control_signals: FinalControlSignals {
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                            supervisor_expired,
+                            system_power: Some(system_power),
                         },
-                    );
+                        modifier_held: false,
+                    });
                     match replan_action {
-                        DispatchReplanAction::ContinueImmediately
-                        | DispatchReplanAction::WaitCompleted => {}
-                        DispatchReplanAction::Exit => break,
+                        DispatchReplanAction::ContinueImmediately => {}
+                        DispatchReplanAction::WaitForModifier => {
+                            unreachable!("generic replans cannot request modifier-specific backoff")
+                        }
+                        DispatchReplanAction::Exit => {
+                            if !target.is_valid() {
+                                core.runtime.terminal_error.get_or_insert_with(|| {
+                                    "immutable session target or owner identity was invalidated"
+                                        .to_string()
+                                });
+                            }
+                            break;
+                        }
+                    }
+                    continue;
+                }
+                DispatchAttemptOutcome::ModifierHeld => {
+                    super::dispatch::publish_pending_wait_observation(
+                        &mut core.runtime,
+                        core.observer.pending.as_ref(),
+                        &mut core.metrics,
+                    );
+                    let replan_action = dispatch_replan_action(DispatchReplanWaitContext {
+                        target,
+                        control_signals: FinalControlSignals {
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                            supervisor_expired,
+                            system_power: Some(system_power),
+                        },
+                        modifier_held: true,
+                    });
+                    match replan_action {
+                        DispatchReplanAction::ContinueImmediately => {}
+                        DispatchReplanAction::WaitForModifier => {
+                            let now_qpc = qpc_ticks_or_terminal!();
+                            let next_active_up_deadline = resources
+                                .scheduler
+                                .earliest_active_up_due_qpc(resources.playback.epoch)
+                                .map_err(|error| {
+                                    format!("modifier-held active Up deadline failed: {error}")
+                                });
+                            let next_active_up_deadline = match next_active_up_deadline {
+                                Ok(deadline) => deadline,
+                                Err(error) => {
+                                    core.runtime.terminal_error = Some(error);
+                                    break;
+                                }
+                            };
+                            let modifier_wait = wait_after_modifier_held(
+                                now_qpc,
+                                next_active_up_deadline,
+                                qpc_clock,
+                                |clock, deadline, spin_threshold| {
+                                    resources.waiter.wait_until_ticks_with_metrics_typed(
+                                        clock,
+                                        deadline,
+                                        spin_threshold,
+                                        interrupt,
+                                    )
+                                },
+                            );
+                            let modifier_wait = match modifier_wait {
+                                Ok(wait) => wait,
+                                Err(error) => {
+                                    core.runtime.terminal_error = Some(error);
+                                    break;
+                                }
+                            };
+                            let interrupted = matches!(
+                                modifier_wait,
+                                ModifierWaitResult::Waited {
+                                    result: sky_dispatch_win32::wait::WaitResult {
+                                        outcome: sky_dispatch_win32::wait::WaitOutcome::Interrupted,
+                                        ..
+                                    },
+                                    ..
+                                }
+                            );
+                            match account_modifier_wait_result(
+                                modifier_wait,
+                                &mut core.runtime,
+                                core.observer.pending.as_ref(),
+                                &mut core.metrics,
+                                resources.playback.epoch,
+                            ) {
+                                Ok(Some(wake)) => {
+                                    pending_modifier_up_deadline_wake = Some(wake);
+                                }
+                                Ok(None) => {}
+                                Err(failure) => {
+                                    record_wait_failure(
+                                        failure,
+                                        &mut core.metrics,
+                                        &mut core.runtime.terminal_error,
+                                    );
+                                    break;
+                                }
+                            }
+                            if interrupted {
+                                let _ = interrupt.try_take();
+                            }
+                        }
+                        DispatchReplanAction::Exit => {
+                            if !target.is_valid() {
+                                core.runtime.terminal_error.get_or_insert_with(|| {
+                                    "immutable session target or owner identity was invalidated"
+                                        .to_string()
+                                });
+                            }
+                            break;
+                        }
                     }
                     continue;
                 }
@@ -2239,8 +2198,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
 mod tests {
     #[path = "../../dispatch_loop_deadline_hg_projection_tests.rs"]
     mod deadline_hg_projection;
-    #[path = "../../dispatch_loop_deadline_interrupted_tests.rs"]
-    mod deadline_interrupted;
     #[path = "../../dispatch_loop_deadline_late_due_tests.rs"]
     mod deadline_late_due;
     #[path = "../../dispatch_loop_deadline_post_due_control_tests.rs"]
@@ -2249,14 +2206,10 @@ mod tests {
     mod deadline_real_waiter;
     #[path = "../../dispatch_loop_failure_tests.rs"]
     mod failure;
-    #[path = "../../dispatch_loop_late_retry_tests.rs"]
-    mod late_retry;
     #[path = "../../dispatch_loop_observer_tests.rs"]
     mod observer;
     #[path = "../../dispatch_loop_owner_proof_tests.rs"]
     mod owner_proof;
-    #[path = "../../dispatch_loop_preflight_busy_tests.rs"]
-    mod preflight_busy;
     #[path = "../../dispatch_loop_raw_zero_tests.rs"]
     mod raw_zero;
     #[path = "../../dispatch_loop_replan_timing_tests.rs"]

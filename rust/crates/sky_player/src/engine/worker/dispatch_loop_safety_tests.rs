@@ -819,7 +819,7 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
 }
 
 #[test]
-fn focus_recovery_cleanup_rejects_rebound_and_same_hwnd_aba_owner() {
+fn focus_recovery_cleanup_rejects_invalidated_session_target() {
     struct ForegroundReset;
     impl Drop for ForegroundReset {
         fn drop(&mut self) {
@@ -830,7 +830,7 @@ fn focus_recovery_cleanup_rejects_rebound_and_same_hwnd_aba_owner() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
 
-    for rebound_hwnd in [2, 1] {
+    for replacement_hwnd in [2, 1] {
         let actions = [
             test_action(6670, ActionKind::Down, 0, 0x15),
             test_action(6671, ActionKind::Up, 500_000, 0x15),
@@ -865,14 +865,14 @@ fn focus_recovery_cleanup_rejects_rebound_and_same_hwnd_aba_owner() {
             .expect("origin proof lookup")
             .expect("origin proof");
 
-        harness.republish_focus_owner_for_test(rebound_hwnd, 202);
-        let rebound = super::super::load_target_stamp(&harness.target).expect("rebound owner");
-        assert_ne!(rebound, origin);
+        // Neither a different HWND nor same-HWND reuse can replace the fixed
+        // session target or authorize focus-recovery cleanup.
+        harness.invalidate_focus_owner_for_test(replacement_hwnd, 202);
         let error = super::super::suspend_live_input_for_dispatch(
             &mut harness.resources.backend,
             &mut harness.resources.scheduler,
             &harness.target,
-            Some(rebound),
+            Some(origin),
             true,
             &harness.runtime,
             || {
@@ -883,8 +883,8 @@ fn focus_recovery_cleanup_rejects_rebound_and_same_hwnd_aba_owner() {
                     .map_err(|error| format!("{error:?}"))
             },
         )
-        .expect_err("recovery cannot release under a rebound HWND/PID/generation");
-        assert!(error.contains("origin target generation drifted"));
+        .expect_err("recovery cannot release through an invalidated session target");
+        assert!(error.contains("target HWND/generation changed"));
         assert!(cleanup.lock().expect("no cross-owner cleanup").is_empty());
         assert_eq!(packets.lock().expect("only original Down").len(), 1);
         assert_eq!(harness.resources.backend.active_mask, 1);
@@ -900,7 +900,6 @@ fn focus_recovery_cleanup_rejects_rebound_and_same_hwnd_aba_owner() {
         );
     }
 }
-
 #[test]
 fn fresh_focus_rejection_keeps_qpc_failure_terminal() {
     struct ForegroundReset;
@@ -1145,7 +1144,7 @@ fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cl
 }
 
 #[test]
-fn target_generation_race_and_modifier_race_leave_down_unattempted() {
+fn target_invalidation_keeps_down_unattempted_and_cannot_restage() {
     struct ForegroundReset;
     impl Drop for ForegroundReset {
         fn drop(&mut self) {
@@ -1175,66 +1174,15 @@ fn target_generation_race_and_modifier_race_leave_down_unattempted() {
         )
         .expect("stage target-bound Down")
         .expect("Down candidate");
-    harness.republish_focus_owner_for_test(2, 222);
-    assert!(matches!(
+    harness.invalidate_focus_owner_for_test(2, 222);
+    assert_eq!(
         harness.dispatch_staged_candidate_for_test(stale, false),
         StagedDispatchOutcome::Replan
-    ));
+    );
     assert!(packets.lock().expect("sender capture").is_empty());
     assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
-
-    // Re-stage against the current HWND/PID/generation, then mutate modifier
-    // state after owner proof and immediately before the bounded final suffix.
-    let current = harness
-        .stage_candidate_for_test(
-            0,
-            harness.current_executor_chord_for_test(),
-            TimelineTicks::ZERO,
-        )
-        .expect("re-stage current target")
-        .expect("Down candidate");
-    let held = Arc::new(AtomicBool::new(false));
-    let held_for_query = Arc::clone(&held);
-    harness
-        .resources
-        .backend
-        .set_modifier_key_state_query_for_test(move |_| {
-            if held_for_query.load(Ordering::Acquire) {
-                i16::MIN
-            } else {
-                0
-            }
-        });
-    let held_for_gate = Arc::clone(&held);
-    harness.set_final_gate_before_syscall_hook(move || {
-        held_for_gate.store(true, Ordering::Release);
-    });
-    assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(current, false),
-        StagedDispatchOutcome::Replan
-    ));
-    assert!(packets.lock().expect("sender capture").is_empty());
-    assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
-    assert_eq!(harness.local_metrics.final_gate_control_rejections, 1);
-    held.store(false, Ordering::Release);
-    harness.runtime.final_gate_before_syscall_hook = None;
-    let recovered = harness
-        .stage_candidate_for_test(
-            0,
-            harness.current_executor_chord_for_test(),
-            TimelineTicks::ZERO,
-        )
-        .expect("replan after modifier release")
-        .expect("same unattempted Down candidate");
-    assert_eq!(recovered.source_action_index, 30);
-    harness.set_mock_sender_start_qpc_for_test(harness.qpc_now_for_test().unwrap());
-    assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(recovered, false),
-        StagedDispatchOutcome::Dispatched
-    ));
-    assert_eq!(packets.lock().expect("sender capture").len(), 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
 }
-
 #[test]
 fn mixed_packet_with_final_modifier_rejection_replans_as_up_only() {
     let actions = [

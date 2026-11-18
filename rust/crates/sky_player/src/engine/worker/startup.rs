@@ -31,11 +31,6 @@ impl WorkerSchedulingGuards {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn is_priority_active(&self) -> bool {
-        self.priority.is_active()
-    }
-
     pub(crate) fn is_power_active(&self) -> bool {
         self.power.is_active()
     }

@@ -1,6 +1,4 @@
-use super::config::{
-    AdmittedNativeSessionOptions, EffectiveRuntimePolicy, NativeScheduleInput, NativeSessionOptions,
-};
+use super::config::{AdmittedNativeSessionOptions, EffectiveRuntimePolicy, NativeSessionOptions};
 use super::shared::{
     SessionCommands, SessionLifecycle, SessionPublication, SessionShared, SessionTarget,
     StartupAbortReason, StartupPhase, SupervisorLeaseState, SystemPowerEndpoint,
@@ -19,7 +17,6 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OwnerIdentityPollResult {
     CurrentValid,
-    StaleSuperseded,
     CurrentInvalid,
 }
 
@@ -155,35 +152,6 @@ fn wait_for_watchdog_release_or_completion(
     }
 }
 
-pub(crate) fn validate_native_schedule_timing_with_release_gap(
-    schedule: &sky_dispatch_core::model::RuntimeSchedule,
-    effective_min_hold_us: u64,
-    min_release_gap_us: u64,
-    qpc_clock: QpcClock,
-) -> Result<(), String> {
-    sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility(
-        schedule,
-        effective_min_hold_us,
-        min_release_gap_us,
-    )
-    .map_err(|error| format!("native schedule admission failed: {error}"))?;
-    let effective_min_hold_ticks = qpc_clock
-        .duration_from_us(effective_min_hold_us)
-        .map_err(|error| format!("native hold-floor conversion failed: {error:?}"))?;
-    let min_release_gap_ticks = qpc_clock
-        .duration_from_us(min_release_gap_us)
-        .map_err(|error| format!("native release-gap conversion failed: {error:?}"))?;
-    sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility_ticks(
-        schedule,
-        effective_min_hold_us,
-        effective_min_hold_ticks,
-        min_release_gap_us,
-        min_release_gap_ticks,
-        |microseconds| qpc_clock.timeline_from_us(microseconds).ok(),
-    )
-    .map_err(|error| format!("native tick-domain admission failed: {error}"))
-}
-
 pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<(), String> {
     let expected_min_hold_us = timing
         .frame_base_hold_us
@@ -262,40 +230,18 @@ impl NativeDispatchSession {
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
         let min_release_gap_us = options.timing.min_release_gap_us;
-        let (total_us, generation_count) = match &options.schedule {
-            NativeScheduleInput::Raw(schedule) => {
-                #[cfg(any(test, feature = "test-support"))]
-                if let Some(hook) = &options.startup_ordering_hook {
-                    hook.record_raw_schedule_admission_validation();
-                }
-                validate_native_schedule_timing_with_release_gap(
-                    schedule,
-                    options.timing.min_hold_us,
-                    min_release_gap_us,
-                    qpc_clock,
-                )?;
-                (
-                    schedule
-                        .batches
-                        .last()
-                        .map_or(0, |batch| batch.scheduled_us),
-                    schedule.generation_count,
-                )
-            }
-            NativeScheduleInput::Prepared(schedule) => {
-                if !schedule.is_compatible(
-                    qpc_clock.frequency_hz(),
-                    options.timing.min_hold_us,
-                    min_release_gap_us,
-                ) {
-                    return Err(
-                        "prepared dispatch plan no longer matches the QPC domain or H/G timing policy"
-                            .to_string(),
-                    );
-                }
-                (schedule.total_us(), schedule.generation_count())
-            }
-        };
+        if !options.schedule.is_compatible(
+            qpc_clock.frequency_hz(),
+            options.timing.min_hold_us,
+            min_release_gap_us,
+        ) {
+            return Err(
+                "prepared dispatch plan no longer matches the QPC domain or H/G timing policy"
+                    .to_string(),
+            );
+        }
+        let total_us = options.schedule.total_us();
+        let generation_count = options.schedule.generation_count();
         if !cfg!(windows) && matches!(&options.backend, BackendConfig::Production) {
             return Err("production native dispatch is supported only on Windows".to_string());
         }
@@ -415,11 +361,138 @@ impl NativeDispatchSession {
         )
     }
 
+    fn reject_target_admission(&self, reason: StartupAbortReason, error: String) -> String {
+        self.shared.target.invalidate_target();
+        self.shared.commands.system_power.cancel_prearm(reason);
+        let _ = self.shared.commands.interrupt.signal();
+
+        if self
+            .shared
+            .lifecycle
+            .lifecycle
+            .compare_exchange(
+                LIFECYCLE_NEW,
+                LIFECYCLE_STARTING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            let metrics = &self.shared.publication.metrics;
+            *metrics.last_error.lock() = Some(error.clone());
+            *metrics.terminal_error.lock() = Some(error.clone());
+            *metrics.terminal_trigger_reason.lock() = Some(match reason {
+                StartupAbortReason::TargetInvalidated => {
+                    "target_authority_invalidated_during_preparation".to_string()
+                }
+                StartupAbortReason::OwnerInvalidated => {
+                    "owner_authority_invalidated_during_preparation".to_string()
+                }
+                _ => "target_admission_failed_before_arm".to_string(),
+            });
+            self.shared
+                .lifecycle
+                .terminal_outcome
+                .store(OUTCOME_ERROR, Ordering::Release);
+            self.shared
+                .lifecycle
+                .lifecycle
+                .store(LIFECYCLE_FINISHED, Ordering::Release);
+            self.config.lock().take();
+            let (done_lock, done_cv) = &self.shared.lifecycle.completed;
+            if let Ok(mut done) = done_lock.lock() {
+                *done = true;
+                done_cv.notify_all();
+            }
+        }
+
+        error
+    }
+
+    fn validate_target_for_arm(&self) -> Result<(), (StartupAbortReason, String)> {
+        let Some((hwnd, generation)) = self.shared.target.load_stable() else {
+            return Err((
+                StartupAbortReason::TargetInvalidated,
+                "a fixed target HWND must be bound before Arm".into(),
+            ));
+        };
+        if hwnd == 0 || generation == 0 || !self.shared.target.is_valid() {
+            return Err((
+                StartupAbortReason::TargetInvalidated,
+                "the fixed session target is invalid before Arm".into(),
+            ));
+        }
+
+        let owner_pid = match self.shared.target.owner_identity_status(generation) {
+            super::target::OwnerIdentityStatus::Bound(pid) if pid != 0 => pid,
+            _ => {
+                return Err((
+                    StartupAbortReason::OwnerInvalidated,
+                    "a verified target owner must be bound before Arm".into(),
+                ));
+            }
+        };
+
+        if self.shared.target.owner_process_identity_required() {
+            let Some(authority) = self
+                .shared
+                .target
+                .owner_authority_for_generation(generation)
+            else {
+                return Err((
+                    StartupAbortReason::OwnerInvalidated,
+                    "a retained process identity must be bound before Arm".into(),
+                ));
+            };
+            let identity = authority.identity();
+            if identity.hwnd != hwnd || identity.owner_pid != owner_pid {
+                return Err((
+                    StartupAbortReason::OwnerInvalidated,
+                    "the retained process identity does not match the bound HWND/PID".into(),
+                ));
+            }
+            let continuity = authority.continuity();
+            if continuity != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous {
+                return Err((
+                    StartupAbortReason::OwnerInvalidated,
+                    format!(
+                        "the bound process identity is not continuous before Arm: {continuity:?}"
+                    ),
+                ));
+            }
+        }
+
+        if !self.shared.target.is_valid()
+            || self.shared.target.load_stable() != Some((hwnd, generation))
+            || !matches!(
+                self.shared.target.owner_identity_status(generation),
+                super::target::OwnerIdentityStatus::Bound(pid) if pid == owner_pid
+            )
+        {
+            return Err((
+                StartupAbortReason::OwnerInvalidated,
+                "the bound target/owner proof changed during Arm admission".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn reject_owner_binding(&self, error: String) -> String {
+        if self.focus_required {
+            self.reject_target_admission(StartupAbortReason::OwnerInvalidated, error)
+        } else {
+            error
+        }
+    }
+
     pub fn arm(&self, requested_pre_roll_us: u64) -> Result<(), String> {
         // LIFECYCLE_STARTING records worker launch, not input activation. The
         // startup publication state remains the linearization gate until its
         // Ready-to-Armed CAS succeeds, so Quit/Skip accepted in New or during
         // preparation cannot be overwritten by this arm request.
+        if self.shared.lifecycle.lifecycle.load(Ordering::Acquire) != LIFECYCLE_NEW {
+            return Err("session cannot start after target admission has closed".into());
+        }
         validate_timing_constants()?;
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC arm admission failed: {error:?}"))?;
@@ -433,6 +506,31 @@ impl NativeDispatchSession {
         let lease_timeout_ticks = qpc_clock
             .duration_from_us(self.supervisor_lease_timeout_us)
             .map_err(|error| format!("lease timeout conversion failed: {error:?}"))?;
+
+        #[cfg(any(test, feature = "test-support"))]
+        {
+            let mock_focus_session = self.config.lock().as_ref().is_some_and(|admitted| {
+                admitted.options.focus.require_focus
+                    && matches!(&admitted.options.backend, BackendConfig::Mock { .. })
+            });
+            if self.focus_required
+                && mock_focus_session
+                && let Some((hwnd, generation)) = self.shared.target.load_stable()
+                && matches!(
+                    self.shared.target.owner_identity_status(generation),
+                    super::target::OwnerIdentityStatus::NotRequired
+                        | super::target::OwnerIdentityStatus::Missing
+                )
+            {
+                let _ = self.shared.target.bind_owner_identity(hwnd, generation, 1);
+            }
+        }
+
+        if self.focus_required
+            && let Err((reason, error)) = self.validate_target_for_arm()
+        {
+            return Err(self.reject_target_admission(reason, error));
+        }
 
         self.shared
             .lifecycle
@@ -946,54 +1044,19 @@ impl NativeDispatchSession {
     }
 
     pub fn set_target_hwnd(&self, hwnd: isize) {
-        if self.startup_active()
-            && !self
-                .shared
-                .target
-                .load_stable()
-                .is_some_and(|(current, _)| current == hwnd)
-        {
+        let bound = self.shared.target.set_initial_target(hwnd);
+        if !bound {
             self.shared
                 .commands
                 .system_power
                 .cancel_prearm(StartupAbortReason::TargetInvalidated);
         }
-        if self.shared.target.publish(hwnd) {
-            #[cfg(any(test, feature = "test-support"))]
-            {
-                let mock_focus_session = self.config.lock().as_ref().is_some_and(|admitted| {
-                    admitted.options.focus.require_focus
-                        && matches!(&admitted.options.backend, BackendConfig::Mock { .. })
-                });
-                if mock_focus_session
-                    && let Some((current_hwnd, generation)) = self.shared.target.load_stable()
-                    && self.shared.target.owner_identity_status(generation)
-                        == super::target::OwnerIdentityStatus::NotRequired
-                {
-                    let _ = self
-                        .shared
-                        .target
-                        .bind_owner_identity(current_hwnd, generation, 1);
-                }
-            }
+        if bound {
+            let _ = self.shared.commands.interrupt.signal();
+        } else {
+            self.shared.target.invalidate_target();
             let _ = self.shared.commands.interrupt.signal();
         }
-    }
-
-    /// Publish a fresh release-barrier target generation after control-plane revalidation,
-    /// including when the numeric HWND was reused for a new window lifetime.
-    pub fn republish_target_generation_for_revalidation(&self, hwnd: isize) -> bool {
-        if self.startup_active() {
-            self.shared
-                .commands
-                .system_power
-                .cancel_prearm(StartupAbortReason::TargetInvalidated);
-        }
-        let published = self.shared.target.republish_same_hwnd(hwnd);
-        if published {
-            let _ = self.shared.commands.interrupt.signal();
-        }
-        published
     }
 
     /// Bind a retained Win32 process object to the current coherent target
@@ -1021,7 +1084,14 @@ impl NativeDispatchSession {
         &self,
         status: sky_dispatch_win32::focus::WindowIdentityContinuity,
     ) -> bool {
-        let Some((authority, _)) = self.shared.target.owner_authority_snapshot() else {
+        let Some((_, generation)) = self.shared.target.load_stable() else {
+            return false;
+        };
+        let Some(authority) = self
+            .shared
+            .target
+            .owner_authority_for_generation(generation)
+        else {
             return false;
         };
         authority.set_process_identity_status_for_test(status);
@@ -1032,43 +1102,11 @@ impl NativeDispatchSession {
     pub fn window_identity_authority_weak_for_test(
         &self,
     ) -> Option<std::sync::Weak<sky_dispatch_win32::focus::WindowIdentityAuthority>> {
+        let (_, generation) = self.shared.target.load_stable()?;
         self.shared
             .target
-            .owner_authority_snapshot()
-            .map(|(authority, _)| Arc::downgrade(&authority))
-    }
-
-    #[cfg(test)]
-    pub(super) fn set_owner_poll_result_barrier_for_test(
-        &self,
-        reached: Arc<std::sync::Barrier>,
-        resume: Arc<std::sync::Barrier>,
-    ) {
-        self.shared
-            .target
-            .set_owner_poll_result_barrier_for_test(reached, resume);
-    }
-
-    #[cfg(test)]
-    pub(super) fn set_owner_close_snapshot_barrier_for_test(
-        &self,
-        reached: Arc<std::sync::Barrier>,
-        resume: Arc<std::sync::Barrier>,
-    ) {
-        self.shared
-            .target
-            .set_owner_close_snapshot_barrier_for_test(reached, resume);
-    }
-
-    #[cfg(test)]
-    pub(super) fn set_safety_release_validation_barrier_for_test(
-        &self,
-        reached: Arc<std::sync::Barrier>,
-        resume: Arc<std::sync::Barrier>,
-    ) {
-        self.shared
-            .target
-            .set_safety_release_validation_barrier_for_test(reached, resume);
+            .owner_authority_for_generation(generation)
+            .map(Arc::downgrade)
     }
 
     fn bind_window_identity_authority_with_pid(
@@ -1076,16 +1114,26 @@ impl NativeDispatchSession {
         authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
         expected_owner_pid: u32,
     ) -> Result<(), String> {
+        if self.shared.lifecycle.lifecycle.load(Ordering::Acquire) != LIFECYCLE_NEW {
+            let error = "window identity authority must be bound before Arm".to_string();
+            return Err(self.reject_owner_binding(error));
+        }
         let identity = authority.identity();
         let Some((hwnd, generation)) = self.shared.target.load_stable() else {
-            return Err("target is unavailable while binding window identity".to_string());
+            let error = "target is unavailable while binding window identity".to_string();
+            return Err(self.reject_owner_binding(error));
         };
-        if hwnd != identity.hwnd || expected_owner_pid == 0 {
-            return Err("window identity HWND does not match the published target".to_string());
+        if hwnd != identity.hwnd
+            || expected_owner_pid == 0
+            || expected_owner_pid != identity.owner_pid
+        {
+            let error = "window identity HWND/PID does not match the fixed target".to_string();
+            return Err(self.reject_owner_binding(error));
         }
         if authority.continuity() != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
         {
-            return Err("window process identity changed during startup binding".to_string());
+            let error = "window process identity changed during startup binding".to_string();
+            return Err(self.reject_owner_binding(error));
         }
         if !self.shared.target.bind_owner_identity_authority(
             hwnd,
@@ -1093,7 +1141,8 @@ impl NativeDispatchSession {
             expected_owner_pid,
             Arc::new(authority),
         ) {
-            return Err("window identity could not bind to the current target generation".into());
+            let error = "window identity could not bind to the current target generation".into();
+            return Err(self.reject_owner_binding(error));
         }
         let _ = self.shared.commands.interrupt.signal();
         Ok(())
@@ -1111,122 +1160,86 @@ impl NativeDispatchSession {
         let _ = self.shared.commands.interrupt.signal();
     }
 
-    /// Poll the retained process object and exact target HWND on the desktop
-    /// supervisor thread. This function never runs in the precision suffix.
+    /// Poll the immutable process object on the desktop supervisor thread.
+    /// Failure latches this session terminally; it never replaces its target.
     pub fn poll_window_identity_authority_result(&self) -> OwnerIdentityPollResult {
-        let Some((authority, bound_generation)) = self.shared.target.owner_authority_snapshot()
-        else {
-            return if self.shared.target.owner_identity_status(0)
-                == super::target::OwnerIdentityStatus::NotRequired
-            {
+        let Some((_, generation)) = self.shared.target.load_stable() else {
+            return OwnerIdentityPollResult::CurrentInvalid;
+        };
+        match self.shared.target.owner_identity_status(generation) {
+            super::target::OwnerIdentityStatus::NotRequired => {
                 OwnerIdentityPollResult::CurrentValid
-            } else {
-                OwnerIdentityPollResult::CurrentInvalid
-            };
-        };
-        let Some(target) = self.shared.target.load_stable() else {
-            #[cfg(test)]
-            self.shared.target.run_owner_poll_result_hook_for_test();
-            let applied = self.shared.target.invalidate_polled_owner_if_current(
-                &authority,
-                bound_generation,
-                OwnerIdentityFailure::ProcessTerminated,
-            );
-            if applied && self.startup_active() {
-                self.shared
-                    .commands
-                    .system_power
-                    .cancel_prearm(StartupAbortReason::OwnerInvalidated);
             }
-            let _ = self.shared.commands.interrupt.signal();
-            return if applied {
-                OwnerIdentityPollResult::CurrentInvalid
-            } else {
-                OwnerIdentityPollResult::StaleSuperseded
-            };
-        };
-        if target != (authority.identity().hwnd, bound_generation) {
-            let _ = self.shared.commands.interrupt.signal();
-            return OwnerIdentityPollResult::StaleSuperseded;
-        }
-        let continuity = authority.continuity();
-        #[cfg(test)]
-        self.shared.target.run_owner_poll_result_hook_for_test();
-        let failure = match continuity {
-            sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous => {
-                let current = self
-                    .shared
-                    .target
-                    .polled_owner_is_current(&authority, bound_generation);
-                if !current {
-                    let _ = self.shared.commands.interrupt.signal();
+            super::target::OwnerIdentityStatus::Bound(_) => {
+                if !self.shared.target.owner_process_identity_required() {
+                    return OwnerIdentityPollResult::CurrentValid;
                 }
-                return if current {
-                    OwnerIdentityPollResult::CurrentValid
-                } else {
-                    OwnerIdentityPollResult::StaleSuperseded
-                };
+                match self.shared.target.owner_authority_continuity(generation) {
+                    Some(sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous) => {
+                        if self.shared.target.polled_owner_is_current(generation) {
+                            OwnerIdentityPollResult::CurrentValid
+                        } else {
+                            self.shared.target.invalidate_owner_identity_with(
+                                OwnerIdentityFailure::QueryUnavailable,
+                            );
+                            self.fail_session_for_owner_loss();
+                            OwnerIdentityPollResult::CurrentInvalid
+                        }
+                    }
+                    Some(continuity) => {
+                        let failure = match continuity {
+                            sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous => {
+                                unreachable!()
+                            }
+                            sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated => {
+                                OwnerIdentityFailure::ProcessTerminated
+                            }
+                            sky_dispatch_win32::focus::WindowIdentityContinuity::OwnerMismatch => {
+                                OwnerIdentityFailure::OwnerMismatch
+                            }
+                            sky_dispatch_win32::focus::WindowIdentityContinuity::WindowUnavailable => {
+                                OwnerIdentityFailure::WindowUnavailable
+                            }
+                            sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessIdentityMismatch => {
+                                OwnerIdentityFailure::ProcessIdentityMismatch
+                            }
+                            sky_dispatch_win32::focus::WindowIdentityContinuity::QueryUnavailable => {
+                                OwnerIdentityFailure::QueryUnavailable
+                            }
+                        };
+                        self.shared
+                            .target
+                            .invalidate_polled_owner_if_current(generation, failure);
+                        self.fail_session_for_owner_loss();
+                        OwnerIdentityPollResult::CurrentInvalid
+                    }
+                    None => {
+                        self.shared
+                            .target
+                            .invalidate_owner_identity_with(OwnerIdentityFailure::QueryUnavailable);
+                        self.fail_session_for_owner_loss();
+                        OwnerIdentityPollResult::CurrentInvalid
+                    }
+                }
             }
-            sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated => {
-                OwnerIdentityFailure::ProcessTerminated
+            _ => {
+                self.shared
+                    .target
+                    .invalidate_owner_identity_with(OwnerIdentityFailure::QueryUnavailable);
+                self.fail_session_for_owner_loss();
+                OwnerIdentityPollResult::CurrentInvalid
             }
-            sky_dispatch_win32::focus::WindowIdentityContinuity::OwnerMismatch => {
-                OwnerIdentityFailure::OwnerMismatch
-            }
-            sky_dispatch_win32::focus::WindowIdentityContinuity::WindowUnavailable => {
-                OwnerIdentityFailure::WindowUnavailable
-            }
-            sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessIdentityMismatch => {
-                OwnerIdentityFailure::ProcessIdentityMismatch
-            }
-            sky_dispatch_win32::focus::WindowIdentityContinuity::QueryUnavailable => {
-                OwnerIdentityFailure::QueryUnavailable
-            }
-        };
-        let applied = self.shared.target.invalidate_polled_owner_if_current(
-            &authority,
-            bound_generation,
-            failure,
-        );
-        if applied && self.startup_active() {
+        }
+    }
+
+    fn fail_session_for_owner_loss(&self) {
+        if self.startup_active() {
             self.shared
                 .commands
                 .system_power
                 .cancel_prearm(StartupAbortReason::OwnerInvalidated);
         }
         let _ = self.shared.commands.interrupt.signal();
-        if applied {
-            OwnerIdentityPollResult::CurrentInvalid
-        } else {
-            OwnerIdentityPollResult::StaleSuperseded
-        }
-    }
-
-    /// Compatibility wrapper for callers that only need a current-valid bit.
-    /// New supervisor consumers must use the typed result so stale samples are
-    /// not interpreted as current-owner loss.
-    pub fn poll_window_identity_authority(&self) -> bool {
-        self.poll_window_identity_authority_result() == OwnerIdentityPollResult::CurrentValid
-    }
-
-    /// Release the retained process object exactly once at terminal session
-    /// teardown. The caller joins the worker/supervisor before closing it.
-    pub fn close_window_identity_authority(&self) {
-        let Some((authority, generation)) = self.shared.target.owner_authority_snapshot() else {
-            return;
-        };
-        #[cfg(test)]
-        self.shared.target.run_owner_close_snapshot_hook_for_test();
-        let closed = self
-            .shared
-            .target
-            .close_owner_authority_if_current(&authority, generation);
-        if closed && self.startup_active() {
-            self.shared
-                .commands
-                .system_power
-                .cancel_prearm(StartupAbortReason::OwnerInvalidated);
-        }
     }
 
     /// Publish a transition-only supervisor focus hint. This wakes the worker

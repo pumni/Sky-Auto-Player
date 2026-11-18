@@ -6,10 +6,41 @@ use sky_dispatch_win32::input::PhysicalPacket;
 
 const MAX_KEYS: usize = sky_dispatch_core::model::MAX_KEYS;
 
+macro_rules! record_forensics_anomaly {
+    (
+        $forensics:ident,
+        $kind:expr,
+        $slot:expr,
+        $source_action_index:expr,
+        $mask:expr,
+        $target_ticks:expr,
+        $observed_ticks:expr,
+        $aux_ticks:expr,
+        $delta_ticks:expr $(,)?,
+    ) => {{
+        let kind = $kind;
+        $forensics.record_anomaly_count(kind);
+        #[cfg(test)]
+        {
+            $forensics.record_anomaly_detail(
+                kind,
+                $slot,
+                $source_action_index,
+                $mask,
+                $target_ticks,
+                $observed_ticks,
+                $aux_ticks,
+                $delta_ticks,
+            );
+        }
+    }};
+}
+
 /// Fixed-size sender evidence owned by the worker itself. It deliberately
 /// consumes the timestamps already returned by the trusted sender: it does
 /// not sample QPC, allocate, lock, format, or walk the schedule.
 pub(crate) const PRODUCTION_FORENSICS_VERSION: u32 = 4;
+#[cfg(test)]
 const PRODUCTION_ANOMALY_CAPACITY: usize = 32;
 
 #[derive(Clone, Copy, Default)]
@@ -18,7 +49,7 @@ struct ProductionHoldAnchor {
     completion_ticks: u64,
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 #[derive(Clone, Copy, Default)]
 pub(crate) struct ProductionForensicsAnomaly {
     pub(crate) kind: u8,
@@ -35,10 +66,14 @@ pub(crate) struct ProductionForensicsAnomaly {
 pub(crate) struct ProductionHoldForensics {
     anchors: [ProductionHoldAnchor; MAX_KEYS],
     last_up_completion_ticks: [Option<u64>; MAX_KEYS],
+    #[cfg(test)]
     anomalies: [ProductionForensicsAnomaly; PRODUCTION_ANOMALY_CAPACITY],
+    #[cfg(test)]
     anomaly_valid: [bool; PRODUCTION_ANOMALY_CAPACITY],
+    #[cfg(test)]
     next_anomaly: usize,
     anomaly_count: u64,
+    #[cfg(test)]
     anomaly_ring_overwrites: u64,
     pair_samples: u64,
     min_hold_start_after_down_completion_ticks: u64,
@@ -105,8 +140,8 @@ impl ProductionHoldForensics {
     pub(crate) fn observe_packet<P: Into<Option<QpcTicks>>>(
         &mut self,
         packet: PhysicalPacket,
-        source_action_index: u32,
-        target_qpc: QpcTicks,
+        _source_action_index: u32,
+        _target_qpc: QpcTicks,
         pre_call_qpc: P,
         completion_qpc: QpcTicks,
         full_transport_success: bool,
@@ -115,21 +150,26 @@ impl ProductionHoldForensics {
         if !full_transport_success {
             return;
         }
-        let target = target_qpc.as_u64();
+        #[cfg(test)]
+        let target = _target_qpc.as_u64();
         let completion = completion_qpc.as_u64();
         if let Some(pre_call) = pre_call_qpc.into() {
             let pre_call = pre_call.as_u64();
             self.observe_ups(
                 packet.up_mask,
                 packet.down_mask,
-                source_action_index,
+                #[cfg(test)]
+                _source_action_index,
+                #[cfg(test)]
                 target,
                 pre_call,
                 completion,
             );
             self.observe_downs(
                 packet.down_mask,
-                source_action_index,
+                #[cfg(test)]
+                _source_action_index,
+                #[cfg(test)]
                 target,
                 pre_call,
                 completion,
@@ -193,8 +233,8 @@ impl ProductionHoldForensics {
         &mut self,
         mut up_mask: u16,
         same_call_down_mask: u16,
-        source_action_index: u32,
-        target: u64,
+        #[cfg(test)] source_action_index: u32,
+        #[cfg(test)] target: u64,
         up_start: u64,
         completion: u64,
     ) {
@@ -207,7 +247,8 @@ impl ProductionHoldForensics {
                 if same_call_down_mask & bit != 0 {
                     self.same_key_overlap_forensics_count =
                         self.same_key_overlap_forensics_count.saturating_add(1);
-                    self.record_anomaly(
+                    record_forensics_anomaly!(
+                        self,
                         6,
                         slot,
                         source_action_index,
@@ -230,7 +271,8 @@ impl ProductionHoldForensics {
                 if hold_start.is_none() || hold_start_ticks < self.effective_min_hold_ticks {
                     self.hold_floor_violation_count =
                         self.hold_floor_violation_count.saturating_add(1);
-                    self.record_anomaly(
+                    record_forensics_anomaly!(
+                        self,
                         9,
                         slot,
                         source_action_index,
@@ -244,7 +286,17 @@ impl ProductionHoldForensics {
                 self.last_up_completion_ticks[slot] = Some(completion);
             } else {
                 self.unmatched_up_count = self.unmatched_up_count.saturating_add(1);
-                self.record_anomaly(4, slot, source_action_index, bit, target, completion, 0, 0);
+                record_forensics_anomaly!(
+                    self,
+                    4,
+                    slot,
+                    source_action_index,
+                    bit,
+                    target,
+                    completion,
+                    0,
+                    0,
+                );
                 // Even without a paired Down sample, a successful Up is the
                 // physical release anchor for the next same-key Down.
                 self.last_up_completion_ticks[slot] = Some(completion);
@@ -256,13 +308,14 @@ impl ProductionHoldForensics {
     fn observe_downs(
         &mut self,
         mut down_mask: u16,
-        source_action_index: u32,
-        target: u64,
+        #[cfg(test)] source_action_index: u32,
+        #[cfg(test)] target: u64,
         pre_call: u64,
         completion: u64,
     ) {
         while down_mask != 0 {
             let slot = down_mask.trailing_zeros() as usize;
+            #[cfg(test)]
             let bit = 1u16 << slot;
             down_mask &= down_mask - 1;
             if let Some(previous_up_completion) = self.last_up_completion_ticks[slot] {
@@ -274,7 +327,8 @@ impl ProductionHoldForensics {
                         self.min_down_start_after_up_completion_ticks = 0;
                         self.release_floor_violation_count =
                             self.release_floor_violation_count.saturating_add(1);
-                        self.record_anomaly(
+                        record_forensics_anomaly!(
+                            self,
                             8,
                             slot,
                             source_action_index,
@@ -296,7 +350,8 @@ impl ProductionHoldForensics {
                         if gap < self.min_release_gap_ticks {
                             self.release_floor_violation_count =
                                 self.release_floor_violation_count.saturating_add(1);
-                            self.record_anomaly(
+                            record_forensics_anomaly!(
+                                self,
                                 7,
                                 slot,
                                 source_action_index,
@@ -311,9 +366,11 @@ impl ProductionHoldForensics {
                 }
             }
             if self.anchors[slot].valid {
+                #[cfg(test)]
                 let previous_anchor = self.anchors[slot];
                 self.anchor_overwrite_count = self.anchor_overwrite_count.saturating_add(1);
-                self.record_anomaly(
+                record_forensics_anomaly!(
+                    self,
                     5,
                     slot,
                     source_action_index,
@@ -331,8 +388,18 @@ impl ProductionHoldForensics {
         }
     }
 
+    fn record_anomaly_count(&mut self, kind: u8) {
+        self.anomaly_count = self.anomaly_count.saturating_add(1);
+        if matches!(kind, 1..=6 | 8) {
+            self.structural_anomaly_count = self.structural_anomaly_count.saturating_add(1);
+        } else {
+            self.timing_diagnostic_count = self.timing_diagnostic_count.saturating_add(1);
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    fn record_anomaly(
+    #[cfg(test)]
+    fn record_anomaly_detail(
         &mut self,
         kind: u8,
         slot: usize,
@@ -358,16 +425,9 @@ impl ProductionHoldForensics {
         };
         self.anomaly_valid[self.next_anomaly] = true;
         self.next_anomaly = (self.next_anomaly + 1) % PRODUCTION_ANOMALY_CAPACITY;
-        self.anomaly_count = self.anomaly_count.saturating_add(1);
-        if matches!(kind, 1..=6 | 8) {
-            self.structural_anomaly_count = self.structural_anomaly_count.saturating_add(1);
-        } else {
-            self.timing_diagnostic_count = self.timing_diagnostic_count.saturating_add(1);
-        }
     }
 
-    #[allow(dead_code)]
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(test)]
     pub(crate) fn latest_anomaly_for_test(&self) -> Option<ProductionForensicsAnomaly> {
         if self.anomaly_count == 0 {
             return None;
@@ -396,7 +456,11 @@ impl ProductionHoldForensics {
         metrics.production_same_key_overlap_forensics_count = self.same_key_overlap_forensics_count;
         metrics.production_anchor_overwrite_count = self.anchor_overwrite_count;
         metrics.production_unmatched_up_count = self.unmatched_up_count;
-        metrics.production_anomaly_ring_overwrite_count = self.anomaly_ring_overwrites;
+        #[cfg(test)]
+        let anomaly_ring_overwrites = self.anomaly_ring_overwrites;
+        #[cfg(not(test))]
+        let anomaly_ring_overwrites = 0;
+        metrics.production_anomaly_ring_overwrite_count = anomaly_ring_overwrites;
         metrics.production_forensics_anomaly_count = self.anomaly_count;
         metrics.production_structural_anomaly_count = self.structural_anomaly_count;
         metrics.production_timing_diagnostic_count = self.timing_diagnostic_count;

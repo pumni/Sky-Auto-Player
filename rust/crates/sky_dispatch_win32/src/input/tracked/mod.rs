@@ -6,6 +6,9 @@ mod state;
 use super::ReleaseOwnerProof;
 use super::profile::MaterializedInstrumentKeyProfile;
 
+pub(super) type CleanupAttemptAdmission<'a> =
+    dyn FnMut(u16, &ReleaseOwnerProof) -> Result<(), String> + 'a;
+
 #[cfg(any(test, feature = "test-support"))]
 pub type CustomEmitterFn =
     Box<dyn Fn(&[u16], bool) -> super::outcome::PlatformSendResult + Send + Sync>;

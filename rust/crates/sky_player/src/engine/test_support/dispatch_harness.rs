@@ -239,9 +239,6 @@ impl ProductionDispatchTestHarness {
         progress_clock.publish(&resources.playback);
 
         let mut timing = WorkerTimingState::create_test_timing();
-        timing.timing_margin_ticks = clock
-            .duration_from_us(DISPATCH_MARGIN_US)
-            .map_err(|error| format!("Timing Margin conversion failed: {error:?}"))?;
         timing.effective_spin_threshold_ticks = clock
             .duration_from_us(20_000)
             .map_err(|error| format!("test spin threshold conversion failed: {error:?}"))?;
@@ -576,14 +573,9 @@ impl ProductionDispatchTestHarness {
         self.target.reset_proof_operation_counts_for_test();
     }
 
-    pub fn target_proof_counts_for_test(&self) -> (u64, u64, u64, u64) {
+    pub fn target_proof_generation_revalidations_for_test(&self) -> u64 {
         let counts = self.target.proof_operation_counts_for_test();
-        (
-            counts.authority_arc_clones,
-            counts.authority_mutex_attempts,
-            counts.writer_permit_attempts,
-            counts.generation_revalidations,
-        )
+        counts.generation_revalidations
     }
 
     pub fn apply_scheduler_resumable_lifecycle_transition_for_test(
@@ -601,10 +593,14 @@ impl ProductionDispatchTestHarness {
         &mut self,
         post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
     ) -> Result<(), String> {
+        let expected_target = crate::engine::worker::load_target_stamp(&self.target);
         crate::engine::worker::apply_scheduler_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
             &mut self.resources.scheduler,
             &mut self.runtime,
+            &self.target,
+            expected_target,
+            self.config.focus.require_focus,
             self.target.hwnd_for_safety_release(),
             post_cleanup_qpc,
         )
@@ -662,13 +658,6 @@ impl ProductionDispatchTestHarness {
         self.runtime.final_gate_before_syscall_hook = Some(Arc::new(hook));
     }
 
-    pub fn set_final_gate_before_owner_permit_hook<F>(&mut self, hook: F)
-    where
-        F: Fn() + Send + Sync + 'static,
-    {
-        self.runtime.final_gate_before_owner_permit_hook = Some(Arc::new(hook));
-    }
-
     /// Enable deterministic foreground and retained owner identity for tests
     /// that exercise the production focus-required final gate.
     pub fn configure_focus_owner_for_test(&mut self, hwnd: isize, owner_pid: u32) {
@@ -676,7 +665,7 @@ impl ProductionDispatchTestHarness {
         self.target.require_owner_identity();
         let (current_hwnd, generation) = self.target.load_stable().expect("test target snapshot");
         assert_eq!(current_hwnd, hwnd, "focus fixture HWND must be published");
-        #[cfg(feature = "test-support")]
+        #[cfg(any(test, feature = "test-support"))]
         assert!(self.target.bind_owner_identity_authority(
             hwnd,
             generation,
@@ -687,43 +676,20 @@ impl ProductionDispatchTestHarness {
                 )
             ),
         ));
-        #[cfg(not(feature = "test-support"))]
+        #[cfg(not(any(test, feature = "test-support")))]
         assert!(self.target.bind_owner_identity(hwnd, generation, owner_pid));
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
     }
 
-    pub fn republish_focus_owner_for_test(&self, hwnd: isize, owner_pid: u32) {
-        let same_hwnd = self
-            .target
-            .load_stable()
-            .is_some_and(|(current_hwnd, _)| current_hwnd == hwnd);
-        let published = if same_hwnd {
-            self.target.republish_same_hwnd(hwnd)
-        } else {
-            self.target.publish_for_test(hwnd)
-        };
-        assert!(published);
-        let (published_hwnd, generation) = self
-            .target
-            .load_stable()
-            .expect("republished test target snapshot");
-        assert_eq!(published_hwnd, hwnd);
-        #[cfg(feature = "test-support")]
-        assert!(self.target.bind_owner_identity_authority(
-            hwnd,
-            generation,
-            owner_pid,
-            Arc::new(
-                sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
-                    hwnd, owner_pid,
-                )
-            ),
-        ));
-        #[cfg(not(feature = "test-support"))]
-        assert!(self.target.bind_owner_identity(hwnd, generation, owner_pid));
+    pub fn invalidate_focus_owner_for_test(&self, hwnd: isize, owner_pid: u32) {
+        self.target.invalidate_for_test();
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
+    }
+
+    pub fn invalidate_bound_owner_for_test(&self) {
+        self.target.invalidate_owner_identity();
     }
 
     pub fn dispatch_timing_config_for_test(&self) -> Result<DispatchTimingConfigEvidence, String> {

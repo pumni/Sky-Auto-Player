@@ -1582,21 +1582,20 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.send_call_count = Some(Arc::clone(&send_calls));
-    let mut options = test_session_options(
+    let options = test_session_options_with_timing_margin(
         schedule,
-        1,
         BackendConfig::Mock {
             latency_base_us: 0,
             latency_per_key_us: 0,
             fault_script,
         },
+        20_000,
     );
     // This test asserts mixed-packet telemetry cardinality, not the production
     // 500-us deadline policy. Keep the real worker/QPC path, but give the
     // Windows test runner enough scheduling margin that host preemption does
     // not turn the telemetry assertion into an unrelated startup deadline
     // failure. Production configuration remains unchanged.
-    set_test_timing_margin(&mut options, 20_000);
     let session = NativeDispatchSession::new(options).expect("test session admission");
 
     start_with_test_wall_clock_slack(&session);

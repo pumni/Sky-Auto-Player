@@ -106,10 +106,13 @@ fn presentation_consumer_panic_fails_closed_and_releases() {
     let player = presentation_projection_session(0, 30_100_000, 30_200_000);
     let events = Arc::new(Mutex::new(NativeEventHub::default()));
     let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+    let (block_hook, consumer_entered, consumer_gate) =
+        blocked_presentation_hook(PlaybackPresentationStage::BeforeWorkSelection);
     let panic_once = Arc::new(AtomicBool::new(false));
     let hook_panic_once = Arc::clone(&panic_once);
     let (panic_sender, panic_receiver) = mpsc::channel();
     let test_hook: PlaybackPresentationTestHook = Arc::new(move |stage| {
+        block_hook(stage);
         if stage == PlaybackPresentationStage::SnapshotProjection
             && !hook_panic_once.swap(true, Ordering::AcqRel)
         {
@@ -123,6 +126,9 @@ fn presentation_consumer_panic_fails_closed_and_releases() {
         Arc::clone(&diagnostics_gate),
         Some(test_hook),
     );
+    consumer_entered
+        .recv_timeout(Duration::from_secs(2))
+        .expect("consumer held before work selection");
     let mut service = NativePlaybackService::new(activity.clone());
     service.diagnostics_gate = Arc::clone(&diagnostics_gate);
     *service.active.lock().expect("active playback slot") = Some(Arc::clone(&active));
@@ -142,6 +148,8 @@ fn presentation_consumer_panic_fails_closed_and_releases() {
     activation_sender
         .send(PlaybackActivation::Started)
         .expect("monitor activation receiver");
+    // Keep the monitor's periodic publisher from consuming a snapshot and
+    // closing the queue before this test publishes its trigger snapshot.
     assert!(
         active
             .presentation
@@ -149,6 +157,7 @@ fn presentation_consumer_panic_fails_closed_and_releases() {
             .expect("presentation consumer")
             .publish_snapshot(&active, 1_000, 0, EnginePollStatus::Playing)
     );
+    release_test_gate(&consumer_gate);
     panic_receiver
         .recv_timeout(Duration::from_secs(2))
         .expect("injected panic reached snapshot projection");

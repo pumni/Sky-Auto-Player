@@ -19,9 +19,8 @@ pub use config::StartupCalibrationPlacement;
 pub use config::TestWaitPolicy;
 use config::WorkerConfig;
 pub use config::{
-    BackendConfig, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, FocusOptions, NativeScheduleInput,
-    NativeSessionOptions, PriorityOptions, TelemetryOptions, TimingOptions, WaitGuardMode,
-    WaitOptions,
+    BackendConfig, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, FocusOptions, NativeSessionOptions,
+    PriorityOptions, TelemetryOptions, TimingOptions, WaitOptions,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use config::{RestoreRaceHook, StartupCheckpoint, StartupOrderingHook};

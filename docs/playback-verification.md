@@ -99,11 +99,141 @@ Verify both with `Assert-DispatchCleanupM3ManifestIdentity` and
 
 Offline manifest builds and integrity checks do not start the acceptance
 runner. The candidate-only Quiet `canonical-single` Canary at 60 FPS and 500 µs
-safety margin was separately authorized and run once. Its reporting correction
-is documented append-only in
-[`docs/evidence/issue-661-m3/canary-reporting-erratum.md`](evidence/issue-661-m3/canary-reporting-erratum.md).
+safety margin was separately authorized and run once in an earlier revision.
+The archived report and its reporting correction are available from the
+revision-bound snapshot indexed in [HISTORY.md](HISTORY.md).
 The reporting-correction checkpoint authorizes zero further native sessions;
 Smoke, Compare, and Final require separate Leader decisions.
+
+## DispatchSessionRedesignM3 preflight (native runs on hold)
+
+`DispatchSessionRedesignM3` reuses the immutable harness builder, manifest
+validator, per-case runner, observer reader, and paired report path. It leaves
+the historical `DispatchCleanupM3` pins unchanged. The baseline is
+`d0f65e7c412041a6d502f81f469872198db7adc5` / tree
+`19aae9e41bc667a2f991001ed105b6ffdebb8bc6`. The candidate source is the exact
+clean HEAD of `refactor/dispatch-session-redesign`; the runner checkout must be
+that same pushed branch tip. Both roles use Rust/Cargo 1.99.1, MSVC host and
+target `x86_64-pc-windows-msvc`, `dist`, exactly `real-input-acceptance`,
+`Cargo.lock` with `--locked`, Frozen waiter behavior, 500 µs performance and
+safety margins, the V3 Compat3 ReceiveOnly observer, timer and event waits,
+`PriorityMode::Auto`, ring telemetry capacity 1,024, and the same 60 FPS mixed
+workload. The two generated manifests record Cargo.lock path/hash; Final rejects
+different lock hashes. Neither `qpc-read-counting` nor a separate observer-off
+run is part of this plan. Timing-observer on/off remains recorded per
+invocation; this profile uses observer-on for both roles.
+
+The current profile emits harness manifests with `schema_version = 2`, 11
+runner-provenance entries, and 16 `SHA256SUMS` entries (five harness files plus
+the 11 provenance files). The validator rejects schema-v1 manifests for this
+profile. This versioned packaging migration leaves the workload version,
+observer schemas, and evidence cell identifiers unchanged.
+
+Use a Windows 11 interactive host with an unlocked desktop, the verified sink
+foreground, and the exact pinned toolchain. Before any native session, confirm
+that OS and target details identify the approved machine. Put detached
+worktrees, Cargo targets, manifests, binaries, logs, and evidence under a new
+directory outside the checkout. From a clean, pushed branch tip, prepare the
+source checkouts and immutable harnesses:
+
+```powershell
+$m3Root = Join-Path $env:TEMP 'sky-auto-player-dispatch-session-redesign-m3'
+$baselineSource = Join-Path $m3Root 'baseline-source'
+$candidateSource = Join-Path $m3Root 'candidate-source'
+$baselineOutput = Join-Path $m3Root 'baseline-harness'
+$candidateOutput = Join-Path $m3Root 'candidate-harness'
+git worktree add --detach $baselineSource d0f65e7c412041a6d502f81f469872198db7adc5
+$candidateRevision = (git rev-parse HEAD).Trim()
+git worktree add --detach $candidateSource $candidateRevision
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile DispatchSessionRedesignM3 -SourceRole Baseline `
+  -SourceRoot $baselineSource -OutputRoot $baselineOutput
+pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 `
+  -QualificationProfile DispatchSessionRedesignM3 -SourceRole Candidate `
+  -SourceRoot $candidateSource -OutputRoot $candidateOutput
+```
+
+Before requesting authorization, verify both `manifest.json` files with
+`Assert-DispatchSessionRedesignM3ManifestIdentity`,
+`Assert-DispatchSessionRedesignM3RunnerProvenance`, and
+`Assert-ImmutableHarnessManifestIntegrity`; compare their Cargo.lock hashes and
+record each manifest and binary SHA-256. The builder performs immutable checks
+as part of each build. Candidate source must equal the current pushed branch
+HEAD; baseline and candidate source trees must be clean detached worktrees.
+
+Capture the runner identity before importing the manifest module, which loads
+the profile module in its own scope:
+
+```powershell
+Import-Module -Name (Resolve-Path 'scripts/dispatch_qualification_profiles.psm1').Path -Force
+$runnerIdentity = Get-DispatchSessionRedesignM3RunnerIdentity -RunnerRoot (Get-Location).Path
+Import-Module -Name (Resolve-Path 'scripts/dispatch_harness_manifest.psm1').Path -Force
+foreach ($manifestPath in @(
+  (Join-Path $baselineOutput 'manifest.json'),
+  (Join-Path $candidateOutput 'manifest.json')
+)) {
+  $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+  Assert-DispatchSessionRedesignM3ManifestIdentity -Manifest $manifest `
+    -ExpectedRole $manifest.source_role -RepositoryRoot (Get-Location).Path | Out-Null
+  Assert-DispatchSessionRedesignM3RunnerProvenance -Manifest $manifest `
+    -RunnerIdentity $runnerIdentity -RunnerRoot (Get-Location).Path | Out-Null
+  Assert-ImmutableHarnessManifestIntegrity -Manifest $manifest `
+    -ManifestPath $manifestPath | Out-Null
+}
+```
+
+The executable plan is one guarded `Final` stage. Its mapping is:
+
+| Order | Scenario / workload | Load | FPS | Margin | Sample | Role | Sessions |
+|---|---|---|---:|---:|---:|---|---:|
+| 1 | `canonical-single` / `canonical-single` | Quiet | 60 | 500 µs | untimed | Candidate | 1 |
+| 2–6 | `focus-loss`, `stop-cleanup`, `pause-resume`, `owner-process-termination`, `target-hwnd-change` / `safety-smoke` | Quiet | 60 | 500 µs | untimed | Candidate | 5 |
+| 7 | `near-minimum-retrigger` / `near-minimum-retrigger` | Quiet | 60 | 500 µs | untimed | Candidate | 1 |
+| 8 | `near-minimum-retrigger` / `near-minimum-retrigger` | Quiet | 120 | 500 µs | untimed | Candidate | 1 |
+| 9–32 | `mixed-up-down` / `mixed-up-down` | Quiet, Contention | 60 | 500 µs | 15 s | Baseline + Candidate | 24 |
+
+Within each performance cell, six pairs alternate AB then BA; both roles finish
+before a pair is counted. The runner completes the canary first, runs safety
+cases sequentially and stops at the first non-PASS result, then begins paired
+performance only if all preceding candidate cases pass. The cap is 32 sessions
+(20 Candidate, 12 Baseline). A failure, inconclusive result, wrong-target
+attempt, timing-floor violation, chord/order anomaly, unknown release, or
+nonzero residual release obligation stops the matrix immediately. Do not retry
+a failed case or continue to another phase.
+
+The command below is **approval-gated**. Do not run it until the Leader has
+approved the exact mapping and both validated manifests on the PR. That command
+starts the first ReceiveOnly canary and can start native sessions:
+
+```powershell
+pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 `
+  -Stage Final -QualificationProfile DispatchSessionRedesignM3 `
+  -CandidateManifest (Join-Path $candidateOutput 'manifest.json') `
+  -ControlManifest (Join-Path $baselineOutput 'manifest.json') `
+  -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 `
+  -OutputRoot (Join-Path $m3Root 'native-evidence')
+```
+
+Timing uses QPC values and preserves availability/provenance. `D` is the
+authored physical target, `E` the final physical not-before point after H/G,
+`W` the waiter return/handoff when present, `S` the sender pre-call sample, and
+`C` the SendInput completion sample. Existing trace metrics provide `E−D`
+(`floor_displacement`), `S−E` (`residual_lateness`), `S−W`
+(`waiter_to_pre_call`), and `C−S` (`sender_envelope`); timer arm/return and
+deadline-crossing samples remain separate. The report retains p50/p95/p99/max,
+raw and short SendInput outcomes, H/G, chord/order and cleanup counters, final
+release obligations, worker/process CPU, spin sample availability, observer
+loss, QPC frequency, missing-QPC counts, timer provenance and unknown values.
+Missing W/QPC or observer loss is counted and is not imputed as zero. Stop to
+verified release is represented by the Stop cleanup case and its final release
+obligation and sink reconciliation evidence.
+
+The startup regression was caused by the test fixture omitting foreground
+authority setup while production correctly rechecked foreground before
+`ArmedPublished`. The fixture now locks the foreground test seam, sets HWND/PID
+123/77 explicitly, and resets it with scoped cleanup; production focus checks
+are unchanged. The Windows-specific mock and ReceiveOnly suites do not establish
+real Sky gameplay reception, and this preparation has run no native sessions.
 
 ## Issue #666 M4 waiter-only guard A/B
 
@@ -136,9 +266,9 @@ timing, so those measures remain null/not measured. It neither calls
 guard experiment as an exact-base-versus-candidate A/B; the M1
 baseline-equivalent structural benchmark is a separate evidence class.
 
-Native ReceiveOnly and optional gameplay planning is in
-[`issue-666-m4-native-qualification.json`](evidence/issue-666-m4-native-qualification.json).
-It is planning only and explicitly awaits separate Leader authorization; no
+Native ReceiveOnly and optional gameplay planning is historical material
+indexed in [HISTORY.md](HISTORY.md). It is planning only and explicitly awaits
+separate Leader authorization; no
 native input, interactive focus, real suspend/resume, or Sky gameplay session
 is implied by running the offline waiter experiment.
 
@@ -169,17 +299,14 @@ filters, thresholds, and drain timeout keep their defined behavior.
 The Windows `test-support` suite covers target-generation authority lifetime,
 fresh retained process-creation proof at the musical gate, owner disappearance
 through watchdog wake and tracked cleanup, callback-epoch rundown, presentation
-stall isolation, and bounded join/retirement. Run it with the M3 command set in
-[`issue-666-m3.md`](evidence/issue-666-m3.md). These deterministic mock tests
-do not call real `SendInput`, suspend Windows, or qualify gameplay reception.
-The M3 evidence report maps each lifecycle invariant to its test and states
-which paths still need OS/native qualification.
+stall isolation, and bounded join/retirement. Run the local Windows test suite
+with `cargo xtask check desktop-native`. These deterministic mock tests do not
+call real `SendInput`, suspend Windows, or qualify gameplay reception. The
+revision-bound M3 report and its invariant map are indexed in [HISTORY.md](HISTORY.md).
 
 ## Issue #666 integration correction checkpoint
 
-The integrated correctness corrections are recorded in
-[`issue-666-integration.md`](evidence/issue-666-integration.md). The regression
-suite exercises musical Up origin matching at the production worker boundary,
+The regression suite exercises musical Up origin matching at the production worker boundary,
 the desktop supervisor's typed stale-poll consumer, and the narrow proven
 Down-only raw-zero continuation case. These are deterministic Windows tests
 with mock packet senders. They do not call real `SendInput`, manipulate the
@@ -197,9 +324,10 @@ outcome, even when safe unattempted notes continue.
 Snapshot full/lite parity and schema-25 key-set tests remain separate from the
 playback timing and native qualification profiles. Snapshot compatibility does
 not increase the healthy dispatch allocation budget. The operation counts in
-the evidence are test-hook counts for the actual worker/harness boundary;
+archived reports are test-hook counts for the actual worker/harness boundary;
 sender QPC and `GetProcessTimes` counts are separately identified from
-production source because the mock does not call those native APIs.
+production source because the mock does not call those native APIs. The
+revision-bound reports are indexed in [HISTORY.md](HISTORY.md).
 
 The final musical permit also has deterministic authority-mutex contention
 coverage. A hook pauses after fresh foreground/PID/process verification; a
@@ -223,10 +351,9 @@ one tick, exact floor, and plus one tick, including future-deadline projection
 and wake selection. These tests use a mock sender and do not call native
 `SendInput`, change interactive focus, suspend the system, or measure game
 reception. The trace timings are individual QPC observations from deterministic
-tests, not latency distributions or gameplay qualification. See
-[`issue-666-replan-timing.md`](evidence/issue-666-replan-timing.md) for the
+tests, not latency distributions or gameplay qualification. The archived
 baseline/candidate operation-count comparison, race trace, and verification
-ledger.
+ledger are indexed in [HISTORY.md](HISTORY.md).
 
 ## Issue #666 mid-playback preflight and code-quality correction
 
@@ -239,9 +366,8 @@ attempt, the retained A-origin proof, and A's authored Up. Separate controls
 cover same-HWND generation ABA, focus recovery, and lease expiry. H/G tick-edge
 checks use supplied QPC values; a separate real waiter smoke test covers a
 future deadline wake. These are mock-sender tests and do not establish Sky
-gameplay reception. See
-[`issue-666-preflight-code-quality.md`](evidence/issue-666-preflight-code-quality.md)
-for the exact cases, warning cleanup, and verification ledger.
+gameplay reception. The archived exact-case report and verification ledger are
+indexed in [HISTORY.md](HISTORY.md).
 
 ## Offline lifecycle and manifest checks
 

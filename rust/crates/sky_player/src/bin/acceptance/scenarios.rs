@@ -571,7 +571,7 @@ pub(super) fn production_options(
     timing_margin_us: u64,
     scenario: Scenario,
     modifier_query_count: Arc<AtomicU64>,
-) -> NativeSessionOptions {
+) -> Result<NativeSessionOptions, String> {
     production_options_for_fps(
         schedule,
         profile,
@@ -591,34 +591,47 @@ pub(super) fn production_options_for_fps(
     modifier_query_count: Arc<AtomicU64>,
     after_owned_latch: super::modifier_guard::ModifierHeldAfterOwnedLatch,
     game_fps: u16,
-) -> NativeSessionOptions {
+) -> Result<NativeSessionOptions, String> {
     let frame_us = frame_period_us(game_fps);
+    let timing = TimingOptions {
+        game_fps,
+        min_hold_us: scenario_min_hold_us_for_fps(scenario, timing_margin_us, game_fps),
+        min_release_gap_us: acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps),
+        frame_us,
+        frame_base_hold_us: if scenario == Scenario::HolInterleaved {
+            2 * frame_us
+        } else {
+            frame_us
+        },
+        timing_margin_us,
+        strict_timing: false,
+        strict_down_completion_late_us: 2_000,
+        strict_up_completion_late_us: 2_000,
+        input_path_warn_us: ACCEPTANCE_INPUT_PATH_WARN_US,
+    };
+    let qpc_frequency_hz = sky_player::adapter_support::qpc_frequency_hz()
+        .map_err(|error| format!("QPC frequency failed during acceptance Prepare: {error:?}"))?;
+    let qpc_frequency_hz = std::num::NonZeroU64::new(qpc_frequency_hz)
+        .ok_or_else(|| "QPC frequency was zero during acceptance Prepare".to_string())?;
+    let prepared_schedule = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
+        &schedule,
+        qpc_frequency_hz,
+        timing.min_hold_us,
+        timing.min_release_gap_us,
+        schedule.compile_memory.caller_retained_capacity_bytes,
+    )
+    .map_err(|error| format!("native acceptance schedule Prepare failed: {error}"))?;
     let modifier_key_state_query_for_test =
         super::modifier_guard::query_for_scenario(
             scenario,
             Arc::clone(&modifier_query_count),
             after_owned_latch,
         );
-    NativeSessionOptions {
-        schedule: schedule.into(),
+    Ok(NativeSessionOptions {
+        schedule: prepared_schedule,
         backend: BackendConfig::Production,
         profile: DispatchProfile::Production,
-        timing: TimingOptions {
-            game_fps,
-            min_hold_us: scenario_min_hold_us_for_fps(scenario, timing_margin_us, game_fps),
-            min_release_gap_us: acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps),
-            frame_us,
-            frame_base_hold_us: if scenario == Scenario::HolInterleaved {
-                2 * frame_us
-            } else {
-                frame_us
-            },
-            timing_margin_us,
-            strict_timing: false,
-            strict_down_completion_late_us: 2_000,
-            strict_up_completion_late_us: 2_000,
-            input_path_warn_us: ACCEPTANCE_INPUT_PATH_WARN_US,
-        },
+        timing,
         focus: FocusOptions {
             require_focus: true,
             focus_restore_grace_us: ACCEPTANCE_FOCUS_RESTORE_GRACE_US,
@@ -627,7 +640,6 @@ pub(super) fn production_options_for_fps(
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
-            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::default(),
             #[cfg(feature = "test-support")]
             test_spin_threshold_us: None,
             #[cfg(feature = "test-support")]
@@ -658,7 +670,7 @@ pub(super) fn production_options_for_fps(
         preflight_user_held_mask: (scenario == Scenario::PreflightUserHeld).then_some(0b01),
         #[cfg(feature = "test-support")]
         modifier_key_state_query_for_test,
-    }
+    })
 }
 
 pub(super) fn expected_physical_keys(

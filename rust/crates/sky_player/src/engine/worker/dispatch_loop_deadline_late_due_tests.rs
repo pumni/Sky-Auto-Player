@@ -151,7 +151,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         } if chord.source_action_index == 6682
             && timing_window.packet_not_before_qpc == b2_g_floor
     ));
-    let b2 = super::super::stage_scheduler_action_preserving_due_up(
+    let b2 = super::super::stage_scheduler_send_candidate(
         projected_b2,
         super::super::SchedulerStageAdmission {
             target: &harness.target,
@@ -294,7 +294,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
             ..
         } if chord.source_action_index == 6683
     ));
-    let mixed = super::super::stage_scheduler_action_preserving_due_up(
+    let mixed = super::super::stage_scheduler_send_candidate(
         next_to_stage.expect("fresh scheduler stages A Up plus C Down"),
         super::super::SchedulerStageAdmission {
             target: &harness.target,

@@ -876,7 +876,8 @@ fn acceptance_options_freeze_the_materialized_physical_timing_policy() {
         ACCEPTANCE_TIMING_MARGIN_US,
         Scenario::CanonicalSingle,
         std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-    );
+    )
+    .expect("prepared acceptance schedule");
     assert_eq!(options.timing.min_hold_us, authored_hold);
     assert_eq!(options.timing.min_release_gap_us, authored_gap);
     assert_eq!(options.timing.frame_us, ACCEPTANCE_FRAME_US);

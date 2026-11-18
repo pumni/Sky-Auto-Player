@@ -837,3 +837,177 @@ fn mock_invalidated_owner_identity_keeps_release_uncertain_after_accepted_up() {
         "invalid identity makes receiver attribution unavailable"
     );
 }
+
+#[test]
+fn guarded_terminal_cleanup_revalidates_each_retry_and_keeps_prior_raw_evidence() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 71;
+    let send_calls = Arc::new(AtomicUsize::new(0));
+    let sends = Arc::clone(&send_calls);
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 1;
+    backend.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 3, None, None).expect("test release origin"),
+    );
+    backend.set_terminal_up_emitter_for_test(move |packet| {
+        sends.fetch_add(1, Ordering::AcqRel);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: 0,
+            started_ticks: None,
+            completed_ticks: None,
+            win32_error: 5,
+            timing_error: Some(QpcError::CounterUnavailable),
+        }
+    });
+    backend.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+
+    let mut admissions = 0;
+    let outcome =
+        backend.release_terminal_tracked_scope_with_attempt_admission(TARGET, |mask, proof| {
+            admissions += 1;
+            assert_eq!(mask, 1);
+            assert_eq!(proof.target_hwnd(), TARGET);
+            if admissions == 1 {
+                Ok(())
+            } else {
+                Err("owner invalidated during cleanup retry".into())
+            }
+        });
+
+    assert_eq!(admissions, 2, "the retry must revalidate its origin");
+    assert_eq!(
+        send_calls.load(Ordering::Acquire),
+        1,
+        "no second Up after invalidation"
+    );
+    assert_eq!(outcome.release_outcome.attempts, 1);
+    assert_eq!(outcome.release_outcome.attempted_mask, 1);
+    assert_eq!(outcome.release_outcome.stuck_mask, 1);
+    assert_eq!(backend.release_obligation_mask(), 1);
+    assert_eq!(
+        outcome.withheld_reason.as_deref(),
+        Some("owner invalidated during cleanup retry")
+    );
+    assert_eq!(outcome.send_attempts.len(), 1);
+    assert_eq!(outcome.send_attempts[0].raw_calls, 1);
+    assert_eq!(outcome.send_attempts[0].inserted_events, 0);
+    assert_eq!(outcome.send_attempts[0].win32_error, Some(5));
+    assert_eq!(
+        outcome.send_attempts[0].qpc_error,
+        Some(QpcError::CounterUnavailable)
+    );
+    assert_eq!(outcome.probe_verdict, TerminalProbeVerdict::Inconclusive(1));
+}
+
+#[test]
+fn guarded_terminal_cleanup_allows_healthy_retry_and_zero_obligation_is_noop() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 81;
+    let send_calls = Arc::new(AtomicUsize::new(0));
+    let sends = Arc::clone(&send_calls);
+    let probes = Arc::new(AtomicUsize::new(0));
+    let probe_count = Arc::clone(&probes);
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 1;
+    backend.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 4, None, None).expect("test release origin"),
+    );
+    backend.set_emitter(move |scan_codes, key_up| {
+        assert!(key_up);
+        sends.fetch_add(1, Ordering::AcqRel);
+        PlatformSendResult {
+            requested: scan_codes.len() as u8,
+            inserted: scan_codes.len() as u8,
+            started_ticks: QpcTicks::ZERO,
+            completed_ticks: Some(QpcTicks::ZERO),
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    backend.set_probe(move |_, _| {
+        if probe_count.fetch_add(1, Ordering::AcqRel) == 0 {
+            InstrumentPhysicalState::Held(vec![0x15].into())
+        } else {
+            InstrumentPhysicalState::AllUp
+        }
+    });
+
+    let mut admissions = 0;
+    let released = backend.release_terminal_tracked_scope_with_attempt_admission(TARGET, |_, _| {
+        admissions += 1;
+        Ok(())
+    });
+    assert!(released.release_outcome.released_successfully);
+    assert_eq!(admissions, 2);
+    assert_eq!(released.release_outcome.attempts, 2);
+    assert_eq!(released.send_attempts.len(), 2);
+    assert_eq!(send_calls.load(Ordering::Acquire), 2);
+
+    let mut empty = TrackedKeyState::new();
+    let empty_outcome = empty
+        .release_terminal_tracked_scope_with_attempt_admission(TARGET, |_, _| {
+            panic!("zero-obligation cleanup must not request owner proof")
+        });
+    assert_eq!(empty_outcome.release_outcome.attempted_mask, 0);
+    assert_eq!(empty_outcome.release_outcome.attempts, 0);
+    assert!(empty_outcome.send_attempts.is_empty());
+    assert_eq!(
+        empty_outcome.probe_verdict,
+        TerminalProbeVerdict::NotRequired
+    );
+    assert_eq!(empty.release_obligation_mask(), 0);
+}
+
+#[test]
+fn guarded_terminal_cleanup_retains_partial_and_uncertain_up_evidence_when_retry_is_withheld() {
+    const TARGET: isize = 91;
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 0b11;
+    backend.set_release_owner_proof_for_test(
+        0b11,
+        crate::input::ReleaseOwnerProof::new(TARGET, 5, None, None).expect("test release origin"),
+    );
+    backend.set_terminal_up_emitter_for_test(|packet| {
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: 1,
+            started_ticks: Some(QpcTicks::from_raw(10)),
+            completed_ticks: Some(QpcTicks::from_raw(11)),
+            win32_error: 5,
+            timing_error: Some(QpcError::CounterUnavailable),
+        }
+    });
+    backend.set_probe(|_, _| InstrumentPhysicalState::Held(vec![0x15].into()));
+
+    let mut admissions = 0;
+    let outcome = backend.release_terminal_tracked_scope_with_attempt_admission(TARGET, |_, _| {
+        admissions += 1;
+        if admissions == 1 {
+            Ok(())
+        } else {
+            Err("origin proof unavailable".into())
+        }
+    });
+
+    assert_eq!(outcome.release_outcome.attempts, 1);
+    assert_eq!(outcome.release_outcome.attempted_mask, 0b11);
+    assert_eq!(outcome.release_outcome.stuck_mask, 0b11);
+    assert_eq!(backend.release_obligation_mask(), 0b11);
+    assert_eq!(outcome.send_attempts.len(), 1);
+    assert_eq!(outcome.send_attempts[0].raw_calls, 1);
+    assert_eq!(outcome.send_attempts[0].inserted_events, 1);
+    assert_eq!(
+        outcome.send_attempts[0].qpc_error,
+        Some(QpcError::CounterUnavailable)
+    );
+    assert_eq!(outcome.probe_verdict, TerminalProbeVerdict::Held(1));
+    assert_eq!(
+        outcome.withheld_reason.as_deref(),
+        Some("origin proof unavailable")
+    );
+}

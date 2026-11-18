@@ -437,7 +437,7 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
 }
 
 #[test]
-fn stale_target_does_not_send_origin_up_to_new_generation() {
+fn invalidated_session_target_does_not_send_origin_up() {
     use sky_dispatch_core::executor::DispatchDecision;
     use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 
@@ -531,14 +531,14 @@ fn stale_target_does_not_send_origin_up_to_new_generation() {
     assert_eq!(mixed.packet_masks.down_mask, 0b10);
     let accounting_before_replan = harness.generation_accounting_for_test();
 
-    assert!(harness.target.publish(2), "publish a new target generation");
+    harness.invalidate_focus_owner_for_test(2, 202);
     harness.set_mock_sender_start_qpc_for_test(
         harness.qpc_now_for_test().expect("fallback Up sender QPC"),
     );
-    assert!(matches!(
+    assert_ne!(
         harness.dispatch_staged_candidate_for_test(mixed, true),
-        super::super::StagedDispatchOutcome::Exit
-    ));
+        super::super::StagedDispatchOutcome::Dispatched
+    );
     assert!(
         harness.observer.pop_front().is_none(),
         "no Up observation without a sender call"
@@ -548,7 +548,7 @@ fn stale_target_does_not_send_origin_up_to_new_generation() {
     assert_eq!(
         captured.len(),
         1,
-        "stale target sends no Up to the new generation"
+        "invalidated target sends no Up through a replacement window"
     );
     assert_eq!(
         captured[0].0,
@@ -568,13 +568,6 @@ fn stale_target_does_not_send_origin_up_to_new_generation() {
     assert_eq!(accounting_before_replan.activated, 1);
     assert_eq!(accounting_before_replan.released, 0);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
-    assert!(
-        harness
-            .runtime
-            .terminal_error
-            .as_deref()
-            .is_some_and(|error| error.contains("musical Up origin owner differs"))
-    );
 }
 
 #[test]

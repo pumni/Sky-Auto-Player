@@ -4,7 +4,7 @@ param(
     [ValidateSet('frozen')]
     [string]$GuardMode = 'frozen',
     [switch]$QpcReadCounting,
-    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')]
+    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3')]
     [string]$QualificationProfile = 'DispatchCore',
     [ValidateSet('Baseline', 'Candidate')]
     [string]$SourceRole,
@@ -19,24 +19,27 @@ Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -
 $targetTriple = 'x86_64-pc-windows-msvc'
 $profile = 'dist'
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
+$isSessionRedesignProfile = $QualificationProfile -eq 'DispatchSessionRedesignM3'
+$usesSessionQualificationContracts = $isDispatchCleanupM3 -or $isSessionRedesignProfile
 $dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
+$sessionRedesignProfile = if ($isSessionRedesignProfile) { Get-DispatchSessionRedesignM3Profile } else { $null }
 $sourceRootPath = if ($SourceRoot) { [System.IO.Path]::GetFullPath($SourceRoot) } else { $root }
 $rustRoot = Join-Path $sourceRootPath 'rust'
 $features = [System.Collections.Generic.List[string]]::new()
 $features.Add('real-input-acceptance')
 if ($QpcReadCounting) { $features.Add('qpc-read-counting') }
 $featureArgument = $features -join ','
-$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3')
-$workloadVersion = if ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
-$baseRevision = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineRevision } elseif ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } elseif ($QualificationProfile -eq 'Scheduler') { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' } else { '843cc0c6a1392dfff0ca4b017551bd1ffb180579' }
-$baseTree = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineTree } elseif ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } elseif ($QualificationProfile -eq 'Scheduler') { 'f554c41b23a3969d02ed29842d4178f6143c9d86' } else { $null }
-$expectedBranch = if ($isDispatchCleanupM3) { $dispatchCleanupM3.CandidateLineageBranch } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
+$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3')
+$workloadVersion = if ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
+$baseRevision = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineRevision } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.BaselineRevision } elseif ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } elseif ($QualificationProfile -eq 'Scheduler') { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' } else { '843cc0c6a1392dfff0ca4b017551bd1ffb180579' }
+$baseTree = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineTree } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.BaselineTree } elseif ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } elseif ($QualificationProfile -eq 'Scheduler') { 'f554c41b23a3969d02ed29842d4178f6143c9d86' } else { $null }
+$expectedBranch = if ($isDispatchCleanupM3) { $dispatchCleanupM3.CandidateLineageBranch } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.CandidateLineageBranch } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
 $performanceTimingMarginUs = if ($isDispatchCleanupM3 -or $QualificationProfile -eq 'FrameSnapshot') { 0 } else { 500 }
 $safetyTimingMarginUs = 500
 $receiveOnlyObserverMode = if ($qualifiedProfile) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
 $receiveOnlyObserverVersion = if ($qualifiedProfile) { 'scheduler-receiveonly-queue-v3-compat3' } else { $null }
 $destination = [System.IO.Path]::GetFullPath($OutputRoot)
-$cargoTargetRoot = if ($isDispatchCleanupM3) { Join-Path $destination 'cargo-target' } else { $null }
+$cargoTargetRoot = if ($usesSessionQualificationContracts) { Join-Path $destination 'cargo-target' } else { $null }
 $runnerIdentity = $null
 
 if ($isDispatchCleanupM3 -and $QpcReadCounting) {
@@ -59,6 +62,13 @@ function Get-Sha256 {
 function Get-SourceIdentity {
     if ($isDispatchCleanupM3) {
         $identity = Assert-DispatchCleanupM3SourceCheckout -SourceRoot $sourceRootPath -SourceRole $SourceRole -RunnerRoot $root
+        return [ordered]@{
+            revision = $identity.revision; tree = $identity.tree; branch = $identity.branch; root = $identity.root
+            checkout = $identity.checkout; clean = $identity.clean
+        }
+    }
+    if ($isSessionRedesignProfile) {
+        $identity = Assert-DispatchSessionRedesignM3SourceCheckout -SourceRoot $sourceRootPath -SourceRole $SourceRole -RunnerRoot $root
         return [ordered]@{
             revision = $identity.revision; tree = $identity.tree; branch = $identity.branch; root = $identity.root
             checkout = $identity.checkout; clean = $identity.clean
@@ -99,6 +109,20 @@ function ConvertTo-DispatchCleanupM3CheckoutManifest {
     }
 }
 
+function ConvertTo-DispatchSessionRedesignM3CheckoutManifest {
+    param($Identity)
+    [ordered]@{
+        root = $Identity.root
+        top_level = $Identity.checkout.top_level
+        git_dir = $Identity.checkout.git_dir
+        git_common_dir = $Identity.checkout.git_common_dir
+        revision = $Identity.revision
+        tree = $Identity.tree
+        branch = $Identity.branch
+        clean = $Identity.clean
+    }
+}
+
 function Assert-PathOutsideRepository {
     param([string]$Path)
     $fullPath = [System.IO.Path]::GetFullPath($Path)
@@ -121,7 +145,7 @@ if (Test-Path -LiteralPath $destination) {
     New-Item -ItemType Directory -Path $destination | Out-Null
 }
 
-$runnerIdentity = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3RunnerIdentity -RunnerRoot $root } else { $null }
+$runnerIdentity = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3RunnerIdentity -RunnerRoot $root } elseif ($isSessionRedesignProfile) { Get-DispatchSessionRedesignM3RunnerIdentity -RunnerRoot $root } else { $null }
 $priorCargoTargetDir = $env:CARGO_TARGET_DIR
 $source = $null
 $rustcVersion = $null
@@ -135,7 +159,7 @@ $cargoCleanCommand = 'cargo clean --manifest-path "' + $sourceManifest + '" --pr
 $cargoBuildCommand = 'cargo build --locked --manifest-path "' + $sourceManifest + '" -p sky_player --profile ' + $profile + ' --target ' + $targetTriple + ' --features ' + $featureArgument + ' --bin rt-native-acceptance'
 $buildLog = Join-Path $destination 'build.log'
 
-if ($isDispatchCleanupM3) {
+if ($usesSessionQualificationContracts) {
     $env:CARGO_TARGET_DIR = $cargoTargetRoot
     Push-Location -LiteralPath $rustRoot
 }
@@ -145,11 +169,11 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'could not identify active rustc version' }
     $cargoVersion = (& cargo --version).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'could not identify active cargo version' }
-    if ($isDispatchCleanupM3 -and
+    if ($usesSessionQualificationContracts -and
         ($rustcVersion -notmatch '(?m)^release: 1\.99\.1\r?$' -or
             $rustcVersion -notmatch '(?m)^host: x86_64-pc-windows-msvc\r?$' -or
             $cargoVersion -notmatch '^cargo 1\.99\.1(?:\s|$)')) {
-        throw 'DispatchCleanupM3 requires Rust/Cargo 1.99.1 for the Windows MSVC host'
+        throw ($QualificationProfile + ' requires Rust/Cargo 1.99.1 for the Windows MSVC host')
     }
 
     $prevEap = $ErrorActionPreference
@@ -168,7 +192,7 @@ try {
     $buildOutput | Set-Content -LiteralPath $buildLog -Encoding UTF8
     if ($buildExit -ne 0) { throw ('cargo build failed with exit code ' + $buildExit) }
 } finally {
-    if ($isDispatchCleanupM3) {
+    if ($usesSessionQualificationContracts) {
         Pop-Location
         $env:CARGO_TARGET_DIR = $priorCargoTargetDir
     }
@@ -178,7 +202,7 @@ $sourceAfterBuild = Get-SourceIdentity
 if ($sourceAfterBuild.revision -ne $source.revision -or $sourceAfterBuild.tree -ne $source.tree) {
     throw 'source identity changed during immutable harness build'
 }
-$builtBinary = if ($isDispatchCleanupM3) { Join-Path $cargoTargetRoot ($targetTriple + '\dist\rt-native-acceptance.exe') } else { Join-Path $rustRoot ('target\' + $targetTriple + '\dist\rt-native-acceptance.exe') }
+$builtBinary = if ($usesSessionQualificationContracts) { Join-Path $cargoTargetRoot ($targetTriple + '\dist\rt-native-acceptance.exe') } else { Join-Path $rustRoot ('target\' + $targetTriple + '\dist\rt-native-acceptance.exe') }
 if (-not (Test-Path -LiteralPath $builtBinary -PathType Leaf)) { throw 'cargo build did not produce the expected Windows dist harness' }
 $binaryPath = Join-Path $destination 'rt-native-acceptance.exe'
 Copy-Item -LiteralPath $builtBinary -Destination $binaryPath
@@ -187,13 +211,13 @@ $builderHash = Get-Sha256 $PSCommandPath
 $builderCopy = Join-Path $destination 'build_dispatch_core_harness.ps1'
 Copy-Item -LiteralPath $PSCommandPath -Destination $builderCopy
 $runnerScriptProvenance = @()
-if ($isDispatchCleanupM3) {
-    $runnerIdentityAfterBuild = Get-DispatchCleanupM3RunnerIdentity -RunnerRoot $root
+if ($usesSessionQualificationContracts) {
+    $runnerIdentityAfterBuild = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3RunnerIdentity -RunnerRoot $root } else { Get-DispatchSessionRedesignM3RunnerIdentity -RunnerRoot $root }
     if ($runnerIdentityAfterBuild.revision -ne $runnerIdentity.revision -or $runnerIdentityAfterBuild.tree -ne $runnerIdentity.tree) {
         throw 'runner source identity changed during immutable harness build'
     }
     $provenanceRoot = Join-Path $destination 'runner-provenance'
-    $runnerPaths = @($dispatchCleanupM3.RunnerProvenancePaths)
+    $runnerPaths = if ($isDispatchCleanupM3) { @($dispatchCleanupM3.RunnerProvenancePaths) } else { @($sessionRedesignProfile.RunnerProvenancePaths) }
     foreach ($relativePath in $runnerPaths) {
         $runnerFile = Join-Path $root ($relativePath.Replace('/', '\'))
         if (-not (Test-Path -LiteralPath $runnerFile -PathType Leaf)) { throw ('runner provenance source is missing: ' + $relativePath) }
@@ -212,7 +236,7 @@ if ($isDispatchCleanupM3) {
     }
 }
 $manifest = [ordered]@{
-    schema_version = 1
+    schema_version = if ($isSessionRedesignProfile) { $sessionRedesignProfile.HarnessManifestSchemaVersion } else { 1 }
     binary_name = 'rt-native-acceptance.exe'
     binary_path = $binaryPath
     binary_sha256 = $binaryHash
@@ -272,6 +296,34 @@ if ($isDispatchCleanupM3) {
     $manifest['manifest_path'] = $manifestPath
     Assert-DispatchCleanupM3ManifestIdentity -Manifest $manifest -ExpectedRole $SourceRole -RepositoryRoot $root | Out-Null
 }
+if ($isSessionRedesignProfile) {
+    $cargoLockPath = Join-Path $sourceRootPath 'rust\Cargo.lock'
+    if (-not (Test-Path -LiteralPath $cargoLockPath -PathType Leaf)) { throw 'DispatchSessionRedesignM3 source checkout is missing rust/Cargo.lock' }
+    $manifest['baseline_source_revision'] = $sessionRedesignProfile.BaselineRevision
+    $manifest['baseline_source_tree_sha'] = $sessionRedesignProfile.BaselineTree
+    $manifest['candidate_source_revision'] = $runnerIdentity.revision
+    $manifest['candidate_source_tree_sha'] = $runnerIdentity.tree
+    $manifest['source_checkout_identity'] = ConvertTo-DispatchSessionRedesignM3CheckoutManifest $source
+    $manifest['output_root'] = $destination
+    $manifest['cargo_target_dir'] = $cargoTargetRoot
+    $manifest['target_identity'] = $targetTriple
+    $manifest['cargo_lock_path'] = $cargoLockPath
+    $manifest['cargo_lock_sha256'] = Get-Sha256 $cargoLockPath
+    $manifest['receiveonly_observer_schema_version'] = $sessionRedesignProfile.ObserverSchemaVersion
+    $manifest['receiveonly_observer_event_schema_version'] = $sessionRedesignProfile.ObserverEventSchemaVersion
+    $manifest['runner_source_revision'] = $runnerIdentity.revision
+    $manifest['runner_source_tree_sha'] = $runnerIdentity.tree
+    $manifest['runner_source_branch'] = $runnerIdentity.branch
+    $manifest['runner_source_root'] = $runnerIdentity.root
+    $manifest['runner_source_clean'] = $runnerIdentity.clean
+    $manifest['runner_source_checkout_identity'] = ConvertTo-DispatchSessionRedesignM3CheckoutManifest $runnerIdentity
+    $manifest['candidate_lineage_branch'] = $runnerIdentity.candidate_lineage_branch
+    $manifest['candidate_lineage_tip_revision'] = $runnerIdentity.candidate_lineage_tip_revision
+    $manifest['candidate_lineage_verified'] = $runnerIdentity.candidate_lineage_verified
+    $manifest['runner_script_provenance'] = $runnerScriptProvenance
+    $manifest['manifest_path'] = $manifestPath
+    Assert-DispatchSessionRedesignM3ManifestIdentity -Manifest $manifest -ExpectedRole $SourceRole -RepositoryRoot $root | Out-Null
+}
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
 $manifestHash = Get-Sha256 $manifestPath
 $checksumLines = [System.Collections.Generic.List[string]]::new()
@@ -287,7 +339,7 @@ foreach ($entry in $runnerScriptProvenance) {
 Set-Content -LiteralPath (Join-Path $destination 'SHA256SUMS.txt') -Value $checksumLines.ToArray() -Encoding UTF8
 $null = Assert-ImmutableHarnessManifestIntegrity -Manifest ($manifest | ConvertTo-Json -Depth 8 | ConvertFrom-Json) -ManifestPath $manifestPath
 Write-Output ('SOURCE ' + $source.revision + ' tree=' + $source.tree)
-if ($isDispatchCleanupM3) {
+if ($usesSessionQualificationContracts) {
     Write-Output ('RUNNER ' + $runnerIdentity.revision + ' tree=' + $runnerIdentity.tree + ' branch=' + $runnerIdentity.branch + ' candidate-lineage=' + $runnerIdentity.candidate_lineage_tip_revision)
     Write-Output ('ROLE ' + $SourceRole + ' profile=' + $QualificationProfile + ' workload=' + $workloadVersion + ' performance-margin-us=' + $performanceTimingMarginUs + ' safety-margin-us=' + $safetyTimingMarginUs)
     Write-Output ('CARGO_TARGET_DIR ' + $cargoTargetRoot)

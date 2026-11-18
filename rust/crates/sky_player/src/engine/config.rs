@@ -1,6 +1,5 @@
 use super::telemetry::TelemetryMode;
 use sky_dispatch_core::executor::PreparedDispatchSchedule;
-use sky_dispatch_core::model::RuntimeSchedule;
 use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, MaterializedInstrumentKeyProfile};
 use sky_dispatch_win32::mmcss::PriorityMode;
 
@@ -13,7 +12,6 @@ mod effective_policy;
 #[cfg(any(test, feature = "test-support"))]
 pub mod hol;
 pub(crate) use effective_policy::EffectiveRuntimePolicy;
-pub use sky_dispatch_win32::wait::WaitGuardMode;
 
 pub(crate) const STARTUP_READINESS_RESERVE_US: u64 = 2_000;
 pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 1_000;
@@ -214,22 +212,9 @@ pub enum BackendConfig {
     },
 }
 
-/// Schedule admission input for a native session. Existing callers may keep
-/// supplying a validated raw runtime schedule; production desktop playback
-/// supplies the tick-domain plan materialized during Prepare.
-pub enum NativeScheduleInput {
-    Raw(RuntimeSchedule),
-    Prepared(PreparedDispatchSchedule),
-}
-
-impl From<RuntimeSchedule> for NativeScheduleInput {
-    fn from(schedule: RuntimeSchedule) -> Self {
-        Self::Raw(schedule)
-    }
-}
-
 pub struct NativeSessionOptions {
-    pub schedule: NativeScheduleInput,
+    /// Immutable QPC-domain plan prepared before native session admission.
+    pub schedule: PreparedDispatchSchedule,
     pub backend: BackendConfig,
     pub profile: DispatchProfile,
     pub timing: TimingOptions,
@@ -294,8 +279,6 @@ pub struct StartupOrderingHook {
     interrupted_wait_count: AtomicU64,
     interrupted_wait_evidence: std::sync::Mutex<Option<InterruptedWaitEvidence>>,
     pub(crate) unmatched_up_prepare_count: AtomicU64,
-    raw_schedule_admission_validation_count: AtomicU64,
-    raw_schedule_worker_materialization_count: AtomicU64,
     prepared_schedule_executor_consumption_count: AtomicU64,
     watchdog_hold: AtomicBool,
     watchdog_waiting: AtomicBool,
@@ -348,7 +331,6 @@ pub enum StartupCheckpoint {
     InitialWait = 7,
     #[cfg(any(test, feature = "test-support"))]
     FirstDownAdmission = 8,
-    StreamMaterialization = 9,
     #[cfg(any(test, feature = "test-support"))]
     FirstDownCommitted = 10,
     #[cfg(any(test, feature = "test-support"))]
@@ -360,6 +342,8 @@ pub enum StartupCheckpoint {
     PrepareDiagnosticChunk = 14,
     #[cfg(any(test, feature = "test-support"))]
     PhysicalWait = 16,
+    #[cfg(any(test, feature = "test-support"))]
+    DispatchWait = 17,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -406,7 +390,7 @@ impl StartupOrderingHook {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn cpu_baseline_trace_for_test(&self) -> CpuBaselineOrderingTrace {
         self.cpu_baseline_trace
             .lock()
@@ -621,7 +605,7 @@ impl StartupOrderingHook {
         self.down_sender_start_qpc_ticks.load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn last_down_sender_qpc_evidence(
         &self,
     ) -> (Option<u64>, Option<u64>, Option<u64>, Option<u64>) {
@@ -803,7 +787,6 @@ impl Default for WorkerConfig {
                 enable_waitable_timer: true,
                 enable_event_wait: true,
                 supervisor_lease_timeout_us: 0,
-                guard_mode: sky_dispatch_win32::wait::WaitGuardMode::default(),
                 #[cfg(any(test, feature = "test-support"))]
                 test_spin_threshold_us: None,
                 #[cfg(any(test, feature = "test-support"))]
@@ -848,7 +831,6 @@ pub struct WaitOptions {
     pub enable_waitable_timer: bool,
     pub enable_event_wait: bool,
     pub supervisor_lease_timeout_us: u64,
-    pub guard_mode: sky_dispatch_win32::wait::WaitGuardMode,
     /// Test-only early handoff margin. This seam keeps mock-session tests
     /// independent from host timer overshoot without changing authored
     /// targets or the production wait policy.
@@ -864,7 +846,6 @@ impl Default for WaitOptions {
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
-            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::default(),
             #[cfg(any(test, feature = "test-support"))]
             test_spin_threshold_us: None,
             #[cfg(any(test, feature = "test-support"))]
@@ -948,7 +929,6 @@ mod tests {
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
-            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::Frozen,
             test_spin_threshold_us: None,
             test_wait_policy: TestWaitPolicy::ProductionCalibrated,
         };

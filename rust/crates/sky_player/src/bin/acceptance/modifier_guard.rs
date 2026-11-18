@@ -83,7 +83,7 @@ pub(super) fn native_session_options(
     timing_margin_us: u64,
     scenario: Scenario,
     game_fps: u16,
-) -> (NativeSessionOptions, Arc<AtomicU64>, ModifierHeldAfterOwnedLatch) {
+) -> Result<(NativeSessionOptions, Arc<AtomicU64>, ModifierHeldAfterOwnedLatch), String> {
     let query_count = Arc::new(AtomicU64::new(0));
     let after_owned_latch = ModifierHeldAfterOwnedLatch::default();
     let options = super::scenarios::production_options_for_fps(
@@ -94,8 +94,8 @@ pub(super) fn native_session_options(
         Arc::clone(&query_count),
         after_owned_latch.clone(),
         game_fps,
-    );
-    (options, query_count, after_owned_latch)
+    )?;
+    Ok((options, query_count, after_owned_latch))
 }
 
 #[allow(clippy::too_many_arguments)]

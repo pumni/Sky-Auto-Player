@@ -18,7 +18,6 @@ pub(crate) use admission::{
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, ensure_preflight_for_target,
     enter_focus_pause, focus_matches, focus_matches_hwnd, load_target_stamp,
     target_stamp_still_current, verify_final_down_admission, verify_final_musical_up_admission,
-    verify_safety_cleanup_target,
 };
 pub(crate) use anomaly_history::AttemptedDispatchAnomalies;
 #[cfg(any(test, feature = "test-support"))]
@@ -74,7 +73,8 @@ pub(crate) use timing::{
 };
 pub use wait::WaitObservation;
 pub(crate) use wait::{
-    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, wait_for_next_boundary,
+    WaitBoundary, WaitBoundaryInput, WaitDeadline, WaitMutable, WaitSignals, record_wait_failure,
+    wait_for_next_boundary,
 };
 
 use super::shared::SessionShared;
@@ -203,8 +203,6 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_gate_post_lease_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_before_syscall_hook: Option<super::config::FinalGateBeforeSyscallHook>,
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) final_gate_before_owner_permit_hook: Option<Arc<dyn Fn() + Send + Sync>>,
     #[cfg(test)]
     pub(crate) final_lease_qpc_sample_count_for_test: u64,
     #[cfg(test)]
@@ -255,8 +253,6 @@ pub(super) struct WorkerErrorState {
 #[derive(Clone, Copy)]
 pub(crate) struct WorkerTimingState {
     pub(super) strict_timing: bool,
-    #[allow(dead_code)]
-    pub(super) timing_margin_ticks: DurationTicks,
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
@@ -285,7 +281,6 @@ impl WorkerTimingState {
     pub(crate) fn create_test_timing() -> Self {
         Self {
             strict_timing: false,
-            timing_margin_ticks: DurationTicks::ZERO,
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,
@@ -388,7 +383,7 @@ pub(super) fn update_deferred_worker_metrics(
 }
 
 pub(super) struct Worker<'a> {
-    schedule: Option<NativeScheduleInput>,
+    schedule: Option<sky_dispatch_core::executor::PreparedDispatchSchedule>,
     config: WorkerConfig,
     shared: &'a SessionShared,
     epoch_qpc: QpcTicks,
@@ -474,14 +469,18 @@ impl<'a> Worker<'a> {
         }
     }
 
-    fn take_schedule(&mut self) -> Result<NativeScheduleInput, &'static str> {
+    fn take_schedule(
+        &mut self,
+    ) -> Result<sky_dispatch_core::executor::PreparedDispatchSchedule, &'static str> {
         self.schedule
             .take()
             .ok_or("worker runtime plan was already consumed")
     }
 
     #[cfg(test)]
-    pub(super) fn take_schedule_for_test(&mut self) -> Result<NativeScheduleInput, &'static str> {
+    pub(super) fn take_schedule_for_test(
+        &mut self,
+    ) -> Result<sky_dispatch_core::executor::PreparedDispatchSchedule, &'static str> {
         self.take_schedule()
     }
 

@@ -710,6 +710,7 @@ mod tests {
     }
 
     #[cfg(windows)]
+    #[cfg(feature = "tauri-test")]
     #[test]
     fn stable_callback_context_routes_current_epoch_and_ignores_retired_epoch() {
         use sky_player::adapter_support::{ActionKind, KeyActionInput, compile_runtime_intents};
@@ -740,8 +741,29 @@ mod tests {
                 &[0x15],
             )
             .expect("callback-test runtime schedule");
+            let timing = TimingOptions {
+                game_fps: 60,
+                min_hold_us: 500,
+                min_release_gap_us: 17_167,
+                frame_us: 16_667,
+                frame_base_hold_us: 0,
+                timing_margin_us: 500,
+                strict_timing: false,
+                strict_down_completion_late_us: 2_000,
+                strict_up_completion_late_us: 2_000,
+                input_path_warn_us: 300,
+            };
+            let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
+            let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
+                &schedule,
+                qpc.frequency_hz(),
+                timing.min_hold_us,
+                timing.min_release_gap_us,
+                schedule.compile_memory.caller_retained_capacity_bytes,
+            )
+            .expect("prepare callback-test schedule before session admission");
             NativeSessionOptions {
-                schedule: schedule.into(),
+                schedule,
                 #[cfg(feature = "tauri-test")]
                 startup_calibration_placement:
                     sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
@@ -749,18 +771,7 @@ mod tests {
                 timing_observer_for_qualification: false,
                 backend: BackendConfig::Production,
                 profile: DispatchProfile::Production,
-                timing: TimingOptions {
-                    game_fps: 60,
-                    min_hold_us: 500,
-                    min_release_gap_us: 17_167,
-                    frame_us: 16_667,
-                    frame_base_hold_us: 0,
-                    timing_margin_us: 500,
-                    strict_timing: false,
-                    strict_down_completion_late_us: 2_000,
-                    strict_up_completion_late_us: 2_000,
-                    input_path_warn_us: 300,
-                },
+                timing,
                 focus: FocusOptions {
                     require_focus: false,
                     focus_restore_grace_us: 100_000,
@@ -769,7 +780,6 @@ mod tests {
                     enable_waitable_timer: true,
                     enable_event_wait: true,
                     supervisor_lease_timeout_us: 0,
-                    guard_mode: sky_player::engine::WaitGuardMode::default(),
                     #[cfg(feature = "tauri-test")]
                     test_spin_threshold_us: None,
                     #[cfg(feature = "tauri-test")]

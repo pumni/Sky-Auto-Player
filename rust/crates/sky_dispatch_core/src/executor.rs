@@ -919,6 +919,28 @@ impl DispatchExecutor {
         ))
     }
 
+    /// Return the earliest release deadline among every active slot,
+    /// including deadlines that are already due. Modifier backoff uses this
+    /// to wake for an independent Up without treating a blocked Down as the
+    /// next musical event.
+    pub fn earliest_active_up_due_qpc(
+        &self,
+        epoch_qpc: QpcTicks,
+    ) -> Result<Option<QpcTicks>, TimeArithmeticError> {
+        let mut earliest = None;
+        for slot in &self.slots {
+            if slot.active_generation.is_none() {
+                continue;
+            }
+            let authored_up_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
+                slot.authored_up_offset_ticks.as_u64(),
+            ))?;
+            let due = authored_up_qpc.max(slot.release_not_before_qpc);
+            earliest = Some(earliest.map_or(due, |current: QpcTicks| current.min(due)));
+        }
+        Ok(earliest)
+    }
+
     #[inline]
     pub fn chord_cursor(&self) -> usize {
         self.chord_cursor

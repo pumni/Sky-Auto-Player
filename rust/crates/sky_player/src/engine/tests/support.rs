@@ -7,22 +7,40 @@ pub(super) fn test_session_options(
     _allowed_count: usize,
     backend: BackendConfig,
 ) -> NativeSessionOptions {
+    test_session_options_with_timing_margin(schedule, backend, 500)
+}
+
+pub(super) fn test_session_options_with_timing_margin(
+    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    backend: BackendConfig,
+    timing_margin_us: u64,
+) -> NativeSessionOptions {
+    let timing = TimingOptions {
+        game_fps: 60,
+        min_hold_us: timing_margin_us,
+        min_release_gap_us: 16_667 + timing_margin_us,
+        frame_us: 16_667,
+        frame_base_hold_us: 0,
+        timing_margin_us,
+        strict_timing: false,
+        strict_down_completion_late_us: 2_000,
+        strict_up_completion_late_us: 2_000,
+        input_path_warn_us: 300,
+    };
+    let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
+    let prepared_schedule = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
+        &schedule,
+        qpc.frequency_hz(),
+        timing.min_hold_us,
+        timing.min_release_gap_us,
+        schedule.compile_memory.caller_retained_capacity_bytes,
+    )
+    .expect("prepare native test schedule before session admission");
     NativeSessionOptions {
-        schedule: schedule.into(),
+        schedule: prepared_schedule,
         backend,
         profile: DispatchProfile::StrictTimingDiagnostic,
-        timing: TimingOptions {
-            game_fps: 60,
-            min_hold_us: 500,
-            min_release_gap_us: 17_167,
-            frame_us: 16_667,
-            frame_base_hold_us: 0,
-            timing_margin_us: 500,
-            strict_timing: false,
-            strict_down_completion_late_us: 2_000,
-            strict_up_completion_late_us: 2_000,
-            input_path_warn_us: 300,
-        },
+        timing,
         focus: FocusOptions {
             require_focus: false,
             focus_restore_grace_us: 100_000,
@@ -31,7 +49,6 @@ pub(super) fn test_session_options(
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
-            guard_mode: sky_dispatch_win32::wait::WaitGuardMode::Frozen,
             test_spin_threshold_us: Some(20_000),
             #[cfg(any(test, feature = "test-support"))]
             test_wait_policy: super::TestWaitPolicy::LegacyTestWideSpin,
@@ -55,20 +72,6 @@ pub(super) fn test_session_options(
         preflight_user_held_mask: None,
         modifier_key_state_query_for_test: Some(Arc::new(|_| 0)),
     }
-}
-
-pub(super) fn set_test_timing_margin(options: &mut NativeSessionOptions, timing_margin_us: u64) {
-    options.timing.timing_margin_us = timing_margin_us;
-    options.timing.min_hold_us = options
-        .timing
-        .frame_base_hold_us
-        .checked_add(timing_margin_us)
-        .expect("test hold timing equation");
-    options.timing.min_release_gap_us = options
-        .timing
-        .frame_us
-        .checked_add(timing_margin_us)
-        .expect("test release timing equation");
 }
 
 pub(super) fn start_with_test_wall_clock_slack(session: &NativeDispatchSession) {

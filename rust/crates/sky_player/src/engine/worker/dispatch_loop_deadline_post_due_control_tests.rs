@@ -96,7 +96,7 @@ fn due_candidate_rechecks_stop_skip_focus_and_owner_before_sender() {
                 sky_dispatch_win32::focus::set_foreground_window_for_test(Some(2));
                 sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(202)));
             }
-            "owner" => harness.republish_focus_owner_for_test(1, 202),
+            "owner" => harness.invalidate_focus_owner_for_test(1, 202),
             _ => unreachable!(),
         }
         harness.set_mock_sender_start_qpc_for_test(wake_qpc);

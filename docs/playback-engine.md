@@ -52,29 +52,38 @@ Prepare rather than treating the recommendation as unavailable.
 
 `Start` rechecks the prepared ID and settings identity, selects the requested
 variant, and moves its plan into native session creation. It does not compile,
-walk, or validate the authored schedule. Worker boot checks the plan's QPC and
-H/G compatibility, moves its arrays into a new `DispatchExecutor`, and creates
-fresh cursor, slot, epoch, barrier, and transport state for that playback. A
-replay therefore begins with empty session state while reusing only immutable
-schedule data. Dry-run variants do not require a physical QPC plan; their
-advisory remains offline and cannot block a valid dry-run.
+walk, or materialize the authored schedule. Native session admission checks the
+plan against the current QPC frequency and H/G policy; worker boot repeats that
+compatibility gate before moving the prepared arrays into a new
+`DispatchExecutor`. Worker boot also checks the retained-capacity budget before
+dispatch. Each playback creates fresh cursor, slot, epoch, barrier, and
+transport state, so replay begins with empty session state while reusing only
+immutable schedule data. Dry-run variants do not require a physical QPC plan;
+their advisory remains offline and cannot block a valid dry-run.
 
-`NativeScheduleInput::Raw` remains the safe admission path for Rust callers
-that still provide a `RuntimeSchedule`: session admission validates its timing
-policy, and worker boot validates and materializes it again with cancellation
-checkpoints before creating the executor. Desktop production entry points
-provide `NativeScheduleInput::Prepared`. A prepared
-plan whose QPC frequency or H/G policy no longer matches the worker is rejected
-before dispatch.
+`NativeSessionOptions` accepts only `PreparedDispatchSchedule`. The former
+`NativeScheduleInput::Raw` worker route has been removed. Rust callers that
+compile or receive a `RuntimeSchedule` prepare it before constructing native
+session options, using the same QPC frequency, H/G values, retained-capacity
+accounting, and overflow checks. They may use the cancellable preparation
+variant when the caller can be interrupted. The worker never materializes a
+`RuntimeSchedule`. The timing advisory
+continues to analyze the shared compiled `RuntimeSchedule` before native
+preparation; its offline `DispatchExecutor::new_with_cancellation` call remains
+separate from the production worker route and keeps its independent oracle.
 
 Schedule compilation, timing validation, QPC conversion, and arena creation
-run during cancellable Prepare. The remaining prepared worker construction
-moves the already allocated arrays and initializes fixed-size state. Startup
-still emits existing per-batch telemetry rows for unmatched Up metadata to
-preserve schema 25; that diagnostics-only loop is proportional to the number
-of unmatched-Up batches, which is zero for ordinary valid songs. See the
-[M1 evidence record](evidence/issue-666-m1.md) for modeled-capacity and timing
-scope.
+run during cancellable Prepare. Worker startup only checks compatibility and
+budget, moves the already allocated arrays, and initializes fixed-size state.
+Startup still emits existing per-batch telemetry rows for unmatched Up
+metadata to preserve schema 25; that diagnostics-only loop is proportional to
+the number of unmatched-Up batches, which is zero for ordinary valid songs.
+The compatibility `elapsed_us` snapshot field is derived from the shared
+session clock projection; the unused worker-local duplicate has been removed.
+Schema 25 keys, values, QPC provenance, and missing-sample semantics are
+unchanged. Earlier revision-bound implementation and measurement records are
+indexed in [HISTORY.md](HISTORY.md); they are not qualification evidence for
+the current source revision.
 
 ## 15-Slot Dispatch Executor
 
@@ -179,6 +188,17 @@ mixed packet's Down gate is temporarily rejected while its independent Up is
 still eligible, the worker stages and admits that Up-only packet through the
 same fresh musical final gate; the rejected Down remains pending.
 
+When final Down admission rejects a held modifier, the worker uses a bounded
+interruptible backoff. Its wake deadline is the earlier of the next modifier
+poll and the earliest active-slot Up deadline. A due Up returns directly to the
+normal scheduler for fresh selection and final admission; no zero-duration
+wait is armed. The active-slot deadline includes the authored Up and H floor,
+and the selector continues to enforce the completion-based G floor before a
+same-key Down. The deadline wait retains its typed wake and timer evidence and
+attributes the wake to the next packet only when that packet contains an Up at
+the same release deadline. Maintenance polls stay out of the musical wait
+observer stream; their interruptions and backend failures remain counted.
+
 The fresh foreground-owner query is authoritative even when the published
 focus hint still says focused. A `NotForeground` result enters the existing
 Focus pause transition, clears the verified-target stamp and restoration
@@ -193,31 +213,21 @@ for another packet to become eligible. The next outer scheduler evaluation
 then selects newly eligible work and applies the normal Up-before-Down
 coalescing rule. `Interrupted` discards the staged candidate and returns to
 the worker loop for control/focus handling and fresh selection. A
-`PermitBusy` result also returns through fresh scheduler selection; its
-immediate retry and bounded backoff remain separate from the deadline `Due`
-path.
+rejected final admission returns through the ordinary control-aware replan
+path; it does not wait for or retry a target writer/owner permit.
 
 The verified-target cache records only a successful all-instrument-keys-up
-preflight for one exact HWND/generation. It is not a cached foreground or
-process-owner proof. A transient owner-authority read or final-permit Busy
-preserves that stamp only when it was already present and the same target
-generation is still current. Every retry still repeats fresh focus, owner PID,
-process-identity, lease, power, and control admission. Missing or stale stamps,
-target generation changes, and focus recovery continue through their normal
-preflight path; a Busy result cannot create or transfer a stamp.
+preflight for the session's immutable HWND/generation. It is not a cached
+foreground or process-owner proof. Every packet still repeats fresh
+foreground, owner PID, process-identity, lease, power, and control admission.
+Focus recovery continues through its normal cleanup and preflight path.
+Invalidating the session target is terminal and cannot create or transfer a
+preflight stamp.
 
-A short writer or retained-owner-authority mutex miss at the final musical
-permit is classified separately from target drift. With target generation and
-focus still current, the worker performs one immediate full scheduler
-re-evaluation. If the next final permit is also busy, it waits on an
-interruptible 1 ms retry deadline before trying again; continued contention
-alternates one re-evaluation with one bounded wait. The wait uses the existing
-non-spinning boundary waiter and returns through the worker control state
-machine. Stop, Skip, Panic, Pause, lease, focus, power, and target-generation
-checks remain in force. A busy permit never calls the sender, advances a Down
-cursor, or changes the tracked release journal. The retry always stages and
-verifies a fresh candidate; it never reuses an old owner proof. Target drift
-and other replan causes retain their existing policy.
+The focused production target is immutable. A target-stamp failure while
+staging or before a packet wait therefore fails closed; the worker does not
+wait for target publication to recover. The separate bounded resume wait is
+retained for live foreground/focus recovery with the same still-valid target.
 
 Each authored Down onset can cross the syscall boundary at most once. A
 pre-call rejection has no attempt; once the sender reports a syscall attempt,
@@ -258,9 +268,9 @@ change.
 
 Every musical Up bit, including an Up-only packet and a mixed-to-Up-only
 replan, must carry the frozen release-owner proof recorded when its Down
-created the obligation. The final gate proves the current target and compares
-that current proof with every Up origin under a generation-conditional permit
-held through the syscall. Missing, conflicted, mixed-generation, or drifted
+created the obligation. The final gate proves the immutable session target and
+compares its retained owner identity with every Up origin immediately before
+the syscall. Missing, conflicted, mixed-generation, invalidated, or drifted
 proof fails closed without calling the sender or clearing the obligation.
 Independent Up bits with one matching owner remain eligible. Terminal and
 pause safety Up use the tracked cleanup policy and its originating owner proof
@@ -270,6 +280,15 @@ before Down. H/G decisions use real sender completion QPC on healthy packets or
 verified cleanup completion QPC after recovery; missing evidence is never
 replaced by a later clock read. Terminal safety Up remains separate from
 musical packet metrics.
+
+Tracked terminal and resumable cleanup repeat the immutable target, origin,
+owner, and process-continuity admission after each retry delay and immediately
+after packet preparation, before entering the physical sender. If admission is
+missing or fails, the remaining Up sends are withheld, their obligations stay
+quarantined, and the result retains only the actual prior sender calls and
+their transport, probe, and QPC evidence. A withheld retry does not increase
+the sender-attempt count. Zero-obligation cleanup performs no proof query or
+syscall. Terminal QPC fallback does not bypass the per-attempt admission.
 
 Latency, envelope, and hold timing samples are qualified only when transport is
 complete and sender QPC evidence is ordered with no timing error. Unqualified
@@ -295,57 +314,60 @@ dispatch boundary and does not issue `SendInput`.
 
 ### Session Target Binding and Lifetime
 
-`SessionTarget` owns the target HWND/generation publication, its bound owner
-PID and generation, and the retained `WindowIdentityAuthority` for that
-generation. The authority retains a query-only process handle plus the startup
-creation-time and image identity. Desktop startup binds it before Arm; a
-generation publication invalidates and releases the old binding before a new
-identity can bind. A worker that already cloned the old authority may finish
-that bounded query, but its final target-generation check rejects the old
-publication. A target publication cannot inherit the prior process proof, even
-when the numeric HWND is reused.
+`SessionTarget` binds one HWND/generation and one retained owner identity
+before Arm. The authority retains a query-only process handle plus the startup
+creation-time and image identity. The initial HWND is write-once; a different
+HWND, zero target, or failed owner proof invalidates the session and cannot
+publish a replacement, including when Windows reuses the same numeric HWND.
+Production startup binds the target and process authority before Arm. Public
+DTOs and telemetry schema do not change.
 
-Supervisor poll results and authority close are conditional on the exact
-retained `Arc<WindowIdentityAuthority>` and target generation that were
-snapshotted. Querying process continuity happens without holding the writer
-lock; applying its result rechecks the target stamp and retained authority
-under the same writer serialization used by publication and binding. A poll
-returns `CurrentValid`, `CurrentInvalid`, or `StaleSuperseded`. The desktop
-monitor only turns `CurrentInvalid` into panic-release; a stale result cannot
-invalidate the replacement owner's live bit, failure reason, or pre-Arm
-startup. A stale poll can wake the worker, but does not authorize a musical
-syscall: each packet still performs fresh final admission. Late close uses the
-same conditional rule and cannot clear a newly bound authority.
+For production sessions with `require_focus`, `Arm` revalidates that the
+nonzero HWND/generation, bound PID, and retained process authority all match
+and that the authority reports continuous identity before it launches a
+worker. Missing, mismatched, failed, or late proof irreversibly closes
+admission; proof arriving afterward cannot start or rebind that session.
+Focus-free sessions and the explicit mock test path keep their existing
+admission behavior. Desktop and native acceptance both bind through
+`NativeDispatchSession` before calling `Arm`.
+
+The supervisor polls the retained process object without a writer or owner
+mutex. Continuous identity leaves the binding usable. Any continuity failure
+sets a one-way terminal failure latch, cancels pre-Arm startup when applicable,
+and wakes the worker. Target replacement and owner failure are terminal worker
+conditions: the worker checks the latch before staging and before selecting its
+next note, and an interruptible deadline wait returns promptly so the worker
+can finish without a supervisor `quit` or `panic_release` call. Later polls
+cannot clear the failure or bind a new owner. The desktop monitor may also
+request panic-release after `CurrentInvalid`; that request does not provide the
+worker's terminal-completion guarantee. Every packet still performs its fresh
+foreground query and process-identity check. A focus-only loss with the same
+live HWND/PID/process authority remains a recoverable Focus pause.
+The process-authority `Arc` is not cloned for each packet. Per-key release
+proofs share a small identity object that owns it. The authority remains alive
+through worker/watchdog cleanup and drops with the session target after the
+session and its worker references are retired.
 
 For each focus-required musical packet, the worker samples the current
 foreground HWND and owner PID, then queries the retained process handle for its
-live state and creation time after lease/control checks. It performs a final
-atomic HWND/generation/owner check before entering the sender. The process
-query is constant-time and uses no heap allocation; a concurrent control-plane
-binding makes that packet replan before any syscall. The supervisor continues
-to check `IsWindow`, owner PID, process creation time, and image path on its
-control cadence. This final proof supplements the fresh OS window query; it
-does not replace it with a cached PID or identity value.
-
-The musical final permit uses nonblocking acquisition for both the target
-writer and retained owner-authority mutex. If either is busy, the worker
-returns to replan before SendInput and leaves the Down cursor and Up
-obligations untouched. On success, the writer permit remains held through the
-physical sender call. Terminal and resumable safety cleanup keep their
-serialized blocking permit path after validating the frozen release origin.
+live state and creation time after lease/control checks. It checks the
+immutable HWND/generation/owner binding immediately before entering the sender.
+The process query is constant-time and uses no heap allocation. The supervisor
+continues to check `IsWindow`, owner PID, process creation time, and image path
+on its control cadence. This final proof supplements the fresh OS window
+query; it does not replace it with a cached PID or identity value.
 
 Each tracked key slot freezes a release-owner proof before a Down can create an
 in-flight obligation. The proof includes the originating HWND and generation,
-PID when required, and retained process-authority object identity. An A-to-B
-rebind or same-HWND generation change cannot transfer A's release obligation
-to B. Terminal and resumable safety cleanup read the proof from the tracked
-backend, recheck the exact origin HWND/process continuity without requiring
-foreground focus, and acquire a generation-conditional release permit. The
-permit serializes the final proof check with publication/binding/close and is
-held through the safety syscall. If validation observes drift or cannot prove
-the origin, cleanup sends no Up, preserves the obligation, and finalizes with
-an error. Zero-obligation cleanup needs no owner proof or syscall. The existing
-release and quarantine policy remains in force.
+PID when required, and retained process-authority object identity. A changed
+target cannot transfer A's release obligation to another window. Terminal and
+resumable safety cleanup read the proof from the tracked backend and recheck
+the exact origin HWND/process continuity without requiring foreground focus.
+Because a session target cannot be replaced, there is no publication/binding/
+close permit to contend for during the safety syscall. If validation observes
+drift or cannot prove the origin, cleanup sends no Up, preserves the obligation,
+and finalizes with an error. Zero-obligation cleanup needs no owner proof or
+syscall. The existing release and quarantine policy remains in force.
 
 The target binding is stored under the same shared session state used by worker
 and watchdog, so an owner object unwind does not close the process handle while

@@ -17,7 +17,6 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 enum TerminalCleanupFailure {
-    Withheld(String),
     Panicked(Box<dyn std::any::Any + Send>),
 }
 
@@ -108,24 +107,36 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     // owner; resumable cleanup remains a separate lifecycle operation.
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "terminal_release_started");
-    let cleanup_result = match terminal_cleanup_target(target, &backend) {
-        Ok(cleanup_target) => catch_unwind(AssertUnwindSafe(|| {
-            backend.release_terminal_tracked_scope(cleanup_target.hwnd)
-        }))
-        .map_err(TerminalCleanupFailure::Panicked),
-        Err(reason) => Err(TerminalCleanupFailure::Withheld(reason)),
-    };
+    let cleanup_target = terminal_cleanup_target(target);
+    let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
+        backend.release_terminal_tracked_scope_with_attempt_admission(
+            cleanup_target.hwnd,
+            |_, release_owner| {
+                let stamp = cleanup_target.stamp.ok_or_else(|| {
+                    "target HWND/generation unavailable before tracked safety Up".to_string()
+                })?;
+                verify_safety_cleanup_target(
+                    target,
+                    stamp,
+                    release_owner,
+                    cleanup_target.require_owner_identity,
+                )
+            },
+        )
+    }))
+    .map_err(TerminalCleanupFailure::Panicked);
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.release_outcome.clone());
         let release_verified = release_state_verified(&backend, &outcome.release_outcome);
         if !release_verified {
+            let evidence = outcome.terminal_evidence();
             record_termination_error(
                 &mut terminal_error,
                 &mut secondary_errors,
                 format!(
                     "terminal release verification failed: {}; {}",
                     describe_release_outcome(&backend, &outcome.release_outcome),
-                    describe_terminal_release_evidence(outcome)
+                    describe_terminal_release_evidence(&evidence)
                 ),
             );
         }
@@ -134,28 +145,38 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             .iter()
             .any(|attempt| attempt.qpc_error.is_some())
         {
+            let evidence = outcome.terminal_evidence();
             record_termination_error(
                 &mut terminal_error,
                 &mut secondary_errors,
                 format!(
                     "terminal cleanup QPC evidence unavailable: {}",
-                    describe_terminal_release_evidence(outcome)
+                    describe_terminal_release_evidence(&evidence)
                 ),
             );
         } else if outcome.release_outcome.transport_anomaly && release_verified {
+            let evidence = outcome.terminal_evidence();
             let diagnostic = format!(
                 "terminal cleanup transport anomaly: {}",
-                describe_terminal_release_evidence(outcome)
+                describe_terminal_release_evidence(&evidence)
             );
             if !secondary_errors.contains(&diagnostic) {
                 secondary_errors.push(diagnostic);
             }
         }
+        if let Some(reason) = &outcome.withheld_reason {
+            let evidence = outcome.terminal_evidence();
+            record_termination_error(
+                &mut terminal_error,
+                &mut secondary_errors,
+                format!(
+                    "terminal tracked cleanup attempt withheld: {reason}; {}",
+                    describe_terminal_release_evidence(&evidence)
+                ),
+            );
+        }
     } else if let Err(failure) = &cleanup_result {
         let message = match failure {
-            TerminalCleanupFailure::Withheld(reason) => {
-                format!("terminal tracked cleanup withheld: {reason}")
-            }
             TerminalCleanupFailure::Panicked(_) => "terminal backend cleanup panicked".into(),
         };
         record_termination_error(&mut terminal_error, &mut secondary_errors, message);
@@ -197,7 +218,10 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             .as_ref()
             .ok()
             .map(|outcome| outcome.release_outcome.clone());
-        observation.terminal_cleanup_evidence = cleanup_result.as_ref().ok().cloned();
+        observation.terminal_cleanup_evidence = cleanup_result
+            .as_ref()
+            .ok()
+            .map(|outcome| outcome.terminal_evidence());
     }
 
     // Preserve the pre-cancel ledger evidence, but only after the first
@@ -443,7 +467,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     match (worker_result, cleanup_result) {
         (Err(payload), _) => resume_unwind(payload),
         (Ok(_), Err(TerminalCleanupFailure::Panicked(payload))) => resume_unwind(payload),
-        (Ok(_), Err(TerminalCleanupFailure::Withheld(_))) | (Ok(_), Ok(_)) => {}
+        (Ok(_), Ok(_)) => {}
     }
     if terminal_error.is_some()
         || cleanup_panicked
@@ -466,44 +490,25 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
 }
 
-fn terminal_cleanup_target<'a>(
-    target: &'a super::SessionTarget,
-    backend: &sky_dispatch_win32::input::TrackedKeyState,
-) -> Result<TerminalCleanupTarget<'a>, String> {
-    let release_obligation_mask = backend.release_obligation_mask();
+fn terminal_cleanup_target(target: &super::SessionTarget) -> TerminalCleanupTarget {
     let Some((hwnd, generation)) = target.load_stable() else {
-        if release_obligation_mask == 0 {
-            return Ok(TerminalCleanupTarget {
-                hwnd: target.hwnd_for_safety_release(),
-                _release_permit: None,
-            });
-        }
-        return Err("target HWND/generation unavailable while release obligations remain".into());
+        return TerminalCleanupTarget {
+            hwnd: target.hwnd_for_safety_release(),
+            stamp: None,
+            require_owner_identity: target.owner_process_identity_required(),
+        };
     };
-    let stamp = TargetStamp { hwnd, generation };
-    let release_permit = if release_obligation_mask != 0 {
-        let release_owner = backend
-            .release_owner_proof_for_mask(release_obligation_mask)?
-            .ok_or_else(|| "tracked release owner proof is missing".to_string())?;
-        Some(verify_safety_cleanup_target(
-            target,
-            stamp,
-            &release_owner,
-            target.owner_process_identity_required(),
-        )?)
-    } else {
-        None
-    };
-    Ok(TerminalCleanupTarget {
+    TerminalCleanupTarget {
         hwnd,
-        _release_permit: release_permit,
-    })
+        stamp: Some(TargetStamp { hwnd, generation }),
+        require_owner_identity: target.owner_process_identity_required(),
+    }
 }
 
-struct TerminalCleanupTarget<'a> {
+struct TerminalCleanupTarget {
     hwnd: isize,
-    // Retain writer serialization through the terminal safety syscall.
-    _release_permit: Option<parking_lot::MutexGuard<'a, ()>>,
+    stamp: Option<TargetStamp>,
+    require_owner_identity: bool,
 }
 
 fn describe_terminal_release_evidence(evidence: &TerminalReleaseEvidence) -> String {

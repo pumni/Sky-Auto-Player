@@ -1,17 +1,18 @@
 use super::super::outcome::{
-    PacketRetryReason, ReleaseAllOutcome, TerminalProbeVerdict, TerminalReleaseEvidence,
-    TerminalSendAttemptEvidence,
+    GuardedReleaseOutcome, PacketRetryReason, ReleaseAllOutcome, TerminalProbeVerdict,
+    TerminalReleaseEvidence, TerminalSendAttemptEvidence,
 };
 use super::super::physical::{
     LogicalInstrumentPhysicalState, ReconciledRelease, reconcile_logical_release_observation,
 };
 use super::super::scan_code::FULL_INSTRUMENT_MASK;
-use super::{ReleaseScope, TrackedKeyState, release_retry_sleep};
+use super::{CleanupAttemptAdmission, ReleaseScope, TrackedKeyState, release_retry_sleep};
+use crate::input::ReleaseOwnerProof;
 use smallvec::SmallVec;
 
 impl TrackedKeyState {
     pub fn release_scope(&mut self, scope: ReleaseScope, target_hwnd: isize) -> ReleaseAllOutcome {
-        self.release_scope_with_qpc_fallback(scope, target_hwnd, false)
+        self.release_scope_with_qpc_fallback(scope, target_hwnd, false, None)
             .release_outcome
     }
 
@@ -21,7 +22,41 @@ impl TrackedKeyState {
         &mut self,
         target_hwnd: isize,
     ) -> TerminalReleaseEvidence {
-        self.release_scope_with_qpc_fallback(ReleaseScope::Tracked, target_hwnd, true)
+        self.release_scope_with_qpc_fallback(ReleaseScope::Tracked, target_hwnd, true, None)
+            .terminal_evidence()
+    }
+
+    /// Release this session's tracked obligations while revalidating their
+    /// frozen origin immediately before every sender attempt, including after
+    /// each retry delay. A rejected admission stops the retry loop and returns
+    /// all evidence accumulated by prior admitted attempts.
+    pub fn release_tracked_with_attempt_admission(
+        &mut self,
+        target_hwnd: isize,
+        mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
+    ) -> GuardedReleaseOutcome {
+        self.release_scope_with_qpc_fallback(
+            ReleaseScope::Tracked,
+            target_hwnd,
+            false,
+            Some(&mut admission),
+        )
+    }
+
+    /// Terminal counterpart to `release_tracked_with_attempt_admission`.
+    /// Terminal QPC fallback remains available, but never bypasses the fresh
+    /// per-attempt origin admission.
+    pub fn release_terminal_tracked_scope_with_attempt_admission(
+        &mut self,
+        target_hwnd: isize,
+        mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
+    ) -> GuardedReleaseOutcome {
+        self.release_scope_with_qpc_fallback(
+            ReleaseScope::Tracked,
+            target_hwnd,
+            true,
+            Some(&mut admission),
+        )
     }
 
     fn release_scope_with_qpc_fallback(
@@ -29,7 +64,8 @@ impl TrackedKeyState {
         scope: ReleaseScope,
         target_hwnd: isize,
         terminal_qpc_fallback: bool,
-    ) -> TerminalReleaseEvidence {
+        mut admission: Option<&mut CleanupAttemptAdmission<'_>>,
+    ) -> GuardedReleaseOutcome {
         let requested_mask = match scope {
             ReleaseScope::Tracked => self.release_obligation_mask(),
             ReleaseScope::FullInstrument => FULL_INSTRUMENT_MASK,
@@ -37,7 +73,7 @@ impl TrackedKeyState {
 
         if requested_mask == 0 {
             self.clear_unobligated_release_owners((1_u16 << super::RELEASE_OWNER_SLOT_COUNT) - 1);
-            return TerminalReleaseEvidence {
+            return GuardedReleaseOutcome {
                 release_outcome: ReleaseAllOutcome {
                     attempted_mask: 0,
                     transport_anomaly: false,
@@ -48,6 +84,7 @@ impl TrackedKeyState {
                 },
                 send_attempts: SmallVec::new(),
                 probe_verdict: TerminalProbeVerdict::NotRequired,
+                withheld_reason: None,
             };
         }
 
@@ -61,6 +98,9 @@ impl TrackedKeyState {
         let mut final_reconciliation: Option<ReconciledRelease> = None;
         let mut final_probe_verdict: Option<TerminalProbeVerdict> = None;
         let mut terminal_send_attempts = SmallVec::<[TerminalSendAttemptEvidence; 4]>::new();
+        let mut withheld_reason = None;
+        let mut attempted_mask = 0u16;
+        let mut attempts = 0u8;
 
         for attempt_idx in 0..4 {
             if attempt_idx > 0 {
@@ -71,22 +111,43 @@ impl TrackedKeyState {
             }
 
             let previous_unresolved = unresolved_mask;
-            self.release_attempts_total = self.release_attempts_total.saturating_add(1);
-            let emitted = self.do_emit_up_once(unresolved_mask, terminal_qpc_fallback);
-            if terminal_qpc_fallback {
-                terminal_send_attempts.push(TerminalSendAttemptEvidence {
-                    raw_calls: emitted.evidence.attempts,
-                    requested_events: emitted.evidence.requested_mask.count_ones() as u8,
-                    inserted_events: emitted.evidence.first_inserted,
-                    win32_error: emitted
-                        .evidence
-                        .last_win32_error
-                        .or(emitted.evidence.first_win32_error),
-                    started_ticks: emitted.evidence.started_ticks,
-                    completed_ticks: emitted.evidence.completed_ticks,
-                    qpc_error: emitted.evidence.timing_error,
-                });
-            } else if emitted.evidence.timing_error.is_some() {
+            let admission_required = admission.is_some();
+            let mut reborrowed_admission =
+                |mask, proof: &ReleaseOwnerProof| match admission.as_mut() {
+                    Some(check) => check(mask, proof),
+                    None => Ok(()),
+                };
+            let attempt_admission = admission_required.then_some(
+                &mut reborrowed_admission
+                    as &mut dyn FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
+            );
+
+            let emitted = match self.do_emit_up_once(
+                unresolved_mask,
+                terminal_qpc_fallback,
+                attempt_admission,
+                &mut attempts,
+            ) {
+                Ok(emitted) => emitted,
+                Err(reason) => {
+                    withheld_reason = Some(reason);
+                    break;
+                }
+            };
+            attempted_mask |= previous_unresolved;
+            terminal_send_attempts.push(TerminalSendAttemptEvidence {
+                raw_calls: emitted.evidence.attempts,
+                requested_events: emitted.evidence.requested_mask.count_ones() as u8,
+                inserted_events: emitted.evidence.first_inserted,
+                win32_error: emitted
+                    .evidence
+                    .last_win32_error
+                    .or(emitted.evidence.first_win32_error),
+                started_ticks: emitted.evidence.started_ticks,
+                completed_ticks: emitted.evidence.completed_ticks,
+                qpc_error: emitted.evidence.timing_error,
+            });
+            if !terminal_qpc_fallback && emitted.evidence.timing_error.is_some() {
                 self.timing_error = emitted.evidence.timing_error;
             }
             let transport_confirmed_mask = emitted.evidence.confirmed_mask;
@@ -146,17 +207,18 @@ impl TrackedKeyState {
                     if self.failed_release_mask == 0 {
                         self.last_error = None;
                     }
-                    return TerminalReleaseEvidence {
+                    return GuardedReleaseOutcome {
                         release_outcome: ReleaseAllOutcome {
-                            attempted_mask: requested_mask,
+                            attempted_mask,
                             transport_anomaly,
                             released_successfully: true,
                             stuck_mask: 0,
                             verification_inconclusive: false,
-                            attempts: (attempt_idx + 1) as u8,
+                            attempts,
                         },
                         send_attempts: terminal_send_attempts,
                         probe_verdict: TerminalProbeVerdict::AllUp,
+                        withheld_reason: None,
                     };
                 }
                 ReconciledRelease::Held(held_mask) => {
@@ -200,17 +262,18 @@ impl TrackedKeyState {
         let probe_verdict =
             final_probe_verdict.unwrap_or(TerminalProbeVerdict::Inconclusive(unresolved_mask));
 
-        TerminalReleaseEvidence {
+        GuardedReleaseOutcome {
             release_outcome: ReleaseAllOutcome {
-                attempted_mask: requested_mask,
+                attempted_mask,
                 transport_anomaly,
                 released_successfully,
                 stuck_mask,
                 verification_inconclusive,
-                attempts: 4,
+                attempts,
             },
             send_attempts: terminal_send_attempts,
             probe_verdict,
+            withheld_reason,
         }
     }
 

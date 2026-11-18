@@ -1,4 +1,4 @@
-use super::{StartupCheckpoint, StartupOrderingHook};
+use super::StartupOrderingHook;
 use std::sync::atomic::Ordering;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14,29 +14,9 @@ pub(crate) struct InterruptedWaitEvidence {
 }
 
 impl StartupOrderingHook {
-    pub fn raw_schedule_admission_validation_count(&self) -> u64 {
-        self.raw_schedule_admission_validation_count
-            .load(Ordering::Acquire)
-    }
-
-    pub fn raw_schedule_worker_materialization_count(&self) -> u64 {
-        self.raw_schedule_worker_materialization_count
-            .load(Ordering::Acquire)
-    }
-
     pub fn prepared_schedule_executor_consumption_count(&self) -> u64 {
         self.prepared_schedule_executor_consumption_count
             .load(Ordering::Acquire)
-    }
-
-    pub(crate) fn record_raw_schedule_admission_validation(&self) {
-        self.raw_schedule_admission_validation_count
-            .fetch_add(1, Ordering::AcqRel);
-    }
-
-    pub(crate) fn record_raw_schedule_worker_materialization(&self) {
-        self.raw_schedule_worker_materialization_count
-            .fetch_add(1, Ordering::AcqRel);
     }
 
     pub(crate) fn record_prepared_schedule_executor_consumption(&self) {
@@ -65,12 +45,12 @@ impl StartupOrderingHook {
         }
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn interrupted_wait_count(&self) -> u64 {
         self.interrupted_wait_count.load(Ordering::Acquire)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "test-support"))]
     pub(crate) fn last_interrupted_wait_evidence(&self) -> Option<InterruptedWaitEvidence> {
         self.interrupted_wait_evidence
             .lock()
@@ -85,15 +65,6 @@ impl StartupOrderingHook {
         self.down_not_before_qpc_ticks
             .store(not_before, Ordering::Relaxed);
         self.down_window_sequence.fetch_add(1, Ordering::Release);
-    }
-
-    pub(crate) fn record_down_window_before_physical_wait(
-        &self,
-        authored_target: u64,
-        not_before: u64,
-    ) {
-        self.record_down_window(authored_target, not_before);
-        self.visit_startup_checkpoint(StartupCheckpoint::PhysicalWait);
     }
 
     pub(crate) fn record_interrupted_wait(&self, evidence: InterruptedWaitEvidence) {

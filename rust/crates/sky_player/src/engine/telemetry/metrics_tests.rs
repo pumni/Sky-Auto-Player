@@ -15,8 +15,8 @@ fn snapshot_buffer_never_publishes_torn_scalar_pair() {
     let writer = thread::spawn(move || {
         for value in 1..=10_000u64 {
             let local = WorkerMetricsLocal {
-                elapsed_us: value,
                 total_us: value,
+                late_2ms: value,
                 ..WorkerMetricsLocal::default()
             };
             let _ = writer_buffer.try_publish_dispatch(local);
@@ -24,7 +24,7 @@ fn snapshot_buffer_never_publishes_torn_scalar_pair() {
     });
     for _ in 0..10_000 {
         let snapshot = buffer.load();
-        assert_eq!(snapshot.elapsed_us, snapshot.total_us);
+        assert_eq!(snapshot.late_2ms, snapshot.total_us);
     }
     writer.join().expect("snapshot writer thread");
 }
@@ -39,8 +39,8 @@ fn concurrent_source_writers_keep_independent_snapshot_contents() {
         dispatch_start.wait();
         for value in 1..=10_000u64 {
             let _ = dispatch_buffer.try_publish_dispatch(WorkerMetricsLocal {
-                elapsed_us: value,
                 total_us: value,
+                late_2ms: value,
                 ..WorkerMetricsLocal::default()
             });
         }
@@ -61,7 +61,7 @@ fn concurrent_source_writers_keep_independent_snapshot_contents() {
     start.wait();
     for _ in 0..10_000 {
         let snapshot = buffer.load();
-        assert_eq!(snapshot.elapsed_us, snapshot.total_us);
+        assert_eq!(snapshot.late_2ms, snapshot.total_us);
         assert_eq!(
             snapshot.observer_degraded_samples,
             snapshot.wait_window_sample_count
@@ -71,8 +71,8 @@ fn concurrent_source_writers_keep_independent_snapshot_contents() {
     observer_writer.join().expect("observer snapshot writer");
 
     assert!(buffer.try_publish_dispatch(WorkerMetricsLocal {
-        elapsed_us: 10_001,
         total_us: 10_001,
+        late_2ms: 10_001,
         ..WorkerMetricsLocal::default()
     }));
     assert!(buffer.try_publish_observer(WorkerMetricsLocal {
@@ -81,8 +81,8 @@ fn concurrent_source_writers_keep_independent_snapshot_contents() {
         ..WorkerMetricsLocal::default()
     }));
     let snapshot = buffer.load();
-    assert_eq!(snapshot.elapsed_us, 10_001);
     assert_eq!(snapshot.total_us, 10_001);
+    assert_eq!(snapshot.late_2ms, 10_001);
     assert_eq!(snapshot.observer_degraded_samples, 10_001);
     assert_eq!(snapshot.wait_window_sample_count, 10_001);
 }
@@ -92,14 +92,14 @@ fn dispatch_publication_is_nonblocking_when_a_reader_holds_its_slot() {
     let buffer = SnapshotBuffer::default();
     let reader = buffer.dispatch.read();
     assert!(!buffer.try_publish_dispatch(WorkerMetricsLocal {
-        elapsed_us: 1,
         total_us: 1,
+        late_2ms: 1,
         ..WorkerMetricsLocal::default()
     }));
     drop(reader);
     assert!(buffer.try_publish_dispatch(WorkerMetricsLocal {
-        elapsed_us: 2,
         total_us: 2,
+        late_2ms: 2,
         ..WorkerMetricsLocal::default()
     }));
 }
@@ -227,7 +227,6 @@ fn terminal_snapshot_merges_and_clears_the_observer_slot_once() {
     let shared = SharedMetrics::default();
     let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
     let dispatch = WorkerMetricsLocal {
-        elapsed_us: 7,
         total_us: 11,
         ..WorkerMetricsLocal::default()
     };
@@ -251,7 +250,6 @@ fn terminal_snapshot_merges_and_clears_the_observer_slot_once() {
     publish_terminal_metrics(&terminal, &shared, qpc_clock, 100);
 
     let published = shared.snapshot.load();
-    assert_eq!(published.elapsed_us, 7);
     assert_eq!(published.total_us, 11);
     assert_eq!(published.observer_degraded_samples, 3);
     assert_eq!(published.wait_window_sample_count, 5);
@@ -319,7 +317,6 @@ fn observer_and_dispatch_publications_do_not_overwrite_each_other() {
     let shared = SharedMetrics::default();
     let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
     let mut dispatch = WorkerMetricsLocal {
-        elapsed_us: 4,
         total_us: 9,
         ..WorkerMetricsLocal::default()
     };
@@ -344,7 +341,6 @@ fn observer_and_dispatch_publications_do_not_overwrite_each_other() {
     ));
 
     let published = shared.snapshot.load();
-    assert_eq!(published.elapsed_us, 4);
     assert_eq!(published.total_us, 9);
     assert_eq!(published.observer_degraded_samples, 2);
     assert_eq!(published.wait_window_sample_count, 6);

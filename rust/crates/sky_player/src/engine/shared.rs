@@ -699,17 +699,17 @@ impl SystemPowerState {
         self.after_epoch_capture.arm();
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(feature = "test-support")]
     pub(crate) fn arm_epoch_capture_pause_for_test(&self) {
         self.after_epoch_capture.arm();
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(feature = "test-support")]
     pub(crate) fn epoch_capture_pause_reached_for_test(&self) -> bool {
         self.after_epoch_capture.reached.load(Ordering::Acquire)
     }
 
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(feature = "test-support")]
     pub(crate) fn release_epoch_capture_pause_for_test(&self) {
         self.after_epoch_capture
             .released

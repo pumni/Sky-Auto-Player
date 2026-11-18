@@ -12,7 +12,7 @@ if ($parseErrors.Count -ne 0) {
     throw ('qualify_dispatch_core.ps1 parser errors: ' + (($parseErrors | ForEach-Object Message) -join '; '))
 }
 
-foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1', 'native_acceptance_sink.ps1', 'dispatch_harness_manifest.psm1', 'dispatch_qualification_profiles.psm1', 'dispatch_qualification_report.psm1')) {
+foreach ($scriptName in @('build_dispatch_core_harness.ps1', 'run_native_acceptance_case.ps1', 'native_acceptance_sink.ps1', 'dispatch_harness_manifest.psm1', 'dispatch_qualification_profiles.psm1', 'dispatch_qualification_report.psm1', 'dispatch_qualification_orchestration.psm1')) {
     $path = Join-Path $PSScriptRoot $scriptName
     $scriptTokens = $null
     $scriptErrors = $null
@@ -301,7 +301,8 @@ $runnerSource = Get-Content -LiteralPath $runnerPath -Raw
 if ([regex]::Matches($runnerSource, 'Invoke-NativeCaseFailStopSequence').Count -lt 3) {
     throw 'Smoke and Final must both use the tested fail-stop sequence helper'
 }
-$finalSafetyBlock = [regex]::Match($runnerSource, '(?s)\$finalSafetyCases\s*=\s*@\((.*?)\n\s*\)\s*\n\s*\$sequenceResult', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+$finalSafetyBlocks = [regex]::Matches($runnerSource, '(?s)\$finalSafetyCases\s*=\s*@\((.*?)\n\s*\)\s*\n\s*\$sequenceResult', [System.Text.RegularExpressions.RegexOptions]::Singleline)
+$finalSafetyBlock = if ($finalSafetyBlocks.Count -gt 0) { $finalSafetyBlocks[$finalSafetyBlocks.Count - 1] } else { [System.Text.RegularExpressions.Match]::Empty }
 if (-not $finalSafetyBlock.Success -or
     $finalSafetyBlock.Groups[1].Value -notmatch "foreach \(\`$load in @\('Quiet', 'Contention'\)\)" -or
     $finalSafetyBlock.Groups[1].Value -notmatch "load = \`$load" -or
@@ -429,7 +430,7 @@ try { Assert-FrameSnapshotManifestIdentity -Manifest $wrongFramePinnedHash -Expe
 if (-not $wrongFrameHashRejected) { throw 'FrameSnapshot accepted a baseline source tree hash other than the pinned tree' }
 
 $frameBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
-$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3'\)"
+$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3'\)"
 if ($frameBuilderSource -notmatch $m3ProfileSet -or
     $acceptanceSource -notmatch $m3ProfileSet) {
     throw 'FrameSnapshot profile is missing from an immutable build or case-runner boundary'
@@ -466,6 +467,7 @@ if ($qualifierSource -notmatch "ValidateSet\('Canary', 'Smoke', 'Compare', 'Fina
 
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Force
 if (-not (Get-Command Get-DispatchCleanupM3Profile -ErrorAction SilentlyContinue)) {
     throw 'DispatchCleanupM3 profile helper must remain available after manifest module initialization'
 }
@@ -489,6 +491,17 @@ if ($LASTEXITCODE -ne 0 -or $m3RemoteRows.Count -ne 1) { throw 'could not resolv
 $m3LineageTip = ([string]$m3RemoteRows[0] -split '\s+')[0]
 & git -C $repositoryRoot merge-base --is-ancestor $m3Profile.CandidateRevision $m3LineageTip
 if ($LASTEXITCODE -ne 0) { throw 'accepted M2 candidate is not an ancestor of the observed runner branch tip' }
+# The DispatchCleanupM3 parser fixtures model their historical runner identity.
+# The checked-out branch now hosts DispatchSessionRedesignM3, so its live branch
+# name must not be substituted into a legacy pinned artifact fixture.
+$m3RunnerTree = (& git -C $repositoryRoot rev-parse ($m3LineageTip + '^{tree}')).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'could not resolve the historical DispatchCleanupM3 runner tree for artifact fixtures' }
+$m3RunnerGit.revision = $m3LineageTip
+$m3RunnerGit.tree = $m3RunnerTree
+$m3RunnerGit.branch = $m3Profile.CandidateLineageBranch
+$m3RunnerGit.checkout.revision = $m3LineageTip
+$m3RunnerGit.checkout.tree = $m3RunnerTree
+$m3RunnerGit.checkout.branch = $m3Profile.CandidateLineageBranch
 $m3RunnerCheckout = [pscustomobject]@{
     root = $repositoryRoot; top_level = $m3RunnerGit.checkout.top_level; git_dir = $m3RunnerGit.checkout.git_dir
     git_common_dir = $m3RunnerGit.checkout.git_common_dir; revision = $m3RunnerGit.revision
@@ -1320,5 +1333,258 @@ try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario canonical-single
 if (-not $badM3GRejected) { throw 'DispatchCleanupM3 accepted a release gap different from frame interval plus margin' }
 $m3NegativeContractCount++
 
-Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
+$sessionRedesignProfile = Get-DispatchSessionRedesignM3Profile
+if ($sessionRedesignProfile.BaselineRevision -ne 'd0f65e7c412041a6d502f81f469872198db7adc5' -or
+    $sessionRedesignProfile.BaselineTree -ne '19aae9e41bc667a2f991001ed105b6ffdebb8bc6' -or
+    $sessionRedesignProfile.CandidateLineageBranch -ne 'refactor/dispatch-session-redesign' -or
+    $sessionRedesignProfile.HarnessManifestSchemaVersion -ne 2 -or
+    @($sessionRedesignProfile.RunnerProvenancePaths).Count -ne 11 -or
+    $sessionRedesignProfile.Target -ne 'x86_64-pc-windows-msvc' -or
+    $sessionRedesignProfile.RustVersion -ne '1.99.1' -or $sessionRedesignProfile.CargoVersion -ne '1.99.1' -or
+    $sessionRedesignProfile.CargoProfile -ne 'dist' -or
+    @($sessionRedesignProfile.RequiredFeatures).Count -ne 1 -or $sessionRedesignProfile.RequiredFeatures[0] -ne 'real-input-acceptance' -or
+    $sessionRedesignProfile.PerformanceTimingMarginUs -ne 500 -or $sessionRedesignProfile.SafetyTimingMarginUs -ne 500 -or
+    $sessionRedesignProfile.ObserverMode -ne 'SchedulerQueuedV3Compat3' -or
+    @($sessionRedesignProfile.SafetyCases).Count -ne 7 -or @($sessionRedesignProfile.SafetyScenarios).Count -ne 7) {
+    throw 'DispatchSessionRedesignM3 profile differs from the pinned baseline, Windows toolchain, immutable build, or seven-case safety plan'
+}
+if ($sessionRedesignProfile.CanaryCase.Scenario -ne 'canonical-single' -or
+    $sessionRedesignProfile.CanaryCase.Workload -ne 'canonical-single' -or
+    $sessionRedesignProfile.CanaryCase.Load -ne 'Quiet' -or
+    $sessionRedesignProfile.PerformanceCase.Scenario -ne 'mixed-up-down' -or
+    $sessionRedesignProfile.PerformanceCase.Workload -ne 'mixed-up-down' -or
+    (@($sessionRedesignProfile.PerformanceCase.LoadCells) -join '|') -ne 'Quiet|Contention' -or
+    $sessionRedesignProfile.PerformanceCase.GameFps -ne 60 -or
+    $sessionRedesignProfile.PerformanceCase.TimingMarginUs -ne 500 -or
+    $sessionRedesignProfile.PerformanceCase.PairCount -ne 6 -or
+    $sessionRedesignProfile.PerformanceCase.SampleSeconds -ne 15) {
+    throw 'DispatchSessionRedesignM3 canary or paired workload mapping differs from the approved run proposal'
+}
+$expectedSafetyIds = @('focus-loss', 'stop-cleanup', 'pause-resume', 'owner-process-termination', 'target-hwnd-change', 'near-minimum-retrigger@60', 'near-minimum-retrigger@120')
+if ((@($sessionRedesignProfile.SafetyScenarios) -join '|') -ne ($expectedSafetyIds -join '|')) {
+    throw 'DispatchSessionRedesignM3 safety case order or IDs differ from the proposed seven sessions'
+}
+foreach ($safetyCase in $sessionRedesignProfile.SafetyCases) {
+    $expectedWorkload = if ($safetyCase.Scenario -eq 'near-minimum-retrigger') { 'near-minimum-retrigger' } else { 'safety-smoke' }
+    $expectedFps = if ($safetyCase.Id -eq 'near-minimum-retrigger@120') { 120 } else { 60 }
+    if ($safetyCase.Workload -ne $expectedWorkload -or $safetyCase.Load -ne 'Quiet' -or
+        $safetyCase.GameFps -ne $expectedFps -or $safetyCase.TimingMarginUs -ne 500 -or
+        $safetyCase.SampleSeconds -ne 0) {
+        throw ('DispatchSessionRedesignM3 safety case identity is invalid: ' + $safetyCase.Id)
+    }
+}
+$floors60 = Get-DispatchSessionRedesignM3TimingFloors -Scenario canonical-single -GameFps 60 -TimingMarginUs 500
+$floors120 = Get-DispatchSessionRedesignM3TimingFloors -Scenario near-minimum-retrigger -GameFps 120 -TimingMarginUs 500
+if ($floors60.frame_us -ne 16667 -or $floors60.configured_H_us -ne 17167 -or $floors60.configured_G_us -ne 17167 -or
+    $floors120.frame_us -ne 8334 -or $floors120.configured_H_us -ne 8834 -or $floors120.configured_G_us -ne 8834) {
+    throw 'DispatchSessionRedesignM3 H/G floors differ from ceiling frame interval plus the fixed 500 us margin'
+}
+Assert-QualificationTimingMargin -RequestedStage Final -Profile DispatchSessionRedesignM3 -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
+$sessionRedesignValidCases = @(
+    @{ scenario = 'canonical-single'; workload = 'canonical-single'; margin = 500; fps = 60; sample = 0 },
+    @{ scenario = 'focus-loss'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 0 },
+    @{ scenario = 'stop-cleanup'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 0 },
+    @{ scenario = 'pause-resume'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 0 },
+    @{ scenario = 'owner-process-termination'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 0 },
+    @{ scenario = 'target-hwnd-change'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 0 },
+    @{ scenario = 'near-minimum-retrigger'; workload = 'near-minimum-retrigger'; margin = 500; fps = 60; sample = 0 },
+    @{ scenario = 'near-minimum-retrigger'; workload = 'near-minimum-retrigger'; margin = 500; fps = 120; sample = 0 },
+    @{ scenario = 'mixed-up-down'; workload = 'mixed-up-down'; margin = 500; fps = 60; sample = 15 }
+)
+foreach ($case in $sessionRedesignValidCases) {
+    Assert-DispatchSessionRedesignM3SessionIdentity -Scenario $case.scenario -Workload $case.workload `
+        -TimingMarginUs $case.margin -GameFps $case.fps -SampleSeconds $case.sample | Out-Null
+}
+$sessionRedesignInvalidCases = @(
+    @{ name = 'performance zero margin'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; margin = 0; fps = 60; sample = 15 },
+    @{ name = 'performance wrong workload'; scenario = 'mixed-up-down'; workload = 'dense-alternating'; margin = 500; fps = 60; sample = 15 },
+    @{ name = 'performance wrong fps'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; margin = 500; fps = 120; sample = 15 },
+    @{ name = 'performance wrong duration'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; margin = 500; fps = 60; sample = 0 },
+    @{ name = 'safety wrong margin'; scenario = 'focus-loss'; workload = 'safety-smoke'; margin = 0; fps = 60; sample = 0 },
+    @{ name = 'safety timed sample'; scenario = 'stop-cleanup'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 15 },
+    @{ name = 'near minimum wrong workload'; scenario = 'near-minimum-retrigger'; workload = 'safety-smoke'; margin = 500; fps = 120; sample = 0 },
+    @{ name = 'unsupported case'; scenario = 'suspend-resume'; workload = 'safety-smoke'; margin = 500; fps = 60; sample = 0 },
+    @{ name = 'canary wrong fps'; scenario = 'canonical-single'; workload = 'canonical-single'; margin = 500; fps = 120; sample = 0 }
+)
+foreach ($case in $sessionRedesignInvalidCases) {
+    $rejected = $false
+    try { Assert-DispatchSessionRedesignM3SessionIdentity -Scenario $case.scenario -Workload $case.workload -TimingMarginUs $case.margin -GameFps $case.fps -SampleSeconds $case.sample | Out-Null } catch { $rejected = $true }
+    if (-not $rejected) { throw ('DispatchSessionRedesignM3 accepted invalid session ' + $case.name) }
+}
+$sessionRedesignProjection = New-QualificationReportProjection -Profile DispatchSessionRedesignM3 `
+    -Candidate ([pscustomobject]@{ qualification_profile = 'DispatchSessionRedesignM3'; workload_version = $sessionRedesignProfile.WorkloadVersion; performance_timing_margin_us = 500; safety_timing_margin_us = 500; observer_mode = 'qualification-on'; guard_mode = 'frozen'; receiveonly_observer_mode = 'SchedulerQueuedV3Compat3'; receiveonly_observer_version = $sessionRedesignProfile.ObserverVersion }) `
+    -Control ([pscustomobject]@{ qualification_profile = 'DispatchSessionRedesignM3'; performance_timing_margin_us = 500; safety_timing_margin_us = 500 }) `
+    -Stage Final -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 `
+    -SafetyScenarios $sessionRedesignProfile.SafetyScenarios -PerformanceWorkloads @('mixed-up-down')
+if ($sessionRedesignProjection.StageSummary.planned_session_count -ne 32 -or
+    $sessionRedesignProjection.StageSummary.candidate_session_count -ne 20 -or
+    $sessionRedesignProjection.StageSummary.control_session_count -ne 12 -or
+    $sessionRedesignProjection.StageSummary.safety_timing_margin_us -ne 500 -or
+    $sessionRedesignProjection.StageSummary.performance_timing_margin_us -ne 500 -or
+    $sessionRedesignProjection.StageSummary.game_fps_summary -ne 'varies by session (60, 120 FPS)' -or
+    $sessionRedesignProjection.StageSummary.configured_H_G_summary -ne '60 FPS H=G=17,167 us; 120 FPS H=G=8,834 us' -or
+    -not $sessionRedesignProjection.StageSummary.timed_performance_samples -or
+    $sessionRedesignProjection.StageSummary.timed_performance_sample_seconds -ne 15) {
+    throw 'DispatchSessionRedesignM3 report projection lost its session count, timing, workload, FPS, or sample provenance'
+}
+if ($sessionRedesignProjection.CandidateLabel -ne 'DispatchSessionRedesignM3-Candidate' -or
+    $sessionRedesignProjection.ControlLabel -ne 'DispatchSessionRedesignM3-Baseline' -or
+    $sessionRedesignProjection.ManifestParameters.planned_session_count -ne 32 -or
+    $sessionRedesignProjection.ManifestParameters.observer_mode -ne 'qualification-on' -or
+    $sessionRedesignProjection.ManifestParameters.guard_mode -ne 'frozen') {
+    throw 'DispatchSessionRedesignM3 report labels, manifest count, observer, or waiter provenance changed'
+}
+
+Set-StrictMode -Version Latest
+$collectionFixtures = @(
+    [pscustomobject]@{ name = 'zero'; value = $null; expected = 0 },
+    [pscustomobject]@{ name = 'one'; value = 'mixed-up-down'; expected = 1 },
+    [pscustomobject]@{ name = 'many'; value = @('Quiet', 'Contention', 'Safety'); expected = 3 }
+)
+foreach ($fixture in $collectionFixtures) {
+    $collection = ConvertTo-DispatchQualificationCollection -Value $fixture.value
+    if ($collection.Items -isnot [object[]] -or $collection.Length -ne $fixture.expected -or
+        $collection.Items.Length -ne $fixture.expected) {
+        throw ('StrictMode collection normalization failed for cardinality ' + $fixture.name)
+    }
+}
+
+$offlineOrder = [System.Collections.Generic.List[string]]::new()
+$offlineCalls = [System.Collections.Generic.List[object]]::new()
+$offlineCandidateIdentity = [pscustomobject]@{ role = 'Candidate'; validated = $true }
+$offlineBaselineIdentity = [pscustomobject]@{ role = 'Baseline'; validated = $true }
+$offlineFinal = Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionRedesignProfile `
+    -Pairs 6 -TimingMarginUs 500 -SampleSeconds 15 `
+    -OnPlan {
+        param($plan)
+        $offlineOrder.Add('plan')
+    } -InvokeCase {
+        param($case)
+        $offlineOrder.Add('case')
+        $identity = if ($case.role -eq 'control') { $offlineBaselineIdentity } else { $offlineCandidateIdentity }
+        if (-not $identity.validated) { throw 'offline Final attempted a case with an unvalidated synthetic identity' }
+        $offlineCalls.Add([pscustomobject]@{ case = $case; identity_role = $identity.role })
+        [pscustomobject]@{ case_exit_code = 0; status = 'PASS'; identity_role = $identity.role }
+    }
+$offlinePlan = $offlineFinal.Plan
+$offlinePerformanceCases = [object[]]@($offlinePlan.Cases | Where-Object phase -eq 'performance')
+if ($offlinePlan.Cases -isnot [object[]] -or $offlinePlan.PlannedSessionCount -ne 32 -or
+    $offlinePlan.CandidateSessionCount -ne 20 -or $offlinePlan.ControlSessionCount -ne 12 -or
+    $offlineFinal.Execution.AttemptedSessionCount -ne 32 -or
+    $offlineFinal.Execution.StoppedAtFirstNonPass -or $offlineCalls.Count -ne 32 -or
+    $offlineOrder.Count -ne 33 -or $offlineOrder[0] -ne 'plan' -or $offlineOrder[1] -ne 'case' -or
+    $offlinePlan.Cases[0].phase -ne 'canary' -or
+    $offlinePlan.Cases[0].scenario -ne 'canonical-single' -or
+    $offlinePlan.Cases[0].workload -ne 'canonical-single' -or
+    $offlinePlan.Cases[0].role -ne 'candidate' -or
+    (@($offlinePlan.Cases | Select-Object -Skip 1 -First 7 | ForEach-Object { $_.id }) -join '|') -ne ($expectedSafetyIds -join '|') -or
+    $offlinePerformanceCases.Length -ne 24) {
+    throw 'offline top-level M3 Final control path lost its 32-case plan, candidate/baseline counts, canary, safety order, or invocation order'
+}
+for ($caseIndex = 0; $caseIndex -lt $offlinePlan.Cases.Length; $caseIndex++) {
+    if ($offlineCalls[$caseIndex].case.id -ne $offlinePlan.Cases[$caseIndex].id) {
+        throw ('offline M3 Final invoked a case out of plan order at index ' + $caseIndex)
+    }
+}
+if (@($offlineCalls | Where-Object identity_role -eq 'Candidate').Length -ne 20 -or
+    @($offlineCalls | Where-Object identity_role -eq 'Baseline').Length -ne 12) {
+    throw 'offline M3 Final did not route exactly 20 candidate and 12 baseline cases to their validated identities'
+}
+foreach ($load in @('Quiet', 'Contention')) {
+    [object[]]$cellCases = @($offlinePerformanceCases | Where-Object load -eq $load)
+    if ($cellCases.Length -ne 12) { throw ('offline M3 Final plan has an invalid ' + $load + ' cell size') }
+    for ($pair = 1; $pair -le 6; $pair++) {
+        $pairId = 'mixed-up-down/' + $load + '/' + ('{0:D2}' -f $pair)
+        [object[]]$pairCases = @($cellCases | Where-Object pair_id -eq $pairId)
+        $expectedOrder = if ($pair % 2 -eq 1) { 'AB' } else { 'BA' }
+        $expectedRoles = if ($expectedOrder -eq 'AB') { 'control,candidate' } else { 'candidate,control' }
+        if ($pairCases.Length -ne 2 -or
+            (@($pairCases | ForEach-Object { $_.pair_order } | Select-Object -Unique) -join '') -ne $expectedOrder -or
+            (@($pairCases | ForEach-Object { $_.role }) -join ',') -ne $expectedRoles -or
+            (@($pairCases | ForEach-Object { $_.historical }) -join ',') -ne $(if ($expectedOrder -eq 'AB') { 'True,False' } else { 'False,True' })) {
+            throw ('offline M3 Final pair mapping/order is invalid for ' + $pairId)
+        }
+    }
+}
+
+$firstFailureCalls = [System.Collections.Generic.List[object]]::new()
+$firstFailure = Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionRedesignProfile `
+    -Pairs 6 -TimingMarginUs 500 -SampleSeconds 15 -InvokeCase {
+        param($case)
+        $firstFailureCalls.Add($case)
+        [pscustomobject]@{ case_exit_code = 1; status = 'FAIL' }
+    }
+if (-not $firstFailure.Execution.StoppedAtFirstNonPass -or
+    $firstFailure.Execution.AttemptedSessionCount -ne 1 -or
+    $firstFailureCalls.Count -ne 1 -or
+    $firstFailureCalls[0].phase -ne 'canary' -or
+    $firstFailureCalls[0].scenario -ne 'canonical-single') {
+    throw 'offline M3 Final first-case failure did not stop before the second case'
+}
+
+$zeroAttemptCalls = [System.Collections.Generic.List[object]]::new()
+$zeroAttemptError = $null
+try {
+    [void](Invoke-DispatchSessionRedesignM3FinalControlPath -Profile $sessionRedesignProfile `
+        -Pairs 5 -TimingMarginUs 500 -SampleSeconds 15 -InvokeCase {
+            param($case)
+            $zeroAttemptCalls.Add($case)
+            [pscustomobject]@{ case_exit_code = 0; status = 'PASS' }
+        })
+} catch { $zeroAttemptError = $_ }
+if ($null -eq $zeroAttemptError -or $zeroAttemptCalls.Count -ne 0) {
+    throw 'offline M3 Final pre-case planning failure did not preserve zero attempts'
+}
+$offlineFailureRoot = Join-Path $env:TEMP ('m3-runner-failure-contract-' + [guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $offlineFailureRoot | Out-Null
+try {
+    $zeroFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $zeroAttemptError `
+        -RunId 'offline-zero-attempts' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
+        -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount $zeroAttemptCalls.Count `
+        -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath
+    Write-QualificationRunnerFailureArtifacts -Artifacts $zeroFailureArtifacts -EvidenceRoot $offlineFailureRoot `
+        -CommandRows ([System.Collections.Generic.List[string]]::new())
+    $zeroSummary = Get-Content -LiteralPath (Join-Path $offlineFailureRoot 'summary.json') -Raw | ConvertFrom-Json
+    $zeroFailures = Get-Content -LiteralPath (Join-Path $offlineFailureRoot 'failures.json') -Raw | ConvertFrom-Json
+    $zeroErrorDetail = Get-Content -LiteralPath (Join-Path $offlineFailureRoot 'runner-error.json') -Raw | ConvertFrom-Json
+    $zeroMarkdown = Get-Content -LiteralPath (Join-Path $offlineFailureRoot 'summary.md') -Raw
+    $zeroSummaryKeys = @($zeroSummary.PSObject.Properties.Name) -join '|'
+    if ($zeroSummary.run_count -ne 0 -or $zeroSummary.disposition -ne 'runner failed before completing protocol' -or
+        @($zeroSummary.failures).Length -ne 1 -or @($zeroFailures).Length -ne 1 -or
+        $zeroFailures[0].status -ne 'RUNNER_FAILURE' -or
+        $zeroSummaryKeys -ne 'schema_version|run_id|stage|source_revision|source_tree_sha|run_count|failures|disposition' -or
+        [string]::IsNullOrWhiteSpace([string]$zeroErrorDetail.script_path) -or
+        [int]$zeroErrorDetail.line_number -le 0 -or
+        [string]::IsNullOrWhiteSpace([string]$zeroErrorDetail.script_stack_trace) -or
+        [string]::IsNullOrWhiteSpace([string]$zeroErrorDetail.exception_to_string) -or
+        $zeroMarkdown -notmatch 'NotRun') {
+        throw 'offline pre-case runner failure did not write accurate zero-attempt summary and exception evidence'
+    }
+} finally {
+    $safeTempRoot = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+    $safeFailureRoot = [System.IO.Path]::GetFullPath($offlineFailureRoot)
+    if (-not $safeFailureRoot.StartsWith($safeTempRoot, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw 'refusing to clean offline runner failure fixtures outside the temporary directory'
+    }
+    Remove-Item -LiteralPath $offlineFailureRoot -Recurse -Force
+}
+
+$sessionRedesignRunner = Get-Content -LiteralPath $runnerPath -Raw
+$sessionRedesignOrchestration = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Raw
+$sessionRedesignBuilder = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
+$sessionRedesignManifestValidator = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Raw
+if ($sessionRedesignRunner -notmatch 'if \(\$isSessionRedesignProfile -and \$Stage -ne ''Final''\)' -or
+    -not $sessionRedesignRunner.Contains('Invoke-DispatchSessionRedesignM3FinalControlPath') -or
+    -not $sessionRedesignRunner.Contains('[string[]]$performanceWorkloads') -or
+    $sessionRedesignRunner -match '\$performanceWorkloads\.Count' -or
+    -not $sessionRedesignRunner.Contains('New-QualificationRunnerFailureArtifacts') -or
+    -not $sessionRedesignBuilder.Contains('schema_version = if ($isSessionRedesignProfile) { $sessionRedesignProfile.HarnessManifestSchemaVersion } else { 1 }') -or
+    $sessionRedesignManifestValidator -notmatch "schema_version.*profile\.HarnessManifestSchemaVersion" -or
+    -not $sessionRedesignOrchestration.Contains('New-DispatchSessionRedesignM3FinalPlan') -or
+    -not $sessionRedesignOrchestration.Contains('Invoke-DispatchSessionRedesignM3FinalPlan') -or
+    -not (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Raw).Contains('scripts/dispatch_qualification_orchestration.psm1')) {
+    throw 'DispatchSessionRedesignM3 Final path is missing the typed-plan dispatcher, fail-stop runner, or provenance inventory'
+}
+
+Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 schema-v2 provenance inventory, mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

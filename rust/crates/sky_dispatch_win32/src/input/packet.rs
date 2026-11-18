@@ -1050,7 +1050,7 @@ pub fn send_physical_packet_once_with_clock(
 
 /// One packet transaction using a payload built before the final admission
 /// boundary and a caller-owned authoritative start timestamp.
-pub fn send_prepared_physical_packet_once_with_start(
+pub(crate) fn send_prepared_physical_packet_once_with_start(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
     started_ticks: QpcTicks,
@@ -1060,7 +1060,8 @@ pub fn send_prepared_physical_packet_once_with_start(
 
 /// One trusted borrowed prepared-packet attempt using a caller-supplied start
 /// boundary.
-pub fn send_prepared_physical_packet_view_once_with_start(
+#[cfg(test)]
+pub(crate) fn send_prepared_physical_packet_view_once_with_start(
     prepared: PreparedPacketView<'_>,
     clock: QpcClock,
     started_ticks: QpcTicks,

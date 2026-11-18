@@ -40,6 +40,13 @@ pub fn release_owner_proof_arc_clone_count_for_test() -> u64 {
 pub struct ReleaseOwnerProof {
     target_hwnd: isize,
     target_generation: u64,
+    owner: Option<Arc<ReleaseOwnerIdentity>>,
+}
+
+/// The process handle is retained once by the session's target proof. Journal
+/// entries share this small identity object, so cloning a per-key release
+/// proof never clones the process-authority `Arc` or changes handle lifetime.
+struct ReleaseOwnerIdentity {
     owner_pid: Option<u32>,
     authority: Option<Arc<crate::focus::WindowIdentityAuthority>>,
 }
@@ -47,15 +54,18 @@ pub struct ReleaseOwnerProof {
 impl Clone for ReleaseOwnerProof {
     fn clone(&self) -> Self {
         #[cfg(any(test, feature = "test-support"))]
-        if self.authority.is_some() {
+        if self
+            .owner
+            .as_ref()
+            .is_some_and(|owner| owner.authority.is_some())
+        {
             RELEASE_OWNER_PROOF_ARC_CLONE_COUNT
                 .with(|count| count.set(count.get().saturating_add(1)));
         }
         Self {
             target_hwnd: self.target_hwnd,
             target_generation: self.target_generation,
-            owner_pid: self.owner_pid,
-            authority: self.authority.as_ref().map(Arc::clone),
+            owner: self.owner.as_ref().map(Arc::clone),
         }
     }
 }
@@ -86,11 +96,19 @@ impl ReleaseOwnerProof {
         {
             return None;
         }
+        let owner_pid = owner_pid.or(authority_pid);
+        let owner = if owner_pid.is_some() || authority.is_some() {
+            Some(Arc::new(ReleaseOwnerIdentity {
+                owner_pid,
+                authority,
+            }))
+        } else {
+            None
+        };
         Some(Self {
             target_hwnd,
             target_generation,
-            owner_pid: owner_pid.or(authority_pid),
-            authority,
+            owner,
         })
     }
 
@@ -103,11 +121,13 @@ impl ReleaseOwnerProof {
     }
 
     pub fn owner_pid(&self) -> Option<u32> {
-        self.owner_pid
+        self.owner.as_ref().and_then(|owner| owner.owner_pid)
     }
 
     pub fn authority(&self) -> Option<&Arc<crate::focus::WindowIdentityAuthority>> {
-        self.authority.as_ref()
+        self.owner
+            .as_ref()
+            .and_then(|owner| owner.authority.as_ref())
     }
 
     /// Authority object identity matters even when HWND/PID values are equal:
@@ -115,8 +135,8 @@ impl ReleaseOwnerProof {
     pub fn same_owner(&self, other: &Self) -> bool {
         self.target_hwnd == other.target_hwnd
             && self.target_generation == other.target_generation
-            && self.owner_pid == other.owner_pid
-            && match (&self.authority, &other.authority) {
+            && self.owner_pid() == other.owner_pid()
+            && match (self.authority(), other.authority()) {
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
                 (None, None) => true,
                 _ => false,
@@ -129,8 +149,8 @@ pub(crate) use down_transaction::emit_down_with;
 pub use down_transaction::{emit_down, emit_down_once, emit_down_once_with};
 pub use modifier_guard::{ModifierKeyObservation, ModifierMask};
 pub use outcome::{
-    PacketPreparationError, PacketRetryReason, PhysicalKeyPreflightError, PhysicalPacket,
-    PlatformSendResult, ReleaseAllOutcome, SendEvidence, SendTransactionOutcome,
+    GuardedReleaseOutcome, PacketPreparationError, PacketRetryReason, PhysicalKeyPreflightError,
+    PhysicalPacket, PlatformSendResult, ReleaseAllOutcome, SendEvidence, SendTransactionOutcome,
     SendTransactionStatus, TerminalProbeVerdict, TerminalReleaseEvidence,
     TerminalSendAttemptEvidence,
 };
@@ -139,9 +159,8 @@ pub(crate) use packet::PreparedTaggedCalibrationPacket;
 pub use packet::{
     MAX_PACKET_EVENTS, PreparedPacketView, PreparedPhysicalPacket,
     send_physical_packet_once_with_clock, send_prepared_physical_packet_once,
-    send_prepared_physical_packet_once_at_target, send_prepared_physical_packet_once_with_start,
-    send_prepared_physical_packet_view_once, send_prepared_physical_packet_view_once_at_target,
-    send_prepared_physical_packet_view_once_with_start,
+    send_prepared_physical_packet_once_at_target, send_prepared_physical_packet_view_once,
+    send_prepared_physical_packet_view_once_at_target,
 };
 pub use physical::is_scan_code_physically_down;
 pub use profile::{
