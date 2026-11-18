@@ -19,12 +19,13 @@ fn cleanup_inconclusive_with_transport_complete_fails_closed() {
     assert!(!outcome.released_successfully);
     assert!(outcome.verification_inconclusive);
     assert_eq!(outcome.stuck_mask, 0x0003);
-    assert_eq!(outcome.attempts, 4);
-    // Successful insertion does not prove key-up when foreground verification
-    // is inconclusive. Every conservative source retains the obligation.
-    assert_eq!(state.active_mask, 0x0003);
+    assert_eq!(outcome.attempts, 1);
+    // A fully inserted safety Up is never replayed. An inconclusive probe
+    // retains the separate needs_probe mask for a later recovery pass.
+    assert_eq!(state.active_mask, 0);
     assert_eq!(state.possibly_active_mask, 0);
-    assert_eq!(state.failed_release_mask, 0x0003);
+    assert_eq!(state.failed_release_mask, 0);
+    assert_eq!(state.needs_probe_mask, 0x0003);
     assert_eq!(state.release_obligation_mask(), 0x0003);
     assert!(!outcome.transport_anomaly);
 }
@@ -44,19 +45,19 @@ fn inconclusive_cleanup_retains_obligation_for_second_verified_invocation() {
     assert!(!first.released_successfully);
     assert!(first.verification_inconclusive);
     assert_eq!(first.stuck_mask, 1);
-    assert_eq!(first.attempts, 4);
+    assert_eq!(first.attempts, 1);
     assert_eq!(state.release_obligation_mask(), 1);
-    assert_eq!(state.release_attempts_total, 4);
+    assert_eq!(state.release_attempts_total, 1);
 
     state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
     let second = state.release_scope(ReleaseScope::Tracked, 0);
     assert!(second.released_successfully);
     assert!(!second.verification_inconclusive);
-    assert_eq!(second.attempted_mask, 1);
-    assert_eq!(second.attempts, 1);
+    assert_eq!(second.attempted_mask, 0);
+    assert_eq!(second.attempts, 0);
     assert_eq!(state.release_obligation_mask(), 0);
-    assert_eq!(state.release_attempts_total, 5);
-    assert_eq!(send_count.load(Ordering::SeqCst), 5);
+    assert_eq!(state.release_attempts_total, 1);
+    assert_eq!(send_count.load(Ordering::SeqCst), 1);
 }
 
 #[test]
@@ -171,14 +172,14 @@ fn partial_up_and_held_probe_keep_transport_uncertainty_across_retry_rounds() {
     assert!(!outcome.released_successfully);
     assert!(outcome.transport_anomaly);
     assert!(outcome.verification_inconclusive);
-    assert_eq!(outcome.stuck_mask, 0b110);
-    assert_eq!(state.release_obligation_mask(), 0b110);
-    assert_eq!(state.release_attempts_total, 4);
+    assert_eq!(outcome.stuck_mask, 0b111);
+    assert_eq!(state.release_obligation_mask(), 0b111);
+    assert_eq!(state.release_attempts_total, 2);
     let probes = probe_inputs.lock().expect("probe input capture");
-    assert_eq!(probes[0], (0b111, 0b001));
+    assert_eq!(probes[0], (0b111, 0b111));
     assert_eq!(
-        probes[1].0, 0b110,
-        "the unconfirmed key absent from the Held subset remains for retry"
+        probes[1].0, 0b111,
+        "Held and Inconclusive probes retain the entire sent mask"
     );
 }
 

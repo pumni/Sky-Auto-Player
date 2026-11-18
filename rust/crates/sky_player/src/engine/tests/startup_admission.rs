@@ -401,9 +401,9 @@ fn terminal_tracked_cleanup_uses_owner_proof_without_foreground_requirement() {
     );
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, EnginePollStatus::Skipped.as_str());
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
     assert_eq!(send_call_count.load(Ordering::Acquire), 2);
-    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert_eq!(snapshot.final_release_obligation_mask, 1);
 }
 
 #[cfg(feature = "test-support")]
@@ -954,7 +954,6 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     .expect("valid focus-restore schedule");
     let force_inconclusive_probe = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let send_call_count = Arc::new(AtomicU64::new(0));
-    let full_release_count = Arc::new(AtomicU64::new(0));
     let captures = Arc::new(std::sync::Mutex::new(Vec::new()));
     let startup_hook = Arc::new(StartupOrderingHook::default());
     startup_hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
@@ -963,7 +962,6 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     let mut fault_script = FaultInjectionScript::none();
     fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
     fault_script.send_call_count = Some(Arc::clone(&send_call_count));
-    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
     fault_script.send_input_capture = Some(Arc::clone(&captures));
     let mut options = test_session_options(
         schedule,
@@ -1083,7 +1081,6 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
         2,
         "the worker captured Down A and the verified focus cleanup Up"
     );
-    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
     session
         .resume()
@@ -1107,12 +1104,13 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     session.quit().expect("quit restored session");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, EnginePollStatus::Quit.as_str());
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
     assert_eq!(snapshot.precision_packet_attempts, 2);
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert_eq!(snapshot.sendinput_partial_events, 0);
     assert_eq!(snapshot.generation_accounting.active, 0);
+    assert_eq!(snapshot.final_release_obligation_mask, 2);
     assert!(snapshot.generation_accounting.cancelled >= 1);
     let captures = captures.lock().expect("final mock input captures");
     assert!(matches!(

@@ -11,7 +11,6 @@ use super::scan_code::{
 };
 use super::tracked::TEST_RELEASE_SLEEP_COUNT;
 use crate::clock::{QpcError, QpcTicks};
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -32,244 +31,26 @@ fn scripted_result(requested: usize, inserted: u8, _completed_us: u64) -> Platfo
 }
 
 #[test]
-fn down_retry_matrix_is_exact_and_clamped() {
-    for (script, expected_sent, expected_dropped, expected_calls, expected_success) in [
-        (vec![3], 3, 0, 1, true),
-        // A partial first insertion is rolled back; the remainder is
-        // never emitted as a second note-on chord.
-        (vec![2, 1], 0, 3, 2, false),
-        (vec![0, 0], 0, 3, 2, false),
-        (vec![1, 1], 0, 3, 2, false),
-        (vec![99], 3, 0, 1, true),
-    ] {
-        let mut returns = VecDeque::from(script);
-        let mut calls = 0;
-        let emitted = emit_down_with(&[0x15, 0x16, 0x17], |codes, _| {
-            calls += 1;
-            scripted_result(codes.len(), returns.pop_front().unwrap_or(0), calls)
-        });
-        assert_eq!(emitted.sent_scan_codes().len(), expected_sent);
-        assert_eq!(calls, expected_calls);
-        assert_eq!(emitted.is_success(), expected_success);
-        let dropped = (emitted.evidence.requested_mask.count_ones()
-            - emitted.evidence.confirmed_mask.count_ones()) as usize;
-        assert_eq!(dropped, expected_dropped);
-    }
-}
-
-#[test]
-fn partial_note_on_marks_integrity_loss_and_rolls_back_uncertain_chord() {
-    let mut calls = 0;
-    let emitted = emit_down_with(&[0x15, 0x16, 0x17], |codes, key_up| {
-        calls += 1;
-        assert_eq!(key_up, calls == 2);
-        scripted_result(codes.len(), 2, calls)
-    });
-
-    assert!(!emitted.is_success());
-    assert!(matches!(
-        emitted.status,
-        SendTransactionStatus::IntegrityLost
-    ));
-    assert_eq!(emitted.evidence.first_inserted, 2);
-    assert_eq!(emitted.sent_scan_codes().len(), 0);
-    assert_eq!(emitted.evidence.attempts, 2);
-}
-
-#[test]
-fn partial_note_on_rolls_back_the_uncertain_whole_chord() {
-    let mut calls = Vec::new();
-    let emitted = emit_down_with(&[0x15, 0x16, 0x17], |codes, key_up| {
-        calls.push((codes.to_vec(), key_up));
-        scripted_result(
-            codes.len(),
-            if key_up { codes.len() as u8 } else { 1 },
-            calls.len() as u64,
-        )
-    });
-
-    assert!(!emitted.is_success());
-    assert!(matches!(
-        emitted.status,
-        SendTransactionStatus::IntegrityLost
-    ));
-    assert_eq!(
-        calls,
-        vec![
-            (vec![0x15, 0x16, 0x17], false),
-            (vec![0x15, 0x16, 0x17], true)
-        ]
-    );
-}
-
-#[test]
-fn partial_note_on_after_zero_retry_rolls_back_the_uncertain_whole_chord() {
-    let mut calls = Vec::new();
-    let emitted = emit_down_with(&[0x15, 0x16, 0x17], |codes, key_up| {
-        calls.push((codes.to_vec(), key_up));
-        let inserted = match calls.len() {
-            1 => 0,
-            2 if !key_up => 1,
-            _ if key_up => 2,
-            _ => 0,
-        };
-        scripted_result(codes.len(), inserted, calls.len() as u64)
-    });
-
-    assert!(!emitted.is_success());
-    assert!(matches!(
-        emitted.status,
-        SendTransactionStatus::IntegrityLost
-    ));
-    assert_eq!(
-        calls,
-        vec![
-            (vec![0x15, 0x16, 0x17], false),
-            (vec![0x15, 0x16, 0x17], false),
-            (vec![0x15, 0x16, 0x17], true),
-        ]
-    );
-    assert_eq!(emitted.evidence.first_inserted, 0);
-    assert_eq!(emitted.evidence.attempts, 3);
-}
-
-#[test]
-fn zero_progress_can_retry_whole_chord_without_splitting() {
-    let mut calls = 0;
-    let emitted = emit_down_with(&[0x15, 0x16, 0x17], |codes, key_up| {
-        calls += 1;
-        assert!(!key_up);
-        scripted_result(codes.len(), if calls == 1 { 0 } else { 3 }, calls)
-    });
-
-    assert!(emitted.is_success());
-    assert_eq!(emitted.sent_scan_codes().len(), 3);
-    assert_eq!(emitted.evidence.attempts, 2);
-    assert_eq!(emitted.evidence.zero_progress_retries, 1);
-    assert!(!matches!(
-        emitted.status,
-        SendTransactionStatus::IntegrityLost
-    ));
-}
-
-#[test]
-fn complete_rollback_reports_no_residue_after_zero_retry() {
-    let mut calls = 0;
-    let emitted = emit_down_with(&[0x15, 0x16, 0x17], |codes, key_up| {
-        calls += 1;
-        let inserted = match calls {
-            1 => 0,
-            2 if !key_up => 1,
-            3 if key_up => codes.len() as u8,
-            _ => 0,
-        };
-        scripted_result(codes.len(), inserted, calls)
-    });
-
-    assert!(!emitted.is_success());
-    assert_eq!(emitted.evidence.confirmed_mask, 0);
-}
-
-#[test]
-fn up_retry_matrix_is_immediate_and_bounded() {
-    for (script, expected_sent, expected_calls, expected_success) in [
-        (vec![3], 3, 1, true),
-        (vec![1, 3], 3, 2, true),
-        (vec![0, 0], 0, 2, false),
-        (vec![99], 3, 1, true),
-    ] {
-        let mut returns = VecDeque::from(script);
-        let mut calls = 0;
-        let emitted = emit_up_with_immediate(&[0x15, 0x16, 0x17], |codes, _| {
-            calls += 1;
-            scripted_result(codes.len(), returns.pop_front().unwrap_or(0), calls)
-        });
-        assert_eq!(emitted.sent_scan_codes().len(), expected_sent);
-        assert_eq!(calls, expected_calls);
-        assert_eq!(emitted.is_success(), expected_success);
-    }
-}
-
-#[test]
-fn partial_note_off_retries_the_entire_requested_set() {
-    let mut calls = Vec::new();
-    let emitted = emit_up_with_immediate(&[0x15, 0x16, 0x17], |codes, key_up| {
-        assert!(key_up);
-        calls.push(codes.to_vec());
-        scripted_result(
-            codes.len(),
-            if calls.len() == 1 { 1 } else { 3 },
-            calls.len() as u64,
-        )
-    });
-
-    assert!(emitted.is_success());
-    assert_eq!(calls, vec![vec![0x15, 0x16, 0x17], vec![0x15, 0x16, 0x17]]);
-}
-
-#[test]
-fn structured_win32_errors_survive_down_retry() {
-    let mut calls = 0;
-    let emitted = emit_down_with(&[0x15, 0x16], |codes, _| {
-        calls += 1;
-        PlatformSendResult {
-            requested: codes.len() as u8,
-            inserted: 1,
-            started_ticks: QpcTicks::ZERO,
-            completed_ticks: Some(QpcTicks::ZERO),
-            win32_error: if calls == 1 { 5 } else { 0 },
+fn zero_progress_note_on_keeps_release_obligation_without_counting_a_split() {
+    let mut state = TrackedKeyState::with_packet_emitter(|packet| SendTransactionOutcome {
+        status: SendTransactionStatus::ZeroProgress,
+        evidence: SendEvidence {
+            requested_mask: packet.up_mask | packet.down_mask,
+            confirmed_mask: 0,
+            skipped_mask: 0,
+            first_inserted: 0,
+            attempts: 1,
+            zero_progress_retries: 0,
+            retry_reason: PacketRetryReason::ZeroProgress,
+            first_win32_error: Some(5),
+            last_win32_error: Some(5),
+            started_ticks: Some(QpcTicks::ZERO),
+            completed_ticks: Some(QpcTicks::from_raw(1)),
             timing_error: None,
-        }
+        },
     });
 
-    assert!(!emitted.is_success());
-    assert!(matches!(
-        emitted.status,
-        SendTransactionStatus::IntegrityLost
-    ));
-    assert_eq!(emitted.evidence.first_win32_error, Some(5));
-    assert_eq!(emitted.evidence.last_win32_error, Some(5));
-    assert_eq!(emitted.evidence.attempts, 2);
-    assert_eq!(emitted.evidence.zero_progress_retries, 0);
-}
-
-#[test]
-fn structured_win32_errors_survive_up_zero_progress_retries() {
-    let mut calls = 0;
-    let emitted = emit_up_with_immediate(&[0x15], |codes, _| {
-        calls += 1;
-        PlatformSendResult {
-            requested: codes.len() as u8,
-            inserted: 0,
-            started_ticks: QpcTicks::ZERO,
-            completed_ticks: Some(QpcTicks::ZERO),
-            win32_error: if calls == 1 { 5 } else { 1460 },
-            timing_error: None,
-        }
-    });
-
-    assert!(!emitted.is_success());
-    assert_eq!(emitted.evidence.first_win32_error, Some(5));
-    assert_eq!(emitted.evidence.last_win32_error, Some(1460));
-    assert_eq!(emitted.evidence.attempts, 2);
-    assert_eq!(emitted.evidence.zero_progress_retries, 1);
-}
-
-#[test]
-fn zero_progress_note_on_counts_rejection_without_counting_a_split() {
-    let mut state = TrackedKeyState::with_emitter(|codes, key_up| {
-        assert!(!key_up);
-        PlatformSendResult {
-            requested: codes.len() as u8,
-            inserted: 0,
-            started_ticks: QpcTicks::ZERO,
-            completed_ticks: Some(QpcTicks::ZERO),
-            win32_error: 5,
-            timing_error: None,
-        }
-    });
-
-    let result = state.key_down(&[0x15, 0x16]);
+    let result = state.send_physical_packet(PhysicalPacket::new(0, 0b11));
     assert_eq!(result.status, SendTransactionStatus::ZeroProgress);
     assert_eq!(state.chords_rejected, 1);
     assert_eq!(state.authored_keys_rejected, 2);
@@ -277,86 +58,49 @@ fn zero_progress_note_on_counts_rejection_without_counting_a_split() {
     assert_eq!(state.sendinput_zero_progress_failures, 1);
     assert_eq!(state.chord_split_events, 0);
     assert_eq!(state.active_mask, 0);
-    assert_eq!(state.release_obligation_mask(), 0);
+    // The low-level test facade does not consume the scheduler's authored
+    // Down identity, so it cannot prove this is the newly created obligation
+    // eligible for the dispatcher's raw-zero exception. Keep it journaled.
+    assert_eq!(state.release_obligation_mask(), 0b11);
 }
 
 #[test]
 fn post_send_clock_failure_keeps_down_keys_uncertain_for_cleanup() {
-    let mut state = TrackedKeyState::with_emitter(|codes, key_up| {
-        if key_up {
-            test_send_result(codes.len() as u8, codes.len() as u8, 0)
-        } else {
-            PlatformSendResult {
-                requested: codes.len() as u8,
-                inserted: codes.len() as u8,
-                started_ticks: QpcTicks::ZERO,
-                completed_ticks: None,
-                win32_error: 0,
-                timing_error: Some(QpcError::CounterUnavailable),
-            }
-        }
+    let mut state = TrackedKeyState::with_packet_emitter(|packet| SendTransactionOutcome {
+        status: SendTransactionStatus::ClockFailureAfterSend,
+        evidence: SendEvidence {
+            requested_mask: packet.up_mask | packet.down_mask,
+            confirmed_mask: 0,
+            skipped_mask: 0,
+            first_inserted: packet.event_count(),
+            attempts: 1,
+            zero_progress_retries: 0,
+            retry_reason: PacketRetryReason::None,
+            first_win32_error: None,
+            last_win32_error: None,
+            started_ticks: Some(QpcTicks::ZERO),
+            completed_ticks: None,
+            timing_error: Some(QpcError::CounterUnavailable),
+        },
     });
 
-    let outcome = state.key_down(&[0x15, 0x16]);
+    let outcome = state.send_physical_packet(PhysicalPacket::new(0, 0b11));
 
     assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
     assert_eq!(state.active_mask & 0b11, 0);
     assert_eq!(state.possibly_active_mask & 0b11, 0b11);
     let obligation = state.release_obligation_mask();
     assert_eq!(obligation, 0b11);
-    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
+    state.set_emitter(|codes, key_up| {
+        assert!(key_up);
+        test_send_result(codes.len() as u8, codes.len() as u8, 0)
+    });
+    state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
 
     let cleanup = state.release_scope(ReleaseScope::Tracked, 0);
     assert_eq!(cleanup.attempted_mask & obligation, obligation);
     assert!(cleanup.released_successfully);
     assert_eq!(state.release_obligation_mask(), 0);
-}
-
-#[test]
-fn tracked_note_on_uses_one_send_attempt_without_retry() {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let calls_for_emitter = Arc::clone(&calls);
-    let mut state = TrackedKeyState::with_emitter(move |codes, key_up| {
-        assert!(!key_up);
-        calls_for_emitter.fetch_add(1, Ordering::SeqCst);
-        test_send_result(codes.len() as u8, 0, 1460)
-    });
-
-    let outcome = state.key_down(&[0x15, 0x16]);
-
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
-    assert_eq!(outcome.status, SendTransactionStatus::ZeroProgress);
-    assert_eq!(outcome.evidence.attempts, 1);
-    assert_eq!(outcome.evidence.zero_progress_retries, 0);
-    assert_eq!(state.sendinput_zero_progress_failures, 1);
-    assert_eq!(state.chord_split_events, 0);
-    assert_eq!(state.release_obligation_mask(), 0);
-}
-
-#[test]
-fn tracked_note_off_uses_one_send_attempt_without_retry() {
-    let up_calls = Arc::new(AtomicUsize::new(0));
-    let up_calls_for_emitter = Arc::clone(&up_calls);
-    let mut state = TrackedKeyState::with_emitter(move |codes, key_up| {
-        if key_up {
-            up_calls_for_emitter.fetch_add(1, Ordering::SeqCst);
-            test_send_result(codes.len() as u8, 0, 1460)
-        } else {
-            test_send_result(codes.len() as u8, codes.len() as u8, 0)
-        }
-    });
-    assert_eq!(
-        state.key_down(&[0x15, 0x16]).status,
-        SendTransactionStatus::Complete
-    );
-
-    let outcome = state.key_up(&[0x15, 0x16]);
-
-    assert_eq!(up_calls.load(Ordering::SeqCst), 1);
-    assert_eq!(outcome.status, SendTransactionStatus::ZeroProgress);
-    assert_eq!(outcome.evidence.attempts, 1);
-    assert_eq!(outcome.evidence.zero_progress_retries, 0);
-    assert_ne!(state.failed_release_mask & 0b11, 0);
 }
 
 #[test]
@@ -483,23 +227,6 @@ fn raw_sender_rejects_unknown_scan_code_before_backend_call() {
 }
 
 #[test]
-fn full_instrument_release_reports_unreleased_keys() {
-    let mut state = TrackedKeyState::with_emitter(|codes, key_up| PlatformSendResult {
-        requested: codes.len() as u8,
-        inserted: if key_up { 0 } else { codes.len() as u8 },
-        started_ticks: QpcTicks::ZERO,
-        completed_ticks: Some(QpcTicks::ZERO),
-        win32_error: 5,
-        timing_error: None,
-    });
-    let outcome = state.release_all_full_instrument(0);
-    assert!(!outcome.released_successfully);
-    assert_eq!(outcome.attempted(), PHYSICAL_INSTRUMENT_SCAN_CODES);
-    assert_eq!(outcome.stuck_keys(), PHYSICAL_INSTRUMENT_SCAN_CODES);
-    assert_eq!(state.failed_release_mask.count_ones(), 15);
-}
-
-#[test]
 fn physical_held_reports_only_held_subset() {
     let reconciled = reconcile_release_observation(
         0x0007,
@@ -545,26 +272,6 @@ fn verified_all_up_clears_all_tracking_masks() {
 }
 
 #[test]
-fn full_instrument_all_up_clears_transport_derived_stuck_keys() {
-    let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
-        requested: codes.len() as u8,
-        inserted: codes.len() as u8,
-        started_ticks: QpcTicks::ZERO,
-        completed_ticks: Some(QpcTicks::ZERO),
-        win32_error: 0,
-        timing_error: None,
-    });
-    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
-    state.failed_release_mask = FULL_INSTRUMENT_MASK;
-
-    let outcome = state.release_all_full_instrument(0);
-    assert!(outcome.released_successfully);
-    assert!(outcome.stuck_keys().is_empty());
-    assert!(!outcome.verification_inconclusive);
-    assert_eq!(state.failed_release_mask, 0);
-}
-
-#[test]
 fn custom_emitter_still_uses_transport_evidence() {
     let mut state = TrackedKeyState::with_emitter(|codes, _| PlatformSendResult {
         requested: codes.len() as u8,
@@ -578,7 +285,7 @@ fn custom_emitter_still_uses_transport_evidence() {
 
     let outcome = state.release_all(0);
     assert!(!outcome.released_successfully);
-    assert!(outcome.verification_inconclusive);
+    assert!(!outcome.verification_inconclusive);
     assert_eq!(outcome.stuck_keys(), vec![0x15]);
     assert_eq!(state.failed_release_mask, 0x0001);
 }
@@ -606,29 +313,6 @@ fn tracked_cleanup_does_not_call_full_cleanup() {
     let batches = emitted_batches.lock().unwrap();
     assert_eq!(batches.len(), 1);
     assert_eq!(batches[0], vec![0x15]);
-}
-
-#[test]
-fn full_cleanup_does_not_run_tracked_cleanup_first() {
-    let call_count = Arc::new(AtomicUsize::new(0));
-    let count_clone = call_count.clone();
-    let mut state = TrackedKeyState::with_emitter(move |codes, _| {
-        count_clone.fetch_add(1, Ordering::Relaxed);
-        PlatformSendResult {
-            requested: codes.len() as u8,
-            inserted: codes.len() as u8,
-            started_ticks: QpcTicks::ZERO,
-            completed_ticks: Some(QpcTicks::ZERO),
-            win32_error: 0,
-            timing_error: None,
-        }
-    });
-    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
-    state.active_mask = 0x0001;
-
-    let outcome = state.release_all_full_instrument(0);
-    assert!(outcome.released_successfully);
-    assert_eq!(call_count.load(Ordering::Relaxed), 1);
 }
 
 #[test]
@@ -791,7 +475,7 @@ fn final_inconclusive_result_fails_closed() {
 
     let outcome = state.release_all(0);
     assert!(!outcome.released_successfully);
-    assert!(outcome.verification_inconclusive);
+    assert!(!outcome.verification_inconclusive);
     assert_eq!(outcome.stuck_keys(), vec![0x15, 0x16]);
     assert_eq!(state.failed_release_mask, 0x0003);
 }

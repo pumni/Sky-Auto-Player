@@ -629,6 +629,7 @@ pub(crate) struct SharedMetrics {
     pub(crate) effective_wait_policy: Mutex<String>,
     pub(crate) wait_strategy_acquired: Mutex<String>,
     pub(crate) terminal_error: Mutex<Option<String>>,
+    pub(crate) terminal_result: Mutex<Option<super::super::WorkerTerminalResult>>,
     pub(crate) terminal_trigger_reason: Mutex<Option<String>>,
     pub(crate) secondary_errors: Mutex<Vec<String>>,
     pub(crate) generation_status_counts: Mutex<HashMap<String, u64>>,

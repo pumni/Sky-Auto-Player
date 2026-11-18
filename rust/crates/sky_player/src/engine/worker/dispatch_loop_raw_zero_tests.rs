@@ -3,11 +3,11 @@ use crate::engine::test_support::ProductionDispatchTestHarness;
 use crate::engine::worker::StagedDispatchOutcome;
 use sky_dispatch_core::executor::{DispatchDecision, DownChordMetadata};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
-use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
+use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 fn raw_zero_action(
@@ -127,71 +127,8 @@ fn install_success_then_raw_zero_sender(
     packets
 }
 
-fn install_exact_zero_boundary_sender(
-    harness: &mut ProductionDispatchTestHarness,
-    sender_qpc: &Arc<AtomicU64>,
-) -> Arc<Mutex<Vec<(PhysicalPacket, SendEvidence)>>> {
-    let packets = Arc::new(Mutex::new(Vec::with_capacity(4)));
-    let captured = Arc::clone(&packets);
-    let calls = Arc::new(AtomicUsize::new(0));
-    let call_index = Arc::clone(&calls);
-    let sender_qpc = Arc::clone(sender_qpc);
-    harness.resources.backend.set_packet_emitter(move |packet| {
-        let index = call_index.fetch_add(1, Ordering::AcqRel);
-        let started = QpcTicks::from_raw(sender_qpc.load(Ordering::Acquire));
-        let raw_zero = index == 1;
-        let requested_mask = packet.up_mask | packet.down_mask;
-        let evidence = SendEvidence {
-            requested_mask,
-            confirmed_mask: if raw_zero { 0 } else { requested_mask },
-            skipped_mask: 0,
-            first_inserted: if raw_zero { 0 } else { packet.event_count() },
-            attempts: 1,
-            zero_progress_retries: 0,
-            retry_reason: if raw_zero {
-                PacketRetryReason::ZeroProgress
-            } else {
-                PacketRetryReason::None
-            },
-            first_win32_error: raw_zero.then_some(5),
-            last_win32_error: raw_zero.then_some(5),
-            started_ticks: Some(started),
-            completed_ticks: Some(started),
-            timing_error: None,
-        };
-        captured
-            .lock()
-            .expect("boundary packet capture")
-            .push((packet, evidence));
-        SendTransactionOutcome {
-            status: if raw_zero {
-                SendTransactionStatus::ZeroProgress
-            } else {
-                SendTransactionStatus::Complete
-            },
-            evidence,
-        }
-    });
-    packets
-}
-
-fn qpc_at_tick_offset(epoch: QpcTicks, offset: u64) -> QpcTicks {
-    epoch
-        .checked_add_duration(DurationTicks::from_raw(offset))
-        .expect("QPC tick offset")
-}
-
-fn qpc_with_tick_delta(at: QpcTicks, delta: i8) -> QpcTicks {
-    match delta {
-        -1 => QpcTicks::from_raw(at.as_u64().checked_sub(1).expect("QPC minus one tick")),
-        0 => at,
-        1 => QpcTicks::from_raw(at.as_u64().checked_add(1).expect("QPC plus one tick")),
-        _ => unreachable!("boundary fixture only uses -1, 0, and +1"),
-    }
-}
-
 #[test]
-fn proven_raw_zero_down_only_keeps_a_hold_and_dispatches_c_without_a_fake_floor() {
+fn proven_raw_zero_down_only_clears_only_the_new_obligation_and_terminates() {
     let mut harness = ProductionDispatchTestHarness::create_harness(&raw_zero_sequence());
     let epoch = harness.qpc_now_for_test().expect("QPC epoch");
     harness
@@ -224,26 +161,18 @@ fn proven_raw_zero_down_only_keeps_a_hold_and_dispatches_c_without_a_fake_floor(
     assert_eq!(b.packet_masks, PhysicalPacket::new(0, 0b0010));
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(b, false),
-        StagedDispatchOutcome::Dispatched
+        StagedDispatchOutcome::Exit
     );
 
-    assert_eq!(harness.release_obligation_mask_for_test(), 0b0001);
-    assert_eq!(harness.resources.backend.active_mask, 0b0001);
-    assert_eq!(harness.resources.backend.possibly_active_mask, 0);
-    assert_eq!(harness.resources.backend.failed_release_mask, 0);
-    assert_eq!(harness.resources.backend.in_flight_mask, 0);
-    assert_eq!(harness.resume_barrier_qpc_for_test(), None);
+    let captured = packets.lock().expect("captured musical packets");
+    assert_eq!(captured.len(), 2, "no onset is attempted after raw zero");
+    assert_eq!(captured[0].0, PhysicalPacket::new(0, 0b0001));
+    assert_eq!(captured[1].0, PhysicalPacket::new(0, 0b0010));
+    assert_eq!(captured[1].1.first_inserted, 0);
+    assert_eq!(captured[1].1.attempts, 1);
+    drop(captured);
+    assert_eq!(harness.release_obligation_mask_for_test() & 0b0010, 0);
     assert_eq!(harness.runtime.last_physical_send_completion_qpc, None);
-    assert_eq!(
-        harness
-            .current_executor_chord_for_test()
-            .map(|chord| chord.source_action_index),
-        Some(602)
-    );
-    assert_eq!(
-        harness.resources.backend.sendinput_zero_progress_failures,
-        1
-    );
     assert_eq!(
         harness
             .runtime
@@ -251,230 +180,85 @@ fn proven_raw_zero_down_only_keeps_a_hold_and_dispatches_c_without_a_fake_floor(
             .retained_count(),
         1
     );
-    assert!(cleanup.lock().expect("cleanup capture").is_empty());
-
-    // C is only 10 ms after the attempted B packet. A fabricated B completion
-    // would push a global H floor beyond C's authored onset and block it.
-    let c_at = qpc_at_offset(&harness, epoch, 30_000);
-    wait_until_qpc(&harness, c_at);
-    let (c_up_mask, c_down, c) = stage_at_qpc(&mut harness, c_at, epoch);
-    assert_eq!(c_up_mask, 0);
-    assert_eq!(c_down.map(|chord| chord.source_action_index), Some(602));
-    assert_eq!(c.packet_masks, PhysicalPacket::new(0, 0b0100));
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(c, false),
-        StagedDispatchOutcome::Dispatched
-    );
-    assert_eq!(harness.resources.backend.active_mask, 0b0101);
-
-    let c_up_at = qpc_at_offset(&harness, epoch, 50_000);
-    wait_until_qpc(&harness, c_up_at);
-    let (c_up_mask, c_up_down, c_up) = stage_at_qpc(&mut harness, c_up_at, epoch);
-    assert_eq!(c_up_mask, 0b0100);
-    assert!(c_up_down.is_none());
-    assert_eq!(
-        harness.dispatch_staged_candidate_for_test(c_up, false),
-        StagedDispatchOutcome::Dispatched
-    );
-    assert_eq!(harness.resources.backend.active_mask, 0b0001);
-
-    let a_up_at = qpc_at_offset(&harness, epoch, 100_000);
-    wait_until_qpc(&harness, a_up_at);
-    let (a_up_mask, a_up_down, a_up) = stage_at_qpc(&mut harness, a_up_at, epoch);
-    assert_eq!(a_up_mask, 0b0001);
-    assert!(a_up_down.is_none());
-    assert_eq!(
-        harness.dispatch_staged_candidate_for_test(a_up, false),
-        StagedDispatchOutcome::Dispatched
+        cleanup.lock().expect("cleanup capture").as_slice(),
+        &[(vec![0x15], true)],
+        "only the older journaled A duty is safety-released"
     );
 
-    let captured = packets.lock().expect("captured physical packets");
+    let finalized = harness.finalize_for_test();
+    assert_eq!(finalized.outcome_code, crate::engine::OUTCOME_ERROR);
+    assert_eq!(finalized.release_obligation_mask & 0b0010, 0);
+}
+
+#[test]
+fn raw_zero_does_not_create_a_completion_floor_or_send_later_events() {
+    let mut harness = ProductionDispatchTestHarness::create_harness(&raw_zero_sequence());
+    let epoch = harness.qpc_now_for_test().expect("QPC epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback epoch");
+    let packets = install_success_then_raw_zero_sender(&mut harness, || {});
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage A Down")
+        .expect("A Down candidate");
+    assert_eq!(first.source_action_index, 600);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    let b_at = qpc_at_offset(&harness, epoch, 20_000);
+    wait_until_qpc(&harness, b_at);
+    let (_, b_down, b) = stage_at_qpc(&mut harness, b_at, epoch);
+    assert_eq!(b_down.map(|chord| chord.source_action_index), Some(601));
+    assert_eq!(b.packet_masks, PhysicalPacket::new(0, 0b0010));
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(b, false),
+        StagedDispatchOutcome::Exit
+    );
+
+    let captured = packets.lock().expect("captured musical packets");
     assert_eq!(
         captured.len(),
-        5,
-        "one syscall per authored packet; B Up is suppressed"
+        2,
+        "anomaly terminates before any later event"
     );
     assert_eq!(captured[0].0, PhysicalPacket::new(0, 0b0001));
     assert_eq!(captured[1].0, PhysicalPacket::new(0, 0b0010));
     assert_eq!(captured[1].1.first_inserted, 0);
-    assert_eq!(captured[1].1.attempts, 1);
-    assert_eq!(captured[2].0, PhysicalPacket::new(0, 0b0100));
-    assert_eq!(captured[3].0, PhysicalPacket::new(0b0100, 0));
-    assert_eq!(captured[4].0, PhysicalPacket::new(0b0001, 0));
-    assert!(
-        captured[4]
-            .1
-            .started_ticks
-            .is_some_and(|started| started >= a_up_at)
-    );
     drop(captured);
+    assert_eq!(harness.runtime.last_physical_send_completion_qpc, None);
+    assert_eq!(
+        harness
+            .runtime
+            .attempted_dispatch_anomalies
+            .retained_count(),
+        1
+    );
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_deref()
+            .is_some_and(|error| {
+                error.contains("musical playback terminated after proven raw-zero Down")
+            })
+    );
 
     let finalized = harness.finalize_for_test();
     assert_eq!(finalized.outcome_code, crate::engine::OUTCOME_ERROR);
-    assert_eq!(finalized.release_obligation_mask, 0);
-    assert_eq!(finalized.active_mask, 0);
-    assert_eq!(finalized.possibly_active_mask, 0);
-    assert_eq!(finalized.in_flight_mask, 0);
+    assert_eq!(finalized.release_obligation_mask & 0b0010, 0);
+    assert!(cleanup.lock().expect("cleanup capture").len() <= 1);
 }
-
-#[test]
-fn proven_raw_zero_preserves_prior_h_and_g_floors_at_minus_exact_and_plus_one_tick() {
-    for hold_probe_delta in [-1, 0, 1] {
-        for release_probe_delta in [-1, 0, 1] {
-            let actions = [
-                raw_zero_action(610, ActionKind::Down, 0, &[0x15]),
-                raw_zero_action(611, ActionKind::Down, 15_000, &[0x16]),
-                raw_zero_action(612, ActionKind::Up, 17_167, &[0x15]),
-                raw_zero_action(613, ActionKind::Up, 32_167, &[0x16]),
-                raw_zero_action(614, ActionKind::Down, 34_334, &[0x15]),
-                raw_zero_action(615, ActionKind::Up, 51_501, &[0x15]),
-            ];
-            let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
-            let epoch = harness.qpc_now_for_test().expect("QPC epoch");
-            harness
-                .reanchor_playback_clock_for_test(epoch)
-                .expect("reanchor playback epoch");
-            let timing = harness
-                .dispatch_timing_config_for_test()
-                .expect("H/G timing config");
-            let sender_qpc = Arc::new(AtomicU64::new(epoch.as_u64()));
-            let packets = install_exact_zero_boundary_sender(&mut harness, &sender_qpc);
-            harness.attach_executor_for_test().expect("attach executor");
-
-            // A is confirmed at +10 ms, so its H floor is +10 ms + H.
-            let a_completion = qpc_at_offset(&harness, epoch, 10_000);
-            sender_qpc.store(a_completion.as_u64(), Ordering::Release);
-            let first = harness
-                .stage_candidate_for_test(
-                    0,
-                    harness.current_executor_chord_for_test(),
-                    TimelineTicks::ZERO,
-                )
-                .expect("stage initial A Down")
-                .expect("initial A Down candidate");
-            assert_eq!(
-                harness.dispatch_staged_candidate_for_test(first, false),
-                StagedDispatchOutcome::Dispatched
-            );
-
-            // B is attempted once with consistent raw-zero evidence after A
-            // has become active. The exception must preserve A and create no
-            // barrier or completion QPC for B.
-            let b_at = qpc_at_offset(&harness, epoch, 15_000);
-            sender_qpc.store(b_at.as_u64(), Ordering::Release);
-            let (_, b_down, b) = stage_at_qpc(&mut harness, b_at, epoch);
-            assert_eq!(b_down.map(|chord| chord.source_action_index), Some(611));
-            assert_eq!(b.packet_masks, PhysicalPacket::new(0, 0b0010));
-            assert_eq!(
-                harness.dispatch_staged_candidate_for_test(b, false),
-                StagedDispatchOutcome::Dispatched
-            );
-            assert_eq!(harness.release_obligation_mask_for_test(), 0b0001);
-            assert_eq!(harness.resources.backend.active_mask, 0b0001);
-            assert_eq!(harness.resume_barrier_qpc_for_test(), None);
-            assert_eq!(harness.runtime.last_physical_send_completion_qpc, None);
-
-            let hold_floor = qpc_at_tick_offset(a_completion, timing.effective_hold_ticks);
-            let hold_probe = qpc_with_tick_delta(hold_floor, hold_probe_delta);
-            let hold_decision = harness
-                .evaluate_live_scheduler_for_test(hold_probe, epoch)
-                .expect("evaluate A hold floor");
-            if hold_probe_delta == -1 {
-                assert!(matches!(
-                    hold_decision,
-                    DispatchDecision::Wait { deadline_qpc } if deadline_qpc == hold_floor
-                ));
-                wait_until_qpc(&harness, hold_floor);
-            } else {
-                assert!(matches!(
-                    hold_decision,
-                    DispatchDecision::Send {
-                        up_mask: 0b0001,
-                        ..
-                    }
-                ));
-            }
-            let actual_up_qpc = if hold_probe_delta == -1 {
-                hold_floor
-            } else {
-                hold_probe
-            };
-            sender_qpc.store(actual_up_qpc.as_u64(), Ordering::Release);
-            let (a_up_mask, a_down, a_up) = stage_at_qpc(&mut harness, actual_up_qpc, epoch);
-            assert_eq!(a_up_mask, 0b0001);
-            assert!(a_down.is_none());
-            assert_eq!(
-                harness.dispatch_staged_candidate_for_test(a_up, false),
-                StagedDispatchOutcome::Dispatched
-            );
-            assert_eq!(harness.resources.backend.active_mask, 0);
-
-            // The retrigger's authored timestamp is earlier than the physical
-            // G floor because A's actual Up was delayed by H. Probe each exact
-            // tick around that retained physical floor after the zero packet.
-            let release_floor = qpc_at_tick_offset(actual_up_qpc, timing.min_release_gap_ticks);
-            let release_probe = qpc_with_tick_delta(release_floor, release_probe_delta);
-            let release_decision = harness
-                .evaluate_live_scheduler_for_test(release_probe, epoch)
-                .expect("evaluate A release-gap floor");
-            if release_probe_delta == -1 {
-                assert!(matches!(
-                    release_decision,
-                    DispatchDecision::Wait { deadline_qpc } if deadline_qpc == release_floor
-                ));
-                wait_until_qpc(&harness, release_floor);
-            } else {
-                assert!(matches!(
-                    release_decision,
-                    DispatchDecision::Send { up_mask: 0, down_chord: Some(chord), .. }
-                        if chord.source_action_index == 614
-                ));
-            }
-            let actual_down_qpc = if release_probe_delta == -1 {
-                release_floor
-            } else {
-                release_probe
-            };
-            sender_qpc.store(actual_down_qpc.as_u64(), Ordering::Release);
-            let (up_mask, down, a_again) = stage_at_qpc(&mut harness, actual_down_qpc, epoch);
-            assert_eq!(up_mask, 0);
-            assert_eq!(down.map(|chord| chord.source_action_index), Some(614));
-            assert_eq!(a_again.packet_masks, PhysicalPacket::new(0, 0b0001));
-            assert_eq!(
-                harness.dispatch_staged_candidate_for_test(a_again, false),
-                StagedDispatchOutcome::Dispatched
-            );
-            assert_eq!(harness.resources.backend.active_mask, 0b0001);
-
-            let captured = packets.lock().expect("captured H/G packets");
-            assert_eq!(captured.len(), 4, "A Down, B zero, A Up, A retrigger");
-            assert_eq!(captured[1].0, PhysicalPacket::new(0, 0b0010));
-            assert_eq!(captured[1].1.first_inserted, 0);
-            assert_eq!(captured[1].1.attempts, 1);
-            assert_eq!(captured[2].0, PhysicalPacket::new(0b0001, 0));
-            assert_eq!(captured[3].0, PhysicalPacket::new(0, 0b0001));
-            drop(captured);
-            assert_eq!(
-                harness.resources.backend.sendinput_zero_progress_failures,
-                1
-            );
-            assert_eq!(
-                harness
-                    .runtime
-                    .attempted_dispatch_anomalies
-                    .retained_count(),
-                1
-            );
-            assert_eq!(harness.resume_barrier_qpc_for_test(), None);
-
-            let finalized = harness.finalize_for_test();
-            assert_eq!(finalized.outcome_code, crate::engine::OUTCOME_ERROR);
-            assert_eq!(finalized.release_obligation_mask, 0);
-            assert_eq!(finalized.active_mask, 0);
-        }
-    }
-}
-
 #[test]
 fn h_g_real_waiter_smoke_wakes_on_a_future_boundary() {
     let actions = [
@@ -594,7 +378,7 @@ fn raw_zero_classifier_rejects_short_packet_and_contradictory_qpc() {
         assert_eq!(b.packet_masks.down_mask.count_ones(), 2);
         assert_eq!(
             harness.dispatch_staged_candidate_for_test(b, false),
-            StagedDispatchOutcome::Dispatched
+            StagedDispatchOutcome::Exit
         );
 
         assert_eq!(calls.load(Ordering::Acquire), 2);
@@ -699,7 +483,7 @@ fn mixed_up_a_down_b_raw_zero_uses_conservative_reconciliation() {
     assert_eq!(mixed.packet_masks, PhysicalPacket::new(0b0001, 0b0010));
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(mixed, false),
-        StagedDispatchOutcome::Dispatched
+        StagedDispatchOutcome::Exit
     );
     assert_eq!(calls.load(Ordering::Acquire), 2);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
@@ -891,10 +675,6 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         sky_dispatch_win32::focus::reset_foreground_query_count();
         sky_dispatch_win32::focus::reset_process_identity_counts_for_test();
         sky_dispatch_win32::input::reset_release_owner_proof_arc_clone_count_for_test();
-        harness
-            .resources
-            .backend
-            .reset_owner_ledger_visits_for_test();
         harness.reset_target_proof_counts_for_test();
     }
 
@@ -946,7 +726,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
             "a healthy focus-required packet proves process liveness once"
         );
         println!(
-            "proof-count label={label} scheduler_evaluations={} qpc_reads={} foreground_queries={} real_GetForegroundWindow={} owner_pid_checks={} process_identity_checks={} process_liveness_proofs={} GetProcessTimes={} admission_atomic_reads={admission_atomic_reads} target_atomic_reads={target_atomic_reads} release_identity_arc_clones={release_identity_arc_clones} generation_revalidations={generation_checks} ledger_mask_visits={} sender_attempts={sender_attempts} allocations=0",
+            "proof-count label={label} scheduler_evaluations={} qpc_reads={} foreground_queries={} real_GetForegroundWindow={} owner_pid_checks={} process_identity_checks={} process_liveness_proofs={} GetProcessTimes={} admission_atomic_reads={admission_atomic_reads} target_atomic_reads={target_atomic_reads} release_identity_arc_clones={release_identity_arc_clones} generation_revalidations={generation_checks} session_owner_bound={} sender_attempts={sender_attempts} allocations=0",
             sky_dispatch_core::executor::scheduler_evaluation_count_for_test(),
             sky_dispatch_win32::clock::qpc_read_count(),
             sky_dispatch_win32::focus::foreground_query_count(),
@@ -955,7 +735,11 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
             sky_dispatch_win32::focus::process_identity_check_count_for_test(),
             sky_dispatch_win32::focus::process_liveness_check_count_for_test(),
             sky_dispatch_win32::focus::get_process_times_call_count_for_test(),
-            harness.resources.backend.owner_ledger_visits_for_test(),
+            harness
+                .resources
+                .backend
+                .session_release_owner_proof()
+                .is_some(),
         );
     }
 

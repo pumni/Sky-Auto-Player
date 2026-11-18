@@ -47,28 +47,12 @@ pub type ModifierKeyStateQuery = Box<dyn Fn(i32) -> i16 + Send + Sync>;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::AtomicBool;
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReleaseScope {
     Tracked,
-    FullInstrument,
-}
-
-const RELEASE_OWNER_SLOT_COUNT: usize = 15;
-
-struct ReleaseOwnerLedger {
-    owner_by_slot: [Option<ReleaseOwnerProof>; RELEASE_OWNER_SLOT_COUNT],
-    conflicted_mask: u16,
-}
-
-impl Default for ReleaseOwnerLedger {
-    fn default() -> Self {
-        Self {
-            owner_by_slot: std::array::from_fn(|_| None),
-            conflicted_mask: 0,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -77,39 +61,6 @@ std::thread_local! {
         std::cell::Cell::new(0)
     };
 }
-
-#[cfg(any(test, feature = "test-support"))]
-std::thread_local! {
-    static TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE: std::cell::Cell<u64> = const {
-        std::cell::Cell::new(0)
-    };
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) struct TestReleaseOwnerLedgerVisitCount;
-
-#[cfg(any(test, feature = "test-support"))]
-impl TestReleaseOwnerLedgerVisitCount {
-    pub(crate) fn store(&self, value: u64, _ordering: std::sync::atomic::Ordering) {
-        TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE.set(value);
-    }
-
-    pub(crate) fn load(&self, _ordering: std::sync::atomic::Ordering) -> u64 {
-        TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE.get()
-    }
-
-    pub(crate) fn increment(&self) {
-        TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE.set(
-            TEST_RELEASE_OWNER_LEDGER_VISITS_VALUE
-                .get()
-                .saturating_add(1),
-        );
-    }
-}
-
-#[cfg(any(test, feature = "test-support"))]
-pub(crate) static TEST_RELEASE_OWNER_LEDGER_VISITS: TestReleaseOwnerLedgerVisitCount =
-    TestReleaseOwnerLedgerVisitCount;
 
 #[cfg(test)]
 pub(crate) struct TestReleaseSleepCount;
@@ -145,11 +96,16 @@ fn release_retry_sleep(_ms: u64) {
 #[derive(Default)]
 pub struct TrackedKeyState {
     pub(crate) instrument_key_profile: MaterializedInstrumentKeyProfile,
-    release_owner_ledger: ReleaseOwnerLedger,
+    /// One immutable owner proof retained by this worker/session. Key masks
+    /// never carry their own copies of process authority.
+    pub(crate) session_release_owner: Option<ReleaseOwnerProof>,
     pub active_mask: u16,
     pub possibly_active_mask: u16,
     pub failed_release_mask: u16,
     pub in_flight_mask: u16,
+    /// Keys whose safety Up transport completed and now only need an
+    /// independent physical-state probe. These bits are never resent.
+    pub needs_probe_mask: u16,
     /// Cumulative release-FSM send attempts for this worker-owned backend.
     /// This includes distinct resumable and terminal cleanup operations.
     pub release_attempts_total: u64,
@@ -181,10 +137,6 @@ pub struct TrackedKeyState {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) modifier_key_state_query: Option<ModifierKeyStateQuery>,
     #[cfg(any(test, feature = "test-support"))]
-    pub full_instrument_release_calls: u64,
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) full_instrument_release_counter: Option<Arc<AtomicU64>>,
-    #[cfg(any(test, feature = "test-support"))]
     pub(crate) force_preflight_failure: Option<Arc<AtomicBool>>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) force_preflight_user_held_mask: Option<u16>,
@@ -199,6 +151,7 @@ pub struct TrackedKeyState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreparedSendPanicPoint {
     BeforeSenderAuthority,
+    AfterJournalBeforeSyscall,
     AfterSenderReturn,
     AfterStateCommit,
 }

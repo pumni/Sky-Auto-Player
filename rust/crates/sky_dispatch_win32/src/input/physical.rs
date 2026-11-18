@@ -1,7 +1,9 @@
 use super::profile::MaterializedInstrumentKeyProfile;
+use super::scan_code::FULL_INSTRUMENT_MASK;
 #[cfg(test)]
 use super::scan_code::PHYSICAL_INSTRUMENT_SCAN_CODES;
-use super::scan_code::{FULL_INSTRUMENT_MASK, key_mask};
+#[cfg(any(test, feature = "test-support"))]
+use super::scan_code::key_mask;
 use crate::focus::foreground_window_matches;
 use sky_dispatch_core::model::MAX_KEYS;
 #[cfg(any(test, feature = "test-support"))]
@@ -398,6 +400,7 @@ pub(crate) fn instrument_physical_state_for_mask(
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn mask_for_scan_codes(scan_codes: &[u16]) -> Option<u16> {
     scan_codes.iter().try_fold(0u16, |mask, &scan_code| {
         key_mask(scan_code).map(|bit| mask | bit)

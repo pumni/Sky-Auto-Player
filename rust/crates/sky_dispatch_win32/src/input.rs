@@ -1,6 +1,5 @@
 //! Windows SendInput API wrappers, input packet prewarming, and tracked key backend.
 
-mod down_transaction;
 mod modifier_guard;
 mod outcome;
 mod packet;
@@ -15,6 +14,7 @@ pub mod physical_study;
 mod up_transaction;
 
 use std::sync::Arc;
+use std::{fmt, fmt::Formatter};
 
 #[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
@@ -41,6 +41,17 @@ pub struct ReleaseOwnerProof {
     target_hwnd: isize,
     target_generation: u64,
     owner: Option<Arc<ReleaseOwnerIdentity>>,
+}
+
+impl fmt::Debug for ReleaseOwnerProof {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReleaseOwnerProof")
+            .field("target_hwnd", &self.target_hwnd)
+            .field("target_generation", &self.target_generation)
+            .field("owner_pid", &self.owner_pid())
+            .field("has_process_authority", &self.authority().is_some())
+            .finish()
+    }
 }
 
 /// The process handle is retained once by the session's target proof. Journal
@@ -144,44 +155,34 @@ impl ReleaseOwnerProof {
     }
 }
 
-#[cfg(test)]
-pub(crate) use down_transaction::emit_down_with;
-pub use down_transaction::{emit_down, emit_down_once, emit_down_once_with};
 pub use modifier_guard::{ModifierKeyObservation, ModifierMask};
 pub use outcome::{
-    GuardedReleaseOutcome, PacketPreparationError, PacketRetryReason, PhysicalKeyPreflightError,
-    PhysicalPacket, PlatformSendResult, ReleaseAllOutcome, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus, TerminalProbeVerdict, TerminalReleaseEvidence,
+    CleanupDrainDecision, GuardedReleaseOutcome, PacketPreparationError, PacketRetryReason,
+    PhysicalKeyPreflightError, PhysicalPacket, PlatformSendResult, ReleaseAllOutcome, SendEvidence,
+    SendTransactionOutcome, SendTransactionStatus, TerminalProbeVerdict, TerminalReleaseEvidence,
     TerminalSendAttemptEvidence,
 };
 
 pub(crate) use packet::PreparedTaggedCalibrationPacket;
-pub use packet::{
-    MAX_PACKET_EVENTS, PreparedPacketView, PreparedPhysicalPacket,
-    send_physical_packet_once_with_clock, send_prepared_physical_packet_once,
-    send_prepared_physical_packet_once_at_target, send_prepared_physical_packet_view_once,
-    send_prepared_physical_packet_view_once_at_target,
-};
+pub(crate) use packet::send_prepared_physical_packet_once_at_target;
+pub use packet::{MAX_PACKET_EVENTS, PreparedPacketView, PreparedPhysicalPacket};
 pub use physical::is_scan_code_physically_down;
 pub use profile::{
     InstrumentKeyProfile, InstrumentKeyProfileError, InstrumentKeyProfileSpec,
     MaterializedInstrumentKeyProfile, PhysicalKey, SUPPORTED_NON_EXTENDED_SCAN_CODES,
 };
-pub use raw::{send_input_raw, send_input_raw_with_clock};
+pub(crate) use raw::send_input_raw;
 pub use scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
     scan_codes_from_mask,
 };
-pub use tracked::{ReleaseScope, TrackedKeyState};
+#[cfg(any(test, feature = "test-support"))]
+pub use tracked::ReleaseScope;
+pub use tracked::TrackedKeyState;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use physical::InstrumentPhysicalState;
 #[cfg(any(test, feature = "test-support"))]
 pub use tracked::{CustomEmitterFn, CustomPacketEmitterFn, CustomProbeFn, PreparedSendPanicPoint};
-pub use up_transaction::{emit_up, emit_up_with};
-
-#[cfg(test)]
-pub(crate) use up_transaction::emit_up_with_immediate;
-
 #[cfg(test)]
 mod tests;

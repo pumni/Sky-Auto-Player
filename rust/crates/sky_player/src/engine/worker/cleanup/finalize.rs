@@ -1,11 +1,9 @@
 use super::super::admission::{TargetStamp, verify_safety_cleanup_target};
 use super::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
-    FinalizeTiming, OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED,
-    OUTCOME_SYSTEM_SUSPENDED, TerminalTrigger, clean_completion_proven,
-    current_process_cpu_time_us, current_thread_cpu_time_us, describe_release_outcome,
-    publish_backend_metrics, publish_terminal_metrics, record_termination_error,
-    release_state_verified,
+    FinalizeTiming, TerminalTrigger, clean_completion_proven, current_process_cpu_time_us,
+    current_thread_cpu_time_us, describe_release_outcome, publish_backend_metrics,
+    publish_terminal_metrics, record_termination_error, release_state_verified,
 };
 #[cfg(any(test, feature = "test-support"))]
 use parking_lot::Mutex;
@@ -108,8 +106,9 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "terminal_release_started");
     let cleanup_target = terminal_cleanup_target(target);
+    let session_release_owner = backend.session_release_owner_proof().cloned();
     let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
-        backend.release_terminal_tracked_scope_with_attempt_admission(
+        backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
             cleanup_target.hwnd,
             |_, release_owner| {
                 let stamp = cleanup_target.stamp.ok_or_else(|| {
@@ -120,6 +119,21 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
                     stamp,
                     release_owner,
                     cleanup_target.require_owner_identity,
+                )
+            },
+            || {
+                let stamp = cleanup_target.stamp.ok_or_else(|| {
+                    "target HWND/generation unavailable during terminal cleanup".to_string()
+                })?;
+                let release_owner = session_release_owner.as_ref().ok_or_else(|| {
+                    "session release owner proof is missing during terminal cleanup".to_string()
+                })?;
+                super::super::admission::safety_cleanup_drain_decision(
+                    target,
+                    stamp,
+                    release_owner,
+                    cleanup_target.require_owner_identity,
+                    true,
                 )
             },
         )
@@ -464,30 +478,63 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     record_finalization_event(&operation_trace, "terminal_metrics_publication");
     publish_terminal_metrics(&local_metrics, metrics, qpc_clock, end_us);
     let cleanup_panicked = matches!(&cleanup_result, Err(TerminalCleanupFailure::Panicked(_)));
+    let terminal_outcome = if terminal_error.is_some()
+        || cleanup_panicked
+        || worker_panicked
+        || terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
+    {
+        super::super::super::WorkerTerminalOutcome::Error
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::SystemSuspend)) {
+        super::super::super::WorkerTerminalOutcome::SystemSuspended
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::Skip))
+        || skip_requested.load(Ordering::Acquire)
+    {
+        super::super::super::WorkerTerminalOutcome::Skipped
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::Quit))
+        || quit_requested.load(Ordering::Acquire)
+    {
+        super::super::super::WorkerTerminalOutcome::Quit
+    } else {
+        super::super::super::WorkerTerminalOutcome::Finished
+    };
+    let terminal_cause = if worker_panicked {
+        super::super::super::WorkerTerminalCause::WorkerPanic
+    } else if cleanup_panicked {
+        super::super::super::WorkerTerminalCause::CleanupPanic
+    } else {
+        match terminal_trigger {
+            Some(TerminalTrigger::SenderAnomaly) => {
+                super::super::super::WorkerTerminalCause::SenderAnomaly
+            }
+            Some(TerminalTrigger::SystemSuspend) => {
+                super::super::super::WorkerTerminalCause::SystemSuspended
+            }
+            Some(TerminalTrigger::Skip) => super::super::super::WorkerTerminalCause::Skipped,
+            Some(TerminalTrigger::Quit) => super::super::super::WorkerTerminalCause::Quit,
+            Some(TerminalTrigger::WorkerPanic) => {
+                super::super::super::WorkerTerminalCause::WorkerPanic
+            }
+            Some(_) if terminal_error.is_some() => {
+                super::super::super::WorkerTerminalCause::Failure
+            }
+            Some(_) => super::super::super::WorkerTerminalCause::Failure,
+            None if terminal_error.is_some() => super::super::super::WorkerTerminalCause::Failure,
+            None => super::super::super::WorkerTerminalCause::Finished,
+        }
+    };
+    let residual = super::super::super::TerminalReleaseResidual::from_backend(&backend);
+    *metrics.terminal_result.lock() = Some(super::super::super::WorkerTerminalResult {
+        outcome: terminal_outcome,
+        cause: terminal_cause,
+        terminal_error: terminal_error.clone(),
+        residual,
+    });
     match (worker_result, cleanup_result) {
         (Err(payload), _) => resume_unwind(payload),
         (Ok(_), Err(TerminalCleanupFailure::Panicked(payload))) => resume_unwind(payload),
         (Ok(_), Ok(_)) => {}
     }
-    if terminal_error.is_some()
-        || cleanup_panicked
-        || worker_panicked
-        || terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
-    {
-        OUTCOME_ERROR
-    } else if matches!(terminal_trigger, Some(TerminalTrigger::SystemSuspend)) {
-        OUTCOME_SYSTEM_SUSPENDED
-    } else if matches!(terminal_trigger, Some(TerminalTrigger::Skip))
-        || skip_requested.load(Ordering::Acquire)
-    {
-        OUTCOME_SKIPPED
-    } else if matches!(terminal_trigger, Some(TerminalTrigger::Quit))
-        || quit_requested.load(Ordering::Acquire)
-    {
-        OUTCOME_QUIT
-    } else {
-        OUTCOME_FINISHED
-    }
+    terminal_outcome.legacy_code()
 }
 
 fn terminal_cleanup_target(target: &super::SessionTarget) -> TerminalCleanupTarget {

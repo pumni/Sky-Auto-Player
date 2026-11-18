@@ -41,7 +41,7 @@ fn custom_emitter_without_probe_never_synthesizes_held() {
 
     let outcome = state.release_all(0);
     assert!(!outcome.released_successfully);
-    assert!(outcome.verification_inconclusive);
+    assert!(!outcome.verification_inconclusive);
     assert_eq!(outcome.stuck_keys(), vec![0x15]);
     assert_eq!(state.failed_release_mask, 0x0001);
 }

@@ -93,7 +93,7 @@ fn admission_cleanup_uncertainty_keeps_residual_mask_and_secondary_provenance() 
         .clone()
         .expect("admission owner publishes its release outcome");
     assert_eq!(outcome.attempts, 4);
-    assert!(outcome.verification_inconclusive);
+    assert!(!outcome.verification_inconclusive);
     assert_eq!(outcome.stuck_mask, 1);
     assert_eq!(backend.release_attempts_total, 4);
     assert_eq!(backend.release_obligation_mask(), 1);

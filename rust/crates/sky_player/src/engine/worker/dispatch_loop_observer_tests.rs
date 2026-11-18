@@ -44,10 +44,7 @@ fn complete_transport_with_sender_timing_error_reconciles_before_continuation() 
 
     let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
 
-    assert!(matches!(
-        outcome,
-        super::super::StagedDispatchOutcome::Dispatched
-    ));
+    assert!(matches!(outcome, super::super::StagedDispatchOutcome::Exit));
     assert!(
         harness
             .runtime
@@ -118,10 +115,7 @@ fn complete_status_without_completion_qpc_is_reconciled_without_fabricating_time
 
     let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
 
-    assert!(matches!(
-        outcome,
-        super::super::StagedDispatchOutcome::Dispatched
-    ));
+    assert!(matches!(outcome, super::super::StagedDispatchOutcome::Exit));
     assert!(
         harness
             .runtime
@@ -186,7 +180,7 @@ fn complete_status_without_pre_call_qpc_is_reconciled_without_fabricating_time()
         .expect("Down candidate");
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::super::StagedDispatchOutcome::Dispatched
+        super::super::StagedDispatchOutcome::Exit
     ));
     assert!(
         harness
@@ -254,7 +248,7 @@ fn complete_status_with_invalid_qpc_order_is_reconciled_without_clock_substituti
         .expect("Down candidate");
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::super::StagedDispatchOutcome::Dispatched
+        super::super::StagedDispatchOutcome::Exit
     ));
     assert!(
         harness

@@ -1,25 +1,31 @@
-use super::super::down_transaction::emit_down_once_with;
 use super::super::outcome::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
 };
 #[cfg(test)]
+use super::super::packet::send_prepared_physical_packet_once_with_start;
+#[cfg(test)]
 use super::super::packet::send_prepared_physical_packet_view_once_with_start;
 use super::super::packet::{
     PreparedPacketView, PreparedPhysicalPacket, invalid_packet_outcome,
-    send_prepared_physical_packet_once, send_prepared_physical_packet_once_with_start,
-    send_prepared_terminal_up_once,
+    send_prepared_physical_packet_once, send_prepared_terminal_up_once,
 };
-use super::super::physical::mask_for_scan_codes;
-use super::super::raw::{
-    no_syscall_boundary_with_clock, send_input_raw, send_input_raw_with_clock,
-};
-use super::super::scan_code::key_mask;
+#[cfg(any(test, feature = "test-support"))]
 use super::super::up_transaction::emit_up_once_with;
 #[cfg(test)]
 use super::super::up_transaction::terminal_up_outcome;
 use super::{CleanupAttemptAdmission, TrackedKeyState};
+#[cfg(test)]
 use crate::clock::QpcTicks;
-use smallvec::SmallVec;
+
+pub(super) struct CleanupSendContext<'a, 'b> {
+    pub(super) terminal_qpc_fallback: &'a mut bool,
+    pub(super) admission: Option<&'a mut CleanupAttemptAdmission<'b>>,
+    pub(super) drain_control:
+        &'a mut dyn FnMut() -> Result<super::super::outcome::CleanupDrainDecision, String>,
+    pub(super) background_terminal_drain: &'a mut bool,
+    pub(super) raw_up_invocations: u8,
+    pub(super) attempts: &'a mut u8,
+}
 
 fn packet_outcome_proves_zero_transport(
     packet: PhysicalPacket,
@@ -73,7 +79,8 @@ impl TrackedKeyState {
         outcome
     }
 
-    pub fn send_prepared_physical_packet_view(
+    #[cfg(test)]
+    pub(crate) fn send_prepared_physical_packet_view(
         &mut self,
         prepared: PreparedPacketView<'_>,
     ) -> SendTransactionOutcome {
@@ -92,6 +99,10 @@ impl TrackedKeyState {
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::BeforeSenderAuthority);
             let previous_in_flight_mask = self.in_flight_mask;
             self.in_flight_mask |= packet.up_mask | packet.down_mask;
+            #[cfg(any(test, feature = "test-support"))]
+            self.panic_if_prepared_send_at(
+                super::PreparedSendPanicPoint::AfterJournalBeforeSyscall,
+            );
             // A custom sender is a test-support boundary replacement. Its
             // timestamps are injected evidence and must pass through unchanged
             // so missing or contradictory QPC values remain observable.
@@ -108,7 +119,6 @@ impl TrackedKeyState {
                 && (packet.down_mask == 0 || outcome.evidence.attempts == 0)
             {
                 self.in_flight_mask = previous_in_flight_mask;
-                self.clear_unobligated_release_owners(packet.up_mask | packet.down_mask);
             }
             #[cfg(any(test, feature = "test-support"))]
             self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
@@ -142,6 +152,8 @@ impl TrackedKeyState {
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::BeforeSenderAuthority);
         let previous_in_flight_mask = self.in_flight_mask;
         self.in_flight_mask |= packet.up_mask | packet.down_mask;
+        #[cfg(any(test, feature = "test-support"))]
+        self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterJournalBeforeSyscall);
         let outcome =
             super::super::packet::send_prepared_physical_packet_view_once(prepared, clock);
         #[cfg(any(test, feature = "test-support"))]
@@ -155,39 +167,10 @@ impl TrackedKeyState {
             && (packet.down_mask == 0 || outcome.evidence.attempts == 0)
         {
             self.in_flight_mask = previous_in_flight_mask;
-            self.clear_unobligated_release_owners(packet.up_mask | packet.down_mask);
         }
         #[cfg(any(test, feature = "test-support"))]
         self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterStateCommit);
         outcome
-    }
-
-    fn do_emit_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
-        #[cfg(any(test, feature = "test-support"))]
-        if let Some(ref emitter) = self.custom_emitter {
-            return emit_down_once_with(scan_codes, |sc, key_up| emitter(sc, key_up));
-        }
-        if let Some(clock) = self.qpc_clock {
-            emit_down_once_with(scan_codes, |sc, key_up| {
-                send_input_raw_with_clock(sc, key_up, clock)
-            })
-        } else {
-            emit_down_once_with(scan_codes, send_input_raw)
-        }
-    }
-
-    fn do_emit_up(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
-        #[cfg(any(test, feature = "test-support"))]
-        if let Some(ref emitter) = self.custom_emitter {
-            return emit_up_once_with(scan_codes, |sc, key_up| emitter(sc, key_up));
-        }
-        if let Some(clock) = self.qpc_clock {
-            emit_up_once_with(scan_codes, |sc, key_up| {
-                send_input_raw_with_clock(sc, key_up, clock)
-            })
-        } else {
-            emit_up_once_with(scan_codes, send_input_raw)
-        }
     }
 
     /// Single-send note-off for operator-owned cleanup retries. The cleanup FSM
@@ -195,40 +178,47 @@ impl TrackedKeyState {
     /// internal retry.
     pub(super) fn do_emit_up_once(
         &mut self,
-        logical_mask: u16,
-        terminal_qpc_fallback: bool,
-        admission: Option<&mut CleanupAttemptAdmission<'_>>,
-        attempts: &mut u8,
+        prepared: &PreparedPhysicalPacket,
+        mut context: CleanupSendContext<'_, '_>,
     ) -> Result<SendTransactionOutcome, String> {
-        let packet = PhysicalPacket::new(logical_mask, 0);
-        let prepared = match PreparedPhysicalPacket::try_new_with_profile(
-            packet,
-            &self.instrument_key_profile,
-        ) {
-            Ok(prepared) => prepared,
-            Err(_) => {
-                self.release_attempts_total = self.release_attempts_total.saturating_add(1);
-                *attempts = attempts.saturating_add(1);
-                return Ok(invalid_packet_outcome(packet));
-            }
-        };
+        let packet = prepared.packet();
+        let logical_mask = packet.up_mask;
+        if !packet.is_up_only() || logical_mask == 0 {
+            return Ok(invalid_packet_outcome(packet));
+        }
 
-        if let Some(admission) = admission {
+        if let Some(admission) = context.admission.as_deref_mut() {
             let release_owner = self
                 .release_owner_proof_for_mask(logical_mask)?
                 .ok_or_else(|| {
                     "tracked release owner proof is missing before safety Up".to_string()
                 })?;
-            admission(logical_mask, &release_owner)?;
+            admission(logical_mask, release_owner)?;
+        }
+
+        let drain_decision = (context.drain_control)()?;
+        *context.terminal_qpc_fallback |= drain_decision.terminal_requested;
+        if !*context.terminal_qpc_fallback && !drain_decision.origin_foreground {
+            return Err("tracked cleanup origin is not foreground".into());
+        }
+        *context.background_terminal_drain |=
+            drain_decision.terminal_requested && !drain_decision.origin_foreground;
+        if *context.terminal_qpc_fallback
+            && !drain_decision.origin_foreground
+            && context.raw_up_invocations != 0
+        {
+            return Err("background terminal Up budget already used".into());
         }
 
         // Count after admission and immediately before entering the sender. If
         // the sender unwinds, quarantine diagnostics retain the admitted try.
         self.release_attempts_total = self.release_attempts_total.saturating_add(1);
-        *attempts = attempts.saturating_add(1);
+        *context.attempts = context.attempts.saturating_add(1);
 
         #[cfg(test)]
-        if terminal_qpc_fallback && let Some(emitter) = self.custom_terminal_up_emitter.as_ref() {
+        if *context.terminal_qpc_fallback
+            && let Some(emitter) = self.custom_terminal_up_emitter.as_ref()
+        {
             return Ok(terminal_up_outcome(packet, emitter(packet)));
         }
 
@@ -253,154 +243,20 @@ impl TrackedKeyState {
             return Ok(emitter(packet));
         }
 
-        Ok(if terminal_qpc_fallback {
-            send_prepared_terminal_up_once(&prepared, self.qpc_clock)
+        Ok(if *context.terminal_qpc_fallback {
+            send_prepared_terminal_up_once(prepared, self.qpc_clock)
         } else {
             match self.qpc_clock {
-                Some(clock) => send_prepared_physical_packet_once(&prepared, clock),
+                Some(clock) => send_prepared_physical_packet_once(prepared, clock),
                 None => invalid_packet_outcome(packet),
             }
         })
     }
 
-    pub fn key_down(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
-        let requested_mask = mask_for_scan_codes(scan_codes).unwrap_or(0);
-        if scan_codes.is_empty() || requested_mask == 0 {
-            let (started_ticks, completed_ticks, timing_error) =
-                no_syscall_boundary_with_clock(self.qpc_clock);
-            return SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask: 0,
-                    confirmed_mask: 0,
-                    skipped_mask: 0,
-                    first_inserted: 0,
-                    attempts: 0,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(started_ticks),
-                    completed_ticks,
-                    timing_error,
-                },
-            };
-        }
-
-        let mut to_send: SmallVec<[u16; 15]> = SmallVec::new();
-        let mut duplicates: SmallVec<[u16; 15]> = SmallVec::new();
-
-        for &sc in scan_codes {
-            if self.active_mask & key_mask(sc).unwrap_or(0) != 0 {
-                duplicates.push(sc);
-            } else {
-                to_send.push(sc);
-            }
-        }
-
-        let skipped_mask = mask_for_scan_codes(&duplicates).unwrap_or(0);
-
-        if to_send.is_empty() {
-            let (started_ticks, completed_ticks, timing_error) =
-                no_syscall_boundary_with_clock(self.qpc_clock);
-            return SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: requested_mask,
-                    skipped_mask,
-                    first_inserted: 0,
-                    attempts: 0,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(started_ticks),
-                    completed_ticks,
-                    timing_error,
-                },
-            };
-        }
-
-        for &sc in &to_send {
-            self.possibly_active_mask |= key_mask(sc).unwrap_or(0);
-        }
-
-        let emitted = self.do_emit_down(&to_send);
-        self.timing_error = emitted.evidence.timing_error;
-
-        if matches!(
-            emitted.status,
-            SendTransactionStatus::PartialProgress | SendTransactionStatus::IntegrityLost
-        ) {
-            self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
-        }
-        if matches!(emitted.status, SendTransactionStatus::ZeroProgress) {
-            self.sendinput_zero_progress_failures =
-                self.sendinput_zero_progress_failures.saturating_add(1);
-        }
-
-        let to_send_mask = mask_for_scan_codes(&to_send).unwrap_or(0);
-
-        match emitted.status {
-            SendTransactionStatus::Complete => {
-                self.active_mask |= to_send_mask;
-                self.possibly_active_mask &= !to_send_mask;
-            }
-            SendTransactionStatus::IntegrityLost => {
-                self.active_mask &= !to_send_mask;
-                self.possibly_active_mask |= to_send_mask;
-                self.chord_split_events = self.chord_split_events.saturating_add(1);
-            }
-            SendTransactionStatus::ClockFailureAfterSend => {
-                self.active_mask &= !to_send_mask;
-                self.possibly_active_mask |= to_send_mask;
-            }
-            SendTransactionStatus::PreparationRejected
-            | SendTransactionStatus::ZeroProgress
-            | SendTransactionStatus::ClockFailureBeforeSend => {
-                self.possibly_active_mask &= !to_send_mask;
-            }
-            SendTransactionStatus::PartialProgress => {
-                self.active_mask &= !to_send_mask;
-                self.possibly_active_mask |= to_send_mask;
-                self.chord_split_events = self.chord_split_events.saturating_add(1);
-            }
-        }
-
-        if !emitted.is_success() {
-            self.chords_rejected = self.chords_rejected.saturating_add(1);
-            self.authored_keys_rejected = self
-                .authored_keys_rejected
-                .saturating_add(to_send.len() as u64);
-        }
-
-        if emitted.is_success() {
-            if self.failed_release_mask == 0 {
-                self.last_error = None;
-            }
-        } else {
-            self.last_error = Some(format!("note-on rejected; status={:?}", emitted.status,));
-        }
-
-        SendTransactionOutcome {
-            status: emitted.status,
-            evidence: SendEvidence {
-                requested_mask,
-                confirmed_mask: if emitted.is_success() {
-                    requested_mask
-                } else {
-                    0
-                },
-                skipped_mask,
-                ..emitted.evidence
-            },
-        }
-    }
-
     /// Send one validated physical packet. The packet builder is the sole
     /// authored/release transport: it emits all Up events before all Down
     /// events in one `SendInput` call.
+    #[cfg(test)]
     pub fn send_physical_packet(&mut self, packet: PhysicalPacket) -> SendTransactionOutcome {
         let Some(clock) = self.qpc_clock else {
             return self.send_physical_packet_with_start(packet, QpcTicks::ZERO);
@@ -434,6 +290,7 @@ impl TrackedKeyState {
     /// Send one validated physical packet using the caller's authoritative
     /// QPC start boundary. The timestamp is reused by the transport; it is
     /// never resampled after the final admission gate.
+    #[cfg(test)]
     fn send_physical_packet_with_start(
         &mut self,
         packet: PhysicalPacket,
@@ -457,6 +314,10 @@ impl TrackedKeyState {
                     super::PreparedSendPanicPoint::BeforeSenderAuthority,
                 );
                 self.in_flight_mask |= packet.up_mask | packet.down_mask;
+                #[cfg(any(test, feature = "test-support"))]
+                self.panic_if_prepared_send_at(
+                    super::PreparedSendPanicPoint::AfterJournalBeforeSyscall,
+                );
                 let mut outcome = emitter(packet);
                 #[cfg(any(test, feature = "test-support"))]
                 self.panic_if_prepared_send_at(super::PreparedSendPanicPoint::AfterSenderReturn);
@@ -488,6 +349,10 @@ impl TrackedKeyState {
                     super::PreparedSendPanicPoint::BeforeSenderAuthority,
                 );
                 self.in_flight_mask |= packet.up_mask | packet.down_mask;
+                #[cfg(any(test, feature = "test-support"))]
+                self.panic_if_prepared_send_at(
+                    super::PreparedSendPanicPoint::AfterJournalBeforeSyscall,
+                );
                 send_prepared_physical_packet_once_with_start(&prepared, clock, started_ticks)
             }
             #[cfg(not(any(test, feature = "test-support")))]
@@ -517,6 +382,10 @@ impl TrackedKeyState {
                     super::PreparedSendPanicPoint::BeforeSenderAuthority,
                 );
                 self.in_flight_mask |= packet.up_mask | packet.down_mask;
+                #[cfg(any(test, feature = "test-support"))]
+                self.panic_if_prepared_send_at(
+                    super::PreparedSendPanicPoint::AfterJournalBeforeSyscall,
+                );
                 send_prepared_physical_packet_once_with_start(&prepared, clock, started_ticks)
             }
         };
@@ -555,6 +424,10 @@ impl TrackedKeyState {
             #[cfg(any(test, feature = "test-support"))]
             if let Some(emitter) = self.custom_packet_emitter.as_ref() {
                 self.in_flight_mask |= packet.up_mask | packet.down_mask;
+                #[cfg(any(test, feature = "test-support"))]
+                self.panic_if_prepared_send_at(
+                    super::PreparedSendPanicPoint::AfterJournalBeforeSyscall,
+                );
                 let mut outcome = emitter(packet);
                 outcome.evidence.started_ticks = Some(started_ticks);
                 if outcome
@@ -590,6 +463,10 @@ impl TrackedKeyState {
                     );
                 };
                 self.in_flight_mask |= packet.up_mask | packet.down_mask;
+                #[cfg(any(test, feature = "test-support"))]
+                self.panic_if_prepared_send_at(
+                    super::PreparedSendPanicPoint::AfterJournalBeforeSyscall,
+                );
                 send_prepared_physical_packet_view_once_with_start(prepared, clock, started_ticks)
             }
             #[cfg(not(any(test, feature = "test-support")))]
@@ -618,6 +495,10 @@ impl TrackedKeyState {
                     );
                 };
                 self.in_flight_mask |= packet.up_mask | packet.down_mask;
+                #[cfg(any(test, feature = "test-support"))]
+                self.panic_if_prepared_send_at(
+                    super::PreparedSendPanicPoint::AfterJournalBeforeSyscall,
+                );
                 send_prepared_physical_packet_view_once_with_start(prepared, clock, started_ticks)
             }
         };
@@ -635,7 +516,8 @@ impl TrackedKeyState {
     /// prepared payload pointer and length are resolved and immediately
     /// before the single `SendInput` call. Test-only timestamp injection is
     /// deliberately kept in `send_prepared_physical_packet_with_start`.
-    pub fn send_prepared_physical_packet(
+    #[cfg(test)]
+    pub(crate) fn send_prepared_physical_packet(
         &mut self,
         prepared: &PreparedPhysicalPacket,
     ) -> SendTransactionOutcome {
@@ -644,7 +526,15 @@ impl TrackedKeyState {
 
     /// Production scheduler path: retain the in-flight transport journal until
     /// the scheduler has committed the matching physical packet.
-    pub fn send_prepared_physical_packet_at_final_boundary_deferred_commit(
+    #[cfg(test)]
+    pub(crate) fn send_prepared_physical_packet_at_final_boundary_deferred_commit(
+        &mut self,
+        prepared: &PreparedPhysicalPacket,
+    ) -> SendTransactionOutcome {
+        self.send_prepared_physical_packet_at_final_boundary_deferred_commit_inner(prepared)
+    }
+
+    fn send_prepared_physical_packet_at_final_boundary_deferred_commit_inner(
         &mut self,
         prepared: &PreparedPhysicalPacket,
     ) -> SendTransactionOutcome {
@@ -659,13 +549,25 @@ impl TrackedKeyState {
 
     /// Worker-owned final-boundary sender which freezes the release origin
     /// before the syscall can create an in-flight or uncertain Down obligation.
-    pub fn send_prepared_physical_packet_at_final_boundary_deferred_commit_with_release_owner(
+    pub fn send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target(
         &mut self,
         prepared: &PreparedPhysicalPacket,
-        release_owner: &crate::input::ReleaseOwnerProof,
+        target_hwnd: isize,
+        target_generation: u64,
     ) -> SendTransactionOutcome {
-        self.remember_release_owner_for_down(prepared.packet().down_mask, Some(release_owner));
-        self.send_prepared_physical_packet_at_final_boundary_deferred_commit(prepared)
+        let owner_matches_target =
+            self.session_release_owner_proof()
+                .is_some_and(|release_owner| {
+                    release_owner.target_hwnd() == target_hwnd
+                        && release_owner.target_generation() == target_generation
+                });
+        if !owner_matches_target {
+            self.last_error = Some(
+                "prepared packet target does not match the session release owner proof".to_string(),
+            );
+            return invalid_packet_outcome(prepared.packet());
+        }
+        self.send_prepared_physical_packet_at_final_boundary_deferred_commit_inner(prepared)
     }
 
     /// Complete the transport half of a packet transaction after the
@@ -678,7 +580,6 @@ impl TrackedKeyState {
             ));
         }
         self.in_flight_mask = 0;
-        self.clear_unobligated_release_owners(packet_mask);
         Ok(())
     }
 
@@ -704,12 +605,27 @@ impl TrackedKeyState {
             outcome.evidence.confirmed_mask = 0;
         }
         let confirmed_mask = outcome.evidence.confirmed_mask;
+        let complete_transport_without_timing = outcome.has_complete_raw_transport_for(packet)
+            && !outcome.has_valid_sender_timing_evidence();
         match outcome.status {
             SendTransactionStatus::Complete => {
                 let union = packet.up_mask | packet.down_mask;
-                self.active_mask = (self.active_mask & !packet.up_mask) | packet.down_mask;
-                self.possibly_active_mask &= !union;
-                self.failed_release_mask &= !packet.up_mask;
+                if complete_transport_without_timing {
+                    // Raw count and timing are separate evidence dimensions.
+                    // A full packet with unusable QPC is terminal to music but
+                    // remains journaled for cleanup: prior Ups need a probe,
+                    // while Downs remain physical Up duties.
+                    self.active_mask &= !union;
+                    self.possibly_active_mask &= !union;
+                    self.failed_release_mask &= !union;
+                    self.needs_probe_mask |= packet.up_mask;
+                    self.possibly_active_mask |= packet.down_mask;
+                    self.in_flight_mask &= !union;
+                } else {
+                    self.active_mask = (self.active_mask & !packet.up_mask) | packet.down_mask;
+                    self.possibly_active_mask &= !union;
+                    self.failed_release_mask &= !packet.up_mask;
+                }
                 if self.failed_release_mask == 0 {
                     self.last_error = None;
                 }
@@ -774,7 +690,19 @@ impl TrackedKeyState {
                             self.sendinput_partial_events.saturating_add(1);
                         self.chord_split_events = self.chord_split_events.saturating_add(1);
                     }
-                    if !packet_outcome_proves_zero_transport(packet, outcome) {
+                    if outcome.has_complete_raw_transport_for(packet) {
+                        // Full transport without a valid completion boundary is
+                        // still a terminal musical anomaly. Preserve the
+                        // already-sent Up as a probe obligation, while any Down
+                        // in the same atomic packet becomes a fresh Up duty.
+                        let union = packet.up_mask | packet.down_mask;
+                        self.active_mask &= !union;
+                        self.possibly_active_mask &= !union;
+                        self.failed_release_mask &= !union;
+                        self.needs_probe_mask |= packet.up_mask;
+                        self.possibly_active_mask |= packet.down_mask;
+                        self.in_flight_mask &= !union;
+                    } else if !packet_outcome_proves_zero_transport(packet, outcome) {
                         let uncertain_mask = packet.up_mask | packet.down_mask;
                         self.active_mask &= !uncertain_mask;
                         self.possibly_active_mask |= uncertain_mask;
@@ -799,110 +727,7 @@ impl TrackedKeyState {
         if !defer_journal_commit {
             self.in_flight_mask &= !(packet.up_mask | packet.down_mask);
         }
-        if !defer_journal_commit {
-            self.clear_unobligated_release_owners(packet.up_mask | packet.down_mask);
-        }
         outcome
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn key_down_physical_packet(&mut self, packet: PhysicalPacket) -> SendTransactionOutcome {
-        self.send_physical_packet(packet)
-    }
-
-    pub fn key_up(&mut self, scan_codes: &[u16]) -> SendTransactionOutcome {
-        let requested_mask = mask_for_scan_codes(scan_codes).unwrap_or(0);
-        if scan_codes.is_empty() || requested_mask == 0 {
-            let (started_ticks, completed_ticks, timing_error) =
-                no_syscall_boundary_with_clock(self.qpc_clock);
-            return SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask: 0,
-                    confirmed_mask: 0,
-                    skipped_mask: 0,
-                    first_inserted: 0,
-                    attempts: 0,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(started_ticks),
-                    completed_ticks,
-                    timing_error,
-                },
-            };
-        }
-
-        let mut to_release: SmallVec<[u16; 15]> = SmallVec::new();
-        let mut already_released: SmallVec<[u16; 15]> = SmallVec::new();
-
-        for &sc in scan_codes {
-            let bit = key_mask(sc).unwrap_or(0);
-            if self.active_mask & bit != 0
-                || self.possibly_active_mask & bit != 0
-                || self.failed_release_mask & bit != 0
-            {
-                to_release.push(sc);
-            } else {
-                already_released.push(sc);
-            }
-        }
-
-        let skipped_mask = mask_for_scan_codes(&already_released).unwrap_or(0);
-
-        if to_release.is_empty() {
-            let (started_ticks, completed_ticks, timing_error) =
-                no_syscall_boundary_with_clock(self.qpc_clock);
-            return SendTransactionOutcome {
-                status: SendTransactionStatus::Complete,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: 0,
-                    skipped_mask,
-                    first_inserted: 0,
-                    attempts: 0,
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: None,
-                    last_win32_error: None,
-                    started_ticks: Some(started_ticks),
-                    completed_ticks,
-                    timing_error,
-                },
-            };
-        }
-
-        let emitted = self.do_emit_up(&to_release);
-        self.timing_error = emitted.evidence.timing_error;
-
-        if matches!(emitted.status, SendTransactionStatus::PartialProgress) {
-            self.sendinput_partial_events = self.sendinput_partial_events.saturating_add(1);
-        }
-
-        let confirmed_mask = emitted.evidence.confirmed_mask;
-        self.active_mask &= !confirmed_mask;
-        self.possibly_active_mask &= !confirmed_mask;
-        self.failed_release_mask &= !confirmed_mask;
-
-        if !emitted.is_success() {
-            let unconfirmed_released =
-                mask_for_scan_codes(&to_release).unwrap_or(0) & !confirmed_mask;
-            self.failed_release_mask |= unconfirmed_released;
-            self.last_error = Some("partial note-off".to_string());
-        } else if self.failed_release_mask == 0 {
-            self.last_error = None;
-        }
-
-        SendTransactionOutcome {
-            status: emitted.status,
-            evidence: SendEvidence {
-                requested_mask,
-                confirmed_mask,
-                skipped_mask,
-                ..emitted.evidence
-            },
-        }
     }
 }
 

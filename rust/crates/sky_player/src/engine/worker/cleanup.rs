@@ -1,6 +1,5 @@
 use super::{
-    AttemptedDispatchAnomalies, OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED,
-    OUTCOME_SYSTEM_SUSPENDED, TerminalTrigger, TrackedKeyState, WorkerMetricsLocal,
+    AttemptedDispatchAnomalies, TerminalTrigger, TrackedKeyState, WorkerMetricsLocal,
     WorkerSchedulingGuards, current_process_cpu_time_us, current_thread_cpu_time_us,
     publish_backend_metrics,
 };
@@ -24,6 +23,32 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+
+#[derive(Clone, Copy)]
+pub(crate) struct CleanupTarget<'a> {
+    pub(crate) target: &'a SessionTarget,
+    pub(crate) expected_target: Option<TargetStamp>,
+    pub(crate) require_owner_identity: bool,
+    pub(crate) verification_hwnd: isize,
+}
+
+impl<'a> CleanupTarget<'a> {
+    pub(crate) fn for_session(
+        target: &'a SessionTarget,
+        expected_target: Option<TargetStamp>,
+        require_owner_identity: bool,
+    ) -> Self {
+        let verification_hwnd = expected_target
+            .map(|stamp| stamp.hwnd)
+            .unwrap_or_else(|| target.hwnd_for_safety_release());
+        Self {
+            target,
+            expected_target,
+            require_owner_identity,
+            verification_hwnd,
+        }
+    }
+}
 
 pub(super) struct FinalizeResources {
     pub(super) backend: TrackedKeyState,
@@ -163,23 +188,39 @@ pub(crate) fn record_termination_error(
 pub(crate) fn suspend_scheduler_input(
     backend: &mut TrackedKeyState,
     scheduler: &mut DispatchExecutor,
-    target: &SessionTarget,
-    expected_target: Option<TargetStamp>,
-    require_owner_identity: bool,
-    target_hwnd: isize,
+    cleanup_target: CleanupTarget<'_>,
+    drain_control: impl FnMut() -> Result<sky_dispatch_win32::input::CleanupDrainDecision, String>,
     post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
 ) -> Result<usize, String> {
-    let mut release =
-        backend.release_tracked_with_attempt_admission(target_hwnd, |_, release_owner| {
-            let stamp = expected_target.ok_or_else(|| {
+    let mut release = backend.release_tracked_with_attempt_admission_and_drain_control(
+        cleanup_target.verification_hwnd,
+        |_, release_owner| {
+            let stamp = cleanup_target.expected_target.ok_or_else(|| {
                 "target generation unavailable before tracked safety Up".to_string()
             })?;
-            verify_safety_cleanup_target(target, stamp, release_owner, require_owner_identity)
-        });
+            verify_safety_cleanup_target(
+                cleanup_target.target,
+                stamp,
+                release_owner,
+                cleanup_target.require_owner_identity,
+            )
+        },
+        drain_control,
+    );
     if let Some(reason) = release.withheld_reason.take() {
         return Err(format!(
             "tracked safety cleanup admission withheld: {reason}; outcome={:?}; send_attempts={:?}; probe={:?}",
             release.release_outcome, release.send_attempts, release.probe_verdict
+        ));
+    }
+    if release
+        .send_attempts
+        .iter()
+        .any(|attempt| attempt.qpc_error.is_some())
+    {
+        return Err(format!(
+            "tracked safety cleanup lost QPC evidence; resume barrier is withheld: {:?}",
+            release.send_attempts
         ));
     }
     let release_outcome = release.release_outcome;

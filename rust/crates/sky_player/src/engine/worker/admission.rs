@@ -5,7 +5,7 @@ use crate::engine::shared::{
     SessionTarget, SharedProgressClock, SupervisorLeaseAdmission, SupervisorLeaseAgeProof,
     SupervisorLeaseState,
 };
-use crate::engine::target::{OwnerAuthorityReadError, OwnerIdentityStatus};
+use crate::engine::target::OwnerIdentityStatus;
 use crate::engine::telemetry::WorkerMetricsLocal;
 use sky_dispatch_core::clock::PauseReason;
 use sky_dispatch_core::time::DurationTicks;
@@ -166,7 +166,6 @@ pub(crate) enum OwnerAdmissionFailure {
     Mismatch,
     QueryUnavailable,
     IdentityAbsent,
-    IdentityStale,
     ProcessTerminated,
     IdentityDrift,
 }
@@ -335,7 +334,6 @@ pub(crate) fn owner_rejection_reason(failure: OwnerAdmissionFailure) -> &'static
         OwnerAdmissionFailure::Mismatch => "prepared_down_owner_mismatch",
         OwnerAdmissionFailure::QueryUnavailable => "prepared_down_owner_query_unavailable",
         OwnerAdmissionFailure::IdentityAbsent => "prepared_down_owner_identity_absent",
-        OwnerAdmissionFailure::IdentityStale => "prepared_down_owner_identity_stale",
         OwnerAdmissionFailure::ProcessTerminated => "prepared_down_owner_process_terminated",
         OwnerAdmissionFailure::IdentityDrift => "prepared_down_owner_identity_drift",
     }
@@ -345,22 +343,16 @@ fn fresh_final_release_owner_proof(
     target: &SessionTarget,
     expected: TargetStamp,
     require_focus: bool,
-) -> Result<ReleaseOwnerProof, FinalDownVerdict> {
-    let release_owner = target
-        .try_release_owner_proof_for_generation(expected.hwnd, expected.generation)
-        .map_err(|error| match error {
-            OwnerAuthorityReadError::Status(OwnerIdentityStatus::Stale)
-                if !target.is_current(expected.hwnd, expected.generation) =>
-            {
-                FinalDownVerdict::TargetChanged
-            }
-            OwnerAuthorityReadError::Status(status) => {
-                FinalDownVerdict::OwnerRejected(owner_status_failure(status))
-            }
-        })?;
+    release_owner: &ReleaseOwnerProof,
+) -> Result<(), FinalDownVerdict> {
+    if release_owner.target_hwnd() != expected.hwnd
+        || release_owner.target_generation() != expected.generation
+    {
+        return Err(FinalDownVerdict::TargetChanged);
+    }
 
     if !require_focus {
-        return Ok(release_owner);
+        return Ok(());
     }
     if expected.hwnd == 0 {
         return Err(FinalDownVerdict::FocusLost);
@@ -426,22 +418,10 @@ fn fresh_final_release_owner_proof(
             ));
         }
     }
-    Ok(release_owner)
-}
-
-fn owner_status_failure(status: OwnerIdentityStatus) -> OwnerAdmissionFailure {
-    match status {
-        OwnerIdentityStatus::NotRequired
-        | OwnerIdentityStatus::Missing
-        | OwnerIdentityStatus::Bound(_) => OwnerAdmissionFailure::IdentityAbsent,
-        OwnerIdentityStatus::Stale => OwnerAdmissionFailure::IdentityStale,
-        OwnerIdentityStatus::ProcessTerminated => OwnerAdmissionFailure::ProcessTerminated,
-        OwnerIdentityStatus::OwnerMismatch => OwnerAdmissionFailure::Mismatch,
-        OwnerIdentityStatus::WindowUnavailable | OwnerIdentityStatus::ProcessIdentityMismatch => {
-            OwnerAdmissionFailure::IdentityDrift
-        }
-        OwnerIdentityStatus::QueryUnavailable => OwnerAdmissionFailure::QueryUnavailable,
+    if !target.release_owner_proof_is_current(release_owner) {
+        return Err(FinalDownVerdict::TargetChanged);
     }
+    Ok(())
 }
 
 pub(crate) fn enter_focus_pause(
@@ -568,6 +548,22 @@ pub(crate) fn verify_safety_cleanup_target(
                     "tracked safety cleanup origin process proof is no longer current".into(),
                 );
             }
+            match origin_authority.verify_final_process_identity(expected.hwnd, owner_pid) {
+                sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous => {}
+                sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated => {
+                    return Err("tracked safety cleanup origin process terminated".into());
+                }
+                sky_dispatch_win32::focus::WindowIdentityContinuity::OwnerMismatch => {
+                    return Err("tracked safety cleanup origin owner mismatched".into());
+                }
+                sky_dispatch_win32::focus::WindowIdentityContinuity::WindowUnavailable
+                | sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessIdentityMismatch => {
+                    return Err("tracked safety cleanup origin identity drifted".into());
+                }
+                sky_dispatch_win32::focus::WindowIdentityContinuity::QueryUnavailable => {
+                    return Err("tracked safety cleanup origin liveness is unavailable".into());
+                }
+            }
         }
     }
     if !target.release_owner_proof_is_current(release_owner) {
@@ -576,8 +572,38 @@ pub(crate) fn verify_safety_cleanup_target(
     Ok(())
 }
 
+pub(crate) fn safety_cleanup_drain_decision(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    release_owner: &ReleaseOwnerProof,
+    require_owner_identity: bool,
+    terminal_requested: bool,
+) -> Result<sky_dispatch_win32::input::CleanupDrainDecision, String> {
+    verify_safety_cleanup_target(target, expected, release_owner, require_owner_identity)?;
+    let origin_foreground = match release_owner.owner_pid() {
+        Some(owner_pid) => match sky_dispatch_win32::focus::foreground_window_owner_matches(
+            expected.hwnd,
+            owner_pid,
+        ) {
+            sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => true,
+            sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => false,
+            sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
+                return Err("tracked cleanup origin HWND owner identity drifted".into());
+            }
+            sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => {
+                return Err("tracked cleanup foreground owner query is unavailable".into());
+            }
+        },
+        None => true,
+    };
+    Ok(sky_dispatch_win32::input::CleanupDrainDecision {
+        terminal_requested,
+        origin_foreground,
+    })
+}
+
 pub(crate) enum FinalDownAdmissionResult {
-    Allowed { release_owner: ReleaseOwnerProof },
+    Allowed,
     ModifierHeld,
     Replan,
     Terminal(String),
@@ -761,8 +787,18 @@ fn verify_final_musical_packet_admission(
     // The retained process handle is checked first with a zero-time wait and
     // its creation identity. The exact foreground HWND/PID is then sampled
     // once, immediately before the final atomic and control checks.
-    let release_owner = match fresh_final_release_owner_proof(target, expected, require_focus) {
-        Ok(proof) => proof,
+    let owner_verdict = if require_focus {
+        let Some(release_owner) = backend.session_release_owner_proof() else {
+            return FinalDownAdmissionResult::Terminal(
+                "session release owner proof is missing before final admission".to_string(),
+            );
+        };
+        fresh_final_release_owner_proof(target, expected, true, release_owner)
+    } else {
+        Ok(())
+    };
+    match owner_verdict {
+        Ok(()) => {}
         Err(verdict) => {
             apply_final_down_rejection(verdict, runtime, metrics);
             if verdict == FinalDownVerdict::FocusLost
@@ -783,7 +819,7 @@ fn verify_final_musical_packet_admission(
                 _ => FinalDownAdmissionResult::Replan,
             };
         }
-    };
+    }
 
     #[cfg(any(test, feature = "test-support"))]
     if let (Some(hook), Some(system_power)) = (
@@ -826,5 +862,5 @@ fn verify_final_musical_packet_admission(
         return FinalDownAdmissionResult::Replan;
     }
 
-    FinalDownAdmissionResult::Allowed { release_owner }
+    FinalDownAdmissionResult::Allowed
 }

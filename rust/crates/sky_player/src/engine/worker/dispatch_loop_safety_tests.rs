@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 #[test]
-fn attempted_mixed_down_is_reconciled_once_then_next_unattempted_onset_waits_for_cleanup_g() {
+fn attempted_mixed_down_terminates_after_one_packet_and_verified_cleanup() {
     let actions = [
         test_action(10, ActionKind::Down, 0, 0x15),
         test_action(11, ActionKind::Up, 20_000, 0x15),
@@ -101,7 +101,7 @@ fn attempted_mixed_down_is_reconciled_once_then_next_unattempted_onset_waits_for
     });
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(mixed, false),
-        StagedDispatchOutcome::Dispatched
+        StagedDispatchOutcome::Exit
     ));
     assert_eq!(anomaly_calls.load(Ordering::Relaxed), 1);
     assert_eq!(
@@ -155,54 +155,12 @@ fn attempted_mixed_down_is_reconciled_once_then_next_unattempted_onset_waits_for
         }
     );
 
-    let (next_up, next_chord, next_window) = staged_send_at(&mut harness, barrier, epoch);
-    assert_eq!(next_up, 0);
-    assert_eq!(next_chord.map(|chord| chord.source_action_index), Some(13));
-    let next = harness
-        .stage_candidate_with_scheduler_window_for_test(next_up, next_chord, next_window)
-        .expect("stage never-attempted onset 13")
-        .expect("next Down candidate");
-    assert_eq!(next.source_action_index, 13);
-    let next_packets = Arc::new(Mutex::new(Vec::with_capacity(1)));
-    let captured_next_packets = Arc::clone(&next_packets);
-    let next_start = barrier;
-    harness.resources.backend.set_packet_emitter(move |packet| {
-        captured_next_packets
-            .lock()
-            .expect("next onset syscall capture")
-            .push(packet);
-        let completed = next_start
-            .checked_add_duration(DurationTicks::from_raw(1))
-            .expect("next Down completion QPC");
-        SendTransactionOutcome {
-            status: SendTransactionStatus::Complete,
-            evidence: SendEvidence {
-                requested_mask: packet.up_mask | packet.down_mask,
-                confirmed_mask: packet.up_mask | packet.down_mask,
-                skipped_mask: 0,
-                first_inserted: packet.event_count(),
-                attempts: 1,
-                zero_progress_retries: 0,
-                retry_reason: PacketRetryReason::None,
-                first_win32_error: None,
-                last_win32_error: None,
-                started_ticks: Some(next_start),
-                completed_ticks: Some(completed),
-                timing_error: None,
-            },
-        }
-    });
-    assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(next, false),
-        StagedDispatchOutcome::Dispatched
-    ));
+    assert_eq!(anomaly_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(first_capture.lock().expect("first packet capture").len(), 1);
     assert_eq!(
-        next_packets.lock().expect("next packet capture").as_slice(),
-        &[PhysicalPacket::new(0, 0b0100)]
+        harness.finalize_for_test().outcome_code,
+        crate::engine::OUTCOME_ERROR
     );
-    assert_eq!(harness.generation_accounting_for_test().activated, 2);
-    assert_eq!(harness.generation_accounting_for_test().cancelled, 2);
-    assert_eq!(harness.generation_accounting_for_test().active, 1);
 }
 
 #[test]
@@ -262,7 +220,7 @@ fn failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_ob
         Some(0)
     );
     assert_eq!(harness.resources.scheduler.accounting().activated, 0);
-    assert_eq!(harness.resources.backend.in_flight_mask, mask);
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
     assert_eq!(harness.release_obligation_mask_for_test() & mask, mask);
     assert!(harness.runtime.musical_physical_attempt_started);
     assert!(
@@ -360,7 +318,7 @@ fn musical_up_only_fresh_foreground_loss_pauses_without_crossing_sender_boundary
     assert_eq!(harness.runtime.verified_target_for_test(), None);
     let finalized = harness.finalize_for_test();
     assert_eq!(finalized.attempted_mask, 1);
-    assert_eq!(finalized.release_obligation_mask, 0);
+    assert_eq!(finalized.release_obligation_mask, 1);
     assert_eq!(
         cleanup.lock().expect("safety cleanup capture").as_slice(),
         &[(vec![0x15], true)],
@@ -511,7 +469,8 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
         .backend
         .release_owner_proof_for_mask(1)
         .expect("A release proof lookup")
-        .expect("A release proof committed");
+        .expect("A release proof committed")
+        .clone();
     assert_eq!(a_origin.target_hwnd(), origin.hwnd);
     assert_eq!(a_origin.target_generation(), origin.generation);
     assert_eq!(a_origin.owner_pid(), Some(101));
@@ -669,9 +628,11 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
     super::super::suspend_live_input_for_dispatch(
         &mut harness.resources.backend,
         &mut harness.resources.scheduler,
-        &harness.target,
-        Some(origin),
-        true,
+        super::super::super::cleanup::CleanupTarget::for_session(
+            &harness.target,
+            Some(origin),
+            true,
+        ),
         &harness.runtime,
         || {
             let completed = clock
@@ -703,8 +664,10 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
             .resources
             .backend
             .release_owner_proof_for_mask(1)
-            .is_err(),
-        "verified cleanup resolves A's release proof"
+            .expect("session owner proof lookup after verified cleanup")
+            .expect("session owner proof remains after verified cleanup")
+            .same_owner(&a_origin),
+        "physical cleanup does not retire the session authority proof"
     );
     let resume_barrier = harness
         .resume_barrier_qpc_for_test()
@@ -863,7 +826,8 @@ fn focus_recovery_cleanup_rejects_invalidated_session_target() {
             .backend
             .release_owner_proof_for_mask(1)
             .expect("origin proof lookup")
-            .expect("origin proof");
+            .expect("origin proof")
+            .clone();
 
         // Neither a different HWND nor same-HWND reuse can replace the fixed
         // session target or authorize focus-recovery cleanup.
@@ -871,9 +835,11 @@ fn focus_recovery_cleanup_rejects_invalidated_session_target() {
         let error = super::super::suspend_live_input_for_dispatch(
             &mut harness.resources.backend,
             &mut harness.resources.scheduler,
-            &harness.target,
-            Some(origin),
-            true,
+            super::super::super::cleanup::CleanupTarget::for_session(
+                &harness.target,
+                Some(origin),
+                true,
+            ),
             &harness.runtime,
             || {
                 harness
@@ -981,7 +947,7 @@ fn fresh_focus_rejection_keeps_qpc_failure_terminal() {
 }
 
 #[test]
-fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cleanup() {
+fn attempted_musical_up_only_is_not_replayed_and_terminates_before_next_down() {
     let actions = [
         test_action(40, ActionKind::Down, 0, 0x15),
         test_action(41, ActionKind::Up, 20_000, 0x15),
@@ -1058,7 +1024,7 @@ fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cl
     });
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(up, false),
-        StagedDispatchOutcome::Dispatched
+        StagedDispatchOutcome::Exit
     ));
     assert_eq!(
         up_packets.lock().expect("Up-only capture").as_slice(),
@@ -1099,47 +1065,11 @@ fn attempted_musical_up_only_is_not_replayed_and_next_down_waits_for_verified_cl
     assert!(!cleanup_capture.lock().expect("cleanup capture").is_empty());
     assert!(QpcTicks::from_raw(cleanup_completion.load(Ordering::Acquire)) <= barrier);
 
-    let (next_up, next_chord, next_window) = staged_send_at(&mut harness, barrier, epoch);
-    assert_eq!(next_up, 0);
-    assert_eq!(next_chord.map(|chord| chord.source_action_index), Some(42));
-    let next = harness
-        .stage_candidate_with_scheduler_window_for_test(next_up, next_chord, next_window)
-        .expect("stage B after cleanup")
-        .expect("B onset remains pending");
-    assert_eq!(next.source_action_index, 42);
-    let b_start = barrier;
-    let b_packets = Arc::new(Mutex::new(Vec::with_capacity(1)));
-    let captured_b = Arc::clone(&b_packets);
-    harness.resources.backend.set_packet_emitter(move |packet| {
-        captured_b.lock().expect("B sender capture").push(packet);
-        let completed = b_start
-            .checked_add_duration(DurationTicks::from_raw(1))
-            .expect("B completion QPC");
-        SendTransactionOutcome {
-            status: SendTransactionStatus::Complete,
-            evidence: SendEvidence {
-                requested_mask: packet.up_mask | packet.down_mask,
-                confirmed_mask: packet.up_mask | packet.down_mask,
-                skipped_mask: 0,
-                first_inserted: packet.event_count(),
-                attempts: 1,
-                zero_progress_retries: 0,
-                retry_reason: PacketRetryReason::None,
-                first_win32_error: None,
-                last_win32_error: None,
-                started_ticks: Some(b_start),
-                completed_ticks: Some(completed),
-                timing_error: None,
-            },
-        }
-    });
-    assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(next, false),
-        StagedDispatchOutcome::Dispatched
-    ));
+    assert_eq!(up_packets.lock().expect("Up-only capture").len(), 1);
+    assert_eq!(first_capture.lock().expect("initial Down capture").len(), 1);
     assert_eq!(
-        b_packets.lock().expect("B sender capture").as_slice(),
-        &[PhysicalPacket::new(0, 2)]
+        harness.finalize_for_test().outcome_code,
+        crate::engine::OUTCOME_ERROR
     );
 }
 

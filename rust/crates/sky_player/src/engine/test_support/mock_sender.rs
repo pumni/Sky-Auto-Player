@@ -156,9 +156,6 @@ pub(crate) fn create_mock_backend(
             }
         }
     });
-    if let Some(counter) = script.full_instrument_release_calls.clone() {
-        backend.set_full_instrument_release_counter(counter);
-    }
     if let Some(flag) = script.force_preflight_failure.clone() {
         backend.set_force_preflight_failure(flag);
     }

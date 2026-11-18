@@ -74,8 +74,6 @@ pub struct FaultInjectionScript {
     /// Optional first-packet send barriers for deterministic in-flight tests.
     pub first_packet_send_entered: Option<Arc<Barrier>>,
     pub release_first_packet_send: Option<Arc<Barrier>>,
-    /// Shared test-only count of full-instrument cleanup calls.
-    pub full_instrument_release_calls: Option<Arc<AtomicU64>>,
     /// Makes mock preflight fail closed when set.
     pub force_preflight_failure: Option<Arc<AtomicBool>>,
     /// Makes mock preflight report these physical instrument keys as held.

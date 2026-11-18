@@ -551,6 +551,7 @@ impl NativeDispatchSession {
         Ok(())
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn reject_owner_binding(&self, error: String) -> String {
         if self.focus_required {
             self.reject_target_admission(StartupAbortReason::OwnerInvalidated, error)
@@ -1673,6 +1674,17 @@ impl NativeDispatchSession {
             OUTCOME_ERROR => Some("error"),
             _ => Some("error"),
         }
+    }
+
+    /// Return the worker's typed terminal state and any tracked physical
+    /// release residual. It becomes available after finalization publishes it.
+    pub fn terminal_result(&self) -> Option<WorkerTerminalResult> {
+        self.shared
+            .publication
+            .metrics
+            .terminal_result
+            .lock()
+            .clone()
     }
 }
 

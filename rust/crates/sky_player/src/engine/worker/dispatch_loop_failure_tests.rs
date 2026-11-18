@@ -56,7 +56,7 @@ fn sender_failure_record_for_test(
 
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::super::StagedDispatchOutcome::Dispatched
+        super::super::StagedDispatchOutcome::Exit
     ));
     let record = harness
         .runtime
@@ -247,7 +247,7 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
 
         assert!(matches!(
             harness.dispatch_staged_candidate_for_test(candidate, false),
-            super::super::StagedDispatchOutcome::Dispatched
+            super::super::StagedDispatchOutcome::Exit
         ));
         assert_ne!(harness.resources.scheduler.accounting(), accounting_before);
         assert_eq!(harness.resources.scheduler.accounting().activated, 0);
@@ -381,7 +381,7 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
         harness.set_mock_sender_start_qpc_for_test(mixed_target);
         assert!(matches!(
             harness.dispatch_staged_candidate_for_test(candidate, false),
-            super::super::StagedDispatchOutcome::Dispatched
+            super::super::StagedDispatchOutcome::Exit
         ));
         assert_eq!(attempts.load(Ordering::Relaxed), 1);
         assert_eq!(harness.local_metrics.precision_packet_attempts, 2);

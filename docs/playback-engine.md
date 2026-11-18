@@ -231,32 +231,26 @@ staging or before a packet wait therefore fails closed; the worker does not
 wait for target publication to recover. The separate bounded resume wait is
 retained for live foreground/focus recovery with the same still-valid target.
 
-Each authored Down onset can cross the syscall boundary at most once. A
-pre-call rejection has no attempt; once the sender reports a syscall attempt,
-the onset is consumed even when insertion is zero, short, complete with missing
-QPC evidence, or otherwise ambiguous. The worker preserves the raw count,
-Win32 error, attempt, and timing evidence, does not commit the packet as a
-successful musical completion, and never invents a sender completion QPC. The
-one narrow exception is an internally consistent, one-attempt Down-only raw
-zero: the attempted onset is consumed and its zero-insertion journal bits are
-cleared without a safety Up or a new H/G completion floor. Existing active
-slots and their physical floors remain intact, and later unattempted onsets
-remain eligible at their authored times. Any Up-bearing or mixed packet, short
-insertion, unavailable or contradictory transport evidence, invalid QPC
-interval, control change, or target change follows the conservative
-ownership-verified cleanup path. Attempted Down keys then remain tracked as a
-release obligation until safety cleanup proves release. If cleanup succeeds,
-the actual cleanup completion QPC starts the resume barrier at $Q + G$; only
-later Down onsets that have never been attempted may continue, in authored
-order, after all final gates pass again. If ownership, release, or timing cannot
-be proved, playback stays blocked or exits fail-closed with the obligation
-retained. Recovering the physical key state does not convert the anomalous
-transport into a successful packet. The worker keeps an attempted-anomaly latch
-during recovery, then promotes that latch to a terminal error during
-finalization. A session with any attempted post-call anomaly therefore ends in
-error even if later unattempted onsets ran. An already stronger terminal error
-remains primary; a concurrent terminal control cause remains recorded alongside
-the anomaly evidence.
+Musical packets and safety Ups use one raw `SendInput` primitive, with each
+invocation making at most one syscall. The worker materializes a musical packet
+before its precision wait and journals its Down/Up duties before entering the
+sender. If the sender unwinds, that in-flight journal remains available to
+terminal cleanup. Each authored Down onset crosses the syscall boundary at
+most once and is never replayed. The first anomaly—zero or short insertion,
+Win32 error, contradictory count/evidence, or a pre/post-call QPC failure—ends
+musical playback. The worker preserves the raw count, error, attempt, and timing
+evidence, does not commit an anomalous packet as a musical completion, and
+never invents a sender completion QPC. The one narrow journal exception is a
+provable one-attempt Down-only raw zero: after matching the attempted onset to
+its scheduler chord and validating consistent count and QPC evidence, the
+worker clears only that new Down obligation. Prior active or uncertain duties
+remain intact, no safety Up is sent for the proven-zero Down, and no H/G
+completion floor is created. Every other attempted anomaly keeps its uncertain
+transport duties in the journal and enters ownership-verified cleanup; no later
+musical onset is dispatched. Cleanup may resolve the physical residual but
+does not convert the anomalous packet into success. A session with an attempted
+anomaly ends with a typed error result that retains its cause and remaining
+release evidence.
 
 Attempted-anomaly diagnostics have bounded storage: the worker counts every
 attempt, counts omitted detail records, and retains at most 16 records (the
@@ -265,32 +259,42 @@ bytes and preserves the available source action, raw insertion count, Win32
 error, attempt count, and QPC fields. The bounded sample is stored inline and
 does not add heap allocation to the healthy dispatch path. The terminal error
 latch depends on the total counter, not on which detail records remain. This is
-internal diagnostic evidence; telemetry schema 25 and public DTOs do not
-change.
+internal diagnostic evidence; telemetry schema 25 and public transport DTOs
+do not change.
 
 Every musical Up bit, including an Up-only packet and a mixed-to-Up-only
-replan, must carry the frozen release-owner proof recorded when its Down
-created the obligation. The final gate proves the immutable session target and
-compares its retained owner identity with every Up origin immediately before
-the syscall. Missing, conflicted, mixed-generation, invalidated, or drifted
-proof fails closed without calling the sender or clearing the obligation.
-Independent Up bits with one matching owner remain eligible. Terminal and
-pause safety Up use the tracked cleanup policy and its originating owner proof
-without requiring current foreground focus. Healthy dispatch uses fixed
-buffers and does not allocate. Packets contain at most 15 inputs, with Up
-before Down. H/G decisions use real sender completion QPC on healthy packets or
-verified cleanup completion QPC after recovery; missing evidence is never
+replan, must match the immutable owner proof retained once by its worker
+session. The final gate proves the session target and checks its retained owner
+identity immediately before the syscall. Missing, invalidated, or drifted proof
+fails closed without calling the sender or clearing the obligation. Terminal
+and pause safety Up use the same tracked cleanup reducer and originating owner
+proof. The reducer separates `needs_up` (transport Up still owed) from
+`needs_probe` (Up transport completed, physical state still unverified). Only
+`needs_up` can produce another physical Up; Held or Inconclusive probe results
+retain `needs_probe` without sending another Up. Startup abort, Pause, Stop,
+focus return, Suspend, sender anomaly, and panic all use this bounded cleanup
+policy. A drain makes at most four raw Up calls, with 15/50/100 ms delays
+between retries, and revalidates the origin after each delay and at the final
+send boundary. A background Stop may make at most one best-effort Up if the
+origin process is still live; that send is not proof that the game released the
+key. QPC errors still enter finite terminal cleanup. Healthy dispatch uses
+fixed buffers and does not allocate. Packets contain at most 15 inputs, with
+Up before Down. H/G decisions use real sender completion QPC on healthy packets
+or verified cleanup completion QPC after recovery; missing evidence is never
 replaced by a later clock read. Terminal safety Up remains separate from
 musical packet metrics.
 
 Tracked terminal and resumable cleanup repeat the immutable target, origin,
 owner, and process-continuity admission after each retry delay and immediately
-after packet preparation, before entering the physical sender. If admission is
-missing or fails, the remaining Up sends are withheld, their obligations stay
-quarantined, and the result retains only the actual prior sender calls and
-their transport, probe, and QPC evidence. A withheld retry does not increase
-the sender-attempt count. Zero-obligation cleanup performs no proof query or
-syscall. Terminal QPC fallback does not bypass the per-attempt admission.
+before entering the physical sender. If admission is missing or fails, the
+remaining Up sends are withheld, their obligations stay quarantined, and the
+result retains only the actual prior sender calls and their transport, probe,
+and QPC evidence. A withheld retry does not increase the sender-attempt count.
+Zero-obligation cleanup performs no proof query or syscall. Terminal QPC
+fallback does not bypass per-attempt admission. The typed terminal result
+retains the remaining masks, session owner proof, and physical key profile for
+the later recovery layer; playback UI retirement remains owned by its current
+lifecycle owner.
 
 Latency, envelope, and hold timing samples are qualified only when transport is
 complete and sender QPC evidence is ordered with no timing error. Unqualified
@@ -311,8 +315,9 @@ dispatch boundary and does not issue `SendInput`.
   target must remain stable through the configured grace period. The worker then
   reconciles and verifies cleanup, and requires a Down barrier at verified
   cleanup completion plus $G$.
-- Stop, Skip, Panic, and Suspend retain their terminal safety cleanup path,
-  including an Up attempt when the target is not foreground.
+- Stop, Skip, Panic, and Suspend use terminal safety cleanup. A background Stop
+  may send at most one Up to a still-live origin; because the target is not
+  foreground, this best-effort send cannot prove that the game released the key.
 
 ### Session Target Binding and Lifetime
 

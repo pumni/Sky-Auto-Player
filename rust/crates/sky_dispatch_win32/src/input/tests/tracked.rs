@@ -78,8 +78,8 @@ fn prepared_success_emitter(
                 retry_reason: PacketRetryReason::None,
                 first_win32_error: None,
                 last_win32_error: None,
-                started_ticks: None,
-                completed_ticks: None,
+                started_ticks: Some(crate::clock::QpcTicks::from_raw(100)),
+                completed_ticks: Some(crate::clock::QpcTicks::from_raw(101)),
                 timing_error: None,
             },
         }
@@ -217,7 +217,7 @@ fn deferred_mixed_pre_call_qpc_failure_preserves_only_prior_up_obligation() {
     assert_eq!(state.active_mask, packet.up_mask);
     assert_eq!(state.release_obligation_mask(), packet.up_mask);
 
-    let cleanup = state.release_terminal_tracked_scope(0);
+    let cleanup = state.release_terminal_tracked_scope_for_test(0);
     assert!(cleanup.release_outcome.released_successfully);
     assert_eq!(cleanup.release_outcome.attempts, 1);
     assert_eq!(cleanup.release_outcome.attempted_mask, packet.up_mask);
@@ -281,7 +281,7 @@ fn deferred_mixed_zero_insert_keeps_attempted_down_release_obligation() {
         "an attempted zero-insertion Down remains a cleanup obligation"
     );
 
-    let cleanup = state.release_terminal_tracked_scope(0);
+    let cleanup = state.release_terminal_tracked_scope_for_test(0);
     assert!(cleanup.release_outcome.released_successfully);
     assert_eq!(
         cleanup.release_outcome.attempted_mask,
@@ -543,16 +543,24 @@ fn prepared_sender_panic_interleavings_preserve_only_uncommitted_packet_ownershi
     let prepared = super::super::packet::PreparedPhysicalPacket::try_new(packet)
         .expect("valid prepared chord");
 
-    for (point, expected_obligation, expected_down_sends) in [
-        (PreparedSendPanicPoint::BeforeSenderAuthority, 0, 0),
+    for (point, expected_obligation, expected_in_flight, expected_down_sends) in [
+        (PreparedSendPanicPoint::BeforeSenderAuthority, 0, 0, 0),
+        (
+            PreparedSendPanicPoint::AfterJournalBeforeSyscall,
+            packet.down_mask,
+            packet.down_mask,
+            0,
+        ),
         (
             PreparedSendPanicPoint::AfterSenderReturn,
+            packet.down_mask,
             packet.down_mask,
             1,
         ),
         (
             PreparedSendPanicPoint::AfterStateCommit,
             packet.down_mask,
+            0,
             1,
         ),
     ] {
@@ -581,12 +589,7 @@ fn prepared_sender_panic_interleavings_preserve_only_uncommitted_packet_ownershi
             "{point:?}"
         );
         assert_eq!(
-            state.in_flight_mask,
-            if point == PreparedSendPanicPoint::AfterSenderReturn {
-                packet.down_mask
-            } else {
-                0
-            },
+            state.in_flight_mask, expected_in_flight,
             "{point:?}: in-flight residue"
         );
 
@@ -598,18 +601,19 @@ fn prepared_sender_panic_interleavings_preserve_only_uncommitted_packet_ownershi
             expected_down_sends,
             "{point:?}: gameplay Down count"
         );
-        if expected_obligation == 0 {
-            assert!(
-                captured.is_empty(),
-                "{point:?}: no transport before authority"
-            );
+        let expected_packets = if expected_down_sends == 0 {
+            if expected_obligation == 0 {
+                Vec::new()
+            } else {
+                vec![PhysicalPacket::new(expected_obligation, 0)]
+            }
         } else {
-            assert_eq!(
-                captured,
-                vec![packet, PhysicalPacket::new(packet.down_mask, 0)],
-                "{point:?}: exact packet-scoped cleanup"
-            );
-        }
+            vec![packet, PhysicalPacket::new(packet.down_mask, 0)]
+        };
+        assert_eq!(
+            captured, expected_packets,
+            "{point:?}: journal-scoped cleanup"
+        );
         assert_eq!(
             state.release_obligation_mask(),
             0,

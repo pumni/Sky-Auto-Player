@@ -18,15 +18,6 @@ pub fn win32_available() -> bool {
     cfg!(windows)
 }
 
-/// Canonical emergency release for the desktop parent-loss boundary.
-///
-/// This is intentionally not a playback control path: it releases only the
-/// allowlisted fifteen instrument scan codes and contains no scheduling.
-pub fn emergency_release_canonical() -> input::ReleaseAllOutcome {
-    let mut state = input::TrackedKeyState::new();
-    state.release_all_full_instrument(0)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -53,16 +44,33 @@ mod tests {
 
     #[test]
     fn test_tracked_key_state_lifecycle() {
-        let mut state = input::TrackedKeyState::with_emitter(fake_success_emitter);
+        let mut state =
+            input::TrackedKeyState::with_packet_emitter(|packet| SendTransactionOutcome {
+                status: SendTransactionStatus::Complete,
+                evidence: SendEvidence {
+                    requested_mask: packet.up_mask | packet.down_mask,
+                    confirmed_mask: packet.up_mask | packet.down_mask,
+                    skipped_mask: 0,
+                    first_inserted: packet.event_count(),
+                    attempts: 1,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: Some(clock::QpcTicks::from_raw(10)),
+                    completed_ticks: Some(clock::QpcTicks::from_raw(20)),
+                    timing_error: None,
+                },
+            });
+        state.set_emitter(fake_success_emitter);
         state.custom_probe = Some(Box::new(|_, _| input::InstrumentPhysicalState::AllUp));
         assert_eq!(state.active_mask, 0);
 
-        let res_down = state.key_down(&[0x15, 0x16]);
+        let res_down = state.send_physical_packet(input::PhysicalPacket::new(0, 0b11));
         assert_eq!(res_down.status, SendTransactionStatus::Complete);
-        assert_eq!(res_down.sent_scan_codes().as_slice(), &[0x15, 0x16]);
         assert_eq!(state.active_mask.count_ones(), 2);
 
-        let res_up = state.key_up(&[0x15]);
+        let res_up = state.send_physical_packet(input::PhysicalPacket::new(0b01, 0));
         assert_eq!(res_up.status, SendTransactionStatus::Complete);
         assert_eq!(state.active_mask.count_ones(), 1);
 
@@ -91,7 +99,7 @@ mod tests {
                     timing_error: None,
                 },
             });
-        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0b01, 0b10));
+        let outcome = state.send_physical_packet(input::PhysicalPacket::new(0b01, 0b10));
         assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
         assert_eq!(state.active_mask, 0);
         assert_eq!(state.possibly_active_mask, 0b11);
@@ -121,7 +129,7 @@ mod tests {
                 },
             }
         });
-        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0b001, 0b010));
+        let outcome = state.send_physical_packet(input::PhysicalPacket::new(0b001, 0b010));
         assert_eq!(outcome.status, SendTransactionStatus::Complete);
         assert_eq!(state.active_mask, 0b010);
     }
@@ -179,7 +187,7 @@ mod tests {
                     timing_error: None,
                 },
             });
-        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0, 0b001));
+        let outcome = state.send_physical_packet(input::PhysicalPacket::new(0, 0b001));
         assert_eq!(outcome.status, SendTransactionStatus::ZeroProgress);
         assert_eq!(state.sendinput_partial_events, 0);
         assert_eq!(state.sendinput_zero_progress_failures, 1);
@@ -206,7 +214,7 @@ mod tests {
                     timing_error: Some(clock::QpcError::CounterUnavailable),
                 },
             });
-        let outcome = state.key_down_physical_packet(input::PhysicalPacket::new(0, 0b001));
+        let outcome = state.send_physical_packet(input::PhysicalPacket::new(0, 0b001));
         assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
         assert_eq!(state.active_mask, 0);
         assert_eq!(state.possibly_active_mask, 0b001);

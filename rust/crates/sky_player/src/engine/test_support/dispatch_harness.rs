@@ -682,6 +682,14 @@ impl ProductionDispatchTestHarness {
         ));
         #[cfg(not(any(test, feature = "test-support")))]
         assert!(self.target.bind_owner_identity(hwnd, generation, owner_pid));
+        let release_owner = self
+            .target
+            .try_release_owner_proof_for_generation(hwnd, generation)
+            .expect("focus fixture session owner proof");
+        self.resources
+            .backend
+            .bind_session_release_owner(release_owner)
+            .expect("focus fixture binds one session release owner");
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
     }

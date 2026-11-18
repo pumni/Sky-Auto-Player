@@ -189,26 +189,54 @@ pub(crate) const fn preroll_manual_pause_cancels(
     manual_pause && !musical_physical_attempt_started
 }
 
+#[cfg(test)]
 fn suspend_live_input_for_dispatch(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     scheduler: &mut sky_dispatch_core::executor::DispatchExecutor,
-    target: &SessionTarget,
-    expected_target: Option<TargetStamp>,
-    require_owner_identity: bool,
+    cleanup_target: super::cleanup::CleanupTarget<'_>,
     #[cfg(any(test, feature = "test-support"))] runtime: &super::WorkerRuntime,
     post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
-    let target_hwnd = match expected_target {
-        Some(stamp) => stamp.hwnd,
-        None => target.hwnd_for_safety_release(),
+    suspend_live_input_for_dispatch_with_control(
+        backend,
+        scheduler,
+        cleanup_target,
+        #[cfg(any(test, feature = "test-support"))]
+        runtime,
+        || false,
+        post_cleanup_qpc,
+    )
+}
+
+fn suspend_live_input_for_dispatch_with_control(
+    backend: &mut sky_dispatch_win32::input::TrackedKeyState,
+    scheduler: &mut sky_dispatch_core::executor::DispatchExecutor,
+    cleanup_target: super::cleanup::CleanupTarget<'_>,
+    #[cfg(any(test, feature = "test-support"))] runtime: &super::WorkerRuntime,
+    terminal_requested: impl Fn() -> bool,
+    post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
+) -> Result<(), String> {
+    let session_release_owner = backend.session_release_owner_proof().cloned();
+    let mut drain_control = || {
+        let stamp = cleanup_target.expected_target.ok_or_else(|| {
+            "target generation unavailable while draining tracked safety obligations".to_string()
+        })?;
+        let release_owner = session_release_owner.as_ref().ok_or_else(|| {
+            "session release owner proof is missing while draining tracked obligations".to_string()
+        })?;
+        super::admission::safety_cleanup_drain_decision(
+            cleanup_target.target,
+            stamp,
+            release_owner,
+            cleanup_target.require_owner_identity,
+            terminal_requested(),
+        )
     };
     super::cleanup::suspend_scheduler_input(
         backend,
         scheduler,
-        target,
-        expected_target,
-        require_owner_identity,
-        target_hwnd,
+        cleanup_target,
+        &mut drain_control,
         || {
             let cleanup_qpc = post_cleanup_qpc()?;
             #[cfg(any(test, feature = "test-support"))]
@@ -236,10 +264,15 @@ pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
     super::cleanup::suspend_scheduler_input(
         backend,
         scheduler,
-        target,
-        expected_target,
-        require_owner_identity,
-        target_hwnd,
+        super::cleanup::CleanupTarget {
+            verification_hwnd: target_hwnd,
+            ..super::cleanup::CleanupTarget::for_session(
+                target,
+                expected_target,
+                require_owner_identity,
+            )
+        },
+        || Ok(sky_dispatch_win32::input::CleanupDrainDecision::default()),
         || {
             let cleanup_qpc = post_cleanup_qpc()?;
             if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
@@ -299,30 +332,14 @@ fn proven_raw_zero_down_only(
         && evidence.first_inserted == 0
         && evidence.attempts == 1
         && evidence.zero_progress_retries == 0
-        && evidence.retry_reason == sky_dispatch_win32::input::PacketRetryReason::ZeroProgress
+        && matches!(
+            evidence.retry_reason,
+            sky_dispatch_win32::input::PacketRetryReason::None
+                | sky_dispatch_win32::input::PacketRetryReason::ZeroProgress
+        )
         && evidence.first_win32_error == evidence.last_win32_error
         && evidence.timing_error.is_none()
         && completed.checked_duration_since(started).is_ok()
-}
-
-fn raw_zero_continuation_is_safe(
-    target: &SessionTarget,
-    require_focus: bool,
-    focus_active: &AtomicBool,
-    control_signals: FinalControlSignals<'_>,
-) -> bool {
-    let Some(system_power) = control_signals.system_power else {
-        return false;
-    };
-    target.is_valid()
-        && focus_matches(require_focus, focus_active)
-        && !control_signals.quit_requested.load(Ordering::Acquire)
-        && !control_signals.skip_requested.load(Ordering::Acquire)
-        && !control_signals.panic_requested.load(Ordering::Acquire)
-        && !control_signals.desired_pause.load(Ordering::Acquire)
-        && !control_signals.supervisor_expired.is_expired()
-        && !system_power.down_blocked()
-        && !system_power.system_suspend_terminal()
 }
 
 fn down_authored_target(
@@ -597,6 +614,31 @@ pub(crate) fn dispatch_staged_candidate(
     let expected_target = candidate
         .target_stamp
         .expect("musical packet target stamp is captured during staging");
+    if resources.backend.session_release_owner_proof().is_none() {
+        if config.focus.require_focus
+            || candidate.packet_masks.down_mask == 0
+            || resources.backend.release_obligation_mask() != 0
+        {
+            runtime.terminal_error = Some(
+                "session release owner proof is missing at physical packet sender".to_string(),
+            );
+            return DispatchAttemptOutcome::Exit;
+        }
+        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new(
+            expected_target.hwnd,
+            expected_target.generation,
+            None,
+            None,
+        ) else {
+            runtime.terminal_error =
+                Some("session release owner proof could not bind to the packet target".to_string());
+            return DispatchAttemptOutcome::Exit;
+        };
+        if let Err(error) = resources.backend.bind_session_release_owner(proof) {
+            runtime.terminal_error = Some(error);
+            return DispatchAttemptOutcome::Exit;
+        }
+    }
     let up_origin = if candidate.up_mask != 0 {
         match resources
             .backend
@@ -621,7 +663,7 @@ pub(crate) fn dispatch_staged_candidate(
     } else {
         None
     };
-    let release_owner = if has_down {
+    if has_down {
         match verify_final_down_admission(
             target,
             expected_target,
@@ -636,7 +678,7 @@ pub(crate) fn dispatch_staged_candidate(
             runtime,
             local_metrics,
         ) {
-            FinalDownAdmissionResult::Allowed { release_owner } => release_owner,
+            FinalDownAdmissionResult::Allowed => {}
             admission_result @ (FinalDownAdmissionResult::Replan
             | FinalDownAdmissionResult::ModifierHeld) => {
                 let modifier_held =
@@ -732,7 +774,7 @@ pub(crate) fn dispatch_staged_candidate(
             runtime,
             local_metrics,
         ) {
-            FinalDownAdmissionResult::Allowed { release_owner } => release_owner,
+            FinalDownAdmissionResult::Allowed => {}
             // Musical Up admission explicitly does not query modifiers.
             FinalDownAdmissionResult::ModifierHeld => return DispatchAttemptOutcome::Replan,
             FinalDownAdmissionResult::Replan => return DispatchAttemptOutcome::Replan,
@@ -741,10 +783,13 @@ pub(crate) fn dispatch_staged_candidate(
                 return DispatchAttemptOutcome::Exit;
             }
         }
-    };
+    }
 
     if let Some(up_origin) = up_origin.as_ref()
-        && !up_origin.same_owner(&release_owner)
+        && !resources
+            .backend
+            .session_release_owner_proof()
+            .is_some_and(|release_owner| up_origin.same_owner(release_owner))
     {
         runtime.terminal_error = Some(format!(
             "musical Up origin owner differs from current packet owner; up_mask=0x{:04x}; release obligation retained",
@@ -760,11 +805,18 @@ pub(crate) fn dispatch_staged_candidate(
         candidate.packet_masks.up_mask,
         candidate.packet_masks.down_mask,
     );
+    if resources.backend.session_release_owner_proof().is_none() {
+        runtime.terminal_error = Some(
+            "session release owner proof is missing at the prepared packet sender".to_string(),
+        );
+        return DispatchAttemptOutcome::Exit;
+    }
     let send_result = resources
         .backend
-        .send_prepared_physical_packet_at_final_boundary_deferred_commit_with_release_owner(
+        .send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target(
             &candidate.prepared_packet,
-            &release_owner,
+            expected_target.hwnd,
+            expected_target.generation,
         );
     let complete_transport_evidence = send_result.has_complete_evidence_for(physical_packet);
     let valid_sender_timing_evidence = send_result.has_valid_sender_timing_evidence();
@@ -827,6 +879,11 @@ pub(crate) fn dispatch_staged_candidate(
         runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
         return DispatchAttemptOutcome::Exit;
     }
+    if !healthy_completion_evidence {
+        runtime
+            .terminal_trigger
+            .get_or_insert(super::control::TerminalTrigger::SenderAnomaly);
+    }
     if send_result.evidence.attempts == 0 {
         runtime.terminal_error = Some(format!(
             "SendInput rejected before syscall; authored onset remains unattempted: {}",
@@ -851,14 +908,7 @@ pub(crate) fn dispatch_staged_candidate(
             ));
             return DispatchAttemptOutcome::Exit;
         };
-        if proven_raw_zero_down_only(&candidate, send_result)
-            && raw_zero_continuation_is_safe(
-                target,
-                config.focus.require_focus,
-                focus_active,
-                control_signals,
-            )
-        {
+        if proven_raw_zero_down_only(&candidate, send_result) {
             let chord = candidate
                 .down_chord
                 .expect("proven raw-zero Down retains its authored chord identity");
@@ -869,14 +919,17 @@ pub(crate) fn dispatch_staged_candidate(
                     chord.down_mask,
                 )
             {
-                let _ = suspend_live_input_for_dispatch(
+                let _ = suspend_live_input_for_dispatch_with_control(
                     &mut resources.backend,
                     &mut resources.scheduler,
-                    target,
-                    Some(expected_target),
-                    config.focus.require_focus,
+                    super::cleanup::CleanupTarget::for_session(
+                        target,
+                        Some(expected_target),
+                        config.focus.require_focus,
+                    ),
                     #[cfg(any(test, feature = "test-support"))]
                     runtime,
+                    || true,
                     || qpc_clock.now().map_err(|error| format!("{error:?}")),
                 );
                 runtime.terminal_error = Some(format!(
@@ -888,14 +941,17 @@ pub(crate) fn dispatch_staged_candidate(
                 .backend
                 .clear_proven_raw_zero_down_attempt(chord.down_mask)
             {
-                let _ = suspend_live_input_for_dispatch(
+                let _ = suspend_live_input_for_dispatch_with_control(
                     &mut resources.backend,
                     &mut resources.scheduler,
-                    target,
-                    Some(expected_target),
-                    config.focus.require_focus,
+                    super::cleanup::CleanupTarget::for_session(
+                        target,
+                        Some(expected_target),
+                        config.focus.require_focus,
+                    ),
                     #[cfg(any(test, feature = "test-support"))]
                     runtime,
+                    || true,
                     || qpc_clock.now().map_err(|error| format!("{error:?}")),
                 );
                 runtime.terminal_error = Some(format!(
@@ -903,18 +959,47 @@ pub(crate) fn dispatch_staged_candidate(
                 ));
                 return DispatchAttemptOutcome::Exit;
             }
-            return DispatchAttemptOutcome::Dispatched;
+            if resources.backend.release_obligation_mask() != 0
+                && let Err(error) = suspend_live_input_for_dispatch_with_control(
+                    &mut resources.backend,
+                    &mut resources.scheduler,
+                    super::cleanup::CleanupTarget::for_session(
+                        target,
+                        Some(expected_target),
+                        config.focus.require_focus,
+                    ),
+                    #[cfg(any(test, feature = "test-support"))]
+                    runtime,
+                    || true,
+                    || qpc_clock.now().map_err(|error| format!("{error:?}")),
+                )
+            {
+                runtime.verified_target = None;
+                runtime.terminal_error = Some(format!(
+                    "proven-zero Down preserved prior obligations but cleanup failed ({error}): {anomaly_record}"
+                ));
+                return DispatchAttemptOutcome::Exit;
+            }
+            runtime.terminal_error = Some(format!(
+                "musical playback terminated after proven raw-zero Down; no new release obligation was created: {anomaly_record}"
+            ));
+            return DispatchAttemptOutcome::Exit;
         }
-        if let Err(error) = suspend_live_input_for_dispatch(
-            &mut resources.backend,
-            &mut resources.scheduler,
-            target,
-            Some(expected_target),
-            config.focus.require_focus,
-            #[cfg(any(test, feature = "test-support"))]
-            runtime,
-            || qpc_clock.now().map_err(|error| format!("{error:?}")),
-        ) {
+        if resources.backend.release_obligation_mask() != 0
+            && let Err(error) = suspend_live_input_for_dispatch_with_control(
+                &mut resources.backend,
+                &mut resources.scheduler,
+                super::cleanup::CleanupTarget::for_session(
+                    target,
+                    Some(expected_target),
+                    config.focus.require_focus,
+                ),
+                #[cfg(any(test, feature = "test-support"))]
+                runtime,
+                || true,
+                || qpc_clock.now().map_err(|error| format!("{error:?}")),
+            )
+        {
             runtime.verified_target = None;
             runtime.terminal_error = Some(format!(
                 "post-call anomaly tracked safety cleanup failed or was withheld ({error}): {anomaly_record}"
@@ -943,17 +1028,10 @@ pub(crate) fn dispatch_staged_candidate(
             }
         }
 
-        // Terminal controls remain terminal. The release is verified above,
-        // but later authored notes are never dispatched after these signals.
-        if quit_requested.load(Ordering::Acquire)
-            || skip_requested.load(Ordering::Acquire)
-            || panic_requested.load(Ordering::Acquire)
-            || supervisor_expired.is_expired()
-            || system_power.system_suspend_terminal()
-        {
-            return DispatchAttemptOutcome::Exit;
-        }
-        return DispatchAttemptOutcome::Dispatched;
+        runtime.terminal_error = Some(format!(
+            "musical playback terminated after first sender anomaly: {anomaly_record}"
+        ));
+        return DispatchAttemptOutcome::Exit;
     }
 
     let Some(completion_qpc) = send_result.evidence.completed_ticks else {
@@ -1225,6 +1303,13 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 supervisor_expired,
                 system_power: Some(system_power),
             };
+            let cleanup_terminal_requested = || {
+                quit_requested.load(Ordering::Acquire)
+                    || skip_requested.load(Ordering::Acquire)
+                    || panic_requested.load(Ordering::Acquire)
+                    || supervisor_expired.is_expired()
+                    || system_power.system_suspend_terminal()
+            };
             #[cfg(any(test, feature = "test-support"))]
             if command_timing.needs_observation() {
                 let observed_ticks = match qpc_clock.now() {
@@ -1347,14 +1432,17 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     if !manual_pause_active {
                         if (core.runtime.musical_physical_attempt_started
                             || resources.backend.release_obligation_mask() != 0)
-                            && let Err(error) = suspend_live_input_for_dispatch(
+                            && let Err(error) = suspend_live_input_for_dispatch_with_control(
                                 &mut resources.backend,
                                 &mut resources.scheduler,
-                                target,
-                                Some(preflight_target),
-                                config.focus.require_focus,
+                                super::cleanup::CleanupTarget::for_session(
+                                    target,
+                                    Some(preflight_target),
+                                    config.focus.require_focus,
+                                ),
                                 #[cfg(any(test, feature = "test-support"))]
                                 &core.runtime,
+                                cleanup_terminal_requested,
                                 || qpc_clock.now().map_err(|error| format!("{error:?}")),
                             )
                         {
@@ -1379,14 +1467,17 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             break;
                         }
                     } else if core.runtime.manual_pause_suspension_pending {
-                        if let Err(error) = suspend_live_input_for_dispatch(
+                        if let Err(error) = suspend_live_input_for_dispatch_with_control(
                             &mut resources.backend,
                             &mut resources.scheduler,
-                            target,
-                            Some(preflight_target),
-                            config.focus.require_focus,
+                            super::cleanup::CleanupTarget::for_session(
+                                target,
+                                Some(preflight_target),
+                                config.focus.require_focus,
+                            ),
                             #[cfg(any(test, feature = "test-support"))]
                             &core.runtime,
+                            cleanup_terminal_requested,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {
                             core.runtime.verified_target = None;
@@ -1493,14 +1584,17 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             if manual_pause && !resources.playback.has_pause_reason(PauseReason::Manual) {
                 core.runtime.verified_target = None;
                 if !resources.playback.is_paused() {
-                    if let Err(error) = suspend_live_input_for_dispatch(
+                    if let Err(error) = suspend_live_input_for_dispatch_with_control(
                         &mut resources.backend,
                         &mut resources.scheduler,
-                        target,
-                        load_target_stamp(target),
-                        config.focus.require_focus,
+                        super::cleanup::CleanupTarget::for_session(
+                            target,
+                            load_target_stamp(target),
+                            config.focus.require_focus,
+                        ),
                         #[cfg(any(test, feature = "test-support"))]
                         &core.runtime,
+                        cleanup_terminal_requested,
                         || qpc_clock.now().map_err(|error| format!("{error:?}")),
                     ) {
                         core.runtime.terminal_error =
@@ -1541,14 +1635,17 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             } else if !manual_pause && resources.playback.has_pause_reason(PauseReason::Manual) {
                 if !resources.playback.has_pause_reason(PauseReason::Focus) {
                     if core.runtime.manual_pause_suspension_pending {
-                        if let Err(error) = suspend_live_input_for_dispatch(
+                        if let Err(error) = suspend_live_input_for_dispatch_with_control(
                             &mut resources.backend,
                             &mut resources.scheduler,
-                            target,
-                            load_target_stamp(target),
-                            config.focus.require_focus,
+                            super::cleanup::CleanupTarget::for_session(
+                                target,
+                                load_target_stamp(target),
+                                config.focus.require_focus,
+                            ),
                             #[cfg(any(test, feature = "test-support"))]
                             &core.runtime,
+                            cleanup_terminal_requested,
                             || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {
                             core.runtime.terminal_error =

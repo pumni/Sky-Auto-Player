@@ -1,28 +1,32 @@
+#[cfg(test)]
+use super::super::outcome::TerminalReleaseEvidence;
 use super::super::outcome::{
-    GuardedReleaseOutcome, PacketRetryReason, ReleaseAllOutcome, TerminalProbeVerdict,
-    TerminalReleaseEvidence, TerminalSendAttemptEvidence,
+    GuardedReleaseOutcome, PhysicalPacket, ReleaseAllOutcome, TerminalProbeVerdict,
+    TerminalSendAttemptEvidence,
 };
-use super::super::physical::{
-    LogicalInstrumentPhysicalState, ReconciledRelease, reconcile_logical_release_observation,
-};
-use super::super::scan_code::FULL_INSTRUMENT_MASK;
-use super::{CleanupAttemptAdmission, ReleaseScope, TrackedKeyState, release_retry_sleep};
+use super::super::packet::PreparedPhysicalPacket;
+use super::super::physical::{ReconciledRelease, reconcile_logical_release_observation};
+#[cfg(any(test, feature = "test-support"))]
+use super::ReleaseScope;
+use super::{CleanupAttemptAdmission, TrackedKeyState, release_retry_sleep};
 use crate::input::ReleaseOwnerProof;
 use smallvec::SmallVec;
 
 impl TrackedKeyState {
-    pub fn release_scope(&mut self, scope: ReleaseScope, target_hwnd: isize) -> ReleaseAllOutcome {
-        self.release_scope_with_qpc_fallback(scope, target_hwnd, false, None)
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn release_scope(&mut self, _scope: ReleaseScope, target_hwnd: isize) -> ReleaseAllOutcome {
+        self.release_scope_with_qpc_fallback(target_hwnd, false, None, None)
             .release_outcome
     }
 
     /// Terminal finalization may issue one bounded Up transport when QPC is
     /// unavailable, but it is restricted to this session's tracked mask.
-    pub fn release_terminal_tracked_scope(
+    #[cfg(test)]
+    pub(crate) fn release_terminal_tracked_scope_for_test(
         &mut self,
         target_hwnd: isize,
     ) -> TerminalReleaseEvidence {
-        self.release_scope_with_qpc_fallback(ReleaseScope::Tracked, target_hwnd, true, None)
+        self.release_scope_with_qpc_fallback(target_hwnd, true, None, None)
             .terminal_evidence()
     }
 
@@ -35,11 +39,23 @@ impl TrackedKeyState {
         target_hwnd: isize,
         mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
     ) -> GuardedReleaseOutcome {
+        self.release_scope_with_qpc_fallback(target_hwnd, false, Some(&mut admission), None)
+    }
+
+    /// Resumable cleanup shares its retry/probe reducer with terminal cleanup.
+    /// The worker callback is sampled after every delay and again immediately
+    /// before an admitted physical send, allowing Stop to upgrade this drain.
+    pub fn release_tracked_with_attempt_admission_and_drain_control(
+        &mut self,
+        target_hwnd: isize,
+        mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
+        mut drain_control: impl FnMut() -> Result<super::super::outcome::CleanupDrainDecision, String>,
+    ) -> GuardedReleaseOutcome {
         self.release_scope_with_qpc_fallback(
-            ReleaseScope::Tracked,
             target_hwnd,
             false,
             Some(&mut admission),
+            Some(&mut drain_control),
         )
     }
 
@@ -51,28 +67,38 @@ impl TrackedKeyState {
         target_hwnd: isize,
         mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
     ) -> GuardedReleaseOutcome {
+        self.release_scope_with_qpc_fallback(target_hwnd, true, Some(&mut admission), None)
+    }
+
+    /// Terminal cleanup with a fresh origin/foreground decision at each drain
+    /// boundary. The callback may classify a stop as background; this method
+    /// then sends at most one best-effort Up and retains its residual.
+    pub fn release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+        &mut self,
+        target_hwnd: isize,
+        mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
+        mut drain_control: impl FnMut() -> Result<super::super::outcome::CleanupDrainDecision, String>,
+    ) -> GuardedReleaseOutcome {
         self.release_scope_with_qpc_fallback(
-            ReleaseScope::Tracked,
             target_hwnd,
             true,
             Some(&mut admission),
+            Some(&mut drain_control),
         )
     }
 
     fn release_scope_with_qpc_fallback(
         &mut self,
-        scope: ReleaseScope,
         target_hwnd: isize,
-        terminal_qpc_fallback: bool,
+        mut terminal_qpc_fallback: bool,
         mut admission: Option<&mut CleanupAttemptAdmission<'_>>,
+        mut drain_control: Option<
+            &mut dyn FnMut() -> Result<super::super::outcome::CleanupDrainDecision, String>,
+        >,
     ) -> GuardedReleaseOutcome {
-        let requested_mask = match scope {
-            ReleaseScope::Tracked => self.release_obligation_mask(),
-            ReleaseScope::FullInstrument => FULL_INSTRUMENT_MASK,
-        };
+        let requested_mask = self.release_obligation_mask();
 
         if requested_mask == 0 {
-            self.clear_unobligated_release_owners((1_u16 << super::RELEASE_OWNER_SLOT_COUNT) - 1);
             return GuardedReleaseOutcome {
                 release_outcome: ReleaseAllOutcome {
                     attempted_mask: 0,
@@ -85,211 +111,259 @@ impl TrackedKeyState {
                 send_attempts: SmallVec::new(),
                 probe_verdict: TerminalProbeVerdict::NotRequired,
                 withheld_reason: None,
+                needs_up_mask: 0,
+                needs_probe_mask: 0,
             };
         }
 
-        let mut unresolved_mask = requested_mask;
+        let mut needs_probe = self.needs_probe_mask & requested_mask;
+        let mut needs_up = self.needs_up_mask() & requested_mask;
+        let mut prepared_up = if needs_up == 0 {
+            None
+        } else {
+            PreparedPhysicalPacket::try_new_with_profile(
+                PhysicalPacket::new(needs_up, 0),
+                &self.instrument_key_profile,
+            )
+            .ok()
+        };
+        if needs_up != 0 && prepared_up.is_none() {
+            self.last_error = Some("tracked Up packet preparation failed".into());
+            return GuardedReleaseOutcome {
+                release_outcome: ReleaseAllOutcome {
+                    attempted_mask: 0,
+                    transport_anomaly: true,
+                    released_successfully: false,
+                    stuck_mask: needs_up | needs_probe,
+                    verification_inconclusive: true,
+                    attempts: 0,
+                },
+                send_attempts: SmallVec::new(),
+                probe_verdict: TerminalProbeVerdict::Inconclusive(needs_up | needs_probe),
+                withheld_reason: Some("tracked Up packet preparation failed".into()),
+                needs_up_mask: needs_up,
+                needs_probe_mask: needs_probe,
+            };
+        }
+
         const RELEASE_RETRY_DELAYS_MS: [u64; 3] = [15, 50, 100];
 
-        // Keep the raw physical probe verdict separate from reconciliation:
-        // the report exposes what the probe observed, while ownership is only
-        // discharged when transport and probe evidence agree.
         let mut transport_anomaly = false;
-        let mut final_reconciliation: Option<ReconciledRelease> = None;
-        let mut final_probe_verdict: Option<TerminalProbeVerdict> = None;
+        let mut final_probe_verdict = if needs_probe == 0 {
+            TerminalProbeVerdict::NotRequired
+        } else {
+            TerminalProbeVerdict::Inconclusive(needs_probe)
+        };
         let mut terminal_send_attempts = SmallVec::<[TerminalSendAttemptEvidence; 4]>::new();
         let mut withheld_reason = None;
         let mut attempted_mask = 0u16;
         let mut attempts = 0u8;
+        let mut raw_up_invocations = 0u8;
+        let mut background_terminal_drain = false;
 
         for attempt_idx in 0..4 {
             if attempt_idx > 0 {
                 release_retry_sleep(RELEASE_RETRY_DELAYS_MS[attempt_idx - 1]);
             }
-            if unresolved_mask == 0 {
+
+            let mut default_drain_control =
+                || Ok(super::super::outcome::CleanupDrainDecision::default());
+            let drain_decision = match drain_control.as_mut() {
+                Some(control) => match control() {
+                    Ok(decision) => decision,
+                    Err(reason) => {
+                        withheld_reason = Some(reason);
+                        break;
+                    }
+                },
+                None => default_drain_control().expect("default drain control is infallible"),
+            };
+            terminal_qpc_fallback |= drain_decision.terminal_requested;
+            if !terminal_qpc_fallback && !drain_decision.origin_foreground {
+                withheld_reason = Some("tracked cleanup origin is not foreground".into());
+                break;
+            }
+            let background_terminal = terminal_qpc_fallback && !drain_decision.origin_foreground;
+            background_terminal_drain |= background_terminal;
+            if background_terminal && raw_up_invocations != 0 {
+                break;
+            }
+            let raw_attempt_limit = if background_terminal { 1 } else { 4 };
+            if needs_up != 0 && raw_up_invocations >= raw_attempt_limit {
+                break;
+            }
+            // A background Stop's one safety Up is best-effort transport only;
+            // never use a background keyboard observation to discharge it.
+            if background_terminal && needs_up == 0 {
                 break;
             }
 
-            let previous_unresolved = unresolved_mask;
-            let admission_required = admission.is_some();
-            let mut reborrowed_admission =
-                |mask, proof: &ReleaseOwnerProof| match admission.as_mut() {
-                    Some(check) => check(mask, proof),
-                    None => Ok(()),
+            if needs_up != 0 {
+                let previous_needs_up = needs_up;
+                let admission_required = admission.is_some();
+                let mut reborrowed_admission =
+                    |mask, proof: &ReleaseOwnerProof| match admission.as_mut() {
+                        Some(check) => check(mask, proof),
+                        None => Ok(()),
+                    };
+                let attempt_admission = admission_required.then_some(
+                    &mut reborrowed_admission
+                        as &mut dyn FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
+                );
+                let Some(prepared) = prepared_up.as_ref() else {
+                    unreachable!("nonempty needs_up was prepared before the drain")
                 };
-            let attempt_admission = admission_required.then_some(
-                &mut reborrowed_admission
-                    as &mut dyn FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
-            );
+                let drain_control_callback: &mut dyn FnMut() -> Result<
+                    super::super::outcome::CleanupDrainDecision,
+                    String,
+                > = match drain_control.as_mut() {
+                    Some(control) => control,
+                    None => &mut default_drain_control,
+                };
+                let emitted = match self.do_emit_up_once(
+                    prepared,
+                    super::packet_send::CleanupSendContext {
+                        terminal_qpc_fallback: &mut terminal_qpc_fallback,
+                        admission: attempt_admission,
+                        drain_control: drain_control_callback,
+                        background_terminal_drain: &mut background_terminal_drain,
+                        raw_up_invocations,
+                        attempts: &mut attempts,
+                    },
+                ) {
+                    Ok(emitted) => emitted,
+                    Err(reason) => {
+                        withheld_reason = Some(reason);
+                        break;
+                    }
+                };
+                raw_up_invocations =
+                    raw_up_invocations.saturating_add(u8::from(emitted.evidence.attempts != 0));
+                if emitted.evidence.attempts != 0 {
+                    attempted_mask |= previous_needs_up;
+                }
+                let packet = prepared.packet();
+                let raw_transport_complete = emitted.has_complete_raw_transport_for(packet);
+                transport_anomaly |= !emitted.has_complete_evidence_for(packet)
+                    || emitted.evidence.timing_error.is_some();
+                terminal_send_attempts.push(TerminalSendAttemptEvidence {
+                    raw_calls: emitted.evidence.attempts,
+                    requested_events: emitted.evidence.requested_mask.count_ones() as u8,
+                    inserted_events: emitted.evidence.first_inserted,
+                    win32_error: emitted
+                        .evidence
+                        .last_win32_error
+                        .or(emitted.evidence.first_win32_error),
+                    started_ticks: emitted.evidence.started_ticks,
+                    completed_ticks: emitted.evidence.completed_ticks,
+                    qpc_error: emitted.evidence.timing_error,
+                });
+                if !terminal_qpc_fallback && emitted.evidence.timing_error.is_some() {
+                    self.timing_error = emitted.evidence.timing_error;
+                }
+                if emitted.evidence.timing_error.is_some() {
+                    // A resumable drain whose QPC evidence fails may still
+                    // perform bounded safety cleanup on a later iteration;
+                    // its caller will reject the resume barrier and terminate.
+                    terminal_qpc_fallback = true;
+                }
 
-            let emitted = match self.do_emit_up_once(
-                unresolved_mask,
-                terminal_qpc_fallback,
-                attempt_admission,
-                &mut attempts,
-            ) {
-                Ok(emitted) => emitted,
-                Err(reason) => {
-                    withheld_reason = Some(reason);
+                if raw_transport_complete {
+                    self.active_mask &= !previous_needs_up;
+                    self.possibly_active_mask &= !previous_needs_up;
+                    self.failed_release_mask &= !previous_needs_up;
+                    self.in_flight_mask &= !previous_needs_up;
+                    self.needs_probe_mask |= previous_needs_up;
+                    needs_up &= !previous_needs_up;
+                    needs_probe |= previous_needs_up;
+                    prepared_up = None;
+                }
+
+                if background_terminal_drain && raw_up_invocations != 0 {
                     break;
                 }
-            };
-            attempted_mask |= previous_unresolved;
-            terminal_send_attempts.push(TerminalSendAttemptEvidence {
-                raw_calls: emitted.evidence.attempts,
-                requested_events: emitted.evidence.requested_mask.count_ones() as u8,
-                inserted_events: emitted.evidence.first_inserted,
-                win32_error: emitted
-                    .evidence
-                    .last_win32_error
-                    .or(emitted.evidence.first_win32_error),
-                started_ticks: emitted.evidence.started_ticks,
-                completed_ticks: emitted.evidence.completed_ticks,
-                qpc_error: emitted.evidence.timing_error,
-            });
-            if !terminal_qpc_fallback && emitted.evidence.timing_error.is_some() {
-                self.timing_error = emitted.evidence.timing_error;
             }
-            let transport_confirmed_mask = emitted.evidence.confirmed_mask;
 
-            let requested_event_count = previous_unresolved.count_ones() as u8;
-            transport_anomaly |= emitted.evidence.attempts != 1
-                || emitted.evidence.requested_mask != previous_unresolved
-                || emitted.evidence.first_inserted != requested_event_count
-                || transport_confirmed_mask != previous_unresolved
-                || emitted.evidence.skipped_mask != 0
-                || emitted.evidence.retry_reason != PacketRetryReason::None
-                || emitted.evidence.first_win32_error.is_some()
-                || emitted.evidence.last_win32_error.is_some();
-
-            let physical_state =
-                self.resolve_release_probe(target_hwnd, unresolved_mask, transport_confirmed_mask);
-            final_probe_verdict = Some(match physical_state {
-                LogicalInstrumentPhysicalState::AllUp => TerminalProbeVerdict::AllUp,
-                LogicalInstrumentPhysicalState::Held(held_mask) => {
-                    TerminalProbeVerdict::Held(held_mask)
-                }
-                LogicalInstrumentPhysicalState::Inconclusive => {
-                    TerminalProbeVerdict::Inconclusive(previous_unresolved)
-                }
-            });
-            let reconciled = reconcile_logical_release_observation(
-                unresolved_mask,
-                transport_confirmed_mask,
-                physical_state,
-            );
-            // The cleanup FSM is an ownership boundary: malformed empty
-            // residuals cannot discharge a nonempty request. Normalize them
-            // before mutating any conservative backend mask.
-            let reconciled = match reconciled {
-                ReconciledRelease::Held(0) | ReconciledRelease::Inconclusive(0) => {
-                    ReconciledRelease::Inconclusive(previous_unresolved)
-                }
-                verdict => verdict,
-            };
-            final_reconciliation = Some(reconciled);
-
-            let resolved_this_transition = match reconciled {
-                ReconciledRelease::VerifiedAllUp => previous_unresolved,
-                ReconciledRelease::Held(held_mask) => previous_unresolved & !held_mask,
-                ReconciledRelease::Inconclusive(unconfirmed_mask) => {
-                    previous_unresolved & !unconfirmed_mask
-                }
-            };
-            self.active_mask &= !resolved_this_transition;
-            self.possibly_active_mask &= !resolved_this_transition;
-            self.failed_release_mask &= !resolved_this_transition;
-            self.in_flight_mask &= !resolved_this_transition;
-            self.clear_unobligated_release_owners(resolved_this_transition);
-
-            match reconciled {
-                ReconciledRelease::VerifiedAllUp => {
-                    if self.failed_release_mask == 0 {
-                        self.last_error = None;
+            if needs_probe != 0 {
+                let physical_state =
+                    self.resolve_release_probe(target_hwnd, needs_probe, needs_probe);
+                let reconciled =
+                    reconcile_logical_release_observation(needs_probe, needs_probe, physical_state);
+                match reconciled {
+                    ReconciledRelease::VerifiedAllUp => {
+                        self.needs_probe_mask &= !needs_probe;
+                        needs_probe = 0;
+                        final_probe_verdict = TerminalProbeVerdict::AllUp;
                     }
-                    return GuardedReleaseOutcome {
-                        release_outcome: ReleaseAllOutcome {
-                            attempted_mask,
-                            transport_anomaly,
-                            released_successfully: true,
-                            stuck_mask: 0,
-                            verification_inconclusive: false,
-                            attempts,
-                        },
-                        send_attempts: terminal_send_attempts,
-                        probe_verdict: TerminalProbeVerdict::AllUp,
-                        withheld_reason: None,
-                    };
+                    ReconciledRelease::Held(held_mask)
+                        if held_mask != 0 && held_mask & !needs_probe == 0 =>
+                    {
+                        final_probe_verdict = TerminalProbeVerdict::Held(held_mask);
+                    }
+                    ReconciledRelease::Held(_) | ReconciledRelease::Inconclusive(_) => {
+                        final_probe_verdict = TerminalProbeVerdict::Inconclusive(needs_probe);
+                    }
                 }
-                ReconciledRelease::Held(held_mask) => {
-                    unresolved_mask = held_mask;
+            }
+
+            if needs_up == 0 && needs_probe == 0 {
+                if self.failed_release_mask == 0 {
+                    self.last_error = None;
                 }
-                ReconciledRelease::Inconclusive(unconfirmed_mask) => {
-                    unresolved_mask = unconfirmed_mask;
-                }
+                return GuardedReleaseOutcome {
+                    release_outcome: ReleaseAllOutcome {
+                        attempted_mask,
+                        transport_anomaly,
+                        released_successfully: true,
+                        stuck_mask: 0,
+                        verification_inconclusive: false,
+                        attempts,
+                    },
+                    send_attempts: terminal_send_attempts,
+                    probe_verdict: if attempted_mask == 0 {
+                        TerminalProbeVerdict::AllUp
+                    } else {
+                        final_probe_verdict
+                    },
+                    withheld_reason: None,
+                    needs_up_mask: 0,
+                    needs_probe_mask: 0,
+                };
             }
         }
 
-        let release_verification =
-            final_reconciliation.unwrap_or(ReconciledRelease::Inconclusive(unresolved_mask));
-        let released_successfully =
-            matches!(release_verification, ReconciledRelease::VerifiedAllUp);
-        let verification_inconclusive =
-            matches!(release_verification, ReconciledRelease::Inconclusive(_));
-        let stuck_mask = if released_successfully {
-            0
-        } else {
-            unresolved_mask
-        };
-
-        let error_msg = match scope {
-            ReleaseScope::Tracked => "tracked release incomplete".to_string(),
-            ReleaseScope::FullInstrument => format!(
-                "full-instrument release incomplete: {}/{} keys unresolved",
-                self.instrument_key_profile
-                    .scan_codes_from_mask(unresolved_mask)
-                    .len(),
-                self.instrument_key_profile
-                    .scan_codes_from_mask(requested_mask)
-                    .len()
-            ),
-        };
-        if !released_successfully {
+        let stuck_mask = needs_up | needs_probe;
+        let error_msg = "tracked release incomplete".to_string();
+        if stuck_mask != 0 {
             self.last_error = Some(error_msg);
-            self.failed_release_mask |= stuck_mask;
+            self.failed_release_mask |= needs_up;
         }
-
-        let probe_verdict =
-            final_probe_verdict.unwrap_or(TerminalProbeVerdict::Inconclusive(unresolved_mask));
+        self.needs_probe_mask = (self.needs_probe_mask & !requested_mask) | needs_probe;
+        if needs_probe != 0 && !matches!(final_probe_verdict, TerminalProbeVerdict::Held(_)) {
+            final_probe_verdict = TerminalProbeVerdict::Inconclusive(needs_probe);
+        }
+        let verification_inconclusive =
+            matches!(final_probe_verdict, TerminalProbeVerdict::Inconclusive(_));
 
         GuardedReleaseOutcome {
             release_outcome: ReleaseAllOutcome {
                 attempted_mask,
                 transport_anomaly,
-                released_successfully,
+                released_successfully: stuck_mask == 0,
                 stuck_mask,
                 verification_inconclusive,
                 attempts,
             },
             send_attempts: terminal_send_attempts,
-            probe_verdict,
+            probe_verdict: final_probe_verdict,
             withheld_reason,
+            needs_up_mask: needs_up,
+            needs_probe_mask: needs_probe,
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn release_all(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
         self.release_scope(ReleaseScope::Tracked, target_hwnd)
-    }
-
-    pub fn release_all_full_instrument(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
-        #[cfg(any(test, feature = "test-support"))]
-        {
-            self.full_instrument_release_calls =
-                self.full_instrument_release_calls.saturating_add(1);
-            if let Some(counter) = &self.full_instrument_release_counter {
-                counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            }
-        }
-        self.release_scope(ReleaseScope::FullInstrument, target_hwnd)
     }
 }
