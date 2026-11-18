@@ -6,19 +6,11 @@ use super::super::outcome::{
 };
 use super::super::packet::PreparedPhysicalPacket;
 use super::super::physical::{ReconciledRelease, reconcile_logical_release_observation};
-#[cfg(any(test, feature = "test-support"))]
-use super::ReleaseScope;
 use super::{CleanupAttemptAdmission, TrackedKeyState, release_retry_sleep};
 use crate::input::ReleaseOwnerProof;
 use smallvec::SmallVec;
 
 impl TrackedKeyState {
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn release_scope(&mut self, _scope: ReleaseScope, target_hwnd: isize) -> ReleaseAllOutcome {
-        self.release_scope_with_qpc_fallback(target_hwnd, false, None, None, 4)
-            .release_outcome
-    }
-
     /// Terminal finalization may issue one bounded Up transport when QPC is
     /// unavailable, but it is restricted to this session's tracked mask.
     #[cfg(test)]
@@ -391,6 +383,7 @@ impl TrackedKeyState {
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn release_all(&mut self, target_hwnd: isize) -> ReleaseAllOutcome {
-        self.release_scope(ReleaseScope::Tracked, target_hwnd)
+        self.release_scope_with_qpc_fallback(target_hwnd, false, None, None, 4)
+            .release_outcome
     }
 }

@@ -179,7 +179,7 @@ fn deferred_partial_packet_keeps_its_journal_for_cleanup() {
     assert_eq!(state.in_flight_mask, packet.down_mask);
     assert_eq!(state.possibly_active_mask, packet.down_mask);
     assert_eq!(state.release_obligation_mask(), packet.down_mask);
-    let cleanup = state.release_scope(super::super::tracked::ReleaseScope::Tracked, 0);
+    let cleanup = state.release_all(0);
     assert_eq!(cleanup.attempted_mask, packet.down_mask);
     assert!(cleanup.released_successfully);
     assert_eq!(state.in_flight_mask, 0);
@@ -334,7 +334,7 @@ fn deferred_down_zero_insert_retains_in_flight_until_verified_cleanup() {
     assert_eq!(state.in_flight_mask, packet.down_mask);
     assert_eq!(state.possibly_active_mask, packet.down_mask);
     assert_eq!(state.release_obligation_mask(), packet.down_mask);
-    let cleanup = state.release_scope(super::super::tracked::ReleaseScope::Tracked, 0);
+    let cleanup = state.release_all(0);
     assert!(cleanup.released_successfully);
     assert_eq!(cleanup.attempted_mask, packet.down_mask);
     assert_eq!(state.release_obligation_mask(), 0);
@@ -436,7 +436,7 @@ fn prepared_sender_panic_retains_exact_packet_mask_until_cleanup() {
     assert_eq!(state.release_obligation_mask(), packet.down_mask);
     state.set_probe(|_, _| super::super::physical::InstrumentPhysicalState::AllUp);
 
-    let cleanup = state.release_scope(super::super::tracked::ReleaseScope::Tracked, 0);
+    let cleanup = state.release_all(0);
     assert_eq!(cleanup.attempted_mask, packet.down_mask);
     assert_eq!(cleanup.attempts, 1);
     assert_eq!(
@@ -524,7 +524,7 @@ fn prepared_mixed_packet_ambiguity_cleans_prior_and_packet_masks_only() {
     );
 
     state.set_probe(|_, _| super::super::physical::InstrumentPhysicalState::AllUp);
-    let cleanup = state.release_scope(super::super::tracked::ReleaseScope::Tracked, 0);
+    let cleanup = state.release_all(0);
     assert_eq!(cleanup.attempted_mask, expected_cleanup_mask);
     assert!(cleanup.released_successfully);
     assert_eq!(
@@ -593,7 +593,7 @@ fn prepared_sender_panic_interleavings_preserve_only_uncommitted_packet_ownershi
             "{point:?}: in-flight residue"
         );
 
-        let cleanup = state.release_scope(super::super::tracked::ReleaseScope::Tracked, 0);
+        let cleanup = state.release_all(0);
         assert_eq!(cleanup.attempted_mask, expected_obligation, "{point:?}");
         let captured = packets.lock().expect("packet capture lock").clone();
         assert_eq!(

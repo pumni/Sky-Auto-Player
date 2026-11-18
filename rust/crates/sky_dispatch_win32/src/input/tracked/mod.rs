@@ -49,12 +49,6 @@ use std::sync::Arc;
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::atomic::AtomicBool;
 
-#[cfg(any(test, feature = "test-support"))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ReleaseScope {
-    Tracked,
-}
-
 #[cfg(test)]
 std::thread_local! {
     static TEST_RELEASE_SLEEP_COUNT_VALUE: std::cell::Cell<usize> = const {

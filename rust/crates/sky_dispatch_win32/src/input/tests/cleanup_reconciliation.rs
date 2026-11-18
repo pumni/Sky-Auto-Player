@@ -41,7 +41,7 @@ fn inconclusive_cleanup_retains_obligation_for_second_verified_invocation() {
     state.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
     state.active_mask = 1;
 
-    let first = state.release_scope(ReleaseScope::Tracked, 0);
+    let first = state.release_all(0);
     assert!(!first.released_successfully);
     assert!(first.verification_inconclusive);
     assert_eq!(first.stuck_mask, 1);
@@ -50,7 +50,7 @@ fn inconclusive_cleanup_retains_obligation_for_second_verified_invocation() {
     assert_eq!(state.release_attempts_total, 1);
 
     state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
-    let second = state.release_scope(ReleaseScope::Tracked, 0);
+    let second = state.release_all(0);
     assert!(second.released_successfully);
     assert!(!second.verification_inconclusive);
     assert_eq!(second.attempted_mask, 0);
@@ -168,7 +168,7 @@ fn partial_up_and_held_probe_keep_transport_uncertainty_across_retry_rounds() {
     });
     state.active_mask = 0b111;
 
-    let outcome = state.release_scope(ReleaseScope::Tracked, 0);
+    let outcome = state.release_all(0);
     assert!(!outcome.released_successfully);
     assert!(outcome.transport_anomaly);
     assert!(outcome.verification_inconclusive);

@@ -207,8 +207,6 @@ pub use scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
     scan_codes_from_mask,
 };
-#[cfg(any(test, feature = "test-support"))]
-pub use tracked::ReleaseScope;
 pub use tracked::TrackedKeyState;
 
 #[cfg(any(test, feature = "test-support"))]

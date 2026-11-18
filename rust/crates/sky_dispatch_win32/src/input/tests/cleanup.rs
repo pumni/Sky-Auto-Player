@@ -74,7 +74,7 @@ fn foreground_change_after_cleanup_send_keeps_verified_release_unavailable() {
     });
     state.active_mask = 1;
 
-    let outcome = state.release_scope(ReleaseScope::Tracked, 42);
+    let outcome = state.release_all(42);
     assert!(!outcome.released_successfully);
     assert!(outcome.verification_inconclusive);
     assert_eq!(outcome.stuck_mask, 1);
@@ -120,7 +120,7 @@ fn tracked_partial_down_keeps_uncertain_keys_until_verified_cleanup() {
     assert_eq!(obligation & 0b11, 0b11);
 
     state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
-    let cleanup = state.release_scope(ReleaseScope::Tracked, 0);
+    let cleanup = state.release_all(0);
     assert_eq!(cleanup.attempted_mask & obligation, obligation);
     assert!(cleanup.released_successfully);
     assert_eq!(state.release_obligation_mask(), 0);
@@ -149,7 +149,7 @@ fn cleanup_up_retries_only_needs_up_within_the_four_call_budget() {
     state.active_mask = 1;
     state.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
 
-    let outcome = state.release_scope(ReleaseScope::Tracked, 0);
+    let outcome = state.release_all(0);
 
     assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
     assert_eq!(outcome.attempts, 4);
@@ -168,7 +168,7 @@ fn cleanup_full_up_and_all_up_probe_clear_the_tracked_obligation() {
     state.active_mask = 1;
     state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
 
-    let outcome = state.release_scope(ReleaseScope::Tracked, 0);
+    let outcome = state.release_all(0);
 
     assert!(outcome.released_successfully);
     assert_eq!(outcome.attempts, 1);
@@ -181,7 +181,7 @@ fn cleanup_fsm_executes_tracked_then_verifies_physical_all_up() {
         TrackedKeyState::with_emitter(|c, _| test_send_result(c.len() as u8, c.len() as u8, 0));
     state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0001;
-    let outcome = state.release_scope(ReleaseScope::Tracked, 0);
+    let outcome = state.release_all(0);
     assert!(outcome.released_successfully);
     assert_eq!(state.active_mask, 0);
     assert_eq!(state.failed_release_mask, 0);
@@ -194,8 +194,8 @@ fn cleanup_fsm_idempotent_on_repeated_calls() {
         TrackedKeyState::with_emitter(|c, _| test_send_result(c.len() as u8, c.len() as u8, 0));
     state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0001;
-    let outcome1 = state.release_scope(ReleaseScope::Tracked, 0);
-    let outcome2 = state.release_scope(ReleaseScope::Tracked, 0);
+    let outcome1 = state.release_all(0);
+    let outcome2 = state.release_all(0);
     assert!(outcome1.released_successfully);
     assert!(outcome2.released_successfully);
     assert_eq!(state.active_mask, 0);
@@ -525,7 +525,7 @@ fn resumable_release_remains_qpc_gated_while_terminal_release_uses_bounded_fallb
     });
     state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
 
-    let resumable = state.release_scope(ReleaseScope::Tracked, 70);
+    let resumable = state.release_all(70);
     assert!(!resumable.released_successfully);
     assert!(!resumable.verification_inconclusive);
     assert_eq!(terminal_calls.load(Ordering::SeqCst), 0);
@@ -622,7 +622,7 @@ fn mock_alt_tab_resume_separates_transport_receiver_and_release_probe() {
     backend.active_mask = 1;
 
     foreground.store(OTHER, Ordering::Release);
-    let interrupted = backend.release_scope(ReleaseScope::Tracked, TARGET);
+    let interrupted = backend.release_all(TARGET);
     assert!(!interrupted.transport_anomaly);
     assert!(interrupted.verification_inconclusive);
     assert_eq!(interrupted.attempts, 1);
@@ -641,7 +641,7 @@ fn mock_alt_tab_resume_separates_transport_receiver_and_release_probe() {
 
     foreground.store(TARGET, Ordering::Release);
     probe_verified.store(true, Ordering::Release);
-    let resumed = backend.release_scope(ReleaseScope::Tracked, TARGET);
+    let resumed = backend.release_all(TARGET);
     assert!(resumed.released_successfully);
     assert_eq!(backend.release_obligation_mask(), 0);
     assert_eq!(
@@ -1280,7 +1280,7 @@ fn cleanup_up_uses_the_session_layout_profile_and_zero_mask_emits_nothing() {
         test_send_result(codes.len() as u8, codes.len() as u8, 0)
     });
     backend.set_probe(|_, _| InstrumentPhysicalState::AllUp);
-    let outcome = backend.release_scope(ReleaseScope::Tracked, 0);
+    let outcome = backend.release_all(0);
 
     assert!(outcome.released_successfully);
     assert_eq!(

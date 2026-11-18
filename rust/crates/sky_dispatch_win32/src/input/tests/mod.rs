@@ -97,7 +97,7 @@ fn post_send_clock_failure_keeps_down_keys_uncertain_for_cleanup() {
     });
     state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
 
-    let cleanup = state.release_scope(ReleaseScope::Tracked, 0);
+    let cleanup = state.release_all(0);
     assert_eq!(cleanup.attempted_mask & obligation, obligation);
     assert!(cleanup.released_successfully);
     assert_eq!(state.release_obligation_mask(), 0);
