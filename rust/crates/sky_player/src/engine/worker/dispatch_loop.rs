@@ -1093,14 +1093,13 @@ pub(crate) fn dispatch_staged_candidate(
     }
 
     let pre_call_qpc = send_result.evidence.started_ticks;
-    runtime.production_forensics.observe_packet_result(
+    runtime.defer_production_packet_result(
         candidate.packet_masks,
         candidate.source_action_index,
         source_action_target_qpc,
         pre_call_qpc,
         completion_qpc,
         send_result.status,
-        local_metrics,
     );
 
     if let Some(observer) = observer {
@@ -1267,6 +1266,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             sky_dispatch_win32::clock::QpcTicks,
         )> = None;
         while core.runtime.terminal_error.is_none() {
+            // Reduce the previous packet's fixed-size forensic record outside
+            // the post-send precision path and before this iteration can
+            // admit another physical packet.
+            core.runtime.drain_production_forensics(&mut core.metrics);
             // A deadline-wake sample belongs to exactly one physical send.
             // Re-entering the non-precision loop clears any stale sample
             // after interrupts, replans, command transitions, or failures.

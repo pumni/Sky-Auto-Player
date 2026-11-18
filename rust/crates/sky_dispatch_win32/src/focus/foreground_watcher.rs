@@ -3,7 +3,7 @@
 //! foreground and process-identity checks at the input boundary.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, atomic::AtomicPtr, mpsc};
+use std::sync::{Arc, Condvar, Mutex, atomic::AtomicPtr, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -20,6 +20,8 @@ struct ForegroundWatcherState {
     closed: AtomicBool,
     message_loop_failed: AtomicBool,
     thread_id: AtomicU64,
+    wake_lock: Mutex<()>,
+    wake: Condvar,
 }
 
 static ACTIVE_WATCHER: AtomicPtr<ForegroundWatcherState> = AtomicPtr::new(std::ptr::null_mut());
@@ -94,6 +96,33 @@ impl ForegroundWatcher {
         })
     }
 
+    /// Wait for a coalesced hint, with a finite timeout used by the exact
+    /// foreground polling fallback. The hint only wakes the owner; it never
+    /// authorizes a sender operation.
+    pub fn wait_for_hint(&self, timeout: Duration) -> Option<ForegroundHint> {
+        if let Some(hint) = self.take_hint() {
+            return Some(hint);
+        }
+        let guard = self
+            .state
+            .wake_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !self.state.closed.load(Ordering::Acquire)
+            && !self.state.message_loop_failed.load(Ordering::Acquire)
+            && self.state.sequence.load(Ordering::Acquire)
+                == self.last_sequence.load(Ordering::Relaxed)
+        {
+            let (guard, _) = self
+                .state
+                .wake
+                .wait_timeout(guard, timeout)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            drop(guard);
+        }
+        self.take_hint()
+    }
+
     /// A failed message loop requires immediate polling fallback. The caller
     /// should poll periodically even while the hook reports healthy because
     /// Windows event delivery can still be lost or reordered.
@@ -105,6 +134,7 @@ impl ForegroundWatcher {
 impl Drop for ForegroundWatcher {
     fn drop(&mut self) {
         self.state.closed.store(true, Ordering::Release);
+        self.state.wake.notify_all();
         #[cfg(windows)]
         {
             let thread_id = self.state.thread_id.load(Ordering::Acquire) as u32;
@@ -195,6 +225,7 @@ fn watcher_message_loop(
         if result <= 0 {
             if !state.closed.load(Ordering::Acquire) {
                 state.message_loop_failed.store(true, Ordering::Release);
+                state.wake.notify_all();
             }
             break;
         }
@@ -245,12 +276,15 @@ unsafe extern "system" fn foreground_event_callback(
     let state = unsafe { &*state_pointer };
     state.hwnd.store(hwnd as isize, Ordering::Relaxed);
     state.sequence.fetch_add(1, Ordering::Release);
+    state.wake.notify_one();
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ForegroundHint, ForegroundWatcherState};
-    use std::sync::atomic::Ordering;
+    use super::{ForegroundHint, ForegroundWatcher, ForegroundWatcherState};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::{Arc, Mutex, mpsc};
+    use std::time::Duration;
 
     #[test]
     fn event_hint_is_a_coalesced_value_not_an_admission_token() {
@@ -272,5 +306,33 @@ mod tests {
         state.sequence.store(2, Ordering::Release);
         assert_eq!(state.sequence.load(Ordering::Acquire), 2);
         assert_eq!(state.hwnd.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn callback_wakes_waiter_but_only_returns_a_hint() {
+        let watcher = Arc::new(ForegroundWatcher {
+            state: Arc::new(ForegroundWatcherState::default()),
+            last_sequence: AtomicU64::new(0),
+            worker: Mutex::new(None),
+        });
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let waiter = Arc::clone(&watcher);
+        let waiting = std::thread::spawn(move || {
+            ready_tx.send(()).expect("waiter ready");
+            waiter.wait_for_hint(Duration::from_secs(1))
+        });
+        ready_rx.recv().expect("waiter started");
+        std::thread::sleep(Duration::from_millis(10));
+        watcher.state.hwnd.store(41, Ordering::Relaxed);
+        watcher.state.sequence.fetch_add(1, Ordering::Release);
+        watcher.state.wake.notify_one();
+
+        assert_eq!(
+            waiting.join().expect("hint waiter thread"),
+            Some(ForegroundHint {
+                sequence: 1,
+                hwnd: Some(41),
+            })
+        );
     }
 }

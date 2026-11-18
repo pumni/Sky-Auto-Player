@@ -298,6 +298,20 @@ impl ActivityCoordinator {
             .unwrap_or(true)
     }
 
+    pub(crate) fn quarantined_session_is_current(&self, session_id: &str) -> bool {
+        self.state
+            .lock()
+            .map(|state| {
+                state.physical_release_quarantined
+                    && state.quarantined_session_id.as_deref() == Some(session_id)
+            })
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn is_closing(&self) -> bool {
+        self.state.lock().map(|state| state.closing).unwrap_or(true)
+    }
+
     pub(crate) fn release_calibration(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.calibration_active = false;

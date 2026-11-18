@@ -1067,6 +1067,191 @@ fn origin_drift_at_the_final_send_boundary_withholds_the_up() {
 }
 
 #[test]
+fn post_join_recovery_budget_is_one_raw_up_across_transport_and_qpc_faults() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 131;
+    for (name, inserted, win32_error, timing_error) in [
+        ("persistent raw zero", 0, 0, None),
+        ("short insertion", 1, 0, None),
+        ("Win32 error", 2, 5, None),
+        (
+            "QPC before-send failure",
+            0,
+            0,
+            Some(crate::clock::QpcError::CounterUnavailable),
+        ),
+        (
+            "QPC after-send failure",
+            2,
+            0,
+            Some(crate::clock::QpcError::CounterUnavailable),
+        ),
+    ] {
+        let raw_calls = Arc::new(AtomicUsize::new(0));
+        let raw_calls_for_emitter = Arc::clone(&raw_calls);
+        let mut state = TrackedKeyState::new();
+        state.active_mask = 0b11;
+        state.set_release_owner_proof_for_test(
+            0b11,
+            crate::input::ReleaseOwnerProof::new(TARGET, 9, None, None).expect("recovery origin"),
+        );
+        state.set_terminal_up_emitter_for_test(move |packet| {
+            raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+            super::super::outcome::TerminalUpTransportResult {
+                requested: packet.event_count(),
+                inserted,
+                started_ticks: Some(QpcTicks::from_raw(1)),
+                completed_ticks: Some(QpcTicks::from_raw(2)),
+                win32_error,
+                timing_error,
+            }
+        });
+        state.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+
+        let outcome = state
+            .release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+                TARGET,
+                |_, proof| {
+                    assert_eq!(proof.target_hwnd(), TARGET);
+                    Ok(())
+                },
+                || {
+                    Ok(crate::input::CleanupDrainDecision {
+                        terminal_requested: true,
+                        origin_foreground: true,
+                    })
+                },
+                1,
+            );
+
+        assert!(
+            raw_calls.load(Ordering::Acquire) <= 1,
+            "{name} exceeded one recovery Up"
+        );
+        assert!(outcome.send_attempts.len() <= 1, "{name} retried transport");
+        assert!(
+            state.release_obligation_mask() != 0,
+            "{name} lost its residual"
+        );
+    }
+}
+
+#[test]
+fn post_join_recovery_probes_held_or_inconclusive_without_replaying_probe_only_up() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 132;
+    for probe_result in [
+        InstrumentPhysicalState::Held(vec![0x15].into()),
+        InstrumentPhysicalState::Inconclusive,
+    ] {
+        let raw_calls = Arc::new(AtomicUsize::new(0));
+        let raw_calls_for_emitter = Arc::clone(&raw_calls);
+        let mut state = TrackedKeyState::new();
+        state.active_mask = 1;
+        state.set_release_owner_proof_for_test(
+            1,
+            crate::input::ReleaseOwnerProof::new(TARGET, 10, None, None).expect("recovery origin"),
+        );
+        state.set_terminal_up_emitter_for_test(move |packet| {
+            raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+            super::super::outcome::TerminalUpTransportResult {
+                requested: packet.event_count(),
+                inserted: packet.event_count(),
+                started_ticks: Some(QpcTicks::from_raw(1)),
+                completed_ticks: Some(QpcTicks::from_raw(2)),
+                win32_error: 0,
+                timing_error: None,
+            }
+        });
+        state.set_probe(move |_, _| probe_result.clone());
+        let outcome = state
+            .release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+                TARGET,
+                |_, _| Ok(()),
+                || {
+                    Ok(crate::input::CleanupDrainDecision {
+                        terminal_requested: true,
+                        origin_foreground: true,
+                    })
+                },
+                1,
+            );
+        assert_eq!(raw_calls.load(Ordering::Acquire), 1);
+        assert_eq!(outcome.send_attempts.len(), 1);
+        assert_eq!(state.release_obligation_mask(), 1);
+        assert_eq!(state.needs_up_mask(), 0);
+        assert_eq!(state.needs_probe_mask, 1);
+    }
+
+    let raw_calls = Arc::new(AtomicUsize::new(0));
+    let raw_calls_for_emitter = Arc::clone(&raw_calls);
+    let mut probe_only = TrackedKeyState::new();
+    probe_only.needs_probe_mask = 1;
+    probe_only.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 10, None, None).expect("probe-only origin"),
+    );
+    probe_only.set_terminal_up_emitter_for_test(move |_| {
+        raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        unreachable!("probe-only recovery must not send Up")
+    });
+    probe_only.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+    let outcome = probe_only
+        .release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+            TARGET,
+            |_, _| Ok(()),
+            || {
+                Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: true,
+                })
+            },
+            1,
+        );
+    assert_eq!(raw_calls.load(Ordering::Acquire), 0);
+    assert!(outcome.send_attempts.is_empty());
+    assert_eq!(probe_only.release_obligation_mask(), 1);
+    assert_eq!(probe_only.needs_probe_mask, 1);
+}
+
+#[test]
+fn post_join_recovery_revalidates_origin_immediately_before_its_only_send() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 133;
+    let raw_calls = Arc::new(AtomicUsize::new(0));
+    let raw_calls_for_emitter = Arc::clone(&raw_calls);
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 1;
+    state.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 11, None, None).expect("recovery origin"),
+    );
+    state.set_terminal_up_emitter_for_test(move |_| {
+        raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        unreachable!("invalidated owner must withhold the Up")
+    });
+    let outcome = state
+        .release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+            TARGET,
+            |_, _| Err("owner invalidated immediately before send".into()),
+            || {
+                Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: true,
+                })
+            },
+            1,
+        );
+    assert_eq!(raw_calls.load(Ordering::Acquire), 0);
+    assert!(outcome.send_attempts.is_empty());
+    assert_eq!(state.release_obligation_mask(), 1);
+    assert_eq!(outcome.needs_up_mask, 1);
+}
+
+#[test]
 fn cleanup_up_uses_the_session_layout_profile_and_zero_mask_emits_nothing() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 

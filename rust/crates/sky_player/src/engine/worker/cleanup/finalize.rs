@@ -40,6 +40,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     let FinalizeState {
         worker_result,
         mut local_metrics,
+        mut pending_production_forensics,
         mut abort_counts,
         mut terminal_error,
         mut secondary_errors,
@@ -325,6 +326,9 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             );
         }
     }
+    // The final packet's compact evidence is reduced after physical cleanup
+    // and observer teardown. It cannot delay or alter terminal release.
+    pending_production_forensics.drain_after_cleanup(&mut local_metrics);
     let end_ticks = qpc_clock.now();
     let end_qpc = end_ticks.and_then(|ticks| {
         qpc_clock

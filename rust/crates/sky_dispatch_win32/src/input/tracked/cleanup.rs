@@ -15,7 +15,7 @@ use smallvec::SmallVec;
 impl TrackedKeyState {
     #[cfg(any(test, feature = "test-support"))]
     pub fn release_scope(&mut self, _scope: ReleaseScope, target_hwnd: isize) -> ReleaseAllOutcome {
-        self.release_scope_with_qpc_fallback(target_hwnd, false, None, None)
+        self.release_scope_with_qpc_fallback(target_hwnd, false, None, None, 4)
             .release_outcome
     }
 
@@ -26,7 +26,7 @@ impl TrackedKeyState {
         &mut self,
         target_hwnd: isize,
     ) -> TerminalReleaseEvidence {
-        self.release_scope_with_qpc_fallback(target_hwnd, true, None, None)
+        self.release_scope_with_qpc_fallback(target_hwnd, true, None, None, 4)
             .terminal_evidence()
     }
 
@@ -39,7 +39,7 @@ impl TrackedKeyState {
         target_hwnd: isize,
         mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
     ) -> GuardedReleaseOutcome {
-        self.release_scope_with_qpc_fallback(target_hwnd, false, Some(&mut admission), None)
+        self.release_scope_with_qpc_fallback(target_hwnd, false, Some(&mut admission), None, 4)
     }
 
     /// Resumable cleanup shares its retry/probe reducer with terminal cleanup.
@@ -56,6 +56,7 @@ impl TrackedKeyState {
             false,
             Some(&mut admission),
             Some(&mut drain_control),
+            4,
         )
     }
 
@@ -67,7 +68,7 @@ impl TrackedKeyState {
         target_hwnd: isize,
         mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
     ) -> GuardedReleaseOutcome {
-        self.release_scope_with_qpc_fallback(target_hwnd, true, Some(&mut admission), None)
+        self.release_scope_with_qpc_fallback(target_hwnd, true, Some(&mut admission), None, 4)
     }
 
     /// Terminal cleanup with a fresh origin/foreground decision at each drain
@@ -84,6 +85,27 @@ impl TrackedKeyState {
             true,
             Some(&mut admission),
             Some(&mut drain_control),
+            4,
+        )
+    }
+
+    /// Recovery uses the same journal, sender admission and release reducer as
+    /// worker cleanup, but each foreground transition is one finite attempt.
+    /// The limit is deliberately capped at the worker's four-call budget and
+    /// is applied to the whole drain invocation, including QPC fallback.
+    pub fn release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+        &mut self,
+        target_hwnd: isize,
+        mut admission: impl FnMut(u16, &ReleaseOwnerProof) -> Result<(), String>,
+        mut drain_control: impl FnMut() -> Result<super::super::outcome::CleanupDrainDecision, String>,
+        max_raw_up_calls: u8,
+    ) -> GuardedReleaseOutcome {
+        self.release_scope_with_qpc_fallback(
+            target_hwnd,
+            true,
+            Some(&mut admission),
+            Some(&mut drain_control),
+            max_raw_up_calls.clamp(1, 4),
         )
     }
 
@@ -95,6 +117,7 @@ impl TrackedKeyState {
         mut drain_control: Option<
             &mut dyn FnMut() -> Result<super::super::outcome::CleanupDrainDecision, String>,
         >,
+        max_raw_up_calls: u8,
     ) -> GuardedReleaseOutcome {
         let requested_mask = self.release_obligation_mask();
 
@@ -161,7 +184,7 @@ impl TrackedKeyState {
         let mut raw_up_invocations = 0u8;
         let mut background_terminal_drain = false;
 
-        for attempt_idx in 0..4 {
+        for attempt_idx in 0..usize::from(max_raw_up_calls) {
             if attempt_idx > 0 {
                 release_retry_sleep(RELEASE_RETRY_DELAYS_MS[attempt_idx - 1]);
             }
@@ -188,7 +211,11 @@ impl TrackedKeyState {
             if background_terminal && raw_up_invocations != 0 {
                 break;
             }
-            let raw_attempt_limit = if background_terminal { 1 } else { 4 };
+            let raw_attempt_limit = if background_terminal {
+                1
+            } else {
+                max_raw_up_calls
+            };
             if needs_up != 0 && raw_up_invocations >= raw_attempt_limit {
                 break;
             }

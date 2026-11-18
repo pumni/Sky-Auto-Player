@@ -108,6 +108,7 @@ impl NativePlaybackService {
             diagnostics_gate: Arc::new(DiagnosticsPublicationGate::default()),
             prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity,
+            post_join_recovery: Arc::new(PostJoinRecoveryLifecycle::default()),
             startup_cancellation: Arc::new(AtomicBool::new(false)),
             startup_arm_gate: Mutex::new(()),
             #[cfg(test)]
@@ -1591,6 +1592,7 @@ impl NativePlaybackService {
             sender_trace_state: self.sender_trace_state.clone(),
             diagnostics_gate: self.diagnostics_gate.clone(),
             activity: self.activity.clone(),
+            post_join_recovery: Arc::clone(&self.post_join_recovery),
             #[cfg(test)]
             monitor_join_test_hook: self.monitor_join_test_hook.clone(),
             #[cfg(all(test, feature = "tauri-test"))]
@@ -2067,24 +2069,7 @@ impl NativePlaybackService {
             }
         };
 
-        let (terminal_state, terminal_event_state, terminal_message, terminal_outcome) =
-            match &retirement.publication {
-                PlaybackTerminalPublication::Finished { outcome, message } => (
-                    PlaybackSessionState::Finished,
-                    PlaybackEventState::Finished,
-                    Some(message.clone()),
-                    Some(outcome.clone()),
-                ),
-                PlaybackTerminalPublication::Failed { message, .. } => (
-                    PlaybackSessionState::Failed,
-                    PlaybackEventState::Failed,
-                    Some(message.clone()),
-                    None,
-                ),
-            };
-        if terminal_state == PlaybackSessionState::Failed {
-            active.stop_requested.store(true, Ordering::Release);
-        }
+        let mut committed_retirement = retirement.clone();
         if active.physical
             && let Ok(mut trace_state) = self.sender_trace_state.lock()
         {
@@ -2101,34 +2086,43 @@ impl NativePlaybackService {
             &self.active,
             &self.last_terminal,
             &active,
-            retirement.clone(),
+            committed_retirement.clone(),
         ) {
-            // The UI queue no longer owns retirement. Keep this supervisor
-            // nonblocking and fail closed if a poisoned control-plane lock
-            // prevents the session-id commit.
-            active.event_delivery_failure.store(true, Ordering::Release);
+            // Retirement failure is itself the committed terminal outcome.
+            // Keep any current physical reservation/quarantine intact and do
+            // not publish the worker's pre-commit success intention.
             active.stop_requested.store(true, Ordering::Release);
-            let _ = publish_active_playback_state(
-                &events,
+            committed_retirement.publication = terminal_retirement_commit_failure(
+                &self.active,
+                &self.last_terminal,
                 &active,
-                PlaybackEventState::Stopping,
-                Some(format!(
-                    "Session retirement could not be committed ({error})."
-                )),
-                None,
+                &committed_retirement,
+                &error,
             );
         }
-        if active.done.load(Ordering::Acquire) && !active.release_verified.load(Ordering::Acquire) {
-            // The worker has joined and quarantine/terminal status are already
-            // committed. Recovery now exclusively owns the saved residual and
-            // gets one bounded cleanup drain before terminal UI publication.
-            let _ = recover_quarantined_release_once(&active, &self.last_terminal);
+        let (terminal_state, terminal_event_state, terminal_message, terminal_outcome) =
+            match &committed_retirement.publication {
+                PlaybackTerminalPublication::Finished { outcome, message } => (
+                    PlaybackSessionState::Finished,
+                    PlaybackEventState::Finished,
+                    Some(message.clone()),
+                    Some(outcome.clone()),
+                ),
+                PlaybackTerminalPublication::Failed { message, .. } => (
+                    PlaybackSessionState::Failed,
+                    PlaybackEventState::Failed,
+                    Some(message.clone()),
+                    None,
+                ),
+            };
+        if terminal_state == PlaybackSessionState::Failed {
+            active.stop_requested.store(true, Ordering::Release);
         }
         let completed = terminal_presentation_completion(
             self.active.clone(),
             self.last_terminal.clone(),
             active.clone(),
-            retirement.clone(),
+            committed_retirement.clone(),
             terminal_state,
             #[cfg(all(test, feature = "tauri-test"))]
             self.monitor_retired_test_hook.clone(),
@@ -2141,10 +2135,24 @@ impl NativePlaybackService {
                 state: terminal_event_state,
                 message: terminal_message,
                 outcome: terminal_outcome,
-                publication: retirement.publication.clone(),
+                publication: committed_retirement.publication.clone(),
             },
             completed,
         );
+        // The active monitor's watcher owns the process-wide hook until the
+        // supervisor returns. Tear it down before transferring hint/polling
+        // ownership to the persistent post-join recovery thread.
+        drop(foreground_watcher);
+        if active.done.load(Ordering::Acquire)
+            && !active.release_verified.load(Ordering::Acquire)
+            && active
+                .activity
+                .quarantined_session_is_current(&active.session_id)
+        {
+            let _ = self
+                .post_join_recovery
+                .start(active.clone(), self.last_terminal.clone());
+        }
     }
 
     pub(in crate::native_runtime) fn command(
@@ -2404,6 +2412,7 @@ impl NativePlaybackService {
     }
 
     pub(in crate::native_runtime) fn shutdown(&self, _events: Arc<Mutex<NativeEventHub>>) -> bool {
+        self.post_join_recovery.shutdown();
         let arm_gate = self
             .startup_arm_gate
             .lock()
@@ -2475,6 +2484,7 @@ pub(in crate::native_runtime) struct NativePlaybackServiceHandle {
     pub(in crate::native_runtime) sender_trace_state: Arc<Mutex<SenderTraceState>>,
     pub(in crate::native_runtime) diagnostics_gate: Arc<DiagnosticsPublicationGate>,
     pub(in crate::native_runtime) activity: ActivityCoordinator,
+    pub(in crate::native_runtime) post_join_recovery: Arc<PostJoinRecoveryLifecycle>,
     #[cfg(test)]
     pub(in crate::native_runtime) monitor_join_test_hook: Option<PlaybackJoinTestHook>,
     #[cfg(all(test, feature = "tauri-test"))]
@@ -2496,6 +2506,7 @@ impl NativePlaybackServiceHandle {
             diagnostics_gate: self.diagnostics_gate.clone(),
             prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity: self.activity.clone(),
+            post_join_recovery: Arc::clone(&self.post_join_recovery),
             startup_cancellation: Arc::new(AtomicBool::new(false)),
             startup_arm_gate: Mutex::new(()),
             #[cfg(test)]

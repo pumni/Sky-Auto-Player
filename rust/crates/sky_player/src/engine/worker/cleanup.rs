@@ -63,6 +63,7 @@ pub(super) struct FinalizeResources {
 pub(super) struct FinalizeState {
     pub(super) worker_result: Result<(), Box<dyn Any + Send>>,
     pub(super) local_metrics: WorkerMetricsLocal,
+    pub(super) pending_production_forensics: super::PendingProductionForensics,
     pub(super) abort_counts: HashMap<&'static str, u64>,
     pub(super) terminal_error: Option<String>,
     pub(super) secondary_errors: Vec<String>,
