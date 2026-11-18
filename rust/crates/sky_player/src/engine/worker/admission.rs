@@ -351,6 +351,13 @@ fn fresh_final_release_owner_proof(
         return Err(FinalDownVerdict::TargetChanged);
     }
 
+    // Reject an already-invalidated immutable session before querying the
+    // foreground or retained process. Keep the final proof check below too,
+    // because the target may still be invalidated while those reads run.
+    if !target.is_valid() {
+        return Err(FinalDownVerdict::TargetChanged);
+    }
+
     if !require_focus {
         return Ok(());
     }
@@ -580,11 +587,11 @@ pub(crate) fn safety_cleanup_drain_decision(
     terminal_requested: bool,
 ) -> Result<sky_dispatch_win32::input::CleanupDrainDecision, String> {
     verify_safety_cleanup_target(target, expected, release_owner, require_owner_identity)?;
-    let origin_foreground = match release_owner.owner_pid() {
-        Some(owner_pid) => match sky_dispatch_win32::focus::foreground_window_owner_matches(
-            expected.hwnd,
-            owner_pid,
-        ) {
+    let origin_foreground = if target.foreground_required() {
+        let owner_pid = release_owner.owner_pid().ok_or_else(|| {
+            "tracked focus-required cleanup has no bound origin owner PID".to_string()
+        })?;
+        match sky_dispatch_win32::focus::foreground_window_owner_matches(expected.hwnd, owner_pid) {
             sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => true,
             sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => false,
             sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
@@ -593,8 +600,12 @@ pub(crate) fn safety_cleanup_drain_decision(
             sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => {
                 return Err("tracked cleanup foreground owner query is unavailable".into());
             }
-        },
-        None => true,
+        }
+    } else {
+        // A focus-free session may retain an owner PID solely to prove the
+        // immutable window/process identity. That PID does not impose a
+        // foreground policy on startup or terminal cleanup.
+        true
     };
     Ok(sky_dispatch_win32::input::CleanupDrainDecision {
         terminal_requested,

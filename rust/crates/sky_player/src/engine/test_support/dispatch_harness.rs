@@ -242,7 +242,7 @@ impl ProductionDispatchTestHarness {
         timing.effective_spin_threshold_ticks = clock
             .duration_from_us(20_000)
             .map_err(|error| format!("test spin threshold conversion failed: {error:?}"))?;
-        let target = Arc::new(SessionTarget::new(1, 0));
+        let target = Arc::new(SessionTarget::new(1, 0, config.focus.require_focus));
         let runtime =
             WorkerRuntime::create_test_runtime(Some(crate::engine::worker::TargetStamp {
                 hwnd: 1,
@@ -666,6 +666,7 @@ impl ProductionDispatchTestHarness {
     /// that exercise the production focus-required final gate.
     pub fn configure_focus_owner_for_test(&mut self, hwnd: isize, owner_pid: u32) {
         self.config.focus.require_focus = true;
+        self.target.require_foreground_for_test();
         self.target.require_owner_identity();
         let (current_hwnd, generation) = self.target.load_stable().expect("test target snapshot");
         assert_eq!(current_hwnd, hwnd, "focus fixture HWND must be published");

@@ -326,14 +326,14 @@ impl NativeDispatchSession {
             {
                 return Err("bound window process identity is not continuous".into());
             }
-            let target = SessionTarget::new(hwnd, 1);
+            let target = SessionTarget::new(hwnd, 1, options.focus.require_focus);
             target.require_owner_identity();
             if !target.bind_owner_identity_authority(hwnd, 1, owner_pid, Arc::new(authority)) {
                 return Err("window identity could not bind during session construction".into());
             }
             target
         } else {
-            let target = SessionTarget::new(0, 0);
+            let target = SessionTarget::new(0, 0, options.focus.require_focus);
             if require_owner_identity {
                 target.require_owner_identity();
             }

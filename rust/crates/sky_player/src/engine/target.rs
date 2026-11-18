@@ -41,6 +41,7 @@ fn record_target_atomic_reads(reads: u64) {
 pub struct SessionTarget {
     target: OnceLock<(isize, u64)>,
     owner: OnceLock<sky_dispatch_win32::input::ReleaseOwnerProof>,
+    foreground_required: AtomicBool,
     owner_identity_required: AtomicBool,
     owner_process_identity_required: AtomicBool,
     owner_failure: AtomicU32,
@@ -77,7 +78,7 @@ pub(super) enum OwnerAuthorityReadError {
 }
 
 impl SessionTarget {
-    pub(super) fn new(hwnd: isize, generation: u64) -> Self {
+    pub(super) fn new(hwnd: isize, generation: u64, foreground_required: bool) -> Self {
         let target = OnceLock::new();
         if hwnd != 0 || generation != 0 {
             let _ = target.set((hwnd, generation));
@@ -85,6 +86,7 @@ impl SessionTarget {
         Self {
             target,
             owner: OnceLock::new(),
+            foreground_required: AtomicBool::new(foreground_required),
             owner_identity_required: AtomicBool::new(false),
             owner_process_identity_required: AtomicBool::new(false),
             owner_failure: AtomicU32::new(OwnerIdentityFailure::None as u32),
@@ -139,6 +141,18 @@ impl SessionTarget {
         self.owner_identity_required.store(true, Ordering::Release);
         self.owner_process_identity_required
             .store(true, Ordering::Release);
+    }
+
+    /// Whether this session's admission policy requires the retained origin
+    /// to remain foreground during cleanup. Owner identity/liveness remains a
+    /// separate proof and is checked even for focus-free sessions.
+    pub(super) fn foreground_required(&self) -> bool {
+        self.foreground_required.load(Ordering::Acquire)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn require_foreground_for_test(&self) {
+        self.foreground_required.store(true, Ordering::Release);
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -405,7 +419,7 @@ mod tests {
 
     #[test]
     fn target_can_be_bound_once_and_changed_hwnd_invalidates_the_session() {
-        let target = SessionTarget::new(0, 0);
+        let target = SessionTarget::new(0, 0, false);
         assert_eq!(target.load_stable(), Some((0, 0)));
         assert!(target.set_initial_target(123));
         assert_eq!(target.load_stable(), Some((123, 1)));
@@ -417,7 +431,7 @@ mod tests {
 
     #[test]
     fn failed_owner_latch_is_terminal_for_the_bound_target() {
-        let target = SessionTarget::new(123, 1);
+        let target = SessionTarget::new(123, 1, false);
         target.require_owner_identity();
         assert!(target.bind_owner_identity(123, 1, 77));
         assert_eq!(
@@ -440,7 +454,7 @@ mod tests {
     #[cfg(feature = "test-support")]
     #[test]
     fn release_proof_clones_share_one_retained_process_authority() {
-        let target = SessionTarget::new(123, 1);
+        let target = SessionTarget::new(123, 1, false);
         target.require_owner_identity();
         let authority = Arc::new(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -470,7 +484,7 @@ mod tests {
 
     #[test]
     fn release_proof_for_another_target_is_rejected() {
-        let target = SessionTarget::new(123, 1);
+        let target = SessionTarget::new(123, 1, false);
         let proof = sky_dispatch_win32::input::ReleaseOwnerProof::new(456, 2, None, None)
             .expect("valid detached proof");
         assert!(!target.release_owner_proof_is_current(&proof));

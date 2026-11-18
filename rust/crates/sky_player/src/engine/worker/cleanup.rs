@@ -223,11 +223,11 @@ pub(crate) fn suspend_scheduler_input(
             release.send_attempts
         ));
     }
-    let release_outcome = release.release_outcome;
-    if !release_state_verified(backend, &release_outcome) {
+    if !release_state_verified(backend, &release.release_outcome) {
+        let summary = describe_release_outcome(backend, &release.release_outcome);
+        let evidence = release.terminal_evidence();
         return Err(format!(
-            "release verification failed: {}",
-            describe_release_outcome(backend, &release_outcome)
+            "release verification failed: {summary}; evidence={evidence:?}"
         ));
     }
     let cleanup_completed_qpc = post_cleanup_qpc()
