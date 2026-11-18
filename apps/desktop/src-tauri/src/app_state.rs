@@ -1,12 +1,10 @@
 use crate::native_runtime::{NativeDesktopRuntime, NativeEventHub, TestSeams};
 use crate::native_update::UpdateService;
 use crate::ui_events::UiEvent;
-#[cfg(any(test, feature = "tauri-test"))]
+#[cfg(test)]
 use sky_native_adapters::AppPaths;
 use sky_native_adapters::AppResources;
 use sky_player::engine::TerminalReleaseResidual;
-#[cfg(any(test, feature = "tauri-test"))]
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::ipc::Channel;
@@ -566,8 +564,7 @@ impl AppState {
         state
     }
 
-    #[cfg(any(test, feature = "tauri-test"))]
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn with_test_paths(paths: AppPaths) -> Self {
         let state = Self::default();
         *state
@@ -576,13 +573,6 @@ impl AppState {
             .lock()
             .expect("test paths state poisoned") = Some(paths);
         state
-    }
-
-    #[cfg(any(test, feature = "tauri-test"))]
-    #[allow(dead_code)]
-    pub(crate) fn with_test_install_root(install_root: PathBuf) -> Self {
-        let paths = AppPaths::from_app_data_root(install_root.clone(), install_root);
-        Self::with_test_paths(paths)
     }
 
     pub fn should_exit_after_close(&self) -> bool {

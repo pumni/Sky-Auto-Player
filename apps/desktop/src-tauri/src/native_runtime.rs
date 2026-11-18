@@ -110,7 +110,6 @@ pub(crate) enum TestSeams {
 }
 
 pub(crate) struct NativeDesktopRuntime {
-    #[allow(dead_code)]
     paths: AppPaths,
     settings: Mutex<SettingsService<JsonSettingsStore>>,
     library_manifest: Mutex<LibraryManifestService<JsonLibraryManifestStore>>,
@@ -266,19 +265,6 @@ pub(super) struct NativeSheetSource {
 }
 
 impl NativeDesktopRuntime {
-    #[allow(dead_code)]
-    pub(crate) fn for_current_install() -> Result<Self, String> {
-        let paths = AppPaths::resolve()?;
-        let resources = AppResources::from_resource_dir(paths.install_root());
-        Self::from_paths_with_activity_and_seams(
-            paths,
-            resources,
-            ActivityCoordinator::default(),
-            TestSeams::Disabled,
-        )
-    }
-
-    #[allow(dead_code)]
     #[cfg(test)]
     pub(crate) fn from_install_root(install_root: PathBuf) -> Result<Self, String> {
         Self::from_install_root_with_activity_and_seams(
@@ -286,24 +272,6 @@ impl NativeDesktopRuntime {
             ActivityCoordinator::default(),
             TestSeams::Disabled,
         )
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn for_current_install_with_activity(
-        activity: ActivityCoordinator,
-    ) -> Result<Self, String> {
-        let paths = AppPaths::resolve()?;
-        let resources = AppResources::from_resource_dir(paths.install_root());
-        Self::from_paths_with_activity_and_seams(paths, resources, activity, TestSeams::Disabled)
-    }
-
-    #[allow(dead_code)]
-    #[cfg(test)]
-    pub(crate) fn from_install_root_with_activity(
-        install_root: PathBuf,
-        activity: ActivityCoordinator,
-    ) -> Result<Self, String> {
-        Self::from_install_root_with_activity_and_seams(install_root, activity, TestSeams::Disabled)
     }
 
     pub(crate) fn from_paths_with_activity_and_seams(
@@ -474,7 +442,6 @@ impl NativeDesktopRuntime {
         Ok(runtime)
     }
 
-    #[allow(dead_code)]
     #[cfg(test)]
     pub(crate) fn from_install_root_with_activity_and_seams(
         install_root: PathBuf,
@@ -500,12 +467,12 @@ impl NativeDesktopRuntime {
         )
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn paths(&self) -> &AppPaths {
         &self.paths
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn install_root(&self) -> &Path {
         self.paths.install_root()
     }

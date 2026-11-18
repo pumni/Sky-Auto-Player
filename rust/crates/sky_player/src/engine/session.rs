@@ -1594,7 +1594,6 @@ impl NativeDispatchSession {
     }
 
     #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
-    #[allow(dead_code)]
     pub fn generation_accounting_for_test(&self) -> GenerationAccounting {
         *self.shared.publication.metrics.generation_accounting.lock()
     }
