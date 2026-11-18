@@ -236,7 +236,7 @@ if ($usesSessionQualificationContracts) {
     }
 }
 $manifest = [ordered]@{
-    schema_version = 1
+    schema_version = if ($isSessionRedesignProfile) { $sessionRedesignProfile.HarnessManifestSchemaVersion } else { 1 }
     binary_name = 'rt-native-acceptance.exe'
     binary_path = $binaryPath
     binary_sha256 = $binaryHash

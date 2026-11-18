@@ -11,6 +11,7 @@ function Get-DispatchSessionRedesignM3Profile {
     [pscustomobject]@{
         Name = 'DispatchSessionRedesignM3'
         WorkloadVersion = 'dispatch-session-redesign-m3-v1'
+        HarnessManifestSchemaVersion = 2
         BaselineRevision = 'd0f65e7c412041a6d502f81f469872198db7adc5'
         BaselineTree = '19aae9e41bc667a2f991001ed105b6ffdebb8bc6'
         CandidateLineageBranch = 'refactor/dispatch-session-redesign'
@@ -40,10 +41,7 @@ function Get-DispatchSessionRedesignM3Profile {
             'scripts/dispatch_pair_screen.psm1',
             'scripts/native_acceptance_sink.ps1',
             'scripts/test_qualify_dispatch_core_contracts.ps1',
-            'docs/playback-verification.md',
-            'docs/evidence/dispatch-session-redesign-plan.md',
-            'docs/evidence/dispatch-session-redesign-m3-preflight.md',
-            'docs/evidence/dispatch-session-redesign-m3-runner-correction.md'
+            'docs/playback-verification.md'
         )
     }
 }

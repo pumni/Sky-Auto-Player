@@ -81,13 +81,9 @@ the number of unmatched-Up batches, which is zero for ordinary valid songs.
 The compatibility `elapsed_us` snapshot field is derived from the shared
 session clock projection; the unused worker-local duplicate has been removed.
 Schema 25 keys, values, QPC provenance, and missing-sample semantics are
-unchanged. See the [M1 evidence record](evidence/issue-666-m1.md) for
-modeled-capacity and timing scope and the [M2 evidence record](evidence/dispatch-session-redesign-m2.md)
-for caller migration and compatibility decisions.
-
-The [dispatch-session redesign M1 evidence](evidence/dispatch-session-redesign-m1.md)
-records the isolated baseline/candidate operation counts for the fixed-target
-admission path.
+unchanged. Earlier revision-bound implementation and measurement records are
+indexed in [HISTORY.md](HISTORY.md); they are not qualification evidence for
+the current source revision.
 
 ## 15-Slot Dispatch Executor
 

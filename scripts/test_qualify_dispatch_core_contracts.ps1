@@ -1337,6 +1337,8 @@ $sessionRedesignProfile = Get-DispatchSessionRedesignM3Profile
 if ($sessionRedesignProfile.BaselineRevision -ne 'd0f65e7c412041a6d502f81f469872198db7adc5' -or
     $sessionRedesignProfile.BaselineTree -ne '19aae9e41bc667a2f991001ed105b6ffdebb8bc6' -or
     $sessionRedesignProfile.CandidateLineageBranch -ne 'refactor/dispatch-session-redesign' -or
+    $sessionRedesignProfile.HarnessManifestSchemaVersion -ne 2 -or
+    @($sessionRedesignProfile.RunnerProvenancePaths).Count -ne 11 -or
     $sessionRedesignProfile.Target -ne 'x86_64-pc-windows-msvc' -or
     $sessionRedesignProfile.RustVersion -ne '1.99.1' -or $sessionRedesignProfile.CargoVersion -ne '1.99.1' -or
     $sessionRedesignProfile.CargoProfile -ne 'dist' -or
@@ -1569,16 +1571,20 @@ try {
 
 $sessionRedesignRunner = Get-Content -LiteralPath $runnerPath -Raw
 $sessionRedesignOrchestration = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Raw
+$sessionRedesignBuilder = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
+$sessionRedesignManifestValidator = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Raw
 if ($sessionRedesignRunner -notmatch 'if \(\$isSessionRedesignProfile -and \$Stage -ne ''Final''\)' -or
     -not $sessionRedesignRunner.Contains('Invoke-DispatchSessionRedesignM3FinalControlPath') -or
     -not $sessionRedesignRunner.Contains('[string[]]$performanceWorkloads') -or
     $sessionRedesignRunner -match '\$performanceWorkloads\.Count' -or
     -not $sessionRedesignRunner.Contains('New-QualificationRunnerFailureArtifacts') -or
+    -not $sessionRedesignBuilder.Contains('schema_version = if ($isSessionRedesignProfile) { $sessionRedesignProfile.HarnessManifestSchemaVersion } else { 1 }') -or
+    $sessionRedesignManifestValidator -notmatch "schema_version.*profile\.HarnessManifestSchemaVersion" -or
     -not $sessionRedesignOrchestration.Contains('New-DispatchSessionRedesignM3FinalPlan') -or
     -not $sessionRedesignOrchestration.Contains('Invoke-DispatchSessionRedesignM3FinalPlan') -or
     -not (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Raw).Contains('scripts/dispatch_qualification_orchestration.psm1')) {
     throw 'DispatchSessionRedesignM3 Final path is missing the typed-plan dispatcher, fail-stop runner, or provenance inventory'
 }
 
-Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
+Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 schema-v2 provenance inventory, mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

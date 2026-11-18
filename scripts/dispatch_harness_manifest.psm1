@@ -221,7 +221,7 @@ function Assert-DispatchSessionRedesignM3ManifestIdentity {
     $scriptProvenance = @(Get-ManifestProperty $Manifest 'runner_script_provenance')
     $expectedRunnerPaths = @($profile.RunnerProvenancePaths)
 
-    if ((Get-ManifestProperty $Manifest 'schema_version') -ne 1 -or
+    if ((Get-ManifestProperty $Manifest 'schema_version') -ne $profile.HarnessManifestSchemaVersion -or
         (Get-ManifestProperty $Manifest 'qualification_profile') -ne $profile.Name -or
         (Get-ManifestProperty $Manifest 'workload_version') -ne $profile.WorkloadVersion -or
         (Get-ManifestProperty $Manifest 'source_role') -ne $ExpectedRole -or

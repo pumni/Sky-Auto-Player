@@ -99,9 +99,9 @@ Verify both with `Assert-DispatchCleanupM3ManifestIdentity` and
 
 Offline manifest builds and integrity checks do not start the acceptance
 runner. The candidate-only Quiet `canonical-single` Canary at 60 FPS and 500 µs
-safety margin was separately authorized and run once. Its reporting correction
-is documented append-only in
-[`docs/evidence/issue-661-m3/canary-reporting-erratum.md`](evidence/issue-661-m3/canary-reporting-erratum.md).
+safety margin was separately authorized and run once in an earlier revision.
+The archived report and its reporting correction are available from the
+revision-bound snapshot indexed in [HISTORY.md](HISTORY.md).
 The reporting-correction checkpoint authorizes zero further native sessions;
 Smoke, Compare, and Final require separate Leader decisions.
 
@@ -122,6 +122,12 @@ workload. The two generated manifests record Cargo.lock path/hash; Final rejects
 different lock hashes. Neither `qpc-read-counting` nor a separate observer-off
 run is part of this plan. Timing-observer on/off remains recorded per
 invocation; this profile uses observer-on for both roles.
+
+The current profile emits harness manifests with `schema_version = 2`, 11
+runner-provenance entries, and 16 `SHA256SUMS` entries (five harness files plus
+the 11 provenance files). The validator rejects schema-v1 manifests for this
+profile. This versioned packaging migration leaves the workload version,
+observer schemas, and evidence cell identifiers unchanged.
 
 Use a Windows 11 interactive host with an unlocked desktop, the verified sink
 foreground, and the exact pinned toolchain. Before any native session, confirm
@@ -260,9 +266,9 @@ timing, so those measures remain null/not measured. It neither calls
 guard experiment as an exact-base-versus-candidate A/B; the M1
 baseline-equivalent structural benchmark is a separate evidence class.
 
-Native ReceiveOnly and optional gameplay planning is in
-[`issue-666-m4-native-qualification.json`](evidence/issue-666-m4-native-qualification.json).
-It is planning only and explicitly awaits separate Leader authorization; no
+Native ReceiveOnly and optional gameplay planning is historical material
+indexed in [HISTORY.md](HISTORY.md). It is planning only and explicitly awaits
+separate Leader authorization; no
 native input, interactive focus, real suspend/resume, or Sky gameplay session
 is implied by running the offline waiter experiment.
 
@@ -293,17 +299,14 @@ filters, thresholds, and drain timeout keep their defined behavior.
 The Windows `test-support` suite covers target-generation authority lifetime,
 fresh retained process-creation proof at the musical gate, owner disappearance
 through watchdog wake and tracked cleanup, callback-epoch rundown, presentation
-stall isolation, and bounded join/retirement. Run it with the M3 command set in
-[`issue-666-m3.md`](evidence/issue-666-m3.md). These deterministic mock tests
-do not call real `SendInput`, suspend Windows, or qualify gameplay reception.
-The M3 evidence report maps each lifecycle invariant to its test and states
-which paths still need OS/native qualification.
+stall isolation, and bounded join/retirement. Run the local Windows test suite
+with `cargo xtask check desktop-native`. These deterministic mock tests do not
+call real `SendInput`, suspend Windows, or qualify gameplay reception. The
+revision-bound M3 report and its invariant map are indexed in [HISTORY.md](HISTORY.md).
 
 ## Issue #666 integration correction checkpoint
 
-The integrated correctness corrections are recorded in
-[`issue-666-integration.md`](evidence/issue-666-integration.md). The regression
-suite exercises musical Up origin matching at the production worker boundary,
+The regression suite exercises musical Up origin matching at the production worker boundary,
 the desktop supervisor's typed stale-poll consumer, and the narrow proven
 Down-only raw-zero continuation case. These are deterministic Windows tests
 with mock packet senders. They do not call real `SendInput`, manipulate the
@@ -321,9 +324,10 @@ outcome, even when safe unattempted notes continue.
 Snapshot full/lite parity and schema-25 key-set tests remain separate from the
 playback timing and native qualification profiles. Snapshot compatibility does
 not increase the healthy dispatch allocation budget. The operation counts in
-the evidence are test-hook counts for the actual worker/harness boundary;
+archived reports are test-hook counts for the actual worker/harness boundary;
 sender QPC and `GetProcessTimes` counts are separately identified from
-production source because the mock does not call those native APIs.
+production source because the mock does not call those native APIs. The
+revision-bound reports are indexed in [HISTORY.md](HISTORY.md).
 
 The final musical permit also has deterministic authority-mutex contention
 coverage. A hook pauses after fresh foreground/PID/process verification; a
@@ -347,10 +351,9 @@ one tick, exact floor, and plus one tick, including future-deadline projection
 and wake selection. These tests use a mock sender and do not call native
 `SendInput`, change interactive focus, suspend the system, or measure game
 reception. The trace timings are individual QPC observations from deterministic
-tests, not latency distributions or gameplay qualification. See
-[`issue-666-replan-timing.md`](evidence/issue-666-replan-timing.md) for the
+tests, not latency distributions or gameplay qualification. The archived
 baseline/candidate operation-count comparison, race trace, and verification
-ledger.
+ledger are indexed in [HISTORY.md](HISTORY.md).
 
 ## Issue #666 mid-playback preflight and code-quality correction
 
@@ -363,9 +366,8 @@ attempt, the retained A-origin proof, and A's authored Up. Separate controls
 cover same-HWND generation ABA, focus recovery, and lease expiry. H/G tick-edge
 checks use supplied QPC values; a separate real waiter smoke test covers a
 future deadline wake. These are mock-sender tests and do not establish Sky
-gameplay reception. See
-[`issue-666-preflight-code-quality.md`](evidence/issue-666-preflight-code-quality.md)
-for the exact cases, warning cleanup, and verification ledger.
+gameplay reception. The archived exact-case report and verification ledger are
+indexed in [HISTORY.md](HISTORY.md).
 
 ## Offline lifecycle and manifest checks
 

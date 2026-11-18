@@ -4,6 +4,12 @@ Archived records are revision-bound and are not qualification evidence for
 current source. Browse the pinned trees when an original report or dataset is
 needed.
 
+- **Dispatch-session and Issue #666 evidence before archival cleanup:** the
+  [immutable evidence snapshot at `f5539695400a19e80381f6fd9f6d557b8c8d2b85`](https://github.com/pumni/Sky-Auto-Player/tree/f5539695400a19e80381f6fd9f6d557b8c8d2b85/docs/evidence)
+  contains the reports and supporting records removed from the active docs tree.
+  It is revision-bound historical material, not qualification evidence for
+  current source.
+
 - **Retired release and built-in catalog ADR sources at Checkpoint F:**
   [ADR-0007](https://github.com/pumni/Sky-Auto-Player/blob/0421b5e2d81b1a89e95c43706385cee77a7c0b12/docs/adr/ADR-0007-single-repository-v4-release-architecture.md),
   [ADR-0008](https://github.com/pumni/Sky-Auto-Player/blob/0421b5e2d81b1a89e95c43706385cee77a7c0b12/docs/adr/ADR-0008-v4-builtin-song-catalog.md),
