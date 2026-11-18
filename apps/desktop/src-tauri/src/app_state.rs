@@ -1,7 +1,7 @@
 use crate::native_runtime::{NativeDesktopRuntime, NativeEventHub, TestSeams};
 use crate::native_update::UpdateService;
 use crate::ui_events::UiEvent;
-#[cfg(test)]
+#[cfg(any(test, feature = "tauri-test"))]
 use sky_native_adapters::AppPaths;
 use sky_native_adapters::AppResources;
 use sky_player::engine::TerminalReleaseResidual;
