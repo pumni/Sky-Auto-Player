@@ -22,7 +22,7 @@ evidence:
   - category: architecture
     label: Playback engine contract
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md
-  - category: verification
+  - category: test
     label: Playback verification
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-verification.md
 ---
