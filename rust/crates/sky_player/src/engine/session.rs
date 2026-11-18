@@ -217,9 +217,50 @@ impl NativeDispatchSession {
         Self::new_with_power_endpoint(options, endpoint)
     }
 
+    /// Construct a physical session with its exact target and retained owner
+    /// process authority already bound. Production desktop callers use this
+    /// constructor before Arm; the target cannot be rebound afterward.
+    pub fn new_with_bound_window_identity(
+        options: NativeSessionOptions,
+        authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
+    ) -> Result<Self, String> {
+        let endpoint = SystemPowerEndpoint::new()?;
+        Self::new_with_bound_window_identity_and_power_endpoint(options, endpoint, authority)
+    }
+
+    /// Variant used when the owning desktop already has a process-level power
+    /// endpoint. The HWND/PID/process object are admitted as one constructor
+    /// value before worker startup.
+    pub fn new_with_bound_window_identity_and_power_endpoint(
+        options: NativeSessionOptions,
+        power_endpoint: Arc<SystemPowerEndpoint>,
+        authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
+    ) -> Result<Self, String> {
+        Self::new_with_power_endpoint_and_authority(options, power_endpoint, Some(authority))
+    }
+
+    /// Test and native acceptance constructor for the same pre-bound target
+    /// shape used by production.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_with_bound_window_identity_for_test(
+        options: NativeSessionOptions,
+        authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
+    ) -> Result<Self, String> {
+        let endpoint = SystemPowerEndpoint::new()?;
+        Self::new_with_bound_window_identity_and_power_endpoint(options, endpoint, authority)
+    }
+
     pub fn new_with_power_endpoint(
+        options: NativeSessionOptions,
+        power_endpoint: Arc<SystemPowerEndpoint>,
+    ) -> Result<Self, String> {
+        Self::new_with_power_endpoint_and_authority(options, power_endpoint, None)
+    }
+
+    fn new_with_power_endpoint_and_authority(
         mut options: NativeSessionOptions,
         power_endpoint: Arc<SystemPowerEndpoint>,
+        owner_authority: Option<sky_dispatch_win32::focus::WindowIdentityAuthority>,
     ) -> Result<Self, String> {
         power_endpoint.reset_for_new_session()?;
         validate_timing_constants()?;
@@ -261,10 +302,43 @@ impl NativeDispatchSession {
         let observer_enabled = EffectiveRuntimePolicy::for_native(&options).observer_enabled;
         let require_owner_identity =
             options.focus.require_focus && matches!(&options.backend, BackendConfig::Production);
-        let target = SessionTarget::new(0, 0);
-        if require_owner_identity {
-            target.require_owner_identity();
+        #[cfg(not(any(test, feature = "test-support")))]
+        if require_owner_identity && owner_authority.is_none() {
+            return Err(
+                "production focus sessions require a bound window identity at construction"
+                    .to_string(),
+            );
         }
+        let target = if let Some(authority) = owner_authority {
+            if !options.focus.require_focus {
+                return Err(
+                    "a bound window identity requires focus admission for this session".into(),
+                );
+            }
+            let identity = authority.identity();
+            let hwnd = identity.hwnd;
+            let owner_pid = identity.owner_pid;
+            if hwnd == 0 || owner_pid == 0 {
+                return Err("bound window identity is missing its HWND or owner PID".into());
+            }
+            if authority.continuity()
+                != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+            {
+                return Err("bound window process identity is not continuous".into());
+            }
+            let target = SessionTarget::new(hwnd, 1);
+            target.require_owner_identity();
+            if !target.bind_owner_identity_authority(hwnd, 1, owner_pid, Arc::new(authority)) {
+                return Err("window identity could not bind during session construction".into());
+            }
+            target
+        } else {
+            let target = SessionTarget::new(0, 0);
+            if require_owner_identity {
+                target.require_owner_identity();
+            }
+            target
+        };
         let metrics = Arc::new(SharedMetrics::default());
         *metrics.requested_priority_mode.lock() = "unknown".to_string();
         *metrics.requested_wait_policy.lock() = "unknown".to_string();
@@ -1043,7 +1117,10 @@ impl NativeDispatchSession {
             .store(enabled, Ordering::Release);
     }
 
-    pub fn set_target_hwnd(&self, hwnd: isize) {
+    /// Publish the initial target only for deterministic tests. Attempting a
+    /// second HWND intentionally invalidates the fixture's session.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn bind_initial_target_for_test(&self, hwnd: isize) {
         let bound = self.shared.target.set_initial_target(hwnd);
         if !bound {
             self.shared
@@ -1059,17 +1136,19 @@ impl NativeDispatchSession {
         }
     }
 
-    /// Bind a retained Win32 process object to the current coherent target
-    /// generation. Production require-focus sessions reject Down traffic
-    /// until this succeeds.
-    pub fn bind_window_identity_authority(
-        &self,
-        authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
-    ) -> Result<(), String> {
-        let owner_pid = authority.identity().owner_pid;
-        self.bind_window_identity_authority_with_pid(authority, owner_pid)
+    /// Exercise target retirement without exposing a production rebind API.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn invalidate_target_for_test(&self) {
+        self.shared.target.invalidate_target();
+        self.shared
+            .commands
+            .system_power
+            .cancel_prearm(StartupAbortReason::TargetInvalidated);
+        let _ = self.shared.commands.interrupt.signal();
     }
 
+    /// Test-only seam for fixtures that need to exercise a missing or late
+    /// owner proof. Production binds its proof in the session constructor.
     #[cfg(any(test, feature = "test-support"))]
     pub fn bind_window_identity_authority_for_test(
         &self,
@@ -1109,6 +1188,7 @@ impl NativeDispatchSession {
             .map(Arc::downgrade)
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn bind_window_identity_authority_with_pid(
         &self,
         authority: sky_dispatch_win32::focus::WindowIdentityAuthority,

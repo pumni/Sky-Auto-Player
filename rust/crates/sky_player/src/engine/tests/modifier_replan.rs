@@ -57,7 +57,7 @@ fn mock_session(
     }));
 
     let session = NativeDispatchSession::new(options).expect("mock native session admission");
-    session.set_target_hwnd(TARGET_HWND);
+    session.bind_initial_target_for_test(TARGET_HWND);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(

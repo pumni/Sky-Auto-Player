@@ -578,6 +578,10 @@ impl ProductionDispatchTestHarness {
         counts.generation_revalidations
     }
 
+    pub fn target_proof_atomic_reads_for_test(&self) -> u64 {
+        self.target.proof_operation_counts_for_test().atomic_reads
+    }
+
     pub fn apply_scheduler_resumable_lifecycle_transition_for_test(
         &mut self,
     ) -> Result<(), String> {

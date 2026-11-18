@@ -1640,71 +1640,72 @@ impl NativePlaybackService {
         {
             return Err("focused window owner changed during identity capture".into());
         }
-        let player = Arc::new(NativeDispatchSession::new_with_power_endpoint(
-            NativeSessionOptions {
-                schedule: prepared_schedule,
-                #[cfg(feature = "tauri-test")]
-                startup_calibration_placement:
-                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
-                #[cfg(feature = "tauri-test")]
-                timing_observer_for_qualification: false,
-                #[cfg(feature = "tauri-test")]
-                modifier_key_state_query_for_test: None,
-                backend: BackendConfig::Production,
-                profile: DispatchProfile::Production,
-                timing: TimingOptions {
-                    game_fps: config.fps,
-                    min_hold_us: policy.min_hold_us,
-                    min_release_gap_us: policy.min_release_gap_us,
-                    frame_us: policy.frame_us,
-                    frame_base_hold_us: policy.frame_base_hold_us,
-                    timing_margin_us: policy.timing_margin_us,
-                    strict_timing: false,
-                    strict_down_completion_late_us: 2_000,
-                    strict_up_completion_late_us: 2_000,
-                    input_path_warn_us: 300,
-                },
-                focus: FocusOptions {
-                    require_focus: true,
-                    focus_restore_grace_us: policy.focus_restore_grace_us,
-                },
-                wait: WaitOptions {
-                    enable_waitable_timer: true,
-                    enable_event_wait: true,
-                    supervisor_lease_timeout_us:
-                        sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+        let player = Arc::new(
+            NativeDispatchSession::new_with_bound_window_identity_and_power_endpoint(
+                NativeSessionOptions {
+                    schedule: prepared_schedule,
                     #[cfg(feature = "tauri-test")]
-                    test_spin_threshold_us: None,
+                    startup_calibration_placement:
+                        sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
                     #[cfg(feature = "tauri-test")]
-                    test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
+                    timing_observer_for_qualification: false,
+                    #[cfg(feature = "tauri-test")]
+                    modifier_key_state_query_for_test: None,
+                    backend: BackendConfig::Production,
+                    profile: DispatchProfile::Production,
+                    timing: TimingOptions {
+                        game_fps: config.fps,
+                        min_hold_us: policy.min_hold_us,
+                        min_release_gap_us: policy.min_release_gap_us,
+                        frame_us: policy.frame_us,
+                        frame_base_hold_us: policy.frame_base_hold_us,
+                        timing_margin_us: policy.timing_margin_us,
+                        strict_timing: false,
+                        strict_down_completion_late_us: 2_000,
+                        strict_up_completion_late_us: 2_000,
+                        input_path_warn_us: 300,
+                    },
+                    focus: FocusOptions {
+                        require_focus: true,
+                        focus_restore_grace_us: policy.focus_restore_grace_us,
+                    },
+                    wait: WaitOptions {
+                        enable_waitable_timer: true,
+                        enable_event_wait: true,
+                        supervisor_lease_timeout_us:
+                            sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+                        #[cfg(feature = "tauri-test")]
+                        test_spin_threshold_us: None,
+                        #[cfg(feature = "tauri-test")]
+                        test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
+                    },
+                    telemetry: TelemetryOptions {
+                        mode: TelemetryMode::Ring,
+                        // Keep fixed-width schema 19 records inside the bounded
+                        // sender-trace capture budget before export.
+                        capacity: SENDER_TRACE_CAPTURE_CAPACITY,
+                    },
+                    priority: PriorityOptions {
+                        mode: PriorityMode::Auto,
+                    },
+                    instrument_key_profile: None,
+                    #[cfg(feature = "tauri-test")]
+                    startup_ordering_hook: None,
+                    #[cfg(feature = "tauri-test")]
+                    restore_race_hook: None,
+                    #[cfg(feature = "tauri-test")]
+                    focus_pause_hook: None,
+                    #[cfg(feature = "tauri-test")]
+                    timer_lifecycle_context: None,
+                    #[cfg(feature = "tauri-test")]
+                    prepared_packet_ambiguity_mask: None,
+                    #[cfg(feature = "tauri-test")]
+                    preflight_user_held_mask: None,
                 },
-                telemetry: TelemetryOptions {
-                    mode: TelemetryMode::Ring,
-                    // Keep fixed-width schema 19 records inside the bounded
-                    // sender-trace capture budget before export.
-                    capacity: SENDER_TRACE_CAPTURE_CAPACITY,
-                },
-                priority: PriorityOptions {
-                    mode: PriorityMode::Auto,
-                },
-                instrument_key_profile: None,
-                #[cfg(feature = "tauri-test")]
-                startup_ordering_hook: None,
-                #[cfg(feature = "tauri-test")]
-                restore_race_hook: None,
-                #[cfg(feature = "tauri-test")]
-                focus_pause_hook: None,
-                #[cfg(feature = "tauri-test")]
-                timer_lifecycle_context: None,
-                #[cfg(feature = "tauri-test")]
-                prepared_packet_ambiguity_mask: None,
-                #[cfg(feature = "tauri-test")]
-                preflight_user_held_mask: None,
-            },
-            system_power_endpoint()?,
-        )?);
-        player.set_target_hwnd(target);
-        player.bind_window_identity_authority(owner_authority)?;
+                system_power_endpoint()?,
+                owner_authority,
+            )?,
+        );
         player.set_focus_hint(true);
         player.set_live_diagnostics_enabled(self.diagnostics_gate.is_enabled());
         Ok((player, target))

@@ -885,6 +885,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     use std::sync::atomic::AtomicBool;
 
     fn reset_counts(harness: &ProductionDispatchTestHarness) {
+        crate::engine::worker::admission::reset_final_admission_atomic_reads_for_test();
         sky_dispatch_core::executor::reset_scheduler_evaluation_count_for_test();
         sky_dispatch_win32::clock::reset_qpc_read_count();
         sky_dispatch_win32::focus::reset_foreground_query_count();
@@ -918,16 +919,41 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
             .map(|(_, evidence)| u64::from(evidence.attempts))
             .sum();
         let generation_checks = harness.target_proof_generation_revalidations_for_test();
+        let target_atomic_reads = harness.target_proof_atomic_reads_for_test();
+        let admission_atomic_reads =
+            crate::engine::worker::admission::final_admission_atomic_reads_for_test();
         let release_identity_arc_clones =
             sky_dispatch_win32::input::release_owner_proof_arc_clone_count_for_test();
+        let expected_identity_proofs = u64::from(sender_attempts != 0);
+        assert_eq!(
+            sky_dispatch_win32::focus::foreground_query_count(),
+            expected_identity_proofs,
+            "a healthy focus-required packet performs one fresh foreground query"
+        );
+        assert_eq!(
+            sky_dispatch_win32::focus::owner_query_count(),
+            expected_identity_proofs,
+            "a healthy focus-required packet resolves one foreground owner PID"
+        );
+        assert_eq!(
+            sky_dispatch_win32::focus::process_identity_check_count_for_test(),
+            expected_identity_proofs,
+            "a healthy focus-required packet checks its retained process once"
+        );
+        assert_eq!(
+            sky_dispatch_win32::focus::process_liveness_check_count_for_test(),
+            expected_identity_proofs,
+            "a healthy focus-required packet proves process liveness once"
+        );
         println!(
-            "proof-count label={label} scheduler_evaluations={} qpc_reads={} foreground_queries={} real_GetForegroundWindow={} owner_pid_checks={} process_identity_checks={} GetProcessTimes={} release_identity_arc_clones={release_identity_arc_clones} generation_revalidations={generation_checks} ledger_mask_visits={} sender_attempts={sender_attempts} allocations=0",
+            "proof-count label={label} scheduler_evaluations={} qpc_reads={} foreground_queries={} real_GetForegroundWindow={} owner_pid_checks={} process_identity_checks={} process_liveness_proofs={} GetProcessTimes={} admission_atomic_reads={admission_atomic_reads} target_atomic_reads={target_atomic_reads} release_identity_arc_clones={release_identity_arc_clones} generation_revalidations={generation_checks} ledger_mask_visits={} sender_attempts={sender_attempts} allocations=0",
             sky_dispatch_core::executor::scheduler_evaluation_count_for_test(),
             sky_dispatch_win32::clock::qpc_read_count(),
             sky_dispatch_win32::focus::foreground_query_count(),
             sky_dispatch_win32::focus::real_foreground_query_count(),
             sky_dispatch_win32::focus::owner_query_count(),
             sky_dispatch_win32::focus::process_identity_check_count_for_test(),
+            sky_dispatch_win32::focus::process_liveness_check_count_for_test(),
             sky_dispatch_win32::focus::get_process_times_call_count_for_test(),
             harness.resources.backend.owner_ledger_visits_for_test(),
         );

@@ -110,7 +110,7 @@ fn worker_final_gate_rechecks_retained_process_identity_before_down() {
         );
         options.focus.require_focus = true;
         let session = NativeDispatchSession::new(options).expect("test session admission");
-        session.set_target_hwnd(123);
+        session.bind_initial_target_for_test(123);
         session
             .bind_window_identity_authority_for_test(
                 sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -181,7 +181,7 @@ fn dropped_session_owner_leaves_watchdog_to_release_then_drops_target_binding() 
     );
     options.wait.supervisor_lease_timeout_us = 300_000;
     let session = NativeDispatchSession::new(options).expect("test session admission");
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -294,7 +294,7 @@ fn musical_up_only_rechecks_process_identity_and_cleanup_remains_fail_closed() {
     options.focus.require_focus = true;
     options.startup_ordering_hook = Some(Arc::clone(&hook));
     let session = NativeDispatchSession::new(options).expect("test session admission");
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -380,7 +380,7 @@ fn terminal_tracked_cleanup_uses_owner_proof_without_foreground_requirement() {
     options.focus.require_focus = true;
     options.startup_ordering_hook = Some(Arc::clone(&hook));
     let session = NativeDispatchSession::new(options).expect("test session admission");
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -432,7 +432,7 @@ fn ownership_review_schedule(up_us: u64) -> sky_dispatch_core::model::RuntimeSch
 
 #[cfg(feature = "test-support")]
 fn bind_synthetic_owner(session: &NativeDispatchSession, hwnd: isize, pid: u32) {
-    session.set_target_hwnd(hwnd);
+    session.bind_initial_target_for_test(hwnd);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(hwnd, pid),
@@ -514,7 +514,7 @@ fn target_replacement_during_long_physical_wait_autonomously_stops_held_origin()
     assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
     assert_eq!(send_calls.load(Ordering::Acquire), 1);
 
-    session.set_target_hwnd(456);
+    session.bind_initial_target_for_test(456);
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(88)));
     let replacement_binding = session.bind_window_identity_authority_for_test(
@@ -689,7 +689,7 @@ fn target_invalidated_before_scheduler_staging_finishes_without_input() {
         );
     }
 
-    session.set_target_hwnd(456);
+    session.bind_initial_target_for_test(456);
     hook.release_startup_checkpoint();
     assert!(
         session
@@ -794,7 +794,7 @@ fn production_require_focus_arm_rejects_missing_failed_wrong_or_late_owner_proof
     );
 
     let missing_owner = production_session();
-    missing_owner.set_target_hwnd(123);
+    missing_owner.bind_initial_target_for_test(123);
     assert!(missing_owner.arm(0).is_err());
     assert_eq!(
         missing_owner.spawn_handles_present_for_test(),
@@ -815,7 +815,7 @@ fn production_require_focus_arm_rejects_missing_failed_wrong_or_late_owner_proof
     );
 
     let wrong_owner = production_session();
-    wrong_owner.set_target_hwnd(123);
+    wrong_owner.bind_initial_target_for_test(123);
     assert!(
         wrong_owner
             .bind_window_identity_authority_for_test(
@@ -828,7 +828,7 @@ fn production_require_focus_arm_rejects_missing_failed_wrong_or_late_owner_proof
     assert_eq!(wrong_owner.spawn_handles_present_for_test(), (false, false));
 
     let failed_owner = production_session();
-    failed_owner.set_target_hwnd(123);
+    failed_owner.bind_initial_target_for_test(123);
     failed_owner
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -853,7 +853,7 @@ fn production_require_focus_arm_accepts_exact_continuous_bound_owner() {
     let mut options = test_session_options(schedule, 1, BackendConfig::Production);
     options.focus.require_focus = true;
     let session = NativeDispatchSession::new(options).expect("production focus session admission");
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -985,7 +985,7 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(1)));
     let session = NativeDispatchSession::new(options).expect("test session admission");
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 1),
@@ -2179,7 +2179,7 @@ fn skip_panic_suspend_target_owner_and_lease_stops_win_ready_to_armed() {
         let (session, hook, send_calls) =
             checkpointed_session(startup_boundary_schedule(), checkpoint, 2, false);
         if kind == "target" {
-            session.set_target_hwnd(123);
+            session.bind_initial_target_for_test(123);
         }
         session.arm(100_000).expect("worker arm request");
         assert!(
@@ -2190,7 +2190,7 @@ fn skip_panic_suspend_target_owner_and_lease_stops_win_ready_to_armed() {
             "skip" => session.skip().expect("skip request"),
             "panic" => session.panic_release().expect("panic release request"),
             "suspend" => assert!(session.notify_system_power(true)),
-            "target" => session.set_target_hwnd(456),
+            "target" => session.bind_initial_target_for_test(456),
             "owner" => session.invalidate_window_identity_authority_for_test(),
             "lease" => {
                 session
@@ -2222,7 +2222,7 @@ fn focus_hint_invalidation_cancels_arming_before_epoch_visibility() {
         2,
         true,
     );
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session.set_focus_hint(true);
     session.arm(100_000).expect("worker arm request");
     assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
@@ -2504,7 +2504,7 @@ fn focus_loss_during_post_wait_hook_never_sends_physical_down() {
     let session_for_hook = Arc::clone(&session);
 
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     session.set_focus_hint(true);
     session.arm(0).expect("session arm");

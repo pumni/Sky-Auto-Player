@@ -202,10 +202,11 @@ fn projection_session_with_down(
         )
         .expect("terminal projection session"),
     );
-    player.set_target_hwnd(123);
+    player.bind_initial_target_for_test(123);
     player
-        .bind_window_identity_authority(
+        .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
+            77,
         )
         .expect("bind test owner identity");
     player

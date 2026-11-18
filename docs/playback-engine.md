@@ -167,22 +167,24 @@ calling `SendInput`. Down-bearing packets also check modifiers:
 
 ```text
 Worker Loop -> Wait Deadline Reached
-    -> Sample Foreground HWND
-    -> Query Process Identity (PID, creation time)
-    -> Verify Target HWND & Generation Match
+    -> Early Control / Power Check
+    -> Check Immutable Target and Focus Hint
     -> For Down: Check Modifier Keys (Ctrl, Alt, Shift, Win = unpressed)
-    -> Verify Supervisor Lease Active
-    -> Check System Power & Session Controls (Pause, Skip, Stop)
+    -> Verify Supervisor Lease with Required QPC Sample
+    -> Zero-time Wait and Check Retained Process Creation Identity
+    -> Sample Fresh Foreground HWND and its Owner PID
+    -> Recheck Target / Focus Latches
+    -> Read Controls and Power Once in Fixed Precedence
     -> Pass: Dispatch SendInput
     -> Reject: Defer, Replan, or Terminate
 ```
 
-The worker stages a bounded packet before its deadline wait, then rechecks
-controls, modifiers for Down, fresh foreground HWND/PID ownership, the retained
-process creation-time proof, target generation, lease, power, and focus
-immediately before the prepared sender. A
-pre-call focus, target, or modifier rejection makes the worker replan without
-attempting or advancing that authored Down. Terminal Stop, Skip, Quit, Panic,
+The worker stages a bounded packet before its deadline wait. Its final gate
+uses one process-liveness/creation proof and one fresh foreground HWND/PID
+query. Focus or modifier rejection, and a target already invalid at the initial
+gate check, make the worker replan without attempting or advancing that authored
+Down. Target invalidation observed during the final identity proof terminates
+the session before the sender. Terminal Stop, Skip, Quit, Panic,
 lease expiry, ownership failure, and system suspend remain fail-closed. When a
 mixed packet's Down gate is temporarily rejected while its independent Up is
 still eligible, the worker stages and admits that Up-only packet through the
@@ -314,13 +316,14 @@ dispatch boundary and does not issue `SendInput`.
 
 ### Session Target Binding and Lifetime
 
-`SessionTarget` binds one HWND/generation and one retained owner identity
-before Arm. The authority retains a query-only process handle plus the startup
-creation-time and image identity. The initial HWND is write-once; a different
-HWND, zero target, or failed owner proof invalidates the session and cannot
-publish a replacement, including when Windows reuses the same numeric HWND.
-Production startup binds the target and process authority before Arm. Public
-DTOs and telemetry schema do not change.
+`SessionTarget` receives one HWND/generation and one retained owner identity in
+the production session constructor, before Arm or worker creation. The retained
+process handle requests only
+`PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE`; a zero-time wait proves
+liveness while the startup creation time and image path bind the PID
+incarnation. Production has no target-rebind API. Target or owner failure is a
+one-way session latch, so numeric HWND/PID reuse cannot publish a replacement.
+Public DTOs and telemetry schema do not change.
 
 For production sessions with `require_focus`, `Arm` revalidates that the
 nonzero HWND/generation, bound PID, and retained process authority all match
@@ -328,8 +331,9 @@ and that the authority reports continuous identity before it launches a
 worker. Missing, mismatched, failed, or late proof irreversibly closes
 admission; proof arriving afterward cannot start or rebind that session.
 Focus-free sessions and the explicit mock test path keep their existing
-admission behavior. Desktop and native acceptance both bind through
-`NativeDispatchSession` before calling `Arm`.
+admission behavior. Desktop and native acceptance pass the verified authority
+to the session constructor before calling `Arm`; target invalidation exists
+only as a test/acceptance seam.
 
 The supervisor polls the retained process object without a writer or owner
 mutex. Continuous identity leaves the binding usable. Any continuity failure
@@ -348,14 +352,16 @@ proofs share a small identity object that owns it. The authority remains alive
 through worker/watchdog cleanup and drops with the session target after the
 session and its worker references are retired.
 
-For each focus-required musical packet, the worker samples the current
-foreground HWND and owner PID, then queries the retained process handle for its
-live state and creation time after lease/control checks. It checks the
-immutable HWND/generation/owner binding immediately before entering the sender.
-The process query is constant-time and uses no heap allocation. The supervisor
-continues to check `IsWindow`, owner PID, process creation time, and image path
-on its control cadence. This final proof supplements the fresh OS window
-query; it does not replace it with a cached PID or identity value.
+For each focus-required musical packet, the worker checks modifiers for Down,
+proves the supervisor lease, checks the retained process handle with a
+zero-time wait and creation-time query, then samples the current foreground
+HWND and that exact window's owner PID once. After the fresh Win32 reads, it
+checks the target failure latch and latest focus hint, then reads controls and
+power once in fixed precedence immediately before the sender. No foreground
+callback or cached PID substitutes for that fresh query. The process check is
+constant-time and allocation-free. The supervisor continues to check
+`IsWindow`, owner PID, process creation time, and image path on its control
+cadence.
 
 Each tracked key slot freezes a release-owner proof before a Down can create an
 in-flight obligation. The proof includes the originating HWND and generation,

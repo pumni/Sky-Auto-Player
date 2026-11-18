@@ -12,12 +12,16 @@ std::thread_local! {
     static GET_PROCESS_TIMES_CALL_COUNT: std::cell::Cell<u64> = const {
         std::cell::Cell::new(0)
     };
+    static PROCESS_LIVENESS_CHECK_COUNT: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
 }
 
 #[cfg(feature = "test-support")]
 pub fn reset_process_identity_counts_for_test() {
     FINAL_PROCESS_IDENTITY_CHECK_COUNT.with(|count| count.set(0));
     GET_PROCESS_TIMES_CALL_COUNT.with(|count| count.set(0));
+    PROCESS_LIVENESS_CHECK_COUNT.with(|count| count.set(0));
 }
 
 #[cfg(feature = "test-support")]
@@ -28,6 +32,11 @@ pub fn process_identity_check_count_for_test() -> u64 {
 #[cfg(feature = "test-support")]
 pub fn get_process_times_call_count_for_test() -> u64 {
     GET_PROCESS_TIMES_CALL_COUNT.with(std::cell::Cell::get)
+}
+
+#[cfg(feature = "test-support")]
+pub fn process_liveness_check_count_for_test() -> u64 {
+    PROCESS_LIVENESS_CHECK_COUNT.with(std::cell::Cell::get)
 }
 
 /// Identity of a live window and the process that owns it.
@@ -46,11 +55,12 @@ pub struct WindowIdentity {
 }
 
 /// Retained authority for one window owner process. The process handle is
-/// opened with `PROCESS_QUERY_LIMITED_INFORMATION` only and remains owned by
-/// the session target until its worker and supervisor have exited. The
-/// control plane verifies the full image identity periodically; final musical
-/// admission also checks the retained process creation time without
-/// allocating, beside its fresh foreground HWND/PID query.
+/// opened with only `PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE` and
+/// remains owned by the session target until its worker and supervisor have
+/// exited. The control plane verifies the full image identity periodically;
+/// final musical admission uses a zero-time wait and checks the retained
+/// process creation time without allocating, beside its fresh foreground
+/// HWND/PID query.
 pub struct WindowIdentityAuthority {
     pub(super) identity: WindowIdentity,
     pub(super) image_identity: String,
@@ -145,6 +155,8 @@ impl WindowIdentityAuthority {
     ) -> WindowIdentityContinuity {
         #[cfg(feature = "test-support")]
         FINAL_PROCESS_IDENTITY_CHECK_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+        #[cfg(feature = "test-support")]
+        PROCESS_LIVENESS_CHECK_COUNT.with(|count| count.set(count.get().saturating_add(1)));
         if self.identity.hwnd != expected_hwnd || self.identity.owner_pid != expected_owner_pid {
             return WindowIdentityContinuity::OwnerMismatch;
         }
@@ -160,7 +172,8 @@ impl WindowIdentityAuthority {
         #[cfg(windows)]
         {
             use windows_sys::Win32::Foundation::FILETIME;
-            use windows_sys::Win32::System::Threading::GetProcessTimes;
+            use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
+            use windows_sys::Win32::System::Threading::{GetProcessTimes, WaitForSingleObject};
 
             let Some(handle) = self.process_handle else {
                 #[cfg(feature = "test-support")]
@@ -173,6 +186,14 @@ impl WindowIdentityAuthority {
                 }
             };
             let handle = handle as windows_sys::Win32::Foundation::HANDLE;
+            // SAFETY: the retained handle was opened with SYNCHRONIZE and is
+            // a process object. A zero-time wait observes liveness without
+            // blocking the dispatch worker.
+            match unsafe { WaitForSingleObject(handle, 0) } {
+                WAIT_TIMEOUT => {}
+                WAIT_OBJECT_0 => return WindowIdentityContinuity::ProcessTerminated,
+                _ => return WindowIdentityContinuity::QueryUnavailable,
+            }
             let mut creation = FILETIME {
                 dwLowDateTime: 0,
                 dwHighDateTime: 0,
@@ -196,9 +217,6 @@ impl WindowIdentityAuthority {
             {
                 return WindowIdentityContinuity::QueryUnavailable;
             }
-            if filetime_ticks(exit) != 0 {
-                return WindowIdentityContinuity::ProcessTerminated;
-            }
             if filetime_ticks(creation) != self.identity.process_start_time_filetime {
                 return WindowIdentityContinuity::ProcessIdentityMismatch;
             }
@@ -214,8 +232,9 @@ impl WindowIdentityAuthority {
         #[cfg(windows)]
         {
             use windows_sys::Win32::Foundation::FILETIME;
+            use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
             use windows_sys::Win32::System::Threading::{
-                GetProcessTimes, QueryFullProcessImageNameW,
+                GetProcessTimes, QueryFullProcessImageNameW, WaitForSingleObject,
             };
 
             let Some(handle) = self.process_handle else {
@@ -229,6 +248,13 @@ impl WindowIdentityAuthority {
                 }
             };
             let handle = handle as windows_sys::Win32::Foundation::HANDLE;
+            // SAFETY: the retained handle includes SYNCHRONIZE; zero-time
+            // wait distinguishes a signaled process from a query failure.
+            match unsafe { WaitForSingleObject(handle, 0) } {
+                WAIT_TIMEOUT => {}
+                WAIT_OBJECT_0 => return WindowIdentityContinuity::ProcessTerminated,
+                _ => return WindowIdentityContinuity::QueryUnavailable,
+            }
             let mut creation = FILETIME {
                 dwLowDateTime: 0,
                 dwHighDateTime: 0,
@@ -249,9 +275,6 @@ impl WindowIdentityAuthority {
                 == 0
             {
                 return WindowIdentityContinuity::QueryUnavailable;
-            }
-            if filetime_ticks(exit) != 0 {
-                return WindowIdentityContinuity::ProcessTerminated;
             }
             if filetime_ticks(creation) != self.identity.process_start_time_filetime {
                 return WindowIdentityContinuity::ProcessIdentityMismatch;
@@ -361,6 +384,15 @@ pub fn terminate_receive_only_sink_process_for_test(
     }
 
     let result = (|| {
+        // SAFETY: `process` was opened with SYNCHRONIZE. A zero-time wait
+        // must report timeout for a process that is still live.
+        match unsafe { WaitForSingleObject(process, 0) } {
+            WAIT_TIMEOUT => {}
+            WAIT_OBJECT_0 => {
+                return Err("ReceiveOnly process exited before the termination fixture".into());
+            }
+            _ => return Err("could not query ReceiveOnly process wait state".into()),
+        }
         let mut creation = FILETIME {
             dwLowDateTime: 0,
             dwHighDateTime: 0,
@@ -380,7 +412,6 @@ pub fn terminate_receive_only_sink_process_for_test(
         // SAFETY: Each output points to a live, writable FILETIME value.
         if unsafe { GetProcessTimes(process, &mut creation, &mut exit, &mut kernel, &mut user) }
             == 0
-            || filetime_ticks(exit) != 0
             || filetime_ticks(creation) != identity.process_start_time_filetime
         {
             return Err("ReceiveOnly process creation identity changed before termination".into());
@@ -401,13 +432,6 @@ pub fn terminate_receive_only_sink_process_for_test(
         }
 
         // SAFETY: `process` is the exact identity-revalidated sink handle.
-        match unsafe { WaitForSingleObject(process, 0) } {
-            WAIT_TIMEOUT => {}
-            WAIT_OBJECT_0 => {
-                return Err("ReceiveOnly process exited before the termination fixture".into());
-            }
-            _ => return Err("could not query ReceiveOnly process wait state".into()),
-        }
         // SAFETY: This deliberately terminates only the project-owned sink
         // process whose title, PID incarnation, image path, and window
         // identity were verified above.
@@ -460,8 +484,10 @@ impl Drop for WindowIdentityAuthority {
 pub fn retain_window_identity(hwnd: isize) -> Result<WindowIdentityAuthority, String> {
     use std::path::Path;
     use windows_sys::Win32::Foundation::{CloseHandle, FILETIME, HWND};
+    use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        QueryFullProcessImageNameW, WaitForSingleObject,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
@@ -474,13 +500,26 @@ pub fn retain_window_identity(hwnd: isize) -> Result<WindowIdentityAuthority, St
     if unsafe { GetWindowThreadProcessId(hwnd as HWND, &mut owner_pid) } == 0 || owner_pid == 0 {
         return Err("window owner PID could not be resolved".to_string());
     }
-    // SAFETY: the retained handle requests only PROCESS_QUERY_LIMITED_INFORMATION
-    // and inheritance is disabled.
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, owner_pid) };
+    // SAFETY: the retained playback authority requests only limited identity
+    // queries and synchronization; inheritance is disabled.
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            owner_pid,
+        )
+    };
     if process.is_null() {
         return Err("window owner process could not be opened".to_string());
     }
     let result = (|| {
+        // SAFETY: the retained handle has SYNCHRONIZE and this zero-time wait
+        // does not block target discovery.
+        match unsafe { WaitForSingleObject(process, 0) } {
+            WAIT_TIMEOUT => {}
+            WAIT_OBJECT_0 => return Err("window owner process is not live".to_string()),
+            _ => return Err("window owner process liveness could not be queried".to_string()),
+        }
         let title_length = unsafe { GetWindowTextLengthW(hwnd as HWND) };
         if title_length <= 0 {
             return Err("window title is empty or unavailable".to_string());
@@ -518,9 +557,8 @@ pub fn retain_window_identity(hwnd: isize) -> Result<WindowIdentityAuthority, St
                 &mut user_time,
             )
         } == 0
-            || filetime_ticks(exit_time) != 0
         {
-            return Err("window owner process is not live".to_string());
+            return Err("process creation time could not be read".to_string());
         }
         let mut image_path = [0u16; 4096];
         let mut image_length = image_path.len() as u32;

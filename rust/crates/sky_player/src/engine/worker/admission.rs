@@ -15,6 +15,30 @@ use sky_dispatch_win32::input::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 
+#[cfg(all(test, feature = "qpc-read-counting"))]
+std::thread_local! {
+    static FINAL_ADMISSION_ATOMIC_READS: std::cell::Cell<u64> = const {
+        std::cell::Cell::new(0)
+    };
+}
+
+#[cfg(all(test, feature = "qpc-read-counting"))]
+fn record_final_admission_atomic_reads(reads: u64) {
+    FINAL_ADMISSION_ATOMIC_READS.with(|count| {
+        count.set(count.get().saturating_add(reads));
+    });
+}
+
+#[cfg(all(test, feature = "qpc-read-counting"))]
+pub(crate) fn reset_final_admission_atomic_reads_for_test() {
+    FINAL_ADMISSION_ATOMIC_READS.with(|count| count.set(0));
+}
+
+#[cfg(all(test, feature = "qpc-read-counting"))]
+pub(crate) fn final_admission_atomic_reads_for_test() -> u64 {
+    FINAL_ADMISSION_ATOMIC_READS.with(std::cell::Cell::get)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct TargetStamp {
     pub(crate) hwnd: isize,
@@ -57,7 +81,10 @@ pub(crate) fn final_down_lease_age_proof(
     #[cfg(not(test))]
     let now = qpc_clock.now()?;
 
-    Ok(lease.prove_down_age(now, timeout_ticks))
+    let proof = lease.prove_down_age(now, timeout_ticks);
+    #[cfg(all(test, feature = "qpc-read-counting"))]
+    record_final_admission_atomic_reads(u64::from(proof.state_loads));
+    Ok(proof)
 }
 
 pub(crate) fn record_final_gate_rejection(
@@ -112,6 +139,8 @@ pub(crate) fn focus_matches_hwnd(
     if !require_focus {
         return true;
     }
+    #[cfg(all(test, feature = "qpc-read-counting"))]
+    record_final_admission_atomic_reads(1);
     let validated_focus_active = focus_active.load(Ordering::Acquire);
     let foreground_matches =
         expected_hwnd == 0 || sky_dispatch_win32::focus::foreground_window_matches(expected_hwnd);
@@ -124,7 +153,12 @@ pub(crate) fn focus_matches_hwnd(
 }
 
 pub(crate) fn focus_matches(require_focus: bool, focus_active: &AtomicBool) -> bool {
-    !require_focus || focus_active.load(Ordering::Acquire)
+    if !require_focus {
+        return true;
+    }
+    #[cfg(all(test, feature = "qpc-read-counting"))]
+    record_final_admission_atomic_reads(1);
+    focus_active.load(Ordering::Acquire)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -175,28 +209,38 @@ pub(crate) struct FinalTargetSignals<'a> {
     pub(crate) require_focus: bool,
     pub(crate) focus_active: &'a AtomicBool,
     pub(crate) target: &'a SessionTarget,
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) post_focus_race_hook: Option<&'a super::super::config::FinalGateRaceHook>,
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) post_focus_control_signals: Option<FinalControlSignals<'a>>,
 }
 
 pub(crate) fn final_control_precheck(signals: FinalControlSignals<'_>) -> FinalControlAdmission {
-    if signals.supervisor_expired.is_expired() || signals.panic_requested.load(Ordering::Acquire) {
+    #[cfg(all(test, feature = "qpc-read-counting"))]
+    record_final_admission_atomic_reads(1);
+    if signals.supervisor_expired.is_expired() {
         return FinalControlAdmission::PanicRequested;
     }
-    if signals
-        .system_power
-        .is_some_and(super::super::shared::SystemPowerState::down_blocked)
-    {
-        return FinalControlAdmission::SystemSuspendRequested;
+    #[cfg(all(test, feature = "qpc-read-counting"))]
+    record_final_admission_atomic_reads(1);
+    if signals.panic_requested.load(Ordering::Acquire) {
+        return FinalControlAdmission::PanicRequested;
     }
+    if let Some(system_power) = signals.system_power {
+        #[cfg(all(test, feature = "qpc-read-counting"))]
+        record_final_admission_atomic_reads(1);
+        if system_power.down_blocked() {
+            return FinalControlAdmission::SystemSuspendRequested;
+        }
+    }
+    #[cfg(all(test, feature = "qpc-read-counting"))]
+    record_final_admission_atomic_reads(1);
     if signals.quit_requested.load(Ordering::Acquire) {
         return FinalControlAdmission::QuitRequested;
     }
+    #[cfg(all(test, feature = "qpc-read-counting"))]
+    record_final_admission_atomic_reads(1);
     if signals.skip_requested.load(Ordering::Acquire) {
         return FinalControlAdmission::SkipRequested;
     }
+    #[cfg(all(test, feature = "qpc-read-counting"))]
+    record_final_admission_atomic_reads(1);
     if signals.desired_pause.load(Ordering::Acquire) {
         return FinalControlAdmission::PauseRequested;
     }
@@ -227,84 +271,14 @@ pub(crate) fn final_down_target_hint(target: &FinalTargetSignals<'_>) -> FinalDo
     FinalDownVerdict::Allowed
 }
 
-/// Fresh foreground/process proof and coherent target-owner revalidation for
-/// Down-bearing traffic. Call after modifier observation, immediately before
-/// the shared lease and final-control suffix.
-pub(crate) fn final_down_fresh_target_admission(
-    target: FinalTargetSignals<'_>,
-) -> FinalDownVerdict {
-    let owner_pid = if target.require_focus {
-        if target.expected.hwnd == 0 {
-            return FinalDownVerdict::FocusLost;
-        }
-        match target
-            .target
-            .owner_identity_status(target.expected.generation)
-        {
-            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => owner_pid,
-            OwnerIdentityStatus::NotRequired | OwnerIdentityStatus::Missing => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityAbsent);
-            }
-            OwnerIdentityStatus::Stale => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityStale);
-            }
-            OwnerIdentityStatus::ProcessTerminated => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProcessTerminated);
-            }
-            OwnerIdentityStatus::OwnerMismatch => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::Mismatch);
-            }
-            OwnerIdentityStatus::QueryUnavailable => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::QueryUnavailable);
-            }
-            OwnerIdentityStatus::WindowUnavailable
-            | OwnerIdentityStatus::ProcessIdentityMismatch => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityDrift);
-            }
-            OwnerIdentityStatus::Bound(_) => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityAbsent);
-            }
-        }
-    } else {
-        0
-    };
-    #[cfg(any(test, feature = "test-support"))]
-    if let (Some(hook), Some(control), Some(system_power)) = (
-        target.post_focus_race_hook,
-        target.post_focus_control_signals,
-        target
-            .post_focus_control_signals
-            .and_then(|signals| signals.system_power),
-    ) {
-        hook(
-            target.focus_active,
-            target.target,
-            control.quit_requested,
-            control.skip_requested,
-            control.panic_requested,
-            control.desired_pause,
-            system_power,
-        );
-    }
-    final_down_atomic_revalidation(
-        target.target,
-        target.expected,
-        target.require_focus,
-        target.focus_active,
-        target.require_focus.then_some(owner_pid),
-    )
-}
-
-/// Recheck only bounded atomic target, focus, and owner state after the
-/// modifier queries. The fresh foreground/process proof remains owned by
-/// `verify_final_down_admission` immediately before this final suffix.
+/// Recheck the immutable target's one-way failure latch and the latest focus
+/// hint after fresh Win32 identity reads. The constructor-bound HWND/PID is
+/// immutable, so repeating the same owner/generation lookup adds no proof.
 #[inline(always)]
 pub(crate) fn final_down_atomic_revalidation(
     target: &SessionTarget,
-    expected: TargetStamp,
     require_focus: bool,
     focus_active: &AtomicBool,
-    expected_owner_pid: Option<u32>,
 ) -> FinalDownVerdict {
     if !target.is_valid() {
         return FinalDownVerdict::TargetChanged;
@@ -312,96 +286,7 @@ pub(crate) fn final_down_atomic_revalidation(
     if !focus_matches(require_focus, focus_active) {
         return FinalDownVerdict::FocusLost;
     }
-    if require_focus {
-        match target.owner_identity_status(expected.generation) {
-            OwnerIdentityStatus::Bound(owner_pid) if owner_pid != 0 => {
-                if expected_owner_pid.is_some_and(|expected| expected != owner_pid) {
-                    return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::Mismatch);
-                }
-            }
-            OwnerIdentityStatus::NotRequired | OwnerIdentityStatus::Missing => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityAbsent);
-            }
-            OwnerIdentityStatus::Stale => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityStale);
-            }
-            OwnerIdentityStatus::ProcessTerminated => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::ProcessTerminated);
-            }
-            OwnerIdentityStatus::OwnerMismatch => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::Mismatch);
-            }
-            OwnerIdentityStatus::QueryUnavailable => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::QueryUnavailable);
-            }
-            OwnerIdentityStatus::WindowUnavailable
-            | OwnerIdentityStatus::ProcessIdentityMismatch => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityDrift);
-            }
-            OwnerIdentityStatus::Bound(_) => {
-                return FinalDownVerdict::OwnerRejected(OwnerAdmissionFailure::IdentityAbsent);
-            }
-        }
-    }
     FinalDownVerdict::Allowed
-}
-
-/// The shared post-modifier authority gate. Both dispatch paths enter here
-/// after the same fresh foreground proof and modifier observation. This keeps
-/// target revalidation, the single lease-age sample, and the final control
-/// check in one auditable order without adding a sample or changing sender
-/// ownership.
-#[allow(clippy::too_many_arguments)]
-#[inline(always)]
-pub(crate) fn final_down_post_modifier_verdict(
-    target: &SessionTarget,
-    expected: TargetStamp,
-    require_focus: bool,
-    focus_active: &AtomicBool,
-    control_signals: FinalControlSignals<'_>,
-    lease_timeout_ticks: DurationTicks,
-    qpc_clock: QpcClock,
-    #[cfg(any(test, feature = "test-support"))] post_lease_race_hook: Option<
-        &super::super::config::FinalGateRaceHook,
-    >,
-    #[cfg(test)] qpc_sample_count: &mut u64,
-    #[cfg(test)] qpc_sample_override: &mut Option<Result<QpcTicks, QpcError>>,
-) -> Result<FinalDownVerdict, QpcError> {
-    let authority =
-        final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
-    if authority != FinalDownVerdict::Allowed {
-        return Ok(authority);
-    }
-
-    let lease_proof = final_down_lease_age_proof(
-        control_signals.supervisor_expired,
-        lease_timeout_ticks,
-        qpc_clock,
-        #[cfg(test)]
-        qpc_sample_count,
-        #[cfg(test)]
-        qpc_sample_override,
-    )?;
-    match lease_proof.admission {
-        SupervisorLeaseAdmission::Fresh => {}
-        SupervisorLeaseAdmission::Expired => return Ok(FinalDownVerdict::LeaseExpired),
-        SupervisorLeaseAdmission::Unproven => return Ok(FinalDownVerdict::LeaseUnproven),
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    if let (Some(hook), Some(system_power)) = (post_lease_race_hook, control_signals.system_power) {
-        hook(
-            focus_active,
-            target,
-            control_signals.quit_requested,
-            control_signals.skip_requested,
-            control_signals.panic_requested,
-            control_signals.desired_pause,
-            system_power,
-        );
-    }
-
-    Ok(final_down_control_verdict(control_signals))
 }
 
 #[inline(always)]
@@ -485,22 +370,6 @@ fn fresh_final_release_owner_proof(
             OwnerAdmissionFailure::IdentityAbsent,
         ));
     };
-    match sky_dispatch_win32::focus::foreground_window_owner_matches(expected.hwnd, owner_pid) {
-        sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => {}
-        sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => {
-            return Err(FinalDownVerdict::FocusLost);
-        }
-        sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
-            return Err(FinalDownVerdict::OwnerRejected(
-                OwnerAdmissionFailure::Mismatch,
-            ));
-        }
-        sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => {
-            return Err(FinalDownVerdict::OwnerRejected(
-                OwnerAdmissionFailure::QueryUnavailable,
-            ));
-        }
-    }
     if target.owner_process_identity_required() {
         let Some(authority) = release_owner.authority() else {
             return Err(FinalDownVerdict::OwnerRejected(
@@ -536,6 +405,25 @@ fn fresh_final_release_owner_proof(
                     OwnerAdmissionFailure::QueryUnavailable,
                 ));
             }
+        }
+    }
+
+    // This is the last Win32 target read in the gate. It samples the current
+    // foreground HWND and resolves that exact HWND's owner PID in one call.
+    match sky_dispatch_win32::focus::foreground_window_owner_matches(expected.hwnd, owner_pid) {
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => {}
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => {
+            return Err(FinalDownVerdict::FocusLost);
+        }
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
+            return Err(FinalDownVerdict::OwnerRejected(
+                OwnerAdmissionFailure::Mismatch,
+            ));
+        }
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => {
+            return Err(FinalDownVerdict::OwnerRejected(
+                OwnerAdmissionFailure::QueryUnavailable,
+            ));
         }
     }
     Ok(release_owner)
@@ -775,7 +663,10 @@ fn verify_final_musical_packet_admission(
     metrics: &mut WorkerMetricsLocal,
     check_modifiers: bool,
 ) -> FinalDownAdmissionResult {
-    if final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
+    // Up-only callers already perform this early control check so Suspend
+    // keeps its existing terminal mapping. Down-bearing callers enter here
+    // directly and check control before target and modifier work.
+    if check_modifiers && final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
         return FinalDownAdmissionResult::Replan;
     }
 
@@ -784,10 +675,6 @@ fn verify_final_musical_packet_admission(
         require_focus,
         focus_active,
         target,
-        #[cfg(any(test, feature = "test-support"))]
-        post_focus_race_hook: runtime.final_gate_post_focus_race_hook.as_ref(),
-        #[cfg(any(test, feature = "test-support"))]
-        post_focus_control_signals: Some(control_signals),
     });
     if target_hint != FinalDownVerdict::Allowed {
         apply_final_down_rejection(target_hint, runtime, metrics);
@@ -820,107 +707,60 @@ fn verify_final_musical_packet_admission(
         }
     }
 
-    let fresh_target_verdict = final_down_fresh_target_admission(FinalTargetSignals {
-        expected,
-        require_focus,
-        focus_active,
-        target,
-        #[cfg(any(test, feature = "test-support"))]
-        post_focus_race_hook: runtime.final_gate_post_focus_race_hook.as_ref(),
-        #[cfg(any(test, feature = "test-support"))]
-        post_focus_control_signals: Some(control_signals),
-    });
-    if fresh_target_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(fresh_target_verdict, runtime, metrics);
-        match fresh_target_verdict {
-            FinalDownVerdict::FocusLost => {
-                if let Err(step) =
-                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
-                {
-                    return match step {
-                        DispatchStep::Terminate(err) => FinalDownAdmissionResult::Terminal(err),
-                    };
-                }
-            }
-            FinalDownVerdict::OwnerRejected(failure) => {
-                return FinalDownAdmissionResult::Terminal(
-                    owner_rejection_reason(failure).to_string(),
-                );
-            }
-            _ => {}
-        }
-        return FinalDownAdmissionResult::Replan;
-    }
-
-    let verdict = match final_down_post_modifier_verdict(
-        target,
-        expected,
-        require_focus,
-        focus_active,
-        control_signals,
+    // The lease's required QPC sample stays in the gate. Perform it before
+    // Win32 identity reads so the exact foreground HWND/PID check remains the
+    // last OS identity read before the final atomic and control suffix.
+    let lease_proof = match final_down_lease_age_proof(
+        control_signals.supervisor_expired,
         lease_timeout_ticks,
         qpc_clock,
-        #[cfg(any(test, feature = "test-support"))]
-        runtime.final_gate_post_lease_race_hook.as_ref(),
         #[cfg(test)]
         &mut runtime.final_lease_qpc_sample_count_for_test,
         #[cfg(test)]
         &mut runtime.final_lease_qpc_sample_override_for_test,
     ) {
-        Ok(verdict) => verdict,
+        Ok(proof) => proof,
         Err(_) => {
             return FinalDownAdmissionResult::Terminal("prepared_down_qpc_failure".to_string());
         }
     };
-    if verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(verdict, runtime, metrics);
-        match verdict {
+    let lease_verdict = match lease_proof.admission {
+        SupervisorLeaseAdmission::Fresh => FinalDownVerdict::Allowed,
+        SupervisorLeaseAdmission::Expired => FinalDownVerdict::LeaseExpired,
+        SupervisorLeaseAdmission::Unproven => FinalDownVerdict::LeaseUnproven,
+    };
+    if lease_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(lease_verdict, runtime, metrics);
+        return match lease_verdict {
             FinalDownVerdict::LeaseExpired => {
-                return FinalDownAdmissionResult::Terminal("supervisor_lease_expired".to_string());
+                FinalDownAdmissionResult::Terminal("supervisor_lease_expired".to_string())
             }
             FinalDownVerdict::LeaseUnproven => {
-                return FinalDownAdmissionResult::Terminal("supervisor_lease_unproven".to_string());
+                FinalDownAdmissionResult::Terminal("supervisor_lease_unproven".to_string())
             }
-            _ => return FinalDownAdmissionResult::Replan,
-        }
+            _ => FinalDownAdmissionResult::Replan,
+        };
     }
 
-    // A publication or focus/control race after the fresh OS identity query
-    // must still fail before the caller reaches the prepared sender.
-    let final_target_verdict =
-        final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
-    if final_target_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(final_target_verdict, runtime, metrics);
-        match final_target_verdict {
-            FinalDownVerdict::FocusLost => {
-                if let Err(step) =
-                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
-                {
-                    return match step {
-                        DispatchStep::Terminate(error) => FinalDownAdmissionResult::Terminal(error),
-                    };
-                }
-            }
-            FinalDownVerdict::OwnerRejected(failure) => {
-                return FinalDownAdmissionResult::Terminal(
-                    owner_rejection_reason(failure).to_string(),
-                );
-            }
-            _ => {}
-        }
-        return FinalDownAdmissionResult::Replan;
+    #[cfg(any(test, feature = "test-support"))]
+    if let (Some(hook), Some(system_power)) = (
+        runtime.final_gate_post_lease_race_hook.as_ref(),
+        control_signals.system_power,
+    ) {
+        hook(
+            focus_active,
+            target,
+            control_signals.quit_requested,
+            control_signals.skip_requested,
+            control_signals.panic_requested,
+            control_signals.desired_pause,
+            system_power,
+        );
     }
 
-    let final_control_verdict = final_down_control_verdict(control_signals);
-    if final_control_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(final_control_verdict, runtime, metrics);
-        return FinalDownAdmissionResult::Replan;
-    }
-
-    // Keep the retained process object alive in the session target and query
-    // its creation-time proof after lease/control checks, immediately before
-    // the final atomic target check and sender boundary. Lock contention is a
-    // pre-call rejection for this packet; it does not consume an onset.
+    // The retained process handle is checked first with a zero-time wait and
+    // its creation identity. The exact foreground HWND/PID is then sampled
+    // once, immediately before the final atomic and control checks.
     let release_owner = match fresh_final_release_owner_proof(target, expected, require_focus) {
         Ok(proof) => proof,
         Err(verdict) => {
@@ -937,35 +777,49 @@ fn verify_final_musical_packet_admission(
                 FinalDownVerdict::OwnerRejected(failure) => {
                     FinalDownAdmissionResult::Terminal(owner_rejection_reason(failure).to_string())
                 }
+                FinalDownVerdict::TargetChanged => {
+                    FinalDownAdmissionResult::Terminal("prepared_down_target_changed".to_string())
+                }
                 _ => FinalDownAdmissionResult::Replan,
             };
         }
     };
 
-    let final_identity_target_verdict =
-        final_down_atomic_revalidation(target, expected, require_focus, focus_active, None);
-    if final_identity_target_verdict != FinalDownVerdict::Allowed {
-        apply_final_down_rejection(final_identity_target_verdict, runtime, metrics);
-        return match final_identity_target_verdict {
-            FinalDownVerdict::OwnerRejected(failure) => {
-                FinalDownAdmissionResult::Terminal(owner_rejection_reason(failure).to_string())
-            }
-            FinalDownVerdict::FocusLost => {
-                if let Err(step) =
-                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
-                {
-                    match step {
-                        DispatchStep::Terminate(error) => {
-                            return FinalDownAdmissionResult::Terminal(error);
-                        }
-                    }
-                }
-                FinalDownAdmissionResult::Replan
-            }
-            _ => FinalDownAdmissionResult::Replan,
-        };
+    #[cfg(any(test, feature = "test-support"))]
+    if let (Some(hook), Some(system_power)) = (
+        runtime.final_gate_post_focus_race_hook.as_ref(),
+        control_signals.system_power,
+    ) {
+        hook(
+            focus_active,
+            target,
+            control_signals.quit_requested,
+            control_signals.skip_requested,
+            control_signals.panic_requested,
+            control_signals.desired_pause,
+            system_power,
+        );
     }
 
+    let final_target_verdict = final_down_atomic_revalidation(target, require_focus, focus_active);
+    if final_target_verdict != FinalDownVerdict::Allowed {
+        apply_final_down_rejection(final_target_verdict, runtime, metrics);
+        if final_target_verdict == FinalDownVerdict::FocusLost
+            && let Err(step) = handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
+        {
+            return match step {
+                DispatchStep::Terminate(error) => FinalDownAdmissionResult::Terminal(error),
+            };
+        }
+        if final_target_verdict == FinalDownVerdict::TargetChanged {
+            return FinalDownAdmissionResult::Terminal("prepared_down_target_changed".to_string());
+        }
+        return FinalDownAdmissionResult::Replan;
+    }
+
+    // This is the final admission read: controls, power, focus transitions,
+    // and supervisor expiry all use one fixed precedence immediately before
+    // the prepared sender call.
     let final_control_verdict = final_down_control_verdict(control_signals);
     if final_control_verdict != FinalDownVerdict::Allowed {
         apply_final_down_rejection(final_control_verdict, runtime, metrics);

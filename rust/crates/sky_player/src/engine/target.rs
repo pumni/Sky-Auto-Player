@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct TargetProofOperationCounts {
     pub(super) generation_revalidations: u64,
+    pub(super) atomic_reads: u64,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -12,6 +13,7 @@ std::thread_local! {
     static TARGET_PROOF_OPERATION_COUNTS: std::cell::Cell<TargetProofOperationCounts> =
         const { std::cell::Cell::new(TargetProofOperationCounts {
             generation_revalidations: 0,
+            atomic_reads: 0,
         }) };
 }
 
@@ -20,6 +22,15 @@ fn record_target_stamp_read() {
     TARGET_PROOF_OPERATION_COUNTS.with(|counts| {
         let mut current = counts.get();
         current.generation_revalidations = current.generation_revalidations.saturating_add(1);
+        counts.set(current);
+    });
+}
+
+#[cfg(any(test, feature = "test-support"))]
+fn record_target_atomic_reads(reads: u64) {
+    TARGET_PROOF_OPERATION_COUNTS.with(|counts| {
+        let mut current = counts.get();
+        current.atomic_reads = current.atomic_reads.saturating_add(reads);
         counts.set(current);
     });
 }
@@ -83,6 +94,7 @@ impl SessionTarget {
 
     /// Publish the initial HWND only. A second, different HWND invalidates
     /// this session instead of changing its destination.
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn set_initial_target(&self, hwnd: isize) -> bool {
         if hwnd == 0 || !self.is_valid() {
             self.invalidate_target();
@@ -117,6 +129,8 @@ impl SessionTarget {
     /// check and the syscall boundary.
     #[inline(always)]
     pub(super) fn is_valid(&self) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_atomic_reads(2);
         !self.target_invalidated.load(Ordering::Acquire)
             && self.owner_failure.load(Ordering::Acquire) == OwnerIdentityFailure::None as u32
     }
@@ -173,10 +187,14 @@ impl SessionTarget {
     }
 
     pub(super) fn owner_process_identity_required(&self) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_atomic_reads(1);
         self.owner_process_identity_required.load(Ordering::Acquire)
     }
 
     pub(super) fn owner_identity_status(&self, expected_generation: u64) -> OwnerIdentityStatus {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_atomic_reads(1);
         if !self.owner_identity_required.load(Ordering::Acquire) {
             return OwnerIdentityStatus::NotRequired;
         }
@@ -350,6 +368,8 @@ impl SessionTarget {
     }
 
     fn latched_owner_failure(&self) -> Option<OwnerIdentityStatus> {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_atomic_reads(1);
         match self.owner_failure.load(Ordering::Acquire) {
             value if value == OwnerIdentityFailure::ProcessTerminated as u32 => {
                 Some(OwnerIdentityStatus::ProcessTerminated)

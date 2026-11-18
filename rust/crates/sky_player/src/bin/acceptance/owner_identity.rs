@@ -88,39 +88,38 @@ impl BindingEvidence {
     }
 }
 
-pub(super) fn bind(
-    session: &NativeDispatchSession,
+pub(super) fn create_session(
+    options: sky_player::engine::NativeSessionOptions,
     sink_hwnd: isize,
     scenario: Scenario,
-) -> Result<BindingEvidence, String> {
-    session.set_target_hwnd(sink_hwnd);
+) -> Result<(NativeDispatchSession, BindingEvidence), String> {
     let authority = retain_window_identity(sink_hwnd)?;
     let retained_identity = authority.identity().clone();
     let retained_image_identity = authority.process_image_identity().to_string();
     let actual_owner_pid = retained_identity.owner_pid;
-    let expected_owner_pid = if scenario == Scenario::OwnerMismatch {
-        actual_owner_pid.wrapping_add(1).max(1)
-    } else {
-        actual_owner_pid
-    };
-    let result = if scenario == Scenario::OwnerMismatch {
-        session.bind_window_identity_authority_for_test(authority, expected_owner_pid)
-    } else {
-        session.bind_window_identity_authority(authority)
-    };
-    result?;
+    let expected_owner_pid = actual_owner_pid;
+    let session = NativeDispatchSession::new_with_bound_window_identity_for_test(
+        options, authority,
+    )?;
 
-    if scenario == Scenario::OwnerQueryFailure {
-        set_foreground_owner_for_test(Some(None));
+    match scenario {
+        Scenario::OwnerQueryFailure => set_foreground_owner_for_test(Some(None)),
+        Scenario::OwnerMismatch => {
+            set_foreground_owner_for_test(Some(Some(actual_owner_pid.wrapping_add(1).max(1))))
+        }
+        _ => {}
     }
 
-    Ok(BindingEvidence {
-        actual_owner_pid,
-        expected_owner_pid,
-        retained_identity,
-        retained_image_identity,
-        process_termination: None,
-    })
+    Ok((
+        session,
+        BindingEvidence {
+            actual_owner_pid,
+            expected_owner_pid,
+            retained_identity,
+            retained_image_identity,
+            process_termination: None,
+        },
+    ))
 }
 
 pub(super) fn terminate_at_first_down_admission(
@@ -147,7 +146,7 @@ pub(super) fn terminate_at_first_down_admission(
 }
 
 pub(super) fn clear_test_override(scenario: Scenario) {
-    if scenario == Scenario::OwnerQueryFailure {
+    if matches!(scenario, Scenario::OwnerQueryFailure | Scenario::OwnerMismatch) {
         set_foreground_owner_for_test(None);
     }
 }

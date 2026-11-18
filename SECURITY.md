@@ -41,6 +41,14 @@ external data must be validated before reaching sensitive execution boundaries. 
 unsupported, ambiguous, or integrity-invalid security-sensitive input is rejected rather than
 silently coerced into a permissive behavior.
 
+Playback binds one window owner process before Arm. Its retained Windows handle requests only
+`PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE`: limited identity queries plus zero-time
+liveness waits on the same process object. The creation time and image path bind the PID
+incarnation, and each musical packet still checks the exact foreground HWND/PID. Playback never
+requests process-memory, thread, or termination rights. The native acceptance fixture's separate
+termination-capable handle is test-only and can target only the project's identity-verified
+ReceiveOnly sink.
+
 ## Auditing
 
 The mandates above are enforced by review and by the Rust xtask security audit, which scans the

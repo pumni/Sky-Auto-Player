@@ -409,8 +409,8 @@ fn run_windows(args: RunArgs) -> i32 {
     }
     options.startup_ordering_hook = acceptance_hook.clone();
     let _hook_cleanup = lifecycle_lease_qualification::AcceptanceHookCleanup::new(acceptance_hook.clone());
-    let session = match NativeDispatchSession::new(options) { Ok(session) => Arc::new(session), Err(error) => inconclusive!(&error, json!({})) };
-    let mut owner_binding = match owner_identity::bind(&session, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
+    let (session, mut owner_binding) = match owner_identity::create_session(options, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
+    let session = Arc::new(session);
     session.set_focus_hint(true);
     let fresh_sink = match validate_target_ready(&args.sink_ready, &args.run_id, sink_hwnd, RECEIVE_ONLY_ROLE) {
         Ok(record) => record,
@@ -561,7 +561,7 @@ fn run_windows(args: RunArgs) -> i32 {
         }
         false
     } else if args.scenario == Scenario::TargetHwndChange {
-        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before target-change proof", json!({})); } session.set_target_hwnd(0); target_changed = true; false
+        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before target-change proof", json!({})); } session.invalidate_target_for_test(); target_changed = true; false
     } else if args.scenario == Scenario::SupervisorLeaseExpiry {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before supervisor-lease proof", json!({})); }
         // This native case isolates the session lease/watchdog. It seeds a
