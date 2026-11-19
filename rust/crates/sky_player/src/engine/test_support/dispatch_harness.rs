@@ -10,10 +10,11 @@ use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
 use crate::engine::worker::{
-    DispatchAttemptOutcome, FinalControlSignals, StagedCandidate, StagedControlSignals,
-    StagedDispatchContext, StagedDispatchOutcome, WorkerResources, WorkerRuntime,
-    WorkerSchedulingGuards, WorkerTimingState, dispatch_staged_candidate,
-    pre_wait_candidate_admission, stage_candidate,
+    DispatchAttemptOutcome, FinalControlSignals, FinalDownAdmissionResult, MusicalPacketKind,
+    StagedCandidate, StagedControlSignals, StagedDispatchContext, StagedDispatchOutcome,
+    WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
+    dispatch_staged_candidate, perform_candidate_b_precheck, pre_wait_candidate_admission,
+    stage_candidate,
 };
 use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::clock::PlaybackClockState;
@@ -470,6 +471,67 @@ impl ProductionDispatchTestHarness {
             },
             &mut self.runtime,
         )
+    }
+
+    /// Execute the production candidate B precheck callsite logic using the identical
+    /// typed error handling and terminal propagation as `dispatch_loop.rs:2210-2226`.
+    pub fn execute_candidate_b_precheck_for_test(
+        &mut self,
+        candidate: &StagedCandidate,
+    ) -> Result<(), String> {
+        let Some(expected_target) = candidate.target_stamp else {
+            return Err("candidate has no target stamp".to_string());
+        };
+        let packet_kind = MusicalPacketKind::from_masks(
+            candidate.packet_masks.down_mask,
+            candidate.packet_masks.up_mask,
+        )
+        .ok_or_else(|| "candidate has zero masks".to_string())?;
+
+        let max_proof_age_ticks = self
+            .resources
+            .clock
+            .duration_from_us(500)
+            .map_err(|e| format!("duration conversion failed: {e:?}"))?;
+
+        let precheck_signals = FinalControlSignals {
+            quit_requested: &self.quit_requested,
+            skip_requested: &self.skip_requested,
+            panic_requested: &self.panic_requested,
+            desired_pause: &self.desired_pause,
+            supervisor_expired: &self.supervisor_expired,
+            system_power: Some(&self.system_power),
+        };
+
+        let precheck_outcome = perform_candidate_b_precheck(
+            &self.target,
+            expected_target,
+            self.config.focus.require_focus,
+            &self.focus_active,
+            precheck_signals,
+            self.timing.lease_timeout_ticks,
+            self.resources.clock,
+            &self.resources.backend,
+            packet_kind,
+            max_proof_age_ticks,
+        );
+
+        match precheck_outcome {
+            Ok(proof) => {
+                self.runtime.candidate_b_pending_precheck = Some(proof);
+                Ok(())
+            }
+            Err(FinalDownAdmissionResult::Terminal(err)) => {
+                self.runtime.terminal_error = Some(err.clone());
+                Err(err)
+            }
+            Err(FinalDownAdmissionResult::Replan)
+            | Err(FinalDownAdmissionResult::ModifierHeld)
+            | Err(FinalDownAdmissionResult::Allowed) => {
+                self.runtime.candidate_b_pending_precheck = None;
+                Ok(())
+            }
+        }
     }
 
     pub fn attach_executor_for_test(&mut self) -> Result<(), String> {

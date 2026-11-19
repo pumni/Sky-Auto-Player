@@ -15,9 +15,9 @@ mod timing;
 mod wait;
 
 pub(crate) use admission::{
-    FinalControlSignals, FinalDownAdmissionResult, TargetStamp, ensure_preflight_for_target,
-    enter_focus_pause, focus_matches, focus_matches_hwnd, load_target_stamp,
-    target_stamp_still_current,
+    FinalControlSignals, FinalDownAdmissionResult, MusicalPacketKind, TargetStamp,
+    ensure_preflight_for_target, enter_focus_pause, focus_matches, focus_matches_hwnd,
+    load_target_stamp, perform_candidate_b_precheck, target_stamp_still_current,
 };
 pub(crate) use anomaly_history::AttemptedDispatchAnomalies;
 #[cfg(any(test, feature = "test-support"))]

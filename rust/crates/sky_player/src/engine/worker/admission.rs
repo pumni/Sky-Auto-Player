@@ -872,6 +872,13 @@ pub(crate) fn perform_candidate_b_precheck(
         return Err(FinalDownAdmissionResult::ModifierHeld);
     }
 
+    if lease_timeout_ticks == DurationTicks::ZERO {
+        // Zero lease timeout indicates disabled supervisor lease in session configuration.
+        // Candidate B requires bounded lease proof and cannot prove bounded prespin;
+        // cleanly fall back to Control A (which preserves disabled-lease Fresh semantics).
+        return Err(FinalDownAdmissionResult::Replan);
+    }
+
     let (lease_proof, lease_expiry_opt, proven_progress_ticks) = control_signals
         .supervisor_expired
         .prove_down_age_coherent(precheck_begin_qpc, lease_timeout_ticks);
@@ -1180,6 +1187,27 @@ pub(crate) fn verify_candidate_b_crossing(
                         false,
                     );
                 }
+            }
+
+            // 5. Final max-proof-age validation: ensure proof age did not exceed cap during Win32 calls/preemption
+            if !proof.is_fresh(final_boundary_qpc) {
+                // Proof age exceeded cap (> 500 µs): cleanly fall back to full Control A final gate
+                let fallback_result = verify_final_packet_admission(
+                    target,
+                    expected,
+                    require_focus,
+                    focus_active,
+                    control_signals,
+                    lease_timeout_ticks,
+                    qpc_clock,
+                    progress_clock,
+                    backend,
+                    playback,
+                    runtime,
+                    metrics,
+                    packet_kind,
+                );
+                return (fallback_result, false);
             }
 
             return (FinalDownAdmissionResult::Allowed, true);

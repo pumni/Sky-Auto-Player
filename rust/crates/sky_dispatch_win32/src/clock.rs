@@ -30,12 +30,19 @@ static QPC_READ_COUNT: AtomicU64 = AtomicU64::new(0);
 #[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
     static QPC_NOW_FAULT_INJECTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static QPC_NOW_OVERRIDE_TICKS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
 }
 
 #[cfg(any(test, feature = "test-support"))]
 /// Faults QPC reads on the calling test thread only.
 pub fn set_qpc_now_fault_for_test(fault: bool) {
     QPC_NOW_FAULT_INJECTED.with(|injected| injected.set(fault));
+}
+
+#[cfg(any(test, feature = "test-support"))]
+/// Overrides QPC now reads on the calling test thread only with a fixed tick value.
+pub fn set_qpc_now_override_for_test(ticks: Option<QpcTicks>) {
+    QPC_NOW_OVERRIDE_TICKS.with(|cell| cell.set(ticks.map(|t| t.as_u64())));
 }
 
 #[cfg(any(test, feature = "qpc-read-counting"))]
@@ -126,6 +133,10 @@ pub fn qpc_now_ticks_checked() -> Result<QpcTicks, QpcError> {
     #[cfg(any(test, feature = "test-support"))]
     if QPC_NOW_FAULT_INJECTED.with(std::cell::Cell::get) {
         return Err(QpcError::CounterUnavailable);
+    }
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(ticks) = QPC_NOW_OVERRIDE_TICKS.with(std::cell::Cell::get) {
+        return Ok(QpcTicks::from_raw(ticks));
     }
     #[cfg(windows)]
     {
