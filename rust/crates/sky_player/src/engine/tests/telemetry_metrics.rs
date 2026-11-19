@@ -1586,4 +1586,55 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
     assert_eq!(mixed["requested_count"].as_u64(), Some(2));
     assert_eq!(mixed["sent_count"].as_u64(), Some(2));
     assert_eq!(mixed["polyphony"].as_u64(), Some(2));
+
+    #[cfg(feature = "real-input-acceptance")]
+    {
+        let evidence = session.native_acceptance_lifecycle_evidence();
+        assert_eq!(
+            evidence.candidate_b_crossing_diagnostic,
+            Some(crate::engine::CandidateBCrossingDiagnostic {
+                fast_crossings: 0,
+                fallbacks_to_a: 0,
+            }),
+            "Control A session must publish observed zeros for candidate B crossing counters"
+        );
+    }
+}
+
+#[cfg(feature = "real-input-acceptance")]
+#[test]
+fn native_acceptance_lifecycle_evidence_unstarted_session_is_unavailable() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 20_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid schedule");
+    let options = test_session_options_with_timing_margin(
+        schedule,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+        20_000,
+    );
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    let evidence = session.native_acceptance_lifecycle_evidence();
+    assert_eq!(
+        evidence.candidate_b_crossing_diagnostic, None,
+        "Unstarted session must report candidate B crossing counters as unavailable"
+    );
 }

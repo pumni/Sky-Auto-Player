@@ -58,6 +58,23 @@ impl Worker<'_> {
             hook.visit_startup_checkpoint(StartupCheckpoint::TerminalCleanup);
         }
 
+        #[cfg(feature = "real-input-acceptance")]
+        {
+            shared.publication.metrics.candidate_b_fast_crossings.store(
+                core.runtime.candidate_b_fast_crossings,
+                std::sync::atomic::Ordering::Release,
+            );
+            shared.publication.metrics.candidate_b_fallbacks_to_a.store(
+                core.runtime.candidate_b_fallbacks_to_a,
+                std::sync::atomic::Ordering::Release,
+            );
+            shared
+                .publication
+                .metrics
+                .candidate_b_crossing_counters_available
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+
         finalize_worker(FinalizeInput {
             resources: FinalizeResources {
                 backend: resources.backend,

@@ -976,5 +976,126 @@ fn candidate_b_up_diagnostic_requires_verified_receive_only_sink() {
     }
 }
 
+#[test]
+fn candidate_b_crossing_counters_fidelity_and_report_projection() {
+    use sky_player::engine::{CandidateBCrossingDiagnostic, NativeAcceptanceLifecycleEvidence};
+
+    // 1. Worker never reached dispatch -> unavailable
+    let evidence_unstarted = NativeAcceptanceLifecycleEvidence::default();
+    assert_eq!(evidence_unstarted.candidate_b_crossing_diagnostic, None);
+
+    let report_unstarted = match evidence_unstarted.candidate_b_crossing_diagnostic {
+        Some(diag) => serde_json::json!({
+            "available": true,
+            "admission_variant": "control-a",
+            "fast_crossings": diag.fast_crossings,
+            "fallbacks_to_a": diag.fallbacks_to_a,
+            "count_scope": "crossing_attempts",
+        }),
+        None => serde_json::json!({
+            "available": false,
+            "admission_variant": "control-a",
+            "fast_crossings": serde_json::Value::Null,
+            "fallbacks_to_a": serde_json::Value::Null,
+            "count_scope": "crossing_attempts",
+        }),
+    };
+    assert_eq!(report_unstarted["available"], false);
+    assert_eq!(report_unstarted["fast_crossings"], serde_json::Value::Null);
+    assert_eq!(report_unstarted["fallbacks_to_a"], serde_json::Value::Null);
+    assert_eq!(report_unstarted["count_scope"], "crossing_attempts");
+
+    // 2. Control A session: observed zero / available
+    let evidence_control_a = NativeAcceptanceLifecycleEvidence {
+        candidate_b_crossing_diagnostic: Some(CandidateBCrossingDiagnostic {
+            fast_crossings: 0,
+            fallbacks_to_a: 0,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        evidence_control_a.candidate_b_crossing_diagnostic,
+        Some(CandidateBCrossingDiagnostic {
+            fast_crossings: 0,
+            fallbacks_to_a: 0,
+        })
+    );
+    let report_control_a = match evidence_control_a.candidate_b_crossing_diagnostic {
+        Some(diag) => serde_json::json!({
+            "available": true,
+            "admission_variant": "control-a",
+            "fast_crossings": diag.fast_crossings,
+            "fallbacks_to_a": diag.fallbacks_to_a,
+            "count_scope": "crossing_attempts",
+        }),
+        None => unreachable!(),
+    };
+    assert_eq!(report_control_a["available"], true);
+    assert_eq!(report_control_a["admission_variant"], "control-a");
+    assert_eq!(report_control_a["fast_crossings"], 0);
+    assert_eq!(report_control_a["fallbacks_to_a"], 0);
+    assert_eq!(report_control_a["count_scope"], "crossing_attempts");
+
+    // 3. Candidate B fast crossing
+    let evidence_b_fast = NativeAcceptanceLifecycleEvidence {
+        candidate_b_crossing_diagnostic: Some(CandidateBCrossingDiagnostic {
+            fast_crossings: 1,
+            fallbacks_to_a: 0,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        evidence_b_fast.candidate_b_crossing_diagnostic,
+        Some(CandidateBCrossingDiagnostic {
+            fast_crossings: 1,
+            fallbacks_to_a: 0,
+        })
+    );
+    let report_b_fast = match evidence_b_fast.candidate_b_crossing_diagnostic {
+        Some(diag) => serde_json::json!({
+            "available": true,
+            "admission_variant": "candidate-b-up-diagnostic",
+            "fast_crossings": diag.fast_crossings,
+            "fallbacks_to_a": diag.fallbacks_to_a,
+            "count_scope": "crossing_attempts",
+        }),
+        None => unreachable!(),
+    };
+    assert_eq!(report_b_fast["available"], true);
+    assert_eq!(report_b_fast["admission_variant"], "candidate-b-up-diagnostic");
+    assert_eq!(report_b_fast["fast_crossings"], 1);
+    assert_eq!(report_b_fast["fallbacks_to_a"], 0);
+
+    // 4. Candidate B fallback
+    let evidence_b_fallback = NativeAcceptanceLifecycleEvidence {
+        candidate_b_crossing_diagnostic: Some(CandidateBCrossingDiagnostic {
+            fast_crossings: 0,
+            fallbacks_to_a: 1,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        evidence_b_fallback.candidate_b_crossing_diagnostic,
+        Some(CandidateBCrossingDiagnostic {
+            fast_crossings: 0,
+            fallbacks_to_a: 1,
+        })
+    );
+    let report_b_fallback = match evidence_b_fallback.candidate_b_crossing_diagnostic {
+        Some(diag) => serde_json::json!({
+            "available": true,
+            "admission_variant": "candidate-b-up-diagnostic",
+            "fast_crossings": diag.fast_crossings,
+            "fallbacks_to_a": diag.fallbacks_to_a,
+            "count_scope": "crossing_attempts",
+        }),
+        None => unreachable!(),
+    };
+    assert_eq!(report_b_fallback["available"], true);
+    assert_eq!(report_b_fallback["admission_variant"], "candidate-b-up-diagnostic");
+    assert_eq!(report_b_fallback["fast_crossings"], 0);
+    assert_eq!(report_b_fallback["fallbacks_to_a"], 1);
+}
+
 #[path = "benchmark_schedule_tests.rs"]
 mod benchmark_schedule_tests;

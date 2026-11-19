@@ -20,6 +20,13 @@ pub enum OwnerIdentityPollResult {
     CurrentInvalid,
 }
 
+#[cfg(feature = "real-input-acceptance")]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct CandidateBCrossingDiagnostic {
+    pub fast_crossings: u64,
+    pub fallbacks_to_a: u64,
+}
+
 /// Lifecycle evidence exported only to the explicitly enabled native
 /// acceptance executable. QPC values are observed by the playback worker;
 /// caller-side process launch and post-join reporting timestamps are not
@@ -30,6 +37,7 @@ pub struct NativeAcceptanceLifecycleEvidence {
     pub playback_armed_qpc_ticks: Option<u64>,
     pub worker_release_verified_qpc_ticks: Option<u64>,
     pub raw_up_syscall_count: Option<u64>,
+    pub candidate_b_crossing_diagnostic: Option<CandidateBCrossingDiagnostic>,
 }
 
 fn join_thread_until(
@@ -441,6 +449,13 @@ impl NativeDispatchSession {
     pub fn native_acceptance_lifecycle_evidence(&self) -> NativeAcceptanceLifecycleEvidence {
         let metrics = &self.shared.publication.metrics;
         let nonzero_ticks = |ticks: u64| (ticks != 0).then_some(ticks);
+        let candidate_b_crossing_diagnostic = metrics
+            .candidate_b_crossing_counters_available
+            .load(Ordering::Acquire)
+            .then(|| CandidateBCrossingDiagnostic {
+                fast_crossings: metrics.candidate_b_fast_crossings.load(Ordering::Acquire),
+                fallbacks_to_a: metrics.candidate_b_fallbacks_to_a.load(Ordering::Acquire),
+            });
         NativeAcceptanceLifecycleEvidence {
             playback_armed_qpc_ticks: nonzero_ticks(
                 metrics.playback_armed_qpc_ticks.load(Ordering::Acquire),
@@ -458,6 +473,7 @@ impl NativeDispatchSession {
                         .terminal_release_raw_up_syscall_count
                         .load(Ordering::Acquire)
                 }),
+            candidate_b_crossing_diagnostic,
         }
     }
 
