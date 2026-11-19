@@ -101,42 +101,18 @@ impl Drop for PowerThrottlingGuard {
     }
 }
 
-#[cfg(feature = "test-support")]
-static SIMULATE_GET_PROCESS_INFO_FAIL: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-#[cfg(feature = "test-support")]
-static SIMULATE_SET_PROCESS_INFO_FAIL: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-#[cfg(feature = "test-support")]
-static SIMULATE_RESTORE_FAIL: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
-#[cfg(feature = "test-support")]
-static LAST_RESTORE_FAILED: std::sync::atomic::AtomicBool =
+#[cfg(all(windows, any(test, feature = "test-support")))]
+static LAST_LIVE_RESTORE_FAILED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
-#[cfg(feature = "test-support")]
-pub fn set_simulate_get_process_info_fail_for_test(fail: bool) {
-    SIMULATE_GET_PROCESS_INFO_FAIL.store(fail, std::sync::atomic::Ordering::Release);
+#[cfg(all(windows, any(test, feature = "test-support")))]
+pub fn last_live_restore_failed_for_test() -> bool {
+    LAST_LIVE_RESTORE_FAILED.load(std::sync::atomic::Ordering::Acquire)
 }
 
-#[cfg(feature = "test-support")]
-pub fn set_simulate_set_process_info_fail_for_test(fail: bool) {
-    SIMULATE_SET_PROCESS_INFO_FAIL.store(fail, std::sync::atomic::Ordering::Release);
-}
-
-#[cfg(feature = "test-support")]
-pub fn set_simulate_restore_fail_for_test(fail: bool) {
-    SIMULATE_RESTORE_FAIL.store(fail, std::sync::atomic::Ordering::Release);
-}
-
-#[cfg(feature = "test-support")]
-pub fn last_restore_failed_for_test() -> bool {
-    LAST_RESTORE_FAILED.load(std::sync::atomic::Ordering::Acquire)
-}
-
-#[cfg(feature = "test-support")]
-pub fn reset_restore_failed_for_test() {
-    LAST_RESTORE_FAILED.store(false, std::sync::atomic::Ordering::Release);
+#[cfg(all(windows, any(test, feature = "test-support")))]
+pub fn reset_live_restore_failed_for_test() {
+    LAST_LIVE_RESTORE_FAILED.store(false, std::sync::atomic::Ordering::Release);
 }
 
 /// Process-level Quality of Service policy for diagnostic measurement and lab evaluation.
@@ -163,14 +139,147 @@ impl ProcessQosPolicy {
     }
 }
 
+#[cfg(windows)]
+enum ProcessQosBackend {
+    Live {
+        process: windows_sys::Win32::Foundation::HANDLE,
+        previous: Option<windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE>,
+    },
+    #[cfg(any(test, feature = "test-support"))]
+    Mock {
+        adapter: std::sync::Arc<MockProcessQosBackend>,
+        previous: Option<windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE>,
+    },
+    Inert,
+}
+
+#[cfg(all(windows, any(test, feature = "test-support")))]
+#[derive(Default)]
+pub struct MockProcessQosBackend {
+    pub simulate_get_fail: std::sync::atomic::AtomicBool,
+    pub simulate_set_fail: std::sync::atomic::AtomicBool,
+    pub simulate_restore_fail: std::sync::atomic::AtomicBool,
+    pub query_count: std::sync::atomic::AtomicUsize,
+    pub set_count: std::sync::atomic::AtomicUsize,
+    pub restore_count: std::sync::atomic::AtomicUsize,
+    pub last_restore_failed: std::sync::atomic::AtomicBool,
+    pub initial_state: std::sync::Mutex<
+        Option<windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE>,
+    >,
+    pub configured_states: std::sync::Mutex<
+        Vec<windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE>,
+    >,
+    pub restored_states: std::sync::Mutex<
+        Vec<windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE>,
+    >,
+}
+
+#[cfg(all(windows, any(test, feature = "test-support")))]
+impl std::fmt::Debug for MockProcessQosBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MockProcessQosBackend")
+            .field("simulate_get_fail", &self.simulate_get_fail)
+            .field("simulate_set_fail", &self.simulate_set_fail)
+            .field("simulate_restore_fail", &self.simulate_restore_fail)
+            .field("query_count", &self.query_count)
+            .field("set_count", &self.set_count)
+            .field("restore_count", &self.restore_count)
+            .field("last_restore_failed", &self.last_restore_failed)
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(all(windows, any(test, feature = "test-support")))]
+impl MockProcessQosBackend {
+    pub fn new() -> std::sync::Arc<Self> {
+        std::sync::Arc::new(Self::default())
+    }
+
+    pub fn with_initial_state(control_mask: u32, state_mask: u32) -> std::sync::Arc<Self> {
+        use windows_sys::Win32::System::Threading::{
+            PROCESS_POWER_THROTTLING_CURRENT_VERSION, PROCESS_POWER_THROTTLING_STATE,
+        };
+        let backend = Self::default();
+        if let Ok(mut init) = backend.initial_state.lock() {
+            *init = Some(PROCESS_POWER_THROTTLING_STATE {
+                Version: PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+                ControlMask: control_mask,
+                StateMask: state_mask,
+            });
+        }
+        std::sync::Arc::new(backend)
+    }
+
+    pub fn query_state(
+        &self,
+    ) -> Option<windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE> {
+        self.query_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if self
+            .simulate_get_fail
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            None
+        } else {
+            let state = self
+                .initial_state
+                .lock()
+                .ok()
+                .and_then(|guard| *guard)
+                .unwrap_or(
+                    windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE {
+                        Version:
+                            windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+                        ControlMask: 0,
+                        StateMask: 0,
+                    },
+                );
+            Some(state)
+        }
+    }
+
+    pub fn set_state(
+        &self,
+        state: windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE,
+    ) -> bool {
+        self.set_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut list) = self.configured_states.lock() {
+            list.push(state);
+        }
+        !self
+            .simulate_set_fail
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub fn restore(
+        &self,
+        state: windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE,
+    ) -> bool {
+        self.restore_count
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut list) = self.restored_states.lock() {
+            list.push(state);
+        }
+        let fail = self
+            .simulate_restore_fail
+            .load(std::sync::atomic::Ordering::Acquire);
+        if fail {
+            self.last_restore_failed
+                .store(true, std::sync::atomic::Ordering::Release);
+            false
+        } else {
+            true
+        }
+    }
+}
+
 /// RAII guard for process-level power throttling state.
 ///
 /// Restores the process's prior throttling configuration upon drop.
 pub struct ProcessPowerThrottlingGuard {
     #[cfg(windows)]
-    process: windows_sys::Win32::Foundation::HANDLE,
-    #[cfg(windows)]
-    previous: Option<windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE>,
+    backend: ProcessQosBackend,
     policy: ProcessQosPolicy,
     active: bool,
 }
@@ -202,8 +311,7 @@ impl ProcessPowerThrottlingGuard {
 
             if policy == ProcessQosPolicy::Default {
                 return Self {
-                    process,
-                    previous: None,
+                    backend: ProcessQosBackend::Inert,
                     policy,
                     active: false,
                 };
@@ -217,26 +325,18 @@ impl ProcessPowerThrottlingGuard {
 
             // Query existing state first. If the OS query fails, do not attempt to
             // mutate the process power throttling state, preserving safe restoration.
-            #[cfg(feature = "test-support")]
-            let force_get_fail =
-                SIMULATE_GET_PROCESS_INFO_FAIL.load(std::sync::atomic::Ordering::Acquire);
-            #[cfg(not(feature = "test-support"))]
-            let force_get_fail = false;
-
-            let queried = !force_get_fail
-                && unsafe {
-                    GetProcessInformation(
-                        process,
-                        ProcessPowerThrottling,
-                        (&raw mut previous).cast::<c_void>(),
-                        size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
-                    )
-                } != 0;
+            let queried = unsafe {
+                GetProcessInformation(
+                    process,
+                    ProcessPowerThrottling,
+                    (&raw mut previous).cast::<c_void>(),
+                    size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+                )
+            } != 0;
 
             if !queried {
                 return Self {
-                    process,
-                    previous: None,
+                    backend: ProcessQosBackend::Inert,
                     policy,
                     active: false,
                 };
@@ -256,25 +356,24 @@ impl ProcessPowerThrottlingGuard {
                 StateMask: 0,
             };
 
-            #[cfg(feature = "test-support")]
-            let force_set_fail =
-                SIMULATE_SET_PROCESS_INFO_FAIL.load(std::sync::atomic::Ordering::Acquire);
-            #[cfg(not(feature = "test-support"))]
-            let force_set_fail = false;
-
-            let active = !force_set_fail
-                && unsafe {
-                    SetProcessInformation(
-                        process,
-                        ProcessPowerThrottling,
-                        (&raw const configured).cast::<c_void>(),
-                        size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
-                    )
-                } != 0;
+            let active = unsafe {
+                SetProcessInformation(
+                    process,
+                    ProcessPowerThrottling,
+                    (&raw const configured).cast::<c_void>(),
+                    size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+                )
+            } != 0;
 
             Self {
-                process,
-                previous: active.then_some(previous),
+                backend: if active {
+                    ProcessQosBackend::Live {
+                        process,
+                        previous: Some(previous),
+                    }
+                } else {
+                    ProcessQosBackend::Inert
+                },
                 policy,
                 active,
             }
@@ -285,6 +384,65 @@ impl ProcessPowerThrottlingGuard {
                 policy,
                 active: false,
             }
+        }
+    }
+
+    #[cfg(all(windows, any(test, feature = "test-support")))]
+    pub fn apply_with_mock(
+        policy: ProcessQosPolicy,
+        mock: std::sync::Arc<MockProcessQosBackend>,
+    ) -> Self {
+        if policy == ProcessQosPolicy::Default {
+            return Self {
+                backend: ProcessQosBackend::Mock {
+                    adapter: mock,
+                    previous: None,
+                },
+                policy,
+                active: false,
+            };
+        }
+
+        let previous = match mock.query_state() {
+            Some(p) => p,
+            None => {
+                return Self {
+                    backend: ProcessQosBackend::Mock {
+                        adapter: mock,
+                        previous: None,
+                    },
+                    policy,
+                    active: false,
+                };
+            }
+        };
+
+        let control_mask = match policy {
+            ProcessQosPolicy::Default => 0,
+            ProcessQosPolicy::IgnoreTimerResolution => {
+                windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
+            }
+            ProcessQosPolicy::DisableExecutionSpeed => {
+                windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+            }
+        };
+
+        let configured = windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_STATE {
+            Version:
+                windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_CURRENT_VERSION,
+            ControlMask: control_mask,
+            StateMask: 0,
+        };
+
+        let active = mock.set_state(configured);
+
+        Self {
+            backend: ProcessQosBackend::Mock {
+                adapter: mock,
+                previous: active.then_some(previous),
+            },
+            policy,
+            active,
         }
     }
 
@@ -300,33 +458,42 @@ impl ProcessPowerThrottlingGuard {
 impl Drop for ProcessPowerThrottlingGuard {
     fn drop(&mut self) {
         #[cfg(windows)]
-        if let Some(previous) = self.previous {
-            use std::ffi::c_void;
-            use std::mem::size_of;
-            use windows_sys::Win32::System::Threading::{
-                PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling, SetProcessInformation,
-            };
+        match &mut self.backend {
+            ProcessQosBackend::Live {
+                process,
+                previous: Some(previous),
+            } => {
+                use std::ffi::c_void;
+                use std::mem::size_of;
+                use windows_sys::Win32::System::Threading::{
+                    PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling, SetProcessInformation,
+                };
 
-            #[cfg(feature = "test-support")]
-            let force_restore_fail =
-                SIMULATE_RESTORE_FAIL.load(std::sync::atomic::Ordering::Acquire);
-            #[cfg(not(feature = "test-support"))]
-            let force_restore_fail = false;
-
-            let restored = !force_restore_fail
-                && unsafe {
+                // SAFETY: process is valid for the current process lifetime and previous is
+                // a correctly initialized PROCESS_POWER_THROTTLING_STATE.
+                // We ALWAYS invoke real SetProcessInformation unconditionally to restore OS state.
+                let restored = unsafe {
                     SetProcessInformation(
-                        self.process,
+                        *process,
                         ProcessPowerThrottling,
-                        (&raw const previous).cast::<c_void>(),
+                        (&raw const *previous).cast::<c_void>(),
                         size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
                     )
                 } != 0;
 
-            if !restored {
-                #[cfg(feature = "test-support")]
-                LAST_RESTORE_FAILED.store(true, std::sync::atomic::Ordering::Release);
+                if !restored {
+                    #[cfg(all(windows, any(test, feature = "test-support")))]
+                    LAST_LIVE_RESTORE_FAILED.store(true, std::sync::atomic::Ordering::Release);
+                }
             }
+            #[cfg(any(test, feature = "test-support"))]
+            ProcessQosBackend::Mock {
+                adapter,
+                previous: Some(previous),
+            } => {
+                let _ = adapter.restore(*previous);
+            }
+            _ => {}
         }
     }
 }
@@ -342,7 +509,8 @@ mod tests {
     }
 
     #[test]
-    fn process_power_throttling_guard_lifecycle() {
+    fn process_power_throttling_guard_lifecycle_mocked() {
+        // 1. Default policy must be a no-op on the real apply constructor without any OS syscall.
         let default_guard = ProcessPowerThrottlingGuard::apply(ProcessQosPolicy::Default);
         assert_eq!(default_guard.policy(), ProcessQosPolicy::Default);
         assert!(
@@ -351,57 +519,171 @@ mod tests {
         );
         drop(default_guard);
 
+        // 2. Candidate policies lifecycle verified on isolated mock backend without mutating the runner process.
         for policy in [
             ProcessQosPolicy::IgnoreTimerResolution,
             ProcessQosPolicy::DisableExecutionSpeed,
         ] {
-            let guard = ProcessPowerThrottlingGuard::apply(policy);
+            let mock = super::MockProcessQosBackend::with_initial_state(0x1234, 0x5678);
+            let guard = ProcessPowerThrottlingGuard::apply_with_mock(policy, mock.clone());
             assert_eq!(guard.policy(), policy);
+            assert!(guard.is_active());
+            assert_eq!(
+                mock.query_count.load(std::sync::atomic::Ordering::SeqCst),
+                1
+            );
+            assert_eq!(mock.set_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+            assert_eq!(
+                mock.restore_count.load(std::sync::atomic::Ordering::SeqCst),
+                0
+            );
+
+            // Verify configured state
+            let expected_mask = match policy {
+                ProcessQosPolicy::Default => 0,
+                ProcessQosPolicy::IgnoreTimerResolution => {
+                    windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION
+                }
+                ProcessQosPolicy::DisableExecutionSpeed => {
+                    windows_sys::Win32::System::Threading::PROCESS_POWER_THROTTLING_EXECUTION_SPEED
+                }
+            };
+            assert_eq!(
+                mock.configured_states.lock().unwrap()[0].ControlMask,
+                expected_mask
+            );
+            assert_eq!(mock.configured_states.lock().unwrap()[0].StateMask, 0);
+
+            // Drop guard and verify restoration of original captured policy bits
             drop(guard);
+            assert_eq!(
+                mock.restore_count.load(std::sync::atomic::Ordering::SeqCst),
+                1
+            );
+            assert!(
+                !mock
+                    .last_restore_failed
+                    .load(std::sync::atomic::Ordering::SeqCst)
+            );
+            assert_eq!(mock.restored_states.lock().unwrap()[0].ControlMask, 0x1234);
+            assert_eq!(mock.restored_states.lock().unwrap()[0].StateMask, 0x5678);
         }
     }
 
     #[test]
-    fn process_power_throttling_guard_failure_injection() {
-        super::set_simulate_get_process_info_fail_for_test(true);
-        let guard = ProcessPowerThrottlingGuard::apply(ProcessQosPolicy::IgnoreTimerResolution);
+    fn process_power_throttling_guard_failure_injection_mocked() {
+        // Test query failure: guard must be inactive, no set or restore called.
+        let mock_get_fail = super::MockProcessQosBackend::new();
+        mock_get_fail
+            .simulate_get_fail
+            .store(true, std::sync::atomic::Ordering::Release);
+        let guard = ProcessPowerThrottlingGuard::apply_with_mock(
+            ProcessQosPolicy::IgnoreTimerResolution,
+            mock_get_fail.clone(),
+        );
         assert!(
             !guard.is_active(),
             "guard must not be active if GetProcessInformation failed"
         );
-        assert!(guard.previous.is_none());
+        assert_eq!(
+            mock_get_fail
+                .query_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            mock_get_fail
+                .set_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
         drop(guard);
-        super::set_simulate_get_process_info_fail_for_test(false);
+        assert_eq!(
+            mock_get_fail
+                .restore_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
 
-        super::set_simulate_set_process_info_fail_for_test(true);
-        let guard = ProcessPowerThrottlingGuard::apply(ProcessQosPolicy::IgnoreTimerResolution);
+        // Test set failure: query succeeded, set failed, guard must be inactive, no restore on drop.
+        let mock_set_fail = super::MockProcessQosBackend::new();
+        mock_set_fail
+            .simulate_set_fail
+            .store(true, std::sync::atomic::Ordering::Release);
+        let guard = ProcessPowerThrottlingGuard::apply_with_mock(
+            ProcessQosPolicy::IgnoreTimerResolution,
+            mock_set_fail.clone(),
+        );
         assert!(
             !guard.is_active(),
             "guard must not be active if SetProcessInformation failed"
         );
+        assert_eq!(
+            mock_set_fail
+                .query_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            mock_set_fail
+                .set_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         drop(guard);
-        super::set_simulate_set_process_info_fail_for_test(false);
+        assert_eq!(
+            mock_set_fail
+                .restore_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            0
+        );
     }
 
     #[test]
-    fn process_power_throttling_guard_restoration_verification() {
-        super::reset_restore_failed_for_test();
-        let guard = ProcessPowerThrottlingGuard::apply(ProcessQosPolicy::IgnoreTimerResolution);
+    fn process_power_throttling_guard_restoration_verification_mocked() {
+        // Clean restore
+        let mock_clean = super::MockProcessQosBackend::new();
+        let guard = ProcessPowerThrottlingGuard::apply_with_mock(
+            ProcessQosPolicy::IgnoreTimerResolution,
+            mock_clean.clone(),
+        );
+        assert!(guard.is_active());
         drop(guard);
+        assert_eq!(
+            mock_clean
+                .restore_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         assert!(
-            !super::last_restore_failed_for_test(),
+            !mock_clean
+                .last_restore_failed
+                .load(std::sync::atomic::Ordering::Acquire),
             "clean drop must not report restoration failure"
         );
 
-        super::reset_restore_failed_for_test();
-        super::set_simulate_restore_fail_for_test(true);
-        let guard = ProcessPowerThrottlingGuard::apply(ProcessQosPolicy::IgnoreTimerResolution);
+        // Injected restore failure
+        let mock_fail = super::MockProcessQosBackend::new();
+        mock_fail
+            .simulate_restore_fail
+            .store(true, std::sync::atomic::Ordering::Release);
+        let guard = ProcessPowerThrottlingGuard::apply_with_mock(
+            ProcessQosPolicy::IgnoreTimerResolution,
+            mock_fail.clone(),
+        );
+        assert!(guard.is_active());
         drop(guard);
+        assert_eq!(
+            mock_fail
+                .restore_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
         assert!(
-            super::last_restore_failed_for_test(),
+            mock_fail
+                .last_restore_failed
+                .load(std::sync::atomic::Ordering::Acquire),
             "injected restore failure must be recorded by diagnostic hook"
         );
-        super::set_simulate_restore_fail_for_test(false);
-        super::reset_restore_failed_for_test();
     }
 }
