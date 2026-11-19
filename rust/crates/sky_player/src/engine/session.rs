@@ -273,6 +273,9 @@ impl NativeDispatchSession {
     ) -> Result<Self, String> {
         let session = Self::new_with_bound_window_identity_for_test(options, authority)?;
         session.shared.target.mark_as_receive_only_sink_for_test();
+        if let Some(config) = session.config.lock().as_mut() {
+            config.admission_variant = super::config::AdmissionVariant::B;
+        }
         Ok(session)
     }
 
@@ -410,6 +413,7 @@ impl NativeDispatchSession {
         let admitted_options = AdmittedNativeSessionOptions {
             options,
             instrument_key_profile,
+            admission_variant: super::config::AdmissionVariant::A,
         };
         Ok(Self {
             observer_enabled,

@@ -89,7 +89,7 @@ impl BindingEvidence {
 }
 
 pub(super) fn create_session(
-    mut options: sky_player::engine::NativeSessionOptions,
+    options: sky_player::engine::NativeSessionOptions,
     sink_hwnd: isize,
     scenario: Scenario,
     admission_variant: super::arguments::AdmissionVariantChoice,
@@ -112,13 +112,11 @@ pub(super) fn create_session(
     let expected_owner_pid = actual_owner_pid;
     let session = match admission_variant {
         super::arguments::AdmissionVariantChoice::ControlA => {
-            options.admission_variant = sky_player::engine::AdmissionVariant::A;
             NativeDispatchSession::new_with_bound_window_identity_for_test(
                 options, authority,
             )?
         }
         super::arguments::AdmissionVariantChoice::CandidateBUpDiagnostic => {
-            options.admission_variant = sky_player::engine::AdmissionVariant::B;
             NativeDispatchSession::new_with_bound_window_identity_and_receive_only_sink_for_test(
                 options, authority,
             )?

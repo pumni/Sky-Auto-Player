@@ -608,6 +608,7 @@ fn worker_takes_runtime_schedule_only_once() {
         options: worker_options,
         instrument_key_profile:
             sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical(),
+        admission_variant: super::config::AdmissionVariant::A,
     };
     let mut worker = Worker::new(admitted_options, session.shared_for_test());
 

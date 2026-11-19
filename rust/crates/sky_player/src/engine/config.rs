@@ -226,8 +226,6 @@ pub struct NativeSessionOptions {
     /// canonical 15-key profile during native session admission.
     pub instrument_key_profile: Option<InstrumentKeyProfileSpec>,
     #[cfg(any(test, feature = "test-support"))]
-    pub admission_variant: AdmissionVariant,
-    #[cfg(any(test, feature = "test-support"))]
     pub startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
     /// Paired benchmark selector; absent from production-facing options.
     #[cfg(any(test, feature = "test-support"))]
@@ -254,6 +252,7 @@ pub struct NativeSessionOptions {
 pub(crate) struct AdmittedNativeSessionOptions {
     pub(crate) options: NativeSessionOptions,
     pub(crate) instrument_key_profile: MaterializedInstrumentKeyProfile,
+    pub(crate) admission_variant: AdmissionVariant,
 }
 
 #[cfg(any(test, feature = "test-support"))]

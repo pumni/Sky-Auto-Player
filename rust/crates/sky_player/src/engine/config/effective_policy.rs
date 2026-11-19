@@ -1,6 +1,3 @@
-#[cfg(any(test, feature = "test-support"))]
-#[cfg(test)]
-use super::AdmissionVariant;
 use super::{
     DispatchProfile, NativeSessionOptions, TelemetryMode, TelemetryOptions, WaitOptions,
     WorkerConfig,
@@ -193,8 +190,6 @@ mod tests {
                 mode: PriorityMode::Off,
             },
             instrument_key_profile: None,
-            #[cfg(any(test, feature = "test-support"))]
-            admission_variant: AdmissionVariant::A,
             startup_ordering_hook: None,
             startup_calibration_placement: StartupCalibrationPlacement::BeforeSchedulingGuards,
             timing_observer_for_qualification: qualification_observer,

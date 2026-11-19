@@ -503,8 +503,6 @@ impl<'a> Worker<'a> {
                     telemetry,
                     priority,
                     #[cfg(any(test, feature = "test-support"))]
-                    admission_variant,
-                    #[cfg(any(test, feature = "test-support"))]
                     startup_calibration_placement,
                     #[cfg(any(test, feature = "test-support"))]
                     timing_observer_for_qualification,
@@ -525,6 +523,7 @@ impl<'a> Worker<'a> {
                     instrument_key_profile: _,
                 },
             instrument_key_profile,
+            admission_variant,
         } = admitted;
         #[cfg(any(test, feature = "test-support"))]
         let runtime = WorkerRuntime {
@@ -545,10 +544,7 @@ impl<'a> Worker<'a> {
                 wait,
                 telemetry,
                 priority,
-                #[cfg(any(test, feature = "test-support"))]
                 admission_variant,
-                #[cfg(not(any(test, feature = "test-support")))]
-                admission_variant: super::config::AdmissionVariant::A,
                 #[cfg(any(test, feature = "test-support"))]
                 startup_calibration_placement,
                 #[cfg(any(test, feature = "test-support"))]
