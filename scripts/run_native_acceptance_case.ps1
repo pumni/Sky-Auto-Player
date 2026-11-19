@@ -729,6 +729,11 @@ try {
         throw 'immutable harness manifest changed after identity validation'
     }
 
+    # Signal the sink process to bring itself to the foreground via the existing ActivateRequestFile mechanism
+    if ($focusRestoreRequestPath) {
+        New-Item -ItemType File -Path $focusRestoreRequestPath -Force | Out-Null
+    }
+
     # Bounded foreground handshake: ensure the exact ReceiveOnly sink window is in the foreground.
     # Background processes on Windows 11 cannot unconditionally steal foreground focus.
     # Verify GetForegroundWindow matches the sink HWND. If not, prompt the operator to click it.
