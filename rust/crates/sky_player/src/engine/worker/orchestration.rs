@@ -71,6 +71,7 @@ impl Worker<'_> {
             state: FinalizeState {
                 worker_result,
                 local_metrics: std::mem::take(&mut core.metrics),
+                pending_production_forensics: core.runtime.take_pending_production_forensics(),
                 abort_counts: std::mem::take(&mut core.errors.abort_counts),
                 terminal_error: std::mem::take(&mut core.runtime.terminal_error),
                 secondary_errors: std::mem::take(&mut core.errors.secondary),

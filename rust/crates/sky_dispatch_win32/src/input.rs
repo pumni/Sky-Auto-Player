@@ -1,6 +1,5 @@
 //! Windows SendInput API wrappers, input packet prewarming, and tracked key backend.
 
-mod down_transaction;
 mod modifier_guard;
 mod outcome;
 mod packet;
@@ -15,6 +14,7 @@ pub mod physical_study;
 mod up_transaction;
 
 use std::sync::Arc;
+use std::{fmt, fmt::Formatter};
 
 #[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
@@ -40,7 +40,20 @@ pub fn release_owner_proof_arc_clone_count_for_test() -> u64 {
 pub struct ReleaseOwnerProof {
     target_hwnd: isize,
     target_generation: u64,
+    foreground_required: bool,
     owner: Option<Arc<ReleaseOwnerIdentity>>,
+}
+
+impl fmt::Debug for ReleaseOwnerProof {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReleaseOwnerProof")
+            .field("target_hwnd", &self.target_hwnd)
+            .field("target_generation", &self.target_generation)
+            .field("foreground_required", &self.foreground_required)
+            .field("owner_pid", &self.owner_pid())
+            .field("has_process_authority", &self.authority().is_some())
+            .finish()
+    }
 }
 
 /// The process handle is retained once by the session's target proof. Journal
@@ -65,6 +78,7 @@ impl Clone for ReleaseOwnerProof {
         Self {
             target_hwnd: self.target_hwnd,
             target_generation: self.target_generation,
+            foreground_required: self.foreground_required,
             owner: self.owner.as_ref().map(Arc::clone),
         }
     }
@@ -79,7 +93,29 @@ impl ReleaseOwnerProof {
         owner_pid: Option<u32>,
         authority: Option<Arc<crate::focus::WindowIdentityAuthority>>,
     ) -> Option<Self> {
-        if target_hwnd == 0 && (owner_pid.is_some() || authority.is_some()) {
+        Self::new_with_foreground_policy(
+            target_hwnd,
+            target_generation,
+            owner_pid,
+            authority,
+            false,
+        )
+    }
+
+    /// Build a frozen origin proof with the session's original foreground
+    /// policy. Recovery uses this bit to distinguish focus-required playback
+    /// from focus-free worker/test sessions while still checking process
+    /// identity in both cases.
+    pub fn new_with_foreground_policy(
+        target_hwnd: isize,
+        target_generation: u64,
+        owner_pid: Option<u32>,
+        authority: Option<Arc<crate::focus::WindowIdentityAuthority>>,
+        foreground_required: bool,
+    ) -> Option<Self> {
+        if (target_hwnd == 0 && (owner_pid.is_some() || authority.is_some()))
+            || (foreground_required && target_hwnd == 0)
+        {
             return None;
         }
         let authority_pid = authority.as_ref().map(|authority| {
@@ -108,6 +144,7 @@ impl ReleaseOwnerProof {
         Some(Self {
             target_hwnd,
             target_generation,
+            foreground_required,
             owner,
         })
     }
@@ -118,6 +155,10 @@ impl ReleaseOwnerProof {
 
     pub fn target_generation(&self) -> u64 {
         self.target_generation
+    }
+
+    pub fn foreground_required(&self) -> bool {
+        self.foreground_required
     }
 
     pub fn owner_pid(&self) -> Option<u32> {
@@ -135,6 +176,7 @@ impl ReleaseOwnerProof {
     pub fn same_owner(&self, other: &Self) -> bool {
         self.target_hwnd == other.target_hwnd
             && self.target_generation == other.target_generation
+            && self.foreground_required == other.foreground_required
             && self.owner_pid() == other.owner_pid()
             && match (self.authority(), other.authority()) {
                 (Some(left), Some(right)) => Arc::ptr_eq(left, right),
@@ -144,44 +186,32 @@ impl ReleaseOwnerProof {
     }
 }
 
-#[cfg(test)]
-pub(crate) use down_transaction::emit_down_with;
-pub use down_transaction::{emit_down, emit_down_once, emit_down_once_with};
 pub use modifier_guard::{ModifierKeyObservation, ModifierMask};
 pub use outcome::{
-    GuardedReleaseOutcome, PacketPreparationError, PacketRetryReason, PhysicalKeyPreflightError,
-    PhysicalPacket, PlatformSendResult, ReleaseAllOutcome, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus, TerminalProbeVerdict, TerminalReleaseEvidence,
+    CleanupDrainDecision, GuardedReleaseOutcome, PacketPreparationError, PacketRetryReason,
+    PhysicalKeyPreflightError, PhysicalPacket, PlatformSendResult, ReleaseAllOutcome, SendEvidence,
+    SendTransactionOutcome, SendTransactionStatus, TerminalProbeVerdict, TerminalReleaseEvidence,
     TerminalSendAttemptEvidence,
 };
 
 pub(crate) use packet::PreparedTaggedCalibrationPacket;
-pub use packet::{
-    MAX_PACKET_EVENTS, PreparedPacketView, PreparedPhysicalPacket,
-    send_physical_packet_once_with_clock, send_prepared_physical_packet_once,
-    send_prepared_physical_packet_once_at_target, send_prepared_physical_packet_view_once,
-    send_prepared_physical_packet_view_once_at_target,
-};
+pub(crate) use packet::send_prepared_physical_packet_once_at_target;
+pub use packet::{MAX_PACKET_EVENTS, PreparedPacketView, PreparedPhysicalPacket};
 pub use physical::is_scan_code_physically_down;
 pub use profile::{
     InstrumentKeyProfile, InstrumentKeyProfileError, InstrumentKeyProfileSpec,
     MaterializedInstrumentKeyProfile, PhysicalKey, SUPPORTED_NON_EXTENDED_SCAN_CODES,
 };
-pub use raw::{send_input_raw, send_input_raw_with_clock};
+pub(crate) use raw::send_input_raw;
 pub use scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
     scan_codes_from_mask,
 };
-pub use tracked::{ReleaseScope, TrackedKeyState};
+pub use tracked::TrackedKeyState;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use physical::InstrumentPhysicalState;
 #[cfg(any(test, feature = "test-support"))]
 pub use tracked::{CustomEmitterFn, CustomPacketEmitterFn, CustomProbeFn, PreparedSendPanicPoint};
-pub use up_transaction::{emit_up, emit_up_with};
-
-#[cfg(test)]
-pub(crate) use up_transaction::emit_up_with_immediate;
-
 #[cfg(test)]
 mod tests;

@@ -672,6 +672,9 @@ function New-NativeAcceptanceReadyRecord {
         run_id = $FixtureRunId
         role = $FixtureRole
         sink_kind = $FixtureSinkKind
+        target_class = if ($FixtureRole -eq 'ReceiveOnly') { 'project-owned-non-game-receive-only' } else { 'project-owned-inert-focus-probe' }
+        target_name = $FixtureTitle
+        game_target = $false
         event_log_id = $FixtureEventLogId
         pid = $FixturePid
         hwnd = $FixtureHwnd

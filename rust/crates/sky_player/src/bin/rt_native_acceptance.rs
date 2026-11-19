@@ -409,8 +409,8 @@ fn run_windows(args: RunArgs) -> i32 {
     }
     options.startup_ordering_hook = acceptance_hook.clone();
     let _hook_cleanup = lifecycle_lease_qualification::AcceptanceHookCleanup::new(acceptance_hook.clone());
-    let session = match NativeDispatchSession::new(options) { Ok(session) => Arc::new(session), Err(error) => inconclusive!(&error, json!({})) };
-    let mut owner_binding = match owner_identity::bind(&session, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
+    let (session, mut owner_binding) = match owner_identity::create_session(options, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
+    let session = Arc::new(session);
     session.set_focus_hint(true);
     let fresh_sink = match validate_target_ready(&args.sink_ready, &args.run_id, sink_hwnd, RECEIVE_ONLY_ROLE) {
         Ok(record) => record,
@@ -421,6 +421,13 @@ fn run_windows(args: RunArgs) -> i32 {
         Ok(cursor) => cursor,
         Err(error) => inconclusive!(&error, json!({})),
     };
+    let lifecycle_qpc_frequency_hz =
+        sky_dispatch_win32::clock::qpc_frequency_checked().ok();
+    // This parent-process sample precedes NativeDispatchSession::arm; retain
+    // it only as a harness diagnostic, never as playback admission evidence.
+    let acceptance_pre_arm_qpc_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
+        .ok()
+        .map(|ticks| ticks.as_u64());
     #[cfg(feature = "qpc-read-counting")]
     reset_qpc_read_count();
     if let Err(error) = session.arm(0) {
@@ -437,6 +444,7 @@ fn run_windows(args: RunArgs) -> i32 {
     let mut watchdog_was_held = false;
     let mut owner_process_terminated_at_first_down_checkpoint = false;
     let mut system_suspend_terminal_observed = false;
+    let mut stop_requested_qpc_ticks = None;
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     if args.scenario == Scenario::OwnerProcessTermination {
         let hook = acceptance_hook
@@ -561,7 +569,7 @@ fn run_windows(args: RunArgs) -> i32 {
         }
         false
     } else if args.scenario == Scenario::TargetHwndChange {
-        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before target-change proof", json!({})); } session.set_target_hwnd(0); target_changed = true; false
+        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before target-change proof", json!({})); } session.invalidate_target_for_test(); target_changed = true; false
     } else if args.scenario == Scenario::SupervisorLeaseExpiry {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before supervisor-lease proof", json!({})); }
         // This native case isolates the session lease/watchdog. It seeds a
@@ -592,7 +600,7 @@ fn run_windows(args: RunArgs) -> i32 {
         }
         false
     } else if args.scenario == Scenario::StopCleanup {
-        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before stop proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; if let Err(error) = session.quit() { inconclusive!(&error, json!({})); }; stop_requested = true; false
+        if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before stop proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; stop_requested_qpc_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked().ok().map(|ticks| ticks.as_u64()); if let Err(error) = session.quit() { inconclusive!(&error, json!({})); }; stop_requested = true; false
     } else if args.scenario == Scenario::SkipCleanup {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before skip proof", json!({})); }; let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[])) { return code; } first_physical_commit_observed = true; if let Err(error) = session.skip() { inconclusive!(&error, json!({})); }; skip_requested = true; false
     } else {
@@ -611,6 +619,11 @@ fn run_windows(args: RunArgs) -> i32 {
     let joined = session
         .join(Duration::from_secs(join_timeout_seconds))
         .unwrap_or(false);
+    let worker_joined_qpc_ticks = joined
+        .then(|| sky_dispatch_win32::clock::qpc_now_ticks_checked().ok())
+        .flatten()
+        .map(|ticks| ticks.as_u64());
+    let lifecycle_evidence = session.native_acceptance_lifecycle_evidence();
     #[cfg(feature = "qpc-read-counting")]
     let qpc_read_count = Some(qpc_read_count());
     #[cfg(not(feature = "qpc-read-counting"))]
@@ -670,6 +683,24 @@ fn run_windows(args: RunArgs) -> i32 {
         (None, None, None) => (Vec::new(), None),
         _ => inconclusive!("focus probe evidence paths are incomplete", snapshot_json(&snapshot)),
     };
+    // This diagnostic intentionally marks post-join telemetry/log settling;
+    // it is separate from the worker-recorded physical release boundary.
+    let post_join_report_and_receiveonly_validation_completed_qpc_ticks =
+        sky_dispatch_win32::clock::qpc_now_ticks_checked()
+            .ok()
+            .map(|ticks| ticks.as_u64());
+    let release_sample_gate_proof_complete = args.scenario == Scenario::StopCleanup
+        && stop_requested_qpc_ticks.is_some()
+        && lifecycle_evidence.worker_release_verified_qpc_ticks.is_some()
+        && joined
+        && worker_joined_qpc_ticks.is_some_and(|joined_ticks| {
+            lifecycle_evidence
+                .worker_release_verified_qpc_ticks
+                .is_some_and(|release_ticks| joined_ticks >= release_ticks)
+        })
+        && snapshot.final_release_obligation_mask == 0
+        && sink_drain_failure.is_none()
+        && sink_events.iter().any(|event| event.kind == "key_release");
     let down_sender_attempt_count = acceptance_hook
         .as_deref()
         .map(|hook| hook.down_sender_attempt_count());
@@ -679,6 +710,22 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("timing_observer_for_qualification".to_string(), json!(args.timing_observer_for_qualification));
         object.insert("qpc_read_count_available".to_string(), json!(qpc_read_count.is_some()));
         object.insert("qpc_read_count".to_string(), json!(qpc_read_count));
+        object.insert("lifecycle_measurement".to_string(), json!({
+            "schema_version": 2,
+            "native_session_identity": { "run_id": args.run_id, "scenario": args.scenario.label() },
+            "qpc_clock_source": "Windows QueryPerformanceCounter",
+            "playback_admission_event": "system_power_ready_to_armed_publication",
+            "qpc_frequency_hz": lifecycle_qpc_frequency_hz,
+            "acceptance_pre_arm_qpc_ticks_diagnostic": acceptance_pre_arm_qpc_ticks,
+            "playback_armed_qpc_ticks": lifecycle_evidence.playback_armed_qpc_ticks,
+            "stop_requested_qpc_ticks": stop_requested_qpc_ticks,
+            "worker_joined_qpc_ticks": worker_joined_qpc_ticks,
+            "worker_release_verified_qpc_ticks": lifecycle_evidence.worker_release_verified_qpc_ticks,
+            "post_join_report_and_receiveonly_validation_completed_qpc_ticks": post_join_report_and_receiveonly_validation_completed_qpc_ticks,
+            "release_sample_gate_proof_complete": release_sample_gate_proof_complete,
+            "raw_up_syscall_count": lifecycle_evidence.raw_up_syscall_count,
+            "raw_up_syscall_count_source": "sum of worker TerminalSendAttemptEvidence.raw_calls",
+        }));
         object.insert("native_timing_telemetry".to_string(), timing_telemetry);
         object.insert("native_timing_telemetry_available".to_string(), json!(timing_telemetry_available));
         object.insert("native_timing_telemetry_unavailable_reason".to_string(), json!(timing_telemetry_unavailable_reason));

@@ -57,7 +57,7 @@ fn mock_session(
     }));
 
     let session = NativeDispatchSession::new(options).expect("mock native session admission");
-    session.set_target_hwnd(TARGET_HWND);
+    session.bind_initial_target_for_test(TARGET_HWND);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
@@ -473,7 +473,7 @@ fn terminal_controls_interrupt_modifier_replan_without_attempting_blocked_down()
 }
 
 #[test]
-fn release_owner_proof_clone_counts_scale_per_new_down_slot() {
+fn release_owner_proof_is_retained_once_per_session_not_per_down_slot() {
     use crate::engine::test_support::ProductionDispatchTestHarness;
 
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
@@ -506,9 +506,8 @@ fn release_owner_proof_clone_counts_scale_per_new_down_slot() {
             "owner-proof-clones chord_slots={key_count} release_identity_arc_clones={proof_arc_clones}"
         );
         assert_eq!(
-            proof_arc_clones,
-            key_count as u64 + 1,
-            "one outer owner snapshot plus one retained ReleaseOwnerProof clone per new Down slot"
+            proof_arc_clones, 0,
+            "dispatching additional Down slots does not clone session owner authority"
         );
         let expected_mask = (1_u16 << key_count) - 1;
         assert_eq!(harness.release_obligation_mask_for_test(), expected_mask);

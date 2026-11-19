@@ -146,6 +146,7 @@ pub(crate) fn finalize_worker_for_test(
                     Ok(())
                 },
                 local_metrics: WorkerMetricsLocal::default(),
+                pending_production_forensics: PendingProductionForensics::default(),
                 abort_counts: HashMap::new(),
                 terminal_error,
                 secondary_errors: Vec::new(),
@@ -190,6 +191,8 @@ pub(crate) fn finalize_worker_for_test(
 #[derive(Default)]
 pub(crate) struct WorkerRuntime {
     pub(crate) production_forensics: ProductionHoldForensics,
+    pending_production_forensics: Option<DeferredProductionPacketResult>,
+    production_forensics_queue_overflowed: bool,
     verified_target: Option<TargetStamp>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
@@ -226,6 +229,95 @@ pub(crate) struct WorkerRuntime {
     /// allowing verified cleanup and later, never-attempted notes to proceed.
     pub(crate) attempted_dispatch_anomalies: AttemptedDispatchAnomalies,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
+}
+
+/// Fixed-size packet evidence copied after journal commit and reduced at the
+/// next non-precision worker boundary. At most one dispatch packet can be
+/// pending because the worker drains before it begins another iteration.
+#[derive(Clone, Copy)]
+pub(crate) struct DeferredProductionPacketResult {
+    packet: sky_dispatch_win32::input::PhysicalPacket,
+    source_action_index: u32,
+    target_qpc: QpcTicks,
+    pre_call_qpc: Option<QpcTicks>,
+    completion_qpc: QpcTicks,
+    status: sky_dispatch_win32::input::SendTransactionStatus,
+}
+
+#[derive(Default)]
+pub(crate) struct PendingProductionForensics {
+    forensics: ProductionHoldForensics,
+    packet: Option<DeferredProductionPacketResult>,
+    queue_overflowed: bool,
+}
+
+impl PendingProductionForensics {
+    pub(crate) fn drain_after_cleanup(&mut self, metrics: &mut WorkerMetricsLocal) {
+        if let Some(evidence) = self.packet.take() {
+            self.forensics.observe_packet_result(
+                evidence.packet,
+                evidence.source_action_index,
+                evidence.target_qpc,
+                evidence.pre_call_qpc,
+                evidence.completion_qpc,
+                evidence.status,
+                metrics,
+            );
+        }
+        if self.queue_overflowed {
+            metrics.production_forensics_available = false;
+        }
+    }
+}
+
+impl WorkerRuntime {
+    pub(crate) fn take_pending_production_forensics(&mut self) -> PendingProductionForensics {
+        PendingProductionForensics {
+            forensics: std::mem::take(&mut self.production_forensics),
+            packet: self.pending_production_forensics.take(),
+            queue_overflowed: self.production_forensics_queue_overflowed,
+        }
+    }
+
+    pub(crate) fn defer_production_packet_result(
+        &mut self,
+        packet: sky_dispatch_win32::input::PhysicalPacket,
+        source_action_index: u32,
+        target_qpc: QpcTicks,
+        pre_call_qpc: Option<QpcTicks>,
+        completion_qpc: QpcTicks,
+        status: sky_dispatch_win32::input::SendTransactionStatus,
+    ) {
+        let evidence = DeferredProductionPacketResult {
+            packet,
+            source_action_index,
+            target_qpc,
+            pre_call_qpc,
+            completion_qpc,
+            status,
+        };
+        if self
+            .pending_production_forensics
+            .replace(evidence)
+            .is_some()
+        {
+            // Never report a complete production-forensics record after a
+            // bounded queue overflow. Normal dispatch drains before another
+            // send, so this is a fail-visible invariant guard.
+            self.production_forensics_queue_overflowed = true;
+        }
+    }
+
+    pub(crate) fn drain_production_forensics(&mut self, metrics: &mut WorkerMetricsLocal) {
+        let mut pending = PendingProductionForensics {
+            forensics: std::mem::take(&mut self.production_forensics),
+            packet: self.pending_production_forensics.take(),
+            queue_overflowed: self.production_forensics_queue_overflowed,
+        };
+        pending.drain_after_cleanup(metrics);
+        self.production_forensics = pending.forensics;
+        self.production_forensics_queue_overflowed = pending.queue_overflowed;
+    }
 }
 
 impl WorkerRuntime {

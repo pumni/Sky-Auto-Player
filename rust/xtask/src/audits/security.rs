@@ -57,6 +57,8 @@ const ALLOWED_WINDOWS_SYS_MODULES: &[&str] = &[
     "Win32::Storage::FileSystem",
 ];
 const FORBIDDEN_DLLS: &[&str] = &["ntdll.dll"];
+const APPROVED_FOREGROUND_WINEVENT_ADAPTER: &str =
+    "rust/crates/sky_dispatch_win32/src/focus/foreground_watcher.rs";
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Finding {
@@ -93,15 +95,37 @@ fn windows_sys_paths(line: &str) -> Vec<String> {
     paths
 }
 
-fn approved_windows_sys(path: &str) -> bool {
-    ALLOWED_WINDOWS_SYS_MODULES
-        .iter()
-        .any(|allowed| path == *allowed || path.starts_with(&format!("{allowed}::")))
+fn approved_windows_sys(source_path: &str, path: &str) -> bool {
+    (source_path == APPROVED_FOREGROUND_WINEVENT_ADAPTER
+        && (path == "Win32::UI::Accessibility" || path.starts_with("Win32::UI::Accessibility::")))
+        || ALLOWED_WINDOWS_SYS_MODULES
+            .iter()
+            .any(|allowed| path == *allowed || path.starts_with(&format!("{allowed}::")))
+}
+
+fn call_arguments<'a>(source: &'a str, function: &str) -> Option<&'a str> {
+    let call = source.find(&format!("{function}("))?;
+    let arguments_start = call + function.len() + 1;
+    let mut depth = 1usize;
+    for (offset, character) in source[arguments_start..].char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&source[arguments_start..arguments_start + offset]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 fn scan_rust_text(path: &Path, source: &str) -> Vec<Finding> {
     let clean = strip_rust_comments(source);
     let relative = path.to_string_lossy().replace('\\', "/");
+    let approved_foreground_adapter = relative == APPROVED_FOREGROUND_WINEVENT_ADAPTER;
     let mut findings = Vec::new();
     for (line_number, line) in clean.lines().enumerate() {
         for token in FORBIDDEN_SECURITY_APIS {
@@ -109,6 +133,9 @@ fn scan_rust_text(path: &Path, source: &str) -> Vec<Finding> {
                 .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
                 .any(|word| word == *token)
             {
+                if *token == "SetWinEventHook" && approved_foreground_adapter {
+                    continue;
+                }
                 findings.push(Finding {
                     path: relative.clone(),
                     line: line_number + 1,
@@ -116,6 +143,14 @@ fn scan_rust_text(path: &Path, source: &str) -> Vec<Finding> {
                     detail: format!("`{token}` violates SECURITY.md"),
                 });
             }
+        }
+        if approved_foreground_adapter && line.contains("WINEVENT_INCONTEXT") {
+            findings.push(Finding {
+                path: relative.clone(),
+                line: line_number + 1,
+                rule: "forbidden-foreground-hook-flag".into(),
+                detail: "foreground watcher must use WINEVENT_OUTOFCONTEXT only".into(),
+            });
         }
         let lower = line.to_ascii_lowercase();
         for dll in FORBIDDEN_DLLS {
@@ -129,7 +164,7 @@ fn scan_rust_text(path: &Path, source: &str) -> Vec<Finding> {
             }
         }
         for module in windows_sys_paths(line) {
-            if !approved_windows_sys(&module) {
+            if !approved_windows_sys(&relative, &module) {
                 findings.push(Finding {
                     path: relative.clone(),
                     line: line_number + 1,
@@ -137,6 +172,40 @@ fn scan_rust_text(path: &Path, source: &str) -> Vec<Finding> {
                     detail: format!("`windows_sys::{module}` is outside the approved allowlist"),
                 });
             }
+        }
+    }
+    if approved_foreground_adapter {
+        let valid_call = call_arguments(&clean, "SetWinEventHook").is_some_and(|arguments| {
+            let actual_arguments = arguments
+                .split(',')
+                .filter(|argument| !argument.trim().is_empty())
+                .map(|argument| argument.split_whitespace().collect::<String>())
+                .collect::<Vec<_>>();
+            actual_arguments.iter().map(String::as_str).eq([
+                "EVENT_SYSTEM_FOREGROUND",
+                "EVENT_SYSTEM_FOREGROUND",
+                "std::ptr::null_mut()",
+                "Some(foreground_event_callback)",
+                "0",
+                "0",
+                "WINEVENT_OUTOFCONTEXT",
+            ])
+        });
+        let valid_adapter = valid_call
+            && clean.matches("SetWinEventHook(").count() == 1
+            && clean.matches("UnhookWinEvent(").count() == 1
+            && clean.contains("EVENT_SYSTEM_FOREGROUND")
+            && clean.contains("WINEVENT_OUTOFCONTEXT")
+            && !clean.contains("SetWindowsHookEx")
+            && !clean.contains("WH_KEYBOARD")
+            && !clean.contains("WINEVENT_INCONTEXT");
+        if !valid_adapter {
+            findings.push(Finding {
+                path: relative,
+                line: 1,
+                rule: "invalid-approved-foreground-hook-adapter".into(),
+                detail: "approved adapter must register and unhook exactly one foreground out-of-context event source".into(),
+            });
         }
     }
     findings
@@ -296,6 +365,61 @@ mod tests {
     fn security_allows_sendinput_and_approved_windows_modules() {
         let source = "unsafe { SendInput(1, inputs, size); }\nuse windows_sys::Win32::Foundation::HANDLE;\nuse windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;\nuse windows_sys::Win32::System::Threading::CloseHandle;\nuse windows_sys::Win32::System::Registry::RegOpenKeyExW;\n";
         assert!(scan_rust_text(Path::new("fixture.rs"), source).is_empty());
+    }
+
+    fn approved_foreground_watcher_source(flag: &str) -> String {
+        format!(
+            "use windows_sys::Win32::UI::Accessibility::{{SetWinEventHook, UnhookWinEvent}};\nunsafe {{ SetWinEventHook(\n EVENT_SYSTEM_FOREGROUND,\n EVENT_SYSTEM_FOREGROUND,\n std::ptr::null_mut(),\n Some(foreground_event_callback),\n 0,\n 0,\n {flag},\n); }}\nunsafe {{ UnhookWinEvent(hook); }}\n"
+        )
+    }
+
+    #[test]
+    fn security_allows_only_the_exact_foreground_winevent_adapter() {
+        let approved = approved_foreground_watcher_source("WINEVENT_OUTOFCONTEXT");
+        assert!(
+            scan_rust_text(Path::new(APPROVED_FOREGROUND_WINEVENT_ADAPTER), &approved).is_empty(),
+            "approved fixture findings: {:?}",
+            scan_rust_text(Path::new(APPROVED_FOREGROUND_WINEVENT_ADAPTER), &approved)
+        );
+
+        let unapproved_path = Path::new("rust/crates/sky_player/src/worker.rs");
+        assert!(
+            scan_rust_text(unapproved_path, &approved)
+                .iter()
+                .any(|finding| finding.rule == "forbidden-call:SetWinEventHook")
+        );
+    }
+
+    #[test]
+    fn security_rejects_in_context_and_keyboard_hooks_in_the_approved_adapter() {
+        let in_context = approved_foreground_watcher_source("WINEVENT_INCONTEXT");
+        let findings = scan_rust_text(Path::new(APPROVED_FOREGROUND_WINEVENT_ADAPTER), &in_context);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == "forbidden-foreground-hook-flag")
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == "invalid-approved-foreground-hook-adapter")
+        );
+
+        let keyboard = approved_foreground_watcher_source("WINEVENT_OUTOFCONTEXT").replace(
+            "UnhookWinEvent(hook)",
+            "SetWindowsHookExW(WH_KEYBOARD_LL, callback, module, 0)",
+        );
+        let findings = scan_rust_text(Path::new(APPROVED_FOREGROUND_WINEVENT_ADAPTER), &keyboard);
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == "forbidden-call:SetWindowsHookExW")
+        );
+        assert!(
+            findings
+                .iter()
+                .any(|finding| finding.rule == "invalid-approved-foreground-hook-adapter")
+        );
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use super::{
     DispatchObservation, ObserverRuntime, PendingObservationQueue, observer_test_hook_guard,
-    set_observer_abort_after_drains,
+    set_observer_abort_after_drains, set_observer_artificial_cost_us,
 };
 use crate::engine::worker::dispatch::observation::{DownObservation, StaleMetadataObservation};
 use crate::engine::{
@@ -10,6 +10,7 @@ use crate::engine::{
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::QpcClock;
 use std::sync::Arc;
+use std::time::Instant;
 
 fn queue_down_with_up_slots(queue: &PendingObservationQueue, sequence: u64, count: u8) {
     let mut observation = DownObservation::test_fixture(sequence);
@@ -118,4 +119,29 @@ fn observer_abort_after_partial_drain_counts_only_stranded_up_slots() {
     assert_eq!(json["up_slot_records_dropped_by_observer_abort"], 2);
     assert_eq!(json["up_slot_records_dropped"], 2);
     assert_eq!(json["up_slot_accounting_status"], "valid");
+}
+
+#[test]
+fn slow_observer_does_not_block_the_producer_and_tears_down_after_recording() {
+    let _guard = observer_test_hook_guard();
+    set_observer_artificial_cost_us(75_000);
+    let queue = PendingObservationQueue::default();
+    let (runtime, telemetry) = start_observer(&queue, 0);
+
+    let enqueue_started = Instant::now();
+    queue_stale_metadata(&queue, 11);
+    let enqueue_elapsed = enqueue_started.elapsed();
+    assert!(
+        enqueue_elapsed < std::time::Duration::from_millis(50),
+        "dispatch producer waited for the slow diagnostic consumer: {enqueue_elapsed:?}"
+    );
+
+    let observer_output = runtime.stop();
+    assert!(observer_output.terminal_error.is_none());
+    assert!(observer_output.metrics.observer_duration_max_us >= 50_000);
+    assert!(observer_output.up_slot_accounting_complete);
+    let output = finalized_output(telemetry, observer_output.up_slot_accounting_complete);
+    assert_eq!(output.accepted, 1);
+    assert_eq!(output.records.len(), 1);
+    assert_eq!(output.records[0].source_action_index, 11);
 }

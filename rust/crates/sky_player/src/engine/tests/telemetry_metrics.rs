@@ -518,11 +518,9 @@ fn native_telemetry_does_not_block_dispatch() {
 #[test]
 fn startup_failure_does_not_publish_ready_boundary() {
     let send_calls = Arc::new(AtomicU64::new(0));
-    let full_release_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.wait_failure = true;
     fault_script.send_call_count = Some(Arc::clone(&send_calls));
-    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_calls));
     let session = NativeDispatchSession::new(test_session_options(
         startup_boundary_schedule(),
         1,
@@ -541,7 +539,6 @@ fn startup_failure_does_not_publish_ready_boundary() {
     assert_eq!(session.snapshot().outcome.as_deref(), Some("error"));
     assert_snapshot_common_projection(&session.snapshot(), &session.snapshot_lite());
     assert_eq!(send_calls.load(Ordering::SeqCst), 0);
-    assert_eq!(full_release_calls.load(Ordering::SeqCst), 0);
 }
 
 #[test]
@@ -1266,7 +1263,7 @@ fn termination_error_aggregation_preserves_primary_and_secondary_errors() {
 }
 
 #[test]
-fn persistent_zero_progress_down_is_not_replayed_and_next_unattempted_chord_is_sent() {
+fn persistent_zero_progress_down_is_not_replayed_and_terminates_playback() {
     let actions = vec![
         KeyActionInput {
             source_action_index: 0,
@@ -1339,24 +1336,24 @@ fn persistent_zero_progress_down_is_not_replayed_and_next_unattempted_chord_is_s
         snapshot.status, "error",
         "zero progress snapshot: {snapshot:?}"
     );
-    assert_eq!(snapshot.precision_packet_attempts, 3);
+    assert_eq!(snapshot.precision_packet_attempts, 1);
     assert_eq!(snapshot.sendinput_zero_progress_failures, 1);
     assert_eq!(snapshot.sendinput_partial_events, 0);
     assert_eq!(snapshot.transport_anomalies, 1);
     assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 0);
     assert!(
-        snapshot
-            .terminal_error
-            .as_deref()
-            .is_some_and(|error| error.starts_with("clean completion contract failed:"))
+        snapshot.terminal_error.as_deref().is_some_and(
+            |error| error.starts_with("musical playback terminated after proven raw-zero Down")
+        ),
+        "zero progress must retain the transport terminal cause: {snapshot:?}"
     );
-    assert_eq!(snapshot.generation_accounting.cancelled, 1);
-    assert_eq!(snapshot.generation_accounting.released, 1);
+    assert_eq!(snapshot.generation_accounting.cancelled, 2);
+    assert_eq!(snapshot.generation_accounting.released, 0);
     let send_calls = send_input_capture.lock().expect("mock SendInput capture");
     assert_eq!(
         send_calls.len(),
-        5,
-        "one attempted Down, two tracked cleanup Ups, and the later Down/Up"
+        1,
+        "a proven raw-zero Down consumes this onset and terminates without replay: {send_calls:?}"
     );
     assert!(matches!(
         send_calls.first(),
@@ -1370,43 +1367,10 @@ fn persistent_zero_progress_down_is_not_replayed_and_next_unattempted_chord_is_s
             ..
         })
     ));
-    assert_eq!(
-        &send_calls[1..3],
-        &[
-            MockSendInputCapture::SingleEmitter {
-                scan_codes: vec![0x15],
-                key_up: true,
-            },
-            MockSendInputCapture::SingleEmitter {
-                scan_codes: vec![0x15],
-                key_up: true,
-            },
-        ]
-    );
-    assert!(
-        matches!(
-            send_calls.get(3),
-            Some(MockSendInputCapture::Packet {
-                packet: PhysicalPacket {
-                    up_mask: 0,
-                    down_mask: 2
-                },
-                status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
-                attempts: 1,
-                ..
-            })
-        ),
-        "the authored second Down is sent after the first onset was attempted and cleanup verified"
-    );
-    assert!(matches!(
-        send_calls.get(4),
+    assert!(!matches!(
+        send_calls.first(),
         Some(MockSendInputCapture::Packet {
-            packet: PhysicalPacket {
-                up_mask: 2,
-                down_mask: 0
-            },
-            status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
-            attempts: 1,
+            packet: PhysicalPacket { down_mask: 2, .. },
             ..
         })
     ));
@@ -1422,10 +1386,10 @@ fn persistent_zero_progress_down_is_not_replayed_and_next_unattempted_chord_is_s
         "attempted zero-progress onset must not publish a successful packet"
     );
     assert!(
-        records
+        !records
             .iter()
             .any(|record| { record["source_action_index"] == 2 && record["sent_count"] == 1 }),
-        "later authored Down send must remain visible"
+        "no later onset may dispatch after the first transport anomaly"
     );
 }
 
@@ -1467,7 +1431,7 @@ fn post_send_qpc_failure_is_reconciled_without_reconstructed_completion() {
     assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
     assert!(
         snapshot.terminal_error.as_deref().is_some_and(
-            |error| error.contains("earlier SendInput QPC timing evidence unavailable")
+            |error| error.contains("musical playback terminated after first sender anomaly")
         ),
         "the anomaly remains fail-closed for final session outcome: {snapshot:?}"
     );
@@ -1522,10 +1486,9 @@ fn invalid_sender_qpc_order_is_reconciled_without_qualified_timing_samples() {
     assert_eq!(snapshot.sendinput_partial_events, 0);
     assert_eq!(snapshot.sendinput_zero_progress_failures, 0);
     assert!(
-        snapshot
-            .terminal_error
-            .as_deref()
-            .is_some_and(|error| error.starts_with("clean completion contract failed:")),
+        snapshot.terminal_error.as_deref().is_some_and(
+            |error| error.starts_with("musical playback terminated after first sender anomaly")
+        ),
         "an anomaly cannot publish a clean completion: {snapshot:?}"
     );
     assert!(

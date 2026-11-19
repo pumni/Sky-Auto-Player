@@ -108,6 +108,7 @@ impl NativePlaybackService {
             diagnostics_gate: Arc::new(DiagnosticsPublicationGate::default()),
             prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity,
+            post_join_recovery: Arc::new(PostJoinRecoveryLifecycle::default()),
             startup_cancellation: Arc::new(AtomicBool::new(false)),
             startup_arm_gate: Mutex::new(()),
             #[cfg(test)]
@@ -1146,6 +1147,7 @@ impl NativePlaybackService {
                     state: Mutex::new(PlaybackSessionState::Starting),
                     pending: Mutex::new(None),
                     player: None,
+                    terminal_result: Mutex::new(None),
                     power_lifecycle: power_lifecycle.clone(),
                     power_request: Mutex::new(power_request.take()),
                     suspend_resume_registration: Mutex::new(suspend_resume_registration.take()),
@@ -1207,7 +1209,12 @@ impl NativePlaybackService {
                                 message: presentation_error.clone(),
                             },
                         };
-                        let _ = release_terminal_resources(&failed_active, &retirement);
+                        let _ = release_terminal_ownership(
+                            &self.active,
+                            &self.last_terminal,
+                            &failed_active,
+                            retirement.clone(),
+                        );
                         let completed = terminal_presentation_completion(
                             self.active.clone(),
                             self.last_terminal.clone(),
@@ -1241,7 +1248,12 @@ impl NativePlaybackService {
                         message: message.into(),
                     },
                 };
-                let _ = release_terminal_resources(&failed_active, &retirement);
+                let _ = release_terminal_ownership(
+                    &self.active,
+                    &self.last_terminal,
+                    &failed_active,
+                    retirement.clone(),
+                );
                 let completed = terminal_presentation_completion(
                     self.active.clone(),
                     self.last_terminal.clone(),
@@ -1283,6 +1295,7 @@ impl NativePlaybackService {
             state: Mutex::new(PlaybackSessionState::Starting),
             pending: Mutex::new(None),
             player,
+            terminal_result: Mutex::new(None),
             power_lifecycle: power_lifecycle.clone(),
             power_request: Mutex::new(power_request),
             suspend_resume_registration: Mutex::new(suspend_resume_registration),
@@ -1378,7 +1391,12 @@ impl NativePlaybackService {
                         message: error.clone(),
                     },
                 };
-                let _ = release_terminal_resources(&active, &retirement);
+                let _ = release_terminal_ownership(
+                    &self.active,
+                    &self.last_terminal,
+                    &active,
+                    retirement.clone(),
+                );
                 let completed = terminal_presentation_completion(
                     self.active.clone(),
                     self.last_terminal.clone(),
@@ -1415,7 +1433,12 @@ impl NativePlaybackService {
                     message: error.clone(),
                 },
             };
-            let _ = release_terminal_resources(&active, &retirement);
+            let _ = release_terminal_ownership(
+                &self.active,
+                &self.last_terminal,
+                &active,
+                retirement.clone(),
+            );
             let completed = terminal_presentation_completion(
                 self.active.clone(),
                 self.last_terminal.clone(),
@@ -1483,7 +1506,12 @@ impl NativePlaybackService {
                 release: TerminalReleaseEvidence::NotRequired,
                 publication,
             };
-            let _ = release_terminal_resources(&active, &retirement);
+            let _ = release_terminal_ownership(
+                &self.active,
+                &self.last_terminal,
+                &active,
+                retirement.clone(),
+            );
             let completed = terminal_presentation_completion(
                 self.active.clone(),
                 self.last_terminal.clone(),
@@ -1564,6 +1592,7 @@ impl NativePlaybackService {
             sender_trace_state: self.sender_trace_state.clone(),
             diagnostics_gate: self.diagnostics_gate.clone(),
             activity: self.activity.clone(),
+            post_join_recovery: Arc::clone(&self.post_join_recovery),
             #[cfg(test)]
             monitor_join_test_hook: self.monitor_join_test_hook.clone(),
             #[cfg(all(test, feature = "tauri-test"))]
@@ -1640,71 +1669,72 @@ impl NativePlaybackService {
         {
             return Err("focused window owner changed during identity capture".into());
         }
-        let player = Arc::new(NativeDispatchSession::new_with_power_endpoint(
-            NativeSessionOptions {
-                schedule: prepared_schedule,
-                #[cfg(feature = "tauri-test")]
-                startup_calibration_placement:
-                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
-                #[cfg(feature = "tauri-test")]
-                timing_observer_for_qualification: false,
-                #[cfg(feature = "tauri-test")]
-                modifier_key_state_query_for_test: None,
-                backend: BackendConfig::Production,
-                profile: DispatchProfile::Production,
-                timing: TimingOptions {
-                    game_fps: config.fps,
-                    min_hold_us: policy.min_hold_us,
-                    min_release_gap_us: policy.min_release_gap_us,
-                    frame_us: policy.frame_us,
-                    frame_base_hold_us: policy.frame_base_hold_us,
-                    timing_margin_us: policy.timing_margin_us,
-                    strict_timing: false,
-                    strict_down_completion_late_us: 2_000,
-                    strict_up_completion_late_us: 2_000,
-                    input_path_warn_us: 300,
-                },
-                focus: FocusOptions {
-                    require_focus: true,
-                    focus_restore_grace_us: policy.focus_restore_grace_us,
-                },
-                wait: WaitOptions {
-                    enable_waitable_timer: true,
-                    enable_event_wait: true,
-                    supervisor_lease_timeout_us:
-                        sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+        let player = Arc::new(
+            NativeDispatchSession::new_with_bound_window_identity_and_power_endpoint(
+                NativeSessionOptions {
+                    schedule: prepared_schedule,
                     #[cfg(feature = "tauri-test")]
-                    test_spin_threshold_us: None,
+                    startup_calibration_placement:
+                        sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
                     #[cfg(feature = "tauri-test")]
-                    test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
+                    timing_observer_for_qualification: false,
+                    #[cfg(feature = "tauri-test")]
+                    modifier_key_state_query_for_test: None,
+                    backend: BackendConfig::Production,
+                    profile: DispatchProfile::Production,
+                    timing: TimingOptions {
+                        game_fps: config.fps,
+                        min_hold_us: policy.min_hold_us,
+                        min_release_gap_us: policy.min_release_gap_us,
+                        frame_us: policy.frame_us,
+                        frame_base_hold_us: policy.frame_base_hold_us,
+                        timing_margin_us: policy.timing_margin_us,
+                        strict_timing: false,
+                        strict_down_completion_late_us: 2_000,
+                        strict_up_completion_late_us: 2_000,
+                        input_path_warn_us: 300,
+                    },
+                    focus: FocusOptions {
+                        require_focus: true,
+                        focus_restore_grace_us: policy.focus_restore_grace_us,
+                    },
+                    wait: WaitOptions {
+                        enable_waitable_timer: true,
+                        enable_event_wait: true,
+                        supervisor_lease_timeout_us:
+                            sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+                        #[cfg(feature = "tauri-test")]
+                        test_spin_threshold_us: None,
+                        #[cfg(feature = "tauri-test")]
+                        test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
+                    },
+                    telemetry: TelemetryOptions {
+                        mode: TelemetryMode::Ring,
+                        // Keep fixed-width schema 19 records inside the bounded
+                        // sender-trace capture budget before export.
+                        capacity: SENDER_TRACE_CAPTURE_CAPACITY,
+                    },
+                    priority: PriorityOptions {
+                        mode: PriorityMode::Auto,
+                    },
+                    instrument_key_profile: None,
+                    #[cfg(feature = "tauri-test")]
+                    startup_ordering_hook: None,
+                    #[cfg(feature = "tauri-test")]
+                    restore_race_hook: None,
+                    #[cfg(feature = "tauri-test")]
+                    focus_pause_hook: None,
+                    #[cfg(feature = "tauri-test")]
+                    timer_lifecycle_context: None,
+                    #[cfg(feature = "tauri-test")]
+                    prepared_packet_ambiguity_mask: None,
+                    #[cfg(feature = "tauri-test")]
+                    preflight_user_held_mask: None,
                 },
-                telemetry: TelemetryOptions {
-                    mode: TelemetryMode::Ring,
-                    // Keep fixed-width schema 19 records inside the bounded
-                    // sender-trace capture budget before export.
-                    capacity: SENDER_TRACE_CAPTURE_CAPACITY,
-                },
-                priority: PriorityOptions {
-                    mode: PriorityMode::Auto,
-                },
-                instrument_key_profile: None,
-                #[cfg(feature = "tauri-test")]
-                startup_ordering_hook: None,
-                #[cfg(feature = "tauri-test")]
-                restore_race_hook: None,
-                #[cfg(feature = "tauri-test")]
-                focus_pause_hook: None,
-                #[cfg(feature = "tauri-test")]
-                timer_lifecycle_context: None,
-                #[cfg(feature = "tauri-test")]
-                prepared_packet_ambiguity_mask: None,
-                #[cfg(feature = "tauri-test")]
-                preflight_user_held_mask: None,
-            },
-            system_power_endpoint()?,
-        )?);
-        player.set_target_hwnd(target);
-        player.bind_window_identity_authority(owner_authority)?;
+                system_power_endpoint()?,
+                owner_authority,
+            )?,
+        );
         player.set_focus_hint(true);
         player.set_live_diagnostics_enabled(self.diagnostics_gate.is_enabled());
         Ok((player, target))
@@ -1743,7 +1773,12 @@ impl NativePlaybackService {
                     },
                 };
                 let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
-                let _ = release_terminal_resources(&active, &retirement);
+                let _ = release_terminal_ownership(
+                    &self.active,
+                    &self.last_terminal,
+                    &active,
+                    retirement.clone(),
+                );
                 let completed = terminal_presentation_completion(
                     self.active.clone(),
                     self.last_terminal.clone(),
@@ -1781,6 +1816,13 @@ impl NativePlaybackService {
             }
         }
 
+        // WinEvent is only a quick transition hint. The periodic exact
+        // foreground poll remains active as a loss/reorder/message-loop
+        // fallback, and the worker keeps its own fresh final admission.
+        let foreground_watcher =
+            sky_dispatch_win32::focus::foreground_watcher::ForegroundWatcher::start().ok();
+        let mut last_foreground_poll = Instant::now();
+
         let mut last_snapshot = Instant::now();
         let mut last_identity_check = Instant::now();
         let mut last_event_state = PlaybackEventState::Starting;
@@ -1817,10 +1859,21 @@ impl NativePlaybackService {
             if let Some(player) = &active.player
                 && let Some(target) = active.target_hwnd
             {
-                // The supervisor owns only a transition hint. The worker
-                // still performs its fresh exact-HWND final admission.
-                let focused = sky_dispatch_win32::focus::foreground_window_matches(target);
-                player.set_focus_hint(focused);
+                if let Some(hint) = foreground_watcher
+                    .as_ref()
+                    .and_then(|watcher| watcher.take_hint())
+                {
+                    player.set_focus_hint(hint.hwnd == Some(target));
+                }
+                let loop_failed = foreground_watcher
+                    .as_ref()
+                    .is_some_and(|watcher| watcher.polling_fallback_required());
+                if loop_failed || last_foreground_poll.elapsed() >= Duration::from_millis(100) {
+                    player.set_focus_hint(sky_dispatch_win32::focus::foreground_window_matches(
+                        target,
+                    ));
+                    last_foreground_poll = Instant::now();
+                }
             }
             if !identity_authority_invalidated
                 && last_identity_check.elapsed() >= Duration::from_millis(100)
@@ -1955,7 +2008,26 @@ impl NativePlaybackService {
                 .map(|player| player.poll_state().status)
                 .or(terminal_status);
             let snapshot = active.player.as_ref().map(|player| player.snapshot());
-            match decide_playback_handoff(&joined, status, snapshot.as_ref(), active.physical) {
+            let worker_result = if matches!(joined, Ok(true)) {
+                active
+                    .player
+                    .as_ref()
+                    .and_then(|player| player.terminal_result())
+            } else {
+                None
+            };
+            if let Some(result) = worker_result.as_ref()
+                && let Ok(mut stored) = active.terminal_result.lock()
+            {
+                *stored = Some(result.clone());
+            }
+            match decide_playback_handoff_with_result(
+                &joined,
+                status,
+                snapshot.as_ref(),
+                active.physical,
+                worker_result.as_ref(),
+            ) {
                 PlaybackHandoffDecision::Retire(mut retirement) => {
                     active.worker_quiescent.store(true, Ordering::Release);
                     if let Some(error) = join_error.take() {
@@ -1997,8 +2069,39 @@ impl NativePlaybackService {
             }
         };
 
+        let mut committed_retirement = retirement.clone();
+        if active.physical
+            && let Ok(mut trace_state) = self.sender_trace_state.lock()
+        {
+            trace_state.finish_physical_session(
+                &active.session_id,
+                &active.song_id,
+                &active.title,
+                &active.plan_fingerprint,
+                completed_sender_trace(&active),
+            );
+        }
+        let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
+        if let Err(error) = release_terminal_ownership(
+            &self.active,
+            &self.last_terminal,
+            &active,
+            committed_retirement.clone(),
+        ) {
+            // Retirement failure is itself the committed terminal outcome.
+            // Keep any current physical reservation/quarantine intact and do
+            // not publish the worker's pre-commit success intention.
+            active.stop_requested.store(true, Ordering::Release);
+            committed_retirement.publication = terminal_retirement_commit_failure(
+                &self.active,
+                &self.last_terminal,
+                &active,
+                &committed_retirement,
+                &error,
+            );
+        }
         let (terminal_state, terminal_event_state, terminal_message, terminal_outcome) =
-            match &retirement.publication {
+            match &committed_retirement.publication {
                 PlaybackTerminalPublication::Finished { outcome, message } => (
                     PlaybackSessionState::Finished,
                     PlaybackEventState::Finished,
@@ -2015,47 +2118,11 @@ impl NativePlaybackService {
         if terminal_state == PlaybackSessionState::Failed {
             active.stop_requested.store(true, Ordering::Release);
         }
-        if active.physical
-            && let Ok(mut trace_state) = self.sender_trace_state.lock()
-        {
-            trace_state.finish_physical_session(
-                &active.session_id,
-                &active.song_id,
-                &active.title,
-                &active.plan_fingerprint,
-                completed_sender_trace(&active),
-            );
-        }
-        let _ = set_playback_state(&active, PlaybackSessionState::Stopping);
-        let mut retirement_notice_published = false;
-        loop {
-            match release_terminal_resources(&active, &retirement) {
-                Ok(()) => break,
-                Err(error) => {
-                    if !event_delivery_failed && !retirement_notice_published {
-                        retirement_notice_published = publish_active_playback_state(
-                            &events,
-                            &active,
-                            PlaybackEventState::Stopping,
-                            Some(format!(
-                                "The native worker is quiescent, but session retirement is still pending ({error})."
-                            )),
-                            None,
-                        )
-                        .is_ok();
-                        if !retirement_notice_published {
-                            event_delivery_failed = true;
-                        }
-                    }
-                    thread::sleep(PLAYBACK_JOIN_RETRY_INTERVAL);
-                }
-            }
-        }
         let completed = terminal_presentation_completion(
             self.active.clone(),
             self.last_terminal.clone(),
             active.clone(),
-            retirement.clone(),
+            committed_retirement.clone(),
             terminal_state,
             #[cfg(all(test, feature = "tauri-test"))]
             self.monitor_retired_test_hook.clone(),
@@ -2068,10 +2135,24 @@ impl NativePlaybackService {
                 state: terminal_event_state,
                 message: terminal_message,
                 outcome: terminal_outcome,
-                publication: retirement.publication.clone(),
+                publication: committed_retirement.publication.clone(),
             },
             completed,
         );
+        // The active monitor's watcher owns the process-wide hook until the
+        // supervisor returns. Tear it down before transferring hint/polling
+        // ownership to the persistent post-join recovery thread.
+        drop(foreground_watcher);
+        if active.done.load(Ordering::Acquire)
+            && !active.release_verified.load(Ordering::Acquire)
+            && active
+                .activity
+                .quarantined_session_is_current(&active.session_id)
+        {
+            let _ = self
+                .post_join_recovery
+                .start(active.clone(), self.last_terminal.clone());
+        }
     }
 
     pub(in crate::native_runtime) fn command(
@@ -2331,6 +2412,7 @@ impl NativePlaybackService {
     }
 
     pub(in crate::native_runtime) fn shutdown(&self, _events: Arc<Mutex<NativeEventHub>>) -> bool {
+        self.post_join_recovery.shutdown();
         let arm_gate = self
             .startup_arm_gate
             .lock()
@@ -2402,6 +2484,7 @@ pub(in crate::native_runtime) struct NativePlaybackServiceHandle {
     pub(in crate::native_runtime) sender_trace_state: Arc<Mutex<SenderTraceState>>,
     pub(in crate::native_runtime) diagnostics_gate: Arc<DiagnosticsPublicationGate>,
     pub(in crate::native_runtime) activity: ActivityCoordinator,
+    pub(in crate::native_runtime) post_join_recovery: Arc<PostJoinRecoveryLifecycle>,
     #[cfg(test)]
     pub(in crate::native_runtime) monitor_join_test_hook: Option<PlaybackJoinTestHook>,
     #[cfg(all(test, feature = "tauri-test"))]
@@ -2423,6 +2506,7 @@ impl NativePlaybackServiceHandle {
             diagnostics_gate: self.diagnostics_gate.clone(),
             prepare_publication: Mutex::new(PreparePublicationState::default()),
             activity: self.activity.clone(),
+            post_join_recovery: Arc::clone(&self.post_join_recovery),
             startup_cancellation: Arc::new(AtomicBool::new(false)),
             startup_arm_gate: Mutex::new(()),
             #[cfg(test)]

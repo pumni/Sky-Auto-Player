@@ -8,7 +8,7 @@ use super::super::outcome::{
 #[cfg(any(test, feature = "test-support"))]
 use super::super::physical::InstrumentPhysicalState;
 use super::super::profile::MaterializedInstrumentKeyProfile;
-use super::{RELEASE_OWNER_SLOT_COUNT, TrackedKeyState};
+use super::TrackedKeyState;
 use crate::clock::QpcClock;
 use crate::input::ReleaseOwnerProof;
 use std::fmt;
@@ -20,6 +20,7 @@ impl fmt::Debug for TrackedKeyState {
             .field("possibly_active_mask", &self.possibly_active_mask)
             .field("failed_release_mask", &self.failed_release_mask)
             .field("in_flight_mask", &self.in_flight_mask)
+            .field("needs_probe_mask", &self.needs_probe_mask)
             .field("release_attempts_total", &self.release_attempts_total)
             .field("last_error", &self.last_error)
             .field("keys_dropped", &self.keys_dropped)
@@ -48,54 +49,90 @@ impl TrackedKeyState {
         Self::default()
     }
 
+    /// Reconstruct a terminal release journal for the one post-join recovery
+    /// owner. Recovery accepts only a complete, disjoint residual and the
+    /// original immutable process authority; it cannot bind a replacement
+    /// target or infer a profile from the current layout.
+    pub fn from_terminal_release_residual(
+        profile: [super::super::profile::PhysicalKey; sky_dispatch_core::model::MAX_KEYS],
+        owner: ReleaseOwnerProof,
+        outstanding_mask: u16,
+        needs_up_mask: u16,
+        needs_probe_mask: u16,
+    ) -> Result<Self, String> {
+        let valid_mask = super::super::scan_code::FULL_INSTRUMENT_MASK;
+        if outstanding_mask & !valid_mask != 0
+            || needs_up_mask & !valid_mask != 0
+            || needs_probe_mask & !valid_mask != 0
+            || needs_up_mask & needs_probe_mask != 0
+            || needs_up_mask | needs_probe_mask != outstanding_mask
+        {
+            return Err("terminal release residual masks are inconsistent".into());
+        }
+        let authority = owner.authority().ok_or_else(|| {
+            "terminal release residual has no process identity authority".to_string()
+        })?;
+        let owner_pid = owner
+            .owner_pid()
+            .ok_or_else(|| "terminal release residual has no original owner PID".to_string())?;
+        if owner.target_hwnd() == 0
+            || owner.target_generation() == 0
+            || owner_pid == 0
+            || authority.identity().hwnd != owner.target_hwnd()
+            || authority.identity().owner_pid != owner_pid
+        {
+            return Err(
+                "terminal release residual origin proof is incomplete or inconsistent".into(),
+            );
+        }
+        let validated = super::super::profile::InstrumentKeyProfile::try_from_spec(
+            super::super::profile::InstrumentKeyProfileSpec { keys: profile },
+        )
+        .map_err(|error| format!("terminal release profile is invalid: {error}"))?;
+        let mut state = Self::with_profile(
+            super::super::profile::MaterializedInstrumentKeyProfile::from_validated(validated),
+        );
+        state.session_release_owner = Some(owner);
+        state.failed_release_mask = needs_up_mask;
+        state.needs_probe_mask = needs_probe_mask;
+        Ok(state)
+    }
+
     /// Return every key mask that still carries a release obligation.
     pub fn release_obligation_mask(&self) -> u16 {
         self.active_mask
             | self.possibly_active_mask
             | self.failed_release_mask
             | self.in_flight_mask
+            | self.needs_probe_mask
     }
 
-    /// Return the one frozen owner proof for a tracked cleanup mask. A mixed,
-    /// missing, or conflicted origin fails closed rather than borrowing the
-    /// currently published target's identity.
+    pub fn needs_up_mask(&self) -> u16 {
+        (self.active_mask
+            | self.possibly_active_mask
+            | self.failed_release_mask
+            | self.in_flight_mask)
+            & !self.needs_probe_mask
+    }
+
+    /// Return this worker's immutable owner proof for a tracked obligation.
+    /// The proof belongs to the session, so every nonempty mask has the same
+    /// provenance and no per-slot owner ledger is traversed or cloned.
     pub fn release_owner_proof_for_mask(
         &self,
         mask: u16,
-    ) -> Result<Option<ReleaseOwnerProof>, String> {
+    ) -> Result<Option<&ReleaseOwnerProof>, String> {
         if mask == 0 {
             return Ok(None);
         }
-        if mask & !((1_u16 << RELEASE_OWNER_SLOT_COUNT) - 1) != 0 {
+        if mask & !super::super::scan_code::FULL_INSTRUMENT_MASK != 0 {
             return Err("tracked release mask contains a non-instrument slot".into());
         }
-        let mut remaining = mask;
-        let mut proof: Option<ReleaseOwnerProof> = None;
-        while remaining != 0 {
-            let slot = remaining.trailing_zeros() as usize;
-            let bit = 1_u16 << slot;
-            remaining &= !bit;
-            #[cfg(any(test, feature = "test-support"))]
-            super::TEST_RELEASE_OWNER_LEDGER_VISITS.increment();
-            if self.release_owner_ledger.conflicted_mask & bit != 0 {
-                return Err(format!(
-                    "tracked release owner is ambiguous for slot {slot}"
-                ));
-            }
-            let Some(slot_proof) = self.release_owner_ledger.owner_by_slot[slot].as_ref() else {
-                return Err(format!(
-                    "tracked release owner proof is missing for slot {slot}"
-                ));
-            };
-            if let Some(existing) = proof.as_ref() {
-                if !existing.same_owner(slot_proof) {
-                    return Err("tracked release mask spans different owner generations".into());
-                }
-            } else {
-                proof = Some(slot_proof.clone());
-            }
-        }
-        Ok(proof)
+        Ok(self.session_release_owner.as_ref())
+    }
+
+    pub fn session_release_owner_proof(&self) -> Option<&ReleaseOwnerProof> {
+        self.session_release_owner.as_ref()
     }
 
     /// Clear only the conservative journal residue created by one proven
@@ -118,97 +155,45 @@ impl TrackedKeyState {
         }
         self.possibly_active_mask &= !down_mask;
         self.in_flight_mask &= !down_mask;
-        self.clear_unobligated_release_owners(down_mask);
         Ok(())
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn reset_owner_ledger_visits_for_test(&self) {
-        super::TEST_RELEASE_OWNER_LEDGER_VISITS.store(0, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn owner_ledger_visits_for_test(&self) -> u64 {
-        super::TEST_RELEASE_OWNER_LEDGER_VISITS.load(std::sync::atomic::Ordering::Relaxed)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
     pub fn forget_release_owner_proof_for_test(&mut self, mask: u16) {
-        let mut remaining = mask;
-        while remaining != 0 {
-            let slot = remaining.trailing_zeros() as usize;
-            let bit = 1_u16 << slot;
-            remaining &= !bit;
-            if slot < RELEASE_OWNER_SLOT_COUNT {
-                self.release_owner_ledger.owner_by_slot[slot] = None;
-                self.release_owner_ledger.conflicted_mask &= !bit;
-            }
+        if mask != 0 {
+            self.session_release_owner = None;
         }
     }
 
     #[cfg(any(test, feature = "test-support"))]
     pub fn set_release_owner_proof_for_test(&mut self, mask: u16, proof: ReleaseOwnerProof) {
-        let mut remaining = mask;
-        while remaining != 0 {
-            let slot = remaining.trailing_zeros() as usize;
-            let bit = 1_u16 << slot;
-            remaining &= !bit;
-            if slot < RELEASE_OWNER_SLOT_COUNT {
-                self.release_owner_ledger.owner_by_slot[slot] = Some(proof.clone());
-                self.release_owner_ledger.conflicted_mask &= !bit;
+        if mask != 0 {
+            self.bind_session_release_owner(proof)
+                .expect("test session owner proof is immutable");
+        }
+    }
+
+    pub fn bind_session_release_owner(&mut self, proof: ReleaseOwnerProof) -> Result<(), String> {
+        match self.session_release_owner.as_ref() {
+            Some(current) if current.same_owner(&proof) => Ok(()),
+            Some(_) => Err("tracked release owner differs from the bound session owner".into()),
+            None => {
+                self.session_release_owner = Some(proof);
+                Ok(())
             }
         }
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn conflict_release_owner_proof_for_test(&mut self, mask: u16) {
-        self.release_owner_ledger.conflicted_mask |= mask;
-    }
-
-    pub(super) fn remember_release_owner_for_down(
+    pub fn bind_session_release_owner_ref(
         &mut self,
-        down_mask: u16,
-        proof: Option<&ReleaseOwnerProof>,
-    ) {
-        let mut remaining = down_mask;
-        let obligations = self.release_obligation_mask();
-        while remaining != 0 {
-            let slot = remaining.trailing_zeros() as usize;
-            let bit = 1_u16 << slot;
-            remaining &= !bit;
-            #[cfg(any(test, feature = "test-support"))]
-            super::TEST_RELEASE_OWNER_LEDGER_VISITS.increment();
-            if slot >= RELEASE_OWNER_SLOT_COUNT {
-                self.release_owner_ledger.conflicted_mask |= bit;
-                continue;
-            }
-            if obligations & bit == 0 {
-                self.release_owner_ledger.owner_by_slot[slot] = proof.cloned();
-                self.release_owner_ledger.conflicted_mask &= !bit;
-                continue;
-            }
-            let same_owner = self.release_owner_ledger.owner_by_slot[slot]
-                .as_ref()
-                .zip(proof)
-                .is_some_and(|(current, next)| current.same_owner(next));
-            if !same_owner {
-                self.release_owner_ledger.conflicted_mask |= bit;
-            }
-        }
-    }
-
-    pub(super) fn clear_unobligated_release_owners(&mut self, mask: u16) {
-        let obligations = self.release_obligation_mask();
-        let mut remaining = mask & ((1_u16 << RELEASE_OWNER_SLOT_COUNT) - 1);
-        while remaining != 0 {
-            let slot = remaining.trailing_zeros() as usize;
-            let bit = 1_u16 << slot;
-            remaining &= !bit;
-            #[cfg(any(test, feature = "test-support"))]
-            super::TEST_RELEASE_OWNER_LEDGER_VISITS.increment();
-            if obligations & bit == 0 {
-                self.release_owner_ledger.owner_by_slot[slot] = None;
-                self.release_owner_ledger.conflicted_mask &= !bit;
+        proof: &ReleaseOwnerProof,
+    ) -> Result<(), String> {
+        match self.session_release_owner.as_ref() {
+            Some(current) if current.same_owner(proof) => Ok(()),
+            Some(_) => Err("tracked release owner differs from the bound session owner".into()),
+            None => {
+                self.session_release_owner = Some(proof.clone());
+                Ok(())
             }
         }
     }
@@ -372,14 +357,6 @@ impl TrackedKeyState {
         F: Fn(i32) -> i16 + Send + Sync + 'static,
     {
         self.modifier_key_state_query = Some(Box::new(query));
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn set_full_instrument_release_counter(
-        &mut self,
-        counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    ) {
-        self.full_instrument_release_counter = Some(counter);
     }
 
     #[cfg(any(test, feature = "test-support"))]

@@ -29,6 +29,10 @@ function Get-QualificationReportRowLabel {
         if ($Role -eq 'control') { return 'DispatchSessionRedesignM3-Baseline' }
         return 'DispatchSessionRedesignM3-Candidate'
     }
+    if ($Profile -eq 'PlaybackCoreLifecycle') {
+        if ($Role -eq 'control') { return 'PlaybackCoreLifecycle-Baseline' }
+        return 'PlaybackCoreLifecycle-Candidate'
+    }
     if ($Profile -eq 'Scheduler') {
         if ($Role -eq 'control') { return 'Scheduler-Baseline' }
         return 'Scheduler-Candidate'
@@ -111,6 +115,38 @@ function Assert-DispatchSessionRedesignM3SessionIdentity {
             $Scenario + '/' + $Workload + '/' + $TimingMarginUs + '/' + $GameFps + '/' + $SampleSeconds)
     }
     Get-DispatchSessionRedesignM3TimingFloors -Scenario $Scenario -GameFps $GameFps -TimingMarginUs $TimingMarginUs
+}
+
+function Assert-PlaybackCoreLifecycleSessionIdentity {
+    param(
+        [Parameter(Mandatory)] [string]$Scenario,
+        [Parameter(Mandatory)] [string]$Workload,
+        [Parameter(Mandatory)] [ValidateScript({ $_ -eq 500 })] [int]$TimingMarginUs,
+        [Parameter(Mandatory)] [ValidateSet(60)] [int]$GameFps,
+        [int]$SampleSeconds
+    )
+    $profile = Get-PlaybackCoreLifecycleProfile
+    $performance = $Workload -in $profile.PerformanceWorkloads -and
+        $Scenario -eq $Workload -and $SampleSeconds -eq 15
+    $safety = $Workload -eq 'safety-smoke' -and
+        $Scenario -in $profile.SafetyScenarios -and $SampleSeconds -eq 0
+    if (-not ($performance -or $safety)) {
+        throw ('PlaybackCoreLifecycle does not authorize scenario/workload/margin/FPS/sample ' +
+            $Scenario + '/' + $Workload + '/' + $TimingMarginUs + '/' + $GameFps + '/' + $SampleSeconds)
+    }
+    $frameUs = [long][Math]::Ceiling(1000000.0 / $GameFps)
+    [pscustomobject]@{
+        scenario = $Scenario
+        workload = $Workload
+        game_fps = $GameFps
+        timing_margin_us = $TimingMarginUs
+        frame_us = $frameUs
+        hold_frames = 1
+        expected_hold_us = [long]($frameUs + $TimingMarginUs)
+        expected_release_gap_us = [long]($frameUs + $TimingMarginUs)
+        configured_H_us = [long]($frameUs + $TimingMarginUs)
+        configured_G_us = [long]($frameUs + $TimingMarginUs)
+    }
 }
 
 function Get-DispatchSessionRedesignM3StageSummary {
@@ -354,9 +390,62 @@ function Get-DispatchCleanupM3StageSummary {
     $stageSummary
 }
 
+function Get-PlaybackCoreLifecycleStageSummary {
+    param(
+        [Parameter(Mandatory)] [ValidateSet('Final')] [string]$Stage,
+        [Parameter(Mandatory)] [int]$TimingMarginUs,
+        [Parameter(Mandatory)] [int]$Pairs,
+        [Parameter(Mandatory)] [int]$SampleSeconds,
+        [string[]]$SafetyScenarios = @(),
+        [string[]]$PerformanceWorkloads = @(),
+        [string[]]$LoadCells = @()
+    )
+    if ($TimingMarginUs -ne 500 -or $Pairs -ne 6 -or $SampleSeconds -ne 15 -or
+        (@($SafetyScenarios) -join '|') -ne 'focus-loss|owner-mismatch|owner-process-termination|pause-resume|suspend-resume|stop-cleanup|skip-cleanup|supervisor-lease-expiry' -or
+        (@($PerformanceWorkloads) -join '|') -ne 'mixed-up-down|dense-alternating|canonical-max-chord|near-minimum-retrigger|long-idle' -or
+        (@($LoadCells) -join '|') -ne 'Quiet|Contention') {
+        throw 'PlaybackCoreLifecycle Final plan must match its eight candidate safety cases and six alternating A/B pairs across the five Quiet/Contention workloads'
+    }
+    $pairedPerRole = $PerformanceWorkloads.Count * $LoadCells.Count * $Pairs
+    $candidateSessions = $pairedPerRole + $SafetyScenarios.Count
+    [ordered]@{
+        stage = $Stage
+        stage_kind = 'six alternating AB/BA pairs per workload/load cell, followed by candidate-only safety cases; fail-stop between cases'
+        qualification_profile = 'PlaybackCoreLifecycle'
+        workload_version = 'playback-core-lifecycle-v1'
+        planned_session_count = $candidateSessions + $pairedPerRole
+        candidate_session_count = $candidateSessions
+        control_session_count = $pairedPerRole
+        candidate_role = 'Candidate'
+        control_role = 'Baseline'
+        role_scope = 'Baseline/Candidate paired performance; Candidate-only safety'
+        workloads = @('safety-smoke') + @($PerformanceWorkloads)
+        scenarios = @($SafetyScenarios) + @($PerformanceWorkloads)
+        workload_summary = 'eight candidate safety cases plus five paired workloads in Quiet and Contention'
+        load_cells = @($LoadCells)
+        game_fps = 60
+        game_fps_values = @(60)
+        game_fps_summary = '60 FPS workload configuration'
+        timing_margin_us = 500
+        timing_margin_values_us = @(500)
+        timing_margin_summary = '500 us'
+        performance_timing_margin_us = 500
+        safety_timing_margin_us = 500
+        configured_H_us = $null
+        configured_G_us = $null
+        configured_H_G_mode = 'per scenario workload profile'
+        configured_H_G_summary = 'profile-defined production H/G timing at 60 FPS with a 500 us margin'
+        pairs = $Pairs
+        pair_order = 'AB/BA alternating'
+        timed_performance_sample_seconds = $SampleSeconds
+        timed_performance_samples = $pairedPerRole * 2
+        sample_scope = '15 seconds for each candidate and baseline performance session; safety cases are untimed'
+    }
+}
+
 function New-QualificationReportProjection {
     param(
-        [Parameter(Mandatory)] [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3')] [string]$Profile,
+        [Parameter(Mandatory)] [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle')] [string]$Profile,
         [Parameter(Mandatory)] $Candidate,
         $Control,
         [Parameter(Mandatory)] [ValidateSet('Canary', 'Smoke', 'Compare', 'Final')] [string]$Stage,
@@ -371,6 +460,7 @@ function New-QualificationReportProjection {
         'FrameSnapshot' { 'FrameSnapshot-Candidate' }
         'DispatchCleanupM3' { 'DispatchCleanupM3-Candidate' }
         'DispatchSessionRedesignM3' { 'DispatchSessionRedesignM3-Candidate' }
+        'PlaybackCoreLifecycle' { 'PlaybackCoreLifecycle-Candidate' }
         'Scheduler' { 'Scheduler-Candidate' }
         default { 'Candidate-R2' }
     }
@@ -382,6 +472,8 @@ function New-QualificationReportProjection {
         'DispatchCleanupM3-Baseline'
     } elseif ($Profile -eq 'DispatchSessionRedesignM3') {
         'DispatchSessionRedesignM3-Baseline'
+    } elseif ($Profile -eq 'PlaybackCoreLifecycle') {
+        'PlaybackCoreLifecycle-Baseline'
     } elseif ($Profile -eq 'Scheduler') {
         'C0-Scheduler-Baseline'
     } elseif ([bool](Get-ReportOptionalProperty $Control 'c1_timed_verified')) {
@@ -397,6 +489,8 @@ function New-QualificationReportProjection {
         'DispatchCleanupM3-Baseline'
     } elseif ($Profile -eq 'DispatchSessionRedesignM3') {
         'DispatchSessionRedesignM3-Baseline'
+    } elseif ($Profile -eq 'PlaybackCoreLifecycle') {
+        'PlaybackCoreLifecycle-Baseline'
     } elseif ([bool](Get-ReportOptionalProperty $Control 'c1_timed_verified')) {
         'C1-TIMED-R2'
     } else {
@@ -408,6 +502,8 @@ function New-QualificationReportProjection {
         'DispatchCleanupM3-Candidate '
     } elseif ($Profile -eq 'DispatchSessionRedesignM3') {
         'DispatchSessionRedesignM3-Candidate '
+    } elseif ($Profile -eq 'PlaybackCoreLifecycle') {
+        'PlaybackCoreLifecycle-Candidate '
     } else { '' }
     $candidateMargins = [ordered]@{
         performance_timing_margin_us = Get-ReportOptionalProperty $Candidate 'performance_timing_margin_us'
@@ -426,6 +522,10 @@ function New-QualificationReportProjection {
     } elseif ($Profile -eq 'DispatchSessionRedesignM3') {
         Get-DispatchSessionRedesignM3StageSummary -Stage $Stage -TimingMarginUs $TimingMarginUs -Pairs $Pairs `
             -SampleSeconds $SampleSeconds -SafetyScenarios $SafetyScenarios -PerformanceWorkloads $PerformanceWorkloads
+    } elseif ($Profile -eq 'PlaybackCoreLifecycle') {
+        Get-PlaybackCoreLifecycleStageSummary -Stage $Stage -TimingMarginUs $TimingMarginUs -Pairs $Pairs `
+            -SampleSeconds $SampleSeconds -SafetyScenarios $SafetyScenarios -PerformanceWorkloads $PerformanceWorkloads `
+            -LoadCells @('Quiet', 'Contention')
     } else { $null }
     $summaryParameters = if ($m3StageSummary) {
         [ordered]@{
@@ -470,12 +570,12 @@ function New-QualificationReportProjection {
             timing_margin_us = $TimingMarginUs
             performance_timing_margin_us = $candidateMargins.performance_timing_margin_us
             safety_timing_margin_us = $candidateMargins.safety_timing_margin_us
-            order = 'alternating AB/BA, three pairs each per cell'
+            order = 'alternating AB/BA, configured pairs per cell'
             quiet = 'no benchmark CPU workers'
             contention = 'two hidden pwsh busy workers at BelowNormal priority'
             sink = 'project-owned ReceiveOnly sink, identity verified by PID/HWND/start time/event-log ID'
-            receiveonly_observer_mode = if ($Profile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3')) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
-            receiveonly_observer_version = if ($Profile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3')) { 'scheduler-receiveonly-queue-v3-compat3' } else { $null }
+            receiveonly_observer_mode = if ($Profile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle')) { 'SchedulerQueuedV3Compat3' } else { 'LegacyInline' }
+            receiveonly_observer_version = if ($Profile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle')) { 'scheduler-receiveonly-queue-v3-compat3' } else { $null }
         }
     }
     $manifestParameters = if ($m3StageSummary) {
@@ -530,7 +630,7 @@ function New-QualificationReportProjection {
 
     $markdownStageLines = @()
     if ($m3StageSummary) {
-        $m3ProfileName = if ($Profile -eq 'DispatchSessionRedesignM3') { 'DispatchSessionRedesignM3' } else { 'DispatchCleanupM3' }
+        $m3ProfileName = if ($Profile -eq 'DispatchSessionRedesignM3') { 'DispatchSessionRedesignM3' } elseif ($Profile -eq 'PlaybackCoreLifecycle') { 'PlaybackCoreLifecycle' } else { 'DispatchCleanupM3' }
         $markdownStageLines = [string[]]@(
             '- Qualification: ' + $m3ProfileName + ' / ' + $m3StageSummary.stage + ' (' + $m3StageSummary.stage_kind + '); workload version ' + $m3StageSummary.workload_version,
             '- Planned sessions: ' + $m3StageSummary.planned_session_count + '; candidate: ' + $m3StageSummary.candidate_session_count + '; baseline/control: ' + $m3StageSummary.control_session_count,
@@ -564,4 +664,4 @@ function New-QualificationReportProjection {
     }
 }
 
-Export-ModuleMember -Function Get-QualificationReportRowLabel, Get-DispatchCleanupM3TimingFloors, Assert-DispatchCleanupM3RunConfigTiming, Get-DispatchCleanupM3StageSummary, Get-DispatchSessionRedesignM3TimingFloors, Assert-DispatchSessionRedesignM3SessionIdentity, Get-DispatchSessionRedesignM3StageSummary, New-QualificationReportProjection
+Export-ModuleMember -Function Get-QualificationReportRowLabel, Get-DispatchCleanupM3TimingFloors, Assert-DispatchCleanupM3RunConfigTiming, Get-DispatchCleanupM3StageSummary, Get-DispatchSessionRedesignM3TimingFloors, Assert-DispatchSessionRedesignM3SessionIdentity, Get-PlaybackCoreLifecycleStageSummary, Assert-PlaybackCoreLifecycleSessionIdentity, Get-DispatchSessionRedesignM3StageSummary, New-QualificationReportProjection

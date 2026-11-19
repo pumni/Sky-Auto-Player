@@ -1,16 +1,18 @@
 use super::super::admission::{TargetStamp, verify_safety_cleanup_target};
 use super::{
     FinalizeInput, FinalizePublication, FinalizeResources, FinalizeSignals, FinalizeState,
-    FinalizeTiming, OUTCOME_ERROR, OUTCOME_FINISHED, OUTCOME_QUIT, OUTCOME_SKIPPED,
-    OUTCOME_SYSTEM_SUSPENDED, TerminalTrigger, clean_completion_proven,
-    current_process_cpu_time_us, current_thread_cpu_time_us, describe_release_outcome,
-    publish_backend_metrics, publish_terminal_metrics, record_termination_error,
-    release_state_verified,
+    FinalizeTiming, TerminalTrigger, clean_completion_proven, current_process_cpu_time_us,
+    current_thread_cpu_time_us, describe_release_outcome, publish_backend_metrics,
+    publish_terminal_metrics, record_termination_error, release_state_verified,
 };
 #[cfg(any(test, feature = "test-support"))]
 use parking_lot::Mutex;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::QpcError;
+#[cfg(any(test, feature = "real-input-acceptance"))]
+use sky_dispatch_win32::input::GuardedReleaseOutcome;
+#[cfg(feature = "real-input-acceptance")]
+use sky_dispatch_win32::input::TerminalProbeVerdict;
 use sky_dispatch_win32::input::TerminalReleaseEvidence;
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::Arc;
@@ -18,6 +20,15 @@ use std::sync::atomic::Ordering;
 
 enum TerminalCleanupFailure {
     Panicked(Box<dyn std::any::Any + Send>),
+}
+
+#[cfg(any(test, feature = "real-input-acceptance"))]
+fn terminal_raw_up_syscall_count(outcome: &GuardedReleaseOutcome) -> u64 {
+    outcome
+        .send_attempts
+        .iter()
+        .map(|attempt| u64::from(attempt.raw_calls))
+        .sum()
 }
 
 pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
@@ -42,6 +53,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     let FinalizeState {
         worker_result,
         mut local_metrics,
+        mut pending_production_forensics,
         mut abort_counts,
         mut terminal_error,
         mut secondary_errors,
@@ -108,8 +120,9 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "terminal_release_started");
     let cleanup_target = terminal_cleanup_target(target);
+    let session_release_owner = backend.session_release_owner_proof().cloned();
     let cleanup_result = catch_unwind(AssertUnwindSafe(|| {
-        backend.release_terminal_tracked_scope_with_attempt_admission(
+        backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
             cleanup_target.hwnd,
             |_, release_owner| {
                 let stamp = cleanup_target.stamp.ok_or_else(|| {
@@ -122,12 +135,50 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
                     cleanup_target.require_owner_identity,
                 )
             },
+            || {
+                let stamp = cleanup_target.stamp.ok_or_else(|| {
+                    "target HWND/generation unavailable during terminal cleanup".to_string()
+                })?;
+                let release_owner = session_release_owner.as_ref().ok_or_else(|| {
+                    "session release owner proof is missing during terminal cleanup".to_string()
+                })?;
+                super::super::admission::safety_cleanup_drain_decision(
+                    target,
+                    stamp,
+                    release_owner,
+                    cleanup_target.require_owner_identity,
+                    true,
+                )
+            },
         )
     }))
     .map_err(TerminalCleanupFailure::Panicked);
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.release_outcome.clone());
         let release_verified = release_state_verified(&backend, &outcome.release_outcome);
+        #[cfg(feature = "real-input-acceptance")]
+        {
+            metrics.terminal_release_raw_up_syscall_count.store(
+                terminal_raw_up_syscall_count(outcome),
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            metrics
+                .terminal_release_raw_up_syscall_count_available
+                .store(true, std::sync::atomic::Ordering::Release);
+            if release_verified
+                && outcome.needs_up_mask == 0
+                && outcome.needs_probe_mask == 0
+                && matches!(outcome.probe_verdict, TerminalProbeVerdict::AllUp)
+            {
+                // This worker-side QPC sample follows cleanup's terminal
+                // probe and journal reconciliation. It deliberately precedes
+                // telemetry extraction and external ReceiveOnly log settling.
+                let release_ticks = qpc_clock.now().map_or(0, |ticks| ticks.as_u64());
+                metrics
+                    .terminal_release_verified_qpc_ticks
+                    .store(release_ticks, std::sync::atomic::Ordering::Release);
+            }
+        }
         if !release_verified {
             let evidence = outcome.terminal_evidence();
             record_termination_error(
@@ -311,6 +362,9 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             );
         }
     }
+    // The final packet's compact evidence is reduced after physical cleanup
+    // and observer teardown. It cannot delay or alter terminal release.
+    pending_production_forensics.drain_after_cleanup(&mut local_metrics);
     let end_ticks = qpc_clock.now();
     let end_qpc = end_ticks.and_then(|ticks| {
         qpc_clock
@@ -464,30 +518,63 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     record_finalization_event(&operation_trace, "terminal_metrics_publication");
     publish_terminal_metrics(&local_metrics, metrics, qpc_clock, end_us);
     let cleanup_panicked = matches!(&cleanup_result, Err(TerminalCleanupFailure::Panicked(_)));
+    let terminal_outcome = if terminal_error.is_some()
+        || cleanup_panicked
+        || worker_panicked
+        || terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
+    {
+        super::super::super::WorkerTerminalOutcome::Error
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::SystemSuspend)) {
+        super::super::super::WorkerTerminalOutcome::SystemSuspended
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::Skip))
+        || skip_requested.load(Ordering::Acquire)
+    {
+        super::super::super::WorkerTerminalOutcome::Skipped
+    } else if matches!(terminal_trigger, Some(TerminalTrigger::Quit))
+        || quit_requested.load(Ordering::Acquire)
+    {
+        super::super::super::WorkerTerminalOutcome::Quit
+    } else {
+        super::super::super::WorkerTerminalOutcome::Finished
+    };
+    let terminal_cause = if worker_panicked {
+        super::super::super::WorkerTerminalCause::WorkerPanic
+    } else if cleanup_panicked {
+        super::super::super::WorkerTerminalCause::CleanupPanic
+    } else {
+        match terminal_trigger {
+            Some(TerminalTrigger::SenderAnomaly) => {
+                super::super::super::WorkerTerminalCause::SenderAnomaly
+            }
+            Some(TerminalTrigger::SystemSuspend) => {
+                super::super::super::WorkerTerminalCause::SystemSuspended
+            }
+            Some(TerminalTrigger::Skip) => super::super::super::WorkerTerminalCause::Skipped,
+            Some(TerminalTrigger::Quit) => super::super::super::WorkerTerminalCause::Quit,
+            Some(TerminalTrigger::WorkerPanic) => {
+                super::super::super::WorkerTerminalCause::WorkerPanic
+            }
+            Some(_) if terminal_error.is_some() => {
+                super::super::super::WorkerTerminalCause::Failure
+            }
+            Some(_) => super::super::super::WorkerTerminalCause::Failure,
+            None if terminal_error.is_some() => super::super::super::WorkerTerminalCause::Failure,
+            None => super::super::super::WorkerTerminalCause::Finished,
+        }
+    };
+    let residual = super::super::super::TerminalReleaseResidual::from_backend(&backend);
+    *metrics.terminal_result.lock() = Some(super::super::super::WorkerTerminalResult {
+        outcome: terminal_outcome,
+        cause: terminal_cause,
+        terminal_error: terminal_error.clone(),
+        residual,
+    });
     match (worker_result, cleanup_result) {
         (Err(payload), _) => resume_unwind(payload),
         (Ok(_), Err(TerminalCleanupFailure::Panicked(payload))) => resume_unwind(payload),
         (Ok(_), Ok(_)) => {}
     }
-    if terminal_error.is_some()
-        || cleanup_panicked
-        || worker_panicked
-        || terminal_trigger.is_some_and(TerminalTrigger::requires_error_outcome)
-    {
-        OUTCOME_ERROR
-    } else if matches!(terminal_trigger, Some(TerminalTrigger::SystemSuspend)) {
-        OUTCOME_SYSTEM_SUSPENDED
-    } else if matches!(terminal_trigger, Some(TerminalTrigger::Skip))
-        || skip_requested.load(Ordering::Acquire)
-    {
-        OUTCOME_SKIPPED
-    } else if matches!(terminal_trigger, Some(TerminalTrigger::Quit))
-        || quit_requested.load(Ordering::Acquire)
-    {
-        OUTCOME_QUIT
-    } else {
-        OUTCOME_FINISHED
-    }
+    terminal_outcome.legacy_code()
 }
 
 fn terminal_cleanup_target(target: &super::SessionTarget) -> TerminalCleanupTarget {
@@ -547,5 +634,71 @@ fn describe_terminal_release_evidence(evidence: &TerminalReleaseEvidence) -> Str
 fn record_finalization_event(trace: &Option<Arc<Mutex<Vec<&'static str>>>>, event: &'static str) {
     if let Some(trace) = trace {
         trace.lock().push(event);
+    }
+}
+
+#[cfg(test)]
+mod acceptance_raw_up_count_tests {
+    use super::terminal_raw_up_syscall_count;
+    use sky_dispatch_win32::input::{
+        GuardedReleaseOutcome, ReleaseAllOutcome, TerminalProbeVerdict, TerminalSendAttemptEvidence,
+    };
+    use smallvec::SmallVec;
+
+    fn evidence(
+        raw_calls: u8,
+        requested_events: u8,
+        inserted_events: u8,
+    ) -> TerminalSendAttemptEvidence {
+        TerminalSendAttemptEvidence {
+            raw_calls,
+            requested_events,
+            inserted_events,
+            win32_error: None,
+            started_ticks: None,
+            completed_ticks: None,
+            qpc_error: None,
+        }
+    }
+
+    fn cleanup_outcome(
+        admitted_attempts: u8,
+        send_attempts: Vec<TerminalSendAttemptEvidence>,
+        withheld_reason: Option<&str>,
+    ) -> GuardedReleaseOutcome {
+        GuardedReleaseOutcome {
+            release_outcome: ReleaseAllOutcome {
+                attempted_mask: 0,
+                transport_anomaly: true,
+                released_successfully: false,
+                stuck_mask: 1,
+                verification_inconclusive: true,
+                attempts: admitted_attempts,
+            },
+            send_attempts: SmallVec::from_vec(send_attempts),
+            probe_verdict: TerminalProbeVerdict::Inconclusive(1),
+            withheld_reason: withheld_reason.map(str::to_owned),
+            needs_up_mask: 1,
+            needs_probe_mask: 0,
+        }
+    }
+
+    #[test]
+    fn acceptance_raw_up_count_uses_only_recorded_raw_syscalls() {
+        let withheld = cleanup_outcome(4, Vec::new(), Some("authority changed"));
+        assert_eq!(terminal_raw_up_syscall_count(&withheld), 0);
+
+        let pre_send_failure = cleanup_outcome(1, vec![evidence(0, 1, 0)], None);
+        assert_eq!(terminal_raw_up_syscall_count(&pre_send_failure), 0);
+
+        let mut raw_zero_evidence = evidence(1, 1, 0);
+        raw_zero_evidence.win32_error = Some(5);
+        let raw_zero = cleanup_outcome(1, vec![raw_zero_evidence], None);
+        assert_eq!(terminal_raw_up_syscall_count(&raw_zero), 1);
+
+        let mut ambiguous_evidence = evidence(1, 2, 1);
+        ambiguous_evidence.win32_error = Some(5);
+        let ambiguous_sender_failure = cleanup_outcome(1, vec![ambiguous_evidence], None);
+        assert_eq!(terminal_raw_up_syscall_count(&ambiguous_sender_failure), 1);
     }
 }

@@ -3,7 +3,7 @@ use super::outcome::{
     SendTransactionOutcome, SendTransactionStatus, classify_send_status,
 };
 use super::profile::MaterializedInstrumentKeyProfile;
-use super::raw::terminal_up_send_with;
+use super::raw::{send_prepared_inputs_once, terminal_up_send_with};
 use super::scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
 };
@@ -202,10 +202,7 @@ impl PreparedTaggedCalibrationPacket {
         let result = send_input_view_at_target(
             PreparedInputView {
                 requested: self.requested,
-                length: usize::from(self.requested),
                 inputs: self.inputs.as_ptr(),
-                cb_size: std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>(
-                ) as i32,
             },
             clock,
             physical_target_qpc,
@@ -321,19 +318,6 @@ fn build_inputs(
     (inputs, length)
 }
 
-fn send_once(
-    packet: PhysicalPacket,
-    clock: QpcClock,
-    supplied_started_ticks: Option<QpcTicks>,
-) -> Result<PlatformSendResult, SendClockFailure> {
-    let prepared = PreparedPhysicalPacket::try_new(packet)
-        .expect("send_once receives a validated physical packet");
-    match send_once_prepared(&prepared, clock, supplied_started_ticks) {
-        Ok(result) => Ok(result),
-        Err(PreparedSendFailure::Clock(failure)) => Err(failure),
-    }
-}
-
 pub(crate) fn invalid_packet_outcome(packet: PhysicalPacket) -> SendTransactionOutcome {
     SendTransactionOutcome {
         status: SendTransactionStatus::PreparationRejected,
@@ -375,36 +359,22 @@ pub(crate) fn send_prepared_terminal_up_once(
 
     #[cfg(windows)]
     let transport = {
-        use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
+        use windows_sys::Win32::Foundation::SetLastError;
 
         let requested = prepared.event_count();
-        let cb_size =
-            std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>() as i32;
         terminal_up_send_with(requested, &mut sample_qpc, || {
             // Clear stale thread-local state after the optional start
             // sample and immediately before the authoritative syscall.
             unsafe { SetLastError(0) };
-            let inserted = unsafe {
-                SendInput(
-                    u32::from(requested),
-                    prepared.initialized_inputs().as_ptr(),
-                    cb_size,
-                )
-            }
-            .min(u32::from(requested)) as u8;
-            let win32_error = if inserted != requested {
-                unsafe { GetLastError() }
-            } else {
-                0
-            };
-            (inserted, win32_error)
+            // SAFETY: PreparedPhysicalPacket initializes exactly this fixed
+            // prefix and owns the storage until the one-call sender returns.
+            unsafe { send_prepared_inputs_once(prepared.initialized_inputs().as_ptr(), requested) }
         })
     };
 
     #[cfg(not(windows))]
     let transport = terminal_up_send_with(prepared.event_count(), &mut sample_qpc, || {
-        (prepared.event_count(), 0)
+        send_prepared_inputs_once(prepared.event_count())
     });
 
     terminal_up_outcome(packet, transport)
@@ -464,9 +434,7 @@ enum PreparedSendFailure {
 #[cfg(windows)]
 struct PreparedInputView {
     requested: u8,
-    length: usize,
     inputs: *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
-    cb_size: i32,
 }
 
 /// Run the shared target-aware QPC/SendInput envelope for a fixed INPUT view.
@@ -480,8 +448,7 @@ fn send_input_view_at_target(
     clock: QpcClock,
     physical_target_qpc: QpcTicks,
 ) -> Result<PlatformSendResult, PreparedSendFailure> {
-    use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
+    use windows_sys::Win32::Foundation::SetLastError;
 
     // Last-error state is preparation; it must not sit between the crossing
     // sample and SendInput.
@@ -501,13 +468,9 @@ fn send_input_view_at_target(
         std::hint::spin_loop();
     };
 
-    let inserted = unsafe { SendInput(view.length as u32, view.inputs, view.cb_size) }
-        .min(view.length as u32) as u8;
-    let win32_error = if usize::from(inserted) < view.length {
-        unsafe { GetLastError() }
-    } else {
-        0
-    };
+    // SAFETY: the internal calibration caller supplies a fixed, initialized
+    // array prefix and retains it for this synchronous call.
+    let (inserted, win32_error) = unsafe { send_prepared_inputs_once(view.inputs, view.requested) };
     let completed_ticks = match clock.now() {
         Ok(ticks) => ticks,
         Err(error) => {
@@ -568,14 +531,6 @@ fn send_input_view_at_target(
     })
 }
 
-fn send_once_prepared(
-    prepared: &PreparedPhysicalPacket,
-    clock: QpcClock,
-    supplied_started_ticks: Option<QpcTicks>,
-) -> Result<PlatformSendResult, PreparedSendFailure> {
-    send_once_prepared_view(prepared.as_view(), clock, supplied_started_ticks)
-}
-
 fn send_once_prepared_view(
     prepared: PreparedPacketView<'_>,
     clock: QpcClock,
@@ -583,14 +538,10 @@ fn send_once_prepared_view(
 ) -> Result<PlatformSendResult, PreparedSendFailure> {
     #[cfg(windows)]
     {
-        use windows_sys::Win32::Foundation::{GetLastError, SetLastError};
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
+        use windows_sys::Win32::Foundation::SetLastError;
 
         let requested = prepared.event_count();
-        let length = usize::from(prepared.event_count());
         let inputs = prepared.inputs.as_ptr();
-        let cb_size =
-            std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>() as i32;
         // Reset the thread-local error before the final correctness sample so
         // short insertion evidence cannot inherit an unrelated prior error.
         unsafe { SetLastError(0) };
@@ -605,13 +556,10 @@ fn send_once_prepared_view(
                 }
             },
         };
-        let inserted =
-            unsafe { SendInput(length as u32, inputs, cb_size) }.min(length as u32) as u8;
-        let win32_error = if usize::from(inserted) < length {
-            unsafe { GetLastError() }
-        } else {
-            0
-        };
+        // SAFETY: PreparedPacketView is backed by an initialized prefix of the
+        // still-live PreparedPhysicalPacket borrowed by this function.
+        let (inserted, win32_error) =
+            unsafe { send_prepared_inputs_once(inputs, prepared.event_count()) };
         let completed_ticks = match clock.now() {
             Ok(ticks) => ticks,
             Err(error) => {
@@ -665,24 +613,10 @@ fn send_once_prepared_view(
     }
 }
 
-/// One low-level `SendInput`/QPC attempt for a physical packet. Kept as a
-/// first-class value so the retry policy is testable through an injectable
-/// seam without invoking the Win32 syscall.
-#[allow(dead_code)]
+/// One low-level `SendInput`/QPC attempt for a prepared physical packet.
 enum PacketSendAttempt {
     Outcome(PlatformSendResult),
     ClockFailure(SendClockFailure),
-}
-
-fn run_send_attempt(
-    packet: PhysicalPacket,
-    clock: QpcClock,
-    supplied_started_ticks: Option<QpcTicks>,
-) -> PacketSendAttempt {
-    match send_once(packet, clock, supplied_started_ticks) {
-        Ok(res) => PacketSendAttempt::Outcome(res),
-        Err(failure) => PacketSendAttempt::ClockFailure(failure),
-    }
 }
 
 fn run_prepared_send_attempt(
@@ -728,7 +662,7 @@ fn prepared_send_outcome(
         }
     };
     let requested = usize::from(first.requested);
-    let inserted = usize::from(first.inserted).min(requested);
+    let inserted = usize::from(first.inserted);
     let status = classify_send_status(
         inserted,
         requested,
@@ -746,85 +680,6 @@ fn prepared_send_outcome(
     } else {
         PacketRetryReason::None
     };
-    SendTransactionOutcome {
-        status,
-        evidence: SendEvidence {
-            requested_mask,
-            confirmed_mask: if matches!(status, SendTransactionStatus::Complete) {
-                requested_mask
-            } else {
-                0
-            },
-            skipped_mask: 0,
-            first_inserted: inserted as u8,
-            attempts: 1,
-            zero_progress_retries: 0,
-            retry_reason,
-            first_win32_error: win32_error,
-            last_win32_error: win32_error,
-            started_ticks: Some(first.started_ticks),
-            completed_ticks: first.completed_ticks,
-            timing_error: first.timing_error,
-        },
-    }
-}
-
-/// One physical packet attempt with no retry policy.
-fn send_physical_packet_once_impl(
-    packet: PhysicalPacket,
-    mut send_one: impl FnMut(PhysicalPacket) -> PacketSendAttempt,
-) -> SendTransactionOutcome {
-    if !valid_packet(packet) || packet.event_count() == 0 {
-        return invalid_packet_outcome(packet);
-    }
-    let requested_mask = packet.up_mask | packet.down_mask;
-
-    let first = match send_one(packet) {
-        PacketSendAttempt::Outcome(res) => res,
-        PacketSendAttempt::ClockFailure(failure) => {
-            return SendTransactionOutcome {
-                status: if failure.sendinput_called {
-                    SendTransactionStatus::ClockFailureAfterSend
-                } else {
-                    SendTransactionStatus::ClockFailureBeforeSend
-                },
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: 0,
-                    skipped_mask: 0,
-                    first_inserted: failure.inserted,
-                    attempts: u8::from(failure.sendinput_called),
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: (failure.win32_error != 0).then_some(failure.win32_error),
-                    last_win32_error: (failure.win32_error != 0).then_some(failure.win32_error),
-                    started_ticks: failure.started_ticks,
-                    completed_ticks: None,
-                    timing_error: Some(failure.error),
-                },
-            };
-        }
-    };
-    let requested = usize::from(first.requested);
-    let inserted = usize::from(first.inserted).min(requested);
-    let status = classify_send_status(
-        inserted,
-        requested,
-        first.win32_error,
-        Some(first.started_ticks),
-        first.completed_ticks,
-    );
-    let win32_error = (first.win32_error != 0).then_some(first.win32_error);
-    let retry_reason = if inserted == 0 && !matches!(status, SendTransactionStatus::Complete) {
-        PacketRetryReason::ZeroProgress
-    } else if inserted < requested {
-        PacketRetryReason::PartialProgress {
-            inserted_count: inserted as u8,
-        }
-    } else {
-        PacketRetryReason::None
-    };
-
     SendTransactionOutcome {
         status,
         evidence: SendEvidence {
@@ -870,186 +725,9 @@ fn send_prepared_physical_packet_once_impl(
     prepared_send_outcome(packet, first)
 }
 
-/// Test-only retry policy retained to exercise the fail-closed transport
-/// matrix. Production callers use `send_physical_packet_once_with_clock`; the
-/// worker/recovery state machines own any retry decision.
-#[cfg(test)]
-fn send_physical_packet_retry_policy_impl(
-    packet: PhysicalPacket,
-    mut send_one: impl FnMut(PhysicalPacket) -> PacketSendAttempt,
-) -> SendTransactionOutcome {
-    if !valid_packet(packet) || packet.event_count() == 0 {
-        return invalid_packet_outcome(packet);
-    }
-    let requested_mask = packet.up_mask | packet.down_mask;
-
-    let first = match send_one(packet) {
-        PacketSendAttempt::Outcome(res) => res,
-        PacketSendAttempt::ClockFailure(failure) => {
-            return SendTransactionOutcome {
-                status: if failure.sendinput_called {
-                    SendTransactionStatus::ClockFailureAfterSend
-                } else {
-                    SendTransactionStatus::ClockFailureBeforeSend
-                },
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: 0,
-                    skipped_mask: 0,
-                    first_inserted: failure.inserted,
-                    attempts: u8::from(failure.sendinput_called),
-                    zero_progress_retries: 0,
-                    retry_reason: PacketRetryReason::None,
-                    first_win32_error: (failure.win32_error != 0).then_some(failure.win32_error),
-                    last_win32_error: (failure.win32_error != 0).then_some(failure.win32_error),
-                    started_ticks: failure.started_ticks,
-                    completed_ticks: None,
-                    timing_error: Some(failure.error),
-                },
-            };
-        }
-    };
-    let first_win32 = (first.win32_error != 0).then_some(first.win32_error);
-    let status1 = classify_send_status(
-        first.inserted as usize,
-        first.requested as usize,
-        first.win32_error,
-        Some(first.started_ticks),
-        first.completed_ticks,
-    );
-
-    if first.inserted == first.requested {
-        return SendTransactionOutcome {
-            status: status1,
-            evidence: SendEvidence {
-                requested_mask,
-                confirmed_mask: if matches!(status1, SendTransactionStatus::Complete) {
-                    requested_mask
-                } else {
-                    0
-                },
-                skipped_mask: 0,
-                first_inserted: first.inserted,
-                attempts: 1,
-                zero_progress_retries: 0,
-                retry_reason: PacketRetryReason::None,
-                first_win32_error: first_win32,
-                last_win32_error: first_win32,
-                started_ticks: Some(first.started_ticks),
-                completed_ticks: first.completed_ticks,
-                timing_error: None,
-            },
-        };
-    }
-
-    let retry_reason = if first.inserted == 0 {
-        PacketRetryReason::ZeroProgress
-    } else {
-        PacketRetryReason::PartialProgress {
-            inserted_count: first.inserted,
-        }
-    };
-    let up_only = packet.is_up_only();
-
-    // A partial insertion of a Down/Mixed packet has already split the chord.
-    // Never issue a second whole-packet send: the Down that landed would be
-    // duplicated and the physical stream would violate chord integrity.
-    if !up_only && first.inserted > 0 {
-        let status = if first.completed_ticks.is_none() {
-            SendTransactionStatus::ClockFailureAfterSend
-        } else {
-            SendTransactionStatus::IntegrityLost
-        };
-        return SendTransactionOutcome {
-            status,
-            evidence: SendEvidence {
-                requested_mask,
-                confirmed_mask: 0,
-                skipped_mask: 0,
-                first_inserted: first.inserted,
-                attempts: 1,
-                zero_progress_retries: 0,
-                retry_reason,
-                first_win32_error: first_win32,
-                last_win32_error: first_win32,
-                started_ticks: Some(first.started_ticks),
-                completed_ticks: first.completed_ticks,
-                timing_error: None,
-            },
-        };
-    }
-
-    // Safe retry: UpOnly (partial or zero) is idempotent; a Down/Mixed packet
-    // is only retried after guaranteed zero progress (no chord was split).
-    let second = match send_one(packet) {
-        PacketSendAttempt::Outcome(res) => res,
-        PacketSendAttempt::ClockFailure(failure) => {
-            return SendTransactionOutcome {
-                status: SendTransactionStatus::ClockFailureAfterSend,
-                evidence: SendEvidence {
-                    requested_mask,
-                    confirmed_mask: 0,
-                    skipped_mask: 0,
-                    first_inserted: first.inserted,
-                    attempts: u8::from(failure.sendinput_called).saturating_add(1),
-                    zero_progress_retries: u8::from(first.inserted == 0),
-                    retry_reason,
-                    first_win32_error: first_win32,
-                    last_win32_error: (failure.win32_error != 0)
-                        .then_some(failure.win32_error)
-                        .or(first_win32),
-                    started_ticks: failure.started_ticks,
-                    completed_ticks: None,
-                    timing_error: Some(failure.error),
-                },
-            };
-        }
-    };
-    let second_win32 = (second.win32_error != 0).then_some(second.win32_error);
-    let last_win32 = second_win32.or(first_win32);
-    let status2 = classify_send_status(
-        second.inserted as usize,
-        second.requested as usize,
-        second.win32_error,
-        Some(first.started_ticks),
-        second.completed_ticks,
-    );
-
-    SendTransactionOutcome {
-        status: status2,
-        evidence: SendEvidence {
-            requested_mask,
-            confirmed_mask: if matches!(status2, SendTransactionStatus::Complete) {
-                requested_mask
-            } else {
-                0
-            },
-            skipped_mask: 0,
-            first_inserted: first.inserted,
-            attempts: 2,
-            zero_progress_retries: u8::from(first.inserted == 0),
-            retry_reason,
-            first_win32_error: first_win32.or(second_win32),
-            last_win32_error: last_win32,
-            started_ticks: Some(first.started_ticks),
-            completed_ticks: second.completed_ticks,
-            timing_error: None,
-        },
-    }
-}
-
-pub fn send_physical_packet_once_with_clock(
-    packet: PhysicalPacket,
-    clock: QpcClock,
-) -> SendTransactionOutcome {
-    if packet.event_count() == 0 || !valid_packet(packet) {
-        return invalid_packet_outcome(packet);
-    }
-    send_physical_packet_once_impl(packet, |packet| run_send_attempt(packet, clock, None))
-}
-
 /// One packet transaction using a payload built before the final admission
 /// boundary and a caller-owned authoritative start timestamp.
+#[cfg(test)]
 pub(crate) fn send_prepared_physical_packet_once_with_start(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
@@ -1071,7 +749,7 @@ pub(crate) fn send_prepared_physical_packet_view_once_with_start(
 
 /// One trusted prepared packet attempt whose authoritative pre-call QPC is
 /// sampled inside the Win32 sender immediately before `SendInput`.
-pub fn send_prepared_physical_packet_once(
+pub(crate) fn send_prepared_physical_packet_once(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
 ) -> SendTransactionOutcome {
@@ -1079,7 +757,7 @@ pub fn send_prepared_physical_packet_once(
 }
 
 /// One trusted borrowed prepared-packet attempt at the caller's final boundary.
-pub fn send_prepared_physical_packet_view_once(
+pub(crate) fn send_prepared_physical_packet_view_once(
     prepared: PreparedPacketView<'_>,
     clock: QpcClock,
 ) -> SendTransactionOutcome {
@@ -1090,7 +768,7 @@ pub fn send_prepared_physical_packet_view_once(
 /// taken inside the precision sender. All payload metadata needed by the
 /// syscall is resolved before the loop; the crossing sample is reused as the
 /// authoritative pre-call timestamp.
-pub fn send_prepared_physical_packet_once_at_target(
+pub(crate) fn send_prepared_physical_packet_once_at_target(
     prepared: &PreparedPhysicalPacket,
     clock: QpcClock,
     physical_target_qpc: QpcTicks,
@@ -1104,7 +782,7 @@ pub fn send_prepared_physical_packet_once_at_target(
 
 /// One trusted borrowed prepared-packet attempt whose target-crossing QPC
 /// sample is taken immediately before `SendInput`.
-pub fn send_prepared_physical_packet_view_once_at_target(
+pub(crate) fn send_prepared_physical_packet_view_once_at_target(
     prepared: PreparedPacketView<'_>,
     clock: QpcClock,
     physical_target_qpc: QpcTicks,
@@ -1112,13 +790,9 @@ pub fn send_prepared_physical_packet_view_once_at_target(
     let packet = prepared.packet();
     #[cfg(windows)]
     let view = {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT;
-        let length = usize::from(prepared.event_count());
         PreparedInputView {
             requested: prepared.event_count(),
-            length,
             inputs: prepared.inputs.as_ptr(),
-            cb_size: std::mem::size_of::<INPUT>() as i32,
         }
     };
     #[cfg(not(windows))]
@@ -1168,26 +842,6 @@ fn send_prepared_physical_packet_once_at_target_scripted(
 }
 
 #[cfg(test)]
-fn send_physical_packet_retry_policy_scripted(
-    packet: PhysicalPacket,
-    mut send_one: impl FnMut(PhysicalPacket) -> PlatformSendResult,
-) -> SendTransactionOutcome {
-    send_physical_packet_retry_policy_impl(packet, |packet| {
-        PacketSendAttempt::Outcome(send_one(packet))
-    })
-}
-
-#[cfg(test)]
-fn send_physical_packet_once_scripted(
-    packet: PhysicalPacket,
-    mut send_one: impl FnMut(PhysicalPacket) -> PlatformSendResult,
-) -> SendTransactionOutcome {
-    send_physical_packet_once_impl(packet, |packet| {
-        PacketSendAttempt::Outcome(send_one(packet))
-    })
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use std::cell::{Cell, RefCell};
@@ -1202,11 +856,10 @@ mod tests {
             .nth(1)
             .expect("trusted prepared-send primitive");
         let body = trusted
-            .split("/// Test-only retry policy")
+            .split("/// One packet transaction using a payload built before the final admission")
             .next()
             .expect("trusted primitive body");
         assert!(body.contains("run_prepared_send_attempt"));
-        assert!(!body.contains("send_physical_packet_once_impl"));
         assert!(!body.contains("valid_packet("));
         assert!(!body.contains("event_count() == 0"));
     }
@@ -1241,13 +894,14 @@ mod tests {
     fn immediate_sender_samples_true_pre_call() {
         let source = include_str!("packet.rs");
         let body = source
-            .split("fn send_once_prepared(")
+            .split("fn send_once_prepared_view(")
             .nth(1)
             .expect("immediate prepared sender")
-            .split("fn send_once_prepared_view")
+            .split("enum PacketSendAttempt")
             .next()
             .expect("immediate prepared sender body");
-        assert!(body.contains("send_once_prepared_view"));
+        assert!(body.contains("clock.now()"));
+        assert!(body.contains("send_prepared_inputs_once"));
         assert!(!body.contains("latest_start"));
     }
 
@@ -1341,6 +995,28 @@ mod tests {
             );
             assert_eq!(send_calls.get(), 1);
         }
+    }
+
+    #[test]
+    fn contradictory_send_count_is_integrity_lost_without_transport_confirmation() {
+        let packet = PhysicalPacket::new(0, 0b001);
+        let outcome = prepared_send_outcome(
+            packet,
+            Ok(PlatformSendResult {
+                requested: 1,
+                inserted: 2,
+                started_ticks: QpcTicks::from_raw(10),
+                completed_ticks: Some(QpcTicks::from_raw(11)),
+                win32_error: 0,
+                timing_error: None,
+            }),
+        );
+
+        assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
+        assert_eq!(outcome.evidence.first_inserted, 2);
+        assert_eq!(outcome.evidence.confirmed_mask, 0);
+        assert_eq!(outcome.evidence.attempts, 1);
+        assert!(!outcome.has_complete_raw_transport_for(packet));
     }
 
     #[test]
@@ -1465,18 +1141,14 @@ mod tests {
     }
 
     #[test]
-    fn invalid_mask_fails_before_any_send() {
-        let clock = QpcClock::initialize().expect("QPC available for test");
-        let outcome = send_physical_packet_once_with_clock(
-            PhysicalPacket::new(FULL_INSTRUMENT_MASK | (1 << 15), 0),
-            clock,
+    fn prepared_packet_rejects_mask_outside_physical_allowlist() {
+        assert!(
+            PreparedPhysicalPacket::try_new(PhysicalPacket::new(
+                FULL_INSTRUMENT_MASK | (1 << 15),
+                0,
+            ))
+            .is_err()
         );
-        assert_eq!(outcome.status, SendTransactionStatus::PreparationRejected);
-        assert_eq!(outcome.evidence.attempts, 0);
-        assert_eq!(outcome.evidence.first_win32_error, None);
-        assert_eq!(outcome.evidence.last_win32_error, None);
-        assert_eq!(outcome.evidence.started_ticks, None);
-        assert_eq!(outcome.evidence.completed_ticks, None);
     }
 
     #[cfg(windows)]
@@ -1498,144 +1170,6 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn profile_templates_preserve_default_and_allow_non_canonical_remap() {
-        use super::super::profile::{InstrumentKeyProfile, InstrumentKeyProfileSpec, PhysicalKey};
-
-        let canonical = MaterializedInstrumentKeyProfile::canonical();
-        for slot in 0..MAX_KEYS {
-            let expected_down = DOWN_TEMPLATES[PHYSICAL_INSTRUMENT_SCAN_CODES[slot] as usize];
-            let expected_up = UP_TEMPLATES[PHYSICAL_INSTRUMENT_SCAN_CODES[slot] as usize];
-            let actual_down = canonical.down_template(slot);
-            let actual_up = canonical.up_template(slot);
-            assert_eq!(actual_down.r#type, expected_down.r#type);
-            assert_eq!(actual_up.r#type, expected_up.r#type);
-            unsafe {
-                assert_eq!(actual_down.Anonymous.ki.wVk, expected_down.Anonymous.ki.wVk);
-                assert_eq!(
-                    actual_down.Anonymous.ki.wScan,
-                    expected_down.Anonymous.ki.wScan
-                );
-                assert_eq!(
-                    actual_down.Anonymous.ki.dwFlags,
-                    expected_down.Anonymous.ki.dwFlags
-                );
-                assert_eq!(
-                    actual_down.Anonymous.ki.time,
-                    expected_down.Anonymous.ki.time
-                );
-                assert_eq!(
-                    actual_down.Anonymous.ki.dwExtraInfo,
-                    expected_down.Anonymous.ki.dwExtraInfo
-                );
-                assert_eq!(actual_up.Anonymous.ki.wVk, expected_up.Anonymous.ki.wVk);
-                assert_eq!(actual_up.Anonymous.ki.wScan, expected_up.Anonymous.ki.wScan);
-                assert_eq!(
-                    actual_up.Anonymous.ki.dwFlags,
-                    expected_up.Anonymous.ki.dwFlags
-                );
-                assert_eq!(actual_up.Anonymous.ki.time, expected_up.Anonymous.ki.time);
-                assert_eq!(
-                    actual_up.Anonymous.ki.dwExtraInfo,
-                    expected_up.Anonymous.ki.dwExtraInfo
-                );
-            }
-        }
-
-        let mut spec = InstrumentKeyProfileSpec::canonical();
-        spec.keys[0] = PhysicalKey {
-            scan_code: 0x02,
-            extended: false,
-        };
-        let remapped = MaterializedInstrumentKeyProfile::from_validated(
-            InstrumentKeyProfile::try_from_spec(spec).expect("remapped profile"),
-        );
-        let (inputs, length) = build_inputs(PhysicalPacket::new(0b001, 0b010), Some(&remapped));
-        assert_eq!(length, 2);
-        unsafe {
-            let up = inputs[0].assume_init_ref();
-            let down = inputs[1].assume_init_ref();
-            assert_eq!(up.Anonymous.ki.wScan, 0x02);
-            assert_eq!(down.Anonymous.ki.wScan, 0x16);
-        }
-    }
-
-    fn scripted_attempt(requested: u8, inserted: u8) -> PlatformSendResult {
-        PlatformSendResult {
-            requested,
-            inserted,
-            started_ticks: QpcTicks::ZERO,
-            completed_ticks: Some(QpcTicks::ZERO),
-            win32_error: 0,
-            timing_error: None,
-        }
-    }
-
-    #[test]
-    fn partial_down_packet_never_issues_a_second_send() {
-        let mut calls = 0;
-        let outcome =
-            send_physical_packet_retry_policy_scripted(PhysicalPacket::new(0, 0b111), |_| {
-                calls += 1;
-                // A hypothetical second call would be a full success; it must
-                // never happen for a Down-bearing partial insertion.
-                scripted_attempt(3, if calls == 1 { 1 } else { 3 })
-            });
-        assert_eq!(calls, 1);
-        assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
-        assert_eq!(outcome.evidence.first_inserted, 1);
-        assert_eq!(outcome.evidence.attempts, 1);
-        assert_eq!(outcome.evidence.confirmed_mask, 0);
-        assert!(!outcome.is_success());
-    }
-
-    #[test]
-    fn partial_mixed_packet_never_issues_a_second_packet_call() {
-        let mut calls = 0;
-        let outcome =
-            send_physical_packet_retry_policy_scripted(PhysicalPacket::new(0b001, 0b110), |_| {
-                calls += 1;
-                scripted_attempt(3, 2)
-            });
-        assert_eq!(calls, 1);
-        assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
-        assert_eq!(outcome.evidence.first_inserted, 2);
-        assert_eq!(outcome.evidence.attempts, 1);
-        assert_eq!(outcome.evidence.confirmed_mask, 0);
-    }
-
-    #[test]
-    fn every_mixed_insertion_prefix_fails_closed_without_retry() {
-        let packet = PhysicalPacket::new(0x01ff, 0x7e00);
-        let requested = packet.event_count();
-        assert_eq!(requested, 15);
-        let requested_mask = packet.up_mask | packet.down_mask;
-
-        for inserted in 1..requested {
-            let mut calls = 0;
-            let outcome = send_physical_packet_retry_policy_scripted(packet, |_| {
-                calls += 1;
-                scripted_attempt(requested, inserted)
-            });
-
-            assert_eq!(calls, 1, "partial prefix {inserted} was retried");
-            assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
-            assert_eq!(outcome.evidence.first_inserted, inserted);
-            assert_eq!(outcome.evidence.attempts, 1);
-            assert_eq!(outcome.evidence.confirmed_mask, 0);
-            assert_eq!(outcome.evidence.requested_mask, requested_mask);
-        }
-
-        let mut calls = 0;
-        let complete = send_physical_packet_retry_policy_scripted(packet, |_| {
-            calls += 1;
-            scripted_attempt(requested, requested)
-        });
-        assert_eq!(calls, 1);
-        assert_eq!(complete.status, SendTransactionStatus::Complete);
-        assert_eq!(complete.evidence.confirmed_mask, requested_mask);
-    }
-
-    #[test]
     fn prepared_packet_rejects_overlapping_directions() {
         let error = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b001, 0b001))
             .expect_err("same-key Up+Down packet must be rejected");
@@ -1646,73 +1180,5 @@ mod tests {
             }
         );
         assert!(PreparedPhysicalPacket::try_new(PhysicalPacket::new(0b001, 0b010)).is_ok());
-    }
-
-    #[test]
-    fn single_attempt_packet_does_not_retry_zero_progress() {
-        let mut calls = 0;
-        let outcome = send_physical_packet_once_scripted(PhysicalPacket::new(0, 0b111), |_| {
-            calls += 1;
-            scripted_attempt(3, 0)
-        });
-        assert_eq!(calls, 1);
-        assert_eq!(outcome.status, SendTransactionStatus::ZeroProgress);
-        assert_eq!(outcome.evidence.attempts, 1);
-        assert_eq!(outcome.evidence.zero_progress_retries, 0);
-        assert_eq!(
-            outcome.evidence.retry_reason,
-            PacketRetryReason::ZeroProgress
-        );
-    }
-
-    #[test]
-    fn up_only_partial_packet_retries_and_can_complete() {
-        let mut calls = 0;
-        let outcome =
-            send_physical_packet_retry_policy_scripted(PhysicalPacket::new(0b111, 0), |_| {
-                calls += 1;
-                scripted_attempt(3, if calls == 1 { 1 } else { 3 })
-            });
-        assert_eq!(calls, 2);
-        assert_eq!(outcome.status, SendTransactionStatus::Complete);
-        assert_eq!(outcome.evidence.attempts, 2);
-        assert_eq!(outcome.evidence.first_inserted, 1);
-    }
-
-    #[test]
-    fn down_zero_progress_retries_whole_packet_without_splitting() {
-        let mut calls = 0;
-        let outcome =
-            send_physical_packet_retry_policy_scripted(PhysicalPacket::new(0, 0b111), |_| {
-                calls += 1;
-                scripted_attempt(3, if calls == 1 { 0 } else { 3 })
-            });
-        assert_eq!(calls, 2);
-        assert_eq!(outcome.status, SendTransactionStatus::Complete);
-        assert_eq!(outcome.evidence.zero_progress_retries, 1);
-        assert_eq!(outcome.evidence.attempts, 2);
-    }
-
-    #[test]
-    fn down_zero_progress_then_partial_second_is_integrity_lost() {
-        let mut calls = 0;
-        let outcome =
-            send_physical_packet_retry_policy_scripted(PhysicalPacket::new(0, 0b111), |_| {
-                calls += 1;
-                scripted_attempt(3, if calls == 1 { 0 } else { 1 })
-            });
-        assert_eq!(calls, 2);
-        assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
-        assert_eq!(outcome.evidence.first_inserted, 0);
-        assert_eq!(outcome.evidence.zero_progress_retries, 1);
-    }
-
-    #[cfg(not(windows))]
-    #[test]
-    fn physical_packet_send_seam_compiles_and_returns_complete_for_valid_packet() {
-        let clock = QpcClock::initialize().expect("clock");
-        let packet = PhysicalPacket::new(1, 0);
-        let res = send_physical_packet_once_with_clock(packet, clock);
-        assert_eq!(res.status, SendTransactionStatus::Complete);
     }
 }

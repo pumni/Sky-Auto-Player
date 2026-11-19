@@ -4,16 +4,15 @@ locale: vi
 slug: how-it-works
 title: Sky Auto Player Hoạt Động Như Thế Nào
 description: >-
-  Tìm hiểu cách Sky Auto Player đọc file sheet, lên lịch nốt nhạc với timing căn theo frame,
-  và gửi phím qua Windows SendInput API — mà không động đến game.
+  Tìm hiểu cách Sky Auto Player chuẩn bị sheet, lên lịch nốt nhạc và gửi phím qua
+  Windows SendInput API.
 summary: >-
-  Sky Auto Player đọc file sheet do người dùng cung cấp, lên lịch từng nốt nhạc theo mô hình
-  timing, và gửi phím qua Windows SendInput API. Không đọc bộ nhớ game, không sửa file game,
-  không inject code.
+  Sky Auto Player chuẩn bị sheet do người dùng cung cấp và phát bằng player native trên
+  Windows. Timing phía sender và việc game lấy mẫu input là hai việc riêng.
 category: getting-started
 order: 1
 published: '2026-08-08'
-updated: '2026-08-08'
+updated: '2026-11-18'
 draft: false
 showDiagram: true
 related:
@@ -22,83 +21,54 @@ related:
   - security-boundaries
 evidence:
   - category: architecture
-    label: Tổng quan kiến trúc bốn lớp
+    label: Kiến trúc hệ thống
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/architecture.md
   - category: security
-    label: Các mandate bảo mật (chỉ SendInput, không can thiệp game)
+    label: Chính sách bảo mật
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/SECURITY.md
-  - category: implementation
-    label: README — tóm tắt workflow và kỹ thuật
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
   - category: architecture
-    label: Kiến trúc playback engine
+    label: Hợp đồng playback engine
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md
 ---
 
 ## Phần mềm làm gì
 
-Sky Auto Player đọc file sheet nhạc do bạn cung cấp, lên lịch từng nốt, hợp âm và nốt ngân
-theo một mô hình timing, rồi gửi phím đến cửa sổ đang active qua Windows `SendInput` API —
-cùng kênh mà bất kỳ macro bàn phím thông thường nào cũng dùng. Phần mềm không đọc bộ nhớ
-game, không kiểm tra file game, không sửa đổi game, không inject code, và không attach debugger.
+Sky Auto Player đọc sheet do bạn cung cấp, chuẩn bị các nốt và hợp âm,
+rồi lên lịch gửi phím trên desktop Windows. Game lấy mẫu input theo lịch
+riêng, vì vậy timing phía sender không thể đảm bảo game đăng ký nốt ở frame nào.
 
-Quy trình sử dụng điển hình:
+Quy trình thông thường:
 
-1. Export sheet từ [Sky Music editor](https://specy.github.io/skyMusic/) dưới dạng JSON, `.skysheet`, hoặc TXT tương thích JSON.
-2. Nhập file qua Library desktop.
-3. Khởi động Sky Auto Player, chọn bài, chuyển sang game và nhấn hotkey phát nhạc.
+1. Export sheet từ [Sky Music editor](https://specy.github.io/skyMusic/) dưới dạng JSON, **.skysheet**, hoặc TXT tương thích JSON.
+2. Nhập sheet qua Library desktop.
+3. Chọn bài, chuyển sang Sky và bắt đầu phát bằng điều khiển đã cấu hình.
 
-Bản đóng gói `Sky-Auto-Player.exe` là giao diện Tauri desktop chính thức và duy nhất được hỗ trợ,
-gồm Library, Song Detail, Player Dock, Diagnostics, Settings và Update.
+Ứng dụng desktop được hỗ trợ là Tauri app dành cho Windows 11. Ứng dụng có
+Library, Song Detail, Player Dock, Diagnostics, Settings và Update.
 
-Sky Auto Player gửi phím; game nhận chúng theo lịch của riêng nó. Độ chính xác timing
-về phía game phụ thuộc vào lịch trình Windows, tần số polling input của game, và phần cứng
-của bạn — không phải do player kiểm soát.
+## Từ sheet đến playback
 
-## Cách lên lịch nốt nhạc hoạt động
+Desktop chuẩn bị và xác thực sheet trước khi bắt đầu phát. Sau đó một Rust
+worker native gửi lịch đã chuẩn bị theo deadline QPC. Executor cố định 15 slot
+theo dõi thời gian giữ phím và khoảng cách trước khi nhấn lại cùng phím. Một
+hợp âm khỏe được gửi trong một prepared packet; nếu các lần nhả phím và nốt
+mới đến hạn cùng lúc, sự kiện nhả được xếp trước lần nhấn mới.
 
-Sky Auto Player không phát lại một chuỗi delay cố định. Thay vào đó, nó đặt mỗi nốt như
-một sự kiện trên timeline tiến theo tempo của sheet và FPS bạn cấu hình trong Sky.
-Vòng lặp cốt lõi:
+Trước mỗi musical packet, native sender kiểm tra cửa sổ foreground hiện tại
+và identity của target đã giữ. Foreground event chỉ là hint để kiểm tra lại
+focus. Tauri shell điều phối pause và stop, join worker rồi ghi nhận
+retirement trước khi thông báo kết quả lên UI.
 
-- **Chord batch liên tục** — tất cả nốt trong một hợp âm được gửi trong một lệnh `SendInput`
-  duy nhất để giảm thiểu độ lệch phía sender giữa các phím trong cùng hợp âm.
-- **Hold và chẩn đoán tương thích** — planner có thể báo mất mát do chuyển đổi hoặc sustain;
-  sender áp dụng timing floor vật lý. Floor mô tả chính sách phía sender.
-- **Căn hold theo frame** — thời gian hold được biểu diễn dưới dạng 1,0; 1,25; hoặc 1,5
-  frame game ở FPS bạn chọn. Mặc định là 1,0 frame.
-- **Timing QPC** — production sender dùng Frozen wake guard đã hiệu chuẩn và kiểm tra
-  deadline bằng QPC. Windows và game tự lấy mẫu input theo lịch riêng, vì vậy timing phía
-  sender không thể đảm bảo game đăng ký mọi nốt hoặc thời lượng sustain.
+Xem [hợp đồng playback engine](https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md)
+để biết quy tắc timing, cleanup và recovery hiện hành.
 
-Người dùng có thể xem compatibility/risk diagnostics trong bước chuẩn bị để kiểm tra giới
-hạn chuyển đổi hoặc sustain trước khi phát.
+## Phạm vi và giới hạn
 
-## Tổng quan kiến trúc
+Sky Auto Player gửi phím Windows thông thường qua SendInput. Phần mềm không
+kiểm soát vòng lấy mẫu input của game và không đảm bảo kết quả trong game.
+[Chính sách bảo mật](https://github.com/pumni/Sky-Auto-Player/blob/main/SECURITY.md)
+định nghĩa đầy đủ ranh giới bảo mật, bao gồm các kỹ thuật process và input bị cấm.
 
-Code tuân theo thiết kế bốn lớp:
-
-| Lớp                | Trách nhiệm                                                                         |
-| ------------------ | ----------------------------------------------------------------------------------- |
-| **Domain**         | Mô hình timing thuần túy, lịch, profile. Không I/O.                                 |
-| **Orchestration**  | Scheduler và coordinator. Không wall-clock hay SendInput.                           |
-| **Infrastructure** | Theo dõi focus, hotkey listener, real-time sleeper, đăng ký MMCSS.                  |
-| **Platform**       | Backend Windows: `SendInput`, waitable timer, MMCSS. Nơi duy nhất chứa Win32 types. |
-
-Một Rust timing worker sở hữu vòng lặp dispatch: biên dịch lịch nốt nhạc, timing wait độ phân giải cao, theo dõi focus, lệnh gọi `SendInput`, dọn dẹp và telemetry native. Tauri/React render desktop UI; các native Rust application service sở hữu settings, catalog, playback, diagnostics, update và calibration. Desktop production dùng native command router, không có auxiliary process hay fallback path.
-
-## Những gì Sky Auto Player KHÔNG làm
-
-- Đọc hay ghi bộ nhớ của process khác
-- Sửa đổi, vá lỗi, hay kiểm tra file game
-- Inject DLL hay attach debugger vào bất kỳ process nào
-- Cài đặt Windows hook (`SetWindowsHookEx`, v.v.)
-- Bypass hệ thống chống gian lận
-- Đảm bảo độ chính xác timing về phía game — timing phía sender được tối ưu, nhưng game
-  quyết định khi nào đăng ký phím
-
-## Giới hạn
-
-- Chỉ hỗ trợ Windows 10 và 11 (64-bit). MMCSS là Windows API.
-- Tự động phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky. Dùng có trách nhiệm và tự chịu rủi ro.
-- Sky Auto Player là dự án cộng đồng không chính thức, không có liên kết hay sự chứng thực từ thatgamecompany.
+Tự động phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky. Sky Auto
+Player là dự án cộng đồng không chính thức, không liên kết hay được
+thatgamecompany chứng thực.

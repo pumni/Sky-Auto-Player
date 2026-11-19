@@ -1,6 +1,49 @@
 use super::support::*;
 use super::*;
 
+#[cfg(feature = "real-input-acceptance")]
+#[test]
+fn native_acceptance_start_evidence_tracks_worker_armed_publication() {
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::ArmedPublished, 1);
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("acceptance observation session");
+
+    assert_eq!(
+        session
+            .native_acceptance_lifecycle_evidence()
+            .playback_armed_qpc_ticks,
+        None,
+        "pre-arm caller time is not a playback admission timestamp"
+    );
+    session.arm(0).expect("session arm request");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+    let armed_ticks = session
+        .native_acceptance_lifecycle_evidence()
+        .playback_armed_qpc_ticks
+        .expect("worker QPC recorded after successful Armed publication");
+    assert!(armed_ticks > 0);
+
+    session.quit().expect("quit at Armed barrier");
+    hook.release_startup_checkpoint();
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let terminal_evidence = session.native_acceptance_lifecycle_evidence();
+    assert_eq!(
+        terminal_evidence.playback_armed_qpc_ticks,
+        Some(armed_ticks)
+    );
+    assert_eq!(terminal_evidence.raw_up_syscall_count, Some(0));
+}
+
 #[cfg(feature = "test-support")]
 #[test]
 fn playback_cpu_baselines_precede_epoch_qpc_without_rebasing_observer_metrics() {
@@ -110,7 +153,7 @@ fn worker_final_gate_rechecks_retained_process_identity_before_down() {
         );
         options.focus.require_focus = true;
         let session = NativeDispatchSession::new(options).expect("test session admission");
-        session.set_target_hwnd(123);
+        session.bind_initial_target_for_test(123);
         session
             .bind_window_identity_authority_for_test(
                 sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -181,7 +224,7 @@ fn dropped_session_owner_leaves_watchdog_to_release_then_drops_target_binding() 
     );
     options.wait.supervisor_lease_timeout_us = 300_000;
     let session = NativeDispatchSession::new(options).expect("test session admission");
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -294,7 +337,7 @@ fn musical_up_only_rechecks_process_identity_and_cleanup_remains_fail_closed() {
     options.focus.require_focus = true;
     options.startup_ordering_hook = Some(Arc::clone(&hook));
     let session = NativeDispatchSession::new(options).expect("test session admission");
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -380,7 +423,7 @@ fn terminal_tracked_cleanup_uses_owner_proof_without_foreground_requirement() {
     options.focus.require_focus = true;
     options.startup_ordering_hook = Some(Arc::clone(&hook));
     let session = NativeDispatchSession::new(options).expect("test session admission");
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -401,9 +444,9 @@ fn terminal_tracked_cleanup_uses_owner_proof_without_foreground_requirement() {
     );
 
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, EnginePollStatus::Skipped.as_str());
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
     assert_eq!(send_call_count.load(Ordering::Acquire), 2);
-    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert_eq!(snapshot.final_release_obligation_mask, 1);
 }
 
 #[cfg(feature = "test-support")]
@@ -432,13 +475,307 @@ fn ownership_review_schedule(up_us: u64) -> sky_dispatch_core::model::RuntimeSch
 
 #[cfg(feature = "test-support")]
 fn bind_synthetic_owner(session: &NativeDispatchSession, hwnd: isize, pid: u32) {
-    session.set_target_hwnd(hwnd);
+    session.bind_initial_target_for_test(hwnd);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(hwnd, pid),
             pid,
         )
         .expect("bind synthetic process authority");
+}
+
+#[cfg(feature = "test-support")]
+#[test]
+fn worker_pause_drain_stop_upgrade_preserves_budget_origin_and_residual() {
+    use std::sync::mpsc;
+
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum FirstUp {
+        Fail,
+        Full,
+    }
+
+    #[derive(Clone, Copy)]
+    enum Probe {
+        Normal,
+        Held,
+        Inconclusive,
+    }
+
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
+    // These cases exercise the real NativeDispatchSession worker. The sender
+    // gate stops the first Pause Up at the syscall boundary; the test then
+    // publishes Stop (and, in one case, origin drift) before allowing the
+    // worker to continue its same cleanup invocation.
+    for (case, first_up, foreground_drift, probe, total_up, finalizer_up) in [
+        ("stop_foreground", FirstUp::Fail, false, Probe::Normal, 8, 4),
+        (
+            "stop_origin_drift",
+            FirstUp::Fail,
+            true,
+            Probe::Normal,
+            2,
+            1,
+        ),
+        ("stop_probe_held", FirstUp::Full, false, Probe::Held, 1, 0),
+        (
+            "stop_probe_inconclusive",
+            FirstUp::Full,
+            false,
+            Probe::Inconclusive,
+            1,
+            0,
+        ),
+    ] {
+        const TARGET: isize = 123;
+        const OWNER_PID: u32 = 77;
+        sky_dispatch_win32::focus::set_foreground_window_for_test(Some(TARGET));
+        sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(OWNER_PID)));
+
+        let (entered_sender, entered_receiver) = mpsc::channel();
+        let (release_sender, release_receiver) = mpsc::channel();
+        let capture = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let send_call_count = Arc::new(AtomicU64::new(0));
+        let force_held_probe = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let force_inconclusive_probe = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let mut fault_script = FaultInjectionScript::none();
+        fault_script.entries = match first_up {
+            FirstUp::Fail => (1..=16)
+                .map(|call| {
+                    (
+                        call,
+                        InjectedSendOutcome::Zero {
+                            latency_ticks: 0,
+                            win32_error: 5,
+                        },
+                    )
+                })
+                .collect(),
+            FirstUp::Full => vec![(1, InjectedSendOutcome::Full { latency_ticks: 0 })],
+        };
+        fault_script.first_release_send_entered = Some(Arc::new(entered_sender));
+        fault_script.release_first_release_send =
+            Some(Arc::new(std::sync::Mutex::new(release_receiver)));
+        fault_script.send_call_count = Some(Arc::clone(&send_call_count));
+        fault_script.send_input_capture = Some(Arc::clone(&capture));
+        match probe {
+            Probe::Normal => {}
+            Probe::Held => {
+                fault_script.force_held_probe = Some(Arc::clone(&force_held_probe));
+            }
+            Probe::Inconclusive => {
+                fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
+            }
+        }
+
+        let hook = Arc::new(StartupOrderingHook::default());
+        hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
+        let mut options = test_session_options(
+            ownership_review_schedule(5_000_000),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script,
+            },
+        );
+        options.profile = DispatchProfile::MockTest;
+        options.focus.require_focus = true;
+        options.startup_ordering_hook = Some(Arc::clone(&hook));
+        let session = NativeDispatchSession::new_with_bound_window_identity_for_test(
+            options,
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET, OWNER_PID,
+            ),
+        )
+        .expect("bound mock worker session admission");
+
+        session.arm(0).expect("worker arm");
+        assert!(
+            hook.wait_for_startup_checkpoint(Duration::from_secs(3)),
+            "{case}"
+        );
+        assert_eq!(
+            send_call_count.load(Ordering::Acquire),
+            1,
+            "{case}: one Down"
+        );
+        session.pause().expect("request Pause");
+        hook.release_startup_checkpoint();
+        entered_receiver
+            .recv_timeout(Duration::from_secs(3))
+            .unwrap_or_else(|error| panic!("{case}: Pause Up did not reach the gate: {error}"));
+
+        session.quit().expect("publish Stop inside Pause Drain");
+        if foreground_drift {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(88)));
+        }
+        release_sender
+            .send(())
+            .unwrap_or_else(|error| panic!("{case}: release Pause Up gate: {error}"));
+        assert!(
+            session
+                .join(Duration::from_secs(5))
+                .expect("bounded worker join"),
+            "{case}: terminal cleanup must finish"
+        );
+
+        let snapshot = session.snapshot();
+        let terminal = session.terminal_result().expect("typed terminal result");
+        let captures = capture.lock().expect("worker send capture");
+        let down_packets = captures
+            .iter()
+            .filter(|capture| {
+                matches!(capture, MockSendInputCapture::Packet { packet, .. } if packet.down_mask != 0)
+            })
+            .count();
+        let down_packet_is_one_full_attempt = captures.iter().any(|capture| {
+            matches!(
+                capture,
+                MockSendInputCapture::Packet {
+                    packet,
+                    status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
+                    confirmed_mask: 1,
+                    attempts: 1,
+                } if packet.down_mask == 1 && packet.up_mask == 0
+            )
+        });
+        let up_calls = captures
+            .iter()
+            .filter(|capture| {
+                matches!(
+                    capture,
+                    MockSendInputCapture::SingleEmitter { key_up: true, .. }
+                )
+            })
+            .count();
+        let calls_outside_journal = captures.iter().filter(|capture| match capture {
+            MockSendInputCapture::Packet { packet, .. } => {
+                packet.up_mask & !terminal.residual.outstanding_mask != 0
+            }
+            MockSendInputCapture::SingleEmitter {
+                scan_codes,
+                key_up: true,
+            } => scan_codes.as_slice() != [0x15],
+            MockSendInputCapture::SingleEmitter { .. } => false,
+        });
+        assert_eq!(down_packets, 1, "{case}: attempted onset was not replayed");
+        assert!(down_packet_is_one_full_attempt, "{case}: Down evidence");
+        assert_eq!(up_calls, total_up, "{case}: total physical Up calls");
+        let pause_drain_up = total_up - finalizer_up;
+        assert!(
+            pause_drain_up <= 4,
+            "{case}: Pause drain keeps its four-call budget"
+        );
+        assert_eq!(
+            send_call_count.load(Ordering::Acquire),
+            1 + total_up as u64,
+            "{case}: every call is accounted as one Down or one Up"
+        );
+        assert_eq!(
+            calls_outside_journal.count(),
+            0,
+            "{case}: Up outside journal"
+        );
+        assert_eq!(snapshot.release_attempts_total, total_up as u64, "{case}");
+        assert_eq!(
+            snapshot.final_release_obligation_mask, 1,
+            "{case}: residual retained"
+        );
+        assert_eq!(
+            snapshot
+                .release_outcome
+                .as_ref()
+                .map(|outcome| outcome.attempts),
+            Some(finalizer_up as u8),
+            "{case}: finalizer's own bounded drain evidence"
+        );
+        assert_eq!(terminal.residual.outstanding_mask, 1, "{case}");
+        assert_eq!(
+            terminal.residual.needs_up_mask,
+            u16::from(matches!(first_up, FirstUp::Fail)),
+            "{case}"
+        );
+        assert_eq!(
+            terminal.residual.needs_probe_mask,
+            u16::from(matches!(first_up, FirstUp::Full)),
+            "{case}"
+        );
+        let terminal_error = terminal
+            .terminal_error
+            .as_deref()
+            .expect("uncertain Pause cleanup is retained as terminal evidence");
+        assert!(
+            terminal_error.contains("evidence=TerminalReleaseEvidence"),
+            "{case}: {terminal_error}"
+        );
+        assert!(
+            terminal_error.contains("started_ticks: Some("),
+            "{case}: {terminal_error}"
+        );
+        assert!(
+            terminal_error.contains("completed_ticks: Some("),
+            "{case}: {terminal_error}"
+        );
+        assert!(
+            terminal_error.contains("qpc_error: None"),
+            "{case}: {terminal_error}"
+        );
+        assert_eq!(
+            terminal_error
+                .matches("TerminalSendAttemptEvidence { raw_calls: 1")
+                .count(),
+            pause_drain_up,
+            "{case}: upgraded Pause evidence retains every raw Up attempt"
+        );
+        match probe {
+            Probe::Normal => {
+                assert!(
+                    terminal_error.contains("inserted_events: 0"),
+                    "{case}: {terminal_error}"
+                );
+                assert!(
+                    terminal_error.contains("win32_error: Some(5)"),
+                    "{case}: {terminal_error}"
+                );
+            }
+            Probe::Held => assert!(
+                terminal_error.contains("Held(1)"),
+                "{case}: {terminal_error}"
+            ),
+            Probe::Inconclusive => assert!(
+                terminal_error.contains("Inconclusive(1)"),
+                "{case}: {terminal_error}"
+            ),
+        }
+        let owner = terminal
+            .residual
+            .owner
+            .as_ref()
+            .expect("residual owner proof");
+        assert_eq!(owner.target_hwnd(), TARGET, "{case}");
+        assert_eq!(owner.owner_pid(), Some(OWNER_PID), "{case}");
+        assert_eq!(owner.target_generation(), 1, "{case}");
+        assert!(
+            terminal
+                .residual
+                .profile
+                .iter()
+                .any(|key| key.scan_code == 0x15 && !key.extended),
+            "{case}: recovery profile is retained"
+        );
+    }
 }
 
 #[cfg(feature = "test-support")]
@@ -514,7 +851,7 @@ fn target_replacement_during_long_physical_wait_autonomously_stops_held_origin()
     assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(2)));
     assert_eq!(send_calls.load(Ordering::Acquire), 1);
 
-    session.set_target_hwnd(456);
+    session.bind_initial_target_for_test(456);
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(88)));
     let replacement_binding = session.bind_window_identity_authority_for_test(
@@ -689,7 +1026,7 @@ fn target_invalidated_before_scheduler_staging_finishes_without_input() {
         );
     }
 
-    session.set_target_hwnd(456);
+    session.bind_initial_target_for_test(456);
     hook.release_startup_checkpoint();
     assert!(
         session
@@ -794,7 +1131,7 @@ fn production_require_focus_arm_rejects_missing_failed_wrong_or_late_owner_proof
     );
 
     let missing_owner = production_session();
-    missing_owner.set_target_hwnd(123);
+    missing_owner.bind_initial_target_for_test(123);
     assert!(missing_owner.arm(0).is_err());
     assert_eq!(
         missing_owner.spawn_handles_present_for_test(),
@@ -815,7 +1152,7 @@ fn production_require_focus_arm_rejects_missing_failed_wrong_or_late_owner_proof
     );
 
     let wrong_owner = production_session();
-    wrong_owner.set_target_hwnd(123);
+    wrong_owner.bind_initial_target_for_test(123);
     assert!(
         wrong_owner
             .bind_window_identity_authority_for_test(
@@ -828,7 +1165,7 @@ fn production_require_focus_arm_rejects_missing_failed_wrong_or_late_owner_proof
     assert_eq!(wrong_owner.spawn_handles_present_for_test(), (false, false));
 
     let failed_owner = production_session();
-    failed_owner.set_target_hwnd(123);
+    failed_owner.bind_initial_target_for_test(123);
     failed_owner
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -853,7 +1190,7 @@ fn production_require_focus_arm_accepts_exact_continuous_bound_owner() {
     let mut options = test_session_options(schedule, 1, BackendConfig::Production);
     options.focus.require_focus = true;
     let session = NativeDispatchSession::new(options).expect("production focus session admission");
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -954,7 +1291,6 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     .expect("valid focus-restore schedule");
     let force_inconclusive_probe = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let send_call_count = Arc::new(AtomicU64::new(0));
-    let full_release_count = Arc::new(AtomicU64::new(0));
     let captures = Arc::new(std::sync::Mutex::new(Vec::new()));
     let startup_hook = Arc::new(StartupOrderingHook::default());
     startup_hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
@@ -963,7 +1299,6 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     let mut fault_script = FaultInjectionScript::none();
     fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
     fault_script.send_call_count = Some(Arc::clone(&send_call_count));
-    fault_script.full_instrument_release_calls = Some(Arc::clone(&full_release_count));
     fault_script.send_input_capture = Some(Arc::clone(&captures));
     let mut options = test_session_options(
         schedule,
@@ -985,7 +1320,7 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(1)));
     let session = NativeDispatchSession::new(options).expect("test session admission");
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session
         .bind_window_identity_authority_for_test(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 1),
@@ -1083,7 +1418,6 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
         2,
         "the worker captured Down A and the verified focus cleanup Up"
     );
-    assert_eq!(full_release_count.load(Ordering::SeqCst), 0);
 
     session
         .resume()
@@ -1107,12 +1441,13 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     session.quit().expect("quit restored session");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
     let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, EnginePollStatus::Quit.as_str());
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
     assert_eq!(snapshot.precision_packet_attempts, 2);
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert_eq!(snapshot.sendinput_partial_events, 0);
     assert_eq!(snapshot.generation_accounting.active, 0);
+    assert_eq!(snapshot.final_release_obligation_mask, 2);
     assert!(snapshot.generation_accounting.cancelled >= 1);
     let captures = captures.lock().expect("final mock input captures");
     assert!(matches!(
@@ -2179,7 +2514,7 @@ fn skip_panic_suspend_target_owner_and_lease_stops_win_ready_to_armed() {
         let (session, hook, send_calls) =
             checkpointed_session(startup_boundary_schedule(), checkpoint, 2, false);
         if kind == "target" {
-            session.set_target_hwnd(123);
+            session.bind_initial_target_for_test(123);
         }
         session.arm(100_000).expect("worker arm request");
         assert!(
@@ -2190,7 +2525,7 @@ fn skip_panic_suspend_target_owner_and_lease_stops_win_ready_to_armed() {
             "skip" => session.skip().expect("skip request"),
             "panic" => session.panic_release().expect("panic release request"),
             "suspend" => assert!(session.notify_system_power(true)),
-            "target" => session.set_target_hwnd(456),
+            "target" => session.bind_initial_target_for_test(456),
             "owner" => session.invalidate_window_identity_authority_for_test(),
             "lease" => {
                 session
@@ -2222,7 +2557,7 @@ fn focus_hint_invalidation_cancels_arming_before_epoch_visibility() {
         2,
         true,
     );
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     session.set_focus_hint(true);
     session.arm(100_000).expect("worker arm request");
     assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
@@ -2504,7 +2839,7 @@ fn focus_loss_during_post_wait_hook_never_sends_physical_down() {
     let session_for_hook = Arc::clone(&session);
 
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
-    session.set_target_hwnd(123);
+    session.bind_initial_target_for_test(123);
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     session.set_focus_hint(true);
     session.arm(0).expect("session arm");

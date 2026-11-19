@@ -1,7 +1,11 @@
 //! Minimal foreground-window query used by the worker's fresh focus check.
 
+pub mod foreground_watcher;
+
 #[cfg(feature = "test-support")]
 use std::cell::Cell;
+#[cfg(feature = "test-support")]
+use std::cell::RefCell;
 #[cfg(feature = "test-support")]
 use std::sync::Mutex;
 #[cfg(feature = "test-support")]
@@ -14,6 +18,9 @@ thread_local! {
     static FOREGROUND_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
     static REAL_FOREGROUND_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
     static OWNER_QUERY_COUNT: Cell<u64> = const { Cell::new(0) };
+    static FOREGROUND_OWNER_MATCH_SEQUENCE: RefCell<Option<(Vec<bool>, usize)>> = const {
+        RefCell::new(None)
+    };
 }
 
 #[cfg(feature = "test-support")]
@@ -93,6 +100,15 @@ pub fn set_foreground_owner_for_test(owner: Option<Option<u32>>) {
     TEST_FOREGROUND_OWNER.store(encoded, Ordering::Release);
 }
 
+/// Supply exact foreground match results to this test thread. Once the finite
+/// sequence is exhausted, the normal foreground override is used again.
+#[cfg(feature = "test-support")]
+pub fn set_foreground_owner_match_sequence_for_test(sequence: Option<&[bool]>) {
+    FOREGROUND_OWNER_MATCH_SEQUENCE.with(|state| {
+        *state.borrow_mut() = sequence.map(|values| (values.to_vec(), 0));
+    });
+}
+
 #[cfg(feature = "test-support")]
 pub fn window_identity_authority_drop_count_for_test() -> u64 {
     WINDOW_IDENTITY_AUTHORITY_DROP_COUNT.load(Ordering::Acquire)
@@ -145,12 +161,26 @@ pub enum ForegroundOwnerMatch {
 }
 
 /// Read the exact foreground HWND once, then resolve that same HWND's owner
-/// PID. This is the final control-plane identity query used for physical Down
-/// admission; callers must bypass it for UpOnly and non-focus sessions.
+/// PID. This is the final control-plane identity query used for focus-required
+/// musical admission; non-focus sessions bypass it.
 pub fn foreground_window_owner_matches(
     target_hwnd: isize,
     expected_owner_pid: u32,
 ) -> ForegroundOwnerMatch {
+    #[cfg(feature = "test-support")]
+    if let Some(matches) = FOREGROUND_OWNER_MATCH_SEQUENCE.with(|state| {
+        let mut state = state.borrow_mut();
+        let (sequence, index) = state.as_mut()?;
+        let matched = *sequence.get(*index)?;
+        *index = index.saturating_add(1);
+        Some(matched)
+    }) {
+        return if matches {
+            ForegroundOwnerMatch::Match
+        } else {
+            ForegroundOwnerMatch::NotForeground
+        };
+    }
     if target_hwnd == 0 || expected_owner_pid == 0 {
         return ForegroundOwnerMatch::OwnerQueryUnavailable;
     }
@@ -255,7 +285,7 @@ pub use window_identity::{
 #[cfg(feature = "test-support")]
 pub use window_identity::{
     get_process_times_call_count_for_test, process_identity_check_count_for_test,
-    reset_process_identity_counts_for_test,
+    process_liveness_check_count_for_test, reset_process_identity_counts_for_test,
 };
 
 /// Result of the control-plane integrity comparison used to identify a
@@ -418,8 +448,10 @@ fn filetime_ticks(value: windows_sys::Win32::Foundation::FILETIME) -> u64 {
 pub fn inspect_window_identity(hwnd: isize) -> Result<WindowIdentity, String> {
     use std::path::Path;
     use windows_sys::Win32::Foundation::{CloseHandle, HWND};
+    use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
     use windows_sys::Win32::System::Threading::{
-        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+        GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+        QueryFullProcessImageNameW, WaitForSingleObject,
     };
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsWindow,
@@ -447,12 +479,25 @@ pub fn inspect_window_identity(hwnd: isize) -> Result<WindowIdentity, String> {
     let title = String::from_utf16(&title[..title_written as usize])
         .map_err(|_| "window title is not valid UTF-16".to_string())?;
 
-    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, owner_pid) };
+    let process = unsafe {
+        OpenProcess(
+            PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+            0,
+            owner_pid,
+        )
+    };
     if process.is_null() {
         return Err("window owner process could not be opened".to_string());
     }
 
     let result = (|| {
+        // SAFETY: this temporary identity-query handle includes SYNCHRONIZE;
+        // the zero-time wait verifies that the retained PID is still live.
+        match unsafe { WaitForSingleObject(process, 0) } {
+            WAIT_TIMEOUT => {}
+            WAIT_OBJECT_0 => return Err("window owner process is not live".to_string()),
+            _ => return Err("window owner process liveness could not be queried".to_string()),
+        }
         let mut creation_time = windows_sys::Win32::Foundation::FILETIME {
             dwLowDateTime: 0,
             dwHighDateTime: 0,
@@ -560,11 +605,9 @@ pub fn virtual_key_for_scan_code(_hwnd: isize, _scan_code: u16) -> Result<i32, S
 /// Resolve the visible Sky window using the same title/process admission
 /// boundary as the legacy desktop target adapter.  This is deliberately kept
 /// in the Win32 crate so application code never has to own unsafe window API
-/// calls. The returned HWND is a target hint. At the precision boundary, an
-/// eligible `require_focus=true` Down receives exactly one fresh synchronous
-/// foreground proof, then target-stamp, published-focus, and late-control
-/// rechecks. UpOnly and `require_focus=false` Down traffic perform zero fresh
-/// foreground queries; only the query-to-`SendInput` race remains.
+/// calls. The returned HWND is a target hint. Every focus-required musical
+/// packet, including Up-only packets, receives one fresh synchronous
+/// foreground HWND/PID proof; only Down-bearing packets check modifiers.
 #[cfg(windows)]
 pub fn find_sky_window(process_names: &[String], allow_title_fallback: bool) -> Option<isize> {
     use windows_sys::Win32::Foundation::{CloseHandle, HWND, LPARAM};
@@ -787,7 +830,7 @@ mod tests {
         use std::process::{Command, Stdio};
         use std::time::Duration;
         use windows_sys::Win32::System::Threading::{
-            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+            GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
             QueryFullProcessImageNameW,
         };
 
@@ -805,9 +848,15 @@ mod tests {
             .expect("spawn isolated child test process");
         std::thread::sleep(Duration::from_millis(100));
 
-        // SAFETY: only limited query access is requested, inheritance is
-        // disabled, and the process ID belongs to the test-owned child.
-        let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, child.id()) };
+        // SAFETY: only limited query and synchronization access is requested,
+        // inheritance is disabled, and the PID belongs to the test-owned child.
+        let process = unsafe {
+            OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SYNCHRONIZE,
+                0,
+                child.id(),
+            )
+        };
         assert!(!process.is_null(), "open child with query-limited rights");
         let mut creation = windows_sys::Win32::Foundation::FILETIME {
             dwLowDateTime: 0,
@@ -860,12 +909,22 @@ mod tests {
             authority.process_continuity(),
             WindowIdentityContinuity::Continuous
         );
+        assert_eq!(
+            authority.verify_final_process_identity(1, child.id()),
+            WindowIdentityContinuity::Continuous,
+            "zero-time wait should recognize the retained live process"
+        );
 
         child.kill().expect("terminate the test-owned child");
         let _ = child.wait().expect("wait for child termination");
         assert_eq!(
             authority.process_continuity(),
             WindowIdentityContinuity::ProcessTerminated
+        );
+        assert_eq!(
+            authority.verify_final_process_identity(1, child.id()),
+            WindowIdentityContinuity::ProcessTerminated,
+            "the retained process handle remains signaled after exit"
         );
         // Keep the limited-query handle alive through the post-exit check.
         let drop_count_before = super::window_identity_authority_drop_count_for_test();

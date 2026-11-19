@@ -4,7 +4,7 @@ locale: en
 slug: windows-setup
 title: Windows Setup and First Launch
 description: >-
-  Step-by-step setup guide for Sky Auto Player on Windows 10 or 11: download the Tauri installer,
+  Step-by-step setup guide for Sky Auto Player on Windows 11: download the Tauri installer,
   install, add songs, and configure the hotkeys.
 summary: >-
   Download the canonical Tauri NSIS installer, install for the current user, and use the desktop
@@ -12,7 +12,7 @@ summary: >-
 category: getting-started
 order: 3
 published: '2026-08-08'
-updated: '2026-08-08'
+updated: '2026-11-18'
 draft: false
 related:
   - sheet-formats
@@ -29,7 +29,7 @@ evidence:
 
 ## Requirements
 
-- Windows 10 or 11, 64-bit
+- Windows 11, 64-bit
 - No developer toolchain or separate scripting runtime is required — the packaged build is standalone
 - No administrator rights required for the current-user install
 - No system-wide installer or service

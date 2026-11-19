@@ -1,5 +1,10 @@
 # Historical source snapshots
 
+The executed playback-core redesign plan is retained only at its immutable
+source revision: [plan at
+d275398ee97b73cbbead1d47b0e825774160fa6e](https://github.com/pumni/Sky-Auto-Player/blob/d275398ee97b73cbbead1d47b0e825774160fa6e/docs/playback-core-redesign-plan.md).
+It is provenance, not a current contract.
+
 Archived records are revision-bound and are not qualification evidence for
 current source. Browse the pinned trees when an original report or dataset is
 needed.

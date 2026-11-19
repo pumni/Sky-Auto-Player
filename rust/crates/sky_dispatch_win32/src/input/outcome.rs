@@ -128,7 +128,7 @@ pub fn classify_send_status(
         } else {
             SendTransactionStatus::ClockFailureBeforeSend
         }
-    } else if inserted < requested {
+    } else if inserted != requested {
         if inserted == 0 {
             SendTransactionStatus::ZeroProgress
         } else {
@@ -167,6 +167,29 @@ impl SendTransactionOutcome {
             && self.evidence.attempts == 1
             && self.evidence.zero_progress_retries == 0
             && self.evidence.retry_reason == PacketRetryReason::None
+            && self.evidence.first_win32_error.is_none()
+            && self.evidence.last_win32_error.is_none()
+    }
+
+    /// Raw transport can be complete even when the post-send QPC sample is
+    /// absent. Cleanup keeps those dimensions independent: a full, internally
+    /// consistent insertion moves keys to `needs_probe`, while musical timing
+    /// still rejects the packet unless `has_valid_sender_timing_evidence` is
+    /// also true.
+    pub fn has_complete_raw_transport_for(&self, packet: PhysicalPacket) -> bool {
+        let requested_mask = packet.up_mask | packet.down_mask;
+        let requested_events = packet.event_count();
+        requested_events != 0
+            && matches!(
+                self.status,
+                SendTransactionStatus::Complete | SendTransactionStatus::ClockFailureAfterSend
+            )
+            && self.evidence.requested_mask == requested_mask
+            && self.evidence.first_inserted == requested_events
+            && self.evidence.attempts == 1
+            && self.evidence.zero_progress_retries == 0
+            && self.evidence.retry_reason == PacketRetryReason::None
+            && self.evidence.skipped_mask == 0
             && self.evidence.first_win32_error.is_none()
             && self.evidence.last_win32_error.is_none()
     }
@@ -222,6 +245,24 @@ pub enum TerminalProbeVerdict {
     Inconclusive(u16),
 }
 
+/// State sampled by the worker-owned cleanup drain after each delay and at
+/// the final sender boundary. A terminal drain in the background is limited
+/// to one best-effort Up and retains the resulting journal residual.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CleanupDrainDecision {
+    pub terminal_requested: bool,
+    pub origin_foreground: bool,
+}
+
+impl Default for CleanupDrainDecision {
+    fn default() -> Self {
+        Self {
+            terminal_requested: false,
+            origin_foreground: true,
+        }
+    }
+}
+
 /// Terminal cleanup's three evidence dimensions without changing the public
 /// release outcome or qualification/IPC schema.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -229,6 +270,8 @@ pub struct TerminalReleaseEvidence {
     pub release_outcome: ReleaseAllOutcome,
     pub send_attempts: SmallVec<[TerminalSendAttemptEvidence; 4]>,
     pub probe_verdict: TerminalProbeVerdict,
+    pub needs_up_mask: u16,
+    pub needs_probe_mask: u16,
 }
 
 /// Result of a tracked cleanup whose caller revalidates the immutable release
@@ -241,6 +284,8 @@ pub struct GuardedReleaseOutcome {
     pub send_attempts: SmallVec<[TerminalSendAttemptEvidence; 4]>,
     pub probe_verdict: TerminalProbeVerdict,
     pub withheld_reason: Option<String>,
+    pub needs_up_mask: u16,
+    pub needs_probe_mask: u16,
 }
 
 impl GuardedReleaseOutcome {
@@ -249,6 +294,8 @@ impl GuardedReleaseOutcome {
             release_outcome: self.release_outcome.clone(),
             send_attempts: self.send_attempts.clone(),
             probe_verdict: self.probe_verdict,
+            needs_up_mask: self.needs_up_mask,
+            needs_probe_mask: self.needs_probe_mask,
         }
     }
 }

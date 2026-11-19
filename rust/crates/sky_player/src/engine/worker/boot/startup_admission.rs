@@ -1,4 +1,7 @@
-use super::super::admission::focus_matches_hwnd;
+use super::super::admission::{
+    focus_matches_hwnd, safety_cleanup_drain_decision, verify_safety_cleanup_target,
+};
+use super::super::cleanup::CleanupTarget;
 use super::super::config::StartupCheckpoint;
 use super::super::shared::{StartupAbortReason, StartupPhase};
 use super::super::{
@@ -7,6 +10,7 @@ use super::super::{
     release_state_verified, wait_failure_message,
 };
 use crate::engine::config::{CALIBRATION_MAX_STARTUP_BUDGET_US, CALIBRATION_SAMPLES};
+use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::Ordering;
 pub(super) fn record_startup_failure(
@@ -19,8 +23,14 @@ pub(super) fn record_startup_failure(
         .system_power
         .fail_startup(StartupAbortReason::WorkerFailure);
     *metrics.last_error.lock() = Some(message.clone());
-    *metrics.terminal_error.lock() = Some(message);
+    *metrics.terminal_error.lock() = Some(message.clone());
     *metrics.terminal_trigger_reason.lock() = Some("startup_failure".to_string());
+    *metrics.terminal_result.lock() = Some(super::super::super::WorkerTerminalResult {
+        outcome: super::super::super::WorkerTerminalOutcome::Error,
+        cause: super::super::super::WorkerTerminalCause::Failure,
+        terminal_error: Some(message),
+        residual: super::super::super::TerminalReleaseResidual::empty(),
+    });
     OUTCOME_ERROR
 }
 
@@ -131,7 +141,30 @@ pub(super) fn record_startup_abort_without_backend(
         *metrics.last_error.lock() = Some(message.clone());
     }
     *metrics.terminal_error.lock() = None;
-    startup_outcome(trigger)
+    let outcome = startup_outcome(trigger);
+    let typed_outcome = match outcome {
+        OUTCOME_QUIT => super::super::super::WorkerTerminalOutcome::Quit,
+        OUTCOME_SKIPPED => super::super::super::WorkerTerminalOutcome::Skipped,
+        super::super::super::OUTCOME_SYSTEM_SUSPENDED => {
+            super::super::super::WorkerTerminalOutcome::SystemSuspended
+        }
+        _ => super::super::super::WorkerTerminalOutcome::Error,
+    };
+    *metrics.terminal_result.lock() = Some(super::super::super::WorkerTerminalResult {
+        outcome: typed_outcome,
+        cause: if trigger.requires_error_outcome() {
+            super::super::super::WorkerTerminalCause::Failure
+        } else if matches!(trigger, TerminalTrigger::Quit) {
+            super::super::super::WorkerTerminalCause::Quit
+        } else if matches!(trigger, TerminalTrigger::Skip) {
+            super::super::super::WorkerTerminalCause::Skipped
+        } else {
+            super::super::super::WorkerTerminalCause::SystemSuspended
+        },
+        terminal_error: trigger.requires_error_outcome().then_some(message),
+        residual: super::super::super::TerminalReleaseResidual::empty(),
+    });
+    outcome
 }
 
 fn startup_outcome(trigger: TerminalTrigger) -> u8 {
@@ -148,14 +181,64 @@ fn startup_outcome(trigger: TerminalTrigger) -> u8 {
     }
 }
 
-pub(super) fn finalize_startup_abort(
+fn release_startup_tracked_obligations(
+    backend: &mut TrackedKeyState,
+    cleanup_target: CleanupTarget<'_>,
+) -> ReleaseAllOutcome {
+    let session_release_owner = backend.session_release_owner_proof().cloned();
+    backend
+        .release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+            cleanup_target.verification_hwnd,
+            |_, release_owner| {
+                let stamp = cleanup_target.expected_target.ok_or_else(|| {
+                    "target HWND/generation unavailable during startup cleanup".to_string()
+                })?;
+                verify_safety_cleanup_target(
+                    cleanup_target.target,
+                    stamp,
+                    release_owner,
+                    cleanup_target.require_owner_identity,
+                )
+            },
+            || {
+                let stamp = cleanup_target.expected_target.ok_or_else(|| {
+                    "target HWND/generation unavailable during startup cleanup".to_string()
+                })?;
+                let release_owner = session_release_owner.as_ref().ok_or_else(|| {
+                    "session release owner proof is missing during startup cleanup".to_string()
+                })?;
+                safety_cleanup_drain_decision(
+                    cleanup_target.target,
+                    stamp,
+                    release_owner,
+                    cleanup_target.require_owner_identity,
+                    true,
+                )
+            },
+        )
+        .release_outcome
+}
+
+pub(super) fn finalize_startup_abort_with_origin(
     backend: &mut TrackedKeyState,
     metrics: &SharedMetrics,
-    verification_hwnd: isize,
+    cleanup_target: CleanupTarget<'_>,
     trigger: TerminalTrigger,
     primary_error: String,
 ) -> u8 {
-    let cleanup_result = catch_unwind(AssertUnwindSafe(|| backend.release_all(verification_hwnd)));
+    finalize_startup_abort_with_cleanup(backend, metrics, trigger, primary_error, |backend| {
+        release_startup_tracked_obligations(backend, cleanup_target)
+    })
+}
+
+fn finalize_startup_abort_with_cleanup(
+    backend: &mut TrackedKeyState,
+    metrics: &SharedMetrics,
+    trigger: TerminalTrigger,
+    primary_error: String,
+    cleanup: impl FnOnce(&mut TrackedKeyState) -> ReleaseAllOutcome,
+) -> u8 {
+    let cleanup_result = catch_unwind(AssertUnwindSafe(|| cleanup(backend)));
     let cleanup_verified = cleanup_result
         .as_ref()
         .is_ok_and(|cleanup| release_state_verified(backend, cleanup));
@@ -183,15 +266,43 @@ pub(super) fn finalize_startup_abort(
     *metrics.terminal_trigger_reason.lock() = Some(trigger.as_str().to_string());
     *metrics.terminal_error.lock() = cleanup_error.clone();
     *metrics.secondary_errors.lock() = Vec::new();
-    if let Some(cleanup_error) = cleanup_error {
+    let (outcome, terminal_error) = if let Some(cleanup_error) = cleanup_error {
         *metrics.last_error.lock() = Some(format!("{primary_error}; {cleanup_error}"));
-        OUTCOME_ERROR
+        (OUTCOME_ERROR, Some(cleanup_error))
     } else if trigger.requires_error_outcome() {
-        *metrics.last_error.lock() = Some(primary_error);
-        OUTCOME_ERROR
+        *metrics.last_error.lock() = Some(primary_error.clone());
+        (OUTCOME_ERROR, Some(primary_error))
     } else {
-        startup_outcome(trigger)
-    }
+        (startup_outcome(trigger), None)
+    };
+    let typed_outcome = match outcome {
+        OUTCOME_QUIT => super::super::super::WorkerTerminalOutcome::Quit,
+        OUTCOME_SKIPPED => super::super::super::WorkerTerminalOutcome::Skipped,
+        super::super::super::OUTCOME_SYSTEM_SUSPENDED => {
+            super::super::super::WorkerTerminalOutcome::SystemSuspended
+        }
+        _ => super::super::super::WorkerTerminalOutcome::Error,
+    };
+    let cause = if cleanup_result.is_err() {
+        super::super::super::WorkerTerminalCause::CleanupPanic
+    } else if terminal_error.is_some() {
+        super::super::super::WorkerTerminalCause::Failure
+    } else if matches!(trigger, TerminalTrigger::Quit) {
+        super::super::super::WorkerTerminalCause::Quit
+    } else if matches!(trigger, TerminalTrigger::Skip) {
+        super::super::super::WorkerTerminalCause::Skipped
+    } else if matches!(trigger, TerminalTrigger::SystemSuspend) {
+        super::super::super::WorkerTerminalCause::SystemSuspended
+    } else {
+        super::super::super::WorkerTerminalCause::Failure
+    };
+    *metrics.terminal_result.lock() = Some(super::super::super::WorkerTerminalResult {
+        outcome: typed_outcome,
+        cause,
+        terminal_error,
+        residual: super::super::super::TerminalReleaseResidual::from_backend(backend),
+    });
+    outcome
 }
 
 pub(super) fn startup_checkpoint(
@@ -214,13 +325,13 @@ pub(super) fn startup_checkpoint(
     Ok(())
 }
 
-pub(super) fn finalize_admission_failure(
+fn finalize_admission_failure_with_cleanup(
     backend: &mut TrackedKeyState,
     metrics: &SharedMetrics,
-    verification_hwnd: isize,
     primary_error: String,
+    cleanup: impl FnOnce(&mut TrackedKeyState) -> ReleaseAllOutcome,
 ) -> u8 {
-    let cleanup_result = catch_unwind(AssertUnwindSafe(|| backend.release_all(verification_hwnd)));
+    let cleanup_result = catch_unwind(AssertUnwindSafe(|| cleanup(backend)));
     let cleanup_verified = cleanup_result
         .as_ref()
         .is_ok_and(|cleanup| release_state_verified(backend, cleanup));
@@ -251,8 +362,41 @@ pub(super) fn finalize_admission_failure(
     let message = cleanup_error
         .map(|cleanup_error| format!("{primary_error}; {cleanup_error}"))
         .unwrap_or(primary_error);
-    *metrics.last_error.lock() = Some(message);
+    *metrics.last_error.lock() = Some(message.clone());
+    *metrics.terminal_result.lock() = Some(super::super::super::WorkerTerminalResult {
+        outcome: super::super::super::WorkerTerminalOutcome::Error,
+        cause: if cleanup_result.is_err() {
+            super::super::super::WorkerTerminalCause::CleanupPanic
+        } else {
+            super::super::super::WorkerTerminalCause::Failure
+        },
+        terminal_error: Some(message),
+        residual: super::super::super::TerminalReleaseResidual::from_backend(backend),
+    });
     OUTCOME_ERROR
+}
+
+pub(super) fn finalize_admission_failure_with_origin(
+    backend: &mut TrackedKeyState,
+    metrics: &SharedMetrics,
+    cleanup_target: CleanupTarget<'_>,
+    primary_error: String,
+) -> u8 {
+    finalize_admission_failure_with_cleanup(backend, metrics, primary_error, |backend| {
+        release_startup_tracked_obligations(backend, cleanup_target)
+    })
+}
+
+#[cfg(test)]
+pub(super) fn finalize_admission_failure(
+    backend: &mut TrackedKeyState,
+    metrics: &SharedMetrics,
+    verification_hwnd: isize,
+    primary_error: String,
+) -> u8 {
+    finalize_admission_failure_with_cleanup(backend, metrics, primary_error, |backend| {
+        backend.release_all(verification_hwnd)
+    })
 }
 
 pub(super) fn validate_production_wait_backend(

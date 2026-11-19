@@ -46,6 +46,83 @@ function Get-DispatchSessionRedesignM3Profile {
     }
 }
 
+function Get-PlaybackCoreLifecycleProfile {
+    $performanceWorkloads = @(
+        'mixed-up-down',
+        'dense-alternating',
+        'canonical-max-chord',
+        'near-minimum-retrigger',
+        'long-idle'
+    )
+    $safetyScenarios = @(
+        'focus-loss',
+        'owner-mismatch',
+        'owner-process-termination',
+        'pause-resume',
+        'suspend-resume',
+        'stop-cleanup',
+        'skip-cleanup',
+        'supervisor-lease-expiry'
+    )
+    [pscustomobject]@{
+        Name = 'PlaybackCoreLifecycle'
+        WorkloadVersion = 'playback-core-lifecycle-v1'
+        HarnessManifestSchemaVersion = 1
+        BaselineRevision = '2544daa13eb23fdf03bd922e65b96fcffaba421c'
+        BaselineTree = '155882714df131ddc9b9985133a1f0611736b7cd'
+        CandidateLineageBranch = 'refactor/playback-core-lifecycle'
+        Target = 'x86_64-pc-windows-msvc'
+        CargoProfile = 'dist'
+        RequiredFeatures = @('real-input-acceptance')
+        RustVersion = '1.99.1'
+        CargoVersion = '1.99.1'
+        ObserverMode = 'SchedulerQueuedV3Compat3'
+        ObserverVersion = 'scheduler-receiveonly-queue-v3-compat3'
+        ObserverSchemaVersion = 3
+        ObserverEventSchemaVersion = 3
+        PerformanceTimingMarginUs = 500
+        SafetyTimingMarginUs = 500
+        PairCount = 6
+        SampleSeconds = 15
+        PairOrder = 'AB/BA alternating'
+        LoadCells = @('Quiet', 'Contention')
+        PerformanceWorkloads = $performanceWorkloads
+        SafetyScenarios = $safetyScenarios
+        Statistics = @('p50', 'p95', 'p99', 'max')
+        Metrics = @(
+            'eligible-to-pre-call-us',
+            'wait-to-pre-call-us',
+            'pre-call-to-completion-us',
+            'stop-to-worker-release-verified-us',
+            'worker-cpu-us',
+            'worker-spin-us',
+            'raw-up-syscall-count',
+            'worker-joined-to-next-playback-start-us'
+        )
+        TargetIdentity = [ordered]@{
+            target_class = 'project-owned-non-game-receive-only'
+            target_name = 'Sky Auto Player — Native Acceptance Sink'
+            game_target = $false
+            capture_status = 'NOT_RUN'
+            required_at_run = 'owner-approved exact project-owned ReceiveOnly HWND, PID, and retained process identity'
+        }
+        RunnerProvenancePaths = @(
+            'scripts/build_dispatch_core_harness.ps1',
+            'scripts/dispatch_harness_manifest.psm1',
+            'scripts/dispatch_qualification_profiles.psm1',
+            'scripts/qualify_dispatch_core.ps1',
+            'scripts/run_native_acceptance_case.ps1',
+            'scripts/dispatch_qualification_report.psm1',
+            'scripts/dispatch_qualification_orchestration.psm1',
+            'scripts/dispatch_pair_screen.psm1',
+            'scripts/native_acceptance_sink.ps1',
+            'scripts/lib/playback_core_lifecycle_collector.psm1',
+            'scripts/test_qualify_dispatch_core_contracts.ps1',
+            'docs/playback-verification.md'
+        )
+    }
+}
+
 function Get-DispatchCleanupM3Profile {
     [pscustomobject]@{
         Name = 'DispatchCleanupM3'
@@ -239,4 +316,61 @@ function Assert-DispatchSessionRedesignM3SourceCheckout {
     $identity
 }
 
-Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout
+function Get-PlaybackCoreLifecycleRunnerIdentity {
+    param([Parameter(Mandatory)] [string]$RunnerRoot)
+    $profile = Get-PlaybackCoreLifecycleProfile
+    $identity = Get-DispatchM3GitCheckoutIdentity $RunnerRoot
+    if (-not $identity.clean -or $identity.checkout.top_level -ne $identity.root -or
+        $identity.branch -ne $profile.CandidateLineageBranch) {
+        throw 'PlaybackCoreLifecycle runner must be a clean checkout on refactor/playback-core-lifecycle'
+    }
+    $remoteLine = @(& git -C $identity.root ls-remote origin ('refs/heads/' + $profile.CandidateLineageBranch) 2>&1)
+    $remoteExit = $LASTEXITCODE
+    if ($remoteExit -ne 0) { throw ('could not verify PlaybackCoreLifecycle candidate against origin: ' + ($remoteLine -join ' ')) }
+    $remoteRows = @($remoteLine | ForEach-Object { [string]$_ } | Where-Object { $_ -match ('^([0-9a-f]{40})\s+refs/heads/' + [regex]::Escape($profile.CandidateLineageBranch) + '$') })
+    if ($remoteRows.Count -ne 1) { throw 'origin does not advertise exactly one PlaybackCoreLifecycle candidate branch tip' }
+    $lineageTip = [regex]::Match($remoteRows[0], '^([0-9a-f]{40})').Groups[1].Value
+    if ($identity.revision -ne $lineageTip) { throw 'PlaybackCoreLifecycle runner must match the pushed candidate branch tip' }
+    & git -C $identity.root merge-base --is-ancestor $profile.BaselineRevision $lineageTip
+    if ($LASTEXITCODE -ne 0) { throw 'PlaybackCoreLifecycle candidate is not descended from the pinned redesign baseline' }
+    [pscustomobject]@{
+        root = $identity.root
+        revision = $identity.revision
+        tree = $identity.tree
+        branch = $identity.branch
+        clean = $identity.clean
+        checkout = $identity.checkout
+        baseline_revision = $profile.BaselineRevision
+        baseline_tree = $profile.BaselineTree
+        candidate_lineage_branch = $profile.CandidateLineageBranch
+        candidate_lineage_tip_revision = $lineageTip
+        candidate_lineage_verified = $true
+    }
+}
+
+function Assert-PlaybackCoreLifecycleSourceCheckout {
+    param(
+        [Parameter(Mandatory)] [string]$SourceRoot,
+        [Parameter(Mandatory)] [ValidateSet('Baseline', 'Candidate')] [string]$SourceRole,
+        [Parameter(Mandatory)] [string]$RunnerRoot
+    )
+    $profile = Get-PlaybackCoreLifecycleProfile
+    $identity = Get-DispatchM3GitCheckoutIdentity $SourceRoot
+    $runnerIdentity = Get-PlaybackCoreLifecycleRunnerIdentity -RunnerRoot $RunnerRoot
+    $expectedRevision = if ($SourceRole -eq 'Baseline') { $profile.BaselineRevision } else { $runnerIdentity.revision }
+    $expectedTree = if ($SourceRole -eq 'Baseline') { $profile.BaselineTree } else { $runnerIdentity.tree }
+    $expectedBranch = if ($SourceRole -eq 'Baseline') { '' } else { $profile.CandidateLineageBranch }
+    if (-not $identity.clean -or $identity.revision -ne $expectedRevision -or $identity.tree -ne $expectedTree -or
+        $identity.branch -ne $expectedBranch -or $identity.checkout.top_level -ne $identity.root -or
+        $identity.checkout.git_common_dir -ne $runnerIdentity.checkout.git_common_dir -or
+        ($SourceRole -eq 'Baseline' -and -not (Test-DispatchM3PathOutside -Path $identity.root -RepositoryRoot $RunnerRoot)) -or
+        ($SourceRole -eq 'Candidate' -and $identity.root -ne $runnerIdentity.root)) {
+        throw ('PlaybackCoreLifecycle ' + $SourceRole + ' must match its exact clean source identity and role')
+    }
+    if (-not (Test-Path -LiteralPath (Join-Path $identity.root 'rust\Cargo.toml') -PathType Leaf)) {
+        throw ('PlaybackCoreLifecycle ' + $SourceRole + ' source root is missing the Rust workspace')
+    }
+    $identity
+}
+
+Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout

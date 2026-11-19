@@ -72,7 +72,8 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         .backend
         .release_owner_proof_for_mask(1)
         .expect("A origin proof lookup")
-        .expect("A origin proof");
+        .expect("A origin proof")
+        .clone();
 
     let authored_b_up = epoch
         .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
@@ -337,7 +338,9 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
             .resources
             .backend
             .release_owner_proof_for_mask(1)
-            .is_err()
+            .expect("session owner proof lookup after A release")
+            .expect("session owner proof remains after A release")
+            .same_owner(&origin)
     );
     assert!(
         harness

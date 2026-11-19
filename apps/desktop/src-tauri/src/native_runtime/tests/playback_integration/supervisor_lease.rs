@@ -138,6 +138,7 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
             state: Mutex::new(PlaybackSessionState::Starting),
             pending: Mutex::new(None),
             player: Some(player.clone()),
+            terminal_result: Mutex::new(None),
             power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
             power_request: Mutex::new(None),
             suspend_resume_registration: Mutex::new(None),
@@ -526,13 +527,22 @@ fn blocked_terminal_presentation_does_not_hold_supervisor_after_release() {
     monitor.join().expect("monitor thread");
     assert!(active.worker_quiescent.load(Ordering::Acquire));
     assert!(active.release_verified.load(Ordering::Acquire));
-    assert!(!active.done.load(Ordering::Acquire));
+    assert!(active.done.load(Ordering::Acquire));
     assert!(
         service
             .status()
-            .expect("pending presentation status")
+            .expect("committed terminal status while presentation is blocked")
             .active
-            .is_some()
+            .is_none()
+    );
+    assert_eq!(
+        service
+            .status()
+            .expect("committed terminal status")
+            .last_terminal
+            .expect("terminal status commits before UI work")
+            .state,
+        PlaybackSessionState::Finished
     );
 
     release_test_gate(&gate);
@@ -568,7 +578,18 @@ fn supervisor_spawn_failure_is_retired_before_physical_activation() {
     assert!(error.contains("injected playback supervisor spawn failure"));
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut status = service.status().expect("status after supervisor failure");
-    while status.active.is_some() && Instant::now() < deadline {
+    while (status.active.is_some()
+        || !events
+            .lock()
+            .expect("event hub")
+            .buffered_for_test()
+            .iter()
+            .any(|event| {
+                matches!(event, UiEvent::PlaybackFailed { payload, .. }
+                if payload.code == "playback_supervisor_start_failed")
+            }))
+        && Instant::now() < deadline
+    {
         thread::sleep(Duration::from_millis(5));
         status = service.status().expect("pending supervisor failure status");
     }

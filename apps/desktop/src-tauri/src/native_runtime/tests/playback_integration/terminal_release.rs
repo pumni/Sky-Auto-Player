@@ -804,6 +804,800 @@ fn terminal_handoff_uses_worker_result_and_release_evidence_after_join() {
     ));
 }
 
+#[cfg(feature = "tauri-test")]
+fn quarantined_recovery_fixture(
+    session_id: &str,
+    foreground_required: bool,
+    needs_up_mask: u16,
+    needs_probe_mask: u16,
+) -> (
+    NativePlaybackService,
+    Arc<NativeActivePlayback>,
+    Arc<sky_dispatch_win32::focus::WindowIdentityAuthority>,
+) {
+    use sky_player::engine::{
+        TerminalReleaseResidual, WorkerTerminalCause, WorkerTerminalOutcome, WorkerTerminalResult,
+    };
+
+    let activity = ActivityCoordinator::default();
+    let service = NativePlaybackService::new(activity.clone());
+    let mut active = active_for_control_with_physical(PlaybackSessionState::Stopping, None, true);
+    let active_mut = Arc::get_mut(&mut active).expect("unique recovery fixture active slot");
+    active_mut.activity = activity.clone();
+    active_mut.session_id = session_id.to_string();
+    let hwnd = 0x7788;
+    let owner_pid = 0x1199;
+    let authority =
+        sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(hwnd, owner_pid);
+    let authority = Arc::new(authority);
+    let owner = sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
+        hwnd,
+        17,
+        Some(owner_pid),
+        Some(Arc::clone(&authority)),
+        foreground_required,
+    )
+    .expect("recovery owner proof");
+    let materialized = sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical();
+    let profile = std::array::from_fn(|slot| materialized.physical_key(slot));
+    let outstanding_mask = needs_up_mask | needs_probe_mask;
+    *active_mut.terminal_result.lock().expect("typed result") = Some(WorkerTerminalResult {
+        outcome: WorkerTerminalOutcome::Error,
+        cause: WorkerTerminalCause::SenderAnomaly,
+        terminal_error: Some("injected terminal sender anomaly".into()),
+        residual: TerminalReleaseResidual {
+            outstanding_mask,
+            needs_up_mask,
+            needs_probe_mask,
+            owner: Some(owner),
+            profile,
+        },
+    });
+    active_mut.worker_quiescent.store(true, Ordering::Release);
+    *active_mut.activity_lease.lock().expect("activity lease") = Some(
+        activity
+            .reserve_playback(session_id)
+            .expect("reserve recovery session"),
+    );
+    *service.active.lock().expect("active slot") = Some(Arc::clone(&active));
+    release_terminal_ownership(
+        &service.active,
+        &service.last_terminal,
+        &active,
+        TerminalRetirement {
+            quiescence: WorkerQuiescenceProof::WorkerJoined,
+            release: TerminalReleaseEvidence::Unverified {
+                obligation_mask: outstanding_mask,
+                detail: "injected unverified release".into(),
+            },
+            publication: PlaybackTerminalPublication::Failed {
+                code: "terminal_release_unverified".into(),
+                message: "release remains quarantined".into(),
+            },
+        },
+    )
+    .expect("joined session commits terminal quarantine");
+    (service, active, authority)
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn post_join_recovery_observes_focus_return_after_terminal_publication_without_winevent() {
+    let _send_lock = recovery_test_send_lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let session_id = "a".repeat(32);
+    let (service, active, _authority) = quarantined_recovery_fixture(&session_id, false, 0x0001, 0);
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    let terminal_publication = PlaybackTerminalPublication::Failed {
+        code: "terminal_release_unverified".into(),
+        message: "release remains quarantined".into(),
+    };
+
+    // The worker has joined and the session-id quarantine is committed before
+    // the terminal event. Recovery starts only after this event boundary.
+    assert!(active.worker_quiescent.load(Ordering::Acquire));
+    assert!(active.done.load(Ordering::Acquire));
+    publish_terminal_event(&events, &active, &terminal_publication)
+        .expect("publish terminal event before post-join focus return");
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    reset_recovery_test_raw_sends();
+    service
+        .post_join_recovery
+        .start_without_winevent_for_test(active.clone(), service.last_terminal.clone())
+        .expect("start persistent polling recovery owner");
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(recovery_test_raw_sends(), 0, "background must not send Up");
+
+    // This fixture deliberately disables WinEvent. The exact foreground poll
+    // must discover the return and trigger one bounded attempt.
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x1199)));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while recovery_test_raw_sends() == 0 && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(recovery_test_raw_sends(), 1, "focus return gets one raw Up");
+
+    // Repeated polls/duplicate hints while the original target stays
+    // foreground are the same transition, not new recovery attempts.
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
+    std::thread::sleep(Duration::from_millis(150));
+    assert_eq!(recovery_test_raw_sends(), 1);
+    assert!(service.activity.physical_release_is_quarantined());
+    assert!(matches!(
+        service
+            .activity
+            .reserve_playback("successor-after-probe-held"),
+        Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
+    ));
+    service.post_join_recovery.shutdown();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_return() {
+    use sky_player::engine::{
+        FaultInjectionScript, MockSendInputCapture, StartupCheckpoint, StartupOrderingHook,
+    };
+
+    let _send_lock = recovery_test_send_lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    set_recovery_test_probe_result(None);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
+
+    let activity = ActivityCoordinator::default();
+    let mut service = NativePlaybackService::new(activity.clone());
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+    service.diagnostics_gate = Arc::clone(&diagnostics_gate);
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
+    let captures = Arc::new(Mutex::new(Vec::<MockSendInputCapture>::new()));
+    let player = native_handoff_focus_required_test_player(
+        Arc::clone(&hook),
+        Arc::clone(&captures),
+        FaultInjectionScript::none(),
+    );
+    player.bind_initial_target_for_test(123);
+    player
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
+            77,
+        )
+        .expect("bind the original recovery authority");
+    let mut active_value = terminal_projection_active(Arc::clone(&player));
+    active_value.target_hwnd = Some(123);
+    active_value.activity = activity.clone();
+    active_value.activity_lease = Mutex::new(Some(
+        activity
+            .reserve_playback(&active_value.session_id)
+            .expect("physical session reservation"),
+    ));
+    let (retired_sender, retired_receiver) = mpsc::channel();
+    service.monitor_retired_test_hook = Some(Arc::new(move || {
+        let _ = retired_sender.send(());
+    }));
+    let active =
+        attach_shared_test_presentation(Arc::new(active_value), &events, diagnostics_gate, None);
+    *service.active.lock().expect("active slot") = Some(Arc::clone(&active));
+    let service = Arc::new(service);
+
+    let (activation_sender, activation_receiver) = mpsc::channel();
+    let monitor_service = Arc::clone(&service);
+    let monitor_active = Arc::clone(&active);
+    let monitor_events = Arc::clone(&events);
+    let monitor = thread::spawn(move || {
+        monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+    });
+    player.arm(0).expect("arm physical mock worker");
+    activation_sender
+        .send(PlaybackActivation::Started)
+        .expect("monitor activation");
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+
+    // The original target loses foreground only after a complete Down. Stop
+    // then permits the worker's one bounded background safety Up.
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+    hook.arm_startup_checkpoint(StartupCheckpoint::TerminalCleanup, 1);
+    let ack = service
+        .command(
+            "playback.stop",
+            active.session_id.clone(),
+            Arc::clone(&events),
+        )
+        .expect("Stop active physical session");
+    assert!(ack.accepted);
+    hook.release_startup_checkpoint();
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+    assert!(
+        !player
+            .join(Duration::ZERO)
+            .expect("terminal cleanup is gated")
+    );
+    assert!(!active.worker_quiescent.load(Ordering::Acquire));
+    assert!(matches!(
+        activity.reserve_playback("successor-before-monitor-join"),
+        Err(crate::app_state::ActivityReservationError::PhysicalPlaybackActive)
+    ));
+
+    reset_recovery_test_raw_sends();
+    hook.release_startup_checkpoint();
+    retired_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("terminal presentation follows joined quarantine commit");
+    monitor.join().expect("monitor thread");
+    assert!(active.worker_quiescent.load(Ordering::Acquire));
+    assert!(active.done.load(Ordering::Acquire));
+    assert!(activity.physical_release_is_quarantined());
+    let worker_terminal = player
+        .terminal_result()
+        .expect("worker publishes the retained release journal");
+    assert_eq!(worker_terminal.residual.needs_up_mask, 1);
+    assert_eq!(worker_terminal.residual.needs_probe_mask, 0);
+    let worker_calls = captures.lock().expect("mock sender capture").clone();
+    assert_eq!(
+        worker_calls.len(),
+        2,
+        "one Down and one background safety Up"
+    );
+    assert!(matches!(
+        worker_calls[0],
+        MockSendInputCapture::Packet { packet, .. } if packet.down_mask == 1
+    ));
+    assert!(
+        matches!(
+            &worker_calls[1],
+            MockSendInputCapture::SingleEmitter {
+                scan_codes,
+                key_up: true,
+            } if scan_codes == &[0x15]
+        ),
+        "background terminal cleanup must make one raw Up call: {worker_calls:?}"
+    );
+    assert_eq!(
+        service
+            .status()
+            .expect("retired terminal status")
+            .last_terminal
+            .expect("terminal publication committed")
+            .terminal_release_verified,
+        Some(false)
+    );
+    assert_eq!(
+        recovery_test_raw_sends(),
+        0,
+        "post-join recovery must wait for exact foreground return"
+    );
+
+    // The monitor must have transferred recovery ownership before it returned.
+    // A later exact foreground poll should trigger one attempt even though the
+    // real desktop foreground and WinEvent hook are not used by this fixture.
+    set_recovery_test_probe_result(Some(
+        sky_dispatch_win32::input::InstrumentPhysicalState::AllUp,
+    ));
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while recovery_test_raw_sends() == 0 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(recovery_test_raw_sends(), 1);
+    assert_eq!(
+        recovery_test_probe_calls(),
+        1,
+        "one admitted Up is probed once"
+    );
+    thread::sleep(Duration::from_millis(150));
+    assert_eq!(
+        recovery_test_raw_sends(),
+        1,
+        "polls do not replay the same edge"
+    );
+    assert!(!activity.physical_release_is_quarantined());
+    assert_eq!(
+        service
+            .status()
+            .expect("recovered terminal status")
+            .last_terminal
+            .expect("recovered terminal result")
+            .terminal_release_verified,
+        Some(true)
+    );
+    drop(
+        activity
+            .reserve_playback("successor-after-verified-recovery")
+            .expect("verified foreground Up and AllUp probe release quarantine"),
+    );
+
+    service.post_join_recovery.shutdown();
+    set_recovery_test_probe_result(None);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn post_join_recovery_rejects_foreign_foreground_owner_drift_and_prejoin_start() {
+    let _send_lock = recovery_test_send_lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let (service, active, authority) =
+        quarantined_recovery_fixture("post-join-origin-reject", false, 0x0001, 0);
+    reset_recovery_test_raw_sends();
+
+    active.worker_quiescent.store(false, Ordering::Release);
+    active.done.store(false, Ordering::Release);
+    assert!(
+        service
+            .post_join_recovery
+            .start_without_winevent_for_test(active.clone(), service.last_terminal.clone())
+            .is_err()
+    );
+    assert_eq!(recovery_test_raw_sends(), 0);
+    active.worker_quiescent.store(true, Ordering::Release);
+    active.done.store(true, Ordering::Release);
+
+    // A different foreground HWND cannot authorize the old session's Up.
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x9999));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x2222)));
+    service
+        .post_join_recovery
+        .start_without_winevent_for_test(active.clone(), service.last_terminal.clone())
+        .expect("start recovery owner against original authority");
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(recovery_test_raw_sends(), 0);
+
+    // Reusing the original HWND with a different PID is invalid origin, not a
+    // foreground return. The recovery owner tears down and keeps quarantine.
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x2222)));
+    std::thread::sleep(Duration::from_millis(80));
+    assert_eq!(recovery_test_raw_sends(), 0);
+    assert!(service.activity.physical_release_is_quarantined());
+    authority.set_process_identity_status_for_test(
+        sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated,
+    );
+    service.post_join_recovery.shutdown();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[test]
+fn retirement_commit_failure_publishes_failed_status_and_retains_quarantine() {
+    use sky_player::engine::{
+        TerminalReleaseResidual, WorkerTerminalCause, WorkerTerminalOutcome, WorkerTerminalResult,
+    };
+
+    let activity = ActivityCoordinator::default();
+    let service = NativePlaybackService::new(activity.clone());
+    let mut active = active_for_control_with_physical(PlaybackSessionState::Stopping, None, true);
+    let active_mut = Arc::get_mut(&mut active).expect("unique failing-retirement session");
+    active_mut.activity = activity.clone();
+    active_mut.session_id = "b".repeat(32);
+    let authority = Arc::new(
+        sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(0x7711, 0x1199),
+    );
+    let owner = sky_dispatch_win32::input::ReleaseOwnerProof::new(
+        0x7711,
+        31,
+        Some(0x1199),
+        Some(authority),
+    )
+    .expect("original owner proof");
+    let materialized = sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical();
+    *active_mut.terminal_result.lock().expect("terminal result") = Some(WorkerTerminalResult {
+        outcome: WorkerTerminalOutcome::Error,
+        cause: WorkerTerminalCause::SenderAnomaly,
+        terminal_error: Some("injected worker cause".into()),
+        // Invalid mask partition forces quarantine storage to fail while the
+        // physical reservation itself remains fail-closed.
+        residual: TerminalReleaseResidual {
+            outstanding_mask: 1,
+            needs_up_mask: 0,
+            needs_probe_mask: 0,
+            owner: Some(owner),
+            profile: std::array::from_fn(|slot| materialized.physical_key(slot)),
+        },
+    });
+    active_mut.worker_quiescent.store(true, Ordering::Release);
+    *active_mut.activity_lease.lock().expect("activity lease") = Some(
+        activity
+            .reserve_playback("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+            .expect("reserve physical session"),
+    );
+    *service.active.lock().expect("active session slot") = Some(active.clone());
+
+    let retirement = TerminalRetirement {
+        quiescence: WorkerQuiescenceProof::WorkerJoined,
+        release: TerminalReleaseEvidence::Unverified {
+            obligation_mask: 1,
+            detail: "worker release is unverified".into(),
+        },
+        publication: PlaybackTerminalPublication::Finished {
+            outcome: "finished".into(),
+            message: "pre-commit success intention".into(),
+        },
+    };
+    let error = release_terminal_ownership(
+        &service.active,
+        &service.last_terminal,
+        &active,
+        retirement.clone(),
+    )
+    .expect_err("invalid residual must reject retirement commit");
+    let publication = terminal_retirement_commit_failure(
+        &service.active,
+        &service.last_terminal,
+        &active,
+        &retirement,
+        &error,
+    );
+
+    assert!(matches!(
+        &publication,
+        PlaybackTerminalPublication::Failed { code, message }
+            if code == "terminal_retirement_commit_failed"
+                && message.contains("pre-commit success intention")
+                && message.contains("injected worker cause")
+                && message.contains("residual")
+    ));
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    publish_terminal_event(&events, &active, &publication)
+        .expect("publish failure derived from committed retirement result");
+    let published = events.lock().expect("event hub").buffered_for_test();
+    assert!(
+        !published
+            .iter()
+            .any(|event| matches!(event, crate::ui_events::UiEvent::PlaybackFinished { .. }))
+    );
+    assert!(published.iter().any(|event| matches!(
+        event,
+        crate::ui_events::UiEvent::PlaybackFailed { payload, .. }
+            if payload.session_id == active.session_id
+                && payload.code == "terminal_retirement_commit_failed"
+                && payload.message.contains("injected worker cause")
+    )));
+    assert!(!active.release_verified.load(Ordering::Acquire));
+    assert!(!active.done.load(Ordering::Acquire));
+    assert!(activity.physical_release_is_quarantined());
+    let status = service.status().expect("native status after failed commit");
+    assert_eq!(
+        status.active.as_ref().map(|active| active.state),
+        Some(PlaybackSessionState::Failed)
+    );
+    let status = status
+        .last_terminal
+        .expect("session-id failure status committed");
+    assert_eq!(status.session_id, active.session_id);
+    assert_eq!(status.state, PlaybackSessionState::Failed);
+    assert_eq!(
+        status.failure_code.as_deref(),
+        Some("terminal_retirement_commit_failed")
+    );
+    assert_eq!(status.terminal_release_verified, Some(false));
+    assert_eq!(status.release_obligation_mask, Some(1));
+    assert!(matches!(
+        activity.reserve_playback("successor-after-storage-failure"),
+        Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
+    ));
+    assert!(matches!(
+        activity.reserve_calibration(),
+        Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
+    ));
+    assert!(matches!(
+        activity.reserve_update(),
+        Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
+    ));
+}
+
+#[test]
+fn stale_retirement_failure_cannot_rewrite_successor_status() {
+    let activity = ActivityCoordinator::default();
+    let service = NativePlaybackService::new(activity.clone());
+    let stale = active_for_control_with_physical(PlaybackSessionState::Stopping, None, true);
+    *stale.activity_lease.lock().expect("stale activity lease") = Some(
+        activity
+            .reserve_playback(stale.session_id.clone())
+            .expect("reserve stale physical session"),
+    );
+    let successor = active_for_control(PlaybackSessionState::Starting, None);
+    *service.active.lock().expect("active slot") = Some(successor.clone());
+    let stale_retirement = TerminalRetirement {
+        quiescence: WorkerQuiescenceProof::WorkerJoined,
+        release: TerminalReleaseEvidence::Unverified {
+            obligation_mask: 1,
+            detail: "stale session retains an unresolved release obligation".into(),
+        },
+        publication: PlaybackTerminalPublication::Finished {
+            outcome: "finished".into(),
+            message: "stale worker result".into(),
+        },
+    };
+
+    let error = release_terminal_ownership(
+        &service.active,
+        &service.last_terminal,
+        &stale,
+        stale_retirement.clone(),
+    )
+    .expect_err("stale session no longer owns active slot");
+    let publication = terminal_retirement_commit_failure(
+        &service.active,
+        &service.last_terminal,
+        &stale,
+        &stale_retirement,
+        &error,
+    );
+
+    assert!(matches!(
+        publication,
+        PlaybackTerminalPublication::Failed { .. }
+    ));
+    assert_eq!(
+        *successor.state.lock().expect("successor state"),
+        PlaybackSessionState::Starting
+    );
+    assert!(
+        service
+            .last_terminal
+            .lock()
+            .expect("terminal status")
+            .is_none()
+    );
+    assert!(!successor.release_verified.load(Ordering::Acquire));
+    assert!(activity.physical_release_is_quarantined());
+    assert!(matches!(
+        activity.reserve_playback("successor-physical-input"),
+        Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
+    ));
+}
+
+#[test]
+fn poisoned_retirement_slot_keeps_unverified_release_failed() {
+    let activity = ActivityCoordinator::default();
+    let service = NativePlaybackService::new(activity.clone());
+    let active = active_for_control_with_physical(PlaybackSessionState::Stopping, None, true);
+    *active.activity_lease.lock().expect("activity lease") = Some(
+        activity
+            .reserve_playback(active.session_id.clone())
+            .expect("reserve session"),
+    );
+    *service.active.lock().expect("active slot") = Some(active.clone());
+    let poisoned_slot = Arc::clone(&service.active);
+    let _ = std::thread::spawn(move || {
+        let _slot = poisoned_slot.lock().expect("poison active slot");
+        panic!("injected retirement slot poison");
+    })
+    .join();
+
+    release_terminal_ownership(
+        &service.active,
+        &service.last_terminal,
+        &active,
+        TerminalRetirement {
+            quiescence: WorkerQuiescenceProof::WorkerJoined,
+            release: TerminalReleaseEvidence::Unverified {
+                obligation_mask: 1,
+                detail: "release proof unavailable".into(),
+            },
+            publication: PlaybackTerminalPublication::Failed {
+                code: "terminal_release_unverified".into(),
+                message: "release proof unavailable".into(),
+            },
+        },
+    )
+    .expect("retirement recovers poisoned mutex without clearing quarantine");
+    assert!(active.done.load(Ordering::Acquire));
+    assert!(!active.release_verified.load(Ordering::Acquire));
+    assert_eq!(
+        service
+            .status()
+            .expect_err("poisoned status lock fails closed"),
+        "native active-playback lock poisoned"
+    );
+    let terminal = service
+        .last_terminal
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+        .expect("terminal status committed despite active-slot poison");
+    assert_eq!(terminal.state, PlaybackSessionState::Failed);
+    assert_eq!(terminal.terminal_release_verified, Some(false));
+    assert!(activity.physical_release_is_quarantined());
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_focus_loss_preserves_needs_up_without_a_raw_attempt() {
+    let _send_lock = recovery_test_send_lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    set_recovery_test_probe_result(None);
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("focus-lost-recovery", true, 0x0001, 0);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x9999));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x2222)));
+    reset_recovery_test_raw_sends();
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("focus-required recovery waits for original foreground");
+    assert!(error.contains("needs_up=0x0001"));
+    assert_eq!(recovery_test_raw_sends(), 0);
+    assert!(service.activity.physical_release_is_quarantined());
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("failed recovery retains its residual");
+    assert_eq!(residual.needs_up_mask, 0x0001);
+    assert_eq!(residual.needs_probe_mask, 0);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_final_foreground_loss_after_admission_keeps_needs_up_and_quarantine() {
+    let _send_lock = recovery_test_send_lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    set_recovery_test_probe_result(None);
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("final-focus-loss-recovery", true, 0x0001, 0);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x1199)));
+    sky_dispatch_win32::focus::set_foreground_owner_match_sequence_for_test(Some(&[
+        true, true, false,
+    ]));
+    reset_recovery_test_raw_sends();
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("the final exact foreground query must withhold recovery Up");
+    assert!(error.contains("needs_up=0x0001"));
+    assert_eq!(recovery_test_raw_sends(), 0);
+    assert_eq!(recovery_test_probe_calls(), 0);
+    assert!(service.activity.physical_release_is_quarantined());
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("failed final check retains the original recovery journal");
+    assert_eq!(residual.needs_up_mask, 0x0001);
+    assert_eq!(residual.needs_probe_mask, 0);
+    assert_eq!(residual.outstanding_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+    sky_dispatch_win32::focus::set_foreground_owner_match_sequence_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_from_focus_free_session_still_checks_origin_and_never_replays_probe_only_residual() {
+    let _send_lock = recovery_test_send_lock();
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("focus-free-recovery", false, 0x0001, 0);
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x1199)));
+    reset_recovery_test_raw_sends();
+
+    let _ = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("synthetic probe remains inconclusive and quarantined");
+    assert_eq!(recovery_test_raw_sends(), 1);
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("probe-only residual stays quarantined");
+    assert_eq!(residual.needs_up_mask, 0);
+    assert_eq!(residual.needs_probe_mask, 0x0001);
+    assert_eq!(residual.outstanding_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_process_death_keeps_original_residual_and_never_sends() {
+    let _send_lock = recovery_test_send_lock();
+    let (service, active, authority) =
+        quarantined_recovery_fixture("dead-origin-recovery", false, 0x0001, 0);
+    authority.set_process_identity_status_for_test(
+        sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated,
+    );
+    reset_recovery_test_raw_sends();
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("dead process origin cannot be recovered");
+    assert!(error.contains("identity is no longer continuous"));
+    assert_eq!(recovery_test_raw_sends(), 0);
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("dead-origin residual remains available");
+    assert_eq!(residual.needs_up_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_owner_drift_keeps_original_residual_and_never_sends() {
+    let _send_lock = recovery_test_send_lock();
+    let (service, active, authority) =
+        quarantined_recovery_fixture("drifted-origin-recovery", false, 0x0001, 0);
+    authority.set_process_identity_status_for_test(
+        sky_dispatch_win32::focus::WindowIdentityContinuity::OwnerMismatch,
+    );
+    reset_recovery_test_raw_sends();
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("owner drift cannot authorize recovery");
+    assert!(error.contains("identity is no longer continuous"));
+    assert_eq!(recovery_test_raw_sends(), 0);
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("drifted-origin residual remains quarantined");
+    assert_eq!(residual.needs_up_mask, 0x0001);
+    assert_eq!(residual.needs_probe_mask, 0);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_attempt_does_not_retry_after_a_full_transport_and_inconclusive_probe() {
+    let _send_lock = recovery_test_send_lock();
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("qpc-failed-recovery", false, 0x0001, 0);
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x1199)));
+    reset_recovery_test_raw_sends();
+    let result = recover_quarantined_release_once(&active, &service.last_terminal);
+
+    let error = result.expect_err("inconclusive physical probe keeps the residual");
+    assert!(error.contains("remains quarantined"));
+    assert!(recovery_test_raw_sends() <= 1);
+    assert!(service.activity.physical_release_is_quarantined());
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("QPC-failed recovery preserves the origin journal");
+    assert_eq!(residual.outstanding_mask, 0x0001);
+    assert_eq!(residual.needs_up_mask | residual.needs_probe_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn recovery_cannot_claim_a_residual_before_worker_quiescence() {
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("not-yet-joined-recovery", false, 0x0001, 0);
+    active.worker_quiescent.store(false, Ordering::Release);
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("recovery must wait for worker join");
+    assert!(error.contains("requires a joined worker"));
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("a pre-join failure must not take recovery ownership");
+    assert_eq!(residual.outstanding_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
 #[test]
 fn joined_worker_with_unverified_release_quarantines_future_physical_activity() {
     let activity = ActivityCoordinator::default();

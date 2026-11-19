@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct TargetProofOperationCounts {
     pub(super) generation_revalidations: u64,
+    pub(super) atomic_reads: u64,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -12,6 +13,7 @@ std::thread_local! {
     static TARGET_PROOF_OPERATION_COUNTS: std::cell::Cell<TargetProofOperationCounts> =
         const { std::cell::Cell::new(TargetProofOperationCounts {
             generation_revalidations: 0,
+            atomic_reads: 0,
         }) };
 }
 
@@ -24,12 +26,22 @@ fn record_target_stamp_read() {
     });
 }
 
+#[cfg(any(test, feature = "test-support"))]
+fn record_target_atomic_reads(reads: u64) {
+    TARGET_PROOF_OPERATION_COUNTS.with(|counts| {
+        let mut current = counts.get();
+        current.atomic_reads = current.atomic_reads.saturating_add(reads);
+        counts.set(current);
+    });
+}
+
 /// The target and retained process identity are written once before worker
 /// startup. After binding, the worker and supervisor only read this token;
 /// owner failure is a one-way latch and never publishes a replacement.
 pub struct SessionTarget {
     target: OnceLock<(isize, u64)>,
     owner: OnceLock<sky_dispatch_win32::input::ReleaseOwnerProof>,
+    foreground_required: AtomicBool,
     owner_identity_required: AtomicBool,
     owner_process_identity_required: AtomicBool,
     owner_failure: AtomicU32,
@@ -66,7 +78,7 @@ pub(super) enum OwnerAuthorityReadError {
 }
 
 impl SessionTarget {
-    pub(super) fn new(hwnd: isize, generation: u64) -> Self {
+    pub(super) fn new(hwnd: isize, generation: u64, foreground_required: bool) -> Self {
         let target = OnceLock::new();
         if hwnd != 0 || generation != 0 {
             let _ = target.set((hwnd, generation));
@@ -74,6 +86,7 @@ impl SessionTarget {
         Self {
             target,
             owner: OnceLock::new(),
+            foreground_required: AtomicBool::new(foreground_required),
             owner_identity_required: AtomicBool::new(false),
             owner_process_identity_required: AtomicBool::new(false),
             owner_failure: AtomicU32::new(OwnerIdentityFailure::None as u32),
@@ -83,6 +96,7 @@ impl SessionTarget {
 
     /// Publish the initial HWND only. A second, different HWND invalidates
     /// this session instead of changing its destination.
+    #[cfg(any(test, feature = "test-support"))]
     pub(super) fn set_initial_target(&self, hwnd: isize) -> bool {
         if hwnd == 0 || !self.is_valid() {
             self.invalidate_target();
@@ -117,6 +131,8 @@ impl SessionTarget {
     /// check and the syscall boundary.
     #[inline(always)]
     pub(super) fn is_valid(&self) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_atomic_reads(2);
         !self.target_invalidated.load(Ordering::Acquire)
             && self.owner_failure.load(Ordering::Acquire) == OwnerIdentityFailure::None as u32
     }
@@ -127,17 +143,30 @@ impl SessionTarget {
             .store(true, Ordering::Release);
     }
 
+    /// Whether this session's admission policy requires the retained origin
+    /// to remain foreground during cleanup. Owner identity/liveness remains a
+    /// separate proof and is checked even for focus-free sessions.
+    pub(super) fn foreground_required(&self) -> bool {
+        self.foreground_required.load(Ordering::Acquire)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn require_foreground_for_test(&self) {
+        self.foreground_required.store(true, Ordering::Release);
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(super) fn bind_owner_identity(&self, hwnd: isize, generation: u64, owner_pid: u32) -> bool {
         if owner_pid == 0 || self.load_stable() != Some((hwnd, generation)) {
             return false;
         }
         self.owner_identity_required.store(true, Ordering::Release);
-        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new(
+        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
             hwnd,
             generation,
             Some(owner_pid),
             None,
+            self.foreground_required(),
         ) else {
             return false;
         };
@@ -161,11 +190,12 @@ impl SessionTarget {
         self.owner_identity_required.store(true, Ordering::Release);
         self.owner_process_identity_required
             .store(true, Ordering::Release);
-        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new(
+        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
             hwnd,
             generation,
             Some(owner_pid),
             Some(authority),
+            self.foreground_required(),
         ) else {
             return false;
         };
@@ -173,10 +203,14 @@ impl SessionTarget {
     }
 
     pub(super) fn owner_process_identity_required(&self) -> bool {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_atomic_reads(1);
         self.owner_process_identity_required.load(Ordering::Acquire)
     }
 
     pub(super) fn owner_identity_status(&self, expected_generation: u64) -> OwnerIdentityStatus {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_atomic_reads(1);
         if !self.owner_identity_required.load(Ordering::Acquire) {
             return OwnerIdentityStatus::NotRequired;
         }
@@ -222,11 +256,12 @@ impl SessionTarget {
         if let Some(owner) = self.owner.get() {
             return Ok(owner.clone());
         }
-        sky_dispatch_win32::input::ReleaseOwnerProof::new(
+        sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
             expected_hwnd,
             expected_generation,
             None,
             None,
+            self.foreground_required(),
         )
         .ok_or(OwnerAuthorityReadError::Status(OwnerIdentityStatus::Stale))
     }
@@ -350,6 +385,8 @@ impl SessionTarget {
     }
 
     fn latched_owner_failure(&self) -> Option<OwnerIdentityStatus> {
+        #[cfg(any(test, feature = "test-support"))]
+        record_target_atomic_reads(1);
         match self.owner_failure.load(Ordering::Acquire) {
             value if value == OwnerIdentityFailure::ProcessTerminated as u32 => {
                 Some(OwnerIdentityStatus::ProcessTerminated)
@@ -385,7 +422,7 @@ mod tests {
 
     #[test]
     fn target_can_be_bound_once_and_changed_hwnd_invalidates_the_session() {
-        let target = SessionTarget::new(0, 0);
+        let target = SessionTarget::new(0, 0, false);
         assert_eq!(target.load_stable(), Some((0, 0)));
         assert!(target.set_initial_target(123));
         assert_eq!(target.load_stable(), Some((123, 1)));
@@ -397,7 +434,7 @@ mod tests {
 
     #[test]
     fn failed_owner_latch_is_terminal_for_the_bound_target() {
-        let target = SessionTarget::new(123, 1);
+        let target = SessionTarget::new(123, 1, false);
         target.require_owner_identity();
         assert!(target.bind_owner_identity(123, 1, 77));
         assert_eq!(
@@ -420,7 +457,7 @@ mod tests {
     #[cfg(feature = "test-support")]
     #[test]
     fn release_proof_clones_share_one_retained_process_authority() {
-        let target = SessionTarget::new(123, 1);
+        let target = SessionTarget::new(123, 1, false);
         target.require_owner_identity();
         let authority = Arc::new(
             sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(123, 77),
@@ -450,7 +487,7 @@ mod tests {
 
     #[test]
     fn release_proof_for_another_target_is_rejected() {
-        let target = SessionTarget::new(123, 1);
+        let target = SessionTarget::new(123, 1, false);
         let proof = sky_dispatch_win32::input::ReleaseOwnerProof::new(456, 2, None, None)
             .expect("valid detached proof");
         assert!(!target.release_owner_proof_is_current(&proof));

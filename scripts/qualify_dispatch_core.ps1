@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory)]
     [ValidateSet('Canary', 'Smoke', 'Compare', 'Final')]
     [string]$Stage,
-    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3')]
+    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle')]
     [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
     [string]$CandidateManifest,
@@ -14,7 +14,9 @@ param(
     [ValidateSet(0, 500)]
     [int]$TimingMarginUs = 500,
     [Parameter(Mandatory)]
-    [string]$OutputRoot
+    [string]$OutputRoot,
+    [switch]$PlanOnly,
+    [switch]$OwnerApprovedReceiveOnlyRun
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,23 +27,27 @@ Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Force
+Import-Module (Join-Path $PSScriptRoot 'lib\playback_core_lifecycle_collector.psm1') -Force
 
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
 $isSessionRedesignProfile = $QualificationProfile -eq 'DispatchSessionRedesignM3'
+$isPlaybackCoreLifecycle = $QualificationProfile -eq 'PlaybackCoreLifecycle'
 $usesSessionQualificationContracts = $isDispatchCleanupM3 -or $isSessionRedesignProfile
 $dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
 $sessionRedesignProfile = if ($isSessionRedesignProfile) { Get-DispatchSessionRedesignM3Profile } else { $null }
-$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3')
-$baseRevision = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineRevision } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.BaselineRevision } elseif ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } elseif ($QualificationProfile -eq 'Scheduler') { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' } else { '843cc0c6a1392dfff0ca4b017551bd1ffb180579' }
-$baseTree = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineTree } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.BaselineTree } elseif ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } elseif ($QualificationProfile -eq 'Scheduler') { 'f554c41b23a3969d02ed29842d4178f6143c9d86' } else { $null }
-$expectedBranch = if ($isDispatchCleanupM3) { $dispatchCleanupM3.CandidateLineageBranch } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.CandidateLineageBranch } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
-$expectedWorkloadVersion = if ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
+$playbackCoreProfile = if ($isPlaybackCoreLifecycle) { Get-PlaybackCoreLifecycleProfile } else { $null }
+$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle')
+$baseRevision = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineRevision } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.BaselineRevision } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.BaselineRevision } elseif ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } elseif ($QualificationProfile -eq 'Scheduler') { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' } else { '843cc0c6a1392dfff0ca4b017551bd1ffb180579' }
+$baseTree = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineTree } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.BaselineTree } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.BaselineTree } elseif ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } elseif ($QualificationProfile -eq 'Scheduler') { 'f554c41b23a3969d02ed29842d4178f6143c9d86' } else { $null }
+$expectedBranch = if ($isDispatchCleanupM3) { $dispatchCleanupM3.CandidateLineageBranch } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.CandidateLineageBranch } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.CandidateLineageBranch } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
+$expectedWorkloadVersion = if ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.WorkloadVersion } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
 $caseRunner = Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'
 $manifestBuilder = Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1'
 $manifestValidator = Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1'
 $reportProjectionModule = Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1'
 $orchestrationModule = Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1'
+$playbackLifecycleCollectorModule = Join-Path $PSScriptRoot 'lib\playback_core_lifecycle_collector.psm1'
 $candidateManifestPath = [System.IO.Path]::GetFullPath($CandidateManifest)
 $controlManifestPath = if ($ControlManifest) { [System.IO.Path]::GetFullPath($ControlManifest) } else { $null }
 $evidenceRoot = [System.IO.Path]::GetFullPath($OutputRoot)
@@ -111,6 +117,21 @@ function Get-CurrentSourceIdentity {
     }
     if ($isSessionRedesignProfile) {
         $script:runnerIdentity = Get-DispatchSessionRedesignM3RunnerIdentity -RunnerRoot $root
+        $script:head = $script:runnerIdentity.revision
+        $script:tree = $script:runnerIdentity.tree
+        return [ordered]@{
+            branch = $script:runnerIdentity.branch
+            revision = $script:runnerIdentity.revision
+            tree = $script:runnerIdentity.tree
+            clean = $script:runnerIdentity.clean
+            runner_checkout_identity = $script:runnerIdentity.checkout
+            candidate_lineage_branch = $script:runnerIdentity.candidate_lineage_branch
+            candidate_lineage_tip_revision = $script:runnerIdentity.candidate_lineage_tip_revision
+            candidate_lineage_verified = $script:runnerIdentity.candidate_lineage_verified
+        }
+    }
+    if ($isPlaybackCoreLifecycle) {
+        $script:runnerIdentity = Get-PlaybackCoreLifecycleRunnerIdentity -RunnerRoot $root
         $script:head = $script:runnerIdentity.revision
         $script:tree = $script:runnerIdentity.tree
         return [ordered]@{
@@ -246,6 +267,21 @@ function Assert-DispatchSessionRedesignM3SourceRoot {
     Assert-DispatchSessionRedesignM3RunnerProvenance -Manifest $Manifest -RunnerIdentity $script:runnerIdentity -RunnerRoot $root | Out-Null
 }
 
+function Assert-PlaybackCoreLifecycleSourceRoot {
+    param($Manifest, [string]$Role)
+    $expectedRole = if ($Role -eq 'candidate') { 'Candidate' } else { 'Baseline' }
+    Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $Manifest -ExpectedRole $expectedRole -RepositoryRoot $root | Out-Null
+    $sourceRoot = [System.IO.Path]::GetFullPath([string]$Manifest.source_root)
+    $identity = Assert-PlaybackCoreLifecycleSourceCheckout -SourceRoot $sourceRoot -SourceRole $expectedRole -RunnerRoot $root
+    if ($identity.revision -ne $Manifest.source_revision -or
+        $identity.tree -ne $Manifest.source_tree_sha -or
+        $identity.checkout.git_dir -ne [string]$Manifest.source_checkout_identity.git_dir -or
+        $identity.checkout.git_common_dir -ne [string]$Manifest.source_checkout_identity.git_common_dir) {
+        throw ('PlaybackCoreLifecycle ' + $expectedRole + ' manifest source SHA/tree/checkout differs from its exact source')
+    }
+    Assert-PlaybackCoreLifecycleRunnerProvenance -Manifest $Manifest -RunnerIdentity $script:runnerIdentity -RunnerRoot $root | Out-Null
+}
+
 function Read-And-VerifyManifest {
     param([string]$Path, [string]$Role)
     Assert-AbsolutePath $Path ($Role + ' manifest')
@@ -265,6 +301,8 @@ function Read-And-VerifyManifest {
         Assert-DispatchCleanupM3SourceRoot -Manifest $manifest -Role $Role
     } elseif ($isSessionRedesignProfile) {
         Assert-DispatchSessionRedesignM3SourceRoot -Manifest $manifest -Role $Role
+    } elseif ($isPlaybackCoreLifecycle) {
+        Assert-PlaybackCoreLifecycleSourceRoot -Manifest $manifest -Role $Role
     }
     if ($qualifiedProfile) {
         Assert-ImmutableHarnessManifestIntegrity -Manifest $manifest -ManifestPath $Path | Out-Null
@@ -275,7 +313,7 @@ function Read-And-VerifyManifest {
     if ($manifest.schema_version -ne 1 -or
         $manifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
         $manifest.source_tree_sha -notmatch '^[0-9a-f]{40}$' -or
-        $manifest.source_branch -ne $(if (($qualifiedProfile -and $Role -eq 'control') -or $usesSessionQualificationContracts) { '' } else { $expectedBranch }) -or
+        $manifest.source_branch -ne $(if (($qualifiedProfile -and $Role -eq 'control') -or $usesSessionQualificationContracts -or ($isPlaybackCoreLifecycle -and $manifest.source_role -eq 'Baseline')) { '' } else { $expectedBranch }) -or
         ([bool]$manifest.source_tree_clean -ne (-not $c1TimedVerified)) -or
         -not [bool]$manifest.clean_build -or
         $manifest.cargo_profile -ne 'dist' -or
@@ -658,10 +696,11 @@ function Invoke-NativeCase {
         '-OutputRoot', $sessionRoot,
         '-GameFps', [string]$Fps
     )
-    if ($usesSessionQualificationContracts) {
+    if ($usesSessionQualificationContracts -or $isPlaybackCoreLifecycle) {
         if ([string]::IsNullOrWhiteSpace($Workload)) { throw ($QualificationProfile + ' native cases require an explicit workload identity') }
         $args += @('-Workload', $Workload)
     }
+    if ($isPlaybackCoreLifecycle) { $args += '-OwnerApprovedReceiveOnlyRun' }
     if ($Sample -gt 0) { $args += @('-SampleSeconds', [string]$Sample) }
     if ($Load -eq 'Contention') { $args += '-CpuContention' }
     if ($Historical) { $args += '-HistoricalSourceAllowed' }
@@ -672,6 +711,10 @@ function Invoke-NativeCase {
     $commandText = $commandText.Replace($sessionRoot, '<sessions-root>')
     $script:commandRows.Add($commandText)
     $started = [DateTimeOffset]::UtcNow.ToString('O')
+    # Parent-side diagnostic only. The native successor's actual Armed
+    # publication QPC is reported in lifecycle_measurement by the worker.
+    $runnerPreChildProcessLaunchQpcTicks = [System.Diagnostics.Stopwatch]::GetTimestamp()
+    $runnerPreChildProcessLaunchQpcFrequency = [System.Diagnostics.Stopwatch]::Frequency
     $output = @(& (Get-Command pwsh.exe).Source @args 2>&1)
     $caseExit = $LASTEXITCODE
     $ended = [DateTimeOffset]::UtcNow.ToString('O')
@@ -689,6 +732,8 @@ function Invoke-NativeCase {
     $details = if ($null -ne $report) { Get-OptionalProperty $report 'details' } else { $null }
     $invocationPath = if ($caseDirectory) { Join-Path $caseDirectory 'invocation.json' } else { $null }
     $invocation = if ($invocationPath -and (Test-Path -LiteralPath $invocationPath -PathType Leaf)) { Get-Content -LiteralPath $invocationPath -Raw | ConvertFrom-Json } else { $null }
+    $runConfigPath = if ($caseDirectory) { Join-Path $caseDirectory 'run-config.json' } else { $null }
+    $caseRunConfig = if ($runConfigPath -and (Test-Path -LiteralPath $runConfigPath -PathType Leaf)) { Get-Content -LiteralPath $runConfigPath -Raw | ConvertFrom-Json } else { $null }
     if ($isDispatchCleanupM3 -and $caseDirectory) {
         $runConfigPath = Join-Path $caseDirectory 'run-config.json'
         if (-not (Test-Path -LiteralPath $runConfigPath -PathType Leaf)) {
@@ -722,6 +767,7 @@ function Invoke-NativeCase {
         }
     }
     $row = [pscustomobject]@{
+        sequence_index = $script:runRows.Count
         run_id = if ($null -ne $report) { [string]$report.run_id } else { $null }
         stage = $Stage
         cell_id = $CellId
@@ -745,6 +791,7 @@ function Invoke-NativeCase {
         source_changes_sha256 = Get-OptionalProperty $HarnessManifest 'source_changes_sha256'
         derived_source_inventory_sha256 = Get-OptionalProperty $HarnessManifest 'derived_source_inventory_sha256'
         harness_sha256 = $HarnessManifest.binary_sha256
+        manifest_sha256 = $HarnessManifest.manifest_sha256
         profile = $HarnessManifest.cargo_profile
         features = (@($HarnessManifest.cargo_features) -join ',')
         cargo_lock_sha256 = Get-OptionalProperty $HarnessManifest 'cargo_lock_sha256'
@@ -826,10 +873,16 @@ function Invoke-NativeCase {
         observer_queue_dropped = if ($null -ne $metrics) { $metrics.observer_queue_dropped } else { $null }
         timing_metrics_json = if ($null -ne $metrics) { ConvertTo-Json -InputObject $metrics -Depth 12 -Compress } else { $null }
         timing_metrics = $metrics
+        lifecycle_measurement = Get-OptionalProperty $details 'lifecycle_measurement'
+        target_identity = Get-OptionalProperty $invocation 'target_identity'
+        machine_name = Get-OptionalProperty $caseRunConfig 'machine_name'
+        os_boot_time_utc = Get-OptionalProperty $caseRunConfig 'os_boot_time_utc'
+        runner_pre_child_process_launch_qpc_ticks = $runnerPreChildProcessLaunchQpcTicks
+        runner_pre_child_process_launch_qpc_frequency_hz = $runnerPreChildProcessLaunchQpcFrequency
         report = $report
         runner_output = if ($caseDirectory) { $text.Replace($caseDirectory, '<evidence-directory>').Replace($evidenceRoot, '<evidence-root>') } else { $text }
     }
-    if ($usesSessionQualificationContracts) {
+    if ($usesSessionQualificationContracts -or $isPlaybackCoreLifecycle) {
         $row | Add-Member -NotePropertyName qualification_profile -NotePropertyValue $QualificationProfile
         $row | Add-Member -NotePropertyName planned_session_count -NotePropertyValue $plannedSessionCount
         $row | Add-Member -NotePropertyName attempted_session_count -NotePropertyValue $null
@@ -913,7 +966,7 @@ if ($Control -and $Control.guard_mode -eq 'frozen' -and $Candidate.guard_mode -e
 function Assert-QualificationTimingMargin {
     param(
         [ValidateSet('Canary', 'Smoke', 'Compare', 'Final')] [string]$RequestedStage,
-        [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3')] [string]$Profile,
+        [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle')] [string]$Profile,
         [ValidateSet(0, 500)] [int]$MarginUs,
         [int]$PairCount,
         [int]$SampleDurationSeconds
@@ -1058,6 +1111,64 @@ function Get-PairedMetrics {
 }
 
 try {
+    if ($isPlaybackCoreLifecycle) {
+        if ($PlanOnly -and $OwnerApprovedReceiveOnlyRun) {
+            throw '-OwnerApprovedReceiveOnlyRun cannot be combined with -PlanOnly'
+        }
+        if (-not $PlanOnly -and -not $OwnerApprovedReceiveOnlyRun) {
+            throw 'PlaybackCoreLifecycle execution requires -OwnerApprovedReceiveOnlyRun after the repository owner explicitly approves this Windows machine, target receiver, and physical input scope'
+        }
+        if ($Stage -ne 'Final' -or -not $ControlManifest) {
+            throw 'PlaybackCoreLifecycle -PlanOnly requires -Stage Final with candidate and baseline manifests'
+        }
+        Assert-AbsolutePath $CandidateManifest 'candidate manifest'
+        Assert-AbsolutePath $ControlManifest 'baseline manifest'
+        Assert-AbsolutePath $OutputRoot 'output root'
+        Assert-OutsideRepository $evidenceRoot 'output root'
+        $source = Get-CurrentSourceIdentity
+        $rustcVersion = (& rustc -Vv) -join [Environment]::NewLine
+        if ($LASTEXITCODE -ne 0) { throw 'could not identify active rustc version' }
+        $candidate = Read-And-VerifyManifest $candidateManifestPath 'candidate'
+        $control = Read-And-VerifyManifest $controlManifestPath 'control'
+        if ($candidate.source_role -ne 'Candidate' -or $candidate.source_revision -ne $head -or
+            $candidate.source_tree_sha -ne $tree -or
+            $control.source_role -ne 'Baseline' -or
+            $control.source_revision -ne $playbackCoreProfile.BaselineRevision -or
+            $control.source_tree_sha -ne $playbackCoreProfile.BaselineTree) {
+            throw 'PlaybackCoreLifecycle plan requires the exact clean pushed candidate and pinned baseline manifests'
+        }
+        if ($candidate.rustc_version -ne $rustcVersion.Trim() -or
+            $control.rustc_version -ne $candidate.rustc_version -or
+            $candidate.cargo_profile -ne $playbackCoreProfile.CargoProfile -or
+            $control.cargo_profile -ne $candidate.cargo_profile -or
+            (@($candidate.cargo_features) -join ',') -ne (@($playbackCoreProfile.RequiredFeatures) -join ',') -or
+            (@($control.cargo_features) -join ',') -ne (@($candidate.cargo_features) -join ',') -or
+            $candidate.target -ne $playbackCoreProfile.Target -or $control.target -ne $candidate.target -or
+            $candidate.workload_version -ne $playbackCoreProfile.WorkloadVersion -or
+            $control.workload_version -ne $candidate.workload_version -or
+            $candidate.cargo_lock_sha256 -ne $control.cargo_lock_sha256) {
+            throw 'PlaybackCoreLifecycle candidate and baseline manifests do not share the required compiler, target, profile, feature, lockfile, and workload identity'
+        }
+        Write-Output ('PLAN_ONLY profile=PlaybackCoreLifecycle native_attempts=0 target_capture=NOT_RUN')
+        Write-Output ('BASELINE sha=' + $control.source_revision + ' tree=' + $control.source_tree_sha + ' binary_sha256=' + $control.binary_sha256)
+        Write-Output ('CANDIDATE sha=' + $candidate.source_revision + ' tree=' + $candidate.source_tree_sha + ' binary_sha256=' + $candidate.binary_sha256)
+        Write-Output ('TOOLCHAIN rust=' + $candidate.rustc_version + ' cargo=' + $candidate.cargo_version + ' target=' + $candidate.target + ' profile=' + $candidate.cargo_profile + ' features=' + (@($candidate.cargo_features) -join ',' ) + ' cargo_lock_sha256=' + $candidate.cargo_lock_sha256)
+        Write-Output ('TARGET_IDENTITY class=' + $playbackCoreProfile.TargetIdentity.target_class + ' name="' + $playbackCoreProfile.TargetIdentity.target_name + '" game_target=false capture_status=NOT_RUN requirement="owner-approved exact project-owned ReceiveOnly HWND, PID, process start FILETIME, and event-log ID at run time"')
+        Write-Output ('PAIRING loads=' + ($playbackCoreProfile.LoadCells -join ',') + ' workloads=' + ($playbackCoreProfile.PerformanceWorkloads -join ',') + ' pairs=' + $playbackCoreProfile.PairCount + ' order=' + $playbackCoreProfile.PairOrder + ' sample_seconds=' + $playbackCoreProfile.SampleSeconds)
+        foreach ($load in $playbackCoreProfile.LoadCells) {
+            foreach ($workload in $playbackCoreProfile.PerformanceWorkloads) {
+                Write-Output ('PAIR_CELL load=' + $load + ' workload=' + $workload + ' pair_orders=' + (@(1..$playbackCoreProfile.PairCount | ForEach-Object { if ($_ % 2 -eq 1) { 'AB' } else { 'BA' } }) -join ','))
+            }
+        }
+        Write-Output ('STATISTICS=' + ($playbackCoreProfile.Statistics -join ','))
+        Write-Output ('METRICS=' + ($playbackCoreProfile.Metrics -join ','))
+        Write-Output ('SAFETY_SCENARIOS_PREPARED=' + ($playbackCoreProfile.SafetyScenarios -join ',') + ' status=NOT_RUN')
+        if ($PlanOnly) {
+            Write-Output 'ReceiveOnly and gameplay were not run.'
+            return
+        }
+    }
+    if ($PlanOnly) { throw '-PlanOnly is available only with PlaybackCoreLifecycle' }
     if ($isSessionRedesignProfile -and $Stage -ne 'Final') {
         throw 'DispatchSessionRedesignM3 permits only its single fail-stop Final plan; standalone Canary, Smoke, and Compare are not authorized'
     }
@@ -1131,11 +1242,14 @@ try {
         'lease-age-watchdog-delayed', 'noncanonical-profile'
     )
     if ($isSessionRedesignProfile) { $scenarios = [string[]]@($sessionRedesignProfile.SafetyScenarios) }
+    if ($isPlaybackCoreLifecycle) { $scenarios = [string[]]@($playbackCoreProfile.SafetyScenarios) }
     [string[]]$performanceWorkloads = @()
     if ($Stage -eq 'Compare') {
         $performanceWorkloads = [string[]]@('dense-alternating', 'mixed-up-down', 'canonical-max-chord')
     } elseif ($isSessionRedesignProfile) {
         $performanceWorkloads = [string[]]@($sessionRedesignProfile.PerformanceCase.Workload)
+    } elseif ($isPlaybackCoreLifecycle) {
+        $performanceWorkloads = [string[]]@($playbackCoreProfile.PerformanceWorkloads)
     } else {
         $performanceWorkloads = [string[]]@('dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
     }
@@ -1165,6 +1279,12 @@ try {
         $plannedControlSessionCount = [int]$sessionRedesignFinalPlan.ControlSessionCount
         $plannedCandidateSessionCount = [int]$sessionRedesignFinalPlan.CandidateSessionCount
         if ($sessionRedesignExecution.StoppedAtFirstNonPass) { $script:stoppedAtFirstNativeFailure = $true }
+    } elseif ($isPlaybackCoreLifecycle) {
+        $plannedControlSessionCount = $performanceWorkloads.Length * $playbackCoreProfile.LoadCells.Length * $Pairs
+        $plannedCandidateSessionCount = $plannedControlSessionCount + $scenarios.Length
+        $plannedSessionCount = $plannedCandidateSessionCount + $plannedControlSessionCount
+        Write-Output ('PLAN profile=PlaybackCoreLifecycle workload=' + ($performanceWorkloads -join ',') + ' candidate-role=Candidate case-margin-us=' + $TimingMarginUs + ' pairs=' + $Pairs + ' order=' + $playbackCoreProfile.PairOrder + ' loads=' + ($playbackCoreProfile.LoadCells -join ',') + ' candidate-safety=' + ($scenarios -join ',') + ' sessions=' + $plannedSessionCount)
+        Write-Output ('PLAN control-role=Baseline paired performance sessions=' + $plannedControlSessionCount)
     } else {
         $plannedSessionCount = switch ($Stage) {
             'Canary' { 1 }
@@ -1181,7 +1301,19 @@ try {
         }
     }
 
-    if (-not $isSessionRedesignProfile) {
+    if ($isPlaybackCoreLifecycle) {
+        Invoke-PairedWorkloads $performanceWorkloads
+        if ($script:exitCode -eq 0) {
+            $finalSafetyCases = @($scenarios | ForEach-Object {
+                [pscustomobject]@{ scenario = $_; workload = 'safety-smoke'; cell_id = 'pcl-safety-quiet'; load = 'Quiet'; margin = $TimingMarginUs; fps = 60 }
+            })
+            $sequenceResult = Invoke-NativeCaseFailStopSequence -Cases $finalSafetyCases -InvokeCase {
+                param($case)
+                Invoke-NativeCase -Scenario $case.scenario -Workload $case.workload -Role 'candidate' -HarnessManifest $candidate -Load $case.load -CellId $case.cell_id -PairId '' -Order '' -Margin $case.margin -Fps $case.fps -Sample 0 -Historical $false
+            }
+            if ($sequenceResult.stopped_at_first_native_failure) { $script:stoppedAtFirstNativeFailure = $true }
+        }
+    } elseif (-not $isSessionRedesignProfile) {
         if ($Stage -eq 'Canary') {
             $canaryWorkload = if ($isDispatchCleanupM3) { 'canonical-single' } else { 'frame-snapshot-canary-v1' }
             $canaryCell = if ($isDispatchCleanupM3) { 'dispatch-cleanup-m3-canary-quiet' } else { 'frame-snapshot-canary' }
@@ -1215,12 +1347,31 @@ try {
         }
     }
 
-    if ($usesSessionQualificationContracts) {
+    if ($usesSessionQualificationContracts -or $isPlaybackCoreLifecycle) {
         foreach ($row in $runRows) { $row.attempted_session_count = $runRows.Count }
     }
     $source = Get-CurrentSourceIdentity
     $os = Get-CimInstance Win32_OperatingSystem
     $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+    $lifecycleMeasurementReport = $null
+    if ($isPlaybackCoreLifecycle) {
+        $runnerMachineName = [Environment]::MachineName
+        $runnerOsBootTimeUtc = $os.LastBootUpTime.ToUniversalTime().ToString('O')
+        $lifecycleMeasurementReport = New-PlaybackCoreLifecycleMeasurementReport `
+            -RunRows $runRows.ToArray() `
+            -CandidateRevision $candidate.source_revision `
+            -CandidateTree $candidate.source_tree_sha `
+            -CandidateManifestSha256 $candidate.manifest_sha256 `
+            -CandidateBinarySha256 $candidate.binary_sha256 `
+            -RunnerMachineName $runnerMachineName `
+            -RunnerOsBootTimeUtc $runnerOsBootTimeUtc
+        if ($lifecycleMeasurementReport.status -ne 'COMPLETE') {
+            $reason = @($lifecycleMeasurementReport.incompleteness) -join '; '
+            $failureRows.Add([pscustomobject]@{ scenario = 'playback-core-lifecycle-measurements'; workload = 'lifecycle-measurement-collector'; role = 'candidate'; cell_id = 'lifecycle-metrics'; pair_id = $null; exit_code = 1; status = 'INCOMPLETE'; reason = $reason; evidence_directory = $evidenceRoot })
+            $script:exitCode = [Math]::Max($script:exitCode, 1)
+        }
+        $lifecycleMeasurementReport | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'lifecycle-metrics.json') -Encoding UTF8
+    }
     $pairedMetrics = Get-PairedMetrics
     $reportProjection = New-QualificationReportProjection `
         -Profile $QualificationProfile `
@@ -1309,6 +1460,16 @@ try {
             candidate_lineage_tip_revision = $runnerIdentity.candidate_lineage_tip_revision
             candidate_lineage_verified = $runnerIdentity.candidate_lineage_verified
             runner_script_provenance = @($candidate.runner_script_provenance)
+        } } elseif ($isPlaybackCoreLifecycle) { [ordered]@{
+            source_revision = $runnerIdentity.revision
+            source_tree_sha = $runnerIdentity.tree
+            source_branch = $runnerIdentity.branch
+            source_root = $runnerIdentity.root
+            source_tree_clean = $runnerIdentity.clean
+            candidate_lineage_branch = $runnerIdentity.candidate_lineage_branch
+            candidate_lineage_tip_revision = $runnerIdentity.candidate_lineage_tip_revision
+            candidate_lineage_verified = $runnerIdentity.candidate_lineage_verified
+            runner_script_provenance = @($candidate.runner_script_provenance)
         } } else { $null }
         session_plan = $sessionPlan
         candidate = [ordered]@{ label = $candidateLabel; manifest_path = $candidate.manifest_path; manifest_sha256 = $candidate.manifest_sha256; qualification_profile = $reportProjection.CandidateQualificationProfile; source_role = Get-OptionalProperty $candidate 'source_role'; source_root = Get-OptionalProperty $candidate 'source_root'; source_revision = $candidate.source_revision; source_tree_sha = $candidate.source_tree_sha; base_source_revision = Get-OptionalProperty $candidate 'base_source_revision'; base_source_tree_sha = Get-OptionalProperty $candidate 'base_source_tree_sha'; binary_path = $candidate.resolved_binary_path; profile = $candidate.cargo_profile; features = @($candidate.cargo_features); cargo_lock_sha256 = Get-OptionalProperty $candidate 'cargo_lock_sha256'; target = $candidate.target; binary_sha256 = $candidate.binary_sha256; performance_timing_margin_us = $reportProjection.CandidateMargins.performance_timing_margin_us; safety_timing_margin_us = $reportProjection.CandidateMargins.safety_timing_margin_us }
@@ -1322,6 +1483,7 @@ try {
         hard_safety_review = $hardSafety
         performance_pairs = $pairedMetrics.paired_sessions
         performance_cells = $pairedMetrics.cell_summary
+        playback_core_lifecycle_measurements = $lifecycleMeasurementReport
         measurement_definitions = [ordered]@{
             floor_displacement = 'physical eligibility/floor QPC minus authored target'
             residual_lateness = 'sender pre-call QPC minus physical eligibility/floor QPC'
@@ -1541,9 +1703,10 @@ try {
     Copy-Item -LiteralPath $manifestValidator -Destination (Join-Path $evidenceRoot 'dispatch_harness_manifest.psm1')
     Copy-Item -LiteralPath $reportProjectionModule -Destination (Join-Path $evidenceRoot 'dispatch_qualification_report.psm1')
     Copy-Item -LiteralPath $orchestrationModule -Destination (Join-Path $evidenceRoot 'dispatch_qualification_orchestration.psm1')
-    $commandRows.Insert(0, 'pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -QualificationProfile ' + $QualificationProfile + ' -Stage ' + $Stage + ' -CandidateManifest <candidate-manifest>' + $(if ($controlManifestPath) { ' -ControlManifest <control-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs ' + $TimingMarginUs } else { '' }) + ' -OutputRoot <evidence-root>')
+    if ($isPlaybackCoreLifecycle) { Copy-Item -LiteralPath $playbackLifecycleCollectorModule -Destination (Join-Path $evidenceRoot 'playback_core_lifecycle_collector.psm1') }
+    $commandRows.Insert(0, 'pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -QualificationProfile ' + $QualificationProfile + ' -Stage ' + $Stage + ' -CandidateManifest <candidate-manifest>' + $(if ($controlManifestPath) { ' -ControlManifest <control-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs ' + $TimingMarginUs } else { '' }) + ' -OutputRoot <evidence-root>' + $(if ($isPlaybackCoreLifecycle) { ' -OwnerApprovedReceiveOnlyRun' } else { '' }))
     $commandRows | Set-Content -LiteralPath (Join-Path $evidenceRoot 'commands.txt') -Encoding UTF8
-    $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; manifest_validator_sha256 = $validatorHash; report_projection_sha256 = $reportProjectionHash; orchestration_module_sha256 = $orchestrationModuleHash; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null }; comparison = $comparisonDescription }
+    $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; manifest_validator_sha256 = $validatorHash; report_projection_sha256 = $reportProjectionHash; orchestration_module_sha256 = $orchestrationModuleHash; lifecycle_collector_sha256 = if ($isPlaybackCoreLifecycle) { Get-Sha256 $playbackLifecycleCollectorModule } else { $null }; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null }; comparison = $comparisonDescription }
     $metadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'provenance.json') -Encoding UTF8
     [ordered]@{
         schema_version = 1
@@ -1572,6 +1735,7 @@ try {
         manifest_validator_sha256 = $validatorHash
         report_projection_sha256 = $reportProjectionHash
         orchestration_module_sha256 = $orchestrationModuleHash
+        lifecycle_collector_sha256 = if ($isPlaybackCoreLifecycle) { Get-Sha256 $playbackLifecycleCollectorModule } else { $null }
     } | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'manifest.json') -Encoding UTF8
 } catch {
     $runnerFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $_ `

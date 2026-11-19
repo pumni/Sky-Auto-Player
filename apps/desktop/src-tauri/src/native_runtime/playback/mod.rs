@@ -23,16 +23,21 @@ pub(super) use presentation::{
 #[cfg(all(test, feature = "tauri-test"))]
 pub(super) use presentation::{native_event_delivery_failure, publish_playback_snapshot};
 pub(super) use retirement::{
-    DryRunTerminalRequest, PlaybackActivation, PlaybackHandoffDecision, TerminalReleaseEvidence,
-    TerminalRetirement, WorkerQuiescenceProof, decide_playback_handoff, physical_startup_failure,
-    publish_terminal_event, release_terminal_ownership, release_terminal_resources,
-    terminal_presentation_completion,
+    DryRunTerminalRequest, PlaybackActivation, PlaybackHandoffDecision, PostJoinRecoveryLifecycle,
+    TerminalReleaseEvidence, TerminalRetirement, WorkerQuiescenceProof,
+    decide_playback_handoff_with_result, physical_startup_failure, publish_terminal_event,
+    release_terminal_ownership, terminal_presentation_completion,
+    terminal_retirement_commit_failure,
 };
 #[cfg(test)]
 pub(super) use retirement::{
-    publish_retirement_barrier, publish_terminal_poll_result, terminal_publication_after_worker,
-    terminal_release_evidence, terminal_release_evidence_after_startup,
+    decide_playback_handoff, publish_retirement_barrier, publish_terminal_poll_result,
+    recover_quarantined_release_once, recovery_test_raw_sends, recovery_test_send_lock,
+    reset_recovery_test_raw_sends, terminal_publication_after_worker, terminal_release_evidence,
+    terminal_release_evidence_after_startup,
 };
+#[cfg(all(test, feature = "tauri-test"))]
+pub(super) use retirement::{recovery_test_probe_calls, set_recovery_test_probe_result};
 pub(super) use session::{
     cleanup_failed_event_delivery, is_failure_status, opaque_native_id, playback_event_state,
     settings_fingerprint, terminal_success_outcome, validate_playback_start_request,
@@ -72,6 +77,9 @@ pub(super) struct NativePlaybackService {
     pub(super) diagnostics_gate: Arc<DiagnosticsPublicationGate>,
     pub(super) prepare_publication: Mutex<PreparePublicationState>,
     pub(super) activity: ActivityCoordinator,
+    /// Service-owned recovery authority for residuals that survive terminal
+    /// retirement. It is shared with the supervisor handle, never UI state.
+    pub(super) post_join_recovery: Arc<PostJoinRecoveryLifecycle>,
     pub(super) startup_cancellation: Arc<AtomicBool>,
     /// Serializes shutdown acceptance with the final pre-arm handoff.
     pub(super) startup_arm_gate: Mutex<()>,
@@ -267,6 +275,9 @@ pub(super) struct NativeActivePlayback {
     pub(super) state: Mutex<PlaybackSessionState>,
     pub(super) pending: Mutex<Option<PlaybackPendingControl>>,
     pub(super) player: Option<Arc<NativeDispatchSession>>,
+    /// Typed terminal result captured after join. It is retained with this
+    /// session until terminal status and any release residual are committed.
+    pub(super) terminal_result: Mutex<Option<WorkerTerminalResult>>,
     pub(super) power_lifecycle: Arc<PowerLifecycleDiagnostics>,
     pub(super) power_request: Mutex<Option<SystemRequiredPowerRequest>>,
     pub(super) suspend_resume_registration: Mutex<Option<SuspendResumeRegistration>>,

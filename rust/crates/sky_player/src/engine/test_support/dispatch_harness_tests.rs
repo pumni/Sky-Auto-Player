@@ -289,39 +289,36 @@ fn terminal_cleanup_revalidates_owner_after_first_incomplete_attempt() {
 }
 
 #[test]
-fn resumable_cleanup_revalidates_owner_after_first_incomplete_attempt_and_quarantines() {
+fn probe_held_keeps_needs_probe_without_retrying_physical_up() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundTestReset;
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     dispatch_owned_down_for_cleanup(&mut harness);
     let cleanup = harness.configure_mock_cleanup_emitter_for_test();
-    let target = Arc::clone(&harness.target);
     let probes = Arc::new(AtomicUsize::new(0));
     let probe_count = Arc::clone(&probes);
     harness.resources.backend.set_probe(move |_, _| {
-        if probe_count.fetch_add(1, Ordering::AcqRel) == 0 {
-            target.invalidate_owner_identity();
-        }
+        probe_count.fetch_add(1, Ordering::AcqRel);
         InstrumentPhysicalState::Held(vec![0x15].into())
     });
 
     let error = harness
         .apply_scheduler_resumable_lifecycle_transition_for_test()
-        .expect_err("owner invalidation must withhold the retry");
-    assert!(error.contains("target HWND/generation changed"), "{error}");
-    assert_eq!(cleanup.lock().expect("resumable cleanup capture").len(), 1);
+        .expect_err("Held probe must retain its unverified journal obligation");
+    assert!(error.contains("release verification failed"), "{error}");
+    let drain_probe_count = probes.load(Ordering::Acquire);
+    assert!((1..=4).contains(&drain_probe_count));
+    assert_eq!(cleanup.lock().expect("one initial physical Up").len(), 1);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
     assert_eq!(harness.resume_barrier_qpc_for_test(), None);
 
     let mut observation = crate::engine::worker::FinalizeTestObservation::default();
     let _outcome = harness.finalize_worker_for_test(false, &mut observation);
-    assert_eq!(
-        cleanup.lock().expect("terminal quarantine capture").len(),
-        1
-    );
+    assert!(probes.load(Ordering::Acquire) <= drain_probe_count + 4);
+    assert_eq!(cleanup.lock().expect("no retry after needs_probe").len(), 1);
     assert_eq!(observation.release_obligation_mask, 1);
+    assert!(observation.terminal_error.is_some());
 }
-
 #[test]
 fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
     use crate::engine::worker::StagedDispatchOutcome;
@@ -827,7 +824,7 @@ fn live_scheduler_partial_chord_send_is_not_replayed_and_consumed_after_cleanup(
 
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Dispatched
+        StagedDispatchOutcome::Exit
     ));
     let attempts = packet_attempts
         .lock()

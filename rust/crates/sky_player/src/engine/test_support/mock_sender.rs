@@ -23,8 +23,12 @@ pub(crate) fn create_mock_backend(
     let call_index = Arc::new(AtomicU64::new(0));
     let send_call_count = script.send_call_count.clone();
     let send_input_capture = script.send_input_capture.clone();
+    let first_release_send_entered = script.first_release_send_entered.clone();
+    let release_first_release_send = script.release_first_release_send.clone();
+    let release_send_barrier_used = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let script_emitter = Arc::clone(&script);
     let call_index_emitter = Arc::clone(&call_index);
+    let release_send_barrier_used_emitter = Arc::clone(&release_send_barrier_used);
     let mut backend =
         TrackedKeyState::with_qpc_clock_and_profile(qpc_clock, instrument_key_profile);
     backend.set_emitter(move |codes, key_up| {
@@ -40,6 +44,14 @@ pub(crate) fn create_mock_backend(
             );
         }
         let idx = call_index_emitter.fetch_add(1, Ordering::Relaxed) as usize;
+        if key_up && !release_send_barrier_used_emitter.swap(true, Ordering::AcqRel) {
+            if let Some(entered) = &first_release_send_entered {
+                let _ = entered.send(());
+            }
+            if let Some(release) = &release_first_release_send {
+                let _ = release.lock().expect("first release send gate lock").recv();
+            }
+        }
 
         let base_latency_us =
             latency_base_us.saturating_add(latency_per_key_us.saturating_mul(codes.len() as u64));
@@ -156,9 +168,6 @@ pub(crate) fn create_mock_backend(
             }
         }
     });
-    if let Some(counter) = script.full_instrument_release_calls.clone() {
-        backend.set_full_instrument_release_counter(counter);
-    }
     if let Some(flag) = script.force_preflight_failure.clone() {
         backend.set_force_preflight_failure(flag);
     }
@@ -212,12 +221,18 @@ pub(crate) fn create_mock_backend(
     // that a bespoke test probe must be explicit rather than invented by the
     // emitter itself.
     let probe_control = script.force_inconclusive_probe.clone();
+    let held_probe_control = script.force_held_probe.clone();
     backend.set_probe(move |unresolved_mask, confirmed_mask| {
         if probe_control
             .as_ref()
             .is_some_and(|force| force.load(Ordering::Acquire))
         {
             InstrumentPhysicalState::Inconclusive
+        } else if held_probe_control
+            .as_ref()
+            .is_some_and(|force| force.load(Ordering::Acquire))
+        {
+            InstrumentPhysicalState::Held(scan_codes_from_mask(unresolved_mask))
         } else if confirmed_mask == unresolved_mask {
             InstrumentPhysicalState::AllUp
         } else {

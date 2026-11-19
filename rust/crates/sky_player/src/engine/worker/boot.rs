@@ -3,10 +3,12 @@ use super::super::create_mock_backend;
 mod epoch;
 mod prepare_diagnostics;
 mod startup_admission;
+#[cfg(test)]
+use startup_admission::finalize_admission_failure;
 use startup_admission::{
-    finalize_admission_failure, finalize_startup_abort, record_startup_abort_without_backend,
-    record_startup_failure, startup_abort_trigger, startup_checkpoint,
-    validate_production_wait_backend,
+    finalize_admission_failure_with_origin, finalize_startup_abort_with_origin,
+    record_startup_abort_without_backend, record_startup_failure, startup_abort_trigger,
+    startup_checkpoint, validate_production_wait_backend,
 };
 mod startup_calibration;
 mod telemetry_admission;
@@ -17,7 +19,7 @@ use super::super::{
     BackendConfig, DurationTicks, QpcClock, QpcTicks, SharedMetrics, TrackedKeyState,
     current_process_cpu_time_us, current_thread_cpu_time_us, qpc_frequency_checked,
 };
-use super::admission::focus_matches_hwnd;
+use super::admission::{TargetStamp, focus_matches_hwnd};
 use super::{
     DispatchHealthOptions, StartupResources, Worker, WorkerResources, WorkerSchedulingGuards,
     ensure_preflight_for_target, initialize_startup, load_target_stamp,
@@ -133,6 +135,33 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         backend.set_modifier_key_state_query_for_test(move |virtual_key| query(virtual_key));
     }
     let target = &shared.target;
+    let Some((release_hwnd, release_generation)) = target.load_stable() else {
+        return record_startup_failure(
+            shared,
+            "session target unavailable while binding worker release provenance".into(),
+        );
+    };
+    let session_release_owner =
+        match target.try_release_owner_proof_for_generation(release_hwnd, release_generation) {
+            Ok(proof) => proof,
+            Err(error) => {
+                return record_startup_failure(
+                    shared,
+                    format!("session release owner binding failed: {error:?}"),
+                );
+            }
+        };
+    if let Err(error) = backend.bind_session_release_owner(session_release_owner) {
+        return record_startup_failure(
+            shared,
+            format!("session release owner binding failed: {error}"),
+        );
+    }
+    let release_target_stamp = TargetStamp {
+        hwnd: release_hwnd,
+        generation: release_generation,
+    };
+    let require_owner_identity = target.owner_process_identity_required();
     let priority_acquired = &shared.publication.priority_acquired;
     let schedule_has_down = schedule.has_down();
     let admission_failure =
@@ -140,10 +169,14 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             if let Some(trigger) =
                 startup_abort_trigger(shared, config.focus.require_focus && schedule_has_down)
             {
-                finalize_startup_abort(
+                finalize_startup_abort_with_origin(
                     backend,
                     metrics,
-                    target.hwnd_for_safety_release(),
+                    super::cleanup::CleanupTarget::for_session(
+                        target,
+                        Some(release_target_stamp),
+                        require_owner_identity,
+                    ),
                     trigger,
                     format!("startup cancelled: {}", trigger.as_str()),
                 )
@@ -152,10 +185,14 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                     .commands
                     .system_power
                     .fail_startup(StartupAbortReason::WorkerFailure);
-                finalize_admission_failure(
+                finalize_admission_failure_with_origin(
                     backend,
                     metrics,
-                    target.hwnd_for_safety_release(),
+                    super::cleanup::CleanupTarget::for_session(
+                        target,
+                        Some(release_target_stamp),
+                        require_owner_identity,
+                    ),
                     primary_error,
                 )
             }
@@ -810,6 +847,15 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             "worker could not atomically publish the Armed epoch".to_string(),
         );
     }
+    // Capture the actual successor session's successful Ready-to-Armed
+    // admission boundary on the worker QPC clock. This acceptance-only
+    // observation follows the publication CAS; it is not a process-launch or
+    // caller-side arm timestamp. A failed QPC read leaves the metric absent.
+    #[cfg(feature = "real-input-acceptance")]
+    metrics.playback_armed_qpc_ticks.store(
+        qpc_clock.now().map_or(0, |ticks| ticks.as_u64()),
+        Ordering::Release,
+    );
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = startup_hook {
         hook.visit_startup_checkpoint(StartupCheckpoint::ArmedPublished);

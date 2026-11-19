@@ -327,7 +327,7 @@ fn require_source_contract(root: &Path) -> Result<()> {
         .map_err(|error| format!("could not read production dispatch source: {error}"))?;
     let ordered = [
         "verify_final_down_admission(",
-        ".send_prepared_physical_packet_at_final_boundary_deferred_commit(",
+        ".send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target(",
         ".on_send_completed_at(",
         ".commit_physical_packet(",
     ];

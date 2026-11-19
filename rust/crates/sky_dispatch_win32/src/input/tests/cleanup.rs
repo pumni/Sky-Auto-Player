@@ -74,105 +74,53 @@ fn foreground_change_after_cleanup_send_keeps_verified_release_unavailable() {
     });
     state.active_mask = 1;
 
-    let outcome = state.release_scope(ReleaseScope::Tracked, 42);
+    let outcome = state.release_all(42);
     assert!(!outcome.released_successfully);
     assert!(outcome.verification_inconclusive);
     assert_eq!(outcome.stuck_mask, 1);
-    assert_eq!(outcome.attempts, 4);
+    assert_eq!(outcome.attempts, 1);
     assert_eq!(state.release_obligation_mask(), 1);
-    assert_eq!(send_count.load(std::sync::atomic::Ordering::SeqCst), 4);
-}
-
-#[test]
-fn custom_full_instrument_cleanup_preserves_all_fifteen_uncertain_slots_until_verified() {
-    let mut spec = InstrumentKeyProfileSpec::canonical();
-    for (slot, scan_code) in super::super::profile::SUPPORTED_NON_EXTENDED_SCAN_CODES
-        .iter()
-        .copied()
-        .take(15)
-        .enumerate()
-    {
-        spec.keys[slot] = PhysicalKey {
-            scan_code,
-            extended: false,
-        };
-    }
-    let profile = MaterializedInstrumentKeyProfile::from_validated(
-        InstrumentKeyProfile::try_from_spec(spec).expect("custom instrument profile"),
-    );
-    let verified = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let verified_for_probe = Arc::clone(&verified);
-    let mut state = TrackedKeyState::with_profile(profile);
-    state.set_emitter(|codes, _| test_send_result(codes.len() as u8, codes.len() as u8, 0));
-    state.set_probe(move |_, _| {
-        if verified_for_probe.load(std::sync::atomic::Ordering::Acquire) {
-            InstrumentPhysicalState::AllUp
-        } else {
-            InstrumentPhysicalState::Inconclusive
-        }
-    });
-
-    let first = state.release_all_full_instrument(0);
-    assert!(!first.released_successfully);
-    assert!(first.verification_inconclusive);
-    assert_eq!(first.attempted_mask, 0x7fff);
-    assert_eq!(first.stuck_mask, 0x7fff);
-    assert_eq!(first.attempts, 4);
-    assert_eq!(state.release_obligation_mask(), 0x7fff);
-    assert_eq!(state.failed_release_mask, 0x7fff);
-    assert_eq!(state.release_attempts_total, 4);
-    assert_eq!(
-        first.stuck_keys_with_profile(state.instrument_key_profile()),
-        state
-            .instrument_key_profile()
-            .scan_codes_from_mask(0x7fff)
-            .into_vec()
-    );
-
-    verified.store(true, std::sync::atomic::Ordering::Release);
-    let second = state.release_all_full_instrument(0);
-    assert!(second.released_successfully);
-    assert!(!second.verification_inconclusive);
-    assert_eq!(second.attempted_mask, 0x7fff);
-    assert_eq!(second.stuck_mask, 0);
-    assert_eq!(second.attempts, 1);
-    assert_eq!(state.release_obligation_mask(), 0);
-    assert_eq!(state.release_attempts_total, 5);
-}
-
-#[test]
-fn partial_inserted_without_rollback_is_integrity_lost() {
-    let outcome = emit_down_with(&[0x15, 0x16], |codes, key_up| {
-        test_send_result(codes.len() as u8, if key_up { 2 } else { 1 }, 0)
-    });
-    assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
-    assert!(!outcome.is_success());
-    assert_eq!(outcome.evidence.first_inserted, 1);
-    assert_eq!(outcome.evidence.confirmed_mask, 0);
+    assert_eq!(send_count.load(std::sync::atomic::Ordering::SeqCst), 1);
 }
 
 #[test]
 fn tracked_partial_down_keeps_uncertain_keys_until_verified_cleanup() {
     let calls = Arc::new(Mutex::new(0usize));
     let calls_for_emitter = Arc::clone(&calls);
-    let mut state = TrackedKeyState::with_emitter(move |codes, key_up| {
+    let mut state = TrackedKeyState::with_packet_emitter(move |packet| {
         *calls_for_emitter.lock().expect("partial call count") += 1;
-        if key_up {
-            test_send_result(codes.len() as u8, codes.len() as u8, 0)
-        } else {
-            test_send_result(codes.len() as u8, 1, 5)
+        SendTransactionOutcome {
+            status: SendTransactionStatus::PartialProgress,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 1,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::PartialProgress { inserted_count: 1 },
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(QpcTicks::from_raw(10)),
+                completed_ticks: Some(QpcTicks::from_raw(11)),
+                timing_error: None,
+            },
         }
     });
+    state.set_emitter(|codes, key_up| {
+        assert!(key_up, "cleanup uses only the tracked Up packet");
+        test_send_result(codes.len() as u8, codes.len() as u8, 0)
+    });
 
-    let outcome = state.key_down(&[0x15, 0x16]);
-    assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
+    let outcome = state.send_physical_packet(PhysicalPacket::new(0, 0b0011));
+    assert_eq!(outcome.status, SendTransactionStatus::PartialProgress);
     assert_eq!(*calls.lock().expect("partial call count"), 1);
     let obligation = state.release_obligation_mask();
     assert_ne!(obligation, 0);
     assert_eq!(obligation & 0b11, 0b11);
 
-    state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
-    let cleanup = state.release_scope(ReleaseScope::Tracked, 0);
+    state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
+    let cleanup = state.release_all(0);
     assert_eq!(cleanup.attempted_mask & obligation, obligation);
     assert!(cleanup.released_successfully);
     assert_eq!(state.release_obligation_mask(), 0);
@@ -190,79 +138,40 @@ fn release_obligation_mask_unions_all_conservative_sources() {
 }
 
 #[test]
-fn full_inserted_with_win32_error_is_integrity_lost() {
-    let outcome = emit_down_with(&[0x15, 0x16], |codes, _| {
-        let len = codes.len() as u8;
-        test_send_result(len, len, 5)
+fn cleanup_up_retries_only_needs_up_within_the_four_call_budget() {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let calls_for_emitter = Arc::clone(&calls);
+    let mut state = TrackedKeyState::with_emitter(move |codes, key_up| {
+        assert!(key_up);
+        calls_for_emitter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        test_send_result(codes.len() as u8, 0, 5)
     });
-    assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
-    assert!(!outcome.is_success());
-    assert_eq!(outcome.evidence.first_win32_error, Some(5));
-    assert_eq!(outcome.evidence.confirmed_mask, 0);
+    state.active_mask = 1;
+    state.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+
+    let outcome = state.release_all(0);
+
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 4);
+    assert_eq!(outcome.attempts, 4);
+    assert!(!outcome.released_successfully);
+    assert_eq!(outcome.stuck_mask, 1);
+    assert_eq!(state.needs_up_mask(), 1);
+    assert_eq!(state.needs_probe_mask, 0);
 }
 
 #[test]
-fn missing_completion_qpc_after_send_is_clock_failure_after_send() {
-    let outcome = emit_down_with(&[0x15, 0x16], |codes, _| PlatformSendResult {
-        requested: codes.len() as u8,
-        inserted: codes.len() as u8,
-        started_ticks: QpcTicks::ZERO,
-        completed_ticks: None,
-        win32_error: 0,
-        timing_error: None,
-    });
-    assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
-    assert!(!outcome.is_success());
-    assert_eq!(outcome.evidence.confirmed_mask, 0);
-}
-
-#[test]
-fn zero_progress_retry_only_runs_when_first_inserted_is_zero() {
-    let mut call_count = 0;
-    let outcome = emit_down_with(&[0x15, 0x16], |codes, _| {
-        call_count += 1;
-        let len = codes.len() as u8;
-        if call_count == 1 {
-            test_send_result(len, 1, 0)
-        } else {
-            test_send_result(len, 2, 0)
-        }
-    });
-    assert_eq!(call_count, 2);
-    assert_eq!(outcome.status, SendTransactionStatus::IntegrityLost);
-    assert_eq!(outcome.evidence.zero_progress_retries, 0);
-}
-
-#[test]
-fn up_send_failure_leaves_requested_release_unconfirmed() {
-    let mut state = TrackedKeyState::with_emitter(|codes, key_up| {
-        let len = codes.len() as u8;
-        if key_up {
-            test_send_result(len, 0, 5)
-        } else {
-            test_send_result(len, len, 0)
-        }
-    });
-
-    let down_outcome = state.key_down(&[0x15]);
-    assert_eq!(down_outcome.status, SendTransactionStatus::Complete);
-    assert_ne!(state.active_mask & (1 << 0), 0);
-
-    let up_outcome = state.key_up(&[0x15]);
-    assert_ne!(up_outcome.status, SendTransactionStatus::Complete);
-    assert_ne!(state.release_obligation_mask() & (1 << 0), 0);
-}
-
-#[test]
-fn up_send_success_clears_requested_release() {
+fn cleanup_full_up_and_all_up_probe_clear_the_tracked_obligation() {
     let mut state = TrackedKeyState::with_emitter(|codes, _| {
         let len = codes.len() as u8;
         test_send_result(len, len, 0)
     });
-    let down_outcome = state.key_down(&[0x15]);
-    assert_eq!(down_outcome.status, SendTransactionStatus::Complete);
-    let up_outcome = state.key_up(&[0x15]);
-    assert_eq!(up_outcome.status, SendTransactionStatus::Complete);
+    state.active_mask = 1;
+    state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
+
+    let outcome = state.release_all(0);
+
+    assert!(outcome.released_successfully);
+    assert_eq!(outcome.attempts, 1);
     assert_eq!(state.release_obligation_mask(), 0);
 }
 
@@ -272,54 +181,11 @@ fn cleanup_fsm_executes_tracked_then_verifies_physical_all_up() {
         TrackedKeyState::with_emitter(|c, _| test_send_result(c.len() as u8, c.len() as u8, 0));
     state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0001;
-    let outcome = state.release_scope(ReleaseScope::Tracked, 0);
+    let outcome = state.release_all(0);
     assert!(outcome.released_successfully);
     assert_eq!(state.active_mask, 0);
     assert_eq!(state.failed_release_mask, 0);
     assert_eq!(state.release_obligation_mask(), 0);
-}
-
-#[test]
-fn full_cleanup_emits_custom_profile_keys_from_logical_mask() {
-    let mut spec = InstrumentKeyProfileSpec::canonical();
-    for (slot, scan_code) in super::super::profile::SUPPORTED_NON_EXTENDED_SCAN_CODES
-        .iter()
-        .copied()
-        .take(15)
-        .enumerate()
-    {
-        spec.keys[slot] = PhysicalKey {
-            scan_code,
-            extended: false,
-        };
-    }
-    let profile = MaterializedInstrumentKeyProfile::from_validated(
-        InstrumentKeyProfile::try_from_spec(spec).expect("custom profile"),
-    );
-    let emitted = Arc::new(Mutex::new(Vec::<(Vec<u16>, bool)>::new()));
-    let emitted_copy = Arc::clone(&emitted);
-    let mut state = TrackedKeyState::with_profile(profile);
-    state.set_emitter(move |codes, key_up| {
-        emitted_copy
-            .lock()
-            .expect("emitted lock")
-            .push((codes.to_vec(), key_up));
-        test_send_result(codes.len() as u8, codes.len() as u8, 0)
-    });
-    state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
-
-    let outcome = state.release_all_full_instrument(0);
-    assert!(outcome.released_successfully);
-    let calls = emitted.lock().expect("emitted lock");
-    assert_eq!(calls.len(), 1);
-    assert!(calls[0].1);
-    assert_eq!(
-        calls[0].0,
-        vec![
-            0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x10, 0x11,
-            0x12
-        ]
-    );
 }
 
 #[test]
@@ -328,8 +194,8 @@ fn cleanup_fsm_idempotent_on_repeated_calls() {
         TrackedKeyState::with_emitter(|c, _| test_send_result(c.len() as u8, c.len() as u8, 0));
     state.custom_probe = Some(Box::new(|_, _| InstrumentPhysicalState::AllUp));
     state.active_mask = 0x0001;
-    let outcome1 = state.release_scope(ReleaseScope::Tracked, 0);
-    let outcome2 = state.release_scope(ReleaseScope::Tracked, 0);
+    let outcome1 = state.release_all(0);
+    let outcome2 = state.release_all(0);
     assert!(outcome1.released_successfully);
     assert!(outcome2.released_successfully);
     assert_eq!(state.active_mask, 0);
@@ -351,7 +217,7 @@ fn cleanup_transport_anomaly_and_partial_transport_fail_closed_even_if_probe_is_
 
     let outcome = state.release_all(0);
     assert!(!outcome.released_successfully);
-    assert!(outcome.verification_inconclusive);
+    assert!(!outcome.verification_inconclusive);
     assert_eq!(outcome.stuck_keys(), vec![0x15, 0x16]);
     assert!(outcome.transport_anomaly);
     assert_eq!(state.release_obligation_mask(), 0x0003);
@@ -491,14 +357,14 @@ fn terminal_zero_insert_with_all_up_probe_keeps_physical_verdict_and_obligation_
     });
     state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
 
-    let outcome = state.release_terminal_tracked_scope(77);
+    let outcome = state.release_terminal_tracked_scope_for_test(77);
     assert!(outcome.release_outcome.transport_anomaly);
     assert!(!outcome.release_outcome.released_successfully);
-    assert!(outcome.release_outcome.verification_inconclusive);
+    assert!(!outcome.release_outcome.verification_inconclusive);
     assert_eq!(outcome.release_outcome.stuck_mask, 1);
     assert_eq!(
         outcome.probe_verdict,
-        super::super::outcome::TerminalProbeVerdict::AllUp
+        super::super::outcome::TerminalProbeVerdict::NotRequired
     );
     assert_eq!(outcome.send_attempts.len(), 4);
     assert!(outcome.send_attempts.iter().all(|attempt| {
@@ -516,29 +382,31 @@ fn terminal_zero_insert_with_all_up_probe_keeps_physical_verdict_and_obligation_
 #[test]
 fn terminal_partial_up_reports_only_the_physical_held_mask() {
     let mut state = TrackedKeyState::new();
-    state.active_mask = 0b0011;
+    state.active_mask = 0b0001;
     state.set_terminal_up_emitter_for_test(|packet| {
         super::super::outcome::TerminalUpTransportResult {
             requested: packet.event_count(),
-            inserted: 1,
+            inserted: packet.event_count(),
             started_ticks: Some(QpcTicks::from_raw(10)),
             completed_ticks: Some(QpcTicks::from_raw(11)),
-            win32_error: 5,
+            win32_error: 0,
             timing_error: None,
         }
     });
     state.set_probe(|_, _| InstrumentPhysicalState::Held(vec![0x15].into()));
 
-    let outcome = state.release_terminal_tracked_scope(77);
+    let outcome = state.release_terminal_tracked_scope_for_test(77);
 
     assert_eq!(
         outcome.probe_verdict,
         super::super::outcome::TerminalProbeVerdict::Held(0b0001)
     );
-    assert_eq!(outcome.release_outcome.stuck_mask, 0b0011);
+    assert_eq!(outcome.release_outcome.stuck_mask, 0b0001);
     assert!(!outcome.release_outcome.released_successfully);
     assert!(!outcome.release_outcome.verification_inconclusive);
-    assert_eq!(state.release_obligation_mask(), 0b0011);
+    assert_eq!(state.release_obligation_mask(), 0b0001);
+    assert_eq!(state.needs_probe_mask, 0b0001);
+    assert_eq!(outcome.release_outcome.attempts, 1);
 }
 
 #[test]
@@ -566,12 +434,12 @@ fn terminal_up_cleanup_retains_inconclusive_obligations_and_is_idempotent_after_
     });
     state.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
 
-    let inconclusive = state.release_terminal_tracked_scope(77);
+    let inconclusive = state.release_terminal_tracked_scope_for_test(77);
     assert!(!inconclusive.release_outcome.released_successfully);
     assert!(inconclusive.release_outcome.verification_inconclusive);
     assert_eq!(inconclusive.release_outcome.attempted_mask, 0b1111);
-    assert_eq!(inconclusive.release_outcome.attempts, 4);
-    assert_eq!(inconclusive.send_attempts.len(), 4);
+    assert_eq!(inconclusive.release_outcome.attempts, 1);
+    assert_eq!(inconclusive.send_attempts.len(), 1);
     assert!(inconclusive.send_attempts.iter().all(|attempt| {
         attempt.raw_calls == 1
             && attempt.requested_events == 4
@@ -598,16 +466,17 @@ fn terminal_up_cleanup_retains_inconclusive_obligations_and_is_idempotent_after_
     );
 
     state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
-    let verified = state.release_terminal_tracked_scope(77);
+    let verified = state.release_terminal_tracked_scope_for_test(77);
     assert!(verified.release_outcome.released_successfully);
     assert!(!verified.release_outcome.transport_anomaly);
+    assert_eq!(verified.release_outcome.attempts, 0);
     assert_eq!(
         verified.probe_verdict,
         super::super::outcome::TerminalProbeVerdict::AllUp
     );
     assert_eq!(state.release_obligation_mask(), 0);
     let attempts_after_verified = sent.lock().expect("terminal packet lock").len();
-    let repeated = state.release_terminal_tracked_scope(77);
+    let repeated = state.release_terminal_tracked_scope_for_test(77);
     assert!(repeated.release_outcome.released_successfully);
     assert_eq!(repeated.release_outcome.attempts, 0);
     assert!(repeated.send_attempts.is_empty());
@@ -628,7 +497,7 @@ fn terminal_up_emitter_unwind_keeps_session_obligation_for_finalizer_retry() {
     state.set_terminal_up_emitter_for_test(|_| panic!("injected terminal transport unwind"));
 
     let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        state.release_terminal_tracked_scope(99)
+        state.release_terminal_tracked_scope_for_test(99)
     }));
     assert!(unwind.is_err());
     assert_eq!(state.release_attempts_total, 1);
@@ -656,13 +525,13 @@ fn resumable_release_remains_qpc_gated_while_terminal_release_uses_bounded_fallb
     });
     state.set_probe(|_, _| InstrumentPhysicalState::AllUp);
 
-    let resumable = state.release_scope(ReleaseScope::Tracked, 70);
+    let resumable = state.release_all(70);
     assert!(!resumable.released_successfully);
-    assert!(resumable.verification_inconclusive);
+    assert!(!resumable.verification_inconclusive);
     assert_eq!(terminal_calls.load(Ordering::SeqCst), 0);
     assert_eq!(state.release_obligation_mask(), 1);
 
-    let terminal = state.release_terminal_tracked_scope(70);
+    let terminal = state.release_terminal_tracked_scope_for_test(70);
     assert!(terminal.release_outcome.released_successfully);
     assert_eq!(terminal_calls.load(Ordering::SeqCst), 1);
     assert_eq!(state.release_obligation_mask(), 0);
@@ -753,10 +622,10 @@ fn mock_alt_tab_resume_separates_transport_receiver_and_release_probe() {
     backend.active_mask = 1;
 
     foreground.store(OTHER, Ordering::Release);
-    let interrupted = backend.release_scope(ReleaseScope::Tracked, TARGET);
+    let interrupted = backend.release_all(TARGET);
     assert!(!interrupted.transport_anomaly);
     assert!(interrupted.verification_inconclusive);
-    assert_eq!(interrupted.attempts, 4);
+    assert_eq!(interrupted.attempts, 1);
     assert_eq!(backend.release_obligation_mask(), 1);
     assert_eq!(
         observations
@@ -766,13 +635,13 @@ fn mock_alt_tab_resume_separates_transport_receiver_and_release_probe() {
         &[MockWindowObservation {
             accepted_count: 1,
             foreground_at_send: Some(OTHER),
-        }; 4],
+        }],
         "the mock records foreground-at-send separately from physical verification"
     );
 
     foreground.store(TARGET, Ordering::Release);
     probe_verified.store(true, Ordering::Release);
-    let resumed = backend.release_scope(ReleaseScope::Tracked, TARGET);
+    let resumed = backend.release_all(TARGET);
     assert!(resumed.released_successfully);
     assert_eq!(backend.release_obligation_mask(), 0);
     assert_eq!(
@@ -781,7 +650,8 @@ fn mock_alt_tab_resume_separates_transport_receiver_and_release_probe() {
             .expect("mock receiver observation lock")
             .last()
             .map(|observation| observation.foreground_at_send),
-        Some(Some(TARGET))
+        Some(Some(OTHER)),
+        "a completed Up is verified after focus returns without replaying it"
     );
 }
 
@@ -795,10 +665,10 @@ fn mock_stop_with_other_foreground_does_not_claim_target_release() {
     backend.active_mask = 1;
     foreground.store(OTHER, Ordering::Release);
 
-    let terminal = backend.release_terminal_tracked_scope(TARGET);
+    let terminal = backend.release_terminal_tracked_scope_for_test(TARGET);
     assert!(!terminal.release_outcome.transport_anomaly);
     assert!(terminal.release_outcome.verification_inconclusive);
-    assert_eq!(terminal.release_outcome.attempts, 4);
+    assert_eq!(terminal.release_outcome.attempts, 1);
     assert_eq!(backend.release_obligation_mask(), 1);
     assert_eq!(
         observations
@@ -808,7 +678,7 @@ fn mock_stop_with_other_foreground_does_not_claim_target_release() {
         &[MockWindowObservation {
             accepted_count: 1,
             foreground_at_send: Some(OTHER),
-        }; 4]
+        }]
     );
 }
 
@@ -821,9 +691,9 @@ fn mock_invalidated_owner_identity_keeps_release_uncertain_after_accepted_up() {
     backend.active_mask = 1;
     identity_valid.store(false, Ordering::Release);
 
-    let invalidated = backend.release_terminal_tracked_scope(TARGET);
+    let invalidated = backend.release_terminal_tracked_scope_for_test(TARGET);
     assert!(invalidated.release_outcome.verification_inconclusive);
-    assert_eq!(invalidated.release_outcome.attempts, 4);
+    assert_eq!(invalidated.release_outcome.attempts, 1);
     assert_eq!(backend.release_obligation_mask(), 1);
     assert_eq!(
         observations
@@ -833,7 +703,7 @@ fn mock_invalidated_owner_identity_keeps_release_uncertain_after_accepted_up() {
         &[MockWindowObservation {
             accepted_count: 1,
             foreground_at_send: None,
-        }; 4],
+        }],
         "invalid identity makes receiver attribution unavailable"
     );
 }
@@ -899,7 +769,7 @@ fn guarded_terminal_cleanup_revalidates_each_retry_and_keeps_prior_raw_evidence(
         outcome.send_attempts[0].qpc_error,
         Some(QpcError::CounterUnavailable)
     );
-    assert_eq!(outcome.probe_verdict, TerminalProbeVerdict::Inconclusive(1));
+    assert_eq!(outcome.probe_verdict, TerminalProbeVerdict::NotRequired);
 }
 
 #[test]
@@ -943,10 +813,10 @@ fn guarded_terminal_cleanup_allows_healthy_retry_and_zero_obligation_is_noop() {
         Ok(())
     });
     assert!(released.release_outcome.released_successfully);
-    assert_eq!(admissions, 2);
-    assert_eq!(released.release_outcome.attempts, 2);
-    assert_eq!(released.send_attempts.len(), 2);
-    assert_eq!(send_calls.load(Ordering::Acquire), 2);
+    assert_eq!(admissions, 1);
+    assert_eq!(released.release_outcome.attempts, 1);
+    assert_eq!(released.send_attempts.len(), 1);
+    assert_eq!(send_calls.load(Ordering::Acquire), 1);
 
     let mut empty = TrackedKeyState::new();
     let empty_outcome = empty
@@ -1005,9 +875,499 @@ fn guarded_terminal_cleanup_retains_partial_and_uncertain_up_evidence_when_retry
         outcome.send_attempts[0].qpc_error,
         Some(QpcError::CounterUnavailable)
     );
-    assert_eq!(outcome.probe_verdict, TerminalProbeVerdict::Held(1));
+    assert_eq!(outcome.probe_verdict, TerminalProbeVerdict::NotRequired);
     assert_eq!(
         outcome.withheld_reason.as_deref(),
         Some("origin proof unavailable")
     );
+}
+
+#[test]
+fn stop_upgrades_a_pause_drain_without_resetting_its_bounded_sender() {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 101;
+    let resumable_calls = Arc::new(AtomicUsize::new(0));
+    let terminal_calls = Arc::new(AtomicUsize::new(0));
+    let resumable_calls_for_emitter = Arc::clone(&resumable_calls);
+    let terminal_calls_for_emitter = Arc::clone(&terminal_calls);
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 1;
+    backend.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 6, None, None).expect("test release origin"),
+    );
+    backend.set_emitter(move |codes, key_up| {
+        assert!(key_up);
+        resumable_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        test_send_result(codes.len() as u8, 0, 5)
+    });
+    backend.set_terminal_up_emitter_for_test(move |packet| {
+        terminal_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: packet.event_count(),
+            started_ticks: Some(QpcTicks::ZERO),
+            completed_ticks: Some(QpcTicks::ZERO),
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    backend.set_probe(|_, _| InstrumentPhysicalState::AllUp);
+
+    let drain_sample = Cell::new(0usize);
+    let outcome = backend.release_tracked_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, proof| {
+            assert_eq!(proof.target_hwnd(), TARGET);
+            Ok(())
+        },
+        || {
+            let sample = drain_sample.get();
+            drain_sample.set(sample + 1);
+            Ok(crate::input::CleanupDrainDecision {
+                terminal_requested: sample >= 2,
+                origin_foreground: true,
+            })
+        },
+    );
+
+    assert!(outcome.release_outcome.released_successfully);
+    assert_eq!(outcome.release_outcome.attempts, 2);
+    assert_eq!(resumable_calls.load(Ordering::Acquire), 1);
+    assert_eq!(terminal_calls.load(Ordering::Acquire), 1);
+    assert_eq!(outcome.send_attempts.len(), 2);
+    assert_eq!(outcome.send_attempts[0].raw_calls, 1);
+    assert_eq!(outcome.send_attempts[1].raw_calls, 1);
+    assert_eq!(backend.release_obligation_mask(), 0);
+}
+
+#[test]
+fn terminal_background_drain_sends_one_best_effort_up_and_keeps_probe_residual() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 111;
+    let send_calls = Arc::new(AtomicUsize::new(0));
+    let probe_calls = Arc::new(AtomicUsize::new(0));
+    let sends = Arc::clone(&send_calls);
+    let probes = Arc::clone(&probe_calls);
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 1;
+    backend.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 7, None, None).expect("test release origin"),
+    );
+    backend.set_terminal_up_emitter_for_test(move |packet| {
+        sends.fetch_add(1, Ordering::AcqRel);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: packet.event_count(),
+            started_ticks: None,
+            completed_ticks: None,
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    backend.set_probe(move |_, _| {
+        probes.fetch_add(1, Ordering::AcqRel);
+        InstrumentPhysicalState::AllUp
+    });
+
+    let mut drain_samples = 0;
+    let outcome = backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, proof| {
+            assert_eq!(proof.target_hwnd(), TARGET);
+            Ok(())
+        },
+        || {
+            drain_samples += 1;
+            Ok(crate::input::CleanupDrainDecision {
+                terminal_requested: true,
+                origin_foreground: false,
+            })
+        },
+    );
+
+    assert_eq!(drain_samples, 2, "drain rechecks immediately before send");
+    assert_eq!(send_calls.load(Ordering::Acquire), 1);
+    assert_eq!(probe_calls.load(Ordering::Acquire), 0);
+    assert_eq!(outcome.release_outcome.attempts, 1);
+    assert!(!outcome.release_outcome.released_successfully);
+    assert!(!outcome.release_outcome.verification_inconclusive);
+    assert_eq!(outcome.needs_up_mask, 1);
+    assert_eq!(outcome.needs_probe_mask, 0);
+    assert_eq!(backend.release_obligation_mask(), 1);
+    assert_eq!(backend.needs_up_mask(), 1);
+    assert_eq!(backend.needs_probe_mask, 0);
+    assert_eq!(outcome.send_attempts.len(), 1);
+    assert_eq!(outcome.send_attempts[0].raw_calls, 1);
+    assert_eq!(outcome.send_attempts[0].requested_events, 1);
+    assert_eq!(outcome.send_attempts[0].inserted_events, 1);
+}
+
+#[test]
+fn recovery_final_foreground_loss_with_qpc_fallback_withholds_raw_up() {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 112;
+    let raw_calls = Arc::new(AtomicUsize::new(0));
+    let raw_calls_for_emitter = Arc::clone(&raw_calls);
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 1;
+    state.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 70, None, None).expect("recovery origin"),
+    );
+    state.set_terminal_up_emitter_for_test(move |_| {
+        raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        unreachable!("recovery must withhold Up after its final foreground check fails")
+    });
+    state.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+
+    let drain_samples = Cell::new(0usize);
+    let admission_calls = Cell::new(0usize);
+    let outcome = state
+        .release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+            TARGET,
+            |mask, proof| {
+                admission_calls.set(admission_calls.get() + 1);
+                assert_eq!(mask, 1);
+                assert_eq!(proof.target_hwnd(), TARGET);
+                Ok(())
+            },
+            || {
+                let sample = drain_samples.get();
+                drain_samples.set(sample + 1);
+                Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: sample == 0,
+                })
+            },
+            1,
+        );
+
+    assert_eq!(
+        drain_samples.get(),
+        2,
+        "outer and final foreground checks run"
+    );
+    assert_eq!(admission_calls.get(), 1);
+    assert_eq!(raw_calls.load(Ordering::Acquire), 0);
+    assert!(outcome.send_attempts.is_empty());
+    assert_eq!(outcome.needs_up_mask, 1);
+    assert_eq!(outcome.needs_probe_mask, 0);
+    assert_eq!(outcome.release_outcome.stuck_mask, 1);
+    assert!(!outcome.release_outcome.released_successfully);
+    assert_eq!(state.release_obligation_mask(), 1);
+    assert_eq!(state.needs_up_mask(), 1);
+    assert_eq!(state.needs_probe_mask, 0);
+    assert_eq!(
+        outcome.withheld_reason.as_deref(),
+        Some("tracked cleanup origin is not foreground")
+    );
+}
+
+#[test]
+fn origin_drift_at_the_final_send_boundary_withholds_the_up() {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    const TARGET: isize = 121;
+    let origin_current = Arc::new(AtomicBool::new(true));
+    let send_calls = Arc::new(AtomicUsize::new(0));
+    let origin_for_admission = Arc::clone(&origin_current);
+    let sends = Arc::clone(&send_calls);
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 1;
+    backend.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 8, None, None).expect("test release origin"),
+    );
+    backend.set_terminal_up_emitter_for_test(move |packet| {
+        sends.fetch_add(1, Ordering::AcqRel);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: packet.event_count(),
+            started_ticks: None,
+            completed_ticks: None,
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+
+    let drain_sample = Cell::new(0usize);
+    let admission_calls = Cell::new(0usize);
+    let outcome = backend.release_tracked_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, proof| {
+            admission_calls.set(admission_calls.get() + 1);
+            assert!(origin_for_admission.load(Ordering::Acquire));
+            assert_eq!(proof.target_hwnd(), TARGET);
+            Ok(())
+        },
+        || {
+            let sample = drain_sample.get();
+            drain_sample.set(sample + 1);
+            if sample == 0 {
+                Ok(crate::input::CleanupDrainDecision::default())
+            } else {
+                origin_current.store(false, Ordering::Release);
+                Err("origin drift at final send boundary".into())
+            }
+        },
+    );
+
+    assert_eq!(drain_sample.get(), 2);
+    assert_eq!(admission_calls.get(), 1);
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+    assert_eq!(outcome.release_outcome.attempts, 0);
+    assert_eq!(outcome.needs_up_mask, 1);
+    assert_eq!(outcome.needs_probe_mask, 0);
+    assert_eq!(backend.release_obligation_mask(), 1);
+    assert_eq!(
+        outcome.withheld_reason.as_deref(),
+        Some("origin drift at final send boundary")
+    );
+}
+
+#[test]
+fn post_join_recovery_budget_is_one_raw_up_across_transport_and_qpc_faults() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 131;
+    for (name, inserted, win32_error, timing_error) in [
+        ("persistent raw zero", 0, 0, None),
+        ("short insertion", 1, 0, None),
+        ("Win32 error", 2, 5, None),
+        (
+            "QPC before-send failure",
+            0,
+            0,
+            Some(crate::clock::QpcError::CounterUnavailable),
+        ),
+        (
+            "QPC after-send failure",
+            2,
+            0,
+            Some(crate::clock::QpcError::CounterUnavailable),
+        ),
+    ] {
+        let raw_calls = Arc::new(AtomicUsize::new(0));
+        let raw_calls_for_emitter = Arc::clone(&raw_calls);
+        let mut state = TrackedKeyState::new();
+        state.active_mask = 0b11;
+        state.set_release_owner_proof_for_test(
+            0b11,
+            crate::input::ReleaseOwnerProof::new(TARGET, 9, None, None).expect("recovery origin"),
+        );
+        state.set_terminal_up_emitter_for_test(move |packet| {
+            raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+            super::super::outcome::TerminalUpTransportResult {
+                requested: packet.event_count(),
+                inserted,
+                started_ticks: Some(QpcTicks::from_raw(1)),
+                completed_ticks: Some(QpcTicks::from_raw(2)),
+                win32_error,
+                timing_error,
+            }
+        });
+        state.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+
+        let outcome = state
+            .release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+                TARGET,
+                |_, proof| {
+                    assert_eq!(proof.target_hwnd(), TARGET);
+                    Ok(())
+                },
+                || {
+                    Ok(crate::input::CleanupDrainDecision {
+                        terminal_requested: true,
+                        origin_foreground: true,
+                    })
+                },
+                1,
+            );
+
+        assert!(
+            raw_calls.load(Ordering::Acquire) <= 1,
+            "{name} exceeded one recovery Up"
+        );
+        assert!(outcome.send_attempts.len() <= 1, "{name} retried transport");
+        assert!(
+            state.release_obligation_mask() != 0,
+            "{name} lost its residual"
+        );
+    }
+}
+
+#[test]
+fn post_join_recovery_probes_held_or_inconclusive_without_replaying_probe_only_up() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 132;
+    for probe_result in [
+        InstrumentPhysicalState::Held(vec![0x15].into()),
+        InstrumentPhysicalState::Inconclusive,
+    ] {
+        let raw_calls = Arc::new(AtomicUsize::new(0));
+        let raw_calls_for_emitter = Arc::clone(&raw_calls);
+        let mut state = TrackedKeyState::new();
+        state.active_mask = 1;
+        state.set_release_owner_proof_for_test(
+            1,
+            crate::input::ReleaseOwnerProof::new(TARGET, 10, None, None).expect("recovery origin"),
+        );
+        state.set_terminal_up_emitter_for_test(move |packet| {
+            raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+            super::super::outcome::TerminalUpTransportResult {
+                requested: packet.event_count(),
+                inserted: packet.event_count(),
+                started_ticks: Some(QpcTicks::from_raw(1)),
+                completed_ticks: Some(QpcTicks::from_raw(2)),
+                win32_error: 0,
+                timing_error: None,
+            }
+        });
+        state.set_probe(move |_, _| probe_result.clone());
+        let outcome = state
+            .release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+                TARGET,
+                |_, _| Ok(()),
+                || {
+                    Ok(crate::input::CleanupDrainDecision {
+                        terminal_requested: true,
+                        origin_foreground: true,
+                    })
+                },
+                1,
+            );
+        assert_eq!(raw_calls.load(Ordering::Acquire), 1);
+        assert_eq!(outcome.send_attempts.len(), 1);
+        assert_eq!(state.release_obligation_mask(), 1);
+        assert_eq!(state.needs_up_mask(), 0);
+        assert_eq!(state.needs_probe_mask, 1);
+    }
+
+    let raw_calls = Arc::new(AtomicUsize::new(0));
+    let raw_calls_for_emitter = Arc::clone(&raw_calls);
+    let mut probe_only = TrackedKeyState::new();
+    probe_only.needs_probe_mask = 1;
+    probe_only.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 10, None, None).expect("probe-only origin"),
+    );
+    probe_only.set_terminal_up_emitter_for_test(move |_| {
+        raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        unreachable!("probe-only recovery must not send Up")
+    });
+    probe_only.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+    let outcome = probe_only
+        .release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+            TARGET,
+            |_, _| Ok(()),
+            || {
+                Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: true,
+                })
+            },
+            1,
+        );
+    assert_eq!(raw_calls.load(Ordering::Acquire), 0);
+    assert!(outcome.send_attempts.is_empty());
+    assert_eq!(probe_only.release_obligation_mask(), 1);
+    assert_eq!(probe_only.needs_probe_mask, 1);
+}
+
+#[test]
+fn post_join_recovery_revalidates_origin_immediately_before_its_only_send() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 133;
+    let raw_calls = Arc::new(AtomicUsize::new(0));
+    let raw_calls_for_emitter = Arc::clone(&raw_calls);
+    let mut state = TrackedKeyState::new();
+    state.active_mask = 1;
+    state.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 11, None, None).expect("recovery origin"),
+    );
+    state.set_terminal_up_emitter_for_test(move |_| {
+        raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        unreachable!("invalidated owner must withhold the Up")
+    });
+    let outcome = state
+        .release_terminal_tracked_scope_with_attempt_admission_and_drain_control_with_raw_call_budget(
+            TARGET,
+            |_, _| Err("owner invalidated immediately before send".into()),
+            || {
+                Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: true,
+                })
+            },
+            1,
+        );
+    assert_eq!(raw_calls.load(Ordering::Acquire), 0);
+    assert!(outcome.send_attempts.is_empty());
+    assert_eq!(state.release_obligation_mask(), 1);
+    assert_eq!(outcome.needs_up_mask, 1);
+}
+
+#[test]
+fn cleanup_up_uses_the_session_layout_profile_and_zero_mask_emits_nothing() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut spec = InstrumentKeyProfileSpec::canonical();
+    spec.keys[0] = PhysicalKey {
+        scan_code: 0x39,
+        extended: false,
+    };
+    spec.keys[1] = PhysicalKey {
+        scan_code: 0x03,
+        extended: false,
+    };
+    let profile = MaterializedInstrumentKeyProfile::from_validated(
+        InstrumentKeyProfile::try_from_spec(spec).expect("valid swapped layout"),
+    );
+    let captured_codes = Arc::new(Mutex::new(Vec::new()));
+    let captures = Arc::clone(&captured_codes);
+    let mut backend = TrackedKeyState::with_profile(profile);
+    backend.active_mask = 0b0011;
+    backend.set_emitter(move |codes, key_up| {
+        assert!(key_up);
+        captures
+            .lock()
+            .expect("profile cleanup capture lock")
+            .extend_from_slice(codes);
+        test_send_result(codes.len() as u8, codes.len() as u8, 0)
+    });
+    backend.set_probe(|_, _| InstrumentPhysicalState::AllUp);
+    let outcome = backend.release_all(0);
+
+    assert!(outcome.released_successfully);
+    assert_eq!(
+        captured_codes
+            .lock()
+            .expect("profile cleanup capture lock")
+            .as_slice(),
+        &[0x39, 0x03]
+    );
+
+    let zero_mask_send_calls = Arc::new(AtomicUsize::new(0));
+    let sends = Arc::clone(&zero_mask_send_calls);
+    let mut empty = TrackedKeyState::new();
+    empty.set_terminal_up_emitter_for_test(move |_| {
+        sends.fetch_add(1, Ordering::AcqRel);
+        unreachable!("an empty journal cannot authorize an Up")
+    });
+    let zero = empty.release_terminal_tracked_scope_for_test(0);
+    assert_eq!(zero.release_outcome.attempts, 0);
+    assert_eq!(zero.release_outcome.attempted_mask, 0);
+    assert!(zero.send_attempts.is_empty());
+    assert_eq!(zero_mask_send_calls.load(Ordering::Acquire), 0);
 }

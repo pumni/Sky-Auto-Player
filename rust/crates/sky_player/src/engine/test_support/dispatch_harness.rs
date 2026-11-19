@@ -242,7 +242,7 @@ impl ProductionDispatchTestHarness {
         timing.effective_spin_threshold_ticks = clock
             .duration_from_us(20_000)
             .map_err(|error| format!("test spin threshold conversion failed: {error:?}"))?;
-        let target = Arc::new(SessionTarget::new(1, 0));
+        let target = Arc::new(SessionTarget::new(1, 0, config.focus.require_focus));
         let runtime =
             WorkerRuntime::create_test_runtime(Some(crate::engine::worker::TargetStamp {
                 hwnd: 1,
@@ -578,6 +578,10 @@ impl ProductionDispatchTestHarness {
         counts.generation_revalidations
     }
 
+    pub fn target_proof_atomic_reads_for_test(&self) -> u64 {
+        self.target.proof_operation_counts_for_test().atomic_reads
+    }
+
     pub fn apply_scheduler_resumable_lifecycle_transition_for_test(
         &mut self,
     ) -> Result<(), String> {
@@ -662,6 +666,7 @@ impl ProductionDispatchTestHarness {
     /// that exercise the production focus-required final gate.
     pub fn configure_focus_owner_for_test(&mut self, hwnd: isize, owner_pid: u32) {
         self.config.focus.require_focus = true;
+        self.target.require_foreground_for_test();
         self.target.require_owner_identity();
         let (current_hwnd, generation) = self.target.load_stable().expect("test target snapshot");
         assert_eq!(current_hwnd, hwnd, "focus fixture HWND must be published");
@@ -678,6 +683,14 @@ impl ProductionDispatchTestHarness {
         ));
         #[cfg(not(any(test, feature = "test-support")))]
         assert!(self.target.bind_owner_identity(hwnd, generation, owner_pid));
+        let release_owner = self
+            .target
+            .try_release_owner_proof_for_generation(hwnd, generation)
+            .expect("focus fixture session owner proof");
+        self.resources
+            .backend
+            .bind_session_release_owner(release_owner)
+            .expect("focus fixture binds one session release owner");
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
     }

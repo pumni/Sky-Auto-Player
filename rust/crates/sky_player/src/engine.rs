@@ -24,6 +24,8 @@ pub use config::{
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use config::{RestoreRaceHook, StartupCheckpoint, StartupOrderingHook};
+#[cfg(feature = "real-input-acceptance")]
+pub use session::NativeAcceptanceLifecycleEvidence;
 pub use session::{NativeDispatchSession, OwnerIdentityPollResult, SystemPowerSnapshot};
 pub use shared::SystemPowerEndpoint;
 #[cfg(any(test, feature = "test-support"))]
@@ -154,3 +156,85 @@ const OUTCOME_SKIPPED: u8 = 3;
 const OUTCOME_ERROR: u8 = 4;
 const OUTCOME_SYSTEM_SUSPENDED: u8 = 5;
 const CPU_METRICS_SAMPLE_INTERVAL_US: u64 = 100_000;
+
+/// Classification of why the playback worker reached its terminal boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkerTerminalCause {
+    Finished,
+    Quit,
+    Skipped,
+    SystemSuspended,
+    SenderAnomaly,
+    WorkerPanic,
+    CleanupPanic,
+    Failure,
+}
+
+/// Stable terminal outcome category, independent of the legacy numeric worker
+/// status used by the session polling ABI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkerTerminalOutcome {
+    Finished,
+    Quit,
+    Skipped,
+    SystemSuspended,
+    Error,
+}
+
+impl WorkerTerminalOutcome {
+    pub(crate) const fn legacy_code(self) -> u8 {
+        match self {
+            Self::Finished => OUTCOME_FINISHED,
+            Self::Quit => OUTCOME_QUIT,
+            Self::Skipped => OUTCOME_SKIPPED,
+            Self::SystemSuspended => OUTCOME_SYSTEM_SUSPENDED,
+            Self::Error => OUTCOME_ERROR,
+        }
+    }
+}
+
+/// Physical journal state and its immutable origin/profile, retained for a
+/// later recovery layer to inspect without claiming that cleanup released it.
+#[derive(Clone, Debug)]
+pub struct TerminalReleaseResidual {
+    pub outstanding_mask: u16,
+    pub needs_up_mask: u16,
+    pub needs_probe_mask: u16,
+    pub owner: Option<sky_dispatch_win32::input::ReleaseOwnerProof>,
+    pub profile: [sky_dispatch_win32::input::PhysicalKey; sky_dispatch_core::model::MAX_KEYS],
+}
+
+impl TerminalReleaseResidual {
+    pub(crate) fn from_backend(backend: &TrackedKeyState) -> Self {
+        Self {
+            outstanding_mask: backend.release_obligation_mask(),
+            needs_up_mask: backend.needs_up_mask(),
+            needs_probe_mask: backend.needs_probe_mask,
+            owner: backend.session_release_owner_proof().cloned(),
+            profile: std::array::from_fn(|slot| {
+                backend.instrument_key_profile().physical_key(slot)
+            }),
+        }
+    }
+
+    pub(crate) fn empty() -> Self {
+        let profile =
+            sky_dispatch_win32::input::profile::MaterializedInstrumentKeyProfile::canonical();
+        Self {
+            outstanding_mask: 0,
+            needs_up_mask: 0,
+            needs_probe_mask: 0,
+            owner: None,
+            profile: std::array::from_fn(|slot| profile.physical_key(slot)),
+        }
+    }
+}
+
+/// Typed terminal record published after the cleanup reducer has run.
+#[derive(Clone, Debug)]
+pub struct WorkerTerminalResult {
+    pub outcome: WorkerTerminalOutcome,
+    pub cause: WorkerTerminalCause,
+    pub terminal_error: Option<String>,
+    pub residual: TerminalReleaseResidual,
+}

@@ -4,17 +4,15 @@ locale: en
 slug: timing-engine
 title: The Timing Engine
 description: >-
-  How Sky Auto Player schedules notes, aligns chords to dispatch frames, handles holds,
-  adapts to machine latency, and what "timing accuracy" actually means in this context.
+  How Sky Auto Player schedules notes, applies sender-side hold and release floors, and
+  why game-side timing depends on Windows and the game's sampling loop.
 summary: >-
-  Sky Auto Player's timing engine schedules notes against a frame-aligned timeline, submits
-  chords in one SendInput batch, applies sender-side hold floors, and uses a Frozen QPC
-  waiter. Game-side accuracy depends on Windows
-  and the game's own sampling loop.
+  A fixed 15-slot executor schedules prepared notes and sends healthy chords in one packet.
+  Sender timing and game-side sampling remain separate.
 category: playback-timing
 order: 1
 published: '2026-08-08'
-updated: '2026-08-08'
+updated: '2026-11-18'
 draft: false
 related:
   - how-it-works
@@ -22,81 +20,50 @@ related:
   - troubleshooting
 evidence:
   - category: architecture
-    label: Playback engine architecture
+    label: Playback engine contract
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md
-  - category: architecture
-    label: Playback verification and qualification protocol
+  - category: test
+    label: Playback verification
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-verification.md
-  - category: implementation
-    label: README — timing summary
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
 ---
 
-## What "timing" means here
+## What timing means
 
-Sky Auto Player controls the _sender side_ — when it calls `SendInput`. The _game side_ —
-when the game registers and processes a keystroke — depends on the Windows message queue,
-the game's input polling rate, and your hardware. These two things are different.
+Sky Auto Player controls when it calls Windows SendInput. Windows scheduling,
+the game's input polling loop, and hardware affect when the game observes a
+key. Sender completion is not proof that the game registered a note.
 
-The timing engine is designed to minimise sender-side error. It does not — and cannot —
-guarantee that the game receives keystrokes at exactly the intended musical time.
+## Note and chord scheduling
 
-## Note scheduling
+The desktop prepares the sheet before starting a native worker. A fixed
+15-slot executor tracks musical presses and releases. A healthy chord uses
+one prepared packet. When independent releases and presses are due together,
+the packet orders every Up before every Down.
 
-Instead of replaying a fixed list of delays, Sky Auto Player compiles notes into an
-ordered stream driven by the sheet's tempo, your target FPS, and hold parameters.
-A 15-slot executor manages key-hold obligations ($H$) and release gaps ($G$)
-deterministically without dual cursors.
+The production waiter uses calibrated host timing with QPC deadlines. Its
+wake guard remains fixed during playback; it does not continuously adjust
+lead time to hide drift.
 
-## Chord alignment
+## Hold and release floors
 
-Notes that belong to the same chord are submitted in a single `SendInput` call containing
-all the keys in that chord. When disjoint key releases and down chords coincide, they are
-batched together (with Up events preceding Down events in the same call) to eliminate
-sender-side skew.
+Let T be the ceiling of 1,000,000 divided by configured FPS, in microseconds.
+The sender floors are:
 
-## Hold semantics and timing floors
+- H = ceiling(hold_frames × T) + margin.
+- G = T + margin.
 
-A hold note's sender-side Up is gated by the minimum hold floor $H$:
-$$H = \lceil \text{hold\_frames} \times T \rceil + \text{margin}$$
-where $T = \lceil 1{,}000{,}000 / \text{FPS} \rceil$. Retriggering the same key respects
-the release gap floor $G = T$ before sending the next Down.
+An Up cannot occur before both its authored release time and successful Down
+completion plus H. A same-key Down cannot occur before successful Up completion
+plus G. These are sender-side limits; they do not choose the game frame that
+samples a key.
 
-## Hold-frame selection
+## Limits
 
-The hold duration is expressed as a multiple of one game frame at the configured FPS:
+Dense passages may exceed the game's sampling rate even when sender deadlines
+are met. Timing results describe the Windows sender path, not audio or
+gameplay acceptance. The supported desktop application targets Windows 11.
 
-| Selection            | Duration at 60 FPS |
-| -------------------- | ------------------ |
-| 1.0 frames (default) | ~16.7 ms           |
-| 1.25 frames          | ~20.8 ms           |
-| 1.5 frames           | ~25.0 ms           |
-
-The FPS setting controls the sender's floor calculation. It does not guarantee which
-game frame samples a key state.
-
-## Calibration and robust wake guard
-
-Sky Auto Player measures Windows kernel timer wake errors during startup host calibration,
-deriving a robust wake guard ($\text{median} + 6 \times \text{MAD}$). During playback, the
-production waiter uses this frozen wake guard to combine kernel-timer sleep
-with a QPC spin loop. It does not adjust lead time continuously to eliminate drift.
-
-This is **sender-side timing only**. It reduces systematic delay caused by OS scheduling
-jitter on your machine. It does not correct for network latency or game frame pacing.
-The telemetry displayed in the Diagnostics panel reports the measured sender-side result,
-not an audible or in-game guarantee.
-
-## Rust dispatch worker
-
-A dedicated Rust worker thread owns the dispatch loop: compilation of the note schedule,
-the high-resolution timing wait, focus tracking, `SendInput` calls, cleanup, and native
-telemetry. The Tauri/React shell renders the desktop UI, while native Rust services own
-the playback state and safety policies.
-
-## Known limitations
-
-- Timing accuracy on the game side is not controlled by Sky Auto Player.
-- Very fast passages (extremely high BPM or dense arpeggios) may exceed what the game's
-  sampling rate can resolve, regardless of how precisely keystrokes are sent.
-- MMCSS real-time scheduling requires Windows 10 or 11 and is not available on other platforms.
+For current implementation contracts and verification commands, see
+[playback-engine.md](https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md)
+and
+[playback-verification.md](https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-verification.md).

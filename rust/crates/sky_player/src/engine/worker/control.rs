@@ -16,6 +16,7 @@ pub(crate) enum TerminalTrigger {
     FocusAuthorityInvalidated,
     TargetAuthorityInvalidated,
     OwnerAuthorityInvalidated,
+    SenderAnomaly,
     WorkerPanic,
 }
 
@@ -30,6 +31,7 @@ impl TerminalTrigger {
             Self::FocusAuthorityInvalidated => "focus_authority_invalidated_during_preparation",
             Self::TargetAuthorityInvalidated => "target_authority_invalidated_during_preparation",
             Self::OwnerAuthorityInvalidated => "owner_authority_invalidated_during_preparation",
+            Self::SenderAnomaly => "sender_anomaly",
             Self::WorkerPanic => "worker_panic",
         }
     }
@@ -42,6 +44,7 @@ impl TerminalTrigger {
                 | Self::FocusAuthorityInvalidated
                 | Self::TargetAuthorityInvalidated
                 | Self::OwnerAuthorityInvalidated
+                | Self::SenderAnomaly
                 | Self::WorkerPanic
         )
     }

@@ -4,6 +4,43 @@ use super::scan_code::{
 };
 use crate::clock::{QpcClock, QpcError, QpcTicks};
 
+/// The single raw Win32 transport primitive used by musical packets, safety
+/// releases, and calibration payloads. Callers fully prepare the INPUT slice
+/// and clear the thread's last-error state before their authoritative QPC
+/// boundary. `inputs` must point to `requested` initialized INPUT values, and
+/// the caller must keep that storage alive until return. This function performs
+/// exactly one SendInput invocation.
+#[cfg(windows)]
+pub(crate) unsafe fn send_prepared_inputs_once(
+    inputs: *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
+    requested: u8,
+) -> (u8, u32) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::SendInput;
+
+    let requested_count = u32::from(requested);
+    let raw_inserted = unsafe {
+        SendInput(
+            requested_count,
+            inputs,
+            std::mem::size_of::<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>() as i32,
+        )
+    };
+    // Requested packets are bounded to fifteen inputs, so saturating the
+    // impossible larger count retains an unmistakable mismatch in evidence.
+    let inserted = u8::try_from(raw_inserted).unwrap_or(u8::MAX);
+    let win32_error = if raw_inserted < requested_count {
+        unsafe { windows_sys::Win32::Foundation::GetLastError() }
+    } else {
+        0
+    };
+    (inserted, win32_error)
+}
+
+#[cfg(not(windows))]
+pub(crate) fn send_prepared_inputs_once(event_count: u8) -> (u8, u32) {
+    (event_count, 0)
+}
+
 pub(crate) fn no_syscall_boundary_with_clock(
     clock: Option<QpcClock>,
 ) -> (QpcTicks, Option<QpcTicks>, Option<crate::clock::QpcError>) {
@@ -53,7 +90,7 @@ where
 
     TerminalUpTransportResult {
         requested,
-        inserted: inserted.min(requested),
+        inserted,
         started_ticks,
         completed_ticks,
         win32_error,
@@ -110,7 +147,7 @@ const UP_TEMPLATES: [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; MAX
     arr
 };
 
-pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
+pub(crate) fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
     let clock = match QpcClock::initialize() {
         Ok(clock) => clock,
         Err(error) => {
@@ -127,7 +164,7 @@ pub fn send_input_raw(scan_codes: &[u16], key_up: bool) -> PlatformSendResult {
     send_input_raw_with_clock(scan_codes, key_up, clock)
 }
 
-pub fn send_input_raw_with_clock(
+pub(crate) fn send_input_raw_with_clock(
     scan_codes: &[u16],
     key_up: bool,
     clock: QpcClock,
@@ -149,7 +186,7 @@ pub fn send_input_raw_with_clock(
     #[cfg(windows)]
     {
         use windows_sys::Win32::Foundation::SetLastError;
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{INPUT, SendInput};
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT;
 
         if scan_codes.is_empty() {
             let (started_ticks, completed_ticks, timing_error) =
@@ -174,9 +211,6 @@ pub fn send_input_raw_with_clock(
                 DOWN_TEMPLATES[sc as usize]
             };
         }
-        let requested = len as u32;
-        let cb_size = std::mem::size_of::<INPUT>() as i32;
-
         // Clear stale thread-local state before the authoritative start sample;
         // the reset must not sit inside the measured SendInput envelope.
         unsafe { SetLastError(0) };
@@ -194,13 +228,10 @@ pub fn send_input_raw_with_clock(
             }
         };
 
-        let inserted =
-            unsafe { SendInput(requested, packets.as_ptr(), cb_size) }.min(requested) as u8;
-        let win32_error = if u32::from(inserted) != requested {
-            unsafe { windows_sys::Win32::Foundation::GetLastError() }
-        } else {
-            0
-        };
+        // SAFETY: `packets[..len]` is fully initialized immediately above and
+        // remains alive until this synchronous transport call returns.
+        let (inserted, win32_error) =
+            unsafe { send_prepared_inputs_once(packets.as_ptr(), len as u8) };
         let (completed_ticks, timing_error) = match clock.now() {
             Ok(ticks) => (Some(ticks), None),
             Err(error) => (None, Some(error)),
@@ -236,7 +267,7 @@ mod tests {
     fn clears_last_error_before_authoritative_start_sample() {
         let source = include_str!("raw.rs").replace("\r\n", "\n");
         let sender = source
-            .split("pub fn send_input_raw_with_clock")
+            .split("pub(crate) fn send_input_raw_with_clock")
             .nth(1)
             .expect("raw sender implementation");
         let reset = sender
@@ -245,10 +276,13 @@ mod tests {
         let start = sender
             .find("let started_ticks = match clock.now()")
             .expect("raw sender authoritative start sample");
-        let syscall = sender.find("SendInput(").expect("raw SendInput call");
-
         assert!(reset < start);
-        assert!(start < syscall);
+        assert!(start < sender.find("send_prepared_inputs_once").unwrap());
+        let shared_primitive = source
+            .split("pub(crate) unsafe fn send_prepared_inputs_once")
+            .nth(1)
+            .expect("shared Win32 SendInput primitive");
+        assert!(shared_primitive.contains("SendInput("));
     }
 }
 

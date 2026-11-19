@@ -565,7 +565,7 @@ impl StartupOrderingHook {
         }
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn set_boot_delay_us(&self, delay_us: u64) {
         self.boot_delay_us.store(delay_us, Ordering::SeqCst);
     }

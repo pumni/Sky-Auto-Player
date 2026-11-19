@@ -67,6 +67,9 @@ pub struct FaultInjectionScript {
     /// is true. This models target-dependent proof being unavailable during a
     /// focus-loss episode without changing production probe semantics.
     pub force_inconclusive_probe: Option<Arc<AtomicBool>>,
+    /// When set, the mock physical probe returns Held for the entire queried
+    /// mask. This verifies that a probe-only residual never triggers Up.
+    pub force_held_probe: Option<Arc<AtomicBool>>,
     /// Shared test-only count of mock physical send invocations.
     pub send_call_count: Option<Arc<AtomicU64>>,
     /// Optional test-only capture of exact physical send calls in send order.
@@ -74,8 +77,10 @@ pub struct FaultInjectionScript {
     /// Optional first-packet send barriers for deterministic in-flight tests.
     pub first_packet_send_entered: Option<Arc<Barrier>>,
     pub release_first_packet_send: Option<Arc<Barrier>>,
-    /// Shared test-only count of full-instrument cleanup calls.
-    pub full_instrument_release_calls: Option<Arc<AtomicU64>>,
+    /// Optional one-shot barriers for the first physical Up. Tests use these
+    /// to place Stop or origin drift inside a live worker Pause drain.
+    pub first_release_send_entered: Option<Arc<std::sync::mpsc::Sender<()>>>,
+    pub release_first_release_send: Option<Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>>,
     /// Makes mock preflight fail closed when set.
     pub force_preflight_failure: Option<Arc<AtomicBool>>,
     /// Makes mock preflight report these physical instrument keys as held.

@@ -7,9 +7,10 @@ describe intended invariants. This index is a route map, not a reading checklist
 ## Current contracts
 
 - **Ownership and module boundaries:** [architecture](architecture.md).
-- **Native playback:** [engine and timing](playback-engine.md) for scheduling,
-  admission, focus, and cleanup; [verification](playback-verification.md) for
-  native sink and timing qualification. Browser mocks are not native timing evidence.
+- **Native playback:** [playback engine](playback-engine.md) is the current
+  scheduling, sender, cleanup, and retirement contract;
+  [verification](playback-verification.md) owns current Windows commands and
+  qualification. Browser mocks are not native timing evidence.
 - **Desktop UI:** [workbench](desktop-workbench.md) for user interactions,
   [React Aria types](desktop-type-boundary.md), and
   [JavaScript tooling](desktop-tooling.md). Consult the
