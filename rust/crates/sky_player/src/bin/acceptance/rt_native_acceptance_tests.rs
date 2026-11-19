@@ -914,7 +914,7 @@ fn validate_ready_record_rejects_game_target_or_class_mismatch() {
 }
 
 #[test]
-fn parse_args_defaults_to_control_a_and_accepts_candidate_b_up_diagnostic() {
+fn parse_args_defaults_to_control_a_and_fails_closed_on_retired_candidate_b_up_diagnostic() {
     let default_args = base_arguments("canonical-single");
     let parsed = parse_args(default_args).expect("parse default args");
     match parsed {
@@ -924,15 +924,23 @@ fn parse_args_defaults_to_control_a_and_accepts_candidate_b_up_diagnostic() {
         ParsedCommand::Help => panic!("expected run command"),
     }
 
-    let mut candidate_b_args = base_arguments("canonical-single");
-    candidate_b_args.extend(["--admission-variant".into(), "candidate-b-up-diagnostic".into()]);
-    let parsed_b = parse_args(candidate_b_args).expect("parse candidate-b args");
-    match parsed_b {
+    let mut explicit_a_args = base_arguments("canonical-single");
+    explicit_a_args.extend(["--admission-variant".into(), "control-a".into()]);
+    let parsed_a = parse_args(explicit_a_args).expect("parse explicit control-a args");
+    match parsed_a {
         ParsedCommand::Run(run) => {
-            assert_eq!(run.admission_variant, AdmissionVariantChoice::CandidateBUpDiagnostic);
+            assert_eq!(run.admission_variant, AdmissionVariantChoice::ControlA);
         }
         ParsedCommand::Help => panic!("expected run command"),
     }
+
+    let mut candidate_b_args = base_arguments("canonical-single");
+    candidate_b_args.extend(["--admission-variant".into(), "candidate-b-up-diagnostic".into()]);
+    let err = parse_args(candidate_b_args).expect_err("candidate-b-up-diagnostic must fail closed");
+    assert!(
+        err.contains("candidate-b-up-diagnostic has been retired following LAB4 evaluation"),
+        "unexpected error message: {err}"
+    );
 }
 
 #[test]
@@ -946,155 +954,9 @@ fn parse_args_rejects_invalid_or_duplicate_admission_variant() {
         "--admission-variant".into(),
         "control-a".into(),
         "--admission-variant".into(),
-        "candidate-b-up-diagnostic".into(),
+        "control-a".into(),
     ]);
     assert!(parse_args(duplicate_args).is_err());
-}
-
-#[test]
-fn candidate_b_up_diagnostic_requires_verified_receive_only_sink() {
-    let plan = scenario_plan(Scenario::CanonicalSingle, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
-    let options = production_options(
-        plan.schedule,
-        None,
-        ACCEPTANCE_TIMING_MARGIN_US,
-        Scenario::CanonicalSingle,
-        std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-    )
-    .expect("prepared acceptance schedule");
-
-    let result = super::owner_identity::create_session(
-        options,
-        0x42,
-        Scenario::CanonicalSingle,
-        AdmissionVariantChoice::CandidateBUpDiagnostic,
-        false,
-    );
-    match result {
-        Ok(_) => panic!("CandidateBUpDiagnostic must fail closed on unverified sink"),
-        Err(err) => assert!(err.contains("ReceiveOnly sink"), "unexpected error: {err}"),
-    }
-}
-
-#[test]
-fn candidate_b_crossing_counters_fidelity_and_report_projection() {
-    use sky_player::engine::{CandidateBCrossingDiagnostic, NativeAcceptanceLifecycleEvidence};
-
-    // 1. Worker never reached dispatch -> unavailable
-    let evidence_unstarted = NativeAcceptanceLifecycleEvidence::default();
-    assert_eq!(evidence_unstarted.candidate_b_crossing_diagnostic, None);
-
-    let report_unstarted = match evidence_unstarted.candidate_b_crossing_diagnostic {
-        Some(diag) => serde_json::json!({
-            "available": true,
-            "admission_variant": "control-a",
-            "fast_crossings": diag.fast_crossings,
-            "fallbacks_to_a": diag.fallbacks_to_a,
-            "count_scope": "crossing_attempts",
-        }),
-        None => serde_json::json!({
-            "available": false,
-            "admission_variant": "control-a",
-            "fast_crossings": serde_json::Value::Null,
-            "fallbacks_to_a": serde_json::Value::Null,
-            "count_scope": "crossing_attempts",
-        }),
-    };
-    assert_eq!(report_unstarted["available"], false);
-    assert_eq!(report_unstarted["fast_crossings"], serde_json::Value::Null);
-    assert_eq!(report_unstarted["fallbacks_to_a"], serde_json::Value::Null);
-    assert_eq!(report_unstarted["count_scope"], "crossing_attempts");
-
-    // 2. Control A session: observed zero / available
-    let evidence_control_a = NativeAcceptanceLifecycleEvidence {
-        candidate_b_crossing_diagnostic: Some(CandidateBCrossingDiagnostic {
-            fast_crossings: 0,
-            fallbacks_to_a: 0,
-        }),
-        ..Default::default()
-    };
-    assert_eq!(
-        evidence_control_a.candidate_b_crossing_diagnostic,
-        Some(CandidateBCrossingDiagnostic {
-            fast_crossings: 0,
-            fallbacks_to_a: 0,
-        })
-    );
-    let report_control_a = match evidence_control_a.candidate_b_crossing_diagnostic {
-        Some(diag) => serde_json::json!({
-            "available": true,
-            "admission_variant": "control-a",
-            "fast_crossings": diag.fast_crossings,
-            "fallbacks_to_a": diag.fallbacks_to_a,
-            "count_scope": "crossing_attempts",
-        }),
-        None => unreachable!(),
-    };
-    assert_eq!(report_control_a["available"], true);
-    assert_eq!(report_control_a["admission_variant"], "control-a");
-    assert_eq!(report_control_a["fast_crossings"], 0);
-    assert_eq!(report_control_a["fallbacks_to_a"], 0);
-    assert_eq!(report_control_a["count_scope"], "crossing_attempts");
-
-    // 3. Candidate B fast crossing
-    let evidence_b_fast = NativeAcceptanceLifecycleEvidence {
-        candidate_b_crossing_diagnostic: Some(CandidateBCrossingDiagnostic {
-            fast_crossings: 1,
-            fallbacks_to_a: 0,
-        }),
-        ..Default::default()
-    };
-    assert_eq!(
-        evidence_b_fast.candidate_b_crossing_diagnostic,
-        Some(CandidateBCrossingDiagnostic {
-            fast_crossings: 1,
-            fallbacks_to_a: 0,
-        })
-    );
-    let report_b_fast = match evidence_b_fast.candidate_b_crossing_diagnostic {
-        Some(diag) => serde_json::json!({
-            "available": true,
-            "admission_variant": "candidate-b-up-diagnostic",
-            "fast_crossings": diag.fast_crossings,
-            "fallbacks_to_a": diag.fallbacks_to_a,
-            "count_scope": "crossing_attempts",
-        }),
-        None => unreachable!(),
-    };
-    assert_eq!(report_b_fast["available"], true);
-    assert_eq!(report_b_fast["admission_variant"], "candidate-b-up-diagnostic");
-    assert_eq!(report_b_fast["fast_crossings"], 1);
-    assert_eq!(report_b_fast["fallbacks_to_a"], 0);
-
-    // 4. Candidate B fallback
-    let evidence_b_fallback = NativeAcceptanceLifecycleEvidence {
-        candidate_b_crossing_diagnostic: Some(CandidateBCrossingDiagnostic {
-            fast_crossings: 0,
-            fallbacks_to_a: 1,
-        }),
-        ..Default::default()
-    };
-    assert_eq!(
-        evidence_b_fallback.candidate_b_crossing_diagnostic,
-        Some(CandidateBCrossingDiagnostic {
-            fast_crossings: 0,
-            fallbacks_to_a: 1,
-        })
-    );
-    let report_b_fallback = match evidence_b_fallback.candidate_b_crossing_diagnostic {
-        Some(diag) => serde_json::json!({
-            "available": true,
-            "admission_variant": "candidate-b-up-diagnostic",
-            "fast_crossings": diag.fast_crossings,
-            "fallbacks_to_a": diag.fallbacks_to_a,
-            "count_scope": "crossing_attempts",
-        }),
-        None => unreachable!(),
-    };
-    assert_eq!(report_b_fallback["available"], true);
-    assert_eq!(report_b_fallback["admission_variant"], "candidate-b-up-diagnostic");
-    assert_eq!(report_b_fallback["fast_crossings"], 0);
-    assert_eq!(report_b_fallback["fallbacks_to_a"], 1);
 }
 
 #[path = "benchmark_schedule_tests.rs"]

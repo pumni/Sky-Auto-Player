@@ -15,9 +15,9 @@ mod timing;
 mod wait;
 
 pub(crate) use admission::{
-    FinalControlSignals, FinalDownAdmissionResult, MusicalPacketKind, TargetStamp,
-    ensure_preflight_for_target, enter_focus_pause, focus_matches, focus_matches_hwnd,
-    load_target_stamp, perform_candidate_b_precheck, target_stamp_still_current,
+    FinalControlSignals, FinalDownAdmissionResult, TargetStamp, ensure_preflight_for_target,
+    enter_focus_pause, focus_matches, focus_matches_hwnd, load_target_stamp,
+    target_stamp_still_current,
 };
 pub(crate) use anomaly_history::AttemptedDispatchAnomalies;
 #[cfg(any(test, feature = "test-support"))]
@@ -229,9 +229,6 @@ pub(crate) struct WorkerRuntime {
     /// allowing verified cleanup and later, never-attempted notes to proceed.
     pub(crate) attempted_dispatch_anomalies: AttemptedDispatchAnomalies,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
-    pub(crate) candidate_b_pending_precheck: Option<admission::PrecheckProof>,
-    pub(crate) candidate_b_fast_crossings: u64,
-    pub(crate) candidate_b_fallbacks_to_a: u64,
 }
 
 /// Fixed-size packet evidence copied after journal commit and reduced at the
@@ -523,7 +520,6 @@ impl<'a> Worker<'a> {
                     instrument_key_profile: _,
                 },
             instrument_key_profile,
-            admission_variant,
         } = admitted;
         #[cfg(any(test, feature = "test-support"))]
         let runtime = WorkerRuntime {
@@ -544,7 +540,6 @@ impl<'a> Worker<'a> {
                 wait,
                 telemetry,
                 priority,
-                admission_variant,
                 #[cfg(any(test, feature = "test-support"))]
                 startup_calibration_placement,
                 #[cfg(any(test, feature = "test-support"))]

@@ -20,13 +20,6 @@ pub enum OwnerIdentityPollResult {
     CurrentInvalid,
 }
 
-#[cfg(feature = "real-input-acceptance")]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct CandidateBCrossingDiagnostic {
-    pub fast_crossings: u64,
-    pub fallbacks_to_a: u64,
-}
-
 /// Lifecycle evidence exported only to the explicitly enabled native
 /// acceptance executable. QPC values are observed by the playback worker;
 /// caller-side process launch and post-join reporting timestamps are not
@@ -37,7 +30,6 @@ pub struct NativeAcceptanceLifecycleEvidence {
     pub playback_armed_qpc_ticks: Option<u64>,
     pub worker_release_verified_qpc_ticks: Option<u64>,
     pub raw_up_syscall_count: Option<u64>,
-    pub candidate_b_crossing_diagnostic: Option<CandidateBCrossingDiagnostic>,
 }
 
 fn join_thread_until(
@@ -270,23 +262,6 @@ impl NativeDispatchSession {
         Self::new_with_bound_window_identity_and_power_endpoint(options, endpoint, authority)
     }
 
-    /// Test and native acceptance constructor that binds window identity AND
-    /// marks the target as an attested non-game ReceiveOnly sink.
-    ///
-    /// Available only under test or test-support cfg for acceptance harness use.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn new_with_bound_window_identity_and_receive_only_sink_for_test(
-        options: NativeSessionOptions,
-        authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
-    ) -> Result<Self, String> {
-        let session = Self::new_with_bound_window_identity_for_test(options, authority)?;
-        session.shared.target.mark_as_receive_only_sink_for_test();
-        if let Some(config) = session.config.lock().as_mut() {
-            config.admission_variant = super::config::AdmissionVariant::B;
-        }
-        Ok(session)
-    }
-
     pub fn new_with_power_endpoint(
         options: NativeSessionOptions,
         power_endpoint: Arc<SystemPowerEndpoint>,
@@ -421,7 +396,6 @@ impl NativeDispatchSession {
         let admitted_options = AdmittedNativeSessionOptions {
             options,
             instrument_key_profile,
-            admission_variant: super::config::AdmissionVariant::A,
         };
         Ok(Self {
             observer_enabled,
@@ -449,13 +423,6 @@ impl NativeDispatchSession {
     pub fn native_acceptance_lifecycle_evidence(&self) -> NativeAcceptanceLifecycleEvidence {
         let metrics = &self.shared.publication.metrics;
         let nonzero_ticks = |ticks: u64| (ticks != 0).then_some(ticks);
-        let candidate_b_crossing_diagnostic = metrics
-            .candidate_b_crossing_counters_available
-            .load(Ordering::Acquire)
-            .then(|| CandidateBCrossingDiagnostic {
-                fast_crossings: metrics.candidate_b_fast_crossings.load(Ordering::Acquire),
-                fallbacks_to_a: metrics.candidate_b_fallbacks_to_a.load(Ordering::Acquire),
-            });
         NativeAcceptanceLifecycleEvidence {
             playback_armed_qpc_ticks: nonzero_ticks(
                 metrics.playback_armed_qpc_ticks.load(Ordering::Acquire),
@@ -473,7 +440,6 @@ impl NativeDispatchSession {
                         .terminal_release_raw_up_syscall_count
                         .load(Ordering::Acquire)
                 }),
-            candidate_b_crossing_diagnostic,
         }
     }
 

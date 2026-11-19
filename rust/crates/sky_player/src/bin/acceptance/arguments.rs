@@ -32,22 +32,22 @@ impl CalibrationPlacement {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdmissionVariantChoice {
     ControlA,
-    CandidateBUpDiagnostic,
 }
 
 impl AdmissionVariantChoice {
     pub(super) fn parse(value: &str) -> Result<Self, String> {
         match value {
             "control-a" => Ok(Self::ControlA),
-            "candidate-b-up-diagnostic" => Ok(Self::CandidateBUpDiagnostic),
-            _ => Err("--admission-variant must be control-a or candidate-b-up-diagnostic".to_string()),
+            "candidate-b-up-diagnostic" => Err(
+                "candidate-b-up-diagnostic has been retired following LAB4 evaluation: Candidate B-Up was rejected/unqualified for shipping".to_string(),
+            ),
+            _ => Err("--admission-variant must be control-a (candidate-b-up-diagnostic is retired)".to_string()),
         }
     }
 
     pub(super) const fn label(self) -> &'static str {
         match self {
             Self::ControlA => "control-a",
-            Self::CandidateBUpDiagnostic => "candidate-b-up-diagnostic",
         }
     }
 }

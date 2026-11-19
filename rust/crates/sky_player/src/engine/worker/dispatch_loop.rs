@@ -7,8 +7,7 @@ use super::super::{
 #[allow(unused_imports)]
 pub(crate) use super::admission::verify_final_down_admission;
 use super::admission::{
-    FinalControlAdmission, MusicalPacketKind, final_control_precheck, perform_candidate_b_precheck,
-    verify_candidate_b_crossing, verify_final_packet_admission,
+    FinalControlAdmission, MusicalPacketKind, final_control_precheck, verify_final_packet_admission,
 };
 use super::{
     CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
@@ -667,60 +666,21 @@ pub(crate) fn dispatch_staged_candidate(
         }
     }
 
-    // P0-3: Candidate B is strictly restricted to Up-only on ReceiveOnly test sinks.
-    // Down and Mixed packets unconditionally execute full Control A final modifier scan.
-    let is_candidate_b = config.admission_variant == super::super::config::AdmissionVariant::B
-        && target.owner_process_identity_required()
-        && target.is_receive_only_sink()
-        && !packet_kind.has_down();
-
-    let pending_precheck = runtime.candidate_b_pending_precheck.take();
-    let (admission_result, fast_path_taken) = if is_candidate_b {
-        let (res, fast) = verify_candidate_b_crossing(
-            pending_precheck.as_ref(),
-            target,
-            expected_target,
-            config.focus.require_focus,
-            focus_active,
-            control_signals,
-            timing.lease_timeout_ticks,
-            qpc_clock,
-            progress_clock,
-            &resources.backend,
-            &mut resources.playback,
-            runtime,
-            local_metrics,
-            packet_kind,
-        );
-        if fast {
-            runtime.candidate_b_fast_crossings =
-                runtime.candidate_b_fast_crossings.saturating_add(1);
-        } else {
-            runtime.candidate_b_fallbacks_to_a =
-                runtime.candidate_b_fallbacks_to_a.saturating_add(1);
-        }
-        (res, fast)
-    } else {
-        (
-            verify_final_packet_admission(
-                target,
-                expected_target,
-                config.focus.require_focus,
-                focus_active,
-                control_signals,
-                timing.lease_timeout_ticks,
-                qpc_clock,
-                progress_clock,
-                &resources.backend,
-                &mut resources.playback,
-                runtime,
-                local_metrics,
-                packet_kind,
-            ),
-            false,
-        )
-    };
-    let _ = fast_path_taken;
+    let admission_result = verify_final_packet_admission(
+        target,
+        expected_target,
+        config.focus.require_focus,
+        focus_active,
+        control_signals,
+        timing.lease_timeout_ticks,
+        qpc_clock,
+        progress_clock,
+        &resources.backend,
+        &mut resources.playback,
+        runtime,
+        local_metrics,
+        packet_kind,
+    );
 
     match admission_result {
         FinalDownAdmissionResult::Allowed => {}
@@ -2083,149 +2043,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         |candidate| candidate.authored_target_ticks,
                     );
 
-                    let packet_has_down = candidate
-                        .as_ref()
-                        .is_some_and(|c| c.packet_masks.down_mask != 0);
-
-                    // P0-3: Candidate B is strictly restricted to Up-only on ReceiveOnly test sinks.
-                    // Down and Mixed packets unconditionally execute full Control A final modifier scan.
-                    let is_candidate_b = config.admission_variant
-                        == super::super::config::AdmissionVariant::B
-                        && target.owner_process_identity_required()
-                        && target.is_receive_only_sink()
-                        && !packet_has_down;
-
-                    if is_candidate_b
-                        && let Some(candidate_ref) = candidate.as_ref()
-                        && let Some(expected_target) = candidate_ref.target_stamp
-                    {
-                        // P0-1: QPC conversion failure is strictly terminal
-                        let precheck_lead_ticks = match qpc_clock.duration_from_us(200) {
-                            Ok(ticks) => ticks,
-                            Err(error) => {
-                                core.runtime.terminal_error = Some(format!(
-                                    "QPC conversion failure for candidate B precheck lead: {error:?}"
-                                ));
-                                break;
-                            }
-                        };
-                        let precheck_target_qpc = sky_dispatch_core::time::QpcTicks::from_raw(
-                            wait_target_qpc
-                                .as_u64()
-                                .saturating_sub(precheck_lead_ticks.as_u64()),
-                        );
-                        // P0-1: QPC sampling failure is strictly terminal
-                        let now_ticks = match qpc_clock.now() {
-                            Ok(ticks) => ticks,
-                            Err(error) => {
-                                core.runtime.terminal_error = Some(format!(
-                                    "QPC sampling failure before candidate B precheck wait: {error:?}"
-                                ));
-                                break;
-                            }
-                        };
-                        if now_ticks < precheck_target_qpc {
-                            match wait_for_next_boundary(WaitBoundaryInput {
-                                deadline: WaitDeadline {
-                                    physical_target_qpc: Some(precheck_target_qpc),
-                                    // P1-4: Do not enter precision-spin phase ahead of precheck
-                                    spin_threshold_ticks: DurationTicks::ZERO,
-                                    qpc_clock,
-                                },
-                                signals: WaitSignals {
-                                    waiter: &resources.waiter,
-                                    interrupt,
-                                },
-                                mutable: WaitMutable {
-                                    local_metrics: &mut core.metrics,
-                                    terminal_error: &mut core.runtime.terminal_error,
-                                },
-                            }) {
-                                WaitBoundary::Due { .. } => {}
-                                WaitBoundary::Interrupted(
-                                    wait_result,
-                                    target_qpc,
-                                    planned_wait_ticks,
-                                ) => {
-                                    core.runtime.last_dispatch_deadline_wake_qpc = None;
-                                    core.runtime.last_dispatch_deadline_target_qpc = None;
-                                    super::dispatch::publish_interrupted_physical_wait(
-                                        &mut core.runtime,
-                                        core.observer.pending.as_ref(),
-                                        &mut core.metrics,
-                                        wait_result,
-                                        target_qpc,
-                                        planned_wait_ticks,
-                                        authored_target_ticks,
-                                        resources.playback.epoch,
-                                    );
-                                    let _ = interrupt.try_take();
-                                    continue;
-                                }
-                                WaitBoundary::Exit => {
-                                    super::dispatch::publish_pending_wait_observation(
-                                        &mut core.runtime,
-                                        core.observer.pending.as_ref(),
-                                        &mut core.metrics,
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-
-                        let precheck_signals = FinalControlSignals {
-                            quit_requested,
-                            skip_requested,
-                            panic_requested,
-                            desired_pause,
-                            supervisor_expired,
-                            system_power: Some(system_power),
-                        };
-                        let packet_kind = MusicalPacketKind::from_masks(
-                            candidate_ref.packet_masks.down_mask,
-                            candidate_ref.packet_masks.up_mask,
-                        )
-                        .expect("candidate has non-zero mask");
-                        // P0-1: QPC conversion failure is strictly terminal
-                        let max_proof_age_ticks = match qpc_clock.duration_from_us(500) {
-                            Ok(ticks) => ticks,
-                            Err(error) => {
-                                core.runtime.terminal_error = Some(format!(
-                                    "QPC conversion failure for candidate B proof age: {error:?}"
-                                ));
-                                break;
-                            }
-                        };
-                        let precheck_outcome = perform_candidate_b_precheck(
-                            target,
-                            expected_target,
-                            config.focus.require_focus,
-                            focus_active,
-                            precheck_signals,
-                            timing.lease_timeout_ticks,
-                            qpc_clock,
-                            &resources.backend,
-                            packet_kind,
-                            max_proof_age_ticks,
-                        );
-                        match precheck_outcome {
-                            Ok(proof) => {
-                                core.runtime.candidate_b_pending_precheck = Some(proof);
-                            }
-                            Err(FinalDownAdmissionResult::Terminal(err)) => {
-                                core.runtime.terminal_error = Some(err);
-                                break;
-                            }
-                            Err(FinalDownAdmissionResult::Replan)
-                            | Err(FinalDownAdmissionResult::ModifierHeld)
-                            | Err(FinalDownAdmissionResult::Allowed) => {
-                                // Explicitly documented recoverable precheck outcome (e.g. transient focus pause
-                                // or modifier held during precheck window). Candidate B establishes no proof,
-                                // leaving pending_precheck = None, which cleanly falls back to Control A at crossing boundary.
-                            }
-                        }
-                    }
-
                     match wait_for_next_boundary(WaitBoundaryInput {
                         deadline: WaitDeadline {
                             physical_target_qpc: Some(wait_target_qpc),
@@ -2487,8 +2304,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
 
 #[cfg(test)]
 mod tests {
-    #[path = "../../dispatch_loop_candidate_b_tests.rs"]
-    mod candidate_b;
     #[path = "../../dispatch_loop_deadline_hg_projection_tests.rs"]
     mod deadline_hg_projection;
     #[path = "../../dispatch_loop_deadline_late_due_tests.rs"]

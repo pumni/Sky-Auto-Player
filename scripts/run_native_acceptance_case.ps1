@@ -31,6 +31,9 @@
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+if ($AdmissionVariant -eq 'candidate-b-up-diagnostic') {
+    throw 'candidate-b-up-diagnostic has been retired following LAB4 evaluation: Candidate B-Up was rejected/unqualified for shipping'
+}
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force

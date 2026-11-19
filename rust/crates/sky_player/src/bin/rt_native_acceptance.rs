@@ -766,23 +766,6 @@ fn run_windows(args: RunArgs) -> i32 {
             "raw_up_syscall_count": lifecycle_evidence.raw_up_syscall_count,
             "raw_up_syscall_count_source": "sum of worker TerminalSendAttemptEvidence.raw_calls",
         }));
-        let candidate_b_crossing_diagnostic = match lifecycle_evidence.candidate_b_crossing_diagnostic {
-            Some(diag) => json!({
-                "available": true,
-                "admission_variant": args.admission_variant.label(),
-                "fast_crossings": diag.fast_crossings,
-                "fallbacks_to_a": diag.fallbacks_to_a,
-                "count_scope": "crossing_attempts",
-            }),
-            None => json!({
-                "available": false,
-                "admission_variant": args.admission_variant.label(),
-                "fast_crossings": Value::Null,
-                "fallbacks_to_a": Value::Null,
-                "count_scope": "crossing_attempts",
-            }),
-        };
-        object.insert("candidate_b_crossing_diagnostic".to_string(), candidate_b_crossing_diagnostic);
         object.insert("native_timing_telemetry".to_string(), timing_telemetry);
         object.insert("native_timing_telemetry_available".to_string(), json!(timing_telemetry_available));
         object.insert("native_timing_telemetry_unavailable_reason".to_string(), json!(timing_telemetry_unavailable_reason));

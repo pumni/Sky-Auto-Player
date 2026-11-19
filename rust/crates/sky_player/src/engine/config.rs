@@ -252,7 +252,6 @@ pub struct NativeSessionOptions {
 pub(crate) struct AdmittedNativeSessionOptions {
     pub(crate) options: NativeSessionOptions,
     pub(crate) instrument_key_profile: MaterializedInstrumentKeyProfile,
-    pub(crate) admission_variant: AdmissionVariant,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -734,23 +733,6 @@ impl StartupOrderingHook {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum AdmissionVariant {
-    #[default]
-    A,
-    B,
-}
-
-impl AdmissionVariant {
-    #[allow(dead_code)]
-    pub const fn label(self) -> &'static str {
-        match self {
-            Self::A => "variant_a_control",
-            Self::B => "variant_b_precheck",
-        }
-    }
-}
-
 pub(crate) struct WorkerConfig {
     pub(super) backend: BackendConfig,
     pub(super) profile: DispatchProfile,
@@ -759,7 +741,6 @@ pub(crate) struct WorkerConfig {
     pub(super) wait: WaitOptions,
     pub(super) telemetry: TelemetryOptions,
     pub(super) priority: PriorityOptions,
-    pub(crate) admission_variant: AdmissionVariant,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) startup_calibration_placement: StartupCalibrationPlacement,
     #[cfg(any(test, feature = "test-support"))]
@@ -818,7 +799,6 @@ impl Default for WorkerConfig {
             priority: PriorityOptions {
                 mode: PriorityMode::Off,
             },
-            admission_variant: AdmissionVariant::A,
             startup_calibration_placement: StartupCalibrationPlacement::BeforeSchedulingGuards,
             timing_observer_for_qualification: false,
             prepared_packet_ambiguity_mask: None,

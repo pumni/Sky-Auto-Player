@@ -1275,3 +1275,306 @@ fn terminal_control_races_at_final_gate_do_not_attempt_or_advance_down_onset() {
         );
     }
 }
+
+#[test]
+fn terminal_control_races_at_final_gate_do_not_attempt_up_only() {
+    #[derive(Clone, Copy)]
+    enum Race {
+        Quit,
+        Skip,
+        PanicRelease,
+        SystemSuspend,
+        LeaseExpiry,
+    }
+
+    for race in [
+        Race::Quit,
+        Race::Skip,
+        Race::PanicRelease,
+        Race::SystemSuspend,
+        Race::LeaseExpiry,
+    ] {
+        let actions = [
+            test_action(1, ActionKind::Down, 0, 0x15),
+            test_action(2, ActionKind::Up, 20_000, 0x15),
+        ];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let epoch = harness.qpc_now_for_test().expect("test epoch");
+        harness
+            .reanchor_playback_clock_for_test(epoch)
+            .expect("reanchor playback");
+        harness.configure_focus_owner_for_test(1, 101);
+        let packets = harness.configure_mock_packet_sender_for_test(&[]);
+        harness.attach_executor_for_test().expect("attach executor");
+
+        let first = harness
+            .stage_candidate_for_test(
+                0,
+                harness.current_executor_chord_for_test(),
+                TimelineTicks::ZERO,
+            )
+            .expect("stage Down")
+            .expect("Down candidate");
+        harness.set_mock_sender_start_qpc_for_test(epoch);
+        assert_eq!(
+            harness.dispatch_staged_candidate_for_test(first, false),
+            StagedDispatchOutcome::Dispatched
+        );
+        assert_eq!(packets.lock().expect("packet capture").len(), 1);
+
+        let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+        let candidate = harness
+            .stage_candidate_for_test(
+                0x0001,
+                None,
+                sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+            )
+            .expect("stage Up")
+            .expect("Up candidate");
+        harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+        match race {
+            Race::Quit | Race::Skip | Race::PanicRelease | Race::SystemSuspend => {
+                let interrupt = Arc::clone(&harness.interrupt);
+                harness.set_post_focus_revalidation_race_hook(
+                    move |_, _, quit, skip, panic, _, power| match race {
+                        Race::Quit => quit.store(true, Ordering::Release),
+                        Race::Skip => skip.store(true, Ordering::Release),
+                        Race::PanicRelease => panic.store(true, Ordering::Release),
+                        Race::SystemSuspend => {
+                            assert!(power.notify(true, &interrupt));
+                        }
+                        Race::LeaseExpiry => unreachable!(),
+                    },
+                );
+            }
+            Race::LeaseExpiry => harness.supervisor_expired.latch_expired(),
+        }
+
+        let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+        match race {
+            Race::Quit | Race::Skip | Race::PanicRelease | Race::SystemSuspend => {
+                assert!(
+                    matches!(outcome, StagedDispatchOutcome::Replan),
+                    "expected Replan for race {race_name}, got {outcome:?}",
+                    race_name = match race {
+                        Race::Quit => "Quit",
+                        Race::Skip => "Skip",
+                        Race::PanicRelease => "PanicRelease",
+                        Race::SystemSuspend => "SystemSuspend",
+                        _ => unreachable!(),
+                    }
+                );
+            }
+            Race::LeaseExpiry => {
+                assert!(
+                    matches!(outcome, StagedDispatchOutcome::Exit),
+                    "expected Exit for LeaseExpiry, got {outcome:?}"
+                );
+            }
+        }
+        assert_eq!(
+            packets.lock().expect("packet capture").len(),
+            1,
+            "terminal control race must not send Up packet"
+        );
+        assert_eq!(
+            harness.release_obligation_mask_for_test(),
+            1,
+            "release obligation must remain latched"
+        );
+    }
+}
+
+#[test]
+fn up_only_target_invalidated_or_owner_mismatch_at_crossing_fails_closed() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
+    // Case 1: Owner mismatch at crossing
+    {
+        let actions = [
+            test_action(1, ActionKind::Down, 0, 0x15),
+            test_action(2, ActionKind::Up, 20_000, 0x15),
+        ];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let epoch = harness.qpc_now_for_test().expect("test epoch");
+        harness
+            .reanchor_playback_clock_for_test(epoch)
+            .expect("reanchor playback");
+        harness.configure_focus_owner_for_test(1, 101);
+        let packets = harness.configure_mock_packet_sender_for_test(&[]);
+        harness.attach_executor_for_test().expect("attach executor");
+
+        let first = harness
+            .stage_candidate_for_test(
+                0,
+                harness.current_executor_chord_for_test(),
+                TimelineTicks::ZERO,
+            )
+            .expect("stage Down")
+            .expect("Down candidate");
+        harness.set_mock_sender_start_qpc_for_test(epoch);
+        assert_eq!(
+            harness.dispatch_staged_candidate_for_test(first, false),
+            StagedDispatchOutcome::Dispatched
+        );
+
+        let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+        let candidate = harness
+            .stage_candidate_for_test(
+                0x0001,
+                None,
+                sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+            )
+            .expect("stage Up")
+            .expect("Up candidate");
+        harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+        // Owner PID drifts to 999
+        sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(999)));
+
+        assert_eq!(
+            harness.dispatch_staged_candidate_for_test(candidate, false),
+            StagedDispatchOutcome::Exit
+        );
+        assert_eq!(packets.lock().expect("packet capture").len(), 1);
+        assert!(
+            harness
+                .runtime
+                .terminal_error
+                .as_ref()
+                .unwrap()
+                .contains("prepared_down_owner_mismatch")
+        );
+    }
+
+    // Case 2: Target invalidated at crossing
+    {
+        let actions = [
+            test_action(1, ActionKind::Down, 0, 0x15),
+            test_action(2, ActionKind::Up, 20_000, 0x15),
+        ];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let epoch = harness.qpc_now_for_test().expect("test epoch");
+        harness
+            .reanchor_playback_clock_for_test(epoch)
+            .expect("reanchor playback");
+        harness.configure_focus_owner_for_test(1, 101);
+        let packets = harness.configure_mock_packet_sender_for_test(&[]);
+        harness.attach_executor_for_test().expect("attach executor");
+
+        let first = harness
+            .stage_candidate_for_test(
+                0,
+                harness.current_executor_chord_for_test(),
+                TimelineTicks::ZERO,
+            )
+            .expect("stage Down")
+            .expect("Down candidate");
+        harness.set_mock_sender_start_qpc_for_test(epoch);
+        assert_eq!(
+            harness.dispatch_staged_candidate_for_test(first, false),
+            StagedDispatchOutcome::Dispatched
+        );
+
+        let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+        let candidate = harness
+            .stage_candidate_for_test(
+                0x0001,
+                None,
+                sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+            )
+            .expect("stage Up")
+            .expect("Up candidate");
+        harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+        harness.target.invalidate_target();
+
+        assert_eq!(
+            harness.dispatch_staged_candidate_for_test(candidate, false),
+            StagedDispatchOutcome::Replan
+        );
+        assert_eq!(packets.lock().expect("packet capture").len(), 1);
+        assert!(!harness.target.is_valid());
+    }
+}
+
+#[test]
+fn up_only_process_exit_at_crossing_fails_closed() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
+    let actions = [
+        test_action(1, ActionKind::Down, 0, 0x15),
+        test_action(2, ActionKind::Up, 20_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.configure_focus_owner_for_test(1, 101);
+    let packets = harness.configure_mock_packet_sender_for_test(&[]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage Down")
+        .expect("Down candidate");
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+    let candidate = harness
+        .stage_candidate_for_test(
+            0x0001,
+            None,
+            sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+        )
+        .expect("stage Up")
+        .expect("Up candidate");
+    harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+    let (_, generation) = harness.target.load_stable().unwrap();
+    if let Some(authority) = harness.target.owner_authority_for_generation(generation) {
+        authority.set_process_identity_status_for_test(
+            sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated,
+        );
+    }
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        StagedDispatchOutcome::Exit
+    );
+    assert_eq!(packets.lock().expect("packet capture").len(), 1);
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_ref()
+            .unwrap()
+            .contains("prepared_down_owner_process_terminated")
+    );
+}

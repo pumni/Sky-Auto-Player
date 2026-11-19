@@ -46,7 +46,6 @@ pub struct SessionTarget {
     owner_process_identity_required: AtomicBool,
     owner_failure: AtomicU32,
     target_invalidated: AtomicBool,
-    receive_only_sink: AtomicBool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,7 +91,6 @@ impl SessionTarget {
             owner_process_identity_required: AtomicBool::new(false),
             owner_failure: AtomicU32::new(OwnerIdentityFailure::None as u32),
             target_invalidated: AtomicBool::new(false),
-            receive_only_sink: AtomicBool::new(false),
         }
     }
 
@@ -208,17 +206,6 @@ impl SessionTarget {
         #[cfg(any(test, feature = "test-support"))]
         record_target_atomic_reads(1);
         self.owner_process_identity_required.load(Ordering::Acquire)
-    }
-
-    pub(super) fn is_receive_only_sink(&self) -> bool {
-        #[cfg(any(test, feature = "test-support"))]
-        record_target_atomic_reads(1);
-        self.receive_only_sink.load(Ordering::Acquire)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub(super) fn mark_as_receive_only_sink_for_test(&self) {
-        self.receive_only_sink.store(true, Ordering::Release);
     }
 
     pub(super) fn owner_identity_status(&self, expected_generation: u64) -> OwnerIdentityStatus {

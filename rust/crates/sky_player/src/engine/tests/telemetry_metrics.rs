@@ -608,7 +608,6 @@ fn worker_takes_runtime_schedule_only_once() {
         options: worker_options,
         instrument_key_profile:
             sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::canonical(),
-        admission_variant: super::config::AdmissionVariant::A,
     };
     let mut worker = Worker::new(admitted_options, session.shared_for_test());
 
@@ -1586,19 +1585,6 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
     assert_eq!(mixed["requested_count"].as_u64(), Some(2));
     assert_eq!(mixed["sent_count"].as_u64(), Some(2));
     assert_eq!(mixed["polyphony"].as_u64(), Some(2));
-
-    #[cfg(feature = "real-input-acceptance")]
-    {
-        let evidence = session.native_acceptance_lifecycle_evidence();
-        assert_eq!(
-            evidence.candidate_b_crossing_diagnostic,
-            Some(crate::engine::CandidateBCrossingDiagnostic {
-                fast_crossings: 0,
-                fallbacks_to_a: 0,
-            }),
-            "Control A session must publish observed zeros for candidate B crossing counters"
-        );
-    }
 }
 
 #[cfg(feature = "real-input-acceptance")]
@@ -1634,7 +1620,8 @@ fn native_acceptance_lifecycle_evidence_unstarted_session_is_unavailable() {
     let session = NativeDispatchSession::new(options).expect("test session admission");
     let evidence = session.native_acceptance_lifecycle_evidence();
     assert_eq!(
-        evidence.candidate_b_crossing_diagnostic, None,
-        "Unstarted session must report candidate B crossing counters as unavailable"
+        evidence,
+        crate::engine::NativeAcceptanceLifecycleEvidence::default(),
+        "Unstarted session must report default unavailable lifecycle evidence"
     );
 }

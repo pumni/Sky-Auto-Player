@@ -652,12 +652,6 @@ pub(crate) struct SharedMetrics {
     pub(crate) terminal_release_raw_up_syscall_count: AtomicU64,
     #[cfg(feature = "real-input-acceptance")]
     pub(crate) terminal_release_raw_up_syscall_count_available: AtomicBool,
-    #[cfg(feature = "real-input-acceptance")]
-    pub(crate) candidate_b_fast_crossings: AtomicU64,
-    #[cfg(feature = "real-input-acceptance")]
-    pub(crate) candidate_b_fallbacks_to_a: AtomicU64,
-    #[cfg(feature = "real-input-acceptance")]
-    pub(crate) candidate_b_crossing_counters_available: AtomicBool,
     #[cfg(test)]
     pub(crate) publish_count: AtomicU64,
 }
