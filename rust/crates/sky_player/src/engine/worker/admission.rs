@@ -175,6 +175,7 @@ pub(crate) enum FinalDownVerdict {
     Allowed,
     ControlRejected,
     ModifierHeld(ModifierMask),
+    ModifierInconclusive,
     TargetChanged,
     FocusLost,
     OwnerRejected(OwnerAdmissionFailure),
@@ -275,6 +276,7 @@ pub(crate) fn final_down_modifier_verdict(backend: &TrackedKeyState) -> FinalDow
     match backend.observe_modifiers_before_down() {
         ModifierKeyObservation::NoHeldObserved => FinalDownVerdict::Allowed,
         ModifierKeyObservation::HeldObserved(mask) => FinalDownVerdict::ModifierHeld(mask),
+        ModifierKeyObservation::Inconclusive => FinalDownVerdict::ModifierInconclusive,
     }
 }
 
@@ -290,7 +292,9 @@ pub(crate) fn apply_final_down_rejection(
     let rejection = match verdict {
         FinalDownVerdict::Allowed => return,
         FinalDownVerdict::ControlRejected => FinalGateRejection::Control,
-        FinalDownVerdict::ModifierHeld(_) => FinalGateRejection::Modifier,
+        FinalDownVerdict::ModifierHeld(_) | FinalDownVerdict::ModifierInconclusive => {
+            FinalGateRejection::Modifier
+        }
         FinalDownVerdict::TargetChanged => FinalGateRejection::Target,
         FinalDownVerdict::FocusLost => FinalGateRejection::Focus,
         FinalDownVerdict::OwnerRejected(_) => FinalGateRejection::Owner,
@@ -307,6 +311,7 @@ pub(crate) fn apply_final_down_rejection(
         | FinalDownVerdict::LeaseUnproven => runtime.verified_target = None,
         FinalDownVerdict::Allowed
         | FinalDownVerdict::ModifierHeld(_)
+        | FinalDownVerdict::ModifierInconclusive
         | FinalDownVerdict::FocusLost => {}
     }
 }
@@ -689,6 +694,9 @@ pub(crate) fn verify_final_packet_admission(
             apply_final_down_rejection(modifier_verdict, runtime, metrics);
             return match modifier_verdict {
                 FinalDownVerdict::ModifierHeld(_) => FinalDownAdmissionResult::ModifierHeld,
+                FinalDownVerdict::ModifierInconclusive => {
+                    FinalDownAdmissionResult::Terminal("modifier_state_inconclusive".to_string())
+                }
                 _ => FinalDownAdmissionResult::Replan,
             };
         }

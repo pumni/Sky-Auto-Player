@@ -64,6 +64,8 @@ impl StartupCalibrationResult {
 /// alive. The direct desktop adapter consumes this same qualified safety
 /// boundary.
 pub const DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US: u64 = 3_000_000;
+/// Maximum soft-wait duration when musical Down is blocked by physically held modifiers.
+pub const DEFAULT_MODIFIER_HOLD_TIMEOUT_US: u64 = 2_000_000;
 
 #[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -295,6 +297,7 @@ pub struct StartupOrderingHook {
     fail_watchdog_spawn: AtomicBool,
     fail_observer_spawn: AtomicBool,
     fail_startup_epoch_conversion: AtomicBool,
+    fail_guarded_calibration_origin: AtomicBool,
     pub(crate) hol: hol::HolStallController,
     scheduling_threads:
         std::sync::Mutex<(Option<std::thread::ThreadId>, Option<std::thread::ThreadId>)>,
@@ -448,6 +451,16 @@ impl StartupOrderingHook {
 
     pub(crate) fn take_startup_epoch_conversion_failure(&self) -> bool {
         self.fail_startup_epoch_conversion
+            .swap(false, Ordering::AcqRel)
+    }
+
+    pub fn fail_next_guarded_calibration_origin(&self) {
+        self.fail_guarded_calibration_origin
+            .store(true, Ordering::Release);
+    }
+
+    pub(crate) fn take_guarded_calibration_origin_failure(&self) -> bool {
+        self.fail_guarded_calibration_origin
             .swap(false, Ordering::AcqRel)
     }
 
@@ -787,6 +800,7 @@ impl Default for WorkerConfig {
                 enable_waitable_timer: true,
                 enable_event_wait: true,
                 supervisor_lease_timeout_us: 0,
+                modifier_hold_timeout_us: DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
                 #[cfg(any(test, feature = "test-support"))]
                 test_spin_threshold_us: None,
                 #[cfg(any(test, feature = "test-support"))]
@@ -831,6 +845,7 @@ pub struct WaitOptions {
     pub enable_waitable_timer: bool,
     pub enable_event_wait: bool,
     pub supervisor_lease_timeout_us: u64,
+    pub modifier_hold_timeout_us: u64,
     /// Test-only early handoff margin. This seam keeps mock-session tests
     /// independent from host timer overshoot without changing authored
     /// targets or the production wait policy.
@@ -846,6 +861,7 @@ impl Default for WaitOptions {
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+            modifier_hold_timeout_us: DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
             #[cfg(any(test, feature = "test-support"))]
             test_spin_threshold_us: None,
             #[cfg(any(test, feature = "test-support"))]
@@ -929,6 +945,7 @@ mod tests {
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
+            modifier_hold_timeout_us: super::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
             test_spin_threshold_us: None,
             test_wait_policy: TestWaitPolicy::ProductionCalibrated,
         };

@@ -186,7 +186,7 @@ impl ReleaseOwnerProof {
     }
 }
 
-pub use modifier_guard::{ModifierKeyObservation, ModifierMask};
+pub use modifier_guard::{MODIFIER_QUERY_INCONCLUSIVE, ModifierKeyObservation, ModifierMask};
 pub use outcome::{
     CleanupDrainDecision, GuardedReleaseOutcome, PacketPreparationError, PacketRetryReason,
     PhysicalKeyPreflightError, PhysicalPacket, PlatformSendResult, ReleaseAllOutcome, SendEvidence,

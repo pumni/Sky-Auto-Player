@@ -2858,3 +2858,48 @@ fn focus_loss_during_post_wait_hook_never_sends_physical_down() {
         "physical send must NEVER be called when focus is lost during the post-wait hook"
     );
 }
+
+#[test]
+fn guarded_calibration_qpc_origin_failure_fails_closed_without_reusing_stale_now() {
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.fail_next_guarded_calibration_origin();
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.startup_calibration_placement =
+        crate::engine::StartupCalibrationPlacement::AfterSchedulingGuards;
+    options.wait.test_wait_policy = crate::engine::TestWaitPolicy::ProductionCalibrated;
+    options.startup_ordering_hook = Some(hook);
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.arm(100_000).expect("worker startup request");
+    assert!(
+        session
+            .join(Duration::from_secs(5))
+            .expect("calibration failure join")
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
+    assert_eq!(snapshot.outcome.as_deref(), Some("error"));
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("startup_failure")
+    );
+    assert!(
+        snapshot
+            .terminal_error
+            .as_ref()
+            .unwrap()
+            .contains("guarded calibration")
+    );
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+}

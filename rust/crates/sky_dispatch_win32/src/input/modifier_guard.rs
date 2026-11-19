@@ -32,11 +32,15 @@ impl ModifierMask {
     }
 }
 
+/// Inconclusive sentinel for key-state queries when observation fails or is ambiguous.
+pub const MODIFIER_QUERY_INCONCLUSIVE: i16 = 0x7FFF;
+
 /// Final modifier evidence. Zero API results mean only that no held bit was observed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModifierKeyObservation {
     NoHeldObserved,
     HeldObserved(ModifierMask),
+    Inconclusive,
 }
 
 /// Query exactly the five supported modifiers. `GetAsyncKeyState` has no
@@ -53,7 +57,11 @@ pub(crate) fn observe_modifier_keys_with(
 ) -> ModifierKeyObservation {
     let mut held_mask = 0u8;
     for (virtual_key, mask) in MODIFIER_VKS {
-        if (query(virtual_key) as u16 & 0x8000) != 0 {
+        let state = query(virtual_key);
+        if state == MODIFIER_QUERY_INCONCLUSIVE {
+            return ModifierKeyObservation::Inconclusive;
+        }
+        if (state as u16 & 0x8000) != 0 {
             held_mask |= mask;
         }
     }
@@ -116,5 +124,20 @@ mod tests {
             assert_eq!(observation, ModifierKeyObservation::NoHeldObserved);
             assert_eq!(calls, 5);
         }
+    }
+
+    #[test]
+    fn inconclusive_query_returns_inconclusive_observation() {
+        use super::MODIFIER_QUERY_INCONCLUSIVE;
+        let mut calls = 0;
+        let observation = observe_modifier_keys_with(|_| {
+            calls += 1;
+            MODIFIER_QUERY_INCONCLUSIVE
+        });
+        assert_eq!(observation, ModifierKeyObservation::Inconclusive);
+        assert_eq!(
+            calls, 1,
+            "fails closed immediately on first inconclusive query"
+        );
     }
 }

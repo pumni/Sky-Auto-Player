@@ -49,6 +49,7 @@ pub(super) fn test_session_options_with_timing_margin(
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
+            modifier_hold_timeout_us: crate::engine::config::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
             test_spin_threshold_us: Some(20_000),
             #[cfg(any(test, feature = "test-support"))]
             test_wait_policy: super::TestWaitPolicy::LegacyTestWideSpin,

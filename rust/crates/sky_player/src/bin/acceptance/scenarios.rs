@@ -640,6 +640,7 @@ pub(super) fn production_options_for_fps(
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+            modifier_hold_timeout_us: sky_player::engine::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
             #[cfg(feature = "test-support")]
             test_spin_threshold_us: None,
             #[cfg(feature = "test-support")]

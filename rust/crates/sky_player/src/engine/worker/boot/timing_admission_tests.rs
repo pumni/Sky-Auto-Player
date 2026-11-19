@@ -12,6 +12,7 @@ fn options(enable_waitable_timer: bool, enable_event_wait: bool) -> WaitOptions 
         enable_waitable_timer,
         enable_event_wait,
         supervisor_lease_timeout_us: 0,
+        modifier_hold_timeout_us: crate::engine::config::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
         #[cfg(any(test, feature = "test-support"))]
         test_spin_threshold_us: None,
         #[cfg(any(test, feature = "test-support"))]

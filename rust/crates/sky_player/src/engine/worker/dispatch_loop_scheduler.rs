@@ -37,6 +37,7 @@ enum ModifierWaitResult {
 fn wait_after_modifier_held(
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
     next_active_up_deadline: Option<sky_dispatch_win32::clock::QpcTicks>,
+    max_hold_deadline: Option<sky_dispatch_win32::clock::QpcTicks>,
     qpc_clock: sky_dispatch_win32::clock::QpcClock,
     wait: impl FnOnce(
         sky_dispatch_win32::clock::QpcClock,
@@ -47,6 +48,7 @@ fn wait_after_modifier_held(
     let Some(deadline) = modifier_replan_deadline(
         now_qpc,
         next_active_up_deadline,
+        max_hold_deadline,
         qpc_clock,
     )? else {
         // Re-enter the normal scheduler immediately for an already-due Up.
@@ -165,14 +167,21 @@ fn attribute_modifier_up_deadline_wake(
 fn modifier_replan_deadline(
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
     next_active_up_deadline: Option<sky_dispatch_win32::clock::QpcTicks>,
+    max_hold_deadline: Option<sky_dispatch_win32::clock::QpcTicks>,
     qpc_clock: sky_dispatch_win32::clock::QpcClock,
 ) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
     let interval = qpc_clock
         .duration_from_us(MODIFIER_REPLAN_INTERVAL_US)
         .map_err(|error| format!("modifier replan interval conversion failed: {error:?}"))?;
-    let poll_deadline = now_qpc
+    let mut poll_deadline = now_qpc
         .checked_add_duration(interval)
         .map_err(|error| format!("modifier replan deadline overflow: {error}"))?;
+    if let Some(max_deadline) = max_hold_deadline {
+        if max_deadline <= now_qpc {
+            return Ok(None);
+        }
+        poll_deadline = poll_deadline.min(max_deadline);
+    }
     let deadline = match next_active_up_deadline {
         Some(up_deadline) if up_deadline <= now_qpc => return Ok(None),
         Some(up_deadline) => poll_deadline.min(up_deadline),
@@ -494,6 +503,7 @@ mod scheduler_tests {
         let waited = wait_after_modifier_held(
             now,
             Some(up_deadline),
+            None,
             clock,
             |actual_clock, deadline, spin| {
                 assert_eq!(actual_clock, clock);
@@ -550,7 +560,7 @@ mod scheduler_tests {
         let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
         let now = QpcTicks::from_raw(19_500);
         let poll_deadline = QpcTicks::from_raw(20_500);
-        let poll = wait_after_modifier_held(now, None, clock, |_, deadline, spin| {
+        let poll = wait_after_modifier_held(now, None, None, clock, |_, deadline, spin| {
             assert_eq!(deadline, poll_deadline);
             assert_eq!(spin, DurationTicks::ZERO);
             controlled_wait_result(WaitOutcome::Interrupted, None)
@@ -581,7 +591,7 @@ mod scheduler_tests {
         assert_eq!(metrics.spin_observation_expected_samples, 0);
         assert_eq!(queue.len(), 0, "maintenance poll must not enter wait observer");
 
-        let failure = wait_after_modifier_held(now, None, clock, |_, deadline, _| {
+        let failure = wait_after_modifier_held(now, None, None, clock, |_, deadline, _| {
             assert_eq!(deadline, poll_deadline);
             controlled_wait_result(
                 WaitOutcome::Failed(WaitFailure::TimerWait { win32_error: 5 }),
@@ -605,7 +615,7 @@ mod scheduler_tests {
     fn already_due_modifier_up_does_not_arm_wait_or_poll_observer() {
         let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
         let now = QpcTicks::from_raw(20_000);
-        let waited = wait_after_modifier_held(now, Some(now), clock, |_, _, _| {
+        let waited = wait_after_modifier_held(now, Some(now), None, clock, |_, _, _| {
             panic!("already-due Up must not arm a zero-length wait")
         })
         .expect("already-due Up");
@@ -624,7 +634,7 @@ mod scheduler_tests {
         let clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
         let now = QpcTicks::from_raw(19_500);
         let deadline = QpcTicks::from_raw(20_000);
-        let waited = wait_after_modifier_held(now, Some(deadline), clock, |_, _, _| {
+        let waited = wait_after_modifier_held(now, Some(deadline), None, clock, |_, _, _| {
             controlled_wait_result(WaitOutcome::Deadline, Some(deadline))
         })
         .expect("observer-off Up wait");
@@ -637,7 +647,7 @@ mod scheduler_tests {
         assert_eq!(metrics.spin_observation_expected_samples, 1);
         assert_eq!(metrics.spin_observation_missing_samples, 1);
 
-        let interrupted = wait_after_modifier_held(now, Some(deadline), clock, |_, _, _| {
+        let interrupted = wait_after_modifier_held(now, Some(deadline), None, clock, |_, _, _| {
             controlled_wait_result(WaitOutcome::Interrupted, None)
         })
         .expect("interrupted Up wait");
@@ -786,7 +796,7 @@ mod scheduler_tests {
             }
         ));
 
-        let deadline = modifier_replan_deadline(at_19_5ms, Some(active_up_deadline), clock)
+        let deadline = modifier_replan_deadline(at_19_5ms, Some(active_up_deadline), None, clock)
             .expect("modifier deadline calculation")
             .expect("future Up needs an interruptible wait");
         assert_eq!(deadline, active_up_deadline);
@@ -805,7 +815,7 @@ mod scheduler_tests {
             }
         ));
         assert_eq!(
-            modifier_replan_deadline(at_20ms, Some(active_up_deadline), clock)
+            modifier_replan_deadline(at_20ms, Some(active_up_deadline), None, clock)
                 .expect("already-due Up calculation"),
             None,
             "an already-due Up replans immediately without arming a busy wait"
@@ -819,17 +829,29 @@ mod scheduler_tests {
         let poll = QpcTicks::from_raw(20_500);
         let due = QpcTicks::from_raw(20_000);
         assert_eq!(
-            modifier_replan_deadline(now, Some(QpcTicks::from_raw(21_000)), clock)
+            modifier_replan_deadline(now, Some(QpcTicks::from_raw(21_000)), None, clock)
                 .expect("later Up deadline"),
             Some(poll)
         );
         assert_eq!(
-            modifier_replan_deadline(now, None, clock).expect("no active Up"),
+            modifier_replan_deadline(now, None, None, clock).expect("no active Up"),
             Some(poll)
         );
         assert_eq!(
-            modifier_replan_deadline(now, Some(due), clock).expect("Up inside poll quantum"),
+            modifier_replan_deadline(now, Some(due), None, clock).expect("Up inside poll quantum"),
             Some(due)
+        );
+
+        // Bounded deadline capping:
+        let max_early = QpcTicks::from_raw(20_200);
+        assert_eq!(
+            modifier_replan_deadline(now, None, Some(max_early), clock).expect("capped deadline"),
+            Some(max_early)
+        );
+        let max_expired = QpcTicks::from_raw(19_500);
+        assert_eq!(
+            modifier_replan_deadline(now, None, Some(max_expired), clock).expect("expired deadline"),
+            None
         );
     }
 

@@ -185,14 +185,6 @@ pub(crate) fn publish_live_metrics_after_dispatch(
     });
 }
 
-#[inline]
-pub(crate) const fn preroll_manual_pause_cancels(
-    manual_pause: bool,
-    musical_physical_attempt_started: bool,
-) -> bool {
-    manual_pause && !musical_physical_attempt_started
-}
-
 #[cfg(test)]
 fn suspend_live_input_for_dispatch(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
@@ -418,6 +410,8 @@ struct DispatchReplanWaitContext<'a> {
     target: &'a SessionTarget,
     control_signals: FinalControlSignals<'a>,
     modifier_held: bool,
+    focus_active: bool,
+    require_focus: bool,
 }
 
 /// Apply the worker-loop policy after final packet admission requests replan.
@@ -429,6 +423,9 @@ fn dispatch_replan_action(context: DispatchReplanWaitContext<'_>) -> DispatchRep
         FinalControlAdmission::Allowed
     );
     if !controls_allow_wait {
+        return DispatchReplanAction::ContinueImmediately;
+    }
+    if context.require_focus && !context.focus_active {
         return DispatchReplanAction::ContinueImmediately;
     }
     if !context.target.is_valid() {
@@ -1331,14 +1328,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 command_timing.observe_pause(observed_ticks);
             }
 
-            if preroll_manual_pause_cancels(
-                manual_pause,
-                core.runtime.musical_physical_attempt_started,
-            ) {
-                core.runtime.terminal_error = Some("manual_pause_during_preroll".to_string());
-                break;
-            }
-
             if !focus_ok {
                 let entered_focus_pause = match enter_focus_pause(
                     &mut resources.playback,
@@ -1771,6 +1760,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             let paused = resources.playback.is_paused();
             metrics.is_paused.store(paused, Ordering::Relaxed);
             if paused {
+                core.runtime.modifier_hold_started_ticks = None;
                 let target_snapshot = target.load_stable();
                 let focus_snapshot = focus_matches(config.focus.require_focus, focus_active);
                 let focus_grace_deadline = match paused_focus_grace_deadline(
@@ -2145,7 +2135,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 &mut core.metrics,
                 core.observer.pending.as_ref(),
             ) {
-                DispatchAttemptOutcome::Dispatched => continue,
+                DispatchAttemptOutcome::Dispatched => {
+                    core.runtime.modifier_hold_started_ticks = None;
+                    continue;
+                }
                 DispatchAttemptOutcome::Replan => {
                     super::dispatch::publish_pending_wait_observation(
                         &mut core.runtime,
@@ -2163,6 +2156,8 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             system_power: Some(system_power),
                         },
                         modifier_held: false,
+                        focus_active: focus_matches(config.focus.require_focus, focus_active),
+                        require_focus: config.focus.require_focus,
                     });
                     match replan_action {
                         DispatchReplanAction::ContinueImmediately => {}
@@ -2187,6 +2182,26 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         core.observer.pending.as_ref(),
                         &mut core.metrics,
                     );
+                    let now_qpc = qpc_ticks_or_terminal!();
+                    let hold_started = *core
+                        .runtime
+                        .modifier_hold_started_ticks
+                        .get_or_insert(now_qpc);
+                    let hold_elapsed = match now_qpc.checked_duration_since(hold_started) {
+                        Ok(duration) => duration,
+                        Err(error) => {
+                            core.runtime.terminal_error =
+                                Some(format!("modifier hold clock failure: {error}"));
+                            break;
+                        }
+                    };
+                    if timing.modifier_hold_timeout_ticks > DurationTicks::ZERO
+                        && hold_elapsed >= timing.modifier_hold_timeout_ticks
+                    {
+                        core.runtime.terminal_error =
+                            Some("modifier held exceeded bounded wait deadline".to_string());
+                        break;
+                    }
                     let replan_action = dispatch_replan_action(DispatchReplanWaitContext {
                         target,
                         control_signals: FinalControlSignals {
@@ -2198,11 +2213,12 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             system_power: Some(system_power),
                         },
                         modifier_held: true,
+                        focus_active: focus_matches(config.focus.require_focus, focus_active),
+                        require_focus: config.focus.require_focus,
                     });
                     match replan_action {
                         DispatchReplanAction::ContinueImmediately => {}
                         DispatchReplanAction::WaitForModifier => {
-                            let now_qpc = qpc_ticks_or_terminal!();
                             let next_active_up_deadline = resources
                                 .scheduler
                                 .earliest_active_up_due_qpc(resources.playback.epoch)
@@ -2216,9 +2232,18 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                     break;
                                 }
                             };
+                            let max_hold_deadline =
+                                if timing.modifier_hold_timeout_ticks > DurationTicks::ZERO {
+                                    hold_started
+                                        .checked_add_duration(timing.modifier_hold_timeout_ticks)
+                                        .ok()
+                                } else {
+                                    None
+                                };
                             let modifier_wait = wait_after_modifier_held(
                                 now_qpc,
                                 next_active_up_deadline,
+                                max_hold_deadline,
                                 qpc_clock,
                                 |clock, deadline, spin_threshold| {
                                     resources.waiter.wait_until_ticks_with_metrics_typed(

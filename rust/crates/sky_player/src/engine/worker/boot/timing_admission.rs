@@ -34,6 +34,9 @@ pub(super) fn convert(
     let lease_timeout_ticks = qpc_clock
         .duration_from_us(config.wait.supervisor_lease_timeout_us)
         .map_err(|error| format!("lease timeout conversion failed: {error:?}"))?;
+    let modifier_hold_timeout_ticks = qpc_clock
+        .duration_from_us(config.wait.modifier_hold_timeout_us)
+        .map_err(|error| format!("modifier hold timeout conversion failed: {error:?}"))?;
 
     let pre_call_250us_ticks = qpc_clock
         .duration_from_us(250)
@@ -73,6 +76,7 @@ pub(super) fn convert(
             strict_down_completion_late_ticks,
             strict_up_completion_late_ticks,
             focus_restore_grace_ticks,
+            modifier_hold_timeout_ticks,
             lease_timeout_ticks,
             effective_spin_threshold_ticks: DurationTicks::ZERO,
             pre_call_250us_ticks,

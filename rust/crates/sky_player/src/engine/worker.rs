@@ -212,6 +212,7 @@ pub(crate) struct WorkerRuntime {
     pub(crate) final_lease_qpc_sample_override_for_test:
         Option<Result<QpcTicks, sky_dispatch_win32::clock::QpcError>>,
     focus_restore_started_ticks: Option<QpcTicks>,
+    pub(crate) modifier_hold_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,
     pub(crate) pending_wait_observation: Option<WaitObservation>,
     /// Measured completion boundary of the most recent physical sender
@@ -348,6 +349,7 @@ pub(crate) struct WorkerTimingState {
     pub(super) strict_down_completion_late_ticks: DurationTicks,
     pub(super) strict_up_completion_late_ticks: DurationTicks,
     pub(super) focus_restore_grace_ticks: DurationTicks,
+    pub(crate) modifier_hold_timeout_ticks: DurationTicks,
     pub(crate) lease_timeout_ticks: DurationTicks,
     pub(crate) effective_spin_threshold_ticks: DurationTicks,
     /// First QPC tick whose floored public duration is strictly over the
@@ -376,6 +378,7 @@ impl WorkerTimingState {
             strict_down_completion_late_ticks: DurationTicks::ZERO,
             strict_up_completion_late_ticks: DurationTicks::ZERO,
             focus_restore_grace_ticks: DurationTicks::ZERO,
+            modifier_hold_timeout_ticks: DurationTicks::from_raw(20_000_000),
             lease_timeout_ticks: DurationTicks::ZERO,
             effective_spin_threshold_ticks: DurationTicks::ZERO,
             // Test harnesses replace these with the captured clock-domain

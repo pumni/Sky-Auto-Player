@@ -436,6 +436,109 @@ fn progress_snapshot_freezes_for_manual_pause_and_resumes_afterward() {
 }
 
 #[test]
+fn preroll_manual_pause_retains_countdown_and_resumes_without_error() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 100_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "preroll-pause-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 200_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "preroll-pause-up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("compile schedule");
+    let mut options = support::test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.telemetry.mode = TelemetryMode::Off;
+
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session.bind_initial_target_for_test(123);
+    session.set_focus_hint(true);
+    // Arm with 300ms pre-roll.
+    session.arm(300_000).expect("arm request");
+
+    // Wait until preroll is active.
+    let preroll_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot_lite();
+        if snapshot.is_running && snapshot.status == EnginePollStatus::Preroll.as_str() {
+            break;
+        }
+        assert!(
+            Instant::now() < preroll_deadline,
+            "preroll did not start: {snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Pause during preroll.
+    session.pause().expect("pause during preroll");
+    let pause_deadline = Instant::now() + Duration::from_secs(2);
+    let paused_remaining = loop {
+        let snapshot = session.snapshot_lite();
+        if snapshot.is_paused {
+            break snapshot.pre_roll_remaining_us;
+        }
+        assert!(
+            Instant::now() < pause_deadline,
+            "preroll pause not acknowledged: {snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(
+        paused_remaining > 50_000,
+        "pre_roll_remaining_us should reflect retained countdown: {paused_remaining}"
+    );
+
+    // Sleep 100ms while paused.
+    std::thread::sleep(Duration::from_millis(100));
+    let after_sleep_remaining = session.snapshot_lite().pre_roll_remaining_us;
+    assert_eq!(
+        paused_remaining, after_sleep_remaining,
+        "pre_roll_remaining_us must retain its countdown while paused"
+    );
+
+    // Resume playback.
+    session.resume().expect("resume after preroll pause");
+    let resume_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot_lite();
+        if !snapshot.is_paused {
+            break;
+        }
+        assert!(
+            Instant::now() < resume_deadline,
+            "session did not unpause: {snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Worker must finish successfully without terminal error.
+    assert!(
+        session.join(Duration::from_secs(5)).expect("worker join"),
+        "worker must join after resume"
+    );
+    let final_snapshot = session.snapshot();
+    assert_eq!(final_snapshot.terminal_error, None);
+    assert_eq!(final_snapshot.status, EnginePollStatus::Finished.as_str());
+}
+
+#[test]
 fn native_telemetry_does_not_block_dispatch() {
     let actions: Vec<KeyActionInput> = (0_u32..3)
         .flat_map(|index| {

@@ -521,7 +521,24 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     if production_wait
         && calibration_placement == StartupCalibrationPlacement::AfterSchedulingGuards
     {
-        let calibration_origin_ticks = qpc_clock.now().unwrap_or(initial_now_ticks);
+        #[cfg(any(test, feature = "test-support"))]
+        if startup_hook.is_some_and(|hook| hook.take_guarded_calibration_origin_failure()) {
+            return admission_failure(
+                &mut backend,
+                metrics,
+                "QPC counter unavailable before guarded calibration: InjectedFailure".to_string(),
+            );
+        }
+        let calibration_origin_ticks = match qpc_clock.now() {
+            Ok(ticks) => ticks,
+            Err(error) => {
+                return admission_failure(
+                    &mut backend,
+                    metrics,
+                    format!("QPC counter unavailable before guarded calibration: {error:?}"),
+                );
+            }
+        };
         calibration = measure_startup_calibration(
             shared,
             config.focus.require_focus && schedule_has_down,

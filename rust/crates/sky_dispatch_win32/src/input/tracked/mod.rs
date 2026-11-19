@@ -131,6 +131,8 @@ pub struct TrackedKeyState {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) modifier_key_state_query: Option<ModifierKeyStateQuery>,
     #[cfg(any(test, feature = "test-support"))]
+    pub(crate) force_modifier_inconclusive: bool,
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) force_preflight_failure: Option<Arc<AtomicBool>>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) force_preflight_user_held_mask: Option<u16>,

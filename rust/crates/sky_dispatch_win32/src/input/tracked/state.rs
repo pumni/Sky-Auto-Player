@@ -202,10 +202,19 @@ impl TrackedKeyState {
     #[inline]
     pub fn observe_modifiers_before_down(&self) -> ModifierKeyObservation {
         #[cfg(any(test, feature = "test-support"))]
+        if self.force_modifier_inconclusive {
+            return ModifierKeyObservation::Inconclusive;
+        }
+        #[cfg(any(test, feature = "test-support"))]
         if let Some(query) = self.modifier_key_state_query.as_ref() {
             return observe_modifier_keys_with(query.as_ref());
         }
         observe_current_modifier_keys()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_force_modifier_inconclusive_for_test(&mut self, inconclusive: bool) {
+        self.force_modifier_inconclusive = inconclusive;
     }
 
     #[cfg(any(test, feature = "test-support"))]

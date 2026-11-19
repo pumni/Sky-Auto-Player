@@ -467,7 +467,7 @@ impl NativeDispatchSession {
         let elapsed_us = anchor
             .map(|value| value.elapsed_us(now_qpc, qpc_clock))
             .unwrap_or_default();
-        let pre_roll_remaining_us = self.pre_roll_remaining_at(now_qpc, qpc_clock);
+        let pre_roll_remaining_us = self.pre_roll_remaining_at(now_qpc, anchor, qpc_clock);
         (
             ((elapsed_us, exposed_paused), pre_roll_remaining_us),
             startup,
@@ -962,13 +962,25 @@ impl NativeDispatchSession {
         )
     }
 
-    fn pre_roll_remaining_at(&self, now: QpcTicks, clock: QpcClock) -> u64 {
+    fn pre_roll_remaining_at(
+        &self,
+        now: QpcTicks,
+        anchor: Option<crate::engine::shared::ProgressClockSnapshot>,
+        clock: QpcClock,
+    ) -> u64 {
         let epoch_raw = self.shared.publication.epoch_qpc.load(Ordering::Acquire);
         if epoch_raw == 0 {
             return 0;
         }
         let epoch = QpcTicks::from_raw(epoch_raw);
-        let Ok(remaining) = epoch.checked_duration_since(now) else {
+        let reference_now = if let Some(anchor) = anchor
+            && (anchor.paused || anchor.frozen)
+        {
+            anchor.pause_started_qpc.unwrap_or(now)
+        } else {
+            now
+        };
+        let Ok(remaining) = epoch.checked_duration_since(reference_now) else {
             return 0;
         };
         clock.duration_to_us(remaining).unwrap_or_default()
