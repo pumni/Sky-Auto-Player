@@ -3,15 +3,20 @@ use super::super::{
     DurationTicks, QpcError, TimelineTicks, publish_lifecycle_metrics,
     try_publish_metrics_with_update,
 };
-use super::admission::{FinalControlAdmission, final_control_precheck};
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(crate) use super::admission::verify_final_down_admission;
+use super::admission::{
+    FinalControlAdmission, MusicalPacketKind, final_control_precheck, perform_candidate_b_precheck,
+    verify_candidate_b_crossing, verify_final_packet_admission,
+};
 use super::{
     CommandControl, CommandControlInput, CommandControlRuntime, CommandControlSignals,
     FinalControlSignals, FinalDownAdmissionResult, TargetStamp, WaitBoundary, WaitBoundaryInput,
     WaitDeadline, WaitMutable, WaitSignals, Worker, ensure_preflight_for_target, enter_focus_pause,
     focus_matches, focus_matches_hwnd, load_target_stamp, process_command_control,
     publish_backend_counters, publish_backend_metrics, record_wait_failure,
-    target_stamp_still_current, verify_final_down_admission, verify_final_musical_up_admission,
-    wait_for_next_boundary,
+    target_stamp_still_current, wait_for_next_boundary,
 };
 #[cfg(any(test, feature = "test-support"))]
 use crate::engine::test_support::PacketSenderAttemptEvidence;
@@ -592,12 +597,15 @@ pub(crate) fn dispatch_staged_candidate(
         hook.maybe_inject_hol_stall(candidate.packet_masks.down_mask, source_idx, qpc_clock);
     }
 
-    if candidate.up_mask != 0 && candidate.up_slot_timing_summary.is_none() {
+    if candidate.packet_masks.up_mask != 0 && candidate.up_slot_timing_summary.is_none() {
         runtime.terminal_error =
             Some("missing Up slot timing summary in staged candidate".to_string());
         return DispatchAttemptOutcome::Exit;
     }
-    if observer.is_some() && candidate.up_mask != 0 && candidate.up_slot_timings.is_none() {
+    if observer.is_some()
+        && candidate.packet_masks.up_mask != 0
+        && candidate.up_slot_timings.is_none()
+    {
         runtime.terminal_error =
             Some("observer Up-slot attribution missing from staged candidate".to_string());
         return DispatchAttemptOutcome::Exit;
@@ -614,49 +622,23 @@ pub(crate) fn dispatch_staged_candidate(
     let expected_target = candidate
         .target_stamp
         .expect("musical packet target stamp is captured during staging");
-    if resources.backend.session_release_owner_proof().is_none() {
-        if config.focus.require_focus
-            || candidate.packet_masks.down_mask == 0
-            || resources.backend.release_obligation_mask() != 0
-        {
-            runtime.terminal_error = Some(
-                "session release owner proof is missing at physical packet sender".to_string(),
-            );
-            return DispatchAttemptOutcome::Exit;
-        }
-        let Some(proof) = sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
-            expected_target.hwnd,
-            expected_target.generation,
-            None,
-            None,
-            config.focus.require_focus,
-        ) else {
-            runtime.terminal_error =
-                Some("session release owner proof could not bind to the packet target".to_string());
-            return DispatchAttemptOutcome::Exit;
-        };
-        if let Err(error) = resources.backend.bind_session_release_owner(proof) {
-            runtime.terminal_error = Some(error);
-            return DispatchAttemptOutcome::Exit;
-        }
-    }
-    let up_origin = if candidate.up_mask != 0 {
+    let up_origin = if candidate.packet_masks.up_mask != 0 {
         match resources
             .backend
-            .release_owner_proof_for_mask(candidate.up_mask)
+            .release_owner_proof_for_mask(candidate.packet_masks.up_mask)
         {
             Ok(Some(proof)) => Some(proof),
             Ok(None) => {
                 runtime.terminal_error = Some(format!(
                     "musical Up owner proof is missing for mask 0x{:04x}; release obligation retained",
-                    candidate.up_mask
+                    candidate.packet_masks.up_mask
                 ));
                 return DispatchAttemptOutcome::Exit;
             }
             Err(error) => {
                 runtime.terminal_error = Some(format!(
                     "musical Up owner proof is missing or conflicted for mask 0x{:04x}; release obligation retained: {error}",
-                    candidate.up_mask
+                    candidate.packet_masks.up_mask
                 ));
                 return DispatchAttemptOutcome::Exit;
             }
@@ -664,8 +646,20 @@ pub(crate) fn dispatch_staged_candidate(
     } else {
         None
     };
-    if has_down {
-        match verify_final_down_admission(
+
+    let packet_kind = MusicalPacketKind::from_masks(
+        candidate.packet_masks.down_mask,
+        candidate.packet_masks.up_mask,
+    )
+    .expect("musical packet has non-zero mask");
+
+    let is_candidate_b = config.admission_variant == super::super::config::AdmissionVariant::B
+        && target.owner_process_identity_required();
+
+    let pending_precheck = runtime.candidate_b_pending_precheck.take();
+    let (admission_result, fast_path_taken) = if is_candidate_b {
+        let (res, fast) = verify_candidate_b_crossing(
+            pending_precheck.as_ref(),
             target,
             expected_target,
             config.focus.require_focus,
@@ -678,12 +672,42 @@ pub(crate) fn dispatch_staged_candidate(
             &mut resources.playback,
             runtime,
             local_metrics,
-        ) {
-            FinalDownAdmissionResult::Allowed => {}
-            admission_result @ (FinalDownAdmissionResult::Replan
-            | FinalDownAdmissionResult::ModifierHeld) => {
-                let modifier_held =
-                    matches!(admission_result, FinalDownAdmissionResult::ModifierHeld);
+            packet_kind,
+        );
+        if fast {
+            runtime.candidate_b_fast_crossings =
+                runtime.candidate_b_fast_crossings.saturating_add(1);
+        } else {
+            runtime.candidate_b_fallbacks_to_a =
+                runtime.candidate_b_fallbacks_to_a.saturating_add(1);
+        }
+        (res, fast)
+    } else {
+        (
+            verify_final_packet_admission(
+                target,
+                expected_target,
+                config.focus.require_focus,
+                focus_active,
+                control_signals,
+                timing.lease_timeout_ticks,
+                qpc_clock,
+                progress_clock,
+                &resources.backend,
+                &mut resources.playback,
+                runtime,
+                local_metrics,
+                packet_kind,
+            ),
+            false,
+        )
+    };
+    let _ = fast_path_taken;
+
+    match admission_result {
+        FinalDownAdmissionResult::Allowed => {}
+        FinalDownAdmissionResult::ModifierHeld => {
+            if packet_kind.has_up() {
                 match stage_up_only_for_mixed_replan(
                     &candidate,
                     SchedulerStageAdmission {
@@ -723,66 +747,70 @@ pub(crate) fn dispatch_staged_candidate(
                             observer,
                         );
                     }
-                    Ok(None) => {
-                        return if modifier_held {
-                            DispatchAttemptOutcome::ModifierHeld
-                        } else {
-                            DispatchAttemptOutcome::Replan
-                        };
-                    }
+                    Ok(None) => return DispatchAttemptOutcome::ModifierHeld,
                     Err(error) => {
                         runtime.terminal_error = Some(error);
                         return DispatchAttemptOutcome::Exit;
                     }
                 }
-            }
-            FinalDownAdmissionResult::Terminal(err) => {
-                runtime.terminal_error = Some(gate_rejection_record(&candidate, &err));
-                return DispatchAttemptOutcome::Exit;
+            } else {
+                return DispatchAttemptOutcome::ModifierHeld;
             }
         }
-    } else {
-        let control_signals = FinalControlSignals {
-            quit_requested,
-            skip_requested,
-            panic_requested,
-            desired_pause,
-            supervisor_expired,
-            system_power: Some(system_power),
-        };
-        match final_control_precheck(control_signals) {
-            FinalControlAdmission::Allowed => {}
-            FinalControlAdmission::PauseRequested => return DispatchAttemptOutcome::Replan,
-            FinalControlAdmission::SystemSuspendRequested => {
-                runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
-                return DispatchAttemptOutcome::Exit;
+        FinalDownAdmissionResult::Replan => {
+            if packet_kind.has_up() && packet_kind.has_down() {
+                match stage_up_only_for_mixed_replan(
+                    &candidate,
+                    SchedulerStageAdmission {
+                        target,
+                        require_focus: config.focus.require_focus,
+                        focus_active,
+                        capture_up_slot_timings: observer.is_some(),
+                        control_signals,
+                    },
+                    resources,
+                    runtime,
+                ) {
+                    Ok(Some(up_only)) => {
+                        let fallback_ctx = StagedDispatchContext {
+                            target,
+                            config,
+                            control: StagedControlSignals {
+                                focus_active,
+                                quit_requested,
+                                skip_requested,
+                                panic_requested,
+                                desired_pause,
+                                supervisor_expired,
+                                system_power,
+                            },
+                            timing,
+                            qpc_clock,
+                            progress_clock,
+                            metrics,
+                        };
+                        return dispatch_staged_candidate(
+                            up_only,
+                            fallback_ctx,
+                            resources,
+                            runtime,
+                            local_metrics,
+                            observer,
+                        );
+                    }
+                    Ok(None) => return DispatchAttemptOutcome::Replan,
+                    Err(error) => {
+                        runtime.terminal_error = Some(error);
+                        return DispatchAttemptOutcome::Exit;
+                    }
+                }
+            } else {
+                return DispatchAttemptOutcome::Replan;
             }
-            FinalControlAdmission::PanicRequested
-            | FinalControlAdmission::QuitRequested
-            | FinalControlAdmission::SkipRequested => return DispatchAttemptOutcome::Exit,
         }
-        match verify_final_musical_up_admission(
-            target,
-            expected_target,
-            config.focus.require_focus,
-            focus_active,
-            control_signals,
-            timing.lease_timeout_ticks,
-            qpc_clock,
-            progress_clock,
-            &resources.backend,
-            &mut resources.playback,
-            runtime,
-            local_metrics,
-        ) {
-            FinalDownAdmissionResult::Allowed => {}
-            // Musical Up admission explicitly does not query modifiers.
-            FinalDownAdmissionResult::ModifierHeld => return DispatchAttemptOutcome::Replan,
-            FinalDownAdmissionResult::Replan => return DispatchAttemptOutcome::Replan,
-            FinalDownAdmissionResult::Terminal(error) => {
-                runtime.terminal_error = Some(gate_rejection_record(&candidate, &error));
-                return DispatchAttemptOutcome::Exit;
-            }
+        FinalDownAdmissionResult::Terminal(err) => {
+            runtime.terminal_error = Some(gate_rejection_record(&candidate, &err));
+            return DispatchAttemptOutcome::Exit;
         }
     }
 
@@ -2115,6 +2143,41 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             let Some(candidate) = candidate else {
                 continue;
             };
+            if config.admission_variant == super::super::config::AdmissionVariant::B
+                && target.owner_process_identity_required()
+                && let Some(expected_target) = candidate.target_stamp
+            {
+                let precheck_signals = FinalControlSignals {
+                    quit_requested,
+                    skip_requested,
+                    panic_requested,
+                    desired_pause,
+                    supervisor_expired,
+                    system_power: Some(system_power),
+                };
+                let packet_kind = MusicalPacketKind::from_masks(
+                    candidate.packet_masks.down_mask,
+                    candidate.packet_masks.up_mask,
+                )
+                .expect("candidate has non-zero mask");
+                let max_proof_age_ticks = qpc_clock
+                    .duration_from_us(500)
+                    .unwrap_or(DurationTicks::ZERO);
+                if let Ok(proof) = perform_candidate_b_precheck(
+                    target,
+                    expected_target,
+                    config.focus.require_focus,
+                    focus_active,
+                    precheck_signals,
+                    timing.lease_timeout_ticks,
+                    qpc_clock,
+                    &resources.backend,
+                    packet_kind,
+                    max_proof_age_ticks,
+                ) {
+                    core.runtime.candidate_b_pending_precheck = Some(proof);
+                }
+            }
             let ctx = StagedDispatchContext {
                 target,
                 config,
@@ -2297,6 +2360,8 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
 
 #[cfg(test)]
 mod tests {
+    #[path = "../../dispatch_loop_candidate_b_tests.rs"]
+    mod candidate_b;
     #[path = "../../dispatch_loop_deadline_hg_projection_tests.rs"]
     mod deadline_hg_projection;
     #[path = "../../dispatch_loop_deadline_late_due_tests.rs"]
