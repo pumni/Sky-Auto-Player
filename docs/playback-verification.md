@@ -82,8 +82,8 @@ Build exact baseline and candidate manifests from detached, clean source trees
 with **scripts/build_dispatch_core_harness.ps1**, using profile
 **PlaybackCoreLifecycle**, roles **Baseline** and **Candidate**, and separate
 output roots outside the checkouts. The baseline is immutable. The candidate
-manifest must bind the exact final D SHA and tree; a manifest built from an
-earlier revision is not reusable.
+manifest must bind the exact candidate SHA and tree for the run; a manifest
+built from an earlier revision is not reusable.
 
 Use the same pinned builder for each role:
 
@@ -129,6 +129,30 @@ QPC sampled before launching the child process is retained only as
 `worker_joined_to_runner_pre_next_process_launch_us` diagnostic data; it cannot
 complete the playback Start metric. Missing successor Armed evidence, clock
 mismatch, or identity mismatch leaves the required metric **INCOMPLETE**.
+
+The pinned baseline's native acceptance source at
+[2544daa13eb23fdf03bd922e65b96fcffaba421c](https://github.com/pumni/Sky-Auto-Player/blob/2544daa13eb23fdf03bd922e65b96fcffaba421c/rust/crates/sky_player/src/bin/rt_native_acceptance.rs)
+does not emit `lifecycle_measurement` or worker Armed QPC evidence. Control
+fixtures must preserve that schema; candidate-only lifecycle fields on a
+baseline row are invalid evidence. In each six-pair cell, the actual AB/BA role
+order produces three adjacent candidate→candidate transitions and three
+candidate→baseline transitions:
+
+| Transition | Planned across 10 workload/load cells | Eligible | Available from worker QPC |
+| --- | ---: | ---: | ---: |
+| Candidate → candidate | 30 | 30 | 30 when identity and QPC evidence validate |
+| Candidate → baseline | 30 | 0 | 0; the pinned baseline has no Armed field |
+
+The Final run therefore measures at most 30 of 60 planned immediate-successor
+transitions. It reports the other 30 as unavailable with the pinned-baseline
+schema reason, and the mandatory `worker_joined_to_next_start_us` metric stays
+**INCOMPLETE**. The partial candidate→candidate statistics remain visible but
+do not make that required metric complete. The child-process launch diagnostic
+does not replace missing playback Start evidence. A Leader/owner protocol
+decision is required to accept candidate→candidate-only coverage, or to approve
+a separate protocol that can observe baseline Start while preserving the
+baseline's immutable source identity. Do not overlay the baseline binary or
+fabricate lifecycle evidence for it.
 
 Raw Up syscall count sums
 `TerminalSendAttemptEvidence.raw_calls` for the worker terminal cleanup. It

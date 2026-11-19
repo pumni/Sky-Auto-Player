@@ -1609,6 +1609,9 @@ $playbackCoreRunnerSource = Get-Content -LiteralPath $runnerPath -Raw
 $playbackCoreCollectorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'lib/playback_core_lifecycle_collector.psm1') -Raw
 $playbackCoreCaseRunnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
 $playbackCoreNativeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\bin\rt_native_acceptance.rs') -Raw
+$playbackCoreRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$playbackCoreBaselineNativeSource = (& git -C $playbackCoreRepoRoot show '2544daa13eb23fdf03bd922e65b96fcffaba421c:rust/crates/sky_player/src/bin/rt_native_acceptance.rs') -join [Environment]::NewLine
+if ($LASTEXITCODE -ne 0) { throw 'could not read the frozen PlaybackCoreLifecycle baseline native acceptance source' }
 $playbackCoreWorkerBootSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\boot.rs') -Raw
 $playbackCoreWorkerFinalizeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\cleanup\finalize.rs') -Raw
 if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -or
@@ -1638,9 +1641,17 @@ if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -
     -not $playbackCoreCollectorSource.Contains('playback_armed_qpc_ticks') -or
     -not $playbackCoreCollectorSource.Contains('worker_release_verified_qpc_ticks') -or
     -not $playbackCoreCollectorSource.Contains("'DIAGNOSTIC_ONLY'") -or
+    -not $playbackCoreCollectorSource.Contains("eligible_count = 0; measured_count = 0") -or
     -not $playbackCoreNativeSource.Contains('native_acceptance_lifecycle_evidence') -or
+    -not $playbackCoreNativeSource.Contains('playback_armed_qpc_ticks') -or
+    -not $playbackCoreNativeSource.Contains('worker_release_verified_qpc_ticks') -or
     -not $playbackCoreNativeSource.Contains('raw_up_syscall_count_source') -or
     $playbackCoreNativeSource.Contains('outcome.release_outcome.attempts') -or
+    $playbackCoreBaselineNativeSource.Contains('lifecycle_measurement') -or
+    $playbackCoreBaselineNativeSource.Contains('playback_armed_qpc_ticks') -or
+    $playbackCoreBaselineNativeSource.Contains('worker_release_verified_qpc_ticks') -or
+    $playbackCoreBaselineNativeSource.Contains('raw_up_syscall_count') -or
+    $playbackCoreBaselineNativeSource.Contains('native_acceptance_lifecycle_evidence') -or
     -not $playbackCoreWorkerBootSource.Contains('playback_armed_qpc_ticks') -or
     -not $playbackCoreWorkerFinalizeSource.Contains('terminal_release_verified_qpc_ticks') -or
     -not $playbackCoreWorkerFinalizeSource.Contains('terminal_raw_up_syscall_count') -or
@@ -1682,55 +1693,123 @@ $pclLifecycleMeasurement = [pscustomobject]@{
     raw_up_syscall_count_source = 'sum of worker TerminalSendAttemptEvidence.raw_calls'
     release_all_attempts = 9
 }
-$pclCandidatePredecessor = [pscustomobject]@{
-    schema_version = 2; qpc_clock_source = 'Windows QueryPerformanceCounter'; qpc_frequency_hz = 10000000
-    native_session_identity = [pscustomobject]@{ run_id = 'pcl-candidate-predecessor'; scenario = 'mixed-up-down' }
-    playback_admission_event = 'system_power_ready_to_armed_publication'; playback_armed_qpc_ticks = 250
-    worker_joined_qpc_ticks = 300
+function Copy-PclTestRows {
+    param([object[]]$Rows)
+    foreach ($sourceRow in $Rows) {
+        $row = $sourceRow | Select-Object *
+        foreach ($propertyName in @('lifecycle_measurement', 'target_identity')) {
+            $property = $sourceRow.PSObject.Properties[$propertyName]
+            if ($null -ne $property -and $null -ne $property.Value) {
+                $row.$propertyName = $property.Value | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+            }
+        }
+        $row
+    }
 }
-$pclBaselineSuccessor = [pscustomobject]@{
-    schema_version = 2; qpc_clock_source = 'Windows QueryPerformanceCounter'; qpc_frequency_hz = 10000000
-    native_session_identity = [pscustomobject]@{ run_id = 'pcl-baseline-successor'; scenario = 'mixed-up-down' }
-    playback_admission_event = 'system_power_ready_to_armed_publication'; playback_armed_qpc_ticks = 340
+$pclProfile = Get-PlaybackCoreLifecycleProfile
+$pclBaselineRevision = $pclProfile.BaselineRevision
+$pclBaselineTree = $pclProfile.BaselineTree
+$pclBaselineManifestHash = 'c' * 64
+$pclBaselineBinaryHash = 'd' * 64
+$pclRowsList = [System.Collections.Generic.List[object]]::new()
+$pclSequence = 0
+$pclRowsList.Add([pscustomobject]@{
+    sequence_index = $pclSequence; run_id = 'pcl-candidate-stop'; role = 'candidate'
+    source_revision = $pclRevision; source_tree_sha = $pclTree; manifest_sha256 = $pclManifestHash; harness_sha256 = $pclBinaryHash
+    scenario = 'stop-cleanup'; workload = 'safety-smoke'; load = 'Quiet'; cell_id = 'pcl-safety-quiet'; pair_id = ''
+    sample_seconds = 0; status = 'PASS'; case_exit_code = 0; lifecycle_measurement = $pclLifecycleMeasurement
+    target_identity = $pclTargetIdentity; machine_name = $pclMachine; os_boot_time_utc = $pclBootUtc
+    runner_pre_child_process_launch_qpc_ticks = 10; runner_pre_child_process_launch_qpc_frequency_hz = 10000000
+})
+$pclSequence++
+foreach ($workload in $pclProfile.PerformanceWorkloads) {
+    foreach ($load in $pclProfile.LoadCells) {
+        $cellId = $workload + '/' + $load
+        for ($pair = 1; $pair -le $pclProfile.PairCount; $pair++) {
+            $pairOrder = if ($pair % 2 -eq 1) { 'AB' } else { 'BA' }
+            $roles = if ($pairOrder -eq 'AB') { @('control', 'candidate') } else { @('candidate', 'control') }
+            foreach ($role in $roles) {
+                $isCandidate = $role -eq 'candidate'
+                $runId = 'pcl-' + $workload + '-' + $load.ToLowerInvariant() + '-pair-' + $pair + '-' + $role
+                $row = [ordered]@{
+                    sequence_index = $pclSequence; run_id = $runId; role = $role
+                    source_revision = if ($isCandidate) { $pclRevision } else { $pclBaselineRevision }
+                    source_tree_sha = if ($isCandidate) { $pclTree } else { $pclBaselineTree }
+                    manifest_sha256 = if ($isCandidate) { $pclManifestHash } else { $pclBaselineManifestHash }
+                    harness_sha256 = if ($isCandidate) { $pclBinaryHash } else { $pclBaselineBinaryHash }
+                    scenario = $workload; workload = $workload; load = $load; cell_id = $cellId
+                    pair_id = $cellId + '/' + ('{0:D2}' -f $pair); pair_order = $pairOrder
+                    sample_seconds = 15; status = 'PASS'; case_exit_code = 0
+                    target_identity = $pclTargetIdentity; machine_name = $pclMachine; os_boot_time_utc = $pclBootUtc
+                    lifecycle_measurement = $null
+                    runner_pre_child_process_launch_qpc_ticks = 1000 + ($pclSequence * 100) + 50
+                    runner_pre_child_process_launch_qpc_frequency_hz = 10000000
+                }
+                if ($isCandidate) {
+                    $armedTicks = 1000 + ($pclSequence * 100)
+                    $row.lifecycle_measurement = [pscustomobject]@{
+                        schema_version = 2; qpc_clock_source = 'Windows QueryPerformanceCounter'; qpc_frequency_hz = 10000000
+                        native_session_identity = [pscustomobject]@{ run_id = $runId; scenario = $workload }
+                        playback_admission_event = 'system_power_ready_to_armed_publication'
+                        playback_armed_qpc_ticks = $armedTicks; worker_joined_qpc_ticks = $armedTicks + 40
+                    }
+                }
+                $pclRowsList.Add([pscustomobject]$row)
+                $pclSequence++
+            }
+        }
+    }
 }
-$pclCandidatePredecessor2 = [pscustomobject]@{
-    schema_version = 2; qpc_clock_source = 'Windows QueryPerformanceCounter'; qpc_frequency_hz = 10000000
-    native_session_identity = [pscustomobject]@{ run_id = 'pcl-candidate-predecessor-2'; scenario = 'dense-alternating' }
-    playback_admission_event = 'system_power_ready_to_armed_publication'; playback_armed_qpc_ticks = 400
-    worker_joined_qpc_ticks = 500
+$pclRows = $pclRowsList.ToArray()
+$pclSingleCellRows = @($pclRows | Where-Object { $_.cell_id -eq 'mixed-up-down/Quiet' -or $_.sequence_index -eq 0 })
+$pclSingleCellRoleOrder = @($pclSingleCellRows | Where-Object { $_.sample_seconds -eq 15 } | ForEach-Object { $_.role }) -join ','
+if ($pclSingleCellRoleOrder -ne 'control,candidate,candidate,control,control,candidate,candidate,control,control,candidate,candidate,control') {
+    throw ('PlaybackCoreLifecycle fixture does not preserve the actual six-pair AB/BA role order: ' + $pclSingleCellRoleOrder)
 }
-$pclCandidateSuccessor = [pscustomobject]@{
-    schema_version = 2; qpc_clock_source = 'Windows QueryPerformanceCounter'; qpc_frequency_hz = 10000000
-    native_session_identity = [pscustomobject]@{ run_id = 'pcl-candidate-successor'; scenario = 'canonical-max-chord' }
-    playback_admission_event = 'system_power_ready_to_armed_publication'; playback_armed_qpc_ticks = 620
+$pclSingleCellReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclSingleCellRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
+if ($pclSingleCellReport.worker_joined_to_next_start_us.coverage.by_transition[0].observed_count -ne 3 -or
+    $pclSingleCellReport.worker_joined_to_next_start_us.coverage.by_transition[0].measured_count -ne 3 -or
+    $pclSingleCellReport.worker_joined_to_next_start_us.coverage.by_transition[1].observed_count -ne 3 -or
+    $pclSingleCellReport.worker_joined_to_next_start_us.coverage.by_transition[1].unavailable_count -ne 3 -or
+    $pclSingleCellReport.worker_joined_to_next_start_us.coverage.by_transition[1].eligible_count -ne 0 -or
+    $pclSingleCellReport.worker_joined_to_next_start_us.status -ne 'INCOMPLETE') {
+    throw 'one six-pair AB/BA cell did not yield exactly three measurable candidate→candidate and three unavailable candidate→baseline transitions'
 }
-$pclRows = @(
-    [pscustomobject]@{ sequence_index = 0; run_id = 'pcl-candidate-stop'; role = 'candidate'; source_revision = $pclRevision; source_tree_sha = $pclTree; manifest_sha256 = $pclManifestHash; harness_sha256 = $pclBinaryHash; scenario = 'stop-cleanup'; sample_seconds = 0; status = 'PASS'; case_exit_code = 0; lifecycle_measurement = $pclLifecycleMeasurement; target_identity = $pclTargetIdentity; machine_name = $pclMachine; os_boot_time_utc = $pclBootUtc; runner_pre_child_process_launch_qpc_ticks = 10; runner_pre_child_process_launch_qpc_frequency_hz = 10000000 },
-    [pscustomobject]@{ sequence_index = 1; run_id = 'pcl-candidate-predecessor'; role = 'candidate'; source_revision = $pclRevision; source_tree_sha = $pclTree; manifest_sha256 = $pclManifestHash; harness_sha256 = $pclBinaryHash; scenario = 'mixed-up-down'; sample_seconds = 15; status = 'PASS'; case_exit_code = 0; lifecycle_measurement = $pclCandidatePredecessor; target_identity = $pclTargetIdentity; machine_name = $pclMachine; os_boot_time_utc = $pclBootUtc; runner_pre_child_process_launch_qpc_ticks = 301; runner_pre_child_process_launch_qpc_frequency_hz = 10000000 },
-    [pscustomobject]@{ sequence_index = 2; run_id = 'pcl-baseline-successor'; role = 'control'; source_revision = '3333333333333333333333333333333333333333'; source_tree_sha = '4444444444444444444444444444444444444444'; manifest_sha256 = 'c' * 64; harness_sha256 = 'd' * 64; scenario = 'mixed-up-down'; sample_seconds = 15; status = 'PASS'; case_exit_code = 0; lifecycle_measurement = $pclBaselineSuccessor; target_identity = $pclTargetIdentity; machine_name = $pclMachine; os_boot_time_utc = $pclBootUtc; runner_pre_child_process_launch_qpc_ticks = 9999; runner_pre_child_process_launch_qpc_frequency_hz = 10000000 },
-    [pscustomobject]@{ sequence_index = 3; run_id = 'pcl-candidate-predecessor-2'; role = 'candidate'; source_revision = $pclRevision; source_tree_sha = $pclTree; manifest_sha256 = $pclManifestHash; harness_sha256 = $pclBinaryHash; scenario = 'dense-alternating'; sample_seconds = 15; status = 'PASS'; case_exit_code = 0; lifecycle_measurement = $pclCandidatePredecessor2; target_identity = $pclTargetIdentity; machine_name = $pclMachine; os_boot_time_utc = $pclBootUtc; runner_pre_child_process_launch_qpc_ticks = 501; runner_pre_child_process_launch_qpc_frequency_hz = 10000000 },
-    [pscustomobject]@{ sequence_index = 4; run_id = 'pcl-candidate-successor'; role = 'candidate'; source_revision = $pclRevision; source_tree_sha = $pclTree; manifest_sha256 = $pclManifestHash; harness_sha256 = $pclBinaryHash; scenario = 'canonical-max-chord'; sample_seconds = 15; status = 'PASS'; case_exit_code = 0; lifecycle_measurement = $pclCandidateSuccessor; target_identity = $pclTargetIdentity; machine_name = $pclMachine; os_boot_time_utc = $pclBootUtc; runner_pre_child_process_launch_qpc_ticks = 99999; runner_pre_child_process_launch_qpc_frequency_hz = 10000000 }
-)
 $pclReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
-if ($pclReport.status -ne 'COMPLETE' -or
+if ($pclReport.status -ne 'INCOMPLETE' -or
     $pclReport.stop_to_verified_release_us.status -ne 'COMPLETE' -or
     $pclReport.stop_to_verified_release_us.statistics.p50 -ne 4 -or
-    $pclReport.worker_joined_to_next_start_us.status -ne 'COMPLETE' -or
-    $pclReport.worker_joined_to_next_start_us.statistics.p50 -ne 4 -or
-    $pclReport.worker_joined_to_next_start_us.samples.Count -ne 2 -or
-    $pclReport.worker_joined_to_next_start_us.samples[0].next_role -ne 'control' -or
-    $pclReport.worker_joined_to_next_start_us.samples[0].next_playback_armed_qpc_ticks -ne 340 -or
-    $pclReport.worker_joined_to_next_start_us.samples[1].next_role -ne 'candidate' -or
+    $pclReport.worker_joined_to_next_start_us.status -ne 'INCOMPLETE' -or
+    $pclReport.worker_joined_to_next_start_us.statistics.sample_count -ne 30 -or
+    $pclReport.worker_joined_to_next_start_us.statistics.p50 -ne 6 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.planned_transition_count -ne 60 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.eligible_transition_count -ne 30 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.measured_transition_count -ne 30 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.unavailable_transition_count -ne 30 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 0 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.missing_planned_transition_count -ne 0 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.incomplete_transition_count -ne 30 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.by_transition[0].observed_count -ne 30 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.by_transition[0].measured_count -ne 30 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.by_transition[1].observed_count -ne 30 -or
+    $pclReport.worker_joined_to_next_start_us.coverage.by_transition[1].unavailable_count -ne 30 -or
+    $pclReport.worker_joined_to_next_start_us.samples[0].next_role -ne 'candidate' -or
+    $pclReport.worker_joined_to_next_start_us.samples[0].prior_run_id -notmatch 'pair-1-candidate$' -or
+    $pclReport.worker_joined_to_next_start_us.samples[0].next_run_id -notmatch 'pair-2-candidate$' -or
     $pclReport.worker_joined_to_runner_pre_next_process_launch_us.status -ne 'DIAGNOSTIC_ONLY' -or
-    $pclReport.worker_joined_to_runner_pre_next_process_launch_us.samples[0].runner_pre_child_process_launch_qpc_ticks -ne 9999 -or
+    $pclReport.worker_joined_to_runner_pre_next_process_launch_us.statistics.sample_count -ne 60 -or
     $pclReport.raw_up_syscall_count.statistics.p50 -ne 2 -or
     $pclReport.source_identity.manifest_sha256 -ne $pclManifestHash) {
-    throw 'PlaybackCoreLifecycle fake measurements did not bind worker release, successor Armed QPC, and raw syscall evidence'
+    throw 'PlaybackCoreLifecycle full six-pair role-order fixture did not preserve incomplete baseline coverage and real candidate Armed evidence'
+}
+foreach ($controlRow in @($pclRows | Where-Object { $_.role -eq 'control' })) {
+    if ($null -ne $controlRow.lifecycle_measurement) {
+        throw 'realistic frozen-baseline fixture invented candidate lifecycle evidence on a control row'
+    }
 }
 
 foreach ($drainCompletionTicks in @(211, 10000, 900000000)) {
-    $pclDelayedDrainRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
-    $pclDelayedDrainRows[0].lifecycle_measurement = $pclLifecycleMeasurement | Select-Object *
+    $pclDelayedDrainRows = @(Copy-PclTestRows $pclRows)
     $pclDelayedDrainRows[0].lifecycle_measurement.post_join_report_and_receiveonly_validation_completed_qpc_ticks = $drainCompletionTicks
     $pclDelayedDrainReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclDelayedDrainRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
     if ($pclDelayedDrainReport.stop_to_verified_release_us.statistics.p50 -ne 4 -or
@@ -1739,39 +1818,127 @@ foreach ($drainCompletionTicks in @(211, 10000, 900000000)) {
     }
 }
 
-$pclMissingStartRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
-$pclMissingStartRows[2].lifecycle_measurement = $pclBaselineSuccessor | Select-Object *
-[void]$pclMissingStartRows[2].lifecycle_measurement.PSObject.Properties.Remove('playback_armed_qpc_ticks')
+$pclMissingStartRows = @(Copy-PclTestRows $pclRows)
+[void]$pclMissingStartRows[3].lifecycle_measurement.PSObject.Properties.Remove('playback_armed_qpc_ticks')
 $pclMissingStartReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclMissingStartRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
 if ($pclMissingStartReport.status -ne 'INCOMPLETE' -or
     $pclMissingStartReport.worker_joined_to_next_start_us.status -ne 'INCOMPLETE' -or
-    $pclMissingStartReport.worker_joined_to_runner_pre_next_process_launch_us.statistics.sample_count -eq 0) {
+    $pclMissingStartReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 1 -or
+    $pclMissingStartReport.worker_joined_to_next_start_us.statistics.sample_count -ne 29 -or
+    $pclMissingStartReport.worker_joined_to_runner_pre_next_process_launch_us.statistics.sample_count -ne 60) {
     throw 'missing actual next playback Start was substituted with the available child-process launch diagnostic'
 }
 
-$pclClockMismatchRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
-$pclClockMismatchRows[2].lifecycle_measurement = $pclBaselineSuccessor | Select-Object *
-$pclClockMismatchRows[2].lifecycle_measurement.qpc_frequency_hz = 9999999
+$pclClockMismatchRows = @(Copy-PclTestRows $pclRows)
+$pclClockMismatchRows[3].lifecycle_measurement.qpc_frequency_hz = 9999999
 $pclClockMismatchReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclClockMismatchRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
-if ($pclClockMismatchReport.status -ne 'INCOMPLETE' -or $pclClockMismatchReport.worker_joined_to_next_start_us.status -ne 'INCOMPLETE') {
+if ($pclClockMismatchReport.status -ne 'INCOMPLETE' -or $pclClockMismatchReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 1 -or $pclClockMismatchReport.worker_joined_to_next_start_us.statistics.sample_count -ne 29) {
     throw 'PlaybackCoreLifecycle accepted successor QPC frequency mismatch'
 }
-$pclClockSourceMismatchRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
-$pclClockSourceMismatchRows[2].lifecycle_measurement = $pclBaselineSuccessor | Select-Object *
-$pclClockSourceMismatchRows[2].lifecycle_measurement.qpc_clock_source = 'different-clock'
+$pclMissingFrequencyRows = @(Copy-PclTestRows $pclRows)
+$pclMissingFrequencyRows[3].lifecycle_measurement.qpc_frequency_hz = $null
+$pclMissingFrequencyReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclMissingFrequencyRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
+if ($pclMissingFrequencyReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 1 -or $pclMissingFrequencyReport.worker_joined_to_next_start_us.statistics.sample_count -ne 29) {
+    throw 'PlaybackCoreLifecycle accepted successor QPC evidence without a frequency'
+}
+$pclClockSourceMismatchRows = @(Copy-PclTestRows $pclRows)
+$pclClockSourceMismatchRows[3].lifecycle_measurement.qpc_clock_source = 'different-clock'
 $pclClockSourceMismatchReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclClockSourceMismatchRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
-if ($pclClockSourceMismatchReport.worker_joined_to_next_start_us.status -ne 'INCOMPLETE') {
+if ($pclClockSourceMismatchReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 1 -or $pclClockSourceMismatchReport.worker_joined_to_next_start_us.statistics.sample_count -ne 29) {
     throw 'PlaybackCoreLifecycle accepted mismatched QPC clock provenance'
 }
 
-$pclReleaseProofMissingRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
-$pclReleaseProofMissingRows[0].lifecycle_measurement = $pclLifecycleMeasurement | Select-Object *
+foreach ($invalidArmedTicks in @(0, 1000)) {
+    $pclInvalidArmedRows = @(Copy-PclTestRows $pclRows)
+    $pclInvalidArmedRows[3].lifecycle_measurement.playback_armed_qpc_ticks = $invalidArmedTicks
+    $pclInvalidArmedReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclInvalidArmedRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
+    if ($pclInvalidArmedReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 1 -or $pclInvalidArmedReport.worker_joined_to_next_start_us.statistics.sample_count -ne 29) {
+        throw ('PlaybackCoreLifecycle accepted missing/invalid successor Armed QPC ticks: ' + $invalidArmedTicks)
+    }
+}
+
+$pclWrongSuccessorIdentityRows = @(Copy-PclTestRows $pclRows)
+$pclWrongSuccessorIdentityRows[3].lifecycle_measurement.native_session_identity.run_id = 'unrelated-run'
+$pclWrongSuccessorIdentityReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongSuccessorIdentityRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
+if ($pclWrongSuccessorIdentityReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 1 -or $pclWrongSuccessorIdentityReport.worker_joined_to_next_start_us.statistics.sample_count -ne 29) {
+    throw 'PlaybackCoreLifecycle accepted a successor Armed event bound to a different run ID'
+}
+
+$pclFabricatedBaselineRows = @(Copy-PclTestRows $pclRows)
+$pclFabricatedBaselineMeasurement = $pclFabricatedBaselineRows[3].lifecycle_measurement | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+$pclFabricatedBaselineMeasurement.native_session_identity.run_id = $pclFabricatedBaselineRows[4].run_id
+$pclFabricatedBaselineMeasurement.native_session_identity.scenario = $pclFabricatedBaselineRows[4].scenario
+$pclFabricatedBaselineRows[4].lifecycle_measurement = $pclFabricatedBaselineMeasurement
+$pclFabricatedBaselineReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclFabricatedBaselineRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
+if ($pclFabricatedBaselineReport.worker_joined_to_next_start_us.coverage.unavailable_transition_count -ne 29 -or
+    $pclFabricatedBaselineReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 1 -or
+    $pclFabricatedBaselineReport.worker_joined_to_next_start_us.statistics.sample_count -ne 30) {
+    throw 'PlaybackCoreLifecycle treated fabricated schema-v2 lifecycle evidence as a frozen-baseline playback Start'
+}
+
+$pclMissingSuccessorRows = @(Copy-PclTestRows $pclRows)
+$pclMissingSuccessorRows = @($pclMissingSuccessorRows | Where-Object { $_.sequence_index -ne 3 })
+$pclMissingSuccessorReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclMissingSuccessorRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
+if ($pclMissingSuccessorReport.worker_joined_to_next_start_us.coverage.missing_planned_transition_count -ne 2 -or
+    $pclMissingSuccessorReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 1 -or
+    $pclMissingSuccessorReport.worker_joined_to_next_start_us.coverage.incomplete_transition_count -ne 31 -or
+    $pclMissingSuccessorReport.worker_joined_to_next_start_us.status -ne 'INCOMPLETE') {
+    throw 'PlaybackCoreLifecycle silently dropped a missing timed successor row'
+}
+
+$pclMissingSuccessorEvidenceRows = @(Copy-PclTestRows $pclRows)
+$pclMissingSuccessorEvidenceRows[3].lifecycle_measurement = $null
+$pclMissingSuccessorEvidenceReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclMissingSuccessorEvidenceRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
+if ($pclMissingSuccessorEvidenceReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -lt 1 -or
+    $pclMissingSuccessorEvidenceReport.worker_joined_to_next_start_us.statistics.sample_count -ne 29) {
+    throw 'PlaybackCoreLifecycle accepted a missing candidate successor lifecycle measurement'
+}
+
+$pclWrongRoleRows = @(Copy-PclTestRows $pclRows)
+$pclWrongRoleRows[3].role = 'baseline'
+$pclWrongRoleRejected = $false
+try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongRoleRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclWrongRoleRejected = $true }
+if (-not $pclWrongRoleRejected) { throw 'PlaybackCoreLifecycle accepted a role outside the exact candidate/control protocol' }
+
+foreach ($identityMutation in @(
+        [pscustomobject]@{ name = 'candidate source SHA'; property = 'source_revision'; value = 'f' * 40; row = 3 },
+        [pscustomobject]@{ name = 'candidate source tree'; property = 'source_tree_sha'; value = 'e' * 40; row = 3 },
+        [pscustomobject]@{ name = 'candidate manifest hash'; property = 'manifest_sha256'; value = 'e' * 64; row = 3 },
+        [pscustomobject]@{ name = 'candidate binary hash'; property = 'harness_sha256'; value = 'f' * 64; row = 3 },
+        [pscustomobject]@{ name = 'baseline source SHA'; property = 'source_revision'; value = 'e' * 40; row = 4 },
+        [pscustomobject]@{ name = 'baseline source tree'; property = 'source_tree_sha'; value = 'f' * 40; row = 4 }
+    )) {
+    $pclIdentityRows = @(Copy-PclTestRows $pclRows)
+    $pclIdentityRows[$identityMutation.row].($identityMutation.property) = $identityMutation.value
+    $pclIdentityRejected = $false
+    try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclIdentityRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclIdentityRejected = $true }
+    if (-not $pclIdentityRejected) { throw ('PlaybackCoreLifecycle accepted mutated ' + $identityMutation.name) }
+}
+
+$pclWrongControlHashRows = @(Copy-PclTestRows $pclRows)
+$pclWrongControlHashRows[4].manifest_sha256 = 'e' * 64
+$pclWrongControlHashRejected = $false
+try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongControlHashRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclWrongControlHashRejected = $true }
+if (-not $pclWrongControlHashRejected) { throw 'PlaybackCoreLifecycle accepted a control manifest/binary hash that differs from the pinned baseline identity' }
+
+$pclWrongBootRows = @(Copy-PclTestRows $pclRows)
+$pclWrongBootRows[3].os_boot_time_utc = '2026-11-18T00:00:00.0000000Z'
+$pclWrongBootRejected = $false
+try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongBootRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclWrongBootRejected = $true }
+if (-not $pclWrongBootRejected) { throw 'PlaybackCoreLifecycle accepted a successor from a different Windows boot identity' }
+$pclWrongMachineRows = @(Copy-PclTestRows $pclRows)
+$pclWrongMachineRows[3].machine_name = 'different-machine'
+$pclWrongMachineRejected = $false
+try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongMachineRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclWrongMachineRejected = $true }
+if (-not $pclWrongMachineRejected) { throw 'PlaybackCoreLifecycle accepted a successor from a different machine identity' }
+
+$pclReleaseProofMissingRows = @(Copy-PclTestRows $pclRows)
 $pclReleaseProofMissingRows[0].lifecycle_measurement.release_sample_gate_proof_complete = $false
 $pclReleaseProofMissingReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclReleaseProofMissingRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
 if ($pclReleaseProofMissingReport.status -ne 'INCOMPLETE' -or $pclReleaseProofMissingReport.stop_to_verified_release_us.status -ne 'INCOMPLETE') {
     throw 'PlaybackCoreLifecycle accepted a missing worker release/journal/receiver proof'
 }
-$pclReceiverInconclusiveRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
+$pclReceiverInconclusiveRows = @(Copy-PclTestRows $pclRows)
 $pclReceiverInconclusiveRows[0].status = 'INCONCLUSIVE'
 $pclReceiverInconclusiveRows[0].case_exit_code = 1
 $pclReceiverInconclusiveReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclReceiverInconclusiveRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
@@ -1779,38 +1946,34 @@ if ($pclReceiverInconclusiveReport.status -ne 'INCOMPLETE' -or $pclReceiverIncon
     throw 'PlaybackCoreLifecycle accepted inconclusive ReceiveOnly release evidence'
 }
 
-$pclRawEvidenceMissingRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
-$pclRawEvidenceMissingRows[0].lifecycle_measurement = $pclLifecycleMeasurement | Select-Object *
+$pclRawEvidenceMissingRows = @(Copy-PclTestRows $pclRows)
 [void]$pclRawEvidenceMissingRows[0].lifecycle_measurement.PSObject.Properties.Remove('raw_up_syscall_count')
 $pclRawEvidenceMissingReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclRawEvidenceMissingRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
 if ($pclRawEvidenceMissingReport.status -ne 'INCOMPLETE' -or $pclRawEvidenceMissingReport.raw_up_syscall_count.status -ne 'INCOMPLETE') {
     throw 'PlaybackCoreLifecycle invented a raw Up syscall count when raw evidence was missing'
 }
-$pclWrongTargetRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
+$pclWrongTargetRows = @(Copy-PclTestRows $pclRows)
 $pclWrongTargetRows[1].target_identity = $pclTargetIdentity | Select-Object *
 $pclWrongTargetRows[1].target_identity.game_target = $true
 $pclWrongTargetRejected = $false
 try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongTargetRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclWrongTargetRejected = $true }
 if (-not $pclWrongTargetRejected) { throw 'PlaybackCoreLifecycle collector accepted game_target=true' }
-$pclWrongClassRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
-$pclWrongClassRows[0].target_identity = $pclTargetIdentity | Select-Object *
+$pclWrongClassRows = @(Copy-PclTestRows $pclRows)
 $pclWrongClassRows[0].target_identity.target_class = 'Sky'
 $pclWrongClassRejected = $false
 try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongClassRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclWrongClassRejected = $true }
 if (-not $pclWrongClassRejected) { throw 'PlaybackCoreLifecycle collector accepted a Sky target class' }
-$pclMissingGameTargetRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
-$pclMissingGameTargetRows[0].target_identity = $pclTargetIdentity | Select-Object *
+$pclMissingGameTargetRows = @(Copy-PclTestRows $pclRows)
 [void]$pclMissingGameTargetRows[0].target_identity.PSObject.Properties.Remove('game_target')
 $pclMissingGameTargetRejected = $false
 try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclMissingGameTargetRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclMissingGameTargetRejected = $true }
 if (-not $pclMissingGameTargetRejected) { throw 'PlaybackCoreLifecycle collector accepted missing game_target identity' }
-$pclWrongHashRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
+$pclWrongHashRows = @(Copy-PclTestRows $pclRows)
 $pclWrongHashRows[0].manifest_sha256 = 'e' * 64
 $pclWrongHashRejected = $false
 try { [void](New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclWrongHashRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc) } catch { $pclWrongHashRejected = $true }
 if (-not $pclWrongHashRejected) { throw 'PlaybackCoreLifecycle collector accepted a candidate manifest hash mismatch' }
-$pclIncompleteRows = @($pclRows | ForEach-Object { $_ | Select-Object * })
-$pclIncompleteRows[0].lifecycle_measurement = $pclLifecycleMeasurement | Select-Object *
+$pclIncompleteRows = @(Copy-PclTestRows $pclRows)
 $pclIncompleteRows[0].lifecycle_measurement.release_sample_gate_proof_complete = $false
 $pclIncompleteReport = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclIncompleteRows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc
 if ($pclIncompleteReport.status -ne 'INCOMPLETE' -or $pclIncompleteReport.stop_to_verified_release_us.status -ne 'INCOMPLETE') {
@@ -1818,5 +1981,5 @@ if ($pclIncompleteReport.status -ne 'INCOMPLETE' -or $pclIncompleteReport.stop_t
 }
 
 Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 schema-v2 provenance inventory, mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
-Write-Output 'PASS: PlaybackCoreLifecycle exact baseline/candidate provenance, owner-gated ReceiveOnly workflow, fake lifecycle collector metrics, fail-closed target identity, and PlanOnly dry-run contracts pass'
+Write-Output ('PASS: PlaybackCoreLifecycle frozen-baseline schema and six-pair AB/BA contracts; per cell 3 candidate→candidate measurable / 3 candidate→baseline unavailable; full plan planned=60 eligible=30 measured=30 unavailable=30 incomplete=30; Stop→release and raw syscall evidence contracts pass')
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'
