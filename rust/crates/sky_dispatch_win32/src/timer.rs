@@ -167,15 +167,15 @@ impl WaitableTimer {
         }
     }
 
-    pub fn sleep_us(&self, us: u64) -> Result<(), u32> {
-        let Some(us) = NonZeroU64::new(us) else {
+    pub fn sleep_100ns(&self, intervals_100ns: u64) -> Result<(), u32> {
+        let Some(intervals) = NonZeroU64::new(intervals_100ns) else {
             return Ok(());
         };
         #[cfg(windows)]
         {
             use windows_sys::Win32::System::Threading::{INFINITE, WaitForSingleObject};
 
-            self.arm_relative_us(us)?;
+            self.arm_relative_100ns(intervals)?;
             // SAFETY: waiting borrows the live handle without transferring it.
             let wait_result = unsafe { WaitForSingleObject(self.handle, INFINITE) };
             if wait_result == windows_sys::Win32::Foundation::WAIT_OBJECT_0 {
@@ -186,19 +186,21 @@ impl WaitableTimer {
         }
         #[cfg(not(windows))]
         {
-            std::thread::sleep(std::time::Duration::from_micros(us.get()));
+            let nanos = intervals.get().saturating_mul(100);
+            std::thread::sleep(std::time::Duration::from_nanos(nanos));
             Ok(())
         }
     }
 
+    pub fn sleep_us(&self, us: u64) -> Result<(), u32> {
+        self.sleep_100ns(us.saturating_mul(10))
+    }
+
     #[cfg(windows)]
-    pub(crate) fn arm_relative_us(&self, us: NonZeroU64) -> Result<(), u32> {
+    pub(crate) fn arm_relative_100ns(&self, intervals_100ns: NonZeroU64) -> Result<(), u32> {
         use windows_sys::Win32::System::Threading::SetWaitableTimer;
 
-        let Some(ticks_100ns) = us.get().checked_mul(10) else {
-            return Err(87);
-        };
-        let Ok(ticks_100ns) = i64::try_from(ticks_100ns) else {
+        let Ok(ticks_100ns) = i64::try_from(intervals_100ns.get()) else {
             return Err(87);
         };
         let due_time_100ns = -ticks_100ns;
@@ -211,6 +213,15 @@ impl WaitableTimer {
         } else {
             Err(unsafe { windows_sys::Win32::Foundation::GetLastError() })
         }
+    }
+
+    #[cfg(windows)]
+    #[allow(dead_code)]
+    pub(crate) fn arm_relative_us(&self, us: NonZeroU64) -> Result<(), u32> {
+        let Some(intervals) = us.get().checked_mul(10).and_then(NonZeroU64::new) else {
+            return Err(87);
+        };
+        self.arm_relative_100ns(intervals)
     }
 
     #[cfg(windows)]

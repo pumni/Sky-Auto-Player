@@ -118,6 +118,77 @@ impl QpcClock {
     pub fn timeline_to_us(self, ticks: TimelineTicks) -> Result<u64, TimeConversionError> {
         self.duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
     }
+
+    /// Convert 100-nanosecond intervals to QPC duration ticks with ceiling rounding.
+    ///
+    /// Ceiling rounding guarantees that physical floor invariants (such as
+    /// minimum hold or minimum release gap) are never undercut.
+    pub fn duration_from_100ns(
+        self,
+        intervals_100ns: u64,
+    ) -> Result<DurationTicks, TimeConversionError> {
+        let numerator = (intervals_100ns as u128)
+            .checked_mul(self.frequency_hz.get() as u128)
+            .and_then(|value| value.checked_add(9_999_999))
+            .ok_or(TimeConversionError::Overflow)?;
+        let ticks = numerator / 10_000_000;
+        u64::try_from(ticks)
+            .map(DurationTicks::from_raw)
+            .map_err(|_| TimeConversionError::Overflow)
+    }
+
+    /// Convert 100-nanosecond intervals to QPC duration ticks with floor rounding.
+    pub fn duration_from_100ns_floor(
+        self,
+        intervals_100ns: u64,
+    ) -> Result<DurationTicks, TimeConversionError> {
+        let numerator = (intervals_100ns as u128)
+            .checked_mul(self.frequency_hz.get() as u128)
+            .ok_or(TimeConversionError::Overflow)?;
+        let ticks = numerator / 10_000_000;
+        u64::try_from(ticks)
+            .map(DurationTicks::from_raw)
+            .map_err(|_| TimeConversionError::Overflow)
+    }
+
+    pub fn timeline_from_100ns(
+        self,
+        intervals_100ns: u64,
+    ) -> Result<TimelineTicks, TimeConversionError> {
+        self.duration_from_100ns(intervals_100ns)
+            .map(|ticks| TimelineTicks::from_raw(ticks.as_u64()))
+    }
+
+    /// Convert QPC duration ticks to 100-nanosecond intervals with floor rounding.
+    ///
+    /// Floor rounding ensures that kernel wait durations armed via waitable timers
+    /// never sleep past the scheduled deadline, waking slightly early into the
+    /// final precision spin window.
+    pub fn duration_to_100ns(self, ticks: DurationTicks) -> Result<u64, TimeConversionError> {
+        let intervals = (ticks.as_u64() as u128)
+            .checked_mul(10_000_000)
+            .ok_or(TimeConversionError::Overflow)?
+            / self.frequency_hz.get() as u128;
+        u64::try_from(intervals).map_err(|_| TimeConversionError::Overflow)
+    }
+
+    /// Convert QPC duration ticks to 100-nanosecond intervals with ceiling rounding.
+    ///
+    /// Ceiling rounding guarantees that physical floor invariants expressed in 100ns
+    /// never underestimate the elapsed duration.
+    pub fn duration_to_100ns_ceil(self, ticks: DurationTicks) -> Result<u64, TimeConversionError> {
+        let freq = self.frequency_hz.get() as u128;
+        let numerator = (ticks.as_u64() as u128)
+            .checked_mul(10_000_000)
+            .and_then(|value| value.checked_add(freq - 1))
+            .ok_or(TimeConversionError::Overflow)?;
+        let intervals = numerator / freq;
+        u64::try_from(intervals).map_err(|_| TimeConversionError::Overflow)
+    }
+
+    pub fn timeline_to_100ns(self, ticks: TimelineTicks) -> Result<u64, TimeConversionError> {
+        self.duration_to_100ns(DurationTicks::from_raw(ticks.as_u64()))
+    }
 }
 
 pub fn qpc_frequency_checked() -> Result<u64, QpcError> {
@@ -317,5 +388,124 @@ mod tests {
                 "round-trip must preserve exact microsecond for {us} us"
             );
         }
+    }
+
+    #[test]
+    fn qpc_100ns_conversion_exact_at_10mhz() {
+        // Modern Windows standard frequency: 10 MHz (10_000_000 Hz).
+        // 1 tick == exactly 1 100-ns interval.
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
+        for intervals in [
+            0,
+            1,
+            10,
+            100,
+            1_000,
+            10_000,
+            1_000_000,
+            10_000_000,
+            864_000_000_000,
+        ] {
+            let ticks = clock.duration_from_100ns(intervals).unwrap();
+            assert_eq!(
+                ticks.as_u64(),
+                intervals,
+                "10MHz duration_from_100ns identity"
+            );
+
+            let back_intervals = clock.duration_to_100ns(ticks).unwrap();
+            assert_eq!(
+                back_intervals, intervals,
+                "10MHz duration_to_100ns identity"
+            );
+
+            let back_ceil = clock.duration_to_100ns_ceil(ticks).unwrap();
+            assert_eq!(
+                back_ceil, intervals,
+                "10MHz duration_to_100ns_ceil identity"
+            );
+        }
+    }
+
+    #[test]
+    fn qpc_100ns_conversion_realistic_frequencies_property_matrix() {
+        let realistic_frequencies = [
+            1_000_000,     // 1 MHz (virtualized)
+            3_579_545,     // 3.58 MHz (ACPI PM timer)
+            10_000_000,    // 10 MHz (Windows invariant TSC)
+            14_318_180,    // 14.3 MHz (HPET)
+            19_200_000,    // 19.2 MHz (ARM64 Snapdragon)
+            24_000_000,    // 24 MHz (Intel Crystal Clock)
+            1_000_000_000, // 1 GHz (Direct TSC)
+        ];
+
+        let test_intervals = [
+            1, 2, 5, 10, 15, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 16_667, 100_000,
+            1_000_000, 10_000_000,
+        ];
+
+        for &freq in &realistic_frequencies {
+            let clock = QpcClock::from_frequency_hz(NonZeroU64::new(freq).unwrap());
+
+            for &intervals in &test_intervals {
+                let ticks_ceil = clock.duration_from_100ns(intervals).unwrap();
+                let ticks_floor = clock.duration_from_100ns_floor(intervals).unwrap();
+
+                assert!(
+                    ticks_ceil.as_u64() >= ticks_floor.as_u64(),
+                    "ceil must be >= floor for freq={freq}, intervals={intervals}"
+                );
+
+                // Invariant 1: Physical floor guarantee.
+                // Converting ticks_ceil back to 100ns with ceil must never undercut intervals.
+                let back_ceil = clock.duration_to_100ns_ceil(ticks_ceil).unwrap();
+                assert!(
+                    back_ceil >= intervals,
+                    "physical floor guarantee violated: back_ceil={back_ceil} < intervals={intervals} at freq={freq}"
+                );
+
+                // Invariant 2: Deadline guarantee.
+                // Converting ticks_ceil to 100ns with floor must never exceed the deadline.
+                let back_floor = clock.duration_to_100ns(ticks_ceil).unwrap();
+                let converted_back_floor = clock.duration_from_100ns_floor(back_floor).unwrap();
+                assert!(
+                    converted_back_floor.as_u64() <= ticks_ceil.as_u64(),
+                    "deadline overshoot violated: floor ticks={converted_back_floor:?} > target={ticks_ceil:?} at freq={freq}"
+                );
+
+                // Invariant 3: Precision bounds.
+                // 100ns conversion error must be strictly within 1 interval (0.1 us).
+                let diff_intervals = back_ceil.saturating_sub(back_floor);
+                assert!(
+                    diff_intervals <= 1,
+                    "quantization error exceeded 1 interval: diff={diff_intervals} for freq={freq}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn qpc_100ns_conversion_overflow_safety() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
+        // Day-long durations do not overflow
+        let day_100ns = 86_400 * 10_000_000;
+        assert!(clock.duration_from_100ns(day_100ns).is_ok());
+
+        // Extreme values near u64::MAX reject with Overflow error cleanly
+        let high_clock = QpcClock::from_frequency_hz(NonZeroU64::new(u64::MAX).unwrap());
+        assert_eq!(
+            high_clock.duration_from_100ns(u64::MAX),
+            Err(super::TimeConversionError::Overflow)
+        );
+
+        let low_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1).unwrap());
+        assert_eq!(
+            low_clock.duration_to_100ns(super::DurationTicks::from_raw(u64::MAX)),
+            Err(super::TimeConversionError::Overflow)
+        );
+        assert_eq!(
+            low_clock.duration_to_100ns_ceil(super::DurationTicks::from_raw(u64::MAX)),
+            Err(super::TimeConversionError::Overflow)
+        );
     }
 }
