@@ -217,23 +217,135 @@ impl SupervisorLeaseState {
         self.state.load(Ordering::Acquire) & Self::TICKS_MASK
     }
 
-    /// Compute the exact QPC deadline when the supervisor lease expires based on
-    /// the last recorded supervisor progress timestamp, rather than sample time.
-    pub(crate) fn lease_expiry_ticks(&self, timeout: DurationTicks) -> Option<QpcTicks> {
+    /// Coherent snapshot evaluating lease age and calculating deadline from the
+    /// same atomic Acquire load of supervisor progress. Zero progress or zero
+    /// timeout never produces a usable lease proof.
+    pub(crate) fn prove_down_age_coherent(
+        &self,
+        now: QpcTicks,
+        timeout: DurationTicks,
+    ) -> (SupervisorLeaseAgeProof, Option<QpcTicks>, u64) {
         if timeout == DurationTicks::ZERO {
-            return None;
+            return (
+                SupervisorLeaseAgeProof {
+                    admission: SupervisorLeaseAdmission::Unproven,
+                    state_loads: 0,
+                    compare_exchanges: 0,
+                },
+                None,
+                0,
+            );
         }
+
+        let now = now.as_u64();
         let state = self.state.load(Ordering::Acquire);
+        let mut state_loads = 1;
         if state & Self::EXPIRED_BIT != 0 {
-            return Some(QpcTicks::ZERO);
+            return (
+                SupervisorLeaseAgeProof {
+                    admission: SupervisorLeaseAdmission::Expired,
+                    state_loads,
+                    compare_exchanges: 0,
+                },
+                Some(QpcTicks::ZERO),
+                state & Self::TICKS_MASK,
+            );
         }
+
         let previous = state & Self::TICKS_MASK;
         if previous == 0 {
-            return None;
+            return (
+                SupervisorLeaseAgeProof {
+                    admission: SupervisorLeaseAdmission::Unproven,
+                    state_loads,
+                    compare_exchanges: 0,
+                },
+                None,
+                0,
+            );
         }
-        Some(QpcTicks::from_raw(
-            previous.saturating_add(timeout.as_u64()),
-        ))
+
+        let expiry = QpcTicks::from_raw(previous.saturating_add(timeout.as_u64()));
+
+        if now < previous || now - previous <= timeout.as_u64() {
+            return (
+                SupervisorLeaseAgeProof {
+                    admission: SupervisorLeaseAdmission::Fresh,
+                    state_loads,
+                    compare_exchanges: 0,
+                },
+                Some(expiry),
+                previous,
+            );
+        }
+
+        #[cfg(test)]
+        {
+            let replacement = self
+                .force_down_proof_state_before_cas_for_test
+                .swap(u64::MAX, Ordering::Relaxed);
+            if replacement != u64::MAX {
+                self.state.store(replacement, Ordering::Release);
+            }
+        }
+
+        match self.state.compare_exchange(
+            state,
+            state | Self::EXPIRED_BIT,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => (
+                SupervisorLeaseAgeProof {
+                    admission: SupervisorLeaseAdmission::Expired,
+                    state_loads,
+                    compare_exchanges: 1,
+                },
+                Some(QpcTicks::ZERO),
+                previous,
+            ),
+            Err(reloaded) => {
+                state_loads += 1;
+                if reloaded & Self::EXPIRED_BIT != 0 {
+                    (
+                        SupervisorLeaseAgeProof {
+                            admission: SupervisorLeaseAdmission::Expired,
+                            state_loads,
+                            compare_exchanges: 1,
+                        },
+                        Some(QpcTicks::ZERO),
+                        reloaded & Self::TICKS_MASK,
+                    )
+                } else {
+                    let reloaded_previous = reloaded & Self::TICKS_MASK;
+                    if reloaded_previous != 0
+                        && (now < reloaded_previous || now - reloaded_previous <= timeout.as_u64())
+                    {
+                        (
+                            SupervisorLeaseAgeProof {
+                                admission: SupervisorLeaseAdmission::Fresh,
+                                state_loads,
+                                compare_exchanges: 1,
+                            },
+                            Some(QpcTicks::from_raw(
+                                reloaded_previous.saturating_add(timeout.as_u64()),
+                            )),
+                            reloaded_previous,
+                        )
+                    } else {
+                        (
+                            SupervisorLeaseAgeProof {
+                                admission: SupervisorLeaseAdmission::Unproven,
+                                state_loads,
+                                compare_exchanges: 1,
+                            },
+                            None,
+                            reloaded_previous,
+                        )
+                    }
+                }
+            }
+        }
     }
 
     pub(crate) fn latch_expired(&self) {

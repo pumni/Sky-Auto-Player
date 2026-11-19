@@ -30,6 +30,12 @@ fn candidate_b_up_only_fast_crossing_single_query_succeeds() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     harness.config.admission_variant = AdmissionVariant::B;
@@ -108,6 +114,12 @@ fn candidate_b_down_packet_is_strictly_forced_through_control_a() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     // Configure Candidate B
@@ -142,6 +154,12 @@ fn candidate_b_stale_proof_due_to_preemption_falls_back_to_variant_a() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     harness.config.admission_variant = AdmissionVariant::B;
@@ -232,6 +250,12 @@ fn candidate_b_missing_precheck_falls_back_to_variant_a() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     harness.config.admission_variant = AdmissionVariant::B;
@@ -281,6 +305,12 @@ fn candidate_b_focus_lost_before_crossing_enters_focus_pause_and_replans() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     harness.config.admission_variant = AdmissionVariant::B;
@@ -359,6 +389,12 @@ fn candidate_b_owner_mismatch_at_crossing_fails_closed() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     harness.config.admission_variant = AdmissionVariant::B;
@@ -444,6 +480,12 @@ fn candidate_b_target_invalidated_at_crossing_fails_closed() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     harness.config.admission_variant = AdmissionVariant::B;
@@ -529,6 +571,12 @@ fn candidate_b_release_owner_unbind_at_crossing_fails_closed() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     harness.config.admission_variant = AdmissionVariant::B;
@@ -617,6 +665,12 @@ fn candidate_b_target_process_exit_at_crossing_fails_closed() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     harness.config.admission_variant = AdmissionVariant::B;
@@ -707,6 +761,12 @@ fn candidate_b_lease_expiry_tied_to_supervisor_progress_boundary() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     harness.config.admission_variant = AdmissionVariant::B;
@@ -717,12 +777,16 @@ fn candidate_b_lease_expiry_tied_to_supervisor_progress_boundary() {
     // The lease expires strictly at epoch + 10_000 ticks, tied to supervisor progress.
     harness.supervisor_expired.reset(epoch);
     let lease_timeout_ticks = DurationTicks::from_raw(10_000);
-    let expiry = harness
+    let (proof, expiry, progress) = harness
         .supervisor_expired
-        .lease_expiry_ticks(lease_timeout_ticks)
-        .expect("lease expiry ticks");
+        .prove_down_age_coherent(epoch, lease_timeout_ticks);
     assert_eq!(
-        expiry,
+        proof.admission,
+        crate::engine::shared::SupervisorLeaseAdmission::Fresh
+    );
+    assert_eq!(progress, epoch.as_u64());
+    assert_eq!(
+        expiry.expect("lease expiry ticks"),
         sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 10_000)
     );
 }
@@ -769,6 +833,12 @@ fn candidate_b_qpc_clock_failure_in_precheck_fails_closed() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
     harness.configure_focus_owner_for_test(1, 101);
     harness.mark_as_receive_only_sink_for_test();
     harness.config.admission_variant = AdmissionVariant::B;
@@ -828,4 +898,628 @@ fn candidate_b_qpc_clock_failure_in_precheck_fails_closed() {
         Err(crate::engine::worker::admission::FinalDownAdmissionResult::Terminal(ref err))
             if err.contains("prepared_down_qpc_failure")
     ));
+}
+
+#[test]
+fn candidate_b_post_focus_quit_race_fails_closed_zero_send() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundTestReset;
+
+    let actions = [
+        test_action(1, ActionKind::Down, 0, 0x15),
+        test_action(2, ActionKind::Up, 20_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
+    harness.configure_focus_owner_for_test(1, 101);
+    harness.mark_as_receive_only_sink_for_test();
+    harness.config.admission_variant = AdmissionVariant::B;
+    let packets = harness.configure_mock_packet_sender_for_test(&[]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = candidate_at(&mut harness, epoch, epoch);
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(packets.lock().expect("packets").len(), 1);
+
+    let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+    let candidate = harness
+        .stage_candidate_for_test(
+            0x0001,
+            None,
+            sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+        )
+        .expect("stage Up")
+        .expect("Up candidate");
+    harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+    let precheck_signals = FinalControlSignals {
+        quit_requested: &harness.quit_requested,
+        skip_requested: &harness.skip_requested,
+        panic_requested: &harness.panic_requested,
+        desired_pause: &harness.desired_pause,
+        supervisor_expired: &harness.supervisor_expired,
+        system_power: Some(&harness.system_power),
+    };
+    let max_proof_age_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(500)
+        .expect("duration");
+    let proof = perform_candidate_b_precheck(
+        &harness.target,
+        candidate.target_stamp.unwrap(),
+        harness.config.focus.require_focus,
+        &harness.focus_active,
+        precheck_signals,
+        harness.timing.lease_timeout_ticks,
+        harness.resources.clock,
+        &harness.resources.backend,
+        MusicalPacketKind::UpOnly,
+        max_proof_age_ticks,
+    )
+    .expect("precheck proof");
+    harness.runtime.candidate_b_pending_precheck = Some(proof);
+
+    // Inject Quit during post-focus hook
+    harness.set_post_focus_revalidation_race_hook(|_, _, quit, _, _, _, _| {
+        quit.store(true, std::sync::atomic::Ordering::Release);
+    });
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        StagedDispatchOutcome::Exit
+    );
+
+    // Invariants: ZERO additional raw sends, release obligation preserved without regression
+    assert_eq!(packets.lock().expect("packets").len(), 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0x0001);
+}
+
+#[test]
+fn candidate_b_post_focus_suspend_race_fails_closed_zero_send() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundTestReset;
+
+    let actions = [
+        test_action(1, ActionKind::Down, 0, 0x15),
+        test_action(2, ActionKind::Up, 20_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
+    harness.configure_focus_owner_for_test(1, 101);
+    harness.mark_as_receive_only_sink_for_test();
+    harness.config.admission_variant = AdmissionVariant::B;
+    let packets = harness.configure_mock_packet_sender_for_test(&[]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = candidate_at(&mut harness, epoch, epoch);
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+    let candidate = harness
+        .stage_candidate_for_test(
+            0x0001,
+            None,
+            sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+        )
+        .expect("stage Up")
+        .expect("Up candidate");
+    harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+    let precheck_signals = FinalControlSignals {
+        quit_requested: &harness.quit_requested,
+        skip_requested: &harness.skip_requested,
+        panic_requested: &harness.panic_requested,
+        desired_pause: &harness.desired_pause,
+        supervisor_expired: &harness.supervisor_expired,
+        system_power: Some(&harness.system_power),
+    };
+    let max_proof_age_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(500)
+        .expect("duration");
+    let proof = perform_candidate_b_precheck(
+        &harness.target,
+        candidate.target_stamp.unwrap(),
+        harness.config.focus.require_focus,
+        &harness.focus_active,
+        precheck_signals,
+        harness.timing.lease_timeout_ticks,
+        harness.resources.clock,
+        &harness.resources.backend,
+        MusicalPacketKind::UpOnly,
+        max_proof_age_ticks,
+    )
+    .expect("precheck proof");
+    harness.runtime.candidate_b_pending_precheck = Some(proof);
+
+    // Inject SystemSuspend during post-focus hook
+    let interrupt = harness.interrupt.clone();
+    harness.set_post_focus_revalidation_race_hook(move |_, _, _, _, _, _, power| {
+        power.notify(true, &interrupt);
+    });
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        StagedDispatchOutcome::Exit
+    );
+
+    assert_eq!(
+        harness.runtime.terminal_trigger,
+        Some(crate::engine::worker::control::TerminalTrigger::SystemSuspend)
+    );
+    assert_eq!(packets.lock().expect("packets").len(), 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0x0001);
+}
+
+#[test]
+fn candidate_b_post_focus_pause_race_replans_zero_send() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundTestReset;
+
+    let actions = [
+        test_action(1, ActionKind::Down, 0, 0x15),
+        test_action(2, ActionKind::Up, 20_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
+    harness.configure_focus_owner_for_test(1, 101);
+    harness.mark_as_receive_only_sink_for_test();
+    harness.config.admission_variant = AdmissionVariant::B;
+    let packets = harness.configure_mock_packet_sender_for_test(&[]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = candidate_at(&mut harness, epoch, epoch);
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+    let candidate = harness
+        .stage_candidate_for_test(
+            0x0001,
+            None,
+            sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+        )
+        .expect("stage Up")
+        .expect("Up candidate");
+    harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+    let precheck_signals = FinalControlSignals {
+        quit_requested: &harness.quit_requested,
+        skip_requested: &harness.skip_requested,
+        panic_requested: &harness.panic_requested,
+        desired_pause: &harness.desired_pause,
+        supervisor_expired: &harness.supervisor_expired,
+        system_power: Some(&harness.system_power),
+    };
+    let max_proof_age_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(500)
+        .expect("duration");
+    let proof = perform_candidate_b_precheck(
+        &harness.target,
+        candidate.target_stamp.unwrap(),
+        harness.config.focus.require_focus,
+        &harness.focus_active,
+        precheck_signals,
+        harness.timing.lease_timeout_ticks,
+        harness.resources.clock,
+        &harness.resources.backend,
+        MusicalPacketKind::UpOnly,
+        max_proof_age_ticks,
+    )
+    .expect("precheck proof");
+    harness.runtime.candidate_b_pending_precheck = Some(proof);
+
+    // Inject Pause during post-focus hook
+    harness.set_post_focus_revalidation_race_hook(|_, _, _, _, _, pause, _| {
+        pause.store(true, std::sync::atomic::Ordering::Release);
+    });
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        StagedDispatchOutcome::Replan
+    );
+
+    assert_eq!(packets.lock().expect("packets").len(), 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0x0001);
+}
+
+#[test]
+fn candidate_b_post_focus_target_invalidated_race_fails_closed_zero_send() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundTestReset;
+
+    let actions = [
+        test_action(1, ActionKind::Down, 0, 0x15),
+        test_action(2, ActionKind::Up, 20_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
+    harness.configure_focus_owner_for_test(1, 101);
+    harness.mark_as_receive_only_sink_for_test();
+    harness.config.admission_variant = AdmissionVariant::B;
+    let packets = harness.configure_mock_packet_sender_for_test(&[]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = candidate_at(&mut harness, epoch, epoch);
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+    let candidate = harness
+        .stage_candidate_for_test(
+            0x0001,
+            None,
+            sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+        )
+        .expect("stage Up")
+        .expect("Up candidate");
+    harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+    let precheck_signals = FinalControlSignals {
+        quit_requested: &harness.quit_requested,
+        skip_requested: &harness.skip_requested,
+        panic_requested: &harness.panic_requested,
+        desired_pause: &harness.desired_pause,
+        supervisor_expired: &harness.supervisor_expired,
+        system_power: Some(&harness.system_power),
+    };
+    let max_proof_age_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(500)
+        .expect("duration");
+    let proof = perform_candidate_b_precheck(
+        &harness.target,
+        candidate.target_stamp.unwrap(),
+        harness.config.focus.require_focus,
+        &harness.focus_active,
+        precheck_signals,
+        harness.timing.lease_timeout_ticks,
+        harness.resources.clock,
+        &harness.resources.backend,
+        MusicalPacketKind::UpOnly,
+        max_proof_age_ticks,
+    )
+    .expect("precheck proof");
+    harness.runtime.candidate_b_pending_precheck = Some(proof);
+
+    // Invalidate target during post-focus hook
+    harness.set_post_focus_revalidation_race_hook(|_, target, _, _, _, _, _| {
+        target.invalidate_target();
+    });
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        StagedDispatchOutcome::Exit
+    );
+
+    assert_eq!(packets.lock().expect("packets").len(), 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0x0001);
+}
+
+#[test]
+fn candidate_b_post_focus_lease_expired_race_fails_closed_zero_send() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundTestReset;
+
+    let actions = [
+        test_action(1, ActionKind::Down, 0, 0x15),
+        test_action(2, ActionKind::Up, 20_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
+    harness.configure_focus_owner_for_test(1, 101);
+    harness.mark_as_receive_only_sink_for_test();
+    harness.config.admission_variant = AdmissionVariant::B;
+    let packets = harness.configure_mock_packet_sender_for_test(&[]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = candidate_at(&mut harness, epoch, epoch);
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+    let candidate = harness
+        .stage_candidate_for_test(
+            0x0001,
+            None,
+            sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+        )
+        .expect("stage Up")
+        .expect("Up candidate");
+    harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+    let precheck_signals = FinalControlSignals {
+        quit_requested: &harness.quit_requested,
+        skip_requested: &harness.skip_requested,
+        panic_requested: &harness.panic_requested,
+        desired_pause: &harness.desired_pause,
+        supervisor_expired: &harness.supervisor_expired,
+        system_power: Some(&harness.system_power),
+    };
+    let max_proof_age_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(500)
+        .expect("duration");
+    let proof = perform_candidate_b_precheck(
+        &harness.target,
+        candidate.target_stamp.unwrap(),
+        harness.config.focus.require_focus,
+        &harness.focus_active,
+        precheck_signals,
+        harness.timing.lease_timeout_ticks,
+        harness.resources.clock,
+        &harness.resources.backend,
+        MusicalPacketKind::UpOnly,
+        max_proof_age_ticks,
+    )
+    .expect("precheck proof");
+    harness.runtime.candidate_b_pending_precheck = Some(proof);
+
+    // Latch supervisor lease expired
+    harness.supervisor_expired.latch_expired();
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        StagedDispatchOutcome::Exit
+    );
+
+    assert_eq!(packets.lock().expect("packets").len(), 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0x0001);
+}
+
+#[test]
+fn candidate_b_precheck_zero_progress_or_timeout_fails_closed() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundTestReset;
+
+    let actions = [
+        test_action(1, ActionKind::Down, 0, 0x15),
+        test_action(2, ActionKind::Up, 20_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
+    harness.configure_focus_owner_for_test(1, 101);
+    harness.mark_as_receive_only_sink_for_test();
+    harness.config.admission_variant = AdmissionVariant::B;
+    let _packets = harness.configure_mock_packet_sender_for_test(&[]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = candidate_at(&mut harness, epoch, epoch);
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+    let candidate = harness
+        .stage_candidate_for_test(
+            0x0001,
+            None,
+            sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+        )
+        .expect("stage Up")
+        .expect("Up candidate");
+    harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+    let precheck_signals = FinalControlSignals {
+        quit_requested: &harness.quit_requested,
+        skip_requested: &harness.skip_requested,
+        panic_requested: &harness.panic_requested,
+        desired_pause: &harness.desired_pause,
+        supervisor_expired: &harness.supervisor_expired,
+        system_power: Some(&harness.system_power),
+    };
+    let max_proof_age_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(500)
+        .expect("duration");
+
+    // 1. Zero timeout fails closed as unproven
+    let zero_timeout_res = perform_candidate_b_precheck(
+        &harness.target,
+        candidate.target_stamp.unwrap(),
+        harness.config.focus.require_focus,
+        &harness.focus_active,
+        precheck_signals,
+        DurationTicks::ZERO,
+        harness.resources.clock,
+        &harness.resources.backend,
+        MusicalPacketKind::UpOnly,
+        max_proof_age_ticks,
+    );
+    assert!(matches!(
+        zero_timeout_res,
+        Err(crate::engine::worker::admission::FinalDownAdmissionResult::Terminal(ref err))
+            if err.contains("supervisor_lease_unproven")
+    ));
+
+    // 2. Zero progress supervisor state fails closed as unproven
+    let uninitialized_supervisor =
+        crate::engine::shared::SupervisorLeaseState::new(sky_dispatch_core::time::QpcTicks::ZERO);
+    let zero_progress_signals = FinalControlSignals {
+        quit_requested: &harness.quit_requested,
+        skip_requested: &harness.skip_requested,
+        panic_requested: &harness.panic_requested,
+        desired_pause: &harness.desired_pause,
+        supervisor_expired: &uninitialized_supervisor,
+        system_power: Some(&harness.system_power),
+    };
+    let zero_progress_res = perform_candidate_b_precheck(
+        &harness.target,
+        candidate.target_stamp.unwrap(),
+        harness.config.focus.require_focus,
+        &harness.focus_active,
+        zero_progress_signals,
+        harness.timing.lease_timeout_ticks,
+        harness.resources.clock,
+        &harness.resources.backend,
+        MusicalPacketKind::UpOnly,
+        max_proof_age_ticks,
+    );
+    assert!(matches!(
+        zero_progress_res,
+        Err(crate::engine::worker::admission::FinalDownAdmissionResult::Terminal(ref err))
+            if err.contains("supervisor_lease_unproven")
+    ));
+}
+
+#[test]
+fn candidate_b_caller_qpc_clock_failure_at_crossing_fails_closed_zero_send() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundTestReset;
+
+    let actions = [
+        test_action(1, ActionKind::Down, 0, 0x15),
+        test_action(2, ActionKind::Up, 20_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.timing.lease_timeout_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(100_000)
+        .expect("lease timeout");
+    harness.supervisor_expired.reset(epoch);
+    harness.configure_focus_owner_for_test(1, 101);
+    harness.mark_as_receive_only_sink_for_test();
+    harness.config.admission_variant = AdmissionVariant::B;
+    let packets = harness.configure_mock_packet_sender_for_test(&[]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = candidate_at(&mut harness, epoch, epoch);
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    let up_epoch = sky_dispatch_core::time::QpcTicks::from_raw(epoch.as_u64() + 20_000);
+    let candidate = harness
+        .stage_candidate_for_test(
+            0x0001,
+            None,
+            sky_dispatch_core::time::TimelineTicks::from_raw(20_000),
+        )
+        .expect("stage Up")
+        .expect("Up candidate");
+    harness.set_mock_sender_start_qpc_for_test(up_epoch);
+
+    let precheck_signals = FinalControlSignals {
+        quit_requested: &harness.quit_requested,
+        skip_requested: &harness.skip_requested,
+        panic_requested: &harness.panic_requested,
+        desired_pause: &harness.desired_pause,
+        supervisor_expired: &harness.supervisor_expired,
+        system_power: Some(&harness.system_power),
+    };
+    let max_proof_age_ticks = harness
+        .resources
+        .clock
+        .duration_from_us(500)
+        .expect("duration");
+    let proof = perform_candidate_b_precheck(
+        &harness.target,
+        candidate.target_stamp.unwrap(),
+        harness.config.focus.require_focus,
+        &harness.focus_active,
+        precheck_signals,
+        harness.timing.lease_timeout_ticks,
+        harness.resources.clock,
+        &harness.resources.backend,
+        MusicalPacketKind::UpOnly,
+        max_proof_age_ticks,
+    )
+    .expect("precheck proof");
+    harness.runtime.candidate_b_pending_precheck = Some(proof);
+
+    // Injected QPC fault causes crossing QPC read to fail closed
+    sky_dispatch_win32::clock::set_qpc_now_fault_for_test(true);
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    sky_dispatch_win32::clock::set_qpc_now_fault_for_test(false);
+
+    assert_eq!(outcome, StagedDispatchOutcome::Exit);
+    assert_eq!(packets.lock().expect("packets").len(), 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0x0001);
 }

@@ -107,6 +107,12 @@ static SIMULATE_GET_PROCESS_INFO_FAIL: std::sync::atomic::AtomicBool =
 #[cfg(feature = "test-support")]
 static SIMULATE_SET_PROCESS_INFO_FAIL: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-support")]
+static SIMULATE_RESTORE_FAIL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-support")]
+static LAST_RESTORE_FAILED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 
 #[cfg(feature = "test-support")]
 pub fn set_simulate_get_process_info_fail_for_test(fail: bool) {
@@ -116,6 +122,21 @@ pub fn set_simulate_get_process_info_fail_for_test(fail: bool) {
 #[cfg(feature = "test-support")]
 pub fn set_simulate_set_process_info_fail_for_test(fail: bool) {
     SIMULATE_SET_PROCESS_INFO_FAIL.store(fail, std::sync::atomic::Ordering::Release);
+}
+
+#[cfg(feature = "test-support")]
+pub fn set_simulate_restore_fail_for_test(fail: bool) {
+    SIMULATE_RESTORE_FAIL.store(fail, std::sync::atomic::Ordering::Release);
+}
+
+#[cfg(feature = "test-support")]
+pub fn last_restore_failed_for_test() -> bool {
+    LAST_RESTORE_FAILED.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(feature = "test-support")]
+pub fn reset_restore_failed_for_test() {
+    LAST_RESTORE_FAILED.store(false, std::sync::atomic::Ordering::Release);
 }
 
 /// Process-level Quality of Service policy for diagnostic measurement and lab evaluation.
@@ -286,13 +307,25 @@ impl Drop for ProcessPowerThrottlingGuard {
                 PROCESS_POWER_THROTTLING_STATE, ProcessPowerThrottling, SetProcessInformation,
             };
 
-            unsafe {
-                SetProcessInformation(
-                    self.process,
-                    ProcessPowerThrottling,
-                    (&raw const previous).cast::<c_void>(),
-                    size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
-                );
+            #[cfg(feature = "test-support")]
+            let force_restore_fail =
+                SIMULATE_RESTORE_FAIL.load(std::sync::atomic::Ordering::Acquire);
+            #[cfg(not(feature = "test-support"))]
+            let force_restore_fail = false;
+
+            let restored = !force_restore_fail
+                && unsafe {
+                    SetProcessInformation(
+                        self.process,
+                        ProcessPowerThrottling,
+                        (&raw const previous).cast::<c_void>(),
+                        size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+                    )
+                } != 0;
+
+            if !restored {
+                #[cfg(feature = "test-support")]
+                LAST_RESTORE_FAILED.store(true, std::sync::atomic::Ordering::Release);
             }
         }
     }
@@ -348,5 +381,27 @@ mod tests {
         );
         drop(guard);
         super::set_simulate_set_process_info_fail_for_test(false);
+    }
+
+    #[test]
+    fn process_power_throttling_guard_restoration_verification() {
+        super::reset_restore_failed_for_test();
+        let guard = ProcessPowerThrottlingGuard::apply(ProcessQosPolicy::IgnoreTimerResolution);
+        drop(guard);
+        assert!(
+            !super::last_restore_failed_for_test(),
+            "clean drop must not report restoration failure"
+        );
+
+        super::reset_restore_failed_for_test();
+        super::set_simulate_restore_fail_for_test(true);
+        let guard = ProcessPowerThrottlingGuard::apply(ProcessQosPolicy::IgnoreTimerResolution);
+        drop(guard);
+        assert!(
+            super::last_restore_failed_for_test(),
+            "injected restore failure must be recorded by diagnostic hook"
+        );
+        super::set_simulate_restore_fail_for_test(false);
+        super::reset_restore_failed_for_test();
     }
 }

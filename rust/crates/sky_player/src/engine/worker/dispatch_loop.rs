@@ -2196,7 +2196,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                 break;
                             }
                         };
-                        if let Ok(proof) = perform_candidate_b_precheck(
+                        let precheck_outcome = perform_candidate_b_precheck(
                             target,
                             expected_target,
                             config.focus.require_focus,
@@ -2207,8 +2207,22 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             &resources.backend,
                             packet_kind,
                             max_proof_age_ticks,
-                        ) {
-                            core.runtime.candidate_b_pending_precheck = Some(proof);
+                        );
+                        match precheck_outcome {
+                            Ok(proof) => {
+                                core.runtime.candidate_b_pending_precheck = Some(proof);
+                            }
+                            Err(FinalDownAdmissionResult::Terminal(err)) => {
+                                core.runtime.terminal_error = Some(err);
+                                break;
+                            }
+                            Err(FinalDownAdmissionResult::Replan)
+                            | Err(FinalDownAdmissionResult::ModifierHeld)
+                            | Err(FinalDownAdmissionResult::Allowed) => {
+                                // Explicitly documented recoverable precheck outcome (e.g. transient focus pause
+                                // or modifier held during precheck window). Candidate B establishes no proof,
+                                // leaving pending_precheck = None, which cleanly falls back to Control A at crossing boundary.
+                            }
                         }
                     }
 

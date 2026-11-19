@@ -631,7 +631,8 @@ pub(crate) struct PrecheckProof {
     pub(crate) max_age_ticks: DurationTicks,
     pub(crate) target_stamp: TargetStamp,
     pub(crate) owner_pid: u32,
-    pub(crate) lease_expiry_qpc: Option<QpcTicks>,
+    pub(crate) proven_progress_ticks: u64,
+    pub(crate) lease_expiry_qpc: QpcTicks,
     pub(crate) packet_kind: MusicalPacketKind,
 }
 
@@ -649,9 +650,7 @@ impl PrecheckProof {
         if age_ticks > self.max_age_ticks {
             return false;
         }
-        if let Some(expiry) = self.lease_expiry_qpc
-            && now_qpc >= expiry
-        {
+        if self.lease_expiry_qpc == QpcTicks::ZERO || now_qpc >= self.lease_expiry_qpc {
             return false;
         }
         true
@@ -873,19 +872,32 @@ pub(crate) fn perform_candidate_b_precheck(
         return Err(FinalDownAdmissionResult::ModifierHeld);
     }
 
-    let lease_proof = control_signals
+    let (lease_proof, lease_expiry_opt, proven_progress_ticks) = control_signals
         .supervisor_expired
-        .prove_down_age(precheck_begin_qpc, lease_timeout_ticks);
+        .prove_down_age_coherent(precheck_begin_qpc, lease_timeout_ticks);
+
     if lease_proof.admission != SupervisorLeaseAdmission::Fresh {
+        return Err(match lease_proof.admission {
+            SupervisorLeaseAdmission::Expired => {
+                FinalDownAdmissionResult::Terminal("supervisor_lease_expired".to_string())
+            }
+            SupervisorLeaseAdmission::Unproven => {
+                FinalDownAdmissionResult::Terminal("supervisor_lease_unproven".to_string())
+            }
+            SupervisorLeaseAdmission::Fresh => unreachable!(),
+        });
+    }
+
+    let Some(lease_expiry_qpc) = lease_expiry_opt else {
         return Err(FinalDownAdmissionResult::Terminal(
-            "supervisor_lease_expired".to_string(),
+            "supervisor_lease_unproven".to_string(),
+        ));
+    };
+    if proven_progress_ticks == 0 {
+        return Err(FinalDownAdmissionResult::Terminal(
+            "supervisor_lease_unproven".to_string(),
         ));
     }
-    // P0-2: Lease expiry is bound strictly to the confirmed supervisor progress,
-    // not artificially extended by sample time + timeout.
-    let lease_expiry_qpc = control_signals
-        .supervisor_expired
-        .lease_expiry_ticks(lease_timeout_ticks);
 
     let owner_pid = if require_focus {
         let Some(release_owner) = backend.session_release_owner_proof() else {
@@ -929,6 +941,7 @@ pub(crate) fn perform_candidate_b_precheck(
         max_age_ticks: max_proof_age_ticks,
         target_stamp: expected,
         owner_pid,
+        proven_progress_ticks,
         lease_expiry_qpc,
         packet_kind,
     })
@@ -1016,89 +1029,161 @@ pub(crate) fn verify_candidate_b_crossing(
         }
     }
 
-    // Control and termination signals check
-    if !packet_kind.has_down() {
-        match final_control_precheck(control_signals) {
-            FinalControlAdmission::Allowed => {}
-            FinalControlAdmission::PauseRequested => {
-                return (FinalDownAdmissionResult::Replan, true);
-            }
-            FinalControlAdmission::SystemSuspendRequested => {
-                runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
-                return (
-                    FinalDownAdmissionResult::Terminal("prepared_down_system_suspend".to_string()),
-                    false,
-                );
-            }
-            FinalControlAdmission::PanicRequested
-            | FinalControlAdmission::QuitRequested
-            | FinalControlAdmission::SkipRequested => {
-                return (
-                    FinalDownAdmissionResult::Terminal("prepared_down_control_exit".to_string()),
-                    false,
-                );
-            }
+    // Early control check before foreground query
+    match final_control_precheck(control_signals) {
+        FinalControlAdmission::Allowed => {}
+        FinalControlAdmission::PauseRequested => {
+            return (FinalDownAdmissionResult::Replan, true);
         }
-    } else if final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
-        return (FinalDownAdmissionResult::Replan, true);
+        FinalControlAdmission::SystemSuspendRequested => {
+            runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
+            return (
+                FinalDownAdmissionResult::Terminal("prepared_down_system_suspend".to_string()),
+                false,
+            );
+        }
+        FinalControlAdmission::PanicRequested
+        | FinalControlAdmission::QuitRequested
+        | FinalControlAdmission::SkipRequested => {
+            return (
+                FinalDownAdmissionResult::Terminal("prepared_down_control_exit".to_string()),
+                false,
+            );
+        }
     }
 
-    if let Some(proof) = precheck
-        && proof.is_fresh(now_qpc)
-        && proof.target_stamp == expected
-        && proof.packet_kind == packet_kind
-    {
-        #[cfg(any(test, feature = "test-support"))]
-        if let Some(hook) = runtime.final_gate_before_syscall_hook.as_ref() {
-            hook();
-        }
-
-        if require_focus {
-            match sky_dispatch_win32::focus::foreground_window_owner_matches(
-                expected.hwnd,
-                proof.owner_pid,
-            ) {
-                sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => {}
-                sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => {
-                    let _ = handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock);
-                    return (FinalDownAdmissionResult::Replan, true);
-                }
-                sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
-                    return (
-                        FinalDownAdmissionResult::Terminal(
-                            "prepared_down_owner_mismatch".to_string(),
-                        ),
-                        true,
-                    );
-                }
-                sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => {
-                    return (
-                        FinalDownAdmissionResult::Terminal(
-                            "prepared_down_owner_query_unavailable".to_string(),
-                        ),
-                        true,
-                    );
-                }
-            }
-        }
-
-        #[cfg(any(test, feature = "test-support"))]
-        if let (Some(hook), Some(system_power)) = (
-            runtime.final_gate_post_focus_race_hook.as_ref(),
-            control_signals.system_power,
-        ) {
-            hook(
-                focus_active,
-                target,
-                control_signals.quit_requested,
-                control_signals.skip_requested,
-                control_signals.panic_requested,
-                control_signals.desired_pause,
-                system_power,
+    if let Some(proof) = precheck {
+        // If lease has already expired, fail closed immediately
+        if now_qpc >= proof.lease_expiry_qpc || control_signals.supervisor_expired.is_expired() {
+            return (
+                FinalDownAdmissionResult::Terminal("supervisor_lease_expired".to_string()),
+                false,
             );
         }
 
-        return (FinalDownAdmissionResult::Allowed, true);
+        // If proof matches and is fresh, proceed through B-Up crossing path
+        if proof.is_fresh(now_qpc)
+            && proof.target_stamp == expected
+            && proof.packet_kind == packet_kind
+        {
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(hook) = runtime.final_gate_before_syscall_hook.as_ref() {
+                hook();
+            }
+
+            if require_focus {
+                match sky_dispatch_win32::focus::foreground_window_owner_matches(
+                    expected.hwnd,
+                    proof.owner_pid,
+                ) {
+                    sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => {}
+                    sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => {
+                        let _ =
+                            handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock);
+                        return (FinalDownAdmissionResult::Replan, true);
+                    }
+                    sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
+                        return (
+                            FinalDownAdmissionResult::Terminal(
+                                "prepared_down_owner_mismatch".to_string(),
+                            ),
+                            true,
+                        );
+                    }
+                    sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => {
+                        return (
+                            FinalDownAdmissionResult::Terminal(
+                                "prepared_down_owner_query_unavailable".to_string(),
+                            ),
+                            true,
+                        );
+                    }
+                }
+            }
+
+            #[cfg(any(test, feature = "test-support"))]
+            if let (Some(hook), Some(system_power)) = (
+                runtime.final_gate_post_focus_race_hook.as_ref(),
+                control_signals.system_power,
+            ) {
+                hook(
+                    focus_active,
+                    target,
+                    control_signals.quit_requested,
+                    control_signals.skip_requested,
+                    control_signals.panic_requested,
+                    control_signals.desired_pause,
+                    system_power,
+                );
+            }
+
+            // P0-1: Final control/target/lease check immediately before send
+            // 1. Fresh QPC sample at final sender boundary
+            let final_boundary_qpc = match qpc_clock.now() {
+                Ok(ticks) => ticks,
+                Err(_) => {
+                    return (
+                        FinalDownAdmissionResult::Terminal("prepared_down_qpc_failure".to_string()),
+                        false,
+                    );
+                }
+            };
+
+            // 2. Fresh lease boundary check: ensure lease did not expire during foreground query
+            if final_boundary_qpc >= proof.lease_expiry_qpc
+                || control_signals.supervisor_expired.is_expired()
+            {
+                return (
+                    FinalDownAdmissionResult::Terminal("supervisor_lease_expired".to_string()),
+                    false,
+                );
+            }
+
+            // 3. Final target validity and release-owner currency check
+            if !target.is_valid() {
+                return (
+                    FinalDownAdmissionResult::Terminal(
+                        "prepared_down_target_invalidated".to_string(),
+                    ),
+                    false,
+                );
+            }
+            if !target.release_owner_proof_is_current(release_owner) {
+                return (
+                    FinalDownAdmissionResult::Terminal("prepared_down_target_changed".to_string()),
+                    false,
+                );
+            }
+
+            // 4. Final control state check with Up-only distinct outcomes
+            match final_control_precheck(control_signals) {
+                FinalControlAdmission::Allowed => {}
+                FinalControlAdmission::PauseRequested => {
+                    return (FinalDownAdmissionResult::Replan, true);
+                }
+                FinalControlAdmission::SystemSuspendRequested => {
+                    runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
+                    return (
+                        FinalDownAdmissionResult::Terminal(
+                            "prepared_down_system_suspend".to_string(),
+                        ),
+                        false,
+                    );
+                }
+                FinalControlAdmission::PanicRequested
+                | FinalControlAdmission::QuitRequested
+                | FinalControlAdmission::SkipRequested => {
+                    return (
+                        FinalDownAdmissionResult::Terminal(
+                            "prepared_down_control_exit".to_string(),
+                        ),
+                        false,
+                    );
+                }
+            }
+
+            return (FinalDownAdmissionResult::Allowed, true);
+        }
     }
 
     // Missing or stale precheck proof: fallback to full Control A admission
