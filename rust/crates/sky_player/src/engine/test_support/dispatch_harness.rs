@@ -226,7 +226,7 @@ impl ProductionDispatchTestHarness {
         let playback = PlaybackClockState::new(epoch, DurationTicks::ZERO)
             .map_err(|error| format!("test playback clock: {error}"))?;
         let telemetry = TelemetryCollector::new(TelemetryMode::Ring, 64);
-        let resources = WorkerResources {
+        let mut resources = WorkerResources {
             clock,
             waiter: HybridWaiter::new(),
             backend,
@@ -235,6 +235,17 @@ impl ProductionDispatchTestHarness {
             telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
             scheduling: WorkerSchedulingGuards::create_test_guards(),
         };
+        if let Some(proof) =
+            sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
+                1,
+                0,
+                None,
+                None,
+                config.focus.require_focus,
+            )
+        {
+            let _ = resources.backend.bind_session_release_owner(proof);
+        }
         let progress_clock = SharedProgressClock::default();
         progress_clock.publish(&resources.playback);
 
@@ -687,6 +698,9 @@ impl ProductionDispatchTestHarness {
             .target
             .try_release_owner_proof_for_generation(hwnd, generation)
             .expect("focus fixture session owner proof");
+        self.resources
+            .backend
+            .forget_release_owner_proof_for_test(0xffff);
         self.resources
             .backend
             .bind_session_release_owner(release_owner)

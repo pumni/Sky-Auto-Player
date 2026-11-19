@@ -144,10 +144,10 @@ impl WindowIdentityAuthority {
         }
     }
 
-    /// Recheck the retained process object's creation-time proof for one
-    /// final musical syscall. The current foreground HWND/PID is sampled
-    /// separately by `foreground_window_owner_matches`; this check binds that
-    /// fresh PID back to the process object retained during startup.
+    /// Recheck the retained process object's liveness for one final musical syscall
+    /// without repeating GetProcessTimes on every packet. The current foreground
+    /// HWND/PID is sampled separately by `foreground_window_owner_matches`; this check
+    /// verifies the retained process object remains alive via zero-time wait.
     pub fn verify_final_process_identity(
         &self,
         expected_hwnd: isize,
@@ -160,10 +160,10 @@ impl WindowIdentityAuthority {
         if self.identity.hwnd != expected_hwnd || self.identity.owner_pid != expected_owner_pid {
             return WindowIdentityContinuity::OwnerMismatch;
         }
-        self.process_identity_continuity()
+        self.process_liveness_continuity()
     }
 
-    fn process_identity_continuity(&self) -> WindowIdentityContinuity {
+    fn process_liveness_continuity(&self) -> WindowIdentityContinuity {
         #[cfg(feature = "test-support")]
         if let Some(status) = self.process_identity_test_status() {
             return status;
@@ -171,9 +171,8 @@ impl WindowIdentityAuthority {
 
         #[cfg(windows)]
         {
-            use windows_sys::Win32::Foundation::FILETIME;
             use windows_sys::Win32::Foundation::{WAIT_OBJECT_0, WAIT_TIMEOUT};
-            use windows_sys::Win32::System::Threading::{GetProcessTimes, WaitForSingleObject};
+            use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
             let Some(handle) = self.process_handle else {
                 #[cfg(feature = "test-support")]
@@ -190,37 +189,10 @@ impl WindowIdentityAuthority {
             // a process object. A zero-time wait observes liveness without
             // blocking the dispatch worker.
             match unsafe { WaitForSingleObject(handle, 0) } {
-                WAIT_TIMEOUT => {}
-                WAIT_OBJECT_0 => return WindowIdentityContinuity::ProcessTerminated,
-                _ => return WindowIdentityContinuity::QueryUnavailable,
+                WAIT_TIMEOUT => WindowIdentityContinuity::Continuous,
+                WAIT_OBJECT_0 => WindowIdentityContinuity::ProcessTerminated,
+                _ => WindowIdentityContinuity::QueryUnavailable,
             }
-            let mut creation = FILETIME {
-                dwLowDateTime: 0,
-                dwHighDateTime: 0,
-            };
-            let mut exit = FILETIME {
-                dwLowDateTime: 0,
-                dwHighDateTime: 0,
-            };
-            let mut kernel = FILETIME {
-                dwLowDateTime: 0,
-                dwHighDateTime: 0,
-            };
-            let mut user = FILETIME {
-                dwLowDateTime: 0,
-                dwHighDateTime: 0,
-            };
-            #[cfg(feature = "test-support")]
-            GET_PROCESS_TIMES_CALL_COUNT.with(|count| count.set(count.get().saturating_add(1)));
-            if unsafe { GetProcessTimes(handle, &mut creation, &mut exit, &mut kernel, &mut user) }
-                == 0
-            {
-                return WindowIdentityContinuity::QueryUnavailable;
-            }
-            if filetime_ticks(creation) != self.identity.process_start_time_filetime {
-                return WindowIdentityContinuity::ProcessIdentityMismatch;
-            }
-            WindowIdentityContinuity::Continuous
         }
         #[cfg(not(windows))]
         {
