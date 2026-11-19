@@ -558,6 +558,40 @@ pub(crate) fn stage_candidate(
     }))
 }
 
+#[allow(clippy::too_many_arguments)]
+fn handle_mixed_up_only_fallback(
+    candidate: &StagedCandidate,
+    fallback_outcome: DispatchAttemptOutcome,
+    control_signals: FinalControlSignals<'_>,
+    ctx: StagedDispatchContext<'_>,
+    resources: &mut super::WorkerResources,
+    runtime: &mut super::WorkerRuntime,
+    local_metrics: &mut super::WorkerMetricsLocal,
+    observer: Option<&super::dispatch::PendingObservationQueue>,
+) -> DispatchAttemptOutcome {
+    match stage_up_only_for_mixed_replan(
+        candidate,
+        SchedulerStageAdmission {
+            target: ctx.target,
+            require_focus: ctx.config.focus.require_focus,
+            focus_active: ctx.control.focus_active,
+            capture_up_slot_timings: observer.is_some(),
+            control_signals,
+        },
+        resources,
+        runtime,
+    ) {
+        Ok(Some(up_only)) => {
+            dispatch_staged_candidate(up_only, ctx, resources, runtime, local_metrics, observer)
+        }
+        Ok(None) => fallback_outcome,
+        Err(error) => {
+            runtime.terminal_error = Some(error);
+            DispatchAttemptOutcome::Exit
+        }
+    }
+}
+
 pub(crate) fn dispatch_staged_candidate(
     candidate: StagedCandidate,
     ctx: StagedDispatchContext<'_>,
@@ -686,102 +720,66 @@ pub(crate) fn dispatch_staged_candidate(
         FinalDownAdmissionResult::Allowed => {}
         FinalDownAdmissionResult::ModifierHeld => {
             if packet_kind.has_up() {
-                match stage_up_only_for_mixed_replan(
-                    &candidate,
-                    SchedulerStageAdmission {
-                        target,
-                        require_focus: config.focus.require_focus,
+                let fallback_ctx = StagedDispatchContext {
+                    target,
+                    config,
+                    control: StagedControlSignals {
                         focus_active,
-                        capture_up_slot_timings: observer.is_some(),
-                        control_signals,
+                        quit_requested,
+                        skip_requested,
+                        panic_requested,
+                        desired_pause,
+                        supervisor_expired,
+                        system_power,
                     },
+                    timing,
+                    qpc_clock,
+                    progress_clock,
+                    metrics,
+                };
+                return handle_mixed_up_only_fallback(
+                    &candidate,
+                    DispatchAttemptOutcome::ModifierHeld,
+                    control_signals,
+                    fallback_ctx,
                     resources,
                     runtime,
-                ) {
-                    Ok(Some(up_only)) => {
-                        let fallback_ctx = StagedDispatchContext {
-                            target,
-                            config,
-                            control: StagedControlSignals {
-                                focus_active,
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power,
-                            },
-                            timing,
-                            qpc_clock,
-                            progress_clock,
-                            metrics,
-                        };
-                        return dispatch_staged_candidate(
-                            up_only,
-                            fallback_ctx,
-                            resources,
-                            runtime,
-                            local_metrics,
-                            observer,
-                        );
-                    }
-                    Ok(None) => return DispatchAttemptOutcome::ModifierHeld,
-                    Err(error) => {
-                        runtime.terminal_error = Some(error);
-                        return DispatchAttemptOutcome::Exit;
-                    }
-                }
+                    local_metrics,
+                    observer,
+                );
             } else {
                 return DispatchAttemptOutcome::ModifierHeld;
             }
         }
         FinalDownAdmissionResult::Replan => {
             if packet_kind.has_up() && packet_kind.has_down() {
-                match stage_up_only_for_mixed_replan(
-                    &candidate,
-                    SchedulerStageAdmission {
-                        target,
-                        require_focus: config.focus.require_focus,
+                let fallback_ctx = StagedDispatchContext {
+                    target,
+                    config,
+                    control: StagedControlSignals {
                         focus_active,
-                        capture_up_slot_timings: observer.is_some(),
-                        control_signals,
+                        quit_requested,
+                        skip_requested,
+                        panic_requested,
+                        desired_pause,
+                        supervisor_expired,
+                        system_power,
                     },
+                    timing,
+                    qpc_clock,
+                    progress_clock,
+                    metrics,
+                };
+                return handle_mixed_up_only_fallback(
+                    &candidate,
+                    DispatchAttemptOutcome::Replan,
+                    control_signals,
+                    fallback_ctx,
                     resources,
                     runtime,
-                ) {
-                    Ok(Some(up_only)) => {
-                        let fallback_ctx = StagedDispatchContext {
-                            target,
-                            config,
-                            control: StagedControlSignals {
-                                focus_active,
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power,
-                            },
-                            timing,
-                            qpc_clock,
-                            progress_clock,
-                            metrics,
-                        };
-                        return dispatch_staged_candidate(
-                            up_only,
-                            fallback_ctx,
-                            resources,
-                            runtime,
-                            local_metrics,
-                            observer,
-                        );
-                    }
-                    Ok(None) => return DispatchAttemptOutcome::Replan,
-                    Err(error) => {
-                        runtime.terminal_error = Some(error);
-                        return DispatchAttemptOutcome::Exit;
-                    }
-                }
+                    local_metrics,
+                    observer,
+                );
             } else {
                 return DispatchAttemptOutcome::Replan;
             }
