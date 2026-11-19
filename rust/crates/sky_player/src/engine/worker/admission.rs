@@ -848,6 +848,11 @@ pub(crate) fn perform_candidate_b_precheck(
     packet_kind: MusicalPacketKind,
     max_proof_age_ticks: DurationTicks,
 ) -> Result<PrecheckProof, FinalDownAdmissionResult> {
+    // P0-2: Sample precheck_begin_qpc at entry before any observation
+    let precheck_begin_qpc = qpc_clock
+        .now()
+        .map_err(|_| FinalDownAdmissionResult::Terminal("prepared_down_qpc_failure".to_string()))?;
+
     if final_control_precheck(control_signals) != FinalControlAdmission::Allowed {
         return Err(FinalDownAdmissionResult::Replan);
     }
@@ -867,9 +872,7 @@ pub(crate) fn perform_candidate_b_precheck(
     {
         return Err(FinalDownAdmissionResult::ModifierHeld);
     }
-    let precheck_begin_qpc = qpc_clock
-        .now()
-        .map_err(|_| FinalDownAdmissionResult::Terminal("prepared_down_qpc_failure".to_string()))?;
+
     let lease_proof = control_signals
         .supervisor_expired
         .prove_down_age(precheck_begin_qpc, lease_timeout_ticks);
@@ -878,11 +881,11 @@ pub(crate) fn perform_candidate_b_precheck(
             "supervisor_lease_expired".to_string(),
         ));
     }
-    let lease_expiry_qpc = if lease_timeout_ticks > DurationTicks::ZERO {
-        Some(precheck_begin_qpc.saturating_add_duration(lease_timeout_ticks))
-    } else {
-        None
-    };
+    // P0-2: Lease expiry is bound strictly to the confirmed supervisor progress,
+    // not artificially extended by sample time + timeout.
+    let lease_expiry_qpc = control_signals
+        .supervisor_expired
+        .lease_expiry_ticks(lease_timeout_ticks);
 
     let owner_pid = if require_focus {
         let Some(release_owner) = backend.session_release_owner_proof() else {

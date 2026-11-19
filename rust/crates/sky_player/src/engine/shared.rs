@@ -217,6 +217,25 @@ impl SupervisorLeaseState {
         self.state.load(Ordering::Acquire) & Self::TICKS_MASK
     }
 
+    /// Compute the exact QPC deadline when the supervisor lease expires based on
+    /// the last recorded supervisor progress timestamp, rather than sample time.
+    pub(crate) fn lease_expiry_ticks(&self, timeout: DurationTicks) -> Option<QpcTicks> {
+        if timeout == DurationTicks::ZERO {
+            return None;
+        }
+        let state = self.state.load(Ordering::Acquire);
+        if state & Self::EXPIRED_BIT != 0 {
+            return Some(QpcTicks::ZERO);
+        }
+        let previous = state & Self::TICKS_MASK;
+        if previous == 0 {
+            return None;
+        }
+        Some(QpcTicks::from_raw(
+            previous.saturating_add(timeout.as_u64()),
+        ))
+    }
+
     pub(crate) fn latch_expired(&self) {
         self.state.fetch_or(Self::EXPIRED_BIT, Ordering::AcqRel);
     }

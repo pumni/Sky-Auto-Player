@@ -123,14 +123,26 @@ pub fn lock_foreground_window_for_test() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+#[cfg(feature = "test-support")]
+static TEST_WINDOW_LIVE_OVERRIDE: std::sync::atomic::AtomicIsize =
+    std::sync::atomic::AtomicIsize::new(0);
+
+#[cfg(feature = "test-support")]
+pub fn set_window_live_for_test(hwnd: Option<isize>) {
+    TEST_WINDOW_LIVE_OVERRIDE.store(hwnd.unwrap_or(0), Ordering::Release);
+}
+
 /// Query whether a window handle is currently a valid live Win32 window.
 pub fn is_window_live(hwnd: isize) -> bool {
     if hwnd <= 0 {
         return false;
     }
     #[cfg(feature = "test-support")]
-    if hwnd > 0 && hwnd < 1000 {
-        return true;
+    {
+        let override_hwnd = TEST_WINDOW_LIVE_OVERRIDE.load(Ordering::Acquire);
+        if override_hwnd != 0 && override_hwnd == hwnd {
+            return true;
+        }
     }
     #[cfg(windows)]
     {

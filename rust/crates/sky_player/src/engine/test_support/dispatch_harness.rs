@@ -707,6 +707,7 @@ impl ProductionDispatchTestHarness {
             .expect("focus fixture binds one session release owner");
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
+        sky_dispatch_win32::focus::set_window_live_for_test(Some(hwnd));
     }
 
     /// Mark this test harness target as the approved project ReceiveOnly sink.
@@ -718,6 +719,7 @@ impl ProductionDispatchTestHarness {
         self.target.invalidate_for_test();
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
+        sky_dispatch_win32::focus::set_window_live_for_test(Some(hwnd));
     }
 
     pub fn invalidate_bound_owner_for_test(&self) {

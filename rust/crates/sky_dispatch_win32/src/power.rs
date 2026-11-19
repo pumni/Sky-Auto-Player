@@ -101,6 +101,23 @@ impl Drop for PowerThrottlingGuard {
     }
 }
 
+#[cfg(feature = "test-support")]
+static SIMULATE_GET_PROCESS_INFO_FAIL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(feature = "test-support")]
+static SIMULATE_SET_PROCESS_INFO_FAIL: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(feature = "test-support")]
+pub fn set_simulate_get_process_info_fail_for_test(fail: bool) {
+    SIMULATE_GET_PROCESS_INFO_FAIL.store(fail, std::sync::atomic::Ordering::Release);
+}
+
+#[cfg(feature = "test-support")]
+pub fn set_simulate_set_process_info_fail_for_test(fail: bool) {
+    SIMULATE_SET_PROCESS_INFO_FAIL.store(fail, std::sync::atomic::Ordering::Release);
+}
+
 /// Process-level Quality of Service policy for diagnostic measurement and lab evaluation.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ProcessQosPolicy {
@@ -179,14 +196,21 @@ impl ProcessPowerThrottlingGuard {
 
             // Query existing state first. If the OS query fails, do not attempt to
             // mutate the process power throttling state, preserving safe restoration.
-            let queried = unsafe {
-                GetProcessInformation(
-                    process,
-                    ProcessPowerThrottling,
-                    (&raw mut previous).cast::<c_void>(),
-                    size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
-                )
-            } != 0;
+            #[cfg(feature = "test-support")]
+            let force_get_fail =
+                SIMULATE_GET_PROCESS_INFO_FAIL.load(std::sync::atomic::Ordering::Acquire);
+            #[cfg(not(feature = "test-support"))]
+            let force_get_fail = false;
+
+            let queried = !force_get_fail
+                && unsafe {
+                    GetProcessInformation(
+                        process,
+                        ProcessPowerThrottling,
+                        (&raw mut previous).cast::<c_void>(),
+                        size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+                    )
+                } != 0;
 
             if !queried {
                 return Self {
@@ -211,14 +235,21 @@ impl ProcessPowerThrottlingGuard {
                 StateMask: 0,
             };
 
-            let active = unsafe {
-                SetProcessInformation(
-                    process,
-                    ProcessPowerThrottling,
-                    (&raw const configured).cast::<c_void>(),
-                    size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
-                )
-            } != 0;
+            #[cfg(feature = "test-support")]
+            let force_set_fail =
+                SIMULATE_SET_PROCESS_INFO_FAIL.load(std::sync::atomic::Ordering::Acquire);
+            #[cfg(not(feature = "test-support"))]
+            let force_set_fail = false;
+
+            let active = !force_set_fail
+                && unsafe {
+                    SetProcessInformation(
+                        process,
+                        ProcessPowerThrottling,
+                        (&raw const configured).cast::<c_void>(),
+                        size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
+                    )
+                } != 0;
 
             Self {
                 process,
@@ -295,5 +326,27 @@ mod tests {
             assert_eq!(guard.policy(), policy);
             drop(guard);
         }
+    }
+
+    #[test]
+    fn process_power_throttling_guard_failure_injection() {
+        super::set_simulate_get_process_info_fail_for_test(true);
+        let guard = ProcessPowerThrottlingGuard::apply(ProcessQosPolicy::IgnoreTimerResolution);
+        assert!(
+            !guard.is_active(),
+            "guard must not be active if GetProcessInformation failed"
+        );
+        assert!(guard.previous.is_none());
+        drop(guard);
+        super::set_simulate_get_process_info_fail_for_test(false);
+
+        super::set_simulate_set_process_info_fail_for_test(true);
+        let guard = ProcessPowerThrottlingGuard::apply(ProcessQosPolicy::IgnoreTimerResolution);
+        assert!(
+            !guard.is_active(),
+            "guard must not be active if SetProcessInformation failed"
+        );
+        drop(guard);
+        super::set_simulate_set_process_info_fail_for_test(false);
     }
 }

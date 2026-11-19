@@ -667,9 +667,12 @@ pub(crate) fn dispatch_staged_candidate(
         }
     }
 
+    // P0-3: Candidate B is strictly restricted to Up-only on ReceiveOnly test sinks.
+    // Down and Mixed packets unconditionally execute full Control A final modifier scan.
     let is_candidate_b = config.admission_variant == super::super::config::AdmissionVariant::B
         && target.owner_process_identity_required()
-        && target.is_receive_only_sink();
+        && target.is_receive_only_sink()
+        && !packet_kind.has_down();
 
     let pending_precheck = runtime.candidate_b_pending_precheck.take();
     let (admission_result, fast_path_taken) = if is_candidate_b {
@@ -2080,29 +2083,53 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         |candidate| candidate.authored_target_ticks,
                     );
 
+                    let packet_has_down = candidate
+                        .as_ref()
+                        .is_some_and(|c| c.packet_masks.down_mask != 0);
+
+                    // P0-3: Candidate B is strictly restricted to Up-only on ReceiveOnly test sinks.
+                    // Down and Mixed packets unconditionally execute full Control A final modifier scan.
                     let is_candidate_b = config.admission_variant
                         == super::super::config::AdmissionVariant::B
                         && target.owner_process_identity_required()
-                        && target.is_receive_only_sink();
+                        && target.is_receive_only_sink()
+                        && !packet_has_down;
 
                     if is_candidate_b
                         && let Some(candidate_ref) = candidate.as_ref()
                         && let Some(expected_target) = candidate_ref.target_stamp
                     {
-                        let precheck_lead_ticks = qpc_clock
-                            .duration_from_us(200)
-                            .unwrap_or(DurationTicks::ZERO);
+                        // P0-1: QPC conversion failure is strictly terminal
+                        let precheck_lead_ticks = match qpc_clock.duration_from_us(200) {
+                            Ok(ticks) => ticks,
+                            Err(error) => {
+                                core.runtime.terminal_error = Some(format!(
+                                    "QPC conversion failure for candidate B precheck lead: {error:?}"
+                                ));
+                                break;
+                            }
+                        };
                         let precheck_target_qpc = sky_dispatch_core::time::QpcTicks::from_raw(
                             wait_target_qpc
                                 .as_u64()
                                 .saturating_sub(precheck_lead_ticks.as_u64()),
                         );
-                        let now_ticks = qpc_clock.now().unwrap_or(wait_target_qpc);
+                        // P0-1: QPC sampling failure is strictly terminal
+                        let now_ticks = match qpc_clock.now() {
+                            Ok(ticks) => ticks,
+                            Err(error) => {
+                                core.runtime.terminal_error = Some(format!(
+                                    "QPC sampling failure before candidate B precheck wait: {error:?}"
+                                ));
+                                break;
+                            }
+                        };
                         if now_ticks < precheck_target_qpc {
                             match wait_for_next_boundary(WaitBoundaryInput {
                                 deadline: WaitDeadline {
                                     physical_target_qpc: Some(precheck_target_qpc),
-                                    spin_threshold_ticks: timing.effective_spin_threshold_ticks,
+                                    // P1-4: Do not enter precision-spin phase ahead of precheck
+                                    spin_threshold_ticks: DurationTicks::ZERO,
                                     qpc_clock,
                                 },
                                 signals: WaitSignals {
@@ -2159,9 +2186,16 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             candidate_ref.packet_masks.up_mask,
                         )
                         .expect("candidate has non-zero mask");
-                        let max_proof_age_ticks = qpc_clock
-                            .duration_from_us(500)
-                            .unwrap_or(DurationTicks::ZERO);
+                        // P0-1: QPC conversion failure is strictly terminal
+                        let max_proof_age_ticks = match qpc_clock.duration_from_us(500) {
+                            Ok(ticks) => ticks,
+                            Err(error) => {
+                                core.runtime.terminal_error = Some(format!(
+                                    "QPC conversion failure for candidate B proof age: {error:?}"
+                                ));
+                                break;
+                            }
+                        };
                         if let Ok(proof) = perform_candidate_b_precheck(
                             target,
                             expected_target,
