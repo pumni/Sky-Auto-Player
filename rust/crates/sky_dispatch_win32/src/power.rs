@@ -167,7 +167,7 @@ impl ProcessPowerThrottlingGuard {
                     process,
                     previous: None,
                     policy,
-                    active: true,
+                    active: false,
                 };
             }
 
@@ -177,6 +177,8 @@ impl ProcessPowerThrottlingGuard {
                 StateMask: 0,
             };
 
+            // Query existing state first. If the OS query fails, do not attempt to
+            // mutate the process power throttling state, preserving safe restoration.
             let queried = unsafe {
                 GetProcessInformation(
                     process,
@@ -185,6 +187,15 @@ impl ProcessPowerThrottlingGuard {
                     size_of::<PROCESS_POWER_THROTTLING_STATE>() as u32,
                 )
             } != 0;
+
+            if !queried {
+                return Self {
+                    process,
+                    previous: None,
+                    policy,
+                    active: false,
+                };
+            }
 
             let control_mask = match policy {
                 ProcessQosPolicy::Default => 0,
@@ -211,7 +222,7 @@ impl ProcessPowerThrottlingGuard {
 
             Self {
                 process,
-                previous: queried.then_some(previous),
+                previous: active.then_some(previous),
                 policy,
                 active,
             }
@@ -268,14 +279,20 @@ mod tests {
 
     #[test]
     fn process_power_throttling_guard_lifecycle() {
+        let default_guard = ProcessPowerThrottlingGuard::apply(ProcessQosPolicy::Default);
+        assert_eq!(default_guard.policy(), ProcessQosPolicy::Default);
+        assert!(
+            !default_guard.is_active(),
+            "default policy must not activate overrides"
+        );
+        drop(default_guard);
+
         for policy in [
-            ProcessQosPolicy::Default,
             ProcessQosPolicy::IgnoreTimerResolution,
             ProcessQosPolicy::DisableExecutionSpeed,
         ] {
             let guard = ProcessPowerThrottlingGuard::apply(policy);
             assert_eq!(guard.policy(), policy);
-            let _ = guard.is_active();
             drop(guard);
         }
     }

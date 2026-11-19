@@ -709,6 +709,11 @@ impl ProductionDispatchTestHarness {
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
     }
 
+    /// Mark this test harness target as the approved project ReceiveOnly sink.
+    pub fn mark_as_receive_only_sink_for_test(&self) {
+        self.target.mark_as_receive_only_sink_for_test();
+    }
+
     pub fn invalidate_focus_owner_for_test(&self, hwnd: isize, owner_pid: u32) {
         self.target.invalidate_for_test();
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));

@@ -653,8 +653,23 @@ pub(crate) fn dispatch_staged_candidate(
     )
     .expect("musical packet has non-zero mask");
 
+    if !packet_kind.has_down() {
+        match final_control_precheck(control_signals) {
+            FinalControlAdmission::Allowed => {}
+            FinalControlAdmission::PauseRequested => return DispatchAttemptOutcome::Replan,
+            FinalControlAdmission::SystemSuspendRequested => {
+                runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
+                return DispatchAttemptOutcome::Exit;
+            }
+            FinalControlAdmission::PanicRequested
+            | FinalControlAdmission::QuitRequested
+            | FinalControlAdmission::SkipRequested => return DispatchAttemptOutcome::Exit,
+        }
+    }
+
     let is_candidate_b = config.admission_variant == super::super::config::AdmissionVariant::B
-        && target.owner_process_identity_required();
+        && target.owner_process_identity_required()
+        && target.is_receive_only_sink();
 
     let pending_precheck = runtime.candidate_b_pending_precheck.take();
     let (admission_result, fast_path_taken) = if is_candidate_b {
@@ -2064,6 +2079,105 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         },
                         |candidate| candidate.authored_target_ticks,
                     );
+
+                    let is_candidate_b = config.admission_variant
+                        == super::super::config::AdmissionVariant::B
+                        && target.owner_process_identity_required()
+                        && target.is_receive_only_sink();
+
+                    if is_candidate_b
+                        && let Some(candidate_ref) = candidate.as_ref()
+                        && let Some(expected_target) = candidate_ref.target_stamp
+                    {
+                        let precheck_lead_ticks = qpc_clock
+                            .duration_from_us(200)
+                            .unwrap_or(DurationTicks::ZERO);
+                        let precheck_target_qpc = sky_dispatch_core::time::QpcTicks::from_raw(
+                            wait_target_qpc
+                                .as_u64()
+                                .saturating_sub(precheck_lead_ticks.as_u64()),
+                        );
+                        let now_ticks = qpc_clock.now().unwrap_or(wait_target_qpc);
+                        if now_ticks < precheck_target_qpc {
+                            match wait_for_next_boundary(WaitBoundaryInput {
+                                deadline: WaitDeadline {
+                                    physical_target_qpc: Some(precheck_target_qpc),
+                                    spin_threshold_ticks: timing.effective_spin_threshold_ticks,
+                                    qpc_clock,
+                                },
+                                signals: WaitSignals {
+                                    waiter: &resources.waiter,
+                                    interrupt,
+                                },
+                                mutable: WaitMutable {
+                                    local_metrics: &mut core.metrics,
+                                    terminal_error: &mut core.runtime.terminal_error,
+                                },
+                            }) {
+                                WaitBoundary::Due { .. } => {}
+                                WaitBoundary::Interrupted(
+                                    wait_result,
+                                    target_qpc,
+                                    planned_wait_ticks,
+                                ) => {
+                                    core.runtime.last_dispatch_deadline_wake_qpc = None;
+                                    core.runtime.last_dispatch_deadline_target_qpc = None;
+                                    super::dispatch::publish_interrupted_physical_wait(
+                                        &mut core.runtime,
+                                        core.observer.pending.as_ref(),
+                                        &mut core.metrics,
+                                        wait_result,
+                                        target_qpc,
+                                        planned_wait_ticks,
+                                        authored_target_ticks,
+                                        resources.playback.epoch,
+                                    );
+                                    let _ = interrupt.try_take();
+                                    continue;
+                                }
+                                WaitBoundary::Exit => {
+                                    super::dispatch::publish_pending_wait_observation(
+                                        &mut core.runtime,
+                                        core.observer.pending.as_ref(),
+                                        &mut core.metrics,
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+
+                        let precheck_signals = FinalControlSignals {
+                            quit_requested,
+                            skip_requested,
+                            panic_requested,
+                            desired_pause,
+                            supervisor_expired,
+                            system_power: Some(system_power),
+                        };
+                        let packet_kind = MusicalPacketKind::from_masks(
+                            candidate_ref.packet_masks.down_mask,
+                            candidate_ref.packet_masks.up_mask,
+                        )
+                        .expect("candidate has non-zero mask");
+                        let max_proof_age_ticks = qpc_clock
+                            .duration_from_us(500)
+                            .unwrap_or(DurationTicks::ZERO);
+                        if let Ok(proof) = perform_candidate_b_precheck(
+                            target,
+                            expected_target,
+                            config.focus.require_focus,
+                            focus_active,
+                            precheck_signals,
+                            timing.lease_timeout_ticks,
+                            qpc_clock,
+                            &resources.backend,
+                            packet_kind,
+                            max_proof_age_ticks,
+                        ) {
+                            core.runtime.candidate_b_pending_precheck = Some(proof);
+                        }
+                    }
+
                     match wait_for_next_boundary(WaitBoundaryInput {
                         deadline: WaitDeadline {
                             physical_target_qpc: Some(wait_target_qpc),
@@ -2143,41 +2257,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             let Some(candidate) = candidate else {
                 continue;
             };
-            if config.admission_variant == super::super::config::AdmissionVariant::B
-                && target.owner_process_identity_required()
-                && let Some(expected_target) = candidate.target_stamp
-            {
-                let precheck_signals = FinalControlSignals {
-                    quit_requested,
-                    skip_requested,
-                    panic_requested,
-                    desired_pause,
-                    supervisor_expired,
-                    system_power: Some(system_power),
-                };
-                let packet_kind = MusicalPacketKind::from_masks(
-                    candidate.packet_masks.down_mask,
-                    candidate.packet_masks.up_mask,
-                )
-                .expect("candidate has non-zero mask");
-                let max_proof_age_ticks = qpc_clock
-                    .duration_from_us(500)
-                    .unwrap_or(DurationTicks::ZERO);
-                if let Ok(proof) = perform_candidate_b_precheck(
-                    target,
-                    expected_target,
-                    config.focus.require_focus,
-                    focus_active,
-                    precheck_signals,
-                    timing.lease_timeout_ticks,
-                    qpc_clock,
-                    &resources.backend,
-                    packet_kind,
-                    max_proof_age_ticks,
-                ) {
-                    core.runtime.candidate_b_pending_precheck = Some(proof);
-                }
-            }
             let ctx = StagedDispatchContext {
                 target,
                 config,

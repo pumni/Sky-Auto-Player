@@ -627,7 +627,7 @@ impl MusicalPacketKind {
 /// Qualified precheck proof captured during Candidate B's pre-spin lead window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PrecheckProof {
-    pub(crate) sample_qpc: QpcTicks,
+    pub(crate) precheck_begin_qpc: QpcTicks,
     pub(crate) max_age_ticks: DurationTicks,
     pub(crate) target_stamp: TargetStamp,
     pub(crate) owner_pid: u32,
@@ -638,11 +638,14 @@ pub(crate) struct PrecheckProof {
 impl PrecheckProof {
     #[inline(always)]
     pub(crate) fn is_fresh(&self, now_qpc: QpcTicks) -> bool {
-        if now_qpc < self.sample_qpc {
+        if now_qpc < self.precheck_begin_qpc {
             return false;
         }
-        let age_ticks =
-            DurationTicks::from_raw(now_qpc.as_u64().saturating_sub(self.sample_qpc.as_u64()));
+        let age_ticks = DurationTicks::from_raw(
+            now_qpc
+                .as_u64()
+                .saturating_sub(self.precheck_begin_qpc.as_u64()),
+        );
         if age_ticks > self.max_age_ticks {
             return false;
         }
@@ -864,19 +867,19 @@ pub(crate) fn perform_candidate_b_precheck(
     {
         return Err(FinalDownAdmissionResult::ModifierHeld);
     }
-    let now_qpc = qpc_clock
+    let precheck_begin_qpc = qpc_clock
         .now()
         .map_err(|_| FinalDownAdmissionResult::Terminal("prepared_down_qpc_failure".to_string()))?;
     let lease_proof = control_signals
         .supervisor_expired
-        .prove_down_age(now_qpc, lease_timeout_ticks);
+        .prove_down_age(precheck_begin_qpc, lease_timeout_ticks);
     if lease_proof.admission != SupervisorLeaseAdmission::Fresh {
         return Err(FinalDownAdmissionResult::Terminal(
             "supervisor_lease_expired".to_string(),
         ));
     }
     let lease_expiry_qpc = if lease_timeout_ticks > DurationTicks::ZERO {
-        Some(now_qpc.saturating_add_duration(lease_timeout_ticks))
+        Some(precheck_begin_qpc.saturating_add_duration(lease_timeout_ticks))
     } else {
         None
     };
@@ -919,7 +922,7 @@ pub(crate) fn perform_candidate_b_precheck(
     };
 
     Ok(PrecheckProof {
-        sample_qpc: now_qpc,
+        precheck_begin_qpc,
         max_age_ticks: max_proof_age_ticks,
         target_stamp: expected,
         owner_pid,
@@ -930,6 +933,8 @@ pub(crate) fn perform_candidate_b_precheck(
 
 /// Candidate B crossing check. If precheck proof is fresh, executes exactly one
 /// admission query (foreground HWND/PID); otherwise cleanly falls back to Control A.
+/// Fail-closed invariants (target invalidation, release owner unbind/mismatch,
+/// window destruction, process exit, control exit/suspend) terminate immediately.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_candidate_b_crossing(
     precheck: Option<&PrecheckProof>,
@@ -956,6 +961,84 @@ pub(crate) fn verify_candidate_b_crossing(
             );
         }
     };
+
+    // Target invalidation is latching and must fail-closed immediately
+    if !target.is_valid() {
+        return (
+            FinalDownAdmissionResult::Terminal("prepared_down_target_invalidated".to_string()),
+            false,
+        );
+    }
+
+    // Release owner binding must remain valid and match expected target
+    let Some(release_owner) = backend.session_release_owner_proof() else {
+        return (
+            FinalDownAdmissionResult::Terminal(
+                "session release owner proof is missing before final admission".to_string(),
+            ),
+            false,
+        );
+    };
+    if release_owner.target_hwnd() != expected.hwnd
+        || release_owner.target_generation() != expected.generation
+    {
+        return (
+            FinalDownAdmissionResult::Terminal("prepared_down_target_changed".to_string()),
+            false,
+        );
+    }
+
+    // Target HWND destruction / reuse check
+    if !sky_dispatch_win32::focus::is_window_live(expected.hwnd) {
+        return (
+            FinalDownAdmissionResult::Terminal("prepared_down_window_unavailable".to_string()),
+            false,
+        );
+    }
+
+    // Process termination check on retained authority
+    if target.owner_process_identity_required()
+        && let Some(authority) = release_owner.authority()
+    {
+        let expected_owner_pid = release_owner.owner_pid().unwrap_or(0);
+        if authority.verify_final_process_identity(expected.hwnd, expected_owner_pid)
+            != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+        {
+            return (
+                FinalDownAdmissionResult::Terminal(
+                    "prepared_down_owner_process_terminated".to_string(),
+                ),
+                false,
+            );
+        }
+    }
+
+    // Control and termination signals check
+    if !packet_kind.has_down() {
+        match final_control_precheck(control_signals) {
+            FinalControlAdmission::Allowed => {}
+            FinalControlAdmission::PauseRequested => {
+                return (FinalDownAdmissionResult::Replan, true);
+            }
+            FinalControlAdmission::SystemSuspendRequested => {
+                runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
+                return (
+                    FinalDownAdmissionResult::Terminal("prepared_down_system_suspend".to_string()),
+                    false,
+                );
+            }
+            FinalControlAdmission::PanicRequested
+            | FinalControlAdmission::QuitRequested
+            | FinalControlAdmission::SkipRequested => {
+                return (
+                    FinalDownAdmissionResult::Terminal("prepared_down_control_exit".to_string()),
+                    false,
+                );
+            }
+        }
+    } else if final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
+        return (FinalDownAdmissionResult::Replan, true);
+    }
 
     if let Some(proof) = precheck
         && proof.is_fresh(now_qpc)
@@ -1010,10 +1093,6 @@ pub(crate) fn verify_candidate_b_crossing(
                 control_signals.desired_pause,
                 system_power,
             );
-        }
-
-        if final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
-            return (FinalDownAdmissionResult::Replan, true);
         }
 
         return (FinalDownAdmissionResult::Allowed, true);

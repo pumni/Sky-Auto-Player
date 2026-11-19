@@ -123,6 +123,27 @@ pub fn lock_foreground_window_for_test() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
+/// Query whether a window handle is currently a valid live Win32 window.
+pub fn is_window_live(hwnd: isize) -> bool {
+    if hwnd <= 0 {
+        return false;
+    }
+    #[cfg(feature = "test-support")]
+    if hwnd > 0 && hwnd < 1000 {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::UI::WindowsAndMessaging::IsWindow;
+        unsafe { IsWindow(hwnd as HWND) != 0 }
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
+}
+
 pub fn foreground_window_matches(target_hwnd: isize) -> bool {
     if target_hwnd == 0 {
         return false;
