@@ -262,6 +262,20 @@ impl NativeDispatchSession {
         Self::new_with_bound_window_identity_and_power_endpoint(options, endpoint, authority)
     }
 
+    /// Test and native acceptance constructor that binds window identity AND
+    /// marks the target as an attested non-game ReceiveOnly sink.
+    ///
+    /// Available only under test or test-support cfg for acceptance harness use.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_with_bound_window_identity_and_receive_only_sink_for_test(
+        options: NativeSessionOptions,
+        authority: sky_dispatch_win32::focus::WindowIdentityAuthority,
+    ) -> Result<Self, String> {
+        let session = Self::new_with_bound_window_identity_for_test(options, authority)?;
+        session.shared.target.mark_as_receive_only_sink_for_test();
+        Ok(session)
+    }
+
     pub fn new_with_power_endpoint(
         options: NativeSessionOptions,
         power_endpoint: Arc<SystemPowerEndpoint>,

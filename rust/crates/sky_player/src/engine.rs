@@ -12,6 +12,8 @@ mod test_support;
 mod tests;
 mod worker;
 
+#[cfg(any(test, feature = "test-support"))]
+pub use config::AdmissionVariant;
 pub use config::DispatchProfile;
 #[cfg(any(test, feature = "test-support"))]
 pub use config::StartupCalibrationPlacement;

@@ -653,6 +653,8 @@ pub(super) fn production_options_for_fps(
             mode: PriorityMode::Auto,
         },
         instrument_key_profile: profile,
+        #[cfg(feature = "test-support")]
+        admission_variant: sky_player::engine::AdmissionVariant::A,
         startup_calibration_placement:
             sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
         timing_observer_for_qualification: false,

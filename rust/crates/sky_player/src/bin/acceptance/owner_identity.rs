@@ -89,18 +89,41 @@ impl BindingEvidence {
 }
 
 pub(super) fn create_session(
-    options: sky_player::engine::NativeSessionOptions,
+    mut options: sky_player::engine::NativeSessionOptions,
     sink_hwnd: isize,
     scenario: Scenario,
+    admission_variant: super::arguments::AdmissionVariantChoice,
+    sink_verified_receive_only: bool,
 ) -> Result<(NativeDispatchSession, BindingEvidence), String> {
+    if matches!(
+        admission_variant,
+        super::arguments::AdmissionVariantChoice::CandidateBUpDiagnostic
+    ) && !sink_verified_receive_only
+    {
+        return Err(
+            "candidate-b-up-diagnostic requires an attested project-owned ReceiveOnly sink target"
+                .to_string(),
+        );
+    }
     let authority = retain_window_identity(sink_hwnd)?;
     let retained_identity = authority.identity().clone();
     let retained_image_identity = authority.process_image_identity().to_string();
     let actual_owner_pid = retained_identity.owner_pid;
     let expected_owner_pid = actual_owner_pid;
-    let session = NativeDispatchSession::new_with_bound_window_identity_for_test(
-        options, authority,
-    )?;
+    let session = match admission_variant {
+        super::arguments::AdmissionVariantChoice::ControlA => {
+            options.admission_variant = sky_player::engine::AdmissionVariant::A;
+            NativeDispatchSession::new_with_bound_window_identity_for_test(
+                options, authority,
+            )?
+        }
+        super::arguments::AdmissionVariantChoice::CandidateBUpDiagnostic => {
+            options.admission_variant = sky_player::engine::AdmissionVariant::B;
+            NativeDispatchSession::new_with_bound_window_identity_and_receive_only_sink_for_test(
+                options, authority,
+            )?
+        }
+    };
 
     match scenario {
         Scenario::OwnerQueryFailure => set_foreground_owner_for_test(Some(None)),

@@ -61,6 +61,8 @@ pub(super) fn test_session_options_with_timing_margin(
             mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
         },
         instrument_key_profile: None,
+        #[cfg(any(test, feature = "test-support"))]
+        admission_variant: super::config::AdmissionVariant::A,
         startup_calibration_placement:
             super::config::StartupCalibrationPlacement::BeforeSchedulingGuards,
         timing_observer_for_qualification: false,

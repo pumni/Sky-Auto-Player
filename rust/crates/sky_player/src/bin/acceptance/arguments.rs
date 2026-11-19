@@ -30,6 +30,29 @@ impl CalibrationPlacement {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdmissionVariantChoice {
+    ControlA,
+    CandidateBUpDiagnostic,
+}
+
+impl AdmissionVariantChoice {
+    pub(super) fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "control-a" => Ok(Self::ControlA),
+            "candidate-b-up-diagnostic" => Ok(Self::CandidateBUpDiagnostic),
+            _ => Err("--admission-variant must be control-a or candidate-b-up-diagnostic".to_string()),
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::ControlA => "control-a",
+            Self::CandidateBUpDiagnostic => "candidate-b-up-diagnostic",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Scenario {
     CanonicalSingle,
     CanonicalChord,
@@ -165,6 +188,7 @@ pub(super) struct RunArgs {
     pub(super) sink_events: PathBuf,
     pub(super) target_hwnd: isize,
     pub(super) scenario: Scenario,
+    pub(super) admission_variant: AdmissionVariantChoice,
     pub(super) calibration_placement: CalibrationPlacement,
     pub(super) timing_observer_for_qualification: bool,
     pub(super) evidence: PathBuf,
@@ -257,6 +281,7 @@ where
     let mut sink_events = None;
     let mut target_hwnd = None;
     let mut scenario = None;
+    let mut admission_variant = None;
     let mut calibration_placement = None;
     let mut timing_observer_for_qualification = false;
     let mut evidence = None;
@@ -322,6 +347,12 @@ where
             "--scenario" => {
                 unique!(scenario, "--scenario");
                 scenario = Some(Scenario::parse(&next_value!("--scenario"))?);
+            }
+            "--admission-variant" => {
+                unique!(admission_variant, "--admission-variant");
+                admission_variant = Some(AdmissionVariantChoice::parse(&next_value!(
+                    "--admission-variant"
+                ))?);
             }
             "--calibration-placement" => {
                 unique!(calibration_placement, "--calibration-placement");
@@ -426,6 +457,7 @@ where
         sink_events: sink_events.ok_or_else(|| "--sink-events is required".to_string())?,
         target_hwnd: target_hwnd.ok_or_else(|| "--target-hwnd is required".to_string())?,
         scenario,
+        admission_variant: admission_variant.unwrap_or(AdmissionVariantChoice::ControlA),
         calibration_placement: calibration_placement.unwrap_or(CalibrationPlacement::Baseline),
         timing_observer_for_qualification,
         evidence: evidence.ok_or_else(|| "--evidence is required".to_string())?,
