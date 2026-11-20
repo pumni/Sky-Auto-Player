@@ -568,6 +568,19 @@ impl ProductionDispatchTestHarness {
             .store(start_qpc.as_u64(), Ordering::Release);
     }
 
+    pub fn set_modifier_key_state_query_for_test<F>(&mut self, query: F)
+    where
+        F: Fn(i32) -> i16 + Send + Sync + 'static,
+    {
+        self.resources
+            .backend
+            .set_modifier_key_state_query_for_test(query);
+    }
+
+    pub fn in_flight_mask_for_test(&self) -> u16 {
+        self.resources.backend.in_flight_mask
+    }
+
     pub fn set_pause_requested_for_test(&self, requested: bool) {
         self.desired_pause.store(requested, Ordering::Release);
         self.interrupt.signal();

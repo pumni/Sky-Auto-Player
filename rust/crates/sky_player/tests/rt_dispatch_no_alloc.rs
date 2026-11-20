@@ -12,7 +12,7 @@ use sky_player::engine::StagedDispatchOutcome;
 use sky_player::engine::dispatch_primitives::ProductionDispatchTestHarness;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 
 struct CountingAllocator;
@@ -286,7 +286,7 @@ fn production_staged_worker_1_5_and_15_key_chords_no_alloc() {
 }
 
 #[test]
-fn production_staged_worker_mixed_up_down_packet_no_alloc() {
+fn production_staged_worker_mixed_to_up_prefix_no_alloc() {
     struct ForegroundOverrideReset;
 
     impl Drop for ForegroundOverrideReset {
@@ -338,16 +338,41 @@ fn production_staged_worker_mixed_up_down_packet_no_alloc() {
     wait_until(authored_target.max(hold_floor));
     let mixed_now = clock.now().expect("mixed packet pre-call QPC");
     let mixed_chord = harness.current_executor_chord_for_test();
+    let modifier_held = Arc::new(AtomicBool::new(false));
+    let held_for_query = Arc::clone(&modifier_held);
+    harness.set_modifier_key_state_query_for_test(move |_| {
+        if held_for_query.load(Ordering::Acquire) {
+            i16::MIN
+        } else {
+            0
+        }
+    });
+    let held_for_gate = Arc::clone(&modifier_held);
+    harness.set_final_gate_before_syscall_hook(move || {
+        held_for_gate.store(true, Ordering::Release);
+    });
 
     enable_counting();
     let mixed_outcome = stage_and_dispatch(&mut harness, epoch, mixed_now, 1, mixed_chord);
     let allocations = disable_counting();
 
-    assert_eq!(allocations, 0, "production mixed Up/Down packet allocated");
+    assert_eq!(
+        allocations, 0,
+        "production Mixed-to-Up-prefix dispatch allocated"
+    );
     assert!(matches!(mixed_outcome, StagedDispatchOutcome::Dispatched));
     let packets = packets.lock().expect("packet capture");
     assert_eq!(packets.len(), 2);
-    assert_eq!(packets[1].0, PhysicalPacket::new(1, 2));
+    assert_eq!(packets[1].0, PhysicalPacket::new(1, 0));
+    assert_eq!(packets[1].1.attempts, 1);
+    assert_eq!(
+        harness
+            .current_executor_chord_for_test()
+            .map(|chord| chord.down_mask),
+        Some(2),
+        "the effective Up prefix must leave the Down onset pending"
+    );
+    assert_eq!(harness.in_flight_mask_for_test(), 0);
 }
 
 #[test]

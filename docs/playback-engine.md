@@ -50,6 +50,11 @@ requires an unpressed modifier set and a valid supervisor lease. The check
 uses a fresh foreground HWND/PID query and process-liveness proof. Cached focus
 state and callback notifications cannot grant admission.
 
+When supervisor lease age checking is enabled, the current sender applies its
+lease proof to Up-only packets as well as Down-bearing packets. An expired or
+unproven lease is terminal for either packet kind. Up-only packets remain
+independent of modifier state; this lease behavior is retained intentionally.
+
 ### Modifier hold and replan policy
 
 - When a modifier key is detected as `Held`, the worker enters a soft wait

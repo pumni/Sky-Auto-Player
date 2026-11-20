@@ -935,6 +935,19 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         fallback.dispatch_staged_candidate_for_test(candidate, false),
         StagedDispatchOutcome::Dispatched
     );
+    let selected_packets = fallback_packets.lock().expect("selected packet capture");
+    assert_eq!(selected_packets.len(), 1, "Up-prefix uses one sender call");
+    assert_eq!(selected_packets[0].0, PhysicalPacket::new(1, 0));
+    assert_eq!(selected_packets[0].1.attempts, 1);
+    drop(selected_packets);
+    assert_eq!(
+        fallback
+            .current_executor_chord_for_test()
+            .map(|chord| chord.down_mask),
+        Some(2),
+        "Up-prefix must leave the staged Down onset pending"
+    );
+    assert_eq!(fallback.release_obligation_mask_for_test(), 0);
     report_counts("mixed-to-up-only", &fallback, &fallback_packets);
     let _ = fallback.finalize_for_test();
 

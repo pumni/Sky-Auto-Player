@@ -364,6 +364,8 @@ pub struct StagedCandidate {
     pub(crate) down_authored_target_ticks: Option<TimelineTicks>,
     pub(crate) down_authored_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     pub(crate) timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
+    pub(crate) up_only_timing_window: Option<sky_dispatch_core::executor::DispatchTimingWindow>,
+    pub(crate) up_only_authored_target_ticks: Option<TimelineTicks>,
     /// Stable HWND/generation snapshot captured during staging. Down-bearing
     /// packets also pass physical-key preflight against this exact stamp.
     pub(crate) target_stamp: Option<TargetStamp>,
@@ -371,10 +373,140 @@ pub struct StagedCandidate {
     pub(crate) trace_kind: u8,
     pub(crate) up_slot_timing_summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
     pub(crate) up_slot_timings: Option<SmallVec<[sky_dispatch_core::executor::UpSlotTiming; 15]>>,
+    /// Selects the prepared Up prefix while retaining the staged Down in the
+    /// executor for the next scheduler pass.
+    pub(crate) up_prefix_selected: bool,
+}
+
+#[derive(Clone, Copy)]
+struct EffectivePacket<'a> {
+    view: sky_dispatch_win32::input::PreparedPacketView<'a>,
+    packet_masks: sky_dispatch_win32::input::PhysicalPacket,
+    up_mask: u16,
+    down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
+    authored_target_ticks: TimelineTicks,
+    authored_target_qpc: sky_dispatch_win32::clock::QpcTicks,
+    down_authored_target_ticks: Option<TimelineTicks>,
+    down_authored_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
+    timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
+    target_stamp: Option<TargetStamp>,
+    source_action_index: u32,
+    trace_kind: u8,
+    up_slot_timing_summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
+    up_slot_timings: Option<&'a [sky_dispatch_core::executor::UpSlotTiming]>,
+}
+
+fn effective_packet(
+    candidate: &StagedCandidate,
+    select_up_prefix: bool,
+) -> Result<EffectivePacket<'_>, String> {
+    if !select_up_prefix {
+        return Ok(EffectivePacket {
+            view: candidate.prepared_packet.as_view(),
+            packet_masks: candidate.packet_masks,
+            up_mask: candidate.up_mask,
+            down_chord: candidate.down_chord,
+            authored_target_ticks: candidate.authored_target_ticks,
+            authored_target_qpc: candidate.authored_target_qpc,
+            down_authored_target_ticks: candidate.down_authored_target_ticks,
+            down_authored_target_qpc: candidate.down_authored_target_qpc,
+            timing_window: candidate.timing_window,
+            target_stamp: candidate.target_stamp,
+            source_action_index: candidate.source_action_index,
+            trace_kind: candidate.trace_kind,
+            up_slot_timing_summary: candidate.up_slot_timing_summary,
+            up_slot_timings: candidate.up_slot_timings.as_deref(),
+        });
+    }
+
+    let summary = candidate
+        .up_slot_timing_summary
+        .filter(|summary| summary.slot_count != 0)
+        .ok_or_else(|| "Up-prefix selection has no active scheduler Up slots".to_string())?;
+    let view = candidate
+        .prepared_packet
+        .up_prefix_view()
+        .ok_or_else(|| "prepared Mixed packet has no initialized Up prefix".to_string())?;
+    let packet_masks = sky_dispatch_win32::input::PhysicalPacket::new(candidate.up_mask, 0);
+    let timing_window = candidate
+        .up_only_timing_window
+        .ok_or_else(|| "staged Mixed packet is missing its Up-only timing window".to_string())?;
+    let authored_target_ticks = candidate
+        .up_only_authored_target_ticks
+        .ok_or_else(|| "staged Mixed packet is missing its Up-only authored target".to_string())?;
+
+    Ok(EffectivePacket {
+        view,
+        packet_masks,
+        up_mask: packet_masks.up_mask,
+        down_chord: None,
+        authored_target_ticks,
+        authored_target_qpc: timing_window.authored_target_qpc,
+        down_authored_target_ticks: None,
+        down_authored_target_qpc: None,
+        timing_window,
+        target_stamp: candidate.target_stamp,
+        source_action_index: summary.first_source_action_index,
+        trace_kind: crate::engine::TRACE_KIND_UP,
+        up_slot_timing_summary: candidate.up_slot_timing_summary,
+        up_slot_timings: candidate.up_slot_timings.as_deref(),
+    })
+}
+
+fn pre_wait_up_prefix_is_authorized(
+    candidate: &StagedCandidate,
+    target: &SessionTarget,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+) -> bool {
+    let Some(expected) = candidate.target_stamp else {
+        return false;
+    };
+    candidate.packet_masks.up_mask != 0
+        && candidate.packet_masks.down_mask != 0
+        && target_stamp_still_current(target, expected)
+        && focus_matches(require_focus, focus_active)
+        && matches!(
+            final_control_precheck(control_signals),
+            FinalControlAdmission::Allowed
+        )
+}
+
+fn maybe_select_earlier_up_prefix_before_wait(
+    candidate: &mut StagedCandidate,
+    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    target: &SessionTarget,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
+    let down_waits_longer = candidate.packet_masks.up_mask != 0
+        && candidate.packet_masks.down_mask != 0
+        && candidate.timing_window.musical_up_not_before_qpc
+            < candidate.timing_window.down_not_before_qpc
+        && now_qpc < candidate.timing_window.down_not_before_qpc;
+    if !down_waits_longer
+        || !pre_wait_up_prefix_is_authorized(
+            candidate,
+            target,
+            require_focus,
+            focus_active,
+            control_signals,
+        )
+    {
+        return Ok(None);
+    }
+
+    let up_deadline = effective_packet(candidate, true)?
+        .timing_window
+        .packet_not_before_qpc;
+    candidate.up_prefix_selected = true;
+    Ok(Some(now_qpc.max(up_deadline)))
 }
 
 fn proven_raw_zero_down_only(
-    candidate: &StagedCandidate,
+    candidate: &EffectivePacket<'_>,
     outcome: sky_dispatch_win32::input::SendTransactionOutcome,
 ) -> bool {
     let packet = candidate.packet_masks;
@@ -488,8 +620,8 @@ struct DispatchReplanWaitContext<'a> {
 }
 
 /// Apply the worker-loop policy after final packet admission requests replan.
-/// A target invalidation is terminal. Modifier-only rejection waits are used
-/// only after any independent due Up fallback has been dispatched.
+/// A target invalidation is terminal. Modifier-only rejection waits preserve
+/// the scheduler's independent Up deadlines.
 fn dispatch_replan_action(context: DispatchReplanWaitContext<'_>) -> DispatchReplanAction {
     let controls_allow_wait = matches!(
         final_control_precheck(context.control_signals),
@@ -567,6 +699,25 @@ pub(crate) fn stage_candidate(
         .scheduler
         .up_slot_timing_summary(up_mask, resources.playback.epoch)
         .map_err(|error| format!("Up slot timing summary arithmetic failure: {error}"))?;
+    let prepared_up_timing_window = if up_mask == 0 {
+        None
+    } else {
+        Some(up_only_timing_window(
+            timing_window,
+            up_slot_timing_summary,
+        )?)
+    };
+    let up_only_authored_target_ticks = prepared_up_timing_window
+        .map(|window| {
+            window
+                .authored_target_qpc
+                .checked_duration_since(resources.playback.epoch)
+                .map(|ticks| TimelineTicks::from_raw(ticks.as_u64()))
+                .map_err(|error| {
+                    format!("Up-only authored target precedes playback epoch: {error}")
+                })
+        })
+        .transpose()?;
     let up_slot_timings = capture_up_slot_timings.then(|| {
         if up_mask != 0 {
             resources.scheduler.up_slot_timings(up_mask)
@@ -620,46 +771,15 @@ pub(crate) fn stage_candidate(
         down_authored_target_ticks: down_target.map(|target| target.0),
         down_authored_target_qpc: down_target.map(|target| target.1),
         timing_window,
+        up_only_timing_window: prepared_up_timing_window,
+        up_only_authored_target_ticks,
         target_stamp,
         source_action_index,
         trace_kind,
         up_slot_timing_summary,
         up_slot_timings,
+        up_prefix_selected: false,
     }))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn handle_mixed_up_only_fallback(
-    candidate: &StagedCandidate,
-    fallback_outcome: DispatchAttemptOutcome,
-    control_signals: FinalControlSignals<'_>,
-    ctx: StagedDispatchContext<'_>,
-    resources: &mut super::WorkerResources,
-    runtime: &mut super::WorkerRuntime,
-    local_metrics: &mut super::WorkerMetricsLocal,
-    observer: Option<&super::dispatch::PendingObservationQueue>,
-) -> DispatchAttemptOutcome {
-    match stage_up_only_for_mixed_replan(
-        candidate,
-        SchedulerStageAdmission {
-            target: ctx.target,
-            require_focus: ctx.config.focus.require_focus,
-            focus_active: ctx.control.focus_active,
-            capture_up_slot_timings: observer.is_some(),
-            control_signals,
-        },
-        resources,
-        runtime,
-    ) {
-        Ok(Some(up_only)) => {
-            dispatch_staged_candidate(up_only, ctx, resources, runtime, local_metrics, observer)
-        }
-        Ok(None) => fallback_outcome,
-        Err(error) => {
-            runtime.terminal_error = Some(error);
-            DispatchAttemptOutcome::Exit
-        }
-    }
 }
 
 pub(crate) fn dispatch_staged_candidate(
@@ -683,7 +803,16 @@ pub(crate) fn dispatch_staged_candidate(
     let qpc_clock = ctx.qpc_clock;
     let progress_clock = ctx.progress_clock;
     let metrics = ctx.metrics;
-    let has_down = candidate.packet_masks.down_mask != 0;
+    let staged_candidate = candidate;
+    let mut select_up_prefix = staged_candidate.up_prefix_selected;
+    let mut candidate = match effective_packet(&staged_candidate, select_up_prefix) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            runtime.terminal_error = Some(error);
+            return DispatchAttemptOutcome::Exit;
+        }
+    };
+    let mut has_down = candidate.packet_masks.down_mask != 0;
 
     #[cfg(any(test, feature = "test-support"))]
     if has_down && let Some(hook) = runtime.startup_ordering_hook.as_ref() {
@@ -700,14 +829,16 @@ pub(crate) fn dispatch_staged_candidate(
         hook.maybe_inject_hol_stall(candidate.packet_masks.down_mask, source_idx, qpc_clock);
     }
 
-    if candidate.packet_masks.up_mask != 0 && candidate.up_slot_timing_summary.is_none() {
+    if staged_candidate.packet_masks.up_mask != 0
+        && staged_candidate.up_slot_timing_summary.is_none()
+    {
         runtime.terminal_error =
             Some("missing Up slot timing summary in staged candidate".to_string());
         return DispatchAttemptOutcome::Exit;
     }
     if observer.is_some()
-        && candidate.packet_masks.up_mask != 0
-        && candidate.up_slot_timings.is_none()
+        && staged_candidate.packet_masks.up_mask != 0
+        && staged_candidate.up_slot_timings.is_none()
     {
         runtime.terminal_error =
             Some("observer Up-slot attribution missing from staged candidate".to_string());
@@ -750,110 +881,69 @@ pub(crate) fn dispatch_staged_candidate(
         None
     };
 
-    let packet_kind = MusicalPacketKind::from_masks(
-        candidate.packet_masks.down_mask,
-        candidate.packet_masks.up_mask,
-    )
-    .expect("musical packet has non-zero mask");
+    let admission_result = loop {
+        let packet_kind = MusicalPacketKind::from_masks(
+            candidate.packet_masks.down_mask,
+            candidate.packet_masks.up_mask,
+        )
+        .expect("musical packet has non-zero mask");
 
-    if !packet_kind.has_down() {
-        match final_control_precheck(control_signals) {
-            FinalControlAdmission::Allowed => {}
-            FinalControlAdmission::PauseRequested => return DispatchAttemptOutcome::Replan,
-            FinalControlAdmission::SystemSuspendRequested => {
-                runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
-                return DispatchAttemptOutcome::Exit;
+        if !packet_kind.has_down() {
+            match final_control_precheck(control_signals) {
+                FinalControlAdmission::Allowed => {}
+                FinalControlAdmission::PauseRequested => return DispatchAttemptOutcome::Replan,
+                FinalControlAdmission::SystemSuspendRequested => {
+                    runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
+                    return DispatchAttemptOutcome::Exit;
+                }
+                FinalControlAdmission::PanicRequested
+                | FinalControlAdmission::QuitRequested
+                | FinalControlAdmission::SkipRequested => return DispatchAttemptOutcome::Exit,
             }
-            FinalControlAdmission::PanicRequested
-            | FinalControlAdmission::QuitRequested
-            | FinalControlAdmission::SkipRequested => return DispatchAttemptOutcome::Exit,
         }
-    }
 
-    let admission_result = verify_final_packet_admission(
-        target,
-        expected_target,
-        config.focus.require_focus,
-        focus_active,
-        control_signals,
-        timing.lease_timeout_ticks,
-        qpc_clock,
-        progress_clock,
-        &resources.backend,
-        &mut resources.playback,
-        runtime,
-        local_metrics,
-        packet_kind,
-    );
+        let admission = verify_final_packet_admission(
+            target,
+            expected_target,
+            config.focus.require_focus,
+            focus_active,
+            control_signals,
+            timing.lease_timeout_ticks,
+            qpc_clock,
+            progress_clock,
+            &resources.backend,
+            &mut resources.playback,
+            runtime,
+            local_metrics,
+            packet_kind,
+        );
+        match admission {
+            FinalDownAdmissionResult::ModifierHeld
+                if packet_kind == MusicalPacketKind::Mixed && !select_up_prefix =>
+            {
+                // The modifier blocks only the Down half. Reuse the staged
+                // packet's initialized Up prefix, then run the complete fresh
+                // Up-only admission contract before any sender effects.
+                select_up_prefix = true;
+                candidate = match effective_packet(&staged_candidate, select_up_prefix) {
+                    Ok(candidate) => candidate,
+                    Err(error) => {
+                        runtime.terminal_error = Some(error);
+                        return DispatchAttemptOutcome::Exit;
+                    }
+                };
+                has_down = false;
+            }
+            other => break other,
+        }
+    };
 
     match admission_result {
         FinalDownAdmissionResult::Allowed => {}
-        FinalDownAdmissionResult::ModifierHeld => {
-            if packet_kind.has_up() {
-                let fallback_ctx = StagedDispatchContext {
-                    target,
-                    config,
-                    control: StagedControlSignals {
-                        focus_active,
-                        quit_requested,
-                        skip_requested,
-                        panic_requested,
-                        desired_pause,
-                        supervisor_expired,
-                        system_power,
-                    },
-                    timing,
-                    qpc_clock,
-                    progress_clock,
-                    metrics,
-                };
-                return handle_mixed_up_only_fallback(
-                    &candidate,
-                    DispatchAttemptOutcome::ModifierHeld,
-                    control_signals,
-                    fallback_ctx,
-                    resources,
-                    runtime,
-                    local_metrics,
-                    observer,
-                );
-            } else {
-                return DispatchAttemptOutcome::ModifierHeld;
-            }
-        }
-        FinalDownAdmissionResult::Replan => {
-            if packet_kind.has_up() && packet_kind.has_down() {
-                let fallback_ctx = StagedDispatchContext {
-                    target,
-                    config,
-                    control: StagedControlSignals {
-                        focus_active,
-                        quit_requested,
-                        skip_requested,
-                        panic_requested,
-                        desired_pause,
-                        supervisor_expired,
-                        system_power,
-                    },
-                    timing,
-                    qpc_clock,
-                    progress_clock,
-                    metrics,
-                };
-                return handle_mixed_up_only_fallback(
-                    &candidate,
-                    DispatchAttemptOutcome::Replan,
-                    control_signals,
-                    fallback_ctx,
-                    resources,
-                    runtime,
-                    local_metrics,
-                    observer,
-                );
-            } else {
-                return DispatchAttemptOutcome::Replan;
-            }
-        }
+        FinalDownAdmissionResult::ModifierHeld => return DispatchAttemptOutcome::ModifierHeld,
+        // Target, foreground, control, owner, and generation replans retain
+        // their lifecycle meaning; they never authorize a fallback Up.
+        FinalDownAdmissionResult::Replan => return DispatchAttemptOutcome::Replan,
         FinalDownAdmissionResult::Terminal(err) => {
             runtime.terminal_error = Some(gate_rejection_record(&candidate, &err));
             return DispatchAttemptOutcome::Exit;
@@ -889,7 +979,7 @@ pub(crate) fn dispatch_staged_candidate(
     let send_result = resources
         .backend
         .send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target(
-            &candidate.prepared_packet,
+            candidate.view,
             expected_target.hwnd,
             expected_target.generation,
         );
@@ -1184,7 +1274,7 @@ pub(crate) fn dispatch_staged_candidate(
                 .up_slot_timing_summary
                 .map_or(0, |summary| summary.slot_count),
         );
-        let up_slot_timings = candidate.up_slot_timings.as_deref().unwrap_or_default();
+        let up_slot_timings = candidate.up_slot_timings.unwrap_or_default();
         let mut up_slots = if up_slot_count == 0 {
             None
         } else {
@@ -2053,17 +2143,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         send_action,
                         SchedulerStageAdmission {
                             target,
-                            require_focus: config.focus.require_focus,
-                            focus_active,
                             capture_up_slot_timings: core.observer.pending.is_some(),
-                            control_signals: FinalControlSignals {
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power: Some(system_power),
-                            },
                         },
                         resources,
                         &mut core.runtime,
@@ -2119,7 +2199,33 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         control_signals,
                         &mut core.runtime,
                     ) {
-                        StagedDispatchOutcome::Dispatched => {}
+                        StagedDispatchOutcome::Dispatched => {
+                            let fallback_control_signals = FinalControlSignals {
+                                quit_requested,
+                                skip_requested,
+                                panic_requested,
+                                desired_pause,
+                                supervisor_expired,
+                                system_power: Some(system_power),
+                            };
+                            if let Some(candidate) = candidate.as_mut() {
+                                match maybe_select_earlier_up_prefix_before_wait(
+                                    candidate,
+                                    now_ticks,
+                                    target,
+                                    config.focus.require_focus,
+                                    focus_active,
+                                    fallback_control_signals,
+                                ) {
+                                    Ok(Some(up_deadline)) => wait_target_qpc = up_deadline,
+                                    Ok(None) => {}
+                                    Err(error) => {
+                                        core.runtime.terminal_error = Some(error);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         StagedDispatchOutcome::Replan => {
                             let target_stale = candidate
                                 .as_ref()
@@ -2140,57 +2246,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                 });
                                 break;
                             }
-                            let fallback = match stage_up_only_for_mixed_replan(
-                                staged_candidate,
-                                SchedulerStageAdmission {
-                                    target,
-                                    require_focus: config.focus.require_focus,
-                                    focus_active,
-                                    capture_up_slot_timings: core.observer.pending.is_some(),
-                                    control_signals: FinalControlSignals {
-                                        quit_requested,
-                                        skip_requested,
-                                        panic_requested,
-                                        desired_pause,
-                                        supervisor_expired,
-                                        system_power: Some(system_power),
-                                    },
-                                },
-                                resources,
-                                &mut core.runtime,
-                            ) {
-                                Ok(fallback) => fallback,
-                                Err(error) => {
-                                    core.runtime.terminal_error = Some(error);
-                                    break;
-                                }
-                            };
-                            if let Some(fallback) = fallback {
-                                wait_target_qpc = scheduler_wait_target_qpc
-                                    .max(fallback.timing_window.packet_not_before_qpc);
-                                candidate = Some(fallback);
-                            } else {
-                                let target_stale = candidate
-                                    .as_ref()
-                                    .and_then(|candidate| candidate.target_stamp)
-                                    .is_some_and(|expected| {
-                                        !target_stamp_still_current(target, expected)
-                                    });
-                                if target_stale {
-                                    core.runtime.verified_target = None;
-                                    core.runtime.terminal_error.get_or_insert_with(|| {
-                                        if target.is_valid() {
-                                            "staged target stamp no longer matches its immutable session binding"
-                                                .to_string()
-                                        } else {
-                                            "immutable session target or owner identity was invalidated"
-                                                .to_string()
-                                        }
-                                    });
-                                    break;
-                                }
-                                continue;
-                            }
+                            // Target, foreground, and control replans retain
+                            // their lifecycle meaning; they never authorize
+                            // sending the Up prefix.
+                            continue;
                         }
                         StagedDispatchOutcome::Exit => break,
                     }
@@ -2203,10 +2262,9 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         );
                     }
                     #[cfg(any(test, feature = "test-support"))]
-                    if candidate
-                        .as_ref()
-                        .is_some_and(|candidate| candidate.packet_masks.down_mask != 0)
-                        && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
+                    if candidate.as_ref().is_some_and(|candidate| {
+                        candidate.packet_masks.down_mask != 0 && !candidate.up_prefix_selected
+                    }) && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
                         && let Some(candidate) = candidate.as_ref()
                     {
                         hook.record_down_window(
@@ -2225,7 +2283,23 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                     .saturating_sub(resources.playback.epoch.as_u64()),
                             )
                         },
-                        |candidate| candidate.authored_target_ticks,
+                        |candidate| {
+                            if candidate.up_prefix_selected {
+                                candidate.up_slot_timing_summary.map_or(
+                                    candidate.authored_target_ticks,
+                                    |summary| {
+                                        TimelineTicks::from_raw(
+                                            summary
+                                                .authored_target_qpc
+                                                .as_u64()
+                                                .saturating_sub(resources.playback.epoch.as_u64()),
+                                        )
+                                    },
+                                )
+                            } else {
+                                candidate.authored_target_ticks
+                            }
+                        },
                     );
 
                     match wait_for_next_boundary(WaitBoundaryInput {
