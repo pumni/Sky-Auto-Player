@@ -27,11 +27,16 @@ pub use config::{
 pub use config::{RestoreRaceHook, StartupCheckpoint, StartupOrderingHook};
 #[cfg(feature = "real-input-acceptance")]
 pub use session::NativeAcceptanceLifecycleEvidence;
-pub use session::{NativeDispatchSession, OwnerIdentityPollResult, SystemPowerSnapshot};
+pub use session::{
+    NativeDispatchSession, OwnerIdentityPollResult, SupervisorLifetimeGuard, SystemPowerSnapshot,
+};
 pub use shared::SystemPowerEndpoint;
 #[cfg(any(test, feature = "test-support"))]
 pub use shared::SystemPowerState;
-pub use snapshot::{EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot};
+pub use snapshot::{
+    EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot,
+    WorkerProgressState,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use telemetry::TRACE_FLAG_DEFERRED;
 #[cfg(test)]

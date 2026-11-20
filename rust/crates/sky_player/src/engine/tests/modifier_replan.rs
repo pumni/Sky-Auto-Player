@@ -1132,7 +1132,11 @@ fn modifier_hold_release_before_timeout_succeeds_after_intermediate_ups() {
 
     wait_until(
         Duration::from_secs(3),
-        || captured_packets(&captures).iter().any(|p| p.up_mask == 0b01),
+        || {
+            captured_packets(&captures)
+                .iter()
+                .any(|p| p.up_mask == 0b01)
+        },
         "independent Up dispatched",
     );
 

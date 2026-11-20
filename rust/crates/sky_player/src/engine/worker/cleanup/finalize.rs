@@ -304,7 +304,10 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
 
     if let Some(trigger) = terminal_trigger {
-        *metrics.terminal_trigger_reason.lock() = Some(trigger.as_str().to_string());
+        let mut reason_slot = metrics.terminal_trigger_reason.lock();
+        if reason_slot.is_none() {
+            *reason_slot = Some(trigger.as_str().to_string());
+        }
     }
     #[cfg(any(test, feature = "test-support"))]
     if let Some(observation) = cleanup_observation.as_deref_mut() {
@@ -402,7 +405,10 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         terminal_trigger = Some(TerminalTrigger::PanicReleaseRequested);
     }
     if let Some(trigger) = terminal_trigger {
-        *metrics.terminal_trigger_reason.lock() = Some(trigger.as_str().to_string());
+        let mut reason_slot = metrics.terminal_trigger_reason.lock();
+        if reason_slot.is_none() {
+            *reason_slot = Some(trigger.as_str().to_string());
+        }
     }
     #[cfg(any(test, feature = "test-support"))]
     if let Some(observation) = cleanup_observation.as_deref_mut() {

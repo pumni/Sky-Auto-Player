@@ -7,7 +7,7 @@ use super::worker::Worker;
 use super::*;
 use crate::engine::config::{MIN_PRODUCTION_PREROLL_US, TimingOptions, validate_timing_constants};
 use crate::engine::target::OwnerIdentityFailure;
-use crate::engine::{EnginePollSnapshot, EnginePollStatus};
+use crate::engine::{EnginePollSnapshot, EnginePollStatus, WorkerProgressState};
 #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 use sky_dispatch_core::accounting::GenerationAccounting;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -71,6 +71,21 @@ fn publish_focus_hint(focus_active: &AtomicBool, interrupt: &OwnedEvent, active:
 }
 
 fn signal_supervisor_expiry(shared: &SessionShared) {
+    signal_supervisor_expiry_with_reason(shared, "supervisor_lease_expired");
+}
+
+pub(crate) fn signal_supervisor_expiry_with_reason(
+    shared: &SessionShared,
+    reason: &'static str,
+) -> bool {
+    if shared
+        .commands
+        .supervisor_expiry_signaled
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        return false;
+    }
     shared
         .commands
         .system_power
@@ -80,7 +95,53 @@ fn signal_supervisor_expiry(shared: &SessionShared) {
         .commands
         .panic_requested
         .store(true, Ordering::Release);
+    let metrics = &shared.publication.metrics;
+    let mut trigger = metrics.terminal_trigger_reason.lock();
+    if trigger.is_none() {
+        *trigger = Some(reason.to_string());
+    }
+    drop(trigger);
+    let mut terminal_error = metrics.terminal_error.lock();
+    if terminal_error.is_none() {
+        *terminal_error = Some(reason.to_string());
+    }
+    drop(terminal_error);
     let _ = shared.commands.interrupt.signal();
+    true
+}
+
+/// Minimal supervisor lifetime guard.
+///
+/// Detects unexpected exit, thread unwind, or unhandled panic while the
+/// playback session is active. If dropped without being disarmed, it publishes
+/// the terminal reason and signals panic-release exactly once.
+pub struct SupervisorLifetimeGuard {
+    shared: Arc<SessionShared>,
+    disarmed: Arc<AtomicBool>,
+}
+
+impl SupervisorLifetimeGuard {
+    pub(super) fn new(shared: Arc<SessionShared>, disarmed: Arc<AtomicBool>) -> Self {
+        Self { shared, disarmed }
+    }
+
+    /// Disarm the lifetime guard on intentional shutdown (e.g. Quit, Skip,
+    /// or normal completion).
+    pub fn disarm(&self) {
+        self.disarmed.store(true, Ordering::Release);
+    }
+
+    pub fn is_disarmed(&self) -> bool {
+        self.disarmed.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for SupervisorLifetimeGuard {
+    fn drop(&mut self) {
+        if !self.disarmed.load(Ordering::Acquire) {
+            signal_supervisor_expiry_with_reason(&self.shared, "supervisor_unwind_or_exit");
+        }
+    }
 }
 
 fn supervisor_watchdog_loop(
@@ -203,6 +264,7 @@ pub struct NativeDispatchSession {
     shared: Arc<SessionShared>,
     supervisor_lease_timeout_us: u64,
     supervisor_lease_timeout_ticks: AtomicU64,
+    supervisor_disarmed: Arc<AtomicBool>,
     thread_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
     watchdog_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
@@ -367,6 +429,7 @@ impl NativeDispatchSession {
                 skip_requested: AtomicBool::new(false),
                 panic_requested: AtomicBool::new(false),
                 supervisor_expired: SupervisorLeaseState::new(initial_heartbeat_ticks),
+                supervisor_expiry_signaled: AtomicBool::new(false),
                 // Supervisor-published focus state is the precision-path hint;
                 // final admission revalidates target and bound owner atomics.
                 focus_active: AtomicBool::new(true),
@@ -391,6 +454,7 @@ impl NativeDispatchSession {
                 pre_roll_us: AtomicU64::new(0),
                 startup_ready_ticks: AtomicU64::new(0),
                 startup_latency_us: AtomicU64::new(0),
+                worker_progress: AtomicU8::new(WorkerProgressState::Starting as u8),
             },
         });
         let admitted_options = AdmittedNativeSessionOptions {
@@ -406,6 +470,7 @@ impl NativeDispatchSession {
             shared,
             supervisor_lease_timeout_us,
             supervisor_lease_timeout_ticks: AtomicU64::new(0),
+            supervisor_disarmed: Arc::new(AtomicBool::new(false)),
             thread_handle: Mutex::new(None),
             watchdog_handle: Mutex::new(None),
         })
@@ -689,6 +754,11 @@ impl NativeDispatchSession {
             .is_some_and(|hook| hook.take_worker_spawn_failure());
 
         self.shared.commands.supervisor_expired.reset(requested_qpc);
+        self.shared
+            .commands
+            .supervisor_expiry_signaled
+            .store(false, Ordering::Release);
+        self.supervisor_disarmed.store(false, Ordering::Release);
         self.supervisor_lease_timeout_ticks
             .store(lease_timeout_ticks.as_u64(), Ordering::Release);
 
@@ -1092,6 +1162,7 @@ impl NativeDispatchSession {
             .commands
             .system_power
             .cancel_prearm(StartupAbortReason::Skip);
+        self.supervisor_disarmed.store(true, Ordering::Release);
         self.shared
             .commands
             .skip_requested
@@ -1110,6 +1181,7 @@ impl NativeDispatchSession {
             .commands
             .system_power
             .cancel_prearm(StartupAbortReason::Quit);
+        self.supervisor_disarmed.store(true, Ordering::Release);
         self.shared
             .commands
             .quit_requested
@@ -1128,6 +1200,7 @@ impl NativeDispatchSession {
             .commands
             .system_power
             .cancel_prearm(StartupAbortReason::PanicRelease);
+        self.supervisor_disarmed.store(true, Ordering::Release);
         self.shared
             .commands
             .panic_requested
@@ -1210,7 +1283,12 @@ impl NativeDispatchSession {
         self.bind_window_identity_authority_with_pid(authority, expected_owner_pid)
     }
 
-    #[cfg(feature = "test-support")]
+    #[cfg(test)]
+    pub(super) fn shared_arc_for_test(&self) -> Arc<SessionShared> {
+        Arc::clone(&self.shared)
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
     pub fn set_window_process_identity_status_for_test(
         &self,
         status: sky_dispatch_win32::focus::WindowIdentityContinuity,
@@ -1497,6 +1575,7 @@ impl NativeDispatchSession {
             is_finished: matches!(lifecycle, LIFECYCLE_FINISHED | LIFECYCLE_POISONED),
             is_paused: paused,
             status: self.poll_status(lifecycle, paused, pre_roll_remaining_us, startup),
+            worker_progress: self.worker_progress(),
         }
     }
 
@@ -1686,7 +1765,32 @@ impl NativeDispatchSession {
         )? {
             return Ok(false);
         }
+        self.supervisor_disarmed.store(true, Ordering::Release);
         Ok(true)
+    }
+
+    /// Obtain a supervisor lifetime guard that disarms on intentional shutdown
+    /// and triggers panic-release if the supervisor unexpectedly exits or unwinds.
+    pub fn supervisor_lifetime_guard(&self) -> SupervisorLifetimeGuard {
+        SupervisorLifetimeGuard::new(
+            Arc::clone(&self.shared),
+            Arc::clone(&self.supervisor_disarmed),
+        )
+    }
+
+    /// Canonical four-state worker operational progress.
+    pub fn worker_progress(&self) -> WorkerProgressState {
+        match self
+            .shared
+            .publication
+            .worker_progress
+            .load(Ordering::Acquire)
+        {
+            2 => WorkerProgressState::Active,
+            3 => WorkerProgressState::Paused,
+            4 => WorkerProgressState::Draining,
+            _ => WorkerProgressState::Starting,
+        }
     }
 
     pub fn take_telemetry_json(&self) -> Result<String, String> {

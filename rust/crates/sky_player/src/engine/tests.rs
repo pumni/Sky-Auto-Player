@@ -61,5 +61,6 @@ fn native_session_rejects_prepared_plan_from_another_qpc_domain() {
 
 mod modifier_replan;
 mod startup_admission;
+mod supervisor_retirement;
 mod support;
 mod telemetry_metrics;

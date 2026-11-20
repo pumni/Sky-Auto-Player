@@ -245,6 +245,44 @@ fn suspend_live_input_for_dispatch_with_control(
     .map(|_| ())
 }
 
+fn validate_resume_prerequisites(
+    now_ticks: sky_dispatch_win32::clock::QpcTicks,
+    target: &SessionTarget,
+    target_stamp: TargetStamp,
+    supervisor_expired: &SupervisorLeaseState,
+    supervisor_lease_timeout_ticks: DurationTicks,
+    require_focus: bool,
+    backend: &sky_dispatch_win32::input::TrackedKeyState,
+) -> Result<(), String> {
+    if supervisor_expired.is_expired()
+        || supervisor_expired.check_expired(now_ticks, supervisor_lease_timeout_ticks)
+    {
+        return Err("supervisor lease expired while paused".to_string());
+    }
+    if !target.is_valid() || !target.is_current(target_stamp.hwnd, target_stamp.generation) {
+        return Err("target invalidated while paused".to_string());
+    }
+    if target.owner_process_identity_required() {
+        let Some(authority) = target.owner_authority_for_generation(target_stamp.generation) else {
+            return Err("target owner authority unavailable on resume".to_string());
+        };
+        let identity = authority.identity();
+        if identity.hwnd != target_stamp.hwnd {
+            return Err("target HWND mismatch on resume".to_string());
+        }
+        let continuity = authority.continuity();
+        if continuity != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous {
+            return Err(format!(
+                "target process identity continuity broken on resume: {continuity:?}"
+            ));
+        }
+    }
+    if require_focus && backend.session_release_owner_proof().is_none() {
+        return Err("session release owner proof unavailable on resume".to_string());
+    }
+    Ok(())
+}
+
 #[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
@@ -1216,6 +1254,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
     let command_timing = &shared.commands.command_timing;
 
     let timing = *core.timing.as_ref().expect("worker timing initialized");
+    shared.publication.worker_progress.store(
+        crate::engine::WorkerProgressState::Active as u8,
+        Ordering::Release,
+    );
     let qpc_clock = core
         .resources
         .as_ref()
@@ -1346,6 +1388,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     }
                 };
                 if entered_focus_pause {
+                    shared.publication.worker_progress.store(
+                        crate::engine::WorkerProgressState::Paused as u8,
+                        Ordering::Release,
+                    );
                     *core.errors.abort_counts.entry("focus_lost").or_insert(0) += 1;
                     #[cfg(any(test, feature = "test-support"))]
                     if let Some(hook) = core.runtime.focus_pause_hook.as_ref() {
@@ -1549,6 +1595,41 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         }
                         continue;
                     }
+                    if let Err(error) = validate_resume_prerequisites(
+                        now_ticks,
+                        target,
+                        post_restore_target,
+                        supervisor_expired,
+                        timing.lease_timeout_ticks,
+                        config.focus.require_focus,
+                        &resources.backend,
+                    ) {
+                        core.runtime.verified_target = None;
+                        core.runtime.focus_restore_started_ticks = None;
+                        core.runtime.terminal_error = Some(error);
+                        break;
+                    }
+                    if resources.backend.release_obligation_mask() != 0
+                        && let Err(error) = suspend_live_input_for_dispatch_with_control(
+                            &mut resources.backend,
+                            &mut resources.scheduler,
+                            super::cleanup::CleanupTarget::for_session(
+                                target,
+                                Some(post_restore_target),
+                                config.focus.require_focus,
+                            ),
+                            #[cfg(any(test, feature = "test-support"))]
+                            &core.runtime,
+                            cleanup_terminal_requested,
+                            || qpc_clock.now().map_err(|error| format!("{error:?}")),
+                        )
+                    {
+                        core.runtime.verified_target = None;
+                        core.runtime.focus_restore_started_ticks = None;
+                        core.runtime.terminal_error =
+                            Some(format!("focus resume journal cleanup failed: {error}"));
+                        break;
+                    }
                     let resumed_ticks = qpc_ticks_or_terminal!();
                     if let Err(error) = resources
                         .playback
@@ -1559,6 +1640,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             Some(format!("playback clock failure: {error}"));
                         break;
                     }
+                    shared.publication.worker_progress.store(
+                        crate::engine::WorkerProgressState::Active as u8,
+                        Ordering::Release,
+                    );
                     shared
                         .publication
                         .progress_clock
@@ -1629,6 +1714,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     core.runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                     break;
                 }
+                shared.publication.worker_progress.store(
+                    crate::engine::WorkerProgressState::Paused as u8,
+                    Ordering::Release,
+                );
                 shared
                     .publication
                     .progress_clock
@@ -1716,6 +1805,39 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         }
                         continue;
                     }
+                    if let Err(error) = validate_resume_prerequisites(
+                        now_ticks,
+                        target,
+                        preflight_target,
+                        supervisor_expired,
+                        timing.lease_timeout_ticks,
+                        config.focus.require_focus,
+                        &resources.backend,
+                    ) {
+                        core.runtime.verified_target = None;
+                        core.runtime.terminal_error = Some(error);
+                        break;
+                    }
+                    if resources.backend.release_obligation_mask() != 0
+                        && let Err(error) = suspend_live_input_for_dispatch_with_control(
+                            &mut resources.backend,
+                            &mut resources.scheduler,
+                            super::cleanup::CleanupTarget::for_session(
+                                target,
+                                Some(preflight_target),
+                                config.focus.require_focus,
+                            ),
+                            #[cfg(any(test, feature = "test-support"))]
+                            &core.runtime,
+                            cleanup_terminal_requested,
+                            || qpc_clock.now().map_err(|error| format!("{error:?}")),
+                        )
+                    {
+                        core.runtime.verified_target = None;
+                        core.runtime.terminal_error =
+                            Some(format!("manual resume journal cleanup failed: {error}"));
+                        break;
+                    }
                     let resumed_ticks = qpc_ticks_or_terminal!();
                     if let Err(error) = resources
                         .playback
@@ -1726,6 +1848,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             Some(format!("playback clock failure: {error}"));
                         break;
                     }
+                    shared.publication.worker_progress.store(
+                        crate::engine::WorkerProgressState::Active as u8,
+                        Ordering::Release,
+                    );
                     shared
                         .publication
                         .progress_clock
@@ -2327,6 +2453,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             &mut core.runtime,
             core.observer.pending.as_ref(),
             &mut core.metrics,
+        );
+        shared.publication.worker_progress.store(
+            crate::engine::WorkerProgressState::Draining as u8,
+            Ordering::Release,
         );
     }))
 }

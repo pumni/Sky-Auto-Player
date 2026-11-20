@@ -151,6 +151,7 @@ pub(super) struct SessionCommands {
     pub(super) skip_requested: AtomicBool,
     pub(super) panic_requested: AtomicBool,
     pub(super) supervisor_expired: SupervisorLeaseState,
+    pub(super) supervisor_expiry_signaled: AtomicBool,
     pub(super) focus_active: AtomicBool,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) command_timing: CommandTimingState,
@@ -881,6 +882,7 @@ pub(super) struct SessionPublication {
     pub(super) pre_roll_us: AtomicU64,
     pub(super) startup_ready_ticks: AtomicU64,
     pub(super) startup_latency_us: AtomicU64,
+    pub(super) worker_progress: AtomicU8,
 }
 
 pub(super) struct SessionShared {
