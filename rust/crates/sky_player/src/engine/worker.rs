@@ -1,5 +1,4 @@
 mod admission;
-mod anomaly_history;
 mod boot;
 mod cleanup;
 mod control;
@@ -19,7 +18,6 @@ pub(crate) use admission::{
     enter_focus_pause, focus_matches, focus_matches_hwnd, load_target_stamp,
     target_stamp_still_current,
 };
-pub(crate) use anomaly_history::AttemptedDispatchAnomalies;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use cleanup::FinalizeTestObservation;
 #[cfg(test)]
@@ -126,11 +124,13 @@ pub(crate) fn finalize_worker_for_test(
     worker_panicked: bool,
     terminal_trigger: Option<TerminalTrigger>,
     terminal_error: Option<String>,
-    attempted_dispatch_anomalies: AttemptedDispatchAnomalies,
+    attempted_dispatch_anomaly: AttemptedDispatchAnomaly,
     cleanup_observation: &mut cleanup::FinalizeTestObservation,
 ) -> u8 {
     let telemetry_output = parking_lot::Mutex::new(None);
     let priority_acquired = parking_lot::Mutex::new(String::new());
+    #[cfg(test)]
+    let publish_count_before = metrics.publish_count.load(Ordering::Acquire);
     let result = catch_unwind(AssertUnwindSafe(|| {
         finalize_worker(FinalizeInput {
             resources: FinalizeResources {
@@ -153,7 +153,7 @@ pub(crate) fn finalize_worker_for_test(
                 abort_counts: HashMap::new(),
                 terminal_error,
                 secondary_errors: Vec::new(),
-                attempted_dispatch_anomalies,
+                attempted_dispatch_anomaly,
                 last_published_error: None,
                 terminal_trigger,
             },
@@ -180,10 +180,109 @@ pub(crate) fn finalize_worker_for_test(
             cleanup_observation: Some(cleanup_observation),
         })
     }));
+    #[cfg(test)]
+    {
+        cleanup_observation.terminal_metrics_publication_count = metrics
+            .publish_count
+            .load(Ordering::Acquire)
+            .saturating_sub(publish_count_before);
+    }
     cleanup_observation.generation_accounting = *metrics.generation_accounting.lock();
     match result {
         Ok(outcome) => outcome,
         Err(payload) => resume_unwind(payload),
+    }
+}
+
+const MAX_ATTEMPTED_ANOMALY_RECORD_BYTES: usize = 512;
+
+/// The first attempted sender anomaly is terminal for musical dispatch. Keep
+/// only its bounded detail while preserving the existing terminal summary.
+#[derive(Debug, Default)]
+pub(crate) struct AttemptedDispatchAnomaly {
+    recorded: bool,
+    detail: Option<String>,
+}
+
+impl AttemptedDispatchAnomaly {
+    pub(crate) fn record(&mut self, mut detail: String) {
+        if self.recorded {
+            return;
+        }
+        truncate_utf8(&mut detail, MAX_ATTEMPTED_ANOMALY_RECORD_BYTES);
+        self.recorded = true;
+        self.detail = Some(detail);
+    }
+
+    pub(crate) fn terminal_error_summary(&self) -> Option<String> {
+        self.recorded.then(|| {
+            format!(
+                "post-call attempted transport anomaly: total=1 omitted=0 retained={}",
+                usize::from(self.detail.is_some()),
+            )
+        })
+    }
+
+    pub(crate) fn append_detail_to(&mut self, destination: &mut Vec<String>) {
+        if let Some(detail) = self.detail.take() {
+            destination.push(detail);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_recorded(&self) -> bool {
+        self.recorded
+    }
+
+    #[cfg(test)]
+    pub(crate) fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
+    }
+}
+
+fn truncate_utf8(value: &mut String, maximum_bytes: usize) {
+    if value.len() <= maximum_bytes {
+        return;
+    }
+    let mut boundary = maximum_bytes;
+    while !value.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    value.truncate(boundary);
+}
+
+#[cfg(test)]
+mod attempted_dispatch_anomaly_tests {
+    use super::{AttemptedDispatchAnomaly, MAX_ATTEMPTED_ANOMALY_RECORD_BYTES};
+
+    #[test]
+    fn retains_only_first_bounded_detail_and_preserves_terminal_latch() {
+        let mut anomaly = AttemptedDispatchAnomaly::default();
+        anomaly.record("x".repeat(MAX_ATTEMPTED_ANOMALY_RECORD_BYTES + 20));
+        anomaly.record("later anomaly must not replace first detail".to_string());
+
+        assert_eq!(
+            anomaly.detail().map(str::len),
+            Some(MAX_ATTEMPTED_ANOMALY_RECORD_BYTES)
+        );
+        assert_eq!(
+            anomaly.terminal_error_summary().as_deref(),
+            Some("post-call attempted transport anomaly: total=1 omitted=0 retained=1")
+        );
+
+        let mut secondary_errors = Vec::new();
+        anomaly.append_detail_to(&mut secondary_errors);
+        assert_eq!(secondary_errors.len(), 1);
+        assert_eq!(
+            anomaly.terminal_error_summary().as_deref(),
+            Some("post-call attempted transport anomaly: total=1 omitted=0 retained=0")
+        );
+
+        let mut multibyte = AttemptedDispatchAnomaly::default();
+        multibyte.record(format!("a{}", "é".repeat(300)));
+        let retained = multibyte.detail().expect("bounded anomaly detail");
+        assert_eq!(retained.len(), MAX_ATTEMPTED_ANOMALY_RECORD_BYTES - 1);
+        assert!(retained.is_char_boundary(retained.len()));
     }
 }
 
@@ -230,9 +329,9 @@ pub(crate) struct WorkerRuntime {
     /// syscall attempt crosses the pre-roll boundary even when its transport
     /// evidence is anomalous; that onset is reconciled and never replayed.
     pub(crate) musical_physical_attempt_started: bool,
-    /// Attempted transport anomalies remain a terminal error latch while
-    /// allowing verified cleanup and later, never-attempted notes to proceed.
-    pub(crate) attempted_dispatch_anomalies: AttemptedDispatchAnomalies,
+    /// The first attempted sender anomaly terminates musical dispatch; only
+    /// bounded verified safety cleanup continues after that boundary.
+    pub(crate) attempted_dispatch_anomaly: AttemptedDispatchAnomaly,
     pub(crate) allow_pre_epoch_startup_dispatch: bool,
 }
 

@@ -1004,7 +1004,7 @@ pub(crate) fn dispatch_staged_candidate(
             .get_or_insert(super::control::TerminalTrigger::SenderAnomaly);
         let anomaly_record = sender_failure_record(&candidate, &send_result);
         runtime
-            .attempted_dispatch_anomalies
+            .attempted_dispatch_anomaly
             .record(format!("post-call attempted anomaly: {anomaly_record}"));
         // A prior successful sender timestamp is not evidence about this
         // anomalous syscall and must not be attributed to the next packet.

@@ -116,6 +116,12 @@ dispatch publisher while preserving the public snapshot and telemetry schema.
 Observer sample expectations, pending work, missing samples, and queue drops
 remain explicit in the snapshot.
 
+Terminal metrics publish once after terminal cleanup, observer shutdown,
+telemetry export, and scheduling-guard teardown, and before the typed terminal
+result becomes visible. The desktop treats live snapshots as progress and
+diagnostic data; worker join remains the fence for retirement and release
+ownership transfer.
+
 ## Pause, Resume, and Journal
 
 When the engine is paused with a clean journal (all obligations reconciled),

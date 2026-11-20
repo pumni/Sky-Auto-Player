@@ -115,7 +115,11 @@ fn assert_up_only_anomaly_terminates(fault: UpOnlyQpcFault) {
         "invalid QPC evidence contributes no qualified timing sample"
     );
 
-    let anomaly = &harness.runtime.attempted_dispatch_anomalies.details()[0];
+    let anomaly = harness
+        .runtime
+        .attempted_dispatch_anomaly
+        .detail()
+        .expect("attempted anomaly detail");
     assert!(anomaly.contains("source_action=11"), "{anomaly}");
     assert!(
         anomaly.contains("up_mask=0x0001 down_mask=0x0000"),
@@ -186,7 +190,7 @@ fn up_only_missing_completion_qpc_terminates_after_one_attempt() {
 }
 
 #[test]
-fn sender_anomaly_cause_survives_skip_arriving_before_finalize() {
+fn sender_anomaly_survives_late_skip_and_suspend_before_finalize() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     harness.configure_mock_cleanup_emitter_for_test();
     harness.attach_executor_for_test().expect("attach executor");
@@ -224,8 +228,11 @@ fn sender_anomaly_cause_survives_skip_arriving_before_finalize() {
         StagedDispatchOutcome::Exit
     ));
     harness.skip_requested.store(true, Ordering::Release);
+    harness.system_power.notify(true, &harness.interrupt);
 
     let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let operation_trace = Arc::new(parking_lot::Mutex::new(Vec::new()));
+    observation.operation_trace = Some(Arc::clone(&operation_trace));
     let outcome = harness.finalize_worker_for_test(false, &mut observation);
     assert_eq!(outcome, crate::engine::OUTCOME_ERROR);
     assert_eq!(
@@ -244,10 +251,47 @@ fn sender_anomaly_cause_survives_skip_arriving_before_finalize() {
     assert!(observation.secondary_errors.iter().any(|error| {
         error.contains("post-call attempted anomaly") && error.contains("source_action=0")
     }));
+    assert!(
+        observation
+            .secondary_errors
+            .iter()
+            .any(|error| { error.contains("system suspend requested during worker execution") })
+    );
+    assert_eq!(observation.release_obligation_mask, 0);
+    assert_eq!(
+        observation.terminal_metrics_publication_count, 1,
+        "finalization publishes exactly one terminal metrics snapshot"
+    );
+    let operation_trace = operation_trace.lock();
+    let positions = [
+        "terminal_release_returned",
+        "observer_shutdown",
+        "telemetry_export",
+        "scheduling_guards_released",
+        "terminal_metrics_publication",
+        "terminal_result_publication",
+    ]
+    .map(|event| {
+        operation_trace
+            .iter()
+            .position(|observed| *observed == event)
+            .unwrap_or_else(|| panic!("missing {event} in {operation_trace:?}"))
+    });
+    assert!(
+        positions.windows(2).all(|window| window[0] < window[1]),
+        "terminal publication must follow telemetry and guard teardown and precede outcome: {operation_trace:?}"
+    );
+    assert_eq!(
+        operation_trace
+            .iter()
+            .filter(|event| **event == "terminal_metrics_publication")
+            .count(),
+        1
+    );
 }
 
 #[test]
-fn first_up_only_anomaly_terminates_and_later_downs_are_never_attempted() {
+fn up_only_anomaly_preserves_residual_when_late_suspend_arrives_before_finalize() {
     let actions = [
         test_action(0, ActionKind::Down, 0, 0x15),
         test_action(1, ActionKind::Up, 20_000, 0x15),
@@ -333,14 +377,25 @@ fn first_up_only_anomaly_terminates_and_later_downs_are_never_attempted() {
         cleanup_sends.is_empty(),
         "needs_probe must not retry Up: {cleanup_sends:?}"
     );
-    assert_eq!(
-        harness.runtime.attempted_dispatch_anomalies.total_count(),
-        1
-    );
+    assert!(harness.runtime.attempted_dispatch_anomaly.is_recorded());
+    harness.system_power.notify(true, &harness.interrupt);
 
-    let finalized = harness.finalize_for_test();
-    assert_eq!(finalized.outcome_code, crate::engine::OUTCOME_ERROR);
-    assert_eq!(finalized.release_obligation_mask, 1);
+    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let outcome = harness.finalize_worker_for_test(false, &mut observation);
+    assert_eq!(outcome, crate::engine::OUTCOME_ERROR);
+    assert_eq!(
+        observation.terminal_trigger_reason.as_deref(),
+        Some("sender_anomaly")
+    );
+    assert!(
+        observation
+            .secondary_errors
+            .iter()
+            .any(|error| { error.contains("system suspend requested during worker execution") })
+    );
+    assert_eq!(observation.release_obligation_mask, 1);
+    assert_eq!(observation.terminal_release_raw_up_syscall_count, 0);
+    assert_eq!(observation.terminal_metrics_publication_count, 1);
 }
 
 fn chord_action(index: u32, kind: ActionKind, scheduled_us: u64, scans: &[u16]) -> KeyActionInput {
@@ -408,10 +463,9 @@ fn suspend_during_partial_progress_down_terminates_error_with_retained_suspend_c
         StagedDispatchOutcome::Exit,
         "partial progress Down exits immediately"
     );
-    assert_eq!(
-        harness.runtime.attempted_dispatch_anomalies.total_count(),
-        1,
-        "exactly one ledger attempted anomaly recorded"
+    assert!(
+        harness.runtime.attempted_dispatch_anomaly.is_recorded(),
+        "the first ledger attempted anomaly is retained"
     );
     assert_eq!(
         harness.local_metrics.precision_packet_attempts, 1,

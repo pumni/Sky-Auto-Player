@@ -125,9 +125,8 @@ fn attempted_mixed_down_terminates_after_one_packet_and_verified_cleanup() {
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
     let anomaly = harness
         .runtime
-        .attempted_dispatch_anomalies
-        .details()
-        .first()
+        .attempted_dispatch_anomaly
+        .detail()
         .expect("preserved raw anomaly evidence");
     assert!(anomaly.contains("source_action=12"), "{anomaly}");
     assert!(
@@ -230,13 +229,7 @@ fn failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_ob
             .as_deref()
             .is_some_and(|error| error.contains("tracked safety cleanup failed"))
     );
-    assert_eq!(
-        harness
-            .runtime
-            .attempted_dispatch_anomalies
-            .retained_count(),
-        1
-    );
+    assert!(harness.runtime.attempted_dispatch_anomaly.is_recorded());
 }
 
 #[test]
@@ -1045,9 +1038,8 @@ fn attempted_musical_up_only_is_not_replayed_and_terminates_before_next_down() {
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
     let anomaly = harness
         .runtime
-        .attempted_dispatch_anomalies
-        .details()
-        .first()
+        .attempted_dispatch_anomaly
+        .detail()
         .expect("Up anomaly");
     assert!(anomaly.contains("source_action=41"), "{anomaly}");
     assert!(

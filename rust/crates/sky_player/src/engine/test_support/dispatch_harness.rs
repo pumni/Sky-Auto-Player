@@ -845,7 +845,7 @@ impl ProductionDispatchTestHarness {
             worker_panicked,
             runtime.terminal_trigger,
             runtime.terminal_error,
-            runtime.attempted_dispatch_anomalies,
+            runtime.attempted_dispatch_anomaly,
             cleanup_observation,
         )
     }
