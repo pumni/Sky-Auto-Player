@@ -176,6 +176,8 @@ impl TrackedKeyState {
 
         const RELEASE_RETRY_DELAYS_MS: [u64; 3] = [15, 50, 100];
 
+        let start_terminal_raw_invocations = self.terminal_raw_up_invocations;
+        let start_terminal_background_invocations = self.terminal_background_raw_up_invocations;
         let mut transport_anomaly = false;
         let mut final_probe_verdict = if needs_probe == 0 {
             TerminalProbeVerdict::NotRequired
@@ -187,13 +189,10 @@ impl TrackedKeyState {
         let mut attempted_mask = 0u16;
         let mut attempts = 0u8;
         let mut raw_up_invocations = 0u8;
+        let mut background_raw_up_invocations = 0u8;
         let mut background_terminal_drain = false;
 
         for attempt_idx in 0..usize::from(max_raw_up_calls) {
-            if attempt_idx > 0 {
-                release_retry_sleep(RELEASE_RETRY_DELAYS_MS[attempt_idx - 1]);
-            }
-
             let mut default_drain_control =
                 || Ok(super::super::outcome::CleanupDrainDecision::default());
             let drain_decision = match drain_control.as_mut() {
@@ -209,9 +208,6 @@ impl TrackedKeyState {
             terminal_qpc_fallback |= drain_decision.terminal_requested;
             let is_worker_terminal = share_worker_terminal_budget
                 && (terminal_qpc_fallback || drain_decision.terminal_requested);
-            if is_worker_terminal && self.terminal_raw_up_invocations < raw_up_invocations {
-                self.terminal_raw_up_invocations = raw_up_invocations;
-            }
             let background_terminal = allow_background_terminal_up
                 && drain_decision.terminal_requested
                 && !drain_decision.origin_foreground;
@@ -221,30 +217,39 @@ impl TrackedKeyState {
             }
             background_terminal_drain |= background_terminal;
 
-            let background_already_invoked = if is_worker_terminal {
-                self.terminal_background_raw_up_invocations != 0
-                    || self.terminal_raw_up_invocations >= max_raw_up_calls
+            let cumulative_raw_calls = if is_worker_terminal {
+                if background_terminal {
+                    start_terminal_background_invocations
+                        .saturating_add(background_raw_up_invocations)
+                } else {
+                    start_terminal_raw_invocations.saturating_add(raw_up_invocations)
+                }
             } else {
-                raw_up_invocations != 0
+                if background_terminal {
+                    background_raw_up_invocations
+                } else {
+                    raw_up_invocations
+                }
             };
-            if background_terminal && background_already_invoked {
-                break;
-            }
+
+            let total_raw_calls = if is_worker_terminal {
+                start_terminal_raw_invocations.saturating_add(raw_up_invocations)
+            } else {
+                raw_up_invocations
+            };
 
             let raw_attempt_limit = if background_terminal {
                 1
             } else {
                 max_raw_up_calls
             };
-            let cumulative_raw_calls = if is_worker_terminal {
-                if background_terminal {
-                    self.terminal_background_raw_up_invocations
-                } else {
-                    self.terminal_raw_up_invocations
-                }
-            } else {
-                raw_up_invocations
-            };
+
+            if background_terminal
+                && (cumulative_raw_calls >= raw_attempt_limit
+                    || total_raw_calls >= max_raw_up_calls)
+            {
+                break;
+            }
             if needs_up != 0 && cumulative_raw_calls >= raw_attempt_limit {
                 break;
             }
@@ -252,6 +257,10 @@ impl TrackedKeyState {
             // never use a background keyboard observation to discharge it.
             if background_terminal && needs_up == 0 {
                 break;
+            }
+
+            if attempt_idx > 0 {
+                release_retry_sleep(RELEASE_RETRY_DELAYS_MS[attempt_idx - 1]);
             }
 
             if needs_up != 0 {
@@ -296,20 +305,17 @@ impl TrackedKeyState {
                 };
                 raw_up_invocations =
                     raw_up_invocations.saturating_add(u8::from(emitted.evidence.attempts != 0));
+                if background_terminal && emitted.evidence.attempts != 0 {
+                    background_raw_up_invocations = background_raw_up_invocations.saturating_add(1);
+                }
                 let is_terminal_attempt = share_worker_terminal_budget
                     && (terminal_qpc_fallback || background_terminal_drain);
                 if is_terminal_attempt && emitted.evidence.attempts != 0 {
-                    if self.terminal_raw_up_invocations < raw_up_invocations.saturating_sub(1) {
-                        self.terminal_raw_up_invocations = raw_up_invocations.saturating_sub(1);
-                    }
-                    self.terminal_raw_up_invocations = self
-                        .terminal_raw_up_invocations
-                        .saturating_add(u8::from(emitted.evidence.attempts != 0));
-                    if background_terminal_drain {
-                        self.terminal_background_raw_up_invocations = self
-                            .terminal_background_raw_up_invocations
-                            .saturating_add(1);
-                    }
+                    self.terminal_raw_up_invocations =
+                        start_terminal_raw_invocations.saturating_add(raw_up_invocations);
+                    self.terminal_background_raw_up_invocations =
+                        start_terminal_background_invocations
+                            .saturating_add(background_raw_up_invocations);
                 }
                 if emitted.evidence.attempts != 0 {
                     attempted_mask |= previous_needs_up;
@@ -339,6 +345,10 @@ impl TrackedKeyState {
                     // perform bounded safety cleanup on a later iteration;
                     // its caller will reject the resume barrier and terminate.
                     terminal_qpc_fallback = true;
+                    if share_worker_terminal_budget {
+                        self.terminal_raw_up_invocations =
+                            start_terminal_raw_invocations.saturating_add(raw_up_invocations);
+                    }
                 }
 
                 if background_terminal_drain && emitted.evidence.attempts != 0 {
@@ -393,7 +403,14 @@ impl TrackedKeyState {
                 if self.failed_release_mask == 0 {
                     self.last_error = None;
                 }
-                if share_worker_terminal_budget && terminal_qpc_fallback {
+                if share_worker_terminal_budget
+                    && (terminal_qpc_fallback || background_terminal_drain)
+                {
+                    self.terminal_raw_up_invocations =
+                        start_terminal_raw_invocations.saturating_add(raw_up_invocations);
+                    self.terminal_background_raw_up_invocations =
+                        start_terminal_background_invocations
+                            .saturating_add(background_raw_up_invocations);
                     self.cumulative_terminal_send_attempts
                         .extend(terminal_send_attempts.iter().cloned());
                 }
@@ -439,7 +456,11 @@ impl TrackedKeyState {
         let verification_inconclusive =
             matches!(final_probe_verdict, TerminalProbeVerdict::Inconclusive(_));
 
-        if share_worker_terminal_budget && terminal_qpc_fallback {
+        if share_worker_terminal_budget && (terminal_qpc_fallback || background_terminal_drain) {
+            self.terminal_raw_up_invocations =
+                start_terminal_raw_invocations.saturating_add(raw_up_invocations);
+            self.terminal_background_raw_up_invocations =
+                start_terminal_background_invocations.saturating_add(background_raw_up_invocations);
             self.cumulative_terminal_send_attempts
                 .extend(terminal_send_attempts.iter().cloned());
         }
