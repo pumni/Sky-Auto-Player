@@ -8,7 +8,7 @@ use super::{
 #[cfg(any(test, feature = "test-support"))]
 use parking_lot::Mutex;
 use sky_dispatch_core::time::DurationTicks;
-use sky_dispatch_win32::clock::QpcError;
+use sky_dispatch_win32::clock::{QpcError, QpcTicks};
 #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 use sky_dispatch_win32::input::GuardedReleaseOutcome;
 #[cfg(feature = "real-input-acceptance")]
@@ -390,6 +390,10 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     // and observer teardown. It cannot delay or alter terminal release.
     pending_production_forensics.drain_after_cleanup(&mut local_metrics);
     let end_ticks = qpc_clock.now();
+    let terminal_publish_ticks = end_ticks
+        .as_ref()
+        .map(|ticks| ticks.as_u64())
+        .unwrap_or_default();
     let end_qpc = end_ticks.and_then(|ticks| {
         qpc_clock
             .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
@@ -513,7 +517,11 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             / local_metrics.playback_wall_time_us as u128)
             as u64;
     }
-    publish_terminal_metrics(&local_metrics, metrics, qpc_clock, end_us);
+    publish_terminal_metrics(
+        &local_metrics,
+        metrics,
+        QpcTicks::from_raw(terminal_publish_ticks),
+    );
     metrics.is_paused.store(false, Ordering::Relaxed);
     let telemetry = match Arc::try_unwrap(telemetry) {
         Ok(telemetry) => telemetry.into_inner(),
@@ -549,7 +557,11 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     local_metrics.power_throttling_disabled = false;
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "terminal_metrics_publication");
-    publish_terminal_metrics(&local_metrics, metrics, qpc_clock, end_us);
+    publish_terminal_metrics(
+        &local_metrics,
+        metrics,
+        QpcTicks::from_raw(terminal_publish_ticks),
+    );
     let cleanup_panicked = matches!(&cleanup_result, Err(TerminalCleanupFailure::Panicked(_)));
     let terminal_outcome = if terminal_error.is_some()
         || cleanup_panicked

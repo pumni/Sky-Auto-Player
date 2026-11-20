@@ -1,7 +1,6 @@
 use super::super::shared::{SessionTarget, SupervisorLeaseState, SystemPowerState};
 use super::super::{
-    DurationTicks, QpcError, TimelineTicks, publish_lifecycle_metrics,
-    try_publish_metrics_with_update,
+    DurationTicks, TimelineTicks, publish_lifecycle_metrics, try_publish_metrics_with_update,
 };
 #[cfg(test)]
 #[allow(unused_imports)]
@@ -177,10 +176,7 @@ pub(crate) fn publish_live_metrics_after_dispatch(
     qpc_clock: sky_dispatch_win32::clock::QpcClock,
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
 ) {
-    let Ok(now_us) = qpc_clock.duration_to_us(DurationTicks::from_raw(now_qpc.as_u64())) else {
-        return;
-    };
-    let _ = try_publish_metrics_with_update(local, shared, qpc_clock, now_us, false, |local| {
+    let _ = try_publish_metrics_with_update(local, shared, qpc_clock, now_qpc, false, |local| {
         publish_backend_counters(backend, local)
     });
 }
@@ -825,12 +821,17 @@ pub(crate) fn dispatch_staged_candidate(
         None
     };
 
-    let admission_result = loop {
+    let (admission_result, precision_gate_start_qpc, precision_gate_end_qpc) = loop {
         let packet_kind = MusicalPacketKind::from_masks(
             candidate.packet_masks.down_mask,
             candidate.packet_masks.up_mask,
         )
         .expect("musical packet has non-zero mask");
+
+        // Qualification traces use the existing optional target-crossing and
+        // final-policy fields for this gate's start/end. A sample failure is
+        // reported as unavailable and never changes admission.
+        let precision_gate_start_qpc = observer.and_then(|_| qpc_clock.now().ok());
 
         if !packet_kind.has_down() {
             match final_control_precheck(control_signals) {
@@ -861,6 +862,7 @@ pub(crate) fn dispatch_staged_candidate(
             local_metrics,
             packet_kind,
         );
+        let precision_gate_end_qpc = observer.and_then(|_| qpc_clock.now().ok());
         match admission {
             FinalDownAdmissionResult::ModifierHeld
                 if packet_kind == MusicalPacketKind::Mixed && !select_up_prefix =>
@@ -878,7 +880,7 @@ pub(crate) fn dispatch_staged_candidate(
                 };
                 has_down = false;
             }
-            other => break other,
+            other => break (other, precision_gate_start_qpc, precision_gate_end_qpc),
         }
     };
 
@@ -1240,7 +1242,12 @@ pub(crate) fn dispatch_staged_candidate(
             }
         }
         let wake_qpc = super::dispatch::take_deadline_wake_qpc(runtime);
-        let precision_handoff = super::dispatch::precision_handoff(runtime, wake_qpc, None, None);
+        let precision_handoff = super::dispatch::precision_handoff(
+            runtime,
+            wake_qpc,
+            precision_gate_start_qpc,
+            precision_gate_end_qpc,
+        );
         let observation = crate::engine::worker::dispatch::observation::DownObservation {
             wait_sequence: runtime
                 .pending_wait_observation
@@ -1255,7 +1262,7 @@ pub(crate) fn dispatch_staged_candidate(
             allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
             physical_target_qpc: candidate.authored_target_qpc,
             physical_timing_window: candidate.timing_window,
-            final_policy_qpc: None,
+            final_policy_qpc: precision_gate_end_qpc,
             pre_call_qpc,
             sendinput_completion_qpc: completion_qpc,
             previous_sendinput_completion_qpc,
@@ -1339,22 +1346,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
     // Every QPC query after admission is part of the worker's correctness
     // boundary. A failed query is terminal and must take the cleanup path;
     // it must never become timestamp zero or a best-effort continuation.
-    macro_rules! qpc_us_or_terminal {
-        () => {{
-            match qpc_clock.now().and_then(|ticks| {
-                qpc_clock
-                    .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
-                    .map_err(|_| QpcError::ConversionOverflow)
-            }) {
-                Ok(value) => value,
-                Err(error) => {
-                    core.runtime.terminal_error = Some(format!("QPC runtime failure: {error:?}"));
-                    break;
-                }
-            }
-        }};
-    }
-
     macro_rules! qpc_ticks_or_terminal {
         () => {{
             match qpc_clock.now() {
@@ -1475,12 +1466,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    publish_lifecycle_metrics(
-                        &core.metrics,
-                        metrics,
-                        qpc_clock,
-                        qpc_us_or_terminal!(),
-                    );
+                    publish_lifecycle_metrics(&core.metrics, metrics, qpc_ticks_or_terminal!());
                 }
             } else if resources.playback.has_pause_reason(PauseReason::Focus) {
                 let restored_at = *core
@@ -1745,12 +1731,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    publish_lifecycle_metrics(
-                        &core.metrics,
-                        metrics,
-                        qpc_clock,
-                        qpc_us_or_terminal!(),
-                    );
+                    publish_lifecycle_metrics(&core.metrics, metrics, qpc_ticks_or_terminal!());
                 }
             }
 
@@ -1785,12 +1766,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         metrics,
                         &mut core.errors.last_published,
                     );
-                    publish_lifecycle_metrics(
-                        &core.metrics,
-                        metrics,
-                        qpc_clock,
-                        qpc_us_or_terminal!(),
-                    );
+                    publish_lifecycle_metrics(&core.metrics, metrics, qpc_ticks_or_terminal!());
                 } else if resources.playback.has_pause_reason(PauseReason::Focus) {
                     core.runtime.manual_pause_suspension_pending = true;
                 }

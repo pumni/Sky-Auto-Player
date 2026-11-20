@@ -28,7 +28,12 @@ impl NativeDispatchSession {
             startup_armed: startup.armed_published,
             startup_ready: startup.ready_published,
             status,
-            local: self.shared.publication.metrics.snapshot.load(),
+            local: self
+                .shared
+                .publication
+                .metrics
+                .snapshot
+                .load(self.qpc_clock),
             last_error: self.shared.publication.metrics.last_error.lock().clone(),
             terminal_error: self.shared.publication.metrics.terminal_error.lock().clone(),
             outcome: self.terminal_outcome(),

@@ -368,10 +368,11 @@ pub(crate) struct WorkerTimingState {
     pub(super) pre_call_2ms_ticks: DurationTicks,
     pub(super) pre_call_5ms_ticks: DurationTicks,
     pub(super) pre_call_10ms_ticks: DurationTicks,
+    pub(super) cpu_metrics_sample_interval_ticks: DurationTicks,
     pub(super) start_wall_time_us: u64,
     pub(super) start_thread_cpu_us: u64,
     pub(super) start_process_cpu_us: u64,
-    pub(super) last_cpu_metrics_sample_us: u64,
+    pub(super) last_cpu_metrics_sample_ticks: u64,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -397,10 +398,11 @@ impl WorkerTimingState {
             pre_call_2ms_ticks: DurationTicks::from_raw(u64::MAX),
             pre_call_5ms_ticks: DurationTicks::from_raw(u64::MAX),
             pre_call_10ms_ticks: DurationTicks::from_raw(u64::MAX),
+            cpu_metrics_sample_interval_ticks: DurationTicks::ZERO,
             start_wall_time_us: 0,
             start_thread_cpu_us: 0,
             start_process_cpu_us: 0,
-            last_cpu_metrics_sample_us: 0,
+            last_cpu_metrics_sample_ticks: 0,
         }
     }
 }
@@ -458,12 +460,17 @@ pub(super) struct WorkerObserverState {
 pub(super) fn update_deferred_worker_metrics(
     local_metrics: &mut WorkerMetricsLocal,
     timing: &mut WorkerTimingState,
-    wall_now_us: u64,
+    qpc_clock: QpcClock,
+    now_ticks: QpcTicks,
 ) {
+    let Ok(wall_now_us) = qpc_clock.duration_to_us(DurationTicks::from_raw(now_ticks.as_u64()))
+    else {
+        return;
+    };
     if cpu_metrics_sample_due(
-        wall_now_us,
-        timing.last_cpu_metrics_sample_us,
-        CPU_METRICS_SAMPLE_INTERVAL_US,
+        now_ticks.as_u64(),
+        timing.last_cpu_metrics_sample_ticks,
+        timing.cpu_metrics_sample_interval_ticks.as_u64(),
     ) {
         // The observer runs on a different thread.  Its sampling point can
         // update the process-wide value, but it must never publish that
@@ -471,7 +478,7 @@ pub(super) fn update_deferred_worker_metrics(
         // value is captured once during finalization on the owning thread.
         local_metrics.process_cpu_time_us =
             current_process_cpu_time_us().saturating_sub(timing.start_process_cpu_us);
-        timing.last_cpu_metrics_sample_us = wall_now_us;
+        timing.last_cpu_metrics_sample_ticks = now_ticks.as_u64();
     }
     local_metrics.playback_wall_time_us = wall_now_us.saturating_sub(timing.start_wall_time_us);
     if local_metrics.idle_wake_count > 0 && local_metrics.playback_wall_time_us > 0 {

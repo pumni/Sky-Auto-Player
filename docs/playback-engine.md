@@ -108,6 +108,14 @@ sender anomaly.
 Required QPC samples and the production waiter policy remain part of the
 timing contract.
 
+Worker metrics keep QPC tick counters as their source values and retain the
+existing 50 ms live-publication cadence. A snapshot reader copies the dispatch
+and observer source slots as one readout, then derives public microsecond
+fields after releasing the slots. This keeps unit conversion out of the
+dispatch publisher while preserving the public snapshot and telemetry schema.
+Observer sample expectations, pending work, missing samples, and queue drops
+remain explicit in the snapshot.
+
 ## Pause, Resume, and Journal
 
 When the engine is paused with a clean journal (all obligations reconciled),

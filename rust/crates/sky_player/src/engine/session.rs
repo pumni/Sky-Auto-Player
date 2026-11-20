@@ -266,6 +266,7 @@ pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<
 
 pub struct NativeDispatchSession {
     config: Mutex<Option<AdmittedNativeSessionOptions>>,
+    qpc_clock: QpcClock,
     observer_enabled: bool,
     focus_required: bool,
     generation_count: u64,
@@ -423,10 +424,11 @@ impl NativeDispatchSession {
             target
         };
         let metrics = Arc::new(SharedMetrics::default());
+        metrics.configure_qpc_clock(qpc_clock);
         *metrics.requested_priority_mode.lock() = "unknown".to_string();
         *metrics.requested_wait_policy.lock() = "unknown".to_string();
         *metrics.effective_wait_policy.lock() = "unknown".to_string();
-        let mut initial_metrics = metrics.snapshot.load();
+        let mut initial_metrics = metrics.snapshot.load(qpc_clock);
         initial_metrics.total_us = total_us;
         let _ = metrics.snapshot.try_publish_dispatch(initial_metrics);
         let shared = Arc::new(SessionShared {
@@ -473,6 +475,7 @@ impl NativeDispatchSession {
         };
         Ok(Self {
             observer_enabled,
+            qpc_clock,
             focus_required: admitted_options.options.focus.require_focus,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
@@ -1246,7 +1249,7 @@ impl NativeDispatchSession {
     pub fn set_live_diagnostics_enabled(&self, enabled: bool) {
         let metrics = &self.shared.publication.metrics;
         if enabled {
-            metrics.last_publish_us.store(0, Ordering::Relaxed);
+            metrics.last_publish_ticks.store(0, Ordering::Relaxed);
         }
         metrics
             .live_diagnostics_enabled
