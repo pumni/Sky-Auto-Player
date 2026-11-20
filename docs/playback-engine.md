@@ -5,16 +5,29 @@ cleanup, and session retirement. The implementation map points to the current
 source; [playback verification](playback-verification.md) owns commands and
 qualification evidence. [SECURITY.md](../SECURITY.md) owns the security policy.
 
-## Ownership
+## Ownership and Progress Partitioning
 
 - The Tauri playback service prepares a sheet, starts and controls a native
-  session, joins its worker, commits retirement by session ID, and coordinates
-  recovery and UI publication.
+  session, monitors worker progress, joins the worker, commits retirement by
+  session ID, and coordinates recovery and UI publication.
 - **sky_player** owns the playback worker, target authority, final admission,
   dispatch control, timing, and the worker cleanup result.
 - **sky_dispatch_core** owns the fixed musical executor and schedule policy.
 - **sky_dispatch_win32** owns Windows focus queries, waits, and physical
   **SendInput** effects.
+
+Native worker progress is strictly partitioned into four states:
+`Starting`, `Active`, `Paused`, and `Draining`.
+Shell-level **Quarantine** and **Retired** states remain exclusively owned by
+the desktop shell (`apps/desktop/src-tauri/src/app_state.rs` and
+`apps/desktop/src-tauri/src/native_runtime/playback/retirement.rs`).
+
+The desktop supervisor thread retains an RAII `SupervisorLifetimeGuard`
+throughout active physical playback. If the supervisor thread unwinds or panics
+unexpectedly, the guard triggers prompt safety release with terminal reason
+`"supervisor_unwind_or_exit"` via atomic one-winner signaling without blocking
+on metrics locks. The guard is safely disarmed upon intentional termination
+(`quit`, `skip`, `panic_release`, and confirmed `join`).
 
 Preparation compiles and validates the immutable dispatch schedule before a
 worker starts. The worker moves prepared storage into its executor; it does not
@@ -26,11 +39,28 @@ A physical session binds one immutable target HWND, owner PID, retained process
 object, and process incarnation. The worker is the session's only physical
 writer. Recovery may take the journal only after that worker has joined.
 
+Pure **Control A** dispatch is the authoritative path for all Down, Up, and
+mixed packets. `ProcessQosPolicy` is pinned to **Default**; experimental B/C
+process QoS bit toggling and adaptive pre-spin adjustments are not enabled in
+production. The pre-spin threshold is frozen.
+
 Every musical packet, including an Up-only packet, passes a fresh final check
 against the staged HWND and retained owner identity. A packet with Down also
 requires an unpressed modifier set and a valid supervisor lease. The check
 uses a fresh foreground HWND/PID query and process-liveness proof. Cached focus
 state and callback notifications cannot grant admission.
+
+### Modifier hold and replan policy
+
+- When a modifier key is detected as `Held`, the worker enters a soft wait
+  bounded by `max_hold_deadline`. An `Inconclusive` query fails closed and
+  blocks admission.
+- A modifier-blocked Down onset does not rebase the timeline epoch or delay due
+  Ups. Any Up traffic due during modifier backoff proceeds independently.
+- Releasing one modifier key or sending an independent Up does not reset the
+  hold budget of other active keys.
+- Modifier hold timeout strictly requires `modifier_hold_timeout_us > 0` at
+  admission. Duration arithmetic overflow fails closed as a terminal error.
 
 The foreground WinEvent callback is a wake hint only. The worker or recovery
 owner rechecks current identity before acting; polling is the fallback if the
@@ -72,6 +102,25 @@ control/admission replans are separate; they do not resume playback after a
 sender anomaly.
 Required QPC samples and the production waiter policy remain part of the
 timing contract.
+
+## Pause, Resume, and Journal
+
+When the engine is paused with a clean journal (all obligations reconciled),
+the worker performs zero periodic waitable-timer wakes and sleeps indefinitely
+on the lifecycle interrupt event (`interrupt.wait_indefinitely()`).
+
+Before resuming dispatch (`exit_pause`), the worker revalidates all authority
+prerequisites via `validate_resume_prerequisites`:
+1. Supervisor lease freshness (`!is_expired()` and `!check_expired()`).
+2. Target window identity validity and generation match.
+3. Target owner process continuity (`WindowIdentityContinuity::Continuous`).
+4. Target window foreground match (`focus_matches_hwnd`).
+5. Release-owner proof currency (matching exact target HWND, generation, and
+   continuous owner PID).
+
+If uncommitted obligations exist in the journal upon resume, they are drained
+via `suspend_live_input_for_dispatch_with_control` before re-establishing the
+dispatch timeline.
 
 ## Journal and bounded cleanup
 

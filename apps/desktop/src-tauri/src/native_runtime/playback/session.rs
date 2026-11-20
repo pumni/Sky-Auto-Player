@@ -1818,6 +1818,11 @@ impl NativePlaybackService {
             }
         }
 
+        let supervisor_lifetime_guard = active
+            .player
+            .as_ref()
+            .map(|player| player.supervisor_lifetime_guard());
+
         // WinEvent is only a quick transition hint. The periodic exact
         // foreground poll remains active as a loss/reorder/message-loop
         // fallback, and the worker keeps its own fresh final admission.
@@ -2032,6 +2037,9 @@ impl NativePlaybackService {
             ) {
                 PlaybackHandoffDecision::Retire(mut retirement) => {
                     active.worker_quiescent.store(true, Ordering::Release);
+                    if let Some(guard) = &supervisor_lifetime_guard {
+                        guard.disarm();
+                    }
                     if let Some(error) = join_error.take() {
                         retirement.publication = PlaybackTerminalPublication::Failed {
                             code: "native_worker_join_failed".into(),

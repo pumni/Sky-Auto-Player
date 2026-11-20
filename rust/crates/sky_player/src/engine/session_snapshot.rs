@@ -290,13 +290,28 @@ impl NativeDispatchSession {
             observer_dropped_samples: local.observer_dropped_samples,
             observer_queue_high_watermark: local.observer_queue_high_watermark,
             terminal_error: projection.terminal_error.clone(),
-            terminal_trigger_reason: self
-                .shared
-                .publication
-                .metrics
-                .terminal_trigger_reason
-                .lock()
-                .clone(),
+            terminal_trigger_reason: {
+                let mut reason = self
+                    .shared
+                    .publication
+                    .metrics
+                    .terminal_trigger_reason
+                    .lock()
+                    .clone();
+                if reason.is_none() {
+                    let code = self
+                        .shared
+                        .commands
+                        .supervisor_expiry_reason_code
+                        .load(Ordering::Acquire);
+                    if let Some(decoded) =
+                        crate::engine::shared::decode_supervisor_expiry_reason(code)
+                    {
+                        reason = Some(decoded.to_string());
+                    }
+                }
+                reason
+            },
             secondary_errors: self
                 .shared
                 .publication

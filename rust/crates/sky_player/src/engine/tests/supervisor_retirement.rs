@@ -642,3 +642,255 @@ fn resume_fails_closed_when_target_continuity_broken() {
         "expected continuity broken error, got: {err}"
     );
 }
+
+#[test]
+fn signal_supervisor_expiry_prompt_without_locks_under_contention() {
+    use crate::engine::session::signal_supervisor_expiry_with_reason;
+
+    let sched = schedule_long(&[0x15]);
+    let options = test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    let shared = session.shared_arc_for_test();
+
+    // Contention scenario: simulate another thread holding metrics.terminal_trigger_reason mutex
+    let mutex_held = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mutex_held_clone = Arc::clone(&mutex_held);
+    let shared_clone = Arc::clone(&shared);
+    let blocker_thread = std::thread::spawn(move || {
+        let _guard = shared_clone
+            .publication
+            .metrics
+            .terminal_trigger_reason
+            .lock();
+        while mutex_held_clone.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    // Give blocker thread time to acquire mutex:
+    std::thread::sleep(Duration::from_millis(20));
+
+    // Calling signal_supervisor_expiry_with_reason must NOT block on the held mutex!
+    let start = Instant::now();
+    let signaled = signal_supervisor_expiry_with_reason(&shared, "supervisor_unwind_or_exit");
+    let duration = start.elapsed();
+
+    assert!(signaled, "first signal must win CAS");
+    assert!(
+        duration < Duration::from_millis(50),
+        "signaling must not block on held metrics lock; took {:?}",
+        duration
+    );
+    assert!(
+        shared.commands.supervisor_expired.is_expired(),
+        "supervisor lease must be latched expired immediately"
+    );
+    assert!(
+        shared.commands.panic_requested.load(Ordering::Acquire),
+        "panic release must be requested immediately"
+    );
+
+    // Release the blocker thread's lock:
+    mutex_held.store(false, Ordering::Release);
+    blocker_thread.join().expect("blocker thread join");
+
+    // The snapshot must still accurately report the atomic reason code:
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("supervisor_unwind_or_exit")
+    );
+}
+
+#[test]
+fn validate_resume_prerequisites_checks_target_and_owner_proof_currency() {
+    use crate::engine::shared::{SessionTarget, SupervisorLeaseState};
+    use crate::engine::worker::{TargetStamp, validate_resume_prerequisites};
+    use sky_dispatch_core::time::DurationTicks;
+    use sky_dispatch_win32::clock::QpcTicks;
+    use sky_dispatch_win32::focus::WindowIdentityAuthority;
+    use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, ReleaseOwnerProof, TrackedKeyState};
+
+    let target = SessionTarget::new(TARGET_HWND, 1, true);
+    let authority = Arc::new(WindowIdentityAuthority::synthetic_for_test(
+        TARGET_HWND,
+        TARGET_PID,
+    ));
+    target.bind_owner_identity_authority(TARGET_HWND, 1, TARGET_PID, authority.clone());
+
+    let target_stamp = TargetStamp {
+        hwnd: TARGET_HWND,
+        generation: 1,
+    };
+    let lease = SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    let lease_timeout = DurationTicks::from_raw(1_000_000);
+    let now = QpcTicks::from_raw(2_000);
+
+    let profile = InstrumentKeyProfileSpec::canonical().keys;
+    let valid_proof = ReleaseOwnerProof::new_with_foreground_policy(
+        TARGET_HWND,
+        1,
+        Some(TARGET_PID),
+        Some(authority.clone()),
+        true,
+    )
+    .expect("valid proof");
+    let valid_backend =
+        TrackedKeyState::from_terminal_release_residual(profile, valid_proof, 0, 0, 0)
+            .expect("valid backend");
+
+    // 1. All match: OK
+    let result = validate_resume_prerequisites(
+        now,
+        &target,
+        target_stamp,
+        &lease,
+        lease_timeout,
+        true,
+        &valid_backend,
+    );
+    assert!(result.is_ok(), "prerequisites should succeed: {:?}", result);
+
+    // 2. Stale target stamp generation
+    let stale_stamp = TargetStamp {
+        hwnd: TARGET_HWND,
+        generation: 2,
+    };
+    let result = validate_resume_prerequisites(
+        now,
+        &target,
+        stale_stamp,
+        &lease,
+        lease_timeout,
+        true,
+        &valid_backend,
+    );
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|e| e.contains("target invalidated")),
+        "should reject stale stamp generation: {:?}",
+        result
+    );
+
+    // 3. Stale release owner proof HWND mismatch
+    let bad_hwnd_auth = Arc::new(WindowIdentityAuthority::synthetic_for_test(
+        0x9999, TARGET_PID,
+    ));
+    let bad_hwnd_proof = ReleaseOwnerProof::new_with_foreground_policy(
+        0x9999,
+        1,
+        Some(TARGET_PID),
+        Some(bad_hwnd_auth),
+        true,
+    )
+    .expect("bad hwnd proof");
+    let bad_hwnd_backend =
+        TrackedKeyState::from_terminal_release_residual(profile, bad_hwnd_proof, 0, 0, 0)
+            .expect("bad hwnd backend");
+    let result = validate_resume_prerequisites(
+        now,
+        &target,
+        target_stamp,
+        &lease,
+        lease_timeout,
+        true,
+        &bad_hwnd_backend,
+    );
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|e| e.contains("target mismatch on resume")),
+        "should reject proof HWND mismatch: {:?}",
+        result
+    );
+
+    // 4. Stale release owner proof generation mismatch
+    let bad_gen_proof = ReleaseOwnerProof::new_with_foreground_policy(
+        TARGET_HWND,
+        2,
+        Some(TARGET_PID),
+        Some(authority.clone()),
+        true,
+    )
+    .expect("bad gen proof");
+    let bad_gen_backend =
+        TrackedKeyState::from_terminal_release_residual(profile, bad_gen_proof, 0, 0, 0)
+            .expect("bad gen backend");
+    let result = validate_resume_prerequisites(
+        now,
+        &target,
+        target_stamp,
+        &lease,
+        lease_timeout,
+        true,
+        &bad_gen_backend,
+    );
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|e| e.contains("target mismatch on resume")),
+        "should reject proof generation mismatch: {:?}",
+        result
+    );
+
+    // 5. Stale owner authority PID mismatch
+    let wrong_pid_auth = Arc::new(WindowIdentityAuthority::synthetic_for_test(
+        TARGET_HWND,
+        0x9999,
+    ));
+    let bad_pid_proof = ReleaseOwnerProof::new_with_foreground_policy(
+        TARGET_HWND,
+        1,
+        Some(0x9999),
+        Some(wrong_pid_auth),
+        true,
+    )
+    .expect("bad pid proof");
+    let bad_pid_backend =
+        TrackedKeyState::from_terminal_release_residual(profile, bad_pid_proof, 0, 0, 0)
+            .expect("bad pid backend");
+    let result = validate_resume_prerequisites(
+        now,
+        &target,
+        target_stamp,
+        &lease,
+        lease_timeout,
+        true,
+        &bad_pid_backend,
+    );
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|e| e.contains("PID mismatch on resume")),
+        "should reject PID mismatch: {:?}",
+        result
+    );
+
+    // 6. Lease expired while paused
+    lease.latch_expired();
+    let result = validate_resume_prerequisites(
+        now,
+        &target,
+        target_stamp,
+        &lease,
+        lease_timeout,
+        true,
+        &valid_backend,
+    );
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|e| e.contains("supervisor lease expired while paused")),
+        "should reject expired lease: {:?}",
+        result
+    );
+}

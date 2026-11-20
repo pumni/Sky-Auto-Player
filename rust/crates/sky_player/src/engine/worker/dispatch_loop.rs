@@ -245,7 +245,7 @@ fn suspend_live_input_for_dispatch_with_control(
     .map(|_| ())
 }
 
-fn validate_resume_prerequisites(
+pub(crate) fn validate_resume_prerequisites(
     now_ticks: sky_dispatch_win32::clock::QpcTicks,
     target: &SessionTarget,
     target_stamp: TargetStamp,
@@ -277,8 +277,43 @@ fn validate_resume_prerequisites(
             ));
         }
     }
-    if require_focus && backend.session_release_owner_proof().is_none() {
-        return Err("session release owner proof unavailable on resume".to_string());
+    if require_focus {
+        let Some(release_owner) = backend.session_release_owner_proof() else {
+            return Err("session release owner proof unavailable on resume".to_string());
+        };
+        if release_owner.target_hwnd() != target_stamp.hwnd
+            || release_owner.target_generation() != target_stamp.generation
+        {
+            return Err(format!(
+                "session release owner proof target mismatch on resume: proof has ({}, {}), target has ({}, {})",
+                release_owner.target_hwnd(),
+                release_owner.target_generation(),
+                target_stamp.hwnd,
+                target_stamp.generation
+            ));
+        }
+        if target.owner_process_identity_required() {
+            let Some(authority) = release_owner.authority() else {
+                return Err("session release owner authority missing on resume".to_string());
+            };
+            if authority.identity().hwnd != target_stamp.hwnd {
+                return Err("session release owner authority HWND mismatch on resume".to_string());
+            }
+            if authority.continuity()
+                != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+            {
+                return Err(format!(
+                    "session release owner authority continuity broken on resume: {:?}",
+                    authority.continuity()
+                ));
+            }
+            if let Some(target_authority) =
+                target.owner_authority_for_generation(target_stamp.generation)
+                && authority.identity().owner_pid != target_authority.identity().owner_pid
+            {
+                return Err("session release owner authority PID mismatch on resume".to_string());
+            }
+        }
     }
     Ok(())
 }

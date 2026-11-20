@@ -42,6 +42,9 @@ pub(crate) use dispatch_loop::DispatchAttemptOutcome;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_scheduler_resumable_lifecycle_transition_for_test;
 #[cfg(any(test, feature = "test-support"))]
+#[allow(unused_imports)]
+pub(crate) use dispatch_loop::validate_resume_prerequisites;
+#[cfg(any(test, feature = "test-support"))]
 pub use dispatch_loop::{StagedCandidate, StagedDispatchOutcome};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::{

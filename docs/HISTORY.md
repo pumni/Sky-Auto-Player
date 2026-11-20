@@ -5,6 +5,13 @@ source revision: [plan at
 d275398ee97b73cbbead1d47b0e825774160fa6e](https://github.com/pumni/Sky-Auto-Player/blob/d275398ee97b73cbbead1d47b0e825774160fa6e/docs/playback-core-redesign-plan.md).
 It is provenance, not a current contract.
 
+The executed dispatch redesign plan for PR #670 is retained only at its immutable
+source revision: [plan at
+2eee386a707f797316e54627f35b71e668718a6c](https://github.com/pumni/Sky-Auto-Player/blob/2eee386a707f797316e54627f35b71e668718a6c/docs/dispatch-redesign-plan.md).
+Active invariants and runbook procedures are consolidated into
+[playback-engine.md](playback-engine.md) and
+[playback-verification.md](playback-verification.md).
+
 Archived records are revision-bound and are not qualification evidence for
 current source. Browse the pinned trees when an original report or dataset is
 needed.

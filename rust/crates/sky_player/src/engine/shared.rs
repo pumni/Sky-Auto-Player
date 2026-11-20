@@ -152,9 +152,23 @@ pub(super) struct SessionCommands {
     pub(super) panic_requested: AtomicBool,
     pub(super) supervisor_expired: SupervisorLeaseState,
     pub(super) supervisor_expiry_signaled: AtomicBool,
+    pub(super) supervisor_expiry_reason_code: AtomicU8,
     pub(super) focus_active: AtomicBool,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) command_timing: CommandTimingState,
+}
+
+#[allow(dead_code)]
+pub(crate) const SUPERVISOR_EXPIRY_REASON_NONE: u8 = 0;
+pub(crate) const SUPERVISOR_EXPIRY_REASON_LEASE_EXPIRED: u8 = 1;
+pub(crate) const SUPERVISOR_EXPIRY_REASON_UNWIND_OR_EXIT: u8 = 2;
+
+pub(crate) fn decode_supervisor_expiry_reason(code: u8) -> Option<&'static str> {
+    match code {
+        SUPERVISOR_EXPIRY_REASON_LEASE_EXPIRED => Some("supervisor_lease_expired"),
+        SUPERVISOR_EXPIRY_REASON_UNWIND_OR_EXIT => Some("supervisor_unwind_or_exit"),
+        _ => None,
+    }
 }
 
 /// One atomic decision shared by supervisor progress, the watchdog, and the

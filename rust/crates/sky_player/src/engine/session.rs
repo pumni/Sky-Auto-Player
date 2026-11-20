@@ -86,6 +86,17 @@ pub(crate) fn signal_supervisor_expiry_with_reason(
     {
         return false;
     }
+    let code = match reason {
+        "supervisor_lease_expired" => crate::engine::shared::SUPERVISOR_EXPIRY_REASON_LEASE_EXPIRED,
+        "supervisor_unwind_or_exit" => {
+            crate::engine::shared::SUPERVISOR_EXPIRY_REASON_UNWIND_OR_EXIT
+        }
+        _ => 255,
+    };
+    shared
+        .commands
+        .supervisor_expiry_reason_code
+        .store(code, Ordering::Release);
     shared
         .commands
         .system_power
@@ -95,18 +106,16 @@ pub(crate) fn signal_supervisor_expiry_with_reason(
         .commands
         .panic_requested
         .store(true, Ordering::Release);
+    // Prompt one-winner safety wake occurs BEFORE any lock acquisition or formatting:
+    let _ = shared.commands.interrupt.signal();
+
+    // Publication of diagnostic metrics occurs after the safety interrupt has unblocked the worker:
     let metrics = &shared.publication.metrics;
-    let mut trigger = metrics.terminal_trigger_reason.lock();
-    if trigger.is_none() {
+    if let Some(mut trigger) = metrics.terminal_trigger_reason.try_lock()
+        && trigger.is_none()
+    {
         *trigger = Some(reason.to_string());
     }
-    drop(trigger);
-    let mut terminal_error = metrics.terminal_error.lock();
-    if terminal_error.is_none() {
-        *terminal_error = Some(reason.to_string());
-    }
-    drop(terminal_error);
-    let _ = shared.commands.interrupt.signal();
     true
 }
 
@@ -430,6 +439,7 @@ impl NativeDispatchSession {
                 panic_requested: AtomicBool::new(false),
                 supervisor_expired: SupervisorLeaseState::new(initial_heartbeat_ticks),
                 supervisor_expiry_signaled: AtomicBool::new(false),
+                supervisor_expiry_reason_code: AtomicU8::new(0),
                 // Supervisor-published focus state is the precision-path hint;
                 // final admission revalidates target and bound owner atomics.
                 focus_active: AtomicBool::new(true),
