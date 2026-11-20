@@ -34,9 +34,15 @@ pub(super) fn convert(
     let lease_timeout_ticks = qpc_clock
         .duration_from_us(config.wait.supervisor_lease_timeout_us)
         .map_err(|error| format!("lease timeout conversion failed: {error:?}"))?;
+    if config.wait.modifier_hold_timeout_us == 0 {
+        return Err("modifier_hold_timeout_us must be greater than zero".to_string());
+    }
     let modifier_hold_timeout_ticks = qpc_clock
         .duration_from_us(config.wait.modifier_hold_timeout_us)
         .map_err(|error| format!("modifier hold timeout conversion failed: {error:?}"))?;
+    if modifier_hold_timeout_ticks == DurationTicks::ZERO {
+        return Err("modifier hold timeout ticks cannot be zero".to_string());
+    }
 
     let pre_call_250us_ticks = qpc_clock
         .duration_from_us(250)

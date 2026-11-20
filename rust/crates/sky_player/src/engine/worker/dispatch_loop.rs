@@ -1093,6 +1093,10 @@ pub(crate) fn dispatch_staged_candidate(
         return DispatchAttemptOutcome::Exit;
     }
 
+    if confirmed_down_mask != 0 {
+        runtime.modifier_hold_started_ticks = None;
+    }
+
     let pre_call_qpc = send_result.evidence.started_ticks;
     runtime.defer_production_packet_result(
         candidate.packet_masks,
@@ -2136,7 +2140,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 core.observer.pending.as_ref(),
             ) {
                 DispatchAttemptOutcome::Dispatched => {
-                    core.runtime.modifier_hold_started_ticks = None;
                     continue;
                 }
                 DispatchAttemptOutcome::Replan => {
@@ -2232,14 +2235,17 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                     break;
                                 }
                             };
-                            let max_hold_deadline =
-                                if timing.modifier_hold_timeout_ticks > DurationTicks::ZERO {
-                                    hold_started
-                                        .checked_add_duration(timing.modifier_hold_timeout_ticks)
-                                        .ok()
-                                } else {
-                                    None
-                                };
+                            let max_hold_deadline = match hold_started
+                                .checked_add_duration(timing.modifier_hold_timeout_ticks)
+                            {
+                                Ok(deadline) => deadline,
+                                Err(error) => {
+                                    core.runtime.terminal_error = Some(format!(
+                                        "modifier hold deadline arithmetic overflow: {error}"
+                                    ));
+                                    break;
+                                }
+                            };
                             let modifier_wait = wait_after_modifier_held(
                                 now_qpc,
                                 next_active_up_deadline,

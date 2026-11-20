@@ -125,3 +125,16 @@ fn timing_admission_converts_materialized_g_with_ceil_in_odd_qpc_domain() {
             .expect("T conversion")
     );
 }
+
+#[test]
+fn timing_admission_rejects_zero_modifier_hold_timeout() {
+    let mut config = WorkerConfig::default();
+    config.wait.modifier_hold_timeout_us = 0;
+    let clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).expect("QPC frequency"));
+    let effective_policy = EffectiveRuntimePolicy::for_worker(&config);
+
+    match convert(&config, clock, &effective_policy) {
+        Ok(_) => panic!("zero timeout must be rejected"),
+        Err(err) => assert!(err.contains("modifier_hold_timeout_us must be greater than zero")),
+    }
+}
