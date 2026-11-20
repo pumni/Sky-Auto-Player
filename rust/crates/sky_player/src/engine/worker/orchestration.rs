@@ -92,6 +92,7 @@ impl Worker<'_> {
                 panic_requested: &shared.commands.panic_requested,
                 supervisor_expired: &shared.commands.supervisor_expired,
                 system_power: &shared.commands.system_power,
+                supervisor_expiry_reason_code: Some(&shared.commands.supervisor_expiry_reason_code),
             },
             publication: FinalizePublication {
                 metrics: &shared.publication.metrics,

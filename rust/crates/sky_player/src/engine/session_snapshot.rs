@@ -291,26 +291,50 @@ impl NativeDispatchSession {
             observer_queue_high_watermark: local.observer_queue_high_watermark,
             terminal_error: projection.terminal_error.clone(),
             terminal_trigger_reason: {
-                let mut reason = self
+                let code = self
+                    .shared
+                    .commands
+                    .supervisor_expiry_reason_code
+                    .load(Ordering::Acquire);
+                let decoded = crate::engine::shared::decode_supervisor_expiry_reason(code);
+                let mut reason_slot = self
                     .shared
                     .publication
                     .metrics
                     .terminal_trigger_reason
-                    .lock()
-                    .clone();
-                if reason.is_none() {
-                    let code = self
-                        .shared
-                        .commands
-                        .supervisor_expiry_reason_code
-                        .load(Ordering::Acquire);
-                    if let Some(decoded) =
-                        crate::engine::shared::decode_supervisor_expiry_reason(code)
-                    {
-                        reason = Some(decoded.to_string());
+                    .lock();
+
+                let resolved = match (reason_slot.as_deref(), decoded) {
+                    (None, Some(supervisor_reason)) => Some(supervisor_reason.to_string()),
+                    (Some(existing), Some(supervisor_reason)) => {
+                        // If existing is a generic panic or lease trigger written by worker
+                        // finalization after a contested lock, the winning specific supervisor reason takes precedence.
+                        // Genuinely earlier stronger terminal causes (e.g. quit, skip, suspend,
+                        // worker panic, focus/target invalidation, startup errors) are preserved.
+                        if matches!(
+                            existing,
+                            "panic_release_requested" | "supervisor_lease_expired"
+                        ) {
+                            Some(supervisor_reason.to_string())
+                        } else {
+                            Some(existing.to_string())
+                        }
                     }
+                    (Some(existing), None) => Some(existing.to_string()),
+                    (None, None) => None,
+                };
+
+                if let Some(ref r) = resolved
+                    && (reason_slot.is_none()
+                        || matches!(
+                            reason_slot.as_deref(),
+                            Some("panic_release_requested" | "supervisor_lease_expired")
+                        ))
+                {
+                    *reason_slot = Some(r.clone());
                 }
-                reason
+
+                resolved
             },
             secondary_errors: self
                 .shared

@@ -893,4 +893,207 @@ fn validate_resume_prerequisites_checks_target_and_owner_proof_currency() {
         "should reject expired lease: {:?}",
         result
     );
+
+    // 7. Different authority Arc with same HWND, PID, and generation
+    let different_auth = Arc::new(WindowIdentityAuthority::synthetic_for_test(
+        TARGET_HWND,
+        TARGET_PID,
+    ));
+    let different_auth_proof = ReleaseOwnerProof::new_with_foreground_policy(
+        TARGET_HWND,
+        1,
+        Some(TARGET_PID),
+        Some(different_auth),
+        true,
+    )
+    .expect("different auth proof");
+    let different_auth_backend =
+        TrackedKeyState::from_terminal_release_residual(profile, different_auth_proof, 0, 0, 0)
+            .expect("different auth backend");
+    let unexpired_lease = SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    let result = validate_resume_prerequisites(
+        now,
+        &target,
+        target_stamp,
+        &unexpired_lease,
+        lease_timeout,
+        true,
+        &different_auth_backend,
+    );
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|e| e.contains("session release owner proof is not current on resume")),
+        "should reject different authority Arc even with identical HWND/PID/generation: {:?}",
+        result
+    );
+}
+
+#[test]
+fn active_worker_contested_reason_lock_preserves_supervisor_unwind_reason_after_finalization() {
+    let _lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+
+    let sched = schedule_long(&[0x15]);
+    let mut options = test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.focus.require_focus = true;
+    options.wait.supervisor_lease_timeout_us = 5_000_000;
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind target owner");
+    session.set_focus_hint(true);
+
+    let guard = session.supervisor_lifetime_guard();
+    assert!(!guard.is_disarmed());
+
+    session.arm(0).expect("arm worker loop");
+
+    // Wait for the active worker to start playing notes
+    wait_until(
+        Duration::from_secs(3),
+        || send_calls.load(Ordering::Acquire) >= 1,
+        "first down send",
+    );
+
+    let shared = session.shared_arc_for_test();
+
+    // Contention scenario: simulate another thread holding metrics.terminal_trigger_reason mutex
+    let mutex_held = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let mutex_held_clone = Arc::clone(&mutex_held);
+    let shared_clone = Arc::clone(&shared);
+    let blocker_thread = std::thread::spawn(move || {
+        let _guard = shared_clone
+            .publication
+            .metrics
+            .terminal_trigger_reason
+            .lock();
+        while mutex_held_clone.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    });
+
+    // Wait until blocker thread acquires mutex:
+    std::thread::sleep(Duration::from_millis(20));
+
+    // Drop supervisor guard (simulate supervisor unwind while mutex is contested):
+    // This MUST succeed without blocking, record reason code atomically, and interrupt worker:
+    let start = Instant::now();
+    drop(guard);
+    let duration = start.elapsed();
+
+    assert!(
+        duration < Duration::from_millis(50),
+        "supervisor guard drop must not block on held metrics lock; took {:?}",
+        duration
+    );
+
+    // Release the blocker thread's lock so worker finalization can proceed:
+    mutex_held.store(false, Ordering::Release);
+    blocker_thread.join().expect("blocker thread join");
+
+    // Join the worker thread to wait for completed finalization:
+    assert!(
+        session
+            .join(Duration::from_secs(3))
+            .expect("join after guard drop"),
+        "worker must terminate after supervisor guard drop"
+    );
+
+    // Now verify snapshot: winning atomic reason MUST be observable, NOT masked by generic panic:
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("supervisor_unwind_or_exit"),
+        "winning specific supervisor unwind reason must not be masked by generic trigger"
+    );
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert_eq!(snapshot.active_count, 0);
+}
+
+#[test]
+fn active_worker_preserves_earlier_terminal_cause_over_subsequent_supervisor_expiry() {
+    let _lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+
+    let sched = schedule_long(&[0x15]);
+    let mut options = test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.focus.require_focus = true;
+    options.wait.supervisor_lease_timeout_us = 5_000_000;
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind target owner");
+    session.set_focus_hint(true);
+
+    let guard = session.supervisor_lifetime_guard();
+    session.arm(0).expect("arm worker loop");
+
+    wait_until(
+        Duration::from_secs(3),
+        || send_calls.load(Ordering::Acquire) >= 1,
+        "first down send",
+    );
+
+    // Intentional quit occurs first:
+    let _ = session.quit();
+    assert!(
+        session
+            .join(Duration::from_secs(3))
+            .expect("join after quit"),
+        "worker must terminate after quit"
+    );
+
+    // Subsequent dropped guard or expiry signal must NOT overwrite the earlier "quit" reason:
+    drop(guard);
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("quit"),
+        "genuinely earlier 'quit' trigger reason must be preserved"
+    );
 }

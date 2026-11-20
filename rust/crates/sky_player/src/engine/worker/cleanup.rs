@@ -22,7 +22,7 @@ use sky_dispatch_win32::input::TerminalReleaseEvidence;
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicU8};
 
 #[derive(Clone, Copy)]
 pub(crate) struct CleanupTarget<'a> {
@@ -79,6 +79,7 @@ pub(super) struct FinalizeSignals<'a> {
     pub(super) panic_requested: &'a AtomicBool,
     pub(super) supervisor_expired: &'a SupervisorLeaseState,
     pub(super) system_power: &'a SystemPowerState,
+    pub(super) supervisor_expiry_reason_code: Option<&'a AtomicU8>,
 }
 
 pub(super) struct FinalizePublication<'a> {

@@ -164,6 +164,7 @@ pub(crate) fn finalize_worker_for_test(
                 panic_requested,
                 supervisor_expired,
                 system_power,
+                supervisor_expiry_reason_code: None,
             },
             publication: FinalizePublication {
                 metrics,

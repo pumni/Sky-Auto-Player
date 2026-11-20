@@ -314,6 +314,9 @@ pub(crate) fn validate_resume_prerequisites(
                 return Err("session release owner authority PID mismatch on resume".to_string());
             }
         }
+        if !target.release_owner_proof_is_current(release_owner) {
+            return Err("session release owner proof is not current on resume".to_string());
+        }
     }
     Ok(())
 }

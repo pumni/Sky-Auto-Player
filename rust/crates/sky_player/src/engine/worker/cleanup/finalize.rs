@@ -68,6 +68,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         panic_requested,
         supervisor_expired,
         system_power,
+        supervisor_expiry_reason_code,
     } = signals;
     let FinalizePublication {
         metrics,
@@ -303,17 +304,32 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         );
     }
 
+    let resolve_trigger_string = |trigger: TerminalTrigger| -> String {
+        let specific = supervisor_expiry_reason_code.and_then(|code| {
+            crate::engine::shared::decode_supervisor_expiry_reason(code.load(Ordering::Acquire))
+        });
+        if let Some(reason_str) = specific
+            && matches!(
+                trigger,
+                TerminalTrigger::PanicReleaseRequested | TerminalTrigger::SupervisorLeaseExpired
+            )
+        {
+            reason_str.to_string()
+        } else {
+            trigger.as_str().to_string()
+        }
+    };
+
     if let Some(trigger) = terminal_trigger {
         let mut reason_slot = metrics.terminal_trigger_reason.lock();
         if reason_slot.is_none() {
-            *reason_slot = Some(trigger.as_str().to_string());
+            *reason_slot = Some(resolve_trigger_string(trigger));
         }
     }
     #[cfg(any(test, feature = "test-support"))]
     if let Some(observation) = cleanup_observation.as_deref_mut() {
         observation.pre_cancel_generation_accounting = pre_cancel_accounting;
-        observation.terminal_trigger_reason =
-            terminal_trigger.map(|trigger| trigger.as_str().to_string());
+        observation.terminal_trigger_reason = terminal_trigger.map(resolve_trigger_string);
     }
 
     if terminal_error.is_none()
@@ -407,13 +423,12 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     if let Some(trigger) = terminal_trigger {
         let mut reason_slot = metrics.terminal_trigger_reason.lock();
         if reason_slot.is_none() {
-            *reason_slot = Some(trigger.as_str().to_string());
+            *reason_slot = Some(resolve_trigger_string(trigger));
         }
     }
     #[cfg(any(test, feature = "test-support"))]
     if let Some(observation) = cleanup_observation.as_deref_mut() {
-        observation.terminal_trigger_reason =
-            terminal_trigger.map(|trigger| trigger.as_str().to_string());
+        observation.terminal_trigger_reason = terminal_trigger.map(resolve_trigger_string);
     }
     if matches!(
         terminal_trigger,
