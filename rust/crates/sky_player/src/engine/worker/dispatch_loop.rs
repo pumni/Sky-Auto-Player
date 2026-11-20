@@ -970,11 +970,6 @@ pub(crate) fn dispatch_staged_candidate(
         runtime
             .attempted_dispatch_anomalies
             .record(format!("post-call attempted anomaly: {anomaly_record}"));
-        if system_power.system_suspend_terminal() {
-            runtime
-                .attempted_dispatch_anomalies
-                .record("system suspend requested during attempted sender anomaly".to_string());
-        }
         // A prior successful sender timestamp is not evidence about this
         // anomalous syscall and must not be attributed to the next packet.
         runtime.last_physical_send_completion_qpc = None;

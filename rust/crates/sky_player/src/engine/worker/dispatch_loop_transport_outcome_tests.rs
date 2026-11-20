@@ -408,6 +408,15 @@ fn suspend_during_partial_progress_down_terminates_error_with_retained_suspend_c
         StagedDispatchOutcome::Exit,
         "partial progress Down exits immediately"
     );
+    assert_eq!(
+        harness.runtime.attempted_dispatch_anomalies.total_count(),
+        1,
+        "exactly one ledger attempted anomaly recorded"
+    );
+    assert_eq!(
+        harness.local_metrics.precision_packet_attempts, 1,
+        "single raw physical sender attempt recorded"
+    );
 
     let mut observation = crate::engine::worker::FinalizeTestObservation::default();
     let outcome = harness.finalize_worker_for_test(false, &mut observation);
@@ -432,7 +441,15 @@ fn suspend_during_partial_progress_down_terminates_error_with_retained_suspend_c
         observation
             .secondary_errors
             .iter()
-            .any(|e| e.contains("system suspend")),
+            .any(|e| e.contains("total=1 omitted=0 retained=1")),
+        "secondary errors reports single total attempted anomaly: {:?}",
+        observation.secondary_errors
+    );
+    assert!(
+        observation
+            .secondary_errors
+            .iter()
+            .any(|e| e.contains("system suspend requested during worker execution")),
         "suspend context retained in secondary errors: {:?}",
         observation.secondary_errors
     );
