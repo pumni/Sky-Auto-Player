@@ -444,6 +444,13 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         record_termination_error(&mut terminal_error, &mut secondary_errors, summary);
     }
     attempted_dispatch_anomalies.append_details_to(&mut secondary_errors);
+    if system_power.system_suspend_terminal()
+        && !secondary_errors
+            .iter()
+            .any(|e| e.contains("system suspend"))
+    {
+        secondary_errors.push("system suspend requested during worker execution".to_string());
+    }
 
     let terminal_abort_reason = if worker_panicked
         || cleanup_result.is_err()

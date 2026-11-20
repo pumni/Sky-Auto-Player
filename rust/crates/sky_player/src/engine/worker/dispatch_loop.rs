@@ -950,16 +950,11 @@ pub(crate) fn dispatch_staged_candidate(
         runtime.musical_physical_attempt_started = true;
     }
 
-    if system_power.system_suspend_terminal() {
-        runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
-        return DispatchAttemptOutcome::Exit;
-    }
-    if !healthy_completion_evidence {
-        runtime
-            .terminal_trigger
-            .get_or_insert(super::control::TerminalTrigger::SenderAnomaly);
-    }
     if send_result.evidence.attempts == 0 {
+        if system_power.system_suspend_terminal() {
+            runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
+            return DispatchAttemptOutcome::Exit;
+        }
         runtime.terminal_error = Some(format!(
             "SendInput rejected before syscall; authored onset remains unattempted: {}",
             sender_failure_record(&candidate, &send_result),
@@ -968,10 +963,18 @@ pub(crate) fn dispatch_staged_candidate(
     }
 
     if !healthy_completion_evidence {
+        runtime
+            .terminal_trigger
+            .get_or_insert(super::control::TerminalTrigger::SenderAnomaly);
         let anomaly_record = sender_failure_record(&candidate, &send_result);
         runtime
             .attempted_dispatch_anomalies
             .record(format!("post-call attempted anomaly: {anomaly_record}"));
+        if system_power.system_suspend_terminal() {
+            runtime
+                .attempted_dispatch_anomalies
+                .record("system suspend requested during attempted sender anomaly".to_string());
+        }
         // A prior successful sender timestamp is not evidence about this
         // anomalous syscall and must not be attributed to the next packet.
         runtime.last_physical_send_completion_qpc = None;
@@ -1106,6 +1109,11 @@ pub(crate) fn dispatch_staged_candidate(
         runtime.terminal_error = Some(format!(
             "musical playback terminated after first sender anomaly: {anomaly_record}"
         ));
+        return DispatchAttemptOutcome::Exit;
+    }
+
+    if system_power.system_suspend_terminal() {
+        runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
         return DispatchAttemptOutcome::Exit;
     }
 
@@ -2380,21 +2388,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         .runtime
                         .modifier_hold_started_ticks
                         .get_or_insert(now_qpc);
-                    let hold_elapsed = match now_qpc.checked_duration_since(hold_started) {
-                        Ok(duration) => duration,
-                        Err(error) => {
-                            core.runtime.terminal_error =
-                                Some(format!("modifier hold clock failure: {error}"));
-                            break;
-                        }
-                    };
-                    if timing.modifier_hold_timeout_ticks > DurationTicks::ZERO
-                        && hold_elapsed >= timing.modifier_hold_timeout_ticks
-                    {
-                        core.runtime.terminal_error =
-                            Some("modifier held exceeded bounded wait deadline".to_string());
-                        break;
-                    }
                     let replan_action = dispatch_replan_action(DispatchReplanWaitContext {
                         target,
                         control_signals: FinalControlSignals {
@@ -2412,6 +2405,22 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     match replan_action {
                         DispatchReplanAction::ContinueImmediately => {}
                         DispatchReplanAction::WaitForModifier => {
+                            let hold_elapsed = match now_qpc.checked_duration_since(hold_started) {
+                                Ok(duration) => duration,
+                                Err(error) => {
+                                    core.runtime.terminal_error =
+                                        Some(format!("modifier hold clock failure: {error}"));
+                                    break;
+                                }
+                            };
+                            if timing.modifier_hold_timeout_ticks > DurationTicks::ZERO
+                                && hold_elapsed >= timing.modifier_hold_timeout_ticks
+                            {
+                                core.runtime.terminal_error = Some(
+                                    "modifier held exceeded bounded wait deadline".to_string(),
+                                );
+                                break;
+                            }
                             let next_active_up_deadline = resources
                                 .scheduler
                                 .earliest_active_up_due_qpc(resources.playback.epoch)

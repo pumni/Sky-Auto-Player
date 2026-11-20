@@ -1268,3 +1268,189 @@ fn modifier_hold_rearms_after_pause_resume() {
     assert_eq!(captured_packets(&captures).len(), 2);
     assert_eq!(snapshot.final_release_obligation_mask, 0);
 }
+
+#[test]
+fn quit_concurrent_with_modifier_timeout_honors_quit() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 200_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-up".into(),
+            },
+        ],
+        &[0x15],
+    );
+
+    let mut options = support::test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.focus.require_focus = true;
+    options.wait.modifier_hold_timeout_us = 30_000;
+
+    let checks = Arc::clone(&admission_checks);
+    options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
+        if virtual_key == 0x5b {
+            checks.fetch_add(1, Ordering::AcqRel);
+        }
+        if virtual_key == 0x11 { i16::MIN } else { 0 }
+    }));
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind synthetic owner");
+    session.set_focus_hint(true);
+
+    session.arm(0).expect("arm worker loop");
+
+    // Allow modifier timeout budget to expire while modifier is held
+    std::thread::sleep(Duration::from_millis(45));
+
+    // Request Quit concurrently with expired modifier hold
+    session.quit().expect("quit requested");
+
+    assert!(
+        session
+            .join(Duration::from_secs(2))
+            .expect("worker completion on quit"),
+        "worker must complete after quit"
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.status,
+        EnginePollStatus::Quit.as_str(),
+        "Quit must take precedence over modifier hold timeout"
+    );
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("quit"),
+        "terminal trigger reason must be quit"
+    );
+    assert_eq!(
+        snapshot.terminal_error, None,
+        "terminal error must be None, not modifier timeout error"
+    );
+}
+
+#[test]
+fn skip_concurrent_with_modifier_timeout_honors_skip() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 200_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-up".into(),
+            },
+        ],
+        &[0x15],
+    );
+
+    let mut options = support::test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.focus.require_focus = true;
+    options.wait.modifier_hold_timeout_us = 30_000;
+
+    let checks = Arc::clone(&admission_checks);
+    options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
+        if virtual_key == 0x5b {
+            checks.fetch_add(1, Ordering::AcqRel);
+        }
+        if virtual_key == 0x11 { i16::MIN } else { 0 }
+    }));
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind synthetic owner");
+    session.set_focus_hint(true);
+
+    session.arm(0).expect("arm worker loop");
+
+    // Allow modifier timeout budget to expire while modifier is held
+    std::thread::sleep(Duration::from_millis(45));
+
+    // Request Skip concurrently with expired modifier hold
+    session.skip().expect("skip requested");
+
+    assert!(
+        session
+            .join(Duration::from_secs(2))
+            .expect("worker completion on skip"),
+        "worker must complete after skip"
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.status,
+        EnginePollStatus::Skipped.as_str(),
+        "Skip must take precedence over modifier hold timeout"
+    );
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("skipped"),
+        "terminal trigger reason must be skipped"
+    );
+    assert_eq!(
+        snapshot.terminal_error, None,
+        "terminal error must be None, not modifier timeout error"
+    );
+}
