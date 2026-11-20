@@ -71,6 +71,7 @@ pub struct FinalizeEvidence {
     pub released: u64,
     pub cancelled: u64,
     pub active_generations: u64,
+    pub terminal_release_raw_up_syscall_count: u64,
 }
 
 pub type CleanupCapture = Arc<Mutex<Vec<(Vec<u16>, bool)>>>;
@@ -795,6 +796,8 @@ impl ProductionDispatchTestHarness {
             released: observation.generation_accounting.released,
             cancelled: observation.generation_accounting.cancelled,
             active_generations: observation.generation_accounting.active,
+            terminal_release_raw_up_syscall_count: observation
+                .terminal_release_raw_up_syscall_count,
         }
     }
 

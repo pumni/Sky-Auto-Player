@@ -1,6 +1,6 @@
 use super::support::{
-    PacketRetryReason, ProductionDispatchTestHarness, SendEvidence, SendTransactionOutcome,
-    SendTransactionStatus, TimelineTicks,
+    ActionKind, KeyActionInput, PacketRetryReason, ProductionDispatchTestHarness, SendEvidence,
+    SendTransactionOutcome, SendTransactionStatus, StagedDispatchOutcome, TimelineTicks,
 };
 
 fn sender_failure_record_for_test(
@@ -196,13 +196,14 @@ fn suspend_after_sender_return_keeps_musical_attempt_evidence() {
     );
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
     assert_eq!(harness.local_metrics.sendinput_envelope_samples, 1);
-    assert_eq!(harness.resources.scheduler.chord_cursor(), 0);
-    assert_eq!(harness.resources.backend.in_flight_mask, 1);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
 
     let evidence = harness.finalize_for_test();
     assert_eq!(evidence.release_obligation_mask, 0);
     assert!(!cleanup.lock().expect("terminal cleanup capture").is_empty());
+    assert_eq!(evidence.terminal_release_raw_up_syscall_count, 1);
 }
 
 #[test]
@@ -602,4 +603,556 @@ fn unstable_target_retry_wait_is_interruptible_before_deadline() {
         super::super::WaitBoundary::Interrupted(..)
     ));
     assert!(terminal_error.is_none());
+}
+
+#[test]
+fn suspend_after_sender_return_up_only_commits_without_phantom_up() {
+    use std::sync::Arc;
+
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: vec![0x15].into(),
+            reason: "first-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 20_000,
+            scan_codes: vec![0x15].into(),
+            reason: "up-only".into(),
+        },
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+    let epoch = harness.resources.playback.epoch;
+
+    let first = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage first Down")
+        .expect("Down candidate");
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+
+    let up_target = epoch
+        .checked_add_duration(
+            harness
+                .qpc_duration_from_us_for_test(20_000)
+                .expect("duration conversion"),
+        )
+        .expect("up target QPC");
+    while harness.qpc_now_for_test().expect("now") < up_target {
+        std::thread::yield_now();
+    }
+    let (up_mask, down_chord, _timing_window) =
+        super::support::staged_send_at(&mut harness, up_target, epoch);
+    assert_eq!(up_mask, 1);
+    assert!(down_chord.is_none());
+    let up_candidate = harness
+        .stage_candidate_for_test(1, None, TimelineTicks::from_raw(20_000))
+        .expect("stage Up")
+        .expect("Up candidate");
+
+    let clock = harness.resources.clock;
+    let system_power = Arc::clone(&harness.system_power);
+    let interrupt = Arc::clone(&harness.interrupt);
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let started = clock.now().expect("sender start QPC");
+        let completed = clock.now().expect("sender completion QPC");
+        assert!(system_power.notify(true, &interrupt));
+        SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: packet.up_mask | packet.down_mask,
+                skipped_mask: 0,
+                first_inserted: packet.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(started),
+                completed_ticks: Some(completed),
+                timing_error: None,
+            },
+        }
+    });
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(up_candidate, false),
+        StagedDispatchOutcome::Exit
+    );
+    assert_eq!(
+        harness.runtime.terminal_trigger,
+        Some(crate::engine::worker::TerminalTrigger::SystemSuspend)
+    );
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(harness.generation_accounting_for_test().activated, 1);
+    assert_eq!(harness.generation_accounting_for_test().released, 1);
+    assert_eq!(harness.generation_accounting_for_test().active, 0);
+
+    let evidence = harness.finalize_for_test();
+    assert_eq!(evidence.release_obligation_mask, 0);
+    assert!(
+        cleanup.lock().expect("terminal cleanup capture").is_empty(),
+        "no phantom Up and no unexpected extra terminal raw Up on already completed Up"
+    );
+    assert_eq!(evidence.terminal_release_raw_up_syscall_count, 0);
+}
+
+#[test]
+fn suspend_after_sender_return_mixed_commits_and_preserves_remaining_down_safety_release() {
+    use std::sync::Arc;
+
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: vec![0x15].into(),
+            reason: "first-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 20_000,
+            scan_codes: vec![0x15].into(),
+            reason: "mixed-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 20_000,
+            scan_codes: vec![0x16].into(),
+            reason: "mixed-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 40_000,
+            scan_codes: vec![0x16].into(),
+            reason: "later-up".into(),
+        },
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+    let epoch = harness.resources.playback.epoch;
+
+    let first = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage first Down")
+        .expect("Down candidate");
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.release_obligation_mask_for_test(), 0b01);
+
+    let mixed_target = epoch
+        .checked_add_duration(
+            harness
+                .qpc_duration_from_us_for_test(20_000)
+                .expect("duration conversion"),
+        )
+        .expect("mixed target QPC");
+    while harness.qpc_now_for_test().expect("now") < mixed_target {
+        std::thread::yield_now();
+    }
+    let (up_mask, down_chord, _timing_window) =
+        super::support::staged_send_at(&mut harness, mixed_target, epoch);
+    assert_eq!(up_mask, 0b01);
+    assert!(down_chord.is_some());
+    let mixed_candidate = harness
+        .stage_candidate_for_test(1, down_chord, TimelineTicks::from_raw(20_000))
+        .expect("stage Mixed")
+        .expect("Mixed candidate");
+    assert_eq!(mixed_candidate.packet_masks.up_mask, 0b01);
+    assert_eq!(mixed_candidate.packet_masks.down_mask, 0b10);
+
+    let clock = harness.resources.clock;
+    let system_power = Arc::clone(&harness.system_power);
+    let interrupt = Arc::clone(&harness.interrupt);
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let started = clock.now().expect("sender start QPC");
+        let completed = clock.now().expect("sender completion QPC");
+        assert!(system_power.notify(true, &interrupt));
+        SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: packet.up_mask | packet.down_mask,
+                skipped_mask: 0,
+                first_inserted: packet.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(started),
+                completed_ticks: Some(completed),
+                timing_error: None,
+            },
+        }
+    });
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(mixed_candidate, false),
+        StagedDispatchOutcome::Exit
+    );
+    assert_eq!(
+        harness.runtime.terminal_trigger,
+        Some(crate::engine::worker::TerminalTrigger::SystemSuspend)
+    );
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0b10);
+    assert_eq!(harness.generation_accounting_for_test().activated, 2);
+    assert_eq!(harness.generation_accounting_for_test().released, 1);
+    assert_eq!(harness.generation_accounting_for_test().active, 1);
+
+    let evidence = harness.finalize_for_test();
+    assert_eq!(evidence.release_obligation_mask, 0);
+    let captured = cleanup.lock().expect("terminal cleanup capture");
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].0, vec![0x16]);
+    assert!(captured[0].1);
+    assert_eq!(evidence.terminal_release_raw_up_syscall_count, 1);
+}
+
+#[test]
+fn suspend_with_malformed_qpc_fails_closed_without_speculative_commit() {
+    use std::sync::Arc;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let _cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("Down candidate");
+    let clock = harness.resources.clock;
+    let system_power = Arc::clone(&harness.system_power);
+    let interrupt = Arc::clone(&harness.interrupt);
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let started = clock.now().expect("sender start QPC");
+        assert!(system_power.notify(true, &interrupt));
+        SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: packet.up_mask | packet.down_mask,
+                skipped_mask: 0,
+                first_inserted: packet.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(started),
+                completed_ticks: None,
+                timing_error: None,
+            },
+        }
+    });
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(candidate, false),
+        StagedDispatchOutcome::Exit
+    );
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
+    assert_eq!(harness.generation_accounting_for_test().activated, 0);
+    assert_eq!(
+        harness.runtime.terminal_trigger,
+        Some(crate::engine::worker::TerminalTrigger::SenderAnomaly)
+    );
+}
+
+#[test]
+fn terminal_budget_foreground_retry_exhaustion_capped_to_four_raw_calls() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let raw_up_calls = Arc::new(AtomicUsize::new(0));
+    let raw_up_calls_for_emitter = Arc::clone(&raw_up_calls);
+    let clock = harness.resources.clock;
+    harness
+        .resources
+        .backend
+        .set_emitter(move |scan_codes, key_up| {
+            if key_up {
+                raw_up_calls_for_emitter.fetch_add(1, Ordering::SeqCst);
+                let now = clock.now().expect("cleanup QPC");
+                sky_dispatch_win32::input::PlatformSendResult {
+                    requested: scan_codes.len() as u8,
+                    inserted: 0,
+                    started_ticks: now,
+                    completed_ticks: Some(now),
+                    win32_error: 5,
+                    timing_error: None,
+                }
+            } else {
+                let now = clock.now().expect("cleanup QPC");
+                sky_dispatch_win32::input::PlatformSendResult {
+                    requested: scan_codes.len() as u8,
+                    inserted: scan_codes.len() as u8,
+                    started_ticks: now,
+                    completed_ticks: Some(now),
+                    win32_error: 0,
+                    timing_error: None,
+                }
+            }
+        });
+    harness.attach_executor_for_test().expect("attach executor");
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("Down candidate");
+
+    harness.resources.backend.set_probe(|_, _| {
+        sky_dispatch_win32::input::InstrumentPhysicalState::Held(smallvec::smallvec![0x15])
+    });
+
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let started = clock.now().expect("sender start QPC");
+        let completed = clock.now().expect("sender completion QPC");
+        SendTransactionOutcome {
+            status: SendTransactionStatus::IntegrityLost,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::PartialProgress { inserted_count: 0 },
+                first_win32_error: Some(5),
+                last_win32_error: Some(5),
+                started_ticks: Some(started),
+                completed_ticks: Some(completed),
+                timing_error: None,
+            },
+        }
+    });
+
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    assert_eq!(outcome, StagedDispatchOutcome::Exit);
+    assert_eq!(
+        raw_up_calls.load(Ordering::Acquire),
+        4,
+        "in-loop cleanup exhausts exactly 4 foreground retries"
+    );
+
+    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let outcome_code = harness.finalize_worker_for_test(false, &mut observation);
+    assert_eq!(outcome_code, crate::engine::OUTCOME_ERROR);
+    assert_eq!(
+        raw_up_calls.load(Ordering::Acquire),
+        4,
+        "finalize_worker must make 0 additional raw calls since 4-call budget was exhausted"
+    );
+    assert_eq!(observation.terminal_release_raw_up_syscall_count, 4);
+    assert_ne!(
+        observation.release_obligation_mask, 0,
+        "unresolved journal must be quarantined"
+    );
+}
+
+#[test]
+fn terminal_budget_background_drain_capped_to_one_raw_call() {
+    use std::sync::Arc;
+    use std::sync::atomic::Ordering;
+
+    let _guard = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.configure_focus_owner_for_test(1, 125);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("Down candidate");
+
+    let clock = harness.resources.clock;
+    let focus = Arc::clone(&harness.focus_active);
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let started = clock.now().expect("sender start QPC");
+        let completed = clock.now().expect("sender completion QPC");
+        focus.store(false, Ordering::Release);
+        sky_dispatch_win32::focus::set_foreground_window_for_test(Some(2));
+        sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(202)));
+        SendTransactionOutcome {
+            status: SendTransactionStatus::IntegrityLost,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::PartialProgress { inserted_count: 0 },
+                first_win32_error: Some(5),
+                last_win32_error: Some(5),
+                started_ticks: Some(started),
+                completed_ticks: Some(completed),
+                timing_error: None,
+            },
+        }
+    });
+
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    assert_eq!(outcome, StagedDispatchOutcome::Exit);
+    assert_eq!(
+        cleanup.lock().expect("cleanup lock").len(),
+        1,
+        "background terminal drain sends exactly 1 raw Up in-loop"
+    );
+
+    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let outcome_code = harness.finalize_worker_for_test(false, &mut observation);
+    assert_eq!(outcome_code, crate::engine::OUTCOME_ERROR);
+    assert_eq!(
+        cleanup.lock().expect("cleanup lock").len(),
+        1,
+        "finalize_worker must make 0 additional background raw calls; total background <= 1"
+    );
+    assert_eq!(observation.terminal_release_raw_up_syscall_count, 1);
+    assert_ne!(
+        observation.release_obligation_mask, 0,
+        "background Up retains residual in failed_release_mask"
+    );
+    sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+}
+
+#[test]
+fn terminal_budget_successful_single_cleanup_matches_aggregate_raw_count() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("Down candidate");
+
+    harness
+        .resources
+        .backend
+        .set_probe(|_, _| sky_dispatch_win32::input::InstrumentPhysicalState::AllUp);
+
+    let clock = harness.resources.clock;
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let started = clock.now().expect("sender start QPC");
+        let completed = clock.now().expect("sender completion QPC");
+        SendTransactionOutcome {
+            status: SendTransactionStatus::IntegrityLost,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::PartialProgress { inserted_count: 0 },
+                first_win32_error: Some(5),
+                last_win32_error: Some(5),
+                started_ticks: Some(started),
+                completed_ticks: Some(completed),
+                timing_error: None,
+            },
+        }
+    });
+
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    assert_eq!(outcome, StagedDispatchOutcome::Exit);
+    assert_eq!(cleanup.lock().expect("cleanup lock").len(), 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+
+    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let _ = harness.finalize_worker_for_test(false, &mut observation);
+    assert_eq!(cleanup.lock().expect("cleanup lock").len(), 1);
+    assert_eq!(observation.terminal_release_raw_up_syscall_count, 1);
+    assert_eq!(observation.release_obligation_mask, 0);
+}
+
+#[test]
+fn terminal_budget_proven_raw_zero_down_has_zero_terminal_raw_calls() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage candidate")
+        .expect("Down candidate");
+
+    let clock = harness.resources.clock;
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let started = clock.now().expect("sender start QPC");
+        let completed = clock.now().expect("sender completion QPC");
+        SendTransactionOutcome {
+            status: SendTransactionStatus::ZeroProgress,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::ZeroProgress,
+                first_win32_error: Some(5),
+                last_win32_error: Some(5),
+                started_ticks: Some(started),
+                completed_ticks: Some(completed),
+                timing_error: None,
+            },
+        }
+    });
+
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    assert_eq!(outcome, StagedDispatchOutcome::Exit);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+
+    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let _ = harness.finalize_worker_for_test(false, &mut observation);
+    assert!(cleanup.lock().expect("cleanup").is_empty());
+    assert_eq!(observation.terminal_release_raw_up_syscall_count, 0);
+    assert_eq!(observation.release_obligation_mask, 0);
+}
+
+#[test]
+fn manual_resume_background_rechecks_focus_before_preflight() {
+    use std::sync::atomic::Ordering;
+
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.attach_executor_for_test().expect("attach executor");
+
+    harness.focus_active.store(false, Ordering::Release);
+
+    let stamp = super::super::load_target_stamp(&harness.target).expect("stamp");
+    let focus_match = super::super::focus_matches_hwnd(true, &harness.focus_active, stamp.hwnd);
+    assert!(
+        !focus_match,
+        "target in background must fail focus_matches_hwnd"
+    );
 }

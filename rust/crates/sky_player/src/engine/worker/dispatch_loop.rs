@@ -1107,11 +1107,6 @@ pub(crate) fn dispatch_staged_candidate(
         return DispatchAttemptOutcome::Exit;
     }
 
-    if system_power.system_suspend_terminal() {
-        runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
-        return DispatchAttemptOutcome::Exit;
-    }
-
     let Some(completion_qpc) = send_result.evidence.completed_ticks else {
         runtime.terminal_error = Some(format!(
             "healthy SendInput evidence lost its completion QPC: {}",
@@ -1269,6 +1264,11 @@ pub(crate) fn dispatch_staged_candidate(
             qpc_clock,
             completion_qpc,
         );
+    }
+
+    if system_power.system_suspend_terminal() {
+        runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
+        return DispatchAttemptOutcome::Exit;
     }
 
     DispatchAttemptOutcome::Dispatched
@@ -1821,17 +1821,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         }
                         continue;
                     };
-                    if let Err(error) = ensure_preflight_for_target(
-                        &resources.backend,
-                        preflight_target,
-                        &mut core.runtime.verified_target,
-                    ) {
-                        core.runtime.verified_target = None;
-                        core.runtime.terminal_error = Some(format!(
-                            "instrument key preflight failed on manual resume; release the 15 instrument keys before playback: {error}"
-                        ));
-                        break;
-                    }
                     if !focus_matches_hwnd(
                         config.focus.require_focus,
                         focus_active,
@@ -1889,6 +1878,17 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         core.runtime.verified_target = None;
                         core.runtime.terminal_error =
                             Some(format!("manual resume journal cleanup failed: {error}"));
+                        break;
+                    }
+                    if let Err(error) = ensure_preflight_for_target(
+                        &resources.backend,
+                        preflight_target,
+                        &mut core.runtime.verified_target,
+                    ) {
+                        core.runtime.verified_target = None;
+                        core.runtime.terminal_error = Some(format!(
+                            "instrument key preflight failed on manual resume; release the 15 instrument keys before playback: {error}"
+                        ));
                         break;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();

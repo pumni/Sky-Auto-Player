@@ -9,7 +9,7 @@ use super::{
 use parking_lot::Mutex;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::QpcError;
-#[cfg(any(test, feature = "real-input-acceptance"))]
+#[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 use sky_dispatch_win32::input::GuardedReleaseOutcome;
 #[cfg(feature = "real-input-acceptance")]
 use sky_dispatch_win32::input::TerminalProbeVerdict;
@@ -22,7 +22,7 @@ enum TerminalCleanupFailure {
     Panicked(Box<dyn std::any::Any + Send>),
 }
 
-#[cfg(any(test, feature = "real-input-acceptance"))]
+#[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 fn terminal_raw_up_syscall_count(outcome: &GuardedReleaseOutcome) -> u64 {
     outcome
         .send_attempts
@@ -157,7 +157,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.release_outcome.clone());
         let release_verified = release_state_verified(&backend, &outcome.release_outcome);
-        #[cfg(feature = "real-input-acceptance")]
+        #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
         {
             metrics.terminal_release_raw_up_syscall_count.store(
                 terminal_raw_up_syscall_count(outcome),
@@ -166,6 +166,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             metrics
                 .terminal_release_raw_up_syscall_count_available
                 .store(true, std::sync::atomic::Ordering::Release);
+            #[cfg(feature = "real-input-acceptance")]
             if release_verified
                 && outcome.needs_up_mask == 0
                 && outcome.needs_probe_mask == 0
@@ -266,6 +267,10 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             .ok()
             .map_or(0, |outcome| outcome.release_outcome.attempts);
         observation.total_release_attempts = backend.release_attempts_total;
+        observation.terminal_release_raw_up_syscall_count = cleanup_result
+            .as_ref()
+            .ok()
+            .map_or(0, terminal_raw_up_syscall_count);
         observation.cleanup_outcome = cleanup_result
             .as_ref()
             .ok()

@@ -518,14 +518,14 @@ fn worker_pause_drain_stop_upgrade_preserves_budget_origin_and_residual() {
     // publishes Stop (and, in one case, origin drift) before allowing the
     // worker to continue its same cleanup invocation.
     for (case, first_up, foreground_drift, probe, total_up, finalizer_up) in [
-        ("stop_foreground", FirstUp::Fail, false, Probe::Normal, 8, 4),
+        ("stop_foreground", FirstUp::Fail, false, Probe::Normal, 4, 0),
         (
             "stop_origin_drift",
             FirstUp::Fail,
             true,
             Probe::Normal,
             2,
-            1,
+            0,
         ),
         ("stop_probe_held", FirstUp::Full, false, Probe::Held, 1, 0),
         (

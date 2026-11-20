@@ -116,6 +116,7 @@ pub(crate) struct FinalizeTestObservation {
     pub(crate) attempted_mask: u16,
     pub(crate) terminal_release_attempts: u8,
     pub(crate) total_release_attempts: u64,
+    pub(crate) terminal_release_raw_up_syscall_count: u64,
     pub(crate) cleanup_outcome: Option<ReleaseAllOutcome>,
     pub(crate) terminal_cleanup_evidence: Option<TerminalReleaseEvidence>,
     pub(crate) generation_accounting: sky_dispatch_core::accounting::GenerationAccounting,
