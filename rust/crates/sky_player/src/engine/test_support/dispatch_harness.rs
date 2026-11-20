@@ -71,6 +71,7 @@ pub struct FinalizeEvidence {
     pub released: u64,
     pub cancelled: u64,
     pub active_generations: u64,
+    pub terminal_release_raw_up_syscall_count: u64,
 }
 
 pub type CleanupCapture = Arc<Mutex<Vec<(Vec<u16>, bool)>>>;
@@ -226,7 +227,7 @@ impl ProductionDispatchTestHarness {
         let playback = PlaybackClockState::new(epoch, DurationTicks::ZERO)
             .map_err(|error| format!("test playback clock: {error}"))?;
         let telemetry = TelemetryCollector::new(TelemetryMode::Ring, 64);
-        let resources = WorkerResources {
+        let mut resources = WorkerResources {
             clock,
             waiter: HybridWaiter::new(),
             backend,
@@ -235,6 +236,17 @@ impl ProductionDispatchTestHarness {
             telemetry: Arc::new(parking_lot::Mutex::new(telemetry)),
             scheduling: WorkerSchedulingGuards::create_test_guards(),
         };
+        if let Some(proof) =
+            sky_dispatch_win32::input::ReleaseOwnerProof::new_with_foreground_policy(
+                1,
+                0,
+                None,
+                None,
+                config.focus.require_focus,
+            )
+        {
+            let _ = resources.backend.bind_session_release_owner(proof);
+        }
         let progress_clock = SharedProgressClock::default();
         progress_clock.publish(&resources.playback);
 
@@ -689,16 +701,21 @@ impl ProductionDispatchTestHarness {
             .expect("focus fixture session owner proof");
         self.resources
             .backend
+            .forget_release_owner_proof_for_test(0xffff);
+        self.resources
+            .backend
             .bind_session_release_owner(release_owner)
             .expect("focus fixture binds one session release owner");
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
+        sky_dispatch_win32::focus::set_window_live_for_test(Some(hwnd));
     }
 
     pub fn invalidate_focus_owner_for_test(&self, hwnd: isize, owner_pid: u32) {
         self.target.invalidate_for_test();
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(hwnd));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(owner_pid)));
+        sky_dispatch_win32::focus::set_window_live_for_test(Some(hwnd));
     }
 
     pub fn invalidate_bound_owner_for_test(&self) {
@@ -779,6 +796,8 @@ impl ProductionDispatchTestHarness {
             released: observation.generation_accounting.released,
             cancelled: observation.generation_accounting.cancelled,
             active_generations: observation.generation_accounting.active,
+            terminal_release_raw_up_syscall_count: observation
+                .terminal_release_raw_up_syscall_count,
         }
     }
 

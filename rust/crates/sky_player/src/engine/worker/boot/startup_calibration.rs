@@ -51,6 +51,36 @@ pub(super) fn select_startup_spin_threshold(
     }
 }
 
+pub(super) fn apply_startup_calibration_result(
+    config: &super::super::super::WorkerConfig,
+    calibration: &StartupCalibrationMeasurement,
+    metrics: &mut crate::engine::telemetry::WorkerMetricsLocal,
+    qpc_clock: QpcClock,
+) -> Result<crate::engine::DurationTicks, String> {
+    let calibration_stats = calibration.stats;
+    let (effective_spin_threshold_us, spin_threshold_source) =
+        select_startup_spin_threshold(config, calibration_stats);
+    metrics.startup_calibration_executed = calibration_stats.is_some();
+    metrics.startup_calibration_sample_count = calibration_stats
+        .as_ref()
+        .map(|_| crate::engine::config::CALIBRATION_SAMPLES as u64)
+        .unwrap_or(0);
+    metrics.startup_calibration_duration_us = calibration.duration_us;
+    metrics.startup_calibration_result = calibration.result as u8;
+    metrics.spin_threshold_source = spin_threshold_source as u8;
+    metrics.effective_spin_threshold_us = effective_spin_threshold_us;
+    if let Some(stats) = calibration_stats {
+        metrics.wake_error_p50_us = stats.p50_us;
+        metrics.wake_error_p95_us = stats.p95_us;
+        metrics.wake_error_p99_us = stats.p99_us;
+        metrics.wake_error_max_us = stats.max_us;
+        metrics.startup_wake_error_robust_us = stats.robust_us;
+    }
+    qpc_clock
+        .duration_from_us(effective_spin_threshold_us)
+        .map_err(|error| format!("spin threshold conversion failed: {error:?}"))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn measure_startup_calibration(
     shared: &SessionShared,

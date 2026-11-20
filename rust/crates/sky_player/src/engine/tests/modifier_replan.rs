@@ -514,3 +514,943 @@ fn release_owner_proof_is_retained_once_per_session_not_per_down_slot() {
         let _ = harness.finalize_for_test();
     }
 }
+
+#[test]
+fn modifier_inconclusive_query_fails_closed_without_sends() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.send_input_capture = Some(Arc::clone(&captures));
+
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "inconclusive-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "inconclusive-up".into(),
+            },
+        ],
+        &[0x15],
+    );
+
+    let mut options = support::test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.focus.require_focus = true;
+    options.modifier_key_state_query_for_test = Some(Arc::new(|_vk| {
+        sky_dispatch_win32::input::MODIFIER_QUERY_INCONCLUSIVE
+    }));
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind synthetic owner");
+    session.set_focus_hint(true);
+
+    session.arm(0).expect("arm worker loop");
+
+    assert!(
+        session
+            .join(Duration::from_secs(2))
+            .expect("worker completion on error"),
+        "inconclusive modifier must terminate the worker promptly"
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
+    let err = snapshot.terminal_error.as_deref().unwrap_or_default();
+    assert!(
+        err.contains("modifier_state_inconclusive"),
+        "expected terminal error containing 'modifier_state_inconclusive', got: {err}"
+    );
+    assert_eq!(
+        captured_packets(&captures).len(),
+        0,
+        "no packets may be sent when modifier query is inconclusive"
+    );
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert_eq!(snapshot.active_count, 0);
+}
+
+#[test]
+fn modifier_hold_exceeding_bounded_deadline_fails_closed() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let held = Arc::new(AtomicBool::new(true));
+    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    let send_calls = Arc::new(AtomicU64::new(0));
+
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.send_input_capture = Some(Arc::clone(&captures));
+
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 200_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-up".into(),
+            },
+        ],
+        &[0x15],
+    );
+
+    let mut options = support::test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.focus.require_focus = true;
+    options.wait.modifier_hold_timeout_us = 50_000;
+
+    let checks = Arc::clone(&admission_checks);
+    let held_flag = Arc::clone(&held);
+    options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
+        if virtual_key == 0x5b {
+            checks.fetch_add(1, Ordering::AcqRel);
+        }
+        if virtual_key == 0x11 && held_flag.load(Ordering::Acquire) {
+            i16::MIN
+        } else {
+            0
+        }
+    }));
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind synthetic owner");
+    session.set_focus_hint(true);
+
+    let start = Instant::now();
+    session.arm(0).expect("arm worker loop");
+
+    assert!(
+        session
+            .join(Duration::from_secs(2))
+            .expect("worker completion on timeout"),
+        "exceeded modifier hold deadline must terminate worker"
+    );
+
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "worker must terminate near bounded deadline (elapsed: {elapsed:?})"
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
+    let err = snapshot.terminal_error.as_deref().unwrap_or_default();
+    assert!(
+        err.contains("modifier held exceeded bounded wait deadline"),
+        "expected error containing 'modifier held exceeded bounded wait deadline', got: {err}"
+    );
+    assert_eq!(captured_packets(&captures).len(), 0, "no packets sent");
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert!(
+        admission_checks.load(Ordering::Acquire) > 0,
+        "should have checked modifier admission"
+    );
+}
+
+#[test]
+fn overlapping_manual_pause_and_focus_loss_resumes_cleanly() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let held = Arc::new(AtomicBool::new(false));
+    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    let send_calls = Arc::new(AtomicU64::new(0));
+
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "overlap-first-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 100_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "overlap-first-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Down,
+                scheduled_us: 300_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "overlap-second-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 500_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "overlap-second-up".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    );
+
+    let session = mock_session(sched, &held, &admission_checks, &captures, &send_calls);
+    session.arm(0).expect("arm worker loop");
+
+    wait_until(
+        Duration::from_secs(3),
+        || !captured_packets(&captures).is_empty(),
+        "first Down dispatched",
+    );
+
+    // 1. Lose focus
+    install_foreground(999, 999);
+    session.set_focus_hint(false);
+
+    wait_until(
+        Duration::from_secs(2),
+        || session.snapshot_lite().is_paused,
+        "worker paused on focus loss",
+    );
+
+    // 2. Pause while focus loss is active (manual pause overlapping focus loss)
+    session.pause().expect("manual pause during focus loss");
+
+    // 3. Restore focus while manual pause is still active
+    install_foreground(TARGET_HWND, TARGET_PID);
+    session.set_focus_hint(true);
+    std::thread::sleep(Duration::from_millis(50));
+
+    // Session must remain paused because manual pause is still active!
+    assert!(
+        session.snapshot_lite().is_paused,
+        "session must remain paused due to manual pause"
+    );
+
+    // 4. Resume manual pause
+    session.resume().expect("manual resume");
+
+    // Playback should now resume and finish cleanly
+    assert!(
+        session
+            .join(Duration::from_secs(5))
+            .expect("clean worker completion after resume"),
+        "session must finish playback after overlapping pause/focus resolution"
+    );
+
+    let all_captures = captures.lock().unwrap().clone();
+    assert_eq!(all_captures.len(), 4, "all 4 actions dispatched");
+    // Verify key 21 was released during pause via safety emission
+    assert!(
+        all_captures.iter().any(|c| matches!(
+            c,
+            MockSendInputCapture::SingleEmitter {
+                key_up: true,
+                scan_codes
+            } if scan_codes.as_slice() == [21]
+        )),
+        "first key must be safely released on pause"
+    );
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Finished.as_str());
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert_eq!(snapshot.active_count, 0);
+    assert_eq!(snapshot.failed_release_count, 0);
+}
+
+#[test]
+fn simultaneous_stop_and_skip_during_modifier_wait() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let held = Arc::new(AtomicBool::new(false));
+    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    let send_calls = Arc::new(AtomicU64::new(0));
+
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "simul-first-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 200_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "simul-blocked-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 1_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "simul-origin-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 1_100_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "simul-unattempted-up".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    );
+
+    let session = mock_session(sched, &held, &admission_checks, &captures, &send_calls);
+    session.arm(0).expect("arm worker loop");
+
+    wait_until(
+        Duration::from_secs(3),
+        || !captured_packets(&captures).is_empty(),
+        "first Down dispatched",
+    );
+
+    let prior_checks = admission_checks.load(Ordering::Acquire);
+    held.store(true, Ordering::Release);
+    wait_until(
+        Duration::from_secs(3),
+        || admission_checks.load(Ordering::Acquire) > prior_checks,
+        "modifier-held wait entered",
+    );
+
+    // Call quit and skip in close succession
+    let _ = session.skip();
+    let _ = session.quit();
+
+    assert!(
+        session.join(Duration::from_secs(2)).expect("worker join"),
+        "simultaneous stop/skip must interrupt modifier wait cleanly"
+    );
+
+    let snapshot = session.snapshot();
+    assert!(
+        snapshot.status == EnginePollStatus::Skipped.as_str()
+            || snapshot.status == EnginePollStatus::Quit.as_str(),
+        "status must be skipped or quit, got: {}",
+        snapshot.status
+    );
+    assert_eq!(
+        captured_packets(&captures).len(),
+        1,
+        "blocked Down must not be sent"
+    );
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert_eq!(snapshot.active_count, 0);
+}
+
+#[test]
+fn modifier_hold_budget_does_not_reset_on_independent_ups_and_fails_closed() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let held = Arc::new(AtomicBool::new(false));
+    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    let send_calls = Arc::new(AtomicU64::new(0));
+
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.send_input_capture = Some(Arc::clone(&captures));
+
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15, 0x16],
+                reason: "initial-downs".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 20_000,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "blocked-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 40_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "independent-up-1".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 70_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "independent-up-2".into(),
+            },
+            KeyActionInput {
+                source_action_index: 4,
+                kind: ActionKind::Up,
+                scheduled_us: 500_000,
+                scan_codes: smallvec::smallvec![0x17],
+                reason: "unattempted-up".into(),
+            },
+        ],
+        &[0x15, 0x16, 0x17],
+    );
+
+    let mut options = support::test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.focus.require_focus = true;
+    options.wait.modifier_hold_timeout_us = 80_000;
+
+    let checks = Arc::clone(&admission_checks);
+    let held_flag = Arc::clone(&held);
+    options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
+        if virtual_key == 0x5b {
+            checks.fetch_add(1, Ordering::AcqRel);
+        }
+        if virtual_key == 0x11 && held_flag.load(Ordering::Acquire) {
+            i16::MIN
+        } else {
+            0
+        }
+    }));
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind synthetic owner");
+    session.set_focus_hint(true);
+
+    session.arm(0).expect("arm worker loop");
+
+    wait_until(
+        Duration::from_secs(3),
+        || !captured_packets(&captures).is_empty(),
+        "initial Down dispatched",
+    );
+
+    held.store(true, Ordering::Release);
+
+    assert!(
+        session
+            .join(Duration::from_secs(3))
+            .expect("worker join on timeout"),
+        "worker must fail closed when hold timeout expires across independent Ups"
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
+    let err = snapshot.terminal_error.as_deref().unwrap_or_default();
+    assert!(
+        err.contains("modifier held exceeded bounded wait deadline"),
+        "expected timeout error, got: {err}"
+    );
+
+    let packets = captured_packets(&captures);
+    assert!(
+        !packets.iter().any(|p| (p.down_mask & 0b100) != 0),
+        "blocked Down (key 0x17) must NEVER have been sent"
+    );
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert_eq!(snapshot.active_count, 0);
+}
+
+#[test]
+fn modifier_hold_release_before_timeout_succeeds_after_intermediate_ups() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let held = Arc::new(AtomicBool::new(false));
+    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    let send_calls = Arc::new(AtomicU64::new(0));
+
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.send_input_capture = Some(Arc::clone(&captures));
+
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "initial-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Down,
+                scheduled_us: 20_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "blocked-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 2,
+                kind: ActionKind::Up,
+                scheduled_us: 40_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "independent-up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 3,
+                kind: ActionKind::Up,
+                scheduled_us: 200_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "final-up".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    );
+
+    let mut options = support::test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.focus.require_focus = true;
+    options.wait.modifier_hold_timeout_us = 500_000;
+
+    let checks = Arc::clone(&admission_checks);
+    let held_flag = Arc::clone(&held);
+    options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
+        if virtual_key == 0x5b {
+            checks.fetch_add(1, Ordering::AcqRel);
+        }
+        if virtual_key == 0x11 && held_flag.load(Ordering::Acquire) {
+            i16::MIN
+        } else {
+            0
+        }
+    }));
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind synthetic owner");
+    session.set_focus_hint(true);
+
+    session.arm(0).expect("arm worker loop");
+
+    wait_until(
+        Duration::from_secs(3),
+        || !captured_packets(&captures).is_empty(),
+        "initial Down dispatched",
+    );
+
+    held.store(true, Ordering::Release);
+
+    wait_until(
+        Duration::from_secs(3),
+        || {
+            captured_packets(&captures)
+                .iter()
+                .any(|p| p.up_mask == 0b01)
+        },
+        "independent Up dispatched",
+    );
+
+    held.store(false, Ordering::Release);
+
+    assert!(
+        session
+            .join(Duration::from_secs(3))
+            .expect("clean worker completion"),
+        "session should finish cleanly after modifier release"
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Finished.as_str());
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    assert_eq!(snapshot.active_count, 0);
+
+    let packets = captured_packets(&captures);
+    assert!(
+        packets.iter().any(|p| (p.down_mask & 0b10) != 0),
+        "key 0x16 Down must be sent after modifier is released"
+    );
+}
+
+#[test]
+fn modifier_hold_rearms_after_pause_resume() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let held = Arc::new(AtomicBool::new(true));
+    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let captures = Arc::new(Mutex::new(Vec::new()));
+    let send_calls = Arc::new(AtomicU64::new(0));
+
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.send_input_capture = Some(Arc::clone(&captures));
+
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 300_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-up".into(),
+            },
+        ],
+        &[0x15],
+    );
+
+    let mut options = support::test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.focus.require_focus = true;
+    options.wait.modifier_hold_timeout_us = 100_000;
+
+    let checks = Arc::clone(&admission_checks);
+    let held_flag = Arc::clone(&held);
+    options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
+        if virtual_key == 0x5b {
+            checks.fetch_add(1, Ordering::AcqRel);
+        }
+        if virtual_key == 0x11 && held_flag.load(Ordering::Acquire) {
+            i16::MIN
+        } else {
+            0
+        }
+    }));
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind synthetic owner");
+    session.set_focus_hint(true);
+
+    session.arm(0).expect("arm worker loop");
+
+    wait_until(
+        Duration::from_secs(2),
+        || admission_checks.load(Ordering::Acquire) > 0,
+        "modifier check entered",
+    );
+
+    session.pause().expect("pause during hold");
+    wait_until(
+        Duration::from_secs(2),
+        || session.snapshot_lite().is_paused,
+        "paused",
+    );
+
+    std::thread::sleep(Duration::from_millis(150));
+
+    held.store(false, Ordering::Release);
+
+    session.resume().expect("resume");
+
+    assert!(
+        session
+            .join(Duration::from_secs(3))
+            .expect("clean worker completion after pause/resume"),
+        "session must finish cleanly after pause/resume"
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Finished.as_str());
+    assert_eq!(captured_packets(&captures).len(), 2);
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+}
+
+#[test]
+fn quit_concurrent_with_modifier_timeout_honors_quit() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 200_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-up".into(),
+            },
+        ],
+        &[0x15],
+    );
+
+    let mut options = support::test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.focus.require_focus = true;
+    options.wait.modifier_hold_timeout_us = 30_000;
+
+    let checks = Arc::clone(&admission_checks);
+    options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
+        if virtual_key == 0x5b {
+            checks.fetch_add(1, Ordering::AcqRel);
+        }
+        if virtual_key == 0x11 { i16::MIN } else { 0 }
+    }));
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind synthetic owner");
+    session.set_focus_hint(true);
+
+    session.arm(0).expect("arm worker loop");
+
+    // Allow modifier timeout budget to expire while modifier is held
+    std::thread::sleep(Duration::from_millis(45));
+
+    // Request Quit concurrently with expired modifier hold
+    session.quit().expect("quit requested");
+
+    assert!(
+        session
+            .join(Duration::from_secs(2))
+            .expect("worker completion on quit"),
+        "worker must complete after quit"
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.status,
+        EnginePollStatus::Quit.as_str(),
+        "Quit must take precedence over modifier hold timeout"
+    );
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("quit"),
+        "terminal trigger reason must be quit"
+    );
+    assert_eq!(
+        snapshot.terminal_error, None,
+        "terminal error must be None, not modifier timeout error"
+    );
+}
+
+#[test]
+fn skip_concurrent_with_modifier_timeout_honors_skip() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let sched = schedule(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: ActionKind::Down,
+                scheduled_us: 10_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: ActionKind::Up,
+                scheduled_us: 200_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "held-up".into(),
+            },
+        ],
+        &[0x15],
+    );
+
+    let mut options = support::test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.profile = DispatchProfile::MockTest;
+    options.focus.require_focus = true;
+    options.wait.modifier_hold_timeout_us = 30_000;
+
+    let checks = Arc::clone(&admission_checks);
+    options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
+        if virtual_key == 0x5b {
+            checks.fetch_add(1, Ordering::AcqRel);
+        }
+        if virtual_key == 0x11 { i16::MIN } else { 0 }
+    }));
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind synthetic owner");
+    session.set_focus_hint(true);
+
+    session.arm(0).expect("arm worker loop");
+
+    // Allow modifier timeout budget to expire while modifier is held
+    std::thread::sleep(Duration::from_millis(45));
+
+    // Request Skip concurrently with expired modifier hold
+    session.skip().expect("skip requested");
+
+    assert!(
+        session
+            .join(Duration::from_secs(2))
+            .expect("worker completion on skip"),
+        "worker must complete after skip"
+    );
+
+    let snapshot = session.snapshot();
+    assert_eq!(
+        snapshot.status,
+        EnginePollStatus::Skipped.as_str(),
+        "Skip must take precedence over modifier hold timeout"
+    );
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("skipped"),
+        "terminal trigger reason must be skipped"
+    );
+    assert_eq!(
+        snapshot.terminal_error, None,
+        "terminal error must be None, not modifier timeout error"
+    );
+}

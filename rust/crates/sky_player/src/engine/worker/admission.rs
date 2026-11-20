@@ -175,6 +175,7 @@ pub(crate) enum FinalDownVerdict {
     Allowed,
     ControlRejected,
     ModifierHeld(ModifierMask),
+    ModifierInconclusive,
     TargetChanged,
     FocusLost,
     OwnerRejected(OwnerAdmissionFailure),
@@ -270,16 +271,14 @@ pub(crate) fn final_down_target_hint(target: &FinalTargetSignals<'_>) -> FinalDo
     FinalDownVerdict::Allowed
 }
 
-/// Recheck the immutable target's one-way failure latch and the latest focus
-/// hint after fresh Win32 identity reads. The constructor-bound HWND/PID is
-/// immutable, so repeating the same owner/generation lookup adds no proof.
 #[inline(always)]
 pub(crate) fn final_down_atomic_revalidation(
     target: &SessionTarget,
+    expected: TargetStamp,
     require_focus: bool,
     focus_active: &AtomicBool,
 ) -> FinalDownVerdict {
-    if !target.is_valid() {
+    if !target.is_valid() || !target.is_current(expected.hwnd, expected.generation) {
         return FinalDownVerdict::TargetChanged;
     }
     if !focus_matches(require_focus, focus_active) {
@@ -293,6 +292,7 @@ pub(crate) fn final_down_modifier_verdict(backend: &TrackedKeyState) -> FinalDow
     match backend.observe_modifiers_before_down() {
         ModifierKeyObservation::NoHeldObserved => FinalDownVerdict::Allowed,
         ModifierKeyObservation::HeldObserved(mask) => FinalDownVerdict::ModifierHeld(mask),
+        ModifierKeyObservation::Inconclusive => FinalDownVerdict::ModifierInconclusive,
     }
 }
 
@@ -308,7 +308,9 @@ pub(crate) fn apply_final_down_rejection(
     let rejection = match verdict {
         FinalDownVerdict::Allowed => return,
         FinalDownVerdict::ControlRejected => FinalGateRejection::Control,
-        FinalDownVerdict::ModifierHeld(_) => FinalGateRejection::Modifier,
+        FinalDownVerdict::ModifierHeld(_) | FinalDownVerdict::ModifierInconclusive => {
+            FinalGateRejection::Modifier
+        }
         FinalDownVerdict::TargetChanged => FinalGateRejection::Target,
         FinalDownVerdict::FocusLost => FinalGateRejection::Focus,
         FinalDownVerdict::OwnerRejected(_) => FinalGateRejection::Owner,
@@ -325,6 +327,7 @@ pub(crate) fn apply_final_down_rejection(
         | FinalDownVerdict::LeaseUnproven => runtime.verified_target = None,
         FinalDownVerdict::Allowed
         | FinalDownVerdict::ModifierHeld(_)
+        | FinalDownVerdict::ModifierInconclusive
         | FinalDownVerdict::FocusLost => {}
     }
 }
@@ -613,6 +616,36 @@ pub(crate) fn safety_cleanup_drain_decision(
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MusicalPacketKind {
+    DownOnly,
+    UpOnly,
+    Mixed,
+}
+
+impl MusicalPacketKind {
+    #[inline(always)]
+    pub(crate) fn from_masks(down_mask: u16, up_mask: u16) -> Option<Self> {
+        match (down_mask != 0, up_mask != 0) {
+            (true, false) => Some(Self::DownOnly),
+            (false, true) => Some(Self::UpOnly),
+            (true, true) => Some(Self::Mixed),
+            (false, false) => None,
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn has_down(self) -> bool {
+        matches!(self, Self::DownOnly | Self::Mixed)
+    }
+
+    #[inline(always)]
+    pub(crate) fn has_up(self) -> bool {
+        matches!(self, Self::UpOnly | Self::Mixed)
+    }
+}
+
+#[derive(Debug)]
 pub(crate) enum FinalDownAdmissionResult {
     Allowed,
     ModifierHeld,
@@ -620,8 +653,11 @@ pub(crate) enum FinalDownAdmissionResult {
     Terminal(String),
 }
 
+/// Single typed entry point evaluating musical admission across Down-only,
+/// Up-only, and mixed packets. Eliminates redundant wrapper and repeated
+/// target validation layers.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn verify_final_down_admission(
+pub(crate) fn verify_final_packet_admission(
     target: &SessionTarget,
     expected: TargetStamp,
     require_focus: bool,
@@ -634,79 +670,16 @@ pub(crate) fn verify_final_down_admission(
     playback: &mut PlaybackClockState,
     runtime: &mut WorkerRuntime,
     metrics: &mut WorkerMetricsLocal,
+    packet_kind: MusicalPacketKind,
 ) -> FinalDownAdmissionResult {
-    verify_final_musical_packet_admission(
-        target,
-        expected,
-        require_focus,
-        focus_active,
-        control_signals,
-        lease_timeout_ticks,
-        qpc_clock,
-        progress_clock,
-        backend,
-        playback,
-        runtime,
-        metrics,
-        true,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn verify_final_musical_up_admission(
-    target: &SessionTarget,
-    expected: TargetStamp,
-    require_focus: bool,
-    focus_active: &AtomicBool,
-    control_signals: FinalControlSignals<'_>,
-    lease_timeout_ticks: DurationTicks,
-    qpc_clock: QpcClock,
-    progress_clock: &SharedProgressClock,
-    backend: &TrackedKeyState,
-    playback: &mut PlaybackClockState,
-    runtime: &mut WorkerRuntime,
-    metrics: &mut WorkerMetricsLocal,
-) -> FinalDownAdmissionResult {
-    verify_final_musical_packet_admission(
-        target,
-        expected,
-        require_focus,
-        focus_active,
-        control_signals,
-        lease_timeout_ticks,
-        qpc_clock,
-        progress_clock,
-        backend,
-        playback,
-        runtime,
-        metrics,
-        false,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn verify_final_musical_packet_admission(
-    target: &SessionTarget,
-    expected: TargetStamp,
-    require_focus: bool,
-    focus_active: &AtomicBool,
-    control_signals: FinalControlSignals<'_>,
-    lease_timeout_ticks: DurationTicks,
-    qpc_clock: QpcClock,
-    progress_clock: &SharedProgressClock,
-    backend: &TrackedKeyState,
-    playback: &mut PlaybackClockState,
-    runtime: &mut WorkerRuntime,
-    metrics: &mut WorkerMetricsLocal,
-    check_modifiers: bool,
-) -> FinalDownAdmissionResult {
-    // Up-only callers already perform this early control check so Suspend
-    // keeps its existing terminal mapping. Down-bearing callers enter here
-    // directly and check control before target and modifier work.
-    if check_modifiers && final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed {
+    // 1. Control check: Down-bearing callers check early before target/modifier.
+    if packet_kind.has_down()
+        && final_down_control_verdict(control_signals) != FinalDownVerdict::Allowed
+    {
         return FinalDownAdmissionResult::Replan;
     }
 
+    // 2. Cheap target and published-focus hint.
     let target_hint = final_down_target_hint(&FinalTargetSignals {
         expected,
         require_focus,
@@ -725,28 +698,27 @@ fn verify_final_musical_packet_admission(
         return FinalDownAdmissionResult::Replan;
     }
 
-    // Model state changes at the final boundary before checking modifiers and
-    // making the fresh foreground/owner proof. This keeps musical Up and Down
-    // packets from relying on a focus stamp sampled before a wait.
     #[cfg(any(test, feature = "test-support"))]
     if let Some(hook) = runtime.final_gate_before_syscall_hook.as_ref() {
         hook();
     }
 
-    if check_modifiers {
+    // 3. Modifiers are scanned only for Down-bearing packets; Up-only is independent.
+    if packet_kind.has_down() {
         let modifier_verdict = final_down_modifier_verdict(backend);
         if modifier_verdict != FinalDownVerdict::Allowed {
             apply_final_down_rejection(modifier_verdict, runtime, metrics);
             return match modifier_verdict {
                 FinalDownVerdict::ModifierHeld(_) => FinalDownAdmissionResult::ModifierHeld,
+                FinalDownVerdict::ModifierInconclusive => {
+                    FinalDownAdmissionResult::Terminal("modifier_state_inconclusive".to_string())
+                }
                 _ => FinalDownAdmissionResult::Replan,
             };
         }
     }
 
-    // The lease's required QPC sample stays in the gate. Perform it before
-    // Win32 identity reads so the exact foreground HWND/PID check remains the
-    // last OS identity read before the final atomic and control suffix.
+    // 4. Supervisor lease proof with bounded age sample.
     let lease_proof = match final_down_lease_age_proof(
         control_signals.supervisor_expired,
         lease_timeout_ticks,
@@ -795,22 +767,15 @@ fn verify_final_musical_packet_admission(
         );
     }
 
-    // The retained process handle is checked first with a zero-time wait and
-    // its creation identity. The exact foreground HWND/PID is then sampled
-    // once, immediately before the final atomic and control checks.
-    let owner_verdict = if require_focus {
+    // 5. Retained process liveness and exact foreground HWND/PID match.
+    if require_focus {
         let Some(release_owner) = backend.session_release_owner_proof() else {
             return FinalDownAdmissionResult::Terminal(
                 "session release owner proof is missing before final admission".to_string(),
             );
         };
-        fresh_final_release_owner_proof(target, expected, true, release_owner)
-    } else {
-        Ok(())
-    };
-    match owner_verdict {
-        Ok(()) => {}
-        Err(verdict) => {
+        if let Err(verdict) = fresh_final_release_owner_proof(target, expected, true, release_owner)
+        {
             apply_final_down_rejection(verdict, runtime, metrics);
             if verdict == FinalDownVerdict::FocusLost
                 && let Err(step) =
@@ -848,7 +813,8 @@ fn verify_final_musical_packet_admission(
         );
     }
 
-    let final_target_verdict = final_down_atomic_revalidation(target, require_focus, focus_active);
+    let final_target_verdict =
+        final_down_atomic_revalidation(target, expected, require_focus, focus_active);
     if final_target_verdict != FinalDownVerdict::Allowed {
         apply_final_down_rejection(final_target_verdict, runtime, metrics);
         if final_target_verdict == FinalDownVerdict::FocusLost
@@ -864,9 +830,7 @@ fn verify_final_musical_packet_admission(
         return FinalDownAdmissionResult::Replan;
     }
 
-    // This is the final admission read: controls, power, focus transitions,
-    // and supervisor expiry all use one fixed precedence immediately before
-    // the prepared sender call.
+    // 6. Final control state check immediately before raw send.
     let final_control_verdict = final_down_control_verdict(control_signals);
     if final_control_verdict != FinalDownVerdict::Allowed {
         apply_final_down_rejection(final_control_verdict, runtime, metrics);
@@ -874,4 +838,70 @@ fn verify_final_musical_packet_admission(
     }
 
     FinalDownAdmissionResult::Allowed
+}
+
+#[cfg(test)]
+#[allow(dead_code, clippy::too_many_arguments)]
+pub(crate) fn verify_final_down_admission(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+    lease_timeout_ticks: DurationTicks,
+    qpc_clock: QpcClock,
+    progress_clock: &SharedProgressClock,
+    backend: &TrackedKeyState,
+    playback: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    metrics: &mut WorkerMetricsLocal,
+) -> FinalDownAdmissionResult {
+    verify_final_packet_admission(
+        target,
+        expected,
+        require_focus,
+        focus_active,
+        control_signals,
+        lease_timeout_ticks,
+        qpc_clock,
+        progress_clock,
+        backend,
+        playback,
+        runtime,
+        metrics,
+        MusicalPacketKind::DownOnly,
+    )
+}
+
+#[cfg(test)]
+#[allow(dead_code, clippy::too_many_arguments)]
+pub(crate) fn verify_final_musical_up_admission(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+    control_signals: FinalControlSignals<'_>,
+    lease_timeout_ticks: DurationTicks,
+    qpc_clock: QpcClock,
+    progress_clock: &SharedProgressClock,
+    backend: &TrackedKeyState,
+    playback: &mut PlaybackClockState,
+    runtime: &mut WorkerRuntime,
+    metrics: &mut WorkerMetricsLocal,
+) -> FinalDownAdmissionResult {
+    verify_final_packet_admission(
+        target,
+        expected,
+        require_focus,
+        focus_active,
+        control_signals,
+        lease_timeout_ticks,
+        qpc_clock,
+        progress_clock,
+        backend,
+        playback,
+        runtime,
+        metrics,
+        MusicalPacketKind::UpOnly,
+    )
 }

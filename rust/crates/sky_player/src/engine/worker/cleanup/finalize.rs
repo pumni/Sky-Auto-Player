@@ -9,7 +9,7 @@ use super::{
 use parking_lot::Mutex;
 use sky_dispatch_core::time::DurationTicks;
 use sky_dispatch_win32::clock::QpcError;
-#[cfg(any(test, feature = "real-input-acceptance"))]
+#[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 use sky_dispatch_win32::input::GuardedReleaseOutcome;
 #[cfg(feature = "real-input-acceptance")]
 use sky_dispatch_win32::input::TerminalProbeVerdict;
@@ -22,7 +22,7 @@ enum TerminalCleanupFailure {
     Panicked(Box<dyn std::any::Any + Send>),
 }
 
-#[cfg(any(test, feature = "real-input-acceptance"))]
+#[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 fn terminal_raw_up_syscall_count(outcome: &GuardedReleaseOutcome) -> u64 {
     outcome
         .send_attempts
@@ -68,6 +68,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         panic_requested,
         supervisor_expired,
         system_power,
+        supervisor_expiry_reason_code,
     } = signals;
     let FinalizePublication {
         metrics,
@@ -156,7 +157,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     if let Ok(outcome) = &cleanup_result {
         *metrics.terminal_release_outcome.lock() = Some(outcome.release_outcome.clone());
         let release_verified = release_state_verified(&backend, &outcome.release_outcome);
-        #[cfg(feature = "real-input-acceptance")]
+        #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
         {
             metrics.terminal_release_raw_up_syscall_count.store(
                 terminal_raw_up_syscall_count(outcome),
@@ -165,6 +166,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             metrics
                 .terminal_release_raw_up_syscall_count_available
                 .store(true, std::sync::atomic::Ordering::Release);
+            #[cfg(feature = "real-input-acceptance")]
             if release_verified
                 && outcome.needs_up_mask == 0
                 && outcome.needs_probe_mask == 0
@@ -265,6 +267,10 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             .ok()
             .map_or(0, |outcome| outcome.release_outcome.attempts);
         observation.total_release_attempts = backend.release_attempts_total;
+        observation.terminal_release_raw_up_syscall_count = cleanup_result
+            .as_ref()
+            .ok()
+            .map_or(0, terminal_raw_up_syscall_count);
         observation.cleanup_outcome = cleanup_result
             .as_ref()
             .ok()
@@ -303,14 +309,32 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         );
     }
 
+    let resolve_trigger_string = |trigger: TerminalTrigger| -> String {
+        let specific = supervisor_expiry_reason_code.and_then(|code| {
+            crate::engine::shared::decode_supervisor_expiry_reason(code.load(Ordering::Acquire))
+        });
+        if let Some(reason_str) = specific
+            && matches!(
+                trigger,
+                TerminalTrigger::PanicReleaseRequested | TerminalTrigger::SupervisorLeaseExpired
+            )
+        {
+            reason_str.to_string()
+        } else {
+            trigger.as_str().to_string()
+        }
+    };
+
     if let Some(trigger) = terminal_trigger {
-        *metrics.terminal_trigger_reason.lock() = Some(trigger.as_str().to_string());
+        let mut reason_slot = metrics.terminal_trigger_reason.lock();
+        if reason_slot.is_none() {
+            *reason_slot = Some(resolve_trigger_string(trigger));
+        }
     }
     #[cfg(any(test, feature = "test-support"))]
     if let Some(observation) = cleanup_observation.as_deref_mut() {
         observation.pre_cancel_generation_accounting = pre_cancel_accounting;
-        observation.terminal_trigger_reason =
-            terminal_trigger.map(|trigger| trigger.as_str().to_string());
+        observation.terminal_trigger_reason = terminal_trigger.map(resolve_trigger_string);
     }
 
     if terminal_error.is_none()
@@ -402,12 +426,14 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         terminal_trigger = Some(TerminalTrigger::PanicReleaseRequested);
     }
     if let Some(trigger) = terminal_trigger {
-        *metrics.terminal_trigger_reason.lock() = Some(trigger.as_str().to_string());
+        let mut reason_slot = metrics.terminal_trigger_reason.lock();
+        if reason_slot.is_none() {
+            *reason_slot = Some(resolve_trigger_string(trigger));
+        }
     }
     #[cfg(any(test, feature = "test-support"))]
     if let Some(observation) = cleanup_observation.as_deref_mut() {
-        observation.terminal_trigger_reason =
-            terminal_trigger.map(|trigger| trigger.as_str().to_string());
+        observation.terminal_trigger_reason = terminal_trigger.map(resolve_trigger_string);
     }
     if matches!(
         terminal_trigger,
@@ -423,6 +449,13 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         record_termination_error(&mut terminal_error, &mut secondary_errors, summary);
     }
     attempted_dispatch_anomalies.append_details_to(&mut secondary_errors);
+    if system_power.system_suspend_terminal()
+        && !secondary_errors
+            .iter()
+            .any(|e| e.contains("system suspend"))
+    {
+        secondary_errors.push("system suspend requested during worker execution".to_string());
+    }
 
     let terminal_abort_reason = if worker_panicked
         || cleanup_result.is_err()

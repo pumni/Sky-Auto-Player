@@ -648,9 +648,9 @@ pub(crate) struct SharedMetrics {
     #[cfg(feature = "real-input-acceptance")]
     pub(crate) terminal_release_verified_qpc_ticks: AtomicU64,
     /// Sum of TerminalSendAttemptEvidence.raw_calls, never ReleaseAllOutcome.attempts.
-    #[cfg(feature = "real-input-acceptance")]
+    #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
     pub(crate) terminal_release_raw_up_syscall_count: AtomicU64,
-    #[cfg(feature = "real-input-acceptance")]
+    #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
     pub(crate) terminal_release_raw_up_syscall_count_available: AtomicBool,
     #[cfg(test)]
     pub(crate) publish_count: AtomicU64,

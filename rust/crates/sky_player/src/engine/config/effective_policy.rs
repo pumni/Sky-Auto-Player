@@ -103,6 +103,7 @@ mod tests {
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
+            modifier_hold_timeout_us: crate::engine::config::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
             test_spin_threshold_us: None,
             test_wait_policy,
         }

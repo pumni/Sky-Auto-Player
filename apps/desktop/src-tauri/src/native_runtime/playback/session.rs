@@ -1703,6 +1703,8 @@ impl NativePlaybackService {
                         enable_event_wait: true,
                         supervisor_lease_timeout_us:
                             sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+                        modifier_hold_timeout_us:
+                            sky_player::engine::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
                         #[cfg(feature = "tauri-test")]
                         test_spin_threshold_us: None,
                         #[cfg(feature = "tauri-test")]
@@ -1815,6 +1817,11 @@ impl NativePlaybackService {
                 active.stop_requested.store(true, Ordering::Release);
             }
         }
+
+        let supervisor_lifetime_guard = active
+            .player
+            .as_ref()
+            .map(|player| player.supervisor_lifetime_guard());
 
         // WinEvent is only a quick transition hint. The periodic exact
         // foreground poll remains active as a loss/reorder/message-loop
@@ -2030,6 +2037,9 @@ impl NativePlaybackService {
             ) {
                 PlaybackHandoffDecision::Retire(mut retirement) => {
                     active.worker_quiescent.store(true, Ordering::Release);
+                    if let Some(guard) = &supervisor_lifetime_guard {
+                        guard.disarm();
+                    }
                     if let Some(error) = join_error.take() {
                         retirement.publication = PlaybackTerminalPublication::Failed {
                             code: "native_worker_join_failed".into(),
@@ -3657,6 +3667,7 @@ mod preparation_cancellation_tests {
                     enable_waitable_timer: true,
                     enable_event_wait: true,
                     supervisor_lease_timeout_us: 0,
+                    modifier_hold_timeout_us: sky_player::engine::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
                     test_spin_threshold_us: Some(20_000),
                     test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
                 },

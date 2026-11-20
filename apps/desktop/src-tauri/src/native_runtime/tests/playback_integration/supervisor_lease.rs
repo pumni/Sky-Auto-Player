@@ -82,6 +82,7 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
                     enable_waitable_timer: true,
                     enable_event_wait: true,
                     supervisor_lease_timeout_us: 250_000,
+                    modifier_hold_timeout_us: sky_player::engine::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
                     test_spin_threshold_us: None,
                     test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
                 },
@@ -618,5 +619,478 @@ fn direct_native_player_keeps_the_qualified_supervisor_lease() {
     assert_eq!(
         sky_player::engine::DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
         3_000_000
+    );
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
+    use sky_player::adapter_support::{
+        ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
+    };
+    use sky_player::engine::{
+        BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions, NativeDispatchSession,
+        NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions, TestWaitPolicy,
+        TimingOptions, WaitOptions,
+    };
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: DispatchActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: Arc::<str>::from("monitor-unwind-test-down"),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: DispatchActionKind::Up,
+                scheduled_us: 10_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: Arc::<str>::from("monitor-unwind-test-up"),
+            },
+        ],
+        &sky_app_core::song::SKY_SCAN_CODES,
+    )
+    .expect("runtime test schedule");
+    let timing = TimingOptions {
+        game_fps: 60,
+        min_hold_us: 17_467,
+        min_release_gap_us: 17_467,
+        frame_us: 16_667,
+        frame_base_hold_us: 16_667,
+        timing_margin_us: 800,
+        strict_timing: false,
+        strict_down_completion_late_us: 2_000,
+        strict_up_completion_late_us: 2_000,
+        input_path_warn_us: 300,
+    };
+    let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
+    let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
+        &schedule,
+        qpc.frequency_hz(),
+        timing.min_hold_us,
+        timing.min_release_gap_us,
+        schedule.compile_memory.caller_retained_capacity_bytes,
+    )
+    .expect("prepare runtime test schedule before session admission");
+    let player = Arc::new(
+        NativeDispatchSession::new_with_power_endpoint(
+            NativeSessionOptions {
+                schedule,
+                #[cfg(feature = "tauri-test")]
+                startup_calibration_placement:
+                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
+                #[cfg(feature = "tauri-test")]
+                timing_observer_for_qualification: false,
+                #[cfg(feature = "tauri-test")]
+                modifier_key_state_query_for_test: None,
+                backend: BackendConfig::Mock {
+                    latency_base_us: 0,
+                    latency_per_key_us: 0,
+                    fault_script: FaultInjectionScript::none(),
+                },
+                profile: DispatchProfile::MockTest,
+                timing,
+                focus: FocusOptions {
+                    require_focus: false,
+                    focus_restore_grace_us: 100_000,
+                },
+                wait: WaitOptions {
+                    enable_waitable_timer: true,
+                    enable_event_wait: true,
+                    supervisor_lease_timeout_us: 10_000_000,
+                    modifier_hold_timeout_us: sky_player::engine::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
+                    test_spin_threshold_us: None,
+                    test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
+                },
+                telemetry: TelemetryOptions {
+                    mode: TelemetryMode::Ring,
+                    capacity: 64,
+                },
+                priority: PriorityOptions {
+                    mode: PriorityMode::Off,
+                },
+                instrument_key_profile: None,
+                startup_ordering_hook: None,
+                restore_race_hook: None,
+                focus_pause_hook: None,
+                timer_lifecycle_context: None,
+                prepared_packet_ambiguity_mask: None,
+                preflight_user_held_mask: None,
+            },
+            sky_player::engine::SystemPowerEndpoint::new()
+                .expect("isolated monitor test power endpoint"),
+        )
+        .expect("mock native session"),
+    );
+    player.arm(0).expect("arm mock native session");
+
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+    let active = attach_test_presentation(
+        NativeActivePlayback {
+            activity: ActivityCoordinator::default(),
+            session_id: "e".repeat(32),
+            prepared_id: "f".repeat(32),
+            song_id: "1".repeat(32),
+            title: "Monitor unwind test fixture".into(),
+            total_us: 10_000_000,
+            config: PlaybackConfigDto {
+                hold_frames: 1.0,
+                timing_margin_us: 800,
+                tempo_scale: 1.0,
+                fps: 60,
+                dry_run: false,
+            },
+            timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
+                .expect("runtime fixture timing policy"),
+            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
+                recommended_timing_margin_us: Some(800),
+                qualified: false,
+                source: "default_fallback".into(),
+            },
+            plan_fingerprint: "2".repeat(64),
+            physical: false,
+            activity_lease: Mutex::new(None),
+            target_hwnd: Some(0),
+            state: Mutex::new(PlaybackSessionState::Starting),
+            pending: Mutex::new(None),
+            player: Some(player.clone()),
+            terminal_result: Mutex::new(None),
+            power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
+            power_request: Mutex::new(None),
+            suspend_resume_registration: Mutex::new(None),
+            started_at: Instant::now(),
+            paused_since: Mutex::new(None),
+            paused_total: Mutex::new(Duration::ZERO),
+            stop_requested: AtomicBool::new(false),
+            dry_run_terminal_request: AtomicU8::new(DRY_RUN_TERMINAL_NONE),
+            done: AtomicBool::new(false),
+            worker_quiescent: AtomicBool::new(false),
+            release_verified: AtomicBool::new(false),
+            sequence: AtomicU64::new(0),
+            event_delivery_failure: Arc::new(AtomicBool::new(false)),
+            presentation: OnceLock::new(),
+        },
+        &events,
+        Arc::clone(&diagnostics_gate),
+        None,
+    );
+    let mut service = NativePlaybackService::new(ActivityCoordinator::default());
+    service.diagnostics_gate = diagnostics_gate;
+    *service.active.lock().expect("active playback slot") = Some(active.clone());
+
+    service.monitor_progress_test_hook = Some(Arc::new(move |_| {
+        panic!("simulated unexpected monitor thread unwind");
+    }));
+
+    let service = Arc::new(service);
+    let monitor_service = Arc::clone(&service);
+    let monitor_active = Arc::clone(&active);
+    let monitor_events = Arc::clone(&events);
+    let (activation_sender, activation_receiver) = mpsc::channel();
+    activation_sender
+        .send(super::PlaybackActivation::Started)
+        .expect("monitor activation receiver");
+
+    let monitor_thread = thread::spawn(move || {
+        monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+    });
+
+    let join_result = monitor_thread.join();
+    assert!(
+        join_result.is_err(),
+        "monitor thread must unwind from panic"
+    );
+
+    assert!(
+        player.join(Duration::from_secs(3)).expect("worker join"),
+        "worker must terminate after supervisor unwind"
+    );
+
+    let snapshot = player.snapshot();
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("supervisor_unwind_or_exit"),
+        "guard drop must latch supervisor_unwind_or_exit trigger reason"
+    );
+    assert_eq!(snapshot.active_count, 0, "no keys must remain held");
+    assert_eq!(
+        snapshot.final_release_obligation_mask, 0,
+        "all release obligations must be fully cleared"
+    );
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
+    use sky_player::adapter_support::{
+        ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
+    };
+    use sky_player::engine::{
+        BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions, NativeDispatchSession,
+        NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions, TestWaitPolicy,
+        TimingOptions, WaitOptions,
+    };
+
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 0,
+                kind: DispatchActionKind::Down,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: Arc::<str>::from("monitor-stop-test-down"),
+            },
+            KeyActionInput {
+                source_action_index: 1,
+                kind: DispatchActionKind::Up,
+                scheduled_us: 10_000_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: Arc::<str>::from("monitor-stop-test-up"),
+            },
+        ],
+        &sky_app_core::song::SKY_SCAN_CODES,
+    )
+    .expect("runtime test schedule");
+    let timing = TimingOptions {
+        game_fps: 60,
+        min_hold_us: 17_467,
+        min_release_gap_us: 17_467,
+        frame_us: 16_667,
+        frame_base_hold_us: 16_667,
+        timing_margin_us: 800,
+        strict_timing: false,
+        strict_down_completion_late_us: 2_000,
+        strict_up_completion_late_us: 2_000,
+        input_path_warn_us: 300,
+    };
+    let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
+    let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
+        &schedule,
+        qpc.frequency_hz(),
+        timing.min_hold_us,
+        timing.min_release_gap_us,
+        schedule.compile_memory.caller_retained_capacity_bytes,
+    )
+    .expect("prepare runtime test schedule before session admission");
+    let player = Arc::new(
+        NativeDispatchSession::new_with_power_endpoint(
+            NativeSessionOptions {
+                schedule,
+                #[cfg(feature = "tauri-test")]
+                startup_calibration_placement:
+                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
+                #[cfg(feature = "tauri-test")]
+                timing_observer_for_qualification: false,
+                #[cfg(feature = "tauri-test")]
+                modifier_key_state_query_for_test: None,
+                backend: BackendConfig::Mock {
+                    latency_base_us: 0,
+                    latency_per_key_us: 0,
+                    fault_script: FaultInjectionScript::none(),
+                },
+                profile: DispatchProfile::MockTest,
+                timing,
+                focus: FocusOptions {
+                    require_focus: false,
+                    focus_restore_grace_us: 100_000,
+                },
+                wait: WaitOptions {
+                    enable_waitable_timer: true,
+                    enable_event_wait: true,
+                    supervisor_lease_timeout_us: 10_000_000,
+                    modifier_hold_timeout_us: sky_player::engine::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
+                    test_spin_threshold_us: None,
+                    test_wait_policy: TestWaitPolicy::LegacyTestWideSpin,
+                },
+                telemetry: TelemetryOptions {
+                    mode: TelemetryMode::Ring,
+                    capacity: 64,
+                },
+                priority: PriorityOptions {
+                    mode: PriorityMode::Off,
+                },
+                instrument_key_profile: None,
+                startup_ordering_hook: None,
+                restore_race_hook: None,
+                focus_pause_hook: None,
+                timer_lifecycle_context: None,
+                prepared_packet_ambiguity_mask: None,
+                preflight_user_held_mask: None,
+            },
+            sky_player::engine::SystemPowerEndpoint::new()
+                .expect("isolated monitor test power endpoint"),
+        )
+        .expect("mock native session"),
+    );
+    player.arm(0).expect("arm mock native session");
+
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+    let session_id = "3".repeat(32);
+    let active = attach_test_presentation(
+        NativeActivePlayback {
+            activity: ActivityCoordinator::default(),
+            session_id: session_id.clone(),
+            prepared_id: "4".repeat(32),
+            song_id: "5".repeat(32),
+            title: "Monitor stop test fixture".into(),
+            total_us: 10_000_000,
+            config: PlaybackConfigDto {
+                hold_frames: 1.0,
+                timing_margin_us: 800,
+                tempo_scale: 1.0,
+                fps: 60,
+                dry_run: false,
+            },
+            timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
+                .expect("runtime fixture timing policy"),
+            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
+                recommended_timing_margin_us: Some(800),
+                qualified: false,
+                source: "default_fallback".into(),
+            },
+            plan_fingerprint: "6".repeat(64),
+            physical: false,
+            activity_lease: Mutex::new(None),
+            target_hwnd: Some(0),
+            state: Mutex::new(PlaybackSessionState::Starting),
+            pending: Mutex::new(None),
+            player: Some(player.clone()),
+            terminal_result: Mutex::new(None),
+            power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
+            power_request: Mutex::new(None),
+            suspend_resume_registration: Mutex::new(None),
+            started_at: Instant::now(),
+            paused_since: Mutex::new(None),
+            paused_total: Mutex::new(Duration::ZERO),
+            stop_requested: AtomicBool::new(false),
+            dry_run_terminal_request: AtomicU8::new(DRY_RUN_TERMINAL_NONE),
+            done: AtomicBool::new(false),
+            worker_quiescent: AtomicBool::new(false),
+            release_verified: AtomicBool::new(false),
+            sequence: AtomicU64::new(0),
+            event_delivery_failure: Arc::new(AtomicBool::new(false)),
+            presentation: OnceLock::new(),
+        },
+        &events,
+        Arc::clone(&diagnostics_gate),
+        None,
+    );
+    let mut service = NativePlaybackService::new(ActivityCoordinator::default());
+    service.diagnostics_gate = diagnostics_gate;
+    *service.active.lock().expect("active playback slot") = Some(active.clone());
+
+    let service = Arc::new(service);
+    let monitor_service = Arc::clone(&service);
+    let monitor_active = Arc::clone(&active);
+    let monitor_events = Arc::clone(&events);
+    let (activation_sender, activation_receiver) = mpsc::channel();
+    activation_sender
+        .send(super::PlaybackActivation::Started)
+        .expect("monitor activation receiver");
+
+    let monitor_thread = thread::spawn(move || {
+        monitor_service.monitor(monitor_active, monitor_events, activation_receiver);
+    });
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while player.snapshot().status != "playing" && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(5));
+    }
+
+    let ack = service
+        .command("playback.stop", session_id, events.clone())
+        .expect("stop command");
+    assert!(ack.accepted);
+
+    monitor_thread.join().expect("monitor thread clean join");
+
+    let snapshot = player.snapshot();
+    assert_eq!(
+        snapshot.terminal_trigger_reason.as_deref(),
+        Some("quit"),
+        "intentional stop must publish quit, not false supervisor_unwind_or_exit"
+    );
+    assert_eq!(snapshot.active_count, 0);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn native_monitor_activation_failure_does_not_arm_guard() {
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    let diagnostics_gate = Arc::new(DiagnosticsPublicationGate::default());
+    let active = attach_test_presentation(
+        NativeActivePlayback {
+            activity: ActivityCoordinator::default(),
+            session_id: "7".repeat(32),
+            prepared_id: "8".repeat(32),
+            song_id: "9".repeat(32),
+            title: "Activation failure test fixture".into(),
+            total_us: 10_000_000,
+            config: PlaybackConfigDto {
+                hold_frames: 1.0,
+                timing_margin_us: 800,
+                tempo_scale: 1.0,
+                fps: 60,
+                dry_run: false,
+            },
+            timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
+                .expect("runtime fixture timing policy"),
+            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
+                recommended_timing_margin_us: Some(800),
+                qualified: false,
+                source: "default_fallback".into(),
+            },
+            plan_fingerprint: "0".repeat(64),
+            physical: false,
+            activity_lease: Mutex::new(None),
+            target_hwnd: Some(0),
+            state: Mutex::new(PlaybackSessionState::Starting),
+            pending: Mutex::new(None),
+            player: None,
+            terminal_result: Mutex::new(None),
+            power_lifecycle: Arc::new(PowerLifecycleDiagnostics::default()),
+            power_request: Mutex::new(None),
+            suspend_resume_registration: Mutex::new(None),
+            started_at: Instant::now(),
+            paused_since: Mutex::new(None),
+            paused_total: Mutex::new(Duration::ZERO),
+            stop_requested: AtomicBool::new(false),
+            dry_run_terminal_request: AtomicU8::new(DRY_RUN_TERMINAL_NONE),
+            done: AtomicBool::new(false),
+            worker_quiescent: AtomicBool::new(false),
+            release_verified: AtomicBool::new(false),
+            sequence: AtomicU64::new(0),
+            event_delivery_failure: Arc::new(AtomicBool::new(false)),
+            presentation: OnceLock::new(),
+        },
+        &events,
+        Arc::clone(&diagnostics_gate),
+        None,
+    );
+    let mut service = NativePlaybackService::new(ActivityCoordinator::default());
+    service.diagnostics_gate = diagnostics_gate;
+    *service.active.lock().expect("active playback slot") = Some(active.clone());
+
+    let (activation_sender, activation_receiver) = mpsc::channel();
+    activation_sender
+        .send(super::PlaybackActivation::Failed(
+            "injected worker start failure".into(),
+        ))
+        .expect("activation failure send");
+
+    service.monitor(active, events, activation_receiver);
+
+    let status = service.status().expect("service status");
+    assert!(status.active.is_none());
+    let terminal = status.last_terminal.expect("terminal record");
+    assert_eq!(terminal.state, PlaybackSessionState::Failed);
+    assert_eq!(
+        terminal.failure_code.as_deref(),
+        Some("native_worker_start_failed")
     );
 }

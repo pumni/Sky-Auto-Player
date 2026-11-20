@@ -6,6 +6,12 @@ is [playback-engine.md](playback-engine.md); security rules are in
 [SECURITY.md](../SECURITY.md). Browser tests and PlanOnly runs are not native
 timing or gameplay evidence.
 
+Production dispatch executes pure **Control A** for all Down, Up, and mixed
+actions with `ProcessQosPolicy` pinned to **Default** and a frozen pre-spin
+window. Experimental B/C process QoS and runtime adaptive spin are not deployed.
+Physical SendInput tests require interactive foreground authorization; in
+unattended CI and automated runs, physical SendInput remains **NOT RUN**.
+
 ## Local Windows gates
 
 Run from the repository root. Record the exact command, exit code, test count,

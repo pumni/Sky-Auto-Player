@@ -24,11 +24,16 @@
     [ValidateSet(60, 120)]
     [int]$GameFps = 60,
     [int]$HolStallUs = 0,
-    [int]$HolCycles = 0
+    [int]$HolCycles = 0,
+    [ValidateSet('control-a', 'candidate-b-up-diagnostic')]
+    [string]$AdmissionVariant = 'control-a'
 )
 
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $false
+if ($AdmissionVariant -eq 'candidate-b-up-diagnostic') {
+    throw 'candidate-b-up-diagnostic has been retired following LAB4 evaluation: Candidate B-Up was rejected/unqualified for shipping'
+}
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
@@ -108,11 +113,15 @@ $profileBaseTree = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineTree }
 $profileBranch = if ($isDispatchCleanupM3) { $dispatchCleanupM3.CandidateLineageBranch } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.CandidateLineageBranch } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } else { 'refactor/scheduler-single-owner-20261112' }
 
 Add-Type -TypeDefinition @"
+using System;
 using System.Runtime.InteropServices;
 public static class NativeAcceptanceForegroundPermission {
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool AllowSetForegroundWindow(uint processId);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr GetForegroundWindow();
 }
 "@
 
@@ -677,6 +686,7 @@ try {
         sink_process_start_time_filetime = [long]$sink.process_start_time_filetime
         sink_process_image_path = $pwshExecutablePath
         foreground_permission_granted_to_sink = [bool]$foregroundPermissionGranted
+        admission_variant = $AdmissionVariant
     }
     if ($usesSessionQualificationContracts) {
         $runConfig['workload'] = $Workload
@@ -712,12 +722,41 @@ try {
     if ($harnessManifest -and $harnessManifest.guard_mode) {
         $harnessArgs += @('--guard-mode', [string]$harnessManifest.guard_mode)
     }
+    if ($AdmissionVariant -ne 'control-a') {
+        $harnessArgs += @('--admission-variant', $AdmissionVariant)
+    }
     if ($Scenario -eq 'focus-loss') {
         $harnessArgs += @('--focus-probe-ready', $probeReadyPath, '--focus-probe-events', $probeEventsPath, '--focus-probe-hwnd', ([long]$probe.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture), '--focus-restore-request', $focusRestoreRequestPath)
     }
     if ($harnessManifest -and (Get-Sha256 $HarnessManifestPath) -ne $harnessManifestHash) {
         throw 'immutable harness manifest changed after identity validation'
     }
+
+    # Signal the sink process to bring itself to the foreground via the existing ActivateRequestFile mechanism
+    if ($focusRestoreRequestPath) {
+        New-Item -ItemType File -Path $focusRestoreRequestPath -Force | Out-Null
+    }
+
+    # Bounded foreground handshake: ensure the exact ReceiveOnly sink window is in the foreground.
+    # Background processes on Windows 11 cannot unconditionally steal foreground focus.
+    # Verify GetForegroundWindow matches the sink HWND. If not, prompt the operator to click it.
+    $targetHwnd = [IntPtr][long]$sink.hwnd
+    $foregroundDeadline = (Get-Date).AddSeconds(15)
+    $foregroundConfirmed = $false
+    while ((Get-Date) -lt $foregroundDeadline) {
+        $fg = [NativeAcceptanceForegroundPermission]::GetForegroundWindow()
+        if ($fg -eq $targetHwnd) {
+            $foregroundConfirmed = $true
+            break
+        }
+        Write-Host "Waiting for ReceiveOnly Sink window (HWND: $targetHwnd) to acquire foreground. Please click it if needed..."
+        Start-Sleep -Milliseconds 500
+    }
+    if (-not $foregroundConfirmed) {
+        $lastFg = [NativeAcceptanceForegroundPermission]::GetForegroundWindow()
+        throw "Failed to bring ReceiveOnly sink (HWND: $targetHwnd) to foreground within 15 seconds (Current foreground HWND: $lastFg). Failing closed to ensure 0 physical sends."
+    }
+
     $captured = @(& $harness @harnessArgs 2>&1)
     $nativeExit = $LASTEXITCODE
     if ($harnessManifest -and (Get-Sha256 $harness) -ne $harnessManifest.binary_sha256) {
@@ -753,6 +792,9 @@ try {
     $expectedSampleSeconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
     if ($report.run_id -ne $runId -or $report.scenario -ne $Scenario -or $report.timing_margin_us -ne $TimingMarginUs -or $report.sample_seconds -ne $expectedSampleSeconds -or $report.game_fps -ne $GameFps) {
         throw 'native report identity does not match this invocation'
+    }
+    if ($report.admission_variant -ne $AdmissionVariant) {
+        throw "native report admission_variant ($($report.admission_variant)) does not match invocation ($AdmissionVariant)"
     }
     if ($report.status -eq 'PASS' -and ($report.details.calibration_placement -ne $CalibrationPlacement.ToLowerInvariant() -or [bool]$report.details.timing_observer_for_qualification -ne [bool]$TimingObserverForQualification)) {
         throw 'passing native report settings do not match this invocation'

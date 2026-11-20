@@ -43,6 +43,10 @@ pub(super) fn run(worker: &mut Worker<'_>) -> u8 {
 impl Worker<'_> {
     fn finalize(&mut self, worker_result: Result<(), Box<dyn Any + Send>>) -> u8 {
         let shared = self.shared;
+        shared.publication.worker_progress.store(
+            crate::engine::WorkerProgressState::Draining as u8,
+            std::sync::atomic::Ordering::Release,
+        );
         let core = &mut self.core;
         let resources = core
             .resources
@@ -88,6 +92,7 @@ impl Worker<'_> {
                 panic_requested: &shared.commands.panic_requested,
                 supervisor_expired: &shared.commands.supervisor_expired,
                 system_power: &shared.commands.system_power,
+                supervisor_expiry_reason_code: Some(&shared.commands.supervisor_expiry_reason_code),
             },
             publication: FinalizePublication {
                 metrics: &shared.publication.metrics,

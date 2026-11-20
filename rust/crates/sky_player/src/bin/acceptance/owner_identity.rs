@@ -92,6 +92,8 @@ pub(super) fn create_session(
     options: sky_player::engine::NativeSessionOptions,
     sink_hwnd: isize,
     scenario: Scenario,
+    _admission_variant: super::arguments::AdmissionVariantChoice,
+    _sink_verified_receive_only: bool,
 ) -> Result<(NativeDispatchSession, BindingEvidence), String> {
     let authority = retain_window_identity(sink_hwnd)?;
     let retained_identity = authority.identity().clone();

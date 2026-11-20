@@ -4,7 +4,9 @@ mod preflight;
 mod state;
 
 use super::ReleaseOwnerProof;
+use super::outcome::TerminalSendAttemptEvidence;
 use super::profile::MaterializedInstrumentKeyProfile;
+use smallvec::SmallVec;
 
 pub(super) type CleanupAttemptAdmission<'a> =
     dyn FnMut(u16, &ReleaseOwnerProof) -> Result<(), String> + 'a;
@@ -103,6 +105,15 @@ pub struct TrackedKeyState {
     /// Cumulative release-FSM send attempts for this worker-owned backend.
     /// This includes distinct resumable and terminal cleanup operations.
     pub release_attempts_total: u64,
+    /// Monotonic count of raw Up syscalls executed during terminal cleanup
+    /// across the worker's terminal lifetime (in-loop anomaly drain + finalizer).
+    pub(crate) terminal_raw_up_invocations: u8,
+    /// Monotonic count of background raw Up syscalls executed during terminal cleanup
+    /// across the worker's terminal lifetime.
+    pub(crate) terminal_background_raw_up_invocations: u8,
+    /// Cumulative send attempt evidence collected across terminal cleanup
+    /// invocations for this worker session.
+    pub(crate) cumulative_terminal_send_attempts: SmallVec<[TerminalSendAttemptEvidence; 4]>,
     pub last_error: Option<String>,
     pub keys_dropped: u64,
     pub chord_split_events: u64,
@@ -130,6 +141,8 @@ pub struct TrackedKeyState {
     pub(crate) preflight_physical_mask_probe: Option<PreflightPhysicalMaskProbe>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) modifier_key_state_query: Option<ModifierKeyStateQuery>,
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) force_modifier_inconclusive: bool,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) force_preflight_failure: Option<Arc<AtomicBool>>,
     #[cfg(any(test, feature = "test-support"))]

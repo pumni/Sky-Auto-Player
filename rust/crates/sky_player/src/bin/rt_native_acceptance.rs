@@ -39,6 +39,8 @@ use scenarios::{action, expected_physical_keys, scenario_plan_for_settings};
 use scenarios::{acceptance_min_hold_us, acceptance_min_release_gap_us, scenario_plan};
 use arguments::{CalibrationPlacement, ParsedCommand, RunArgs, Scenario, parse_args};
 #[cfg(test)]
+pub(crate) use arguments::AdmissionVariantChoice;
+#[cfg(test)]
 pub(super) use scenarios::noncanonical_profile_spec;
 use snapshot_report::{
     NativeCleanupEvidence, ambiguous_packet_cleanup_qualified,
@@ -94,10 +96,29 @@ const SINK_KIND: &str = "SkyAutoPlayer.NativeAcceptanceSink";
 const PROBE_KIND: &str = "SkyAutoPlayer.NativeAcceptanceFocusProbe";
 const SINK_TITLE: &str = "Sky Auto Player — Native Acceptance Sink";
 const PROBE_TITLE: &str = "Sky Auto Player — Native Acceptance Focus Probe";
+const TARGET_CLASS_RECEIVE_ONLY: &str = "project-owned-non-game-receive-only";
+const TARGET_CLASS_PROBE: &str = "project-owned-inert-focus-probe";
 const SCRIPT_MARKER: &str = "native_acceptance_sink.ps1";
 const INPUT_POLICY: &str = concat!("receives_only; benchmark must use ", "Send", "Input");
 const REQUIRED_IMAGE_BASENAME: &str = "pwsh.exe";
-#[derive(Debug, Deserialize, Clone, PartialEq, Eq)] struct ReadyRecord { schema_version: u32, run_id: String, role: String, sink_kind: String, pid: u32, hwnd: i64, title: String, process: String, input_policy: String, event_log_id: String, event_schema_version: u32, process_start_time_filetime: u64 }
+#[derive(Debug, Deserialize, Clone, PartialEq, Eq)]
+struct ReadyRecord {
+    schema_version: u32,
+    run_id: String,
+    role: String,
+    sink_kind: String,
+    target_class: String,
+    target_name: String,
+    game_target: bool,
+    pid: u32,
+    hwnd: i64,
+    title: String,
+    process: String,
+    input_policy: String,
+    event_log_id: String,
+    event_schema_version: u32,
+    process_start_time_filetime: u64,
+}
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)] struct EventRecord { schema_version: u32, run_id: String, role: String, event_log_id: String, sequence: u64, kind: String, scan_code: u16, extended: bool, virtual_key: i32, message: u32, observed_utc: String }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)] struct LogCursor { offset: u64, sequence: u64 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)] struct PhysicalExpectation { scan_code: u16, extended: bool }
@@ -115,12 +136,12 @@ struct AuthorizedTargets {
     probe: Option<ReadyRecord>,
 }
 fn usage() -> &'static str {
-    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--calibration-placement <baseline|candidate>] [--timing-observer-for-qualification] [--timing-margin-us <0..3000, step 100>] [--sample-seconds 15] [--game-fps <60|120>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
+    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--admission-variant <control-a|candidate-b-up-diagnostic>] [--calibration-placement <baseline|candidate>] [--timing-observer-for-qualification] [--timing-margin-us <0..3000, step 100>] [--sample-seconds 15] [--game-fps <60|120>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
 }
-fn protocol_expectation(role: &str) -> Result<(&'static str, &'static str, &'static str), String> {
+fn protocol_expectation(role: &str) -> Result<(&'static str, &'static str, &'static str, &'static str), String> {
     match role {
-        RECEIVE_ONLY_ROLE => Ok((SINK_KIND, SINK_TITLE, RECEIVE_ONLY_ROLE)),
-        PROBE_ROLE => Ok((PROBE_KIND, PROBE_TITLE, PROBE_ROLE)),
+        RECEIVE_ONLY_ROLE => Ok((SINK_KIND, SINK_TITLE, RECEIVE_ONLY_ROLE, TARGET_CLASS_RECEIVE_ONLY)),
+        PROBE_ROLE => Ok((PROBE_KIND, PROBE_TITLE, PROBE_ROLE, TARGET_CLASS_PROBE)),
         _ => Err(format!("unsupported ready-file role {role:?}")),
     }
 }
@@ -130,10 +151,18 @@ fn validate_ready_record(
     target_hwnd: isize,
     role: &str,
 ) -> Result<(), String> {
-    let (expected_kind, expected_title, expected_role) = protocol_expectation(role)?;
+    let (expected_kind, expected_title, expected_role, expected_class) = protocol_expectation(role)?;
     if record.schema_version != READY_SCHEMA_VERSION || record.event_schema_version != EVENT_SCHEMA_VERSION { return Err("ready-file schema/event schema version must be 3".into()); }
     if record.run_id != run_id { return Err("ready-file run_id does not match --run-id".into()); }
-    if record.role != expected_role || record.sink_kind != expected_kind || record.title != expected_title || record.process != SCRIPT_MARKER || record.input_policy != INPUT_POLICY {
+    if record.role != expected_role
+        || record.sink_kind != expected_kind
+        || record.title != expected_title
+        || record.target_class != expected_class
+        || record.target_name != expected_title
+        || record.game_target
+        || record.process != SCRIPT_MARKER
+        || record.input_policy != INPUT_POLICY
+    {
         return Err("ready-file protocol markers do not match the expected project-owned role".into());
     }
     let ready_hwnd = isize::try_from(record.hwnd).map_err(|_| "ready-file HWND is outside the isize range".to_string())?;
@@ -409,7 +438,18 @@ fn run_windows(args: RunArgs) -> i32 {
     }
     options.startup_ordering_hook = acceptance_hook.clone();
     let _hook_cleanup = lifecycle_lease_qualification::AcceptanceHookCleanup::new(acceptance_hook.clone());
-    let (session, mut owner_binding) = match owner_identity::create_session(options, sink_hwnd, args.scenario) { Ok(binding) => binding, Err(error) => inconclusive!(&error, json!({})) };
+    let sink_verified_receive_only = targets.sink.target_class == TARGET_CLASS_RECEIVE_ONLY
+        && !targets.sink.game_target;
+    let (session, mut owner_binding) = match owner_identity::create_session(
+        options,
+        sink_hwnd,
+        args.scenario,
+        args.admission_variant,
+        sink_verified_receive_only,
+    ) {
+        Ok(binding) => binding,
+        Err(error) => inconclusive!(&error, json!({})),
+    };
     let session = Arc::new(session);
     session.set_focus_hint(true);
     let fresh_sink = match validate_target_ready(&args.sink_ready, &args.run_id, sink_hwnd, RECEIVE_ONLY_ROLE) {

@@ -1,12 +1,12 @@
 use super::{
-    ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US, CalibrationPlacement,
+    ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US, AdmissionVariantChoice, CalibrationPlacement,
     DRAIN_DEADLINE_MS, DrainClock, DrainMode, DrainResult, EVENT_SCHEMA_VERSION, EventRecord,
     EventWindow, EventWindowReader, FULL_INSTRUMENT_MASK, INPUT_POLICY,
     MaterializedInstrumentKeyProfile, NativeCleanupEvidence, PHYSICAL_INSTRUMENT_SCAN_CODES,
     PRETERMINAL_DEADLINE_MS, PROBE_KIND, PROBE_TITLE, ParsedCommand, PhysicalExpectation,
     RELEASE_GAP_STRESS_CYCLES,
     PreTerminalResult, READY_SCHEMA_VERSION, RECEIVE_ONLY_ROLE, ReadyRecord, SCRIPT_MARKER,
-    SINK_KIND, SINK_TITLE, Scenario, Verdict, acceptance_min_hold_us,
+    SINK_KIND, SINK_TITLE, TARGET_CLASS_RECEIVE_ONLY, TARGET_CLASS_PROBE, Scenario, Verdict, acceptance_min_hold_us,
     acceptance_min_release_gap_us, cleanup_evidence_clean, drain_event_window_with,
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
     healthy_generation_qualification, production_visibility_qualification,
@@ -42,16 +42,19 @@ fn base_arguments(scenario: &str) -> Vec<String> {
 }
 
 fn ready(role: &str) -> ReadyRecord {
-    let (sink_kind, title) = if role == RECEIVE_ONLY_ROLE {
-        (SINK_KIND, SINK_TITLE)
+    let (sink_kind, title, target_class) = if role == RECEIVE_ONLY_ROLE {
+        (SINK_KIND, SINK_TITLE, TARGET_CLASS_RECEIVE_ONLY)
     } else {
-        (PROBE_KIND, PROBE_TITLE)
+        (PROBE_KIND, PROBE_TITLE, TARGET_CLASS_PROBE)
     };
     ReadyRecord {
         schema_version: READY_SCHEMA_VERSION,
         run_id: "test-run".into(),
         role: role.into(),
         sink_kind: sink_kind.into(),
+        target_class: target_class.into(),
+        target_name: title.into(),
+        game_target: false,
         pid: 7,
         hwnd: 0x42,
         title: title.into(),
@@ -883,6 +886,77 @@ fn acceptance_options_freeze_the_materialized_physical_timing_policy() {
     assert_eq!(options.timing.frame_us, ACCEPTANCE_FRAME_US);
     assert_eq!(options.timing.frame_base_hold_us, ACCEPTANCE_FRAME_US);
     assert_eq!(options.timing.timing_margin_us, ACCEPTANCE_TIMING_MARGIN_US);
+}
+
+#[test]
+fn validate_ready_record_rejects_game_target_or_class_mismatch() {
+    let valid = ready(RECEIVE_ONLY_ROLE);
+    assert!(validate_ready_record(&valid, "test-run", 0x42, RECEIVE_ONLY_ROLE).is_ok());
+
+    let mut game_target_true = valid.clone();
+    game_target_true.game_target = true;
+    assert!(validate_ready_record(&game_target_true, "test-run", 0x42, RECEIVE_ONLY_ROLE).is_err());
+
+    let mut wrong_class = valid.clone();
+    wrong_class.target_class = "game".into();
+    assert!(validate_ready_record(&wrong_class, "test-run", 0x42, RECEIVE_ONLY_ROLE).is_err());
+
+    let mut wrong_title = valid.clone();
+    wrong_title.target_name = "Wrong Name".into();
+    assert!(validate_ready_record(&wrong_title, "test-run", 0x42, RECEIVE_ONLY_ROLE).is_err());
+
+    let valid_probe = ready(super::PROBE_ROLE);
+    assert!(validate_ready_record(&valid_probe, "test-run", 0x42, super::PROBE_ROLE).is_ok());
+
+    let mut probe_with_sink_class = valid_probe.clone();
+    probe_with_sink_class.target_class = TARGET_CLASS_RECEIVE_ONLY.into();
+    assert!(validate_ready_record(&probe_with_sink_class, "test-run", 0x42, super::PROBE_ROLE).is_err());
+}
+
+#[test]
+fn parse_args_defaults_to_control_a_and_fails_closed_on_retired_candidate_b_up_diagnostic() {
+    let default_args = base_arguments("canonical-single");
+    let parsed = parse_args(default_args).expect("parse default args");
+    match parsed {
+        ParsedCommand::Run(run) => {
+            assert_eq!(run.admission_variant, AdmissionVariantChoice::ControlA);
+        }
+        ParsedCommand::Help => panic!("expected run command"),
+    }
+
+    let mut explicit_a_args = base_arguments("canonical-single");
+    explicit_a_args.extend(["--admission-variant".into(), "control-a".into()]);
+    let parsed_a = parse_args(explicit_a_args).expect("parse explicit control-a args");
+    match parsed_a {
+        ParsedCommand::Run(run) => {
+            assert_eq!(run.admission_variant, AdmissionVariantChoice::ControlA);
+        }
+        ParsedCommand::Help => panic!("expected run command"),
+    }
+
+    let mut candidate_b_args = base_arguments("canonical-single");
+    candidate_b_args.extend(["--admission-variant".into(), "candidate-b-up-diagnostic".into()]);
+    let err = parse_args(candidate_b_args).expect_err("candidate-b-up-diagnostic must fail closed");
+    assert!(
+        err.contains("candidate-b-up-diagnostic has been retired following LAB4 evaluation"),
+        "unexpected error message: {err}"
+    );
+}
+
+#[test]
+fn parse_args_rejects_invalid_or_duplicate_admission_variant() {
+    let mut invalid_args = base_arguments("canonical-single");
+    invalid_args.extend(["--admission-variant".into(), "variant-c".into()]);
+    assert!(parse_args(invalid_args).is_err());
+
+    let mut duplicate_args = base_arguments("canonical-single");
+    duplicate_args.extend([
+        "--admission-variant".into(),
+        "control-a".into(),
+        "--admission-variant".into(),
+        "control-a".into(),
+    ]);
+    assert!(parse_args(duplicate_args).is_err());
 }
 
 #[path = "benchmark_schedule_tests.rs"]

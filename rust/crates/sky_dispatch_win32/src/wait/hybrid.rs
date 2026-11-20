@@ -285,13 +285,14 @@ impl HybridWaiter {
                 continue;
             }
 
-            let Some(kernel_wait_us) =
-                (match classify_kernel_wait_us(qpc_clock, remaining_ticks, spin_threshold_ticks) {
+            let Some(kernel_wait_100ns) =
+                (match classify_kernel_wait_100ns(qpc_clock, remaining_ticks, spin_threshold_ticks)
+                {
                     Ok(value) => value,
                     Err(failure) => return WaitResult::failed(failure),
                 })
             else {
-                // A positive QPC remainder can floor to zero microseconds. A
+                // A positive QPC remainder can floor to zero 100-ns intervals. A
                 // zero delay cannot arm a waitable timer, so recheck QPC
                 // directly instead of entering an infinite multi-wait.
                 continue;
@@ -299,18 +300,16 @@ impl HybridWaiter {
             #[cfg(windows)]
             if self.event_wait_enabled {
                 if let Some(timer) = &self.timer {
-                    let timer_arm_delta = self
-                        .capture_timer_provenance
-                        .then(|| qpc_clock.duration_from_us(kernel_wait_us.get()).ok())
-                        .flatten();
+                    let kernel_wait_delta = DurationTicks::from_raw(
+                        remaining_ticks.saturating_sub(spin_threshold_ticks.as_u64()),
+                    );
                     let arm_qpc = self
                         .capture_timer_provenance
                         .then(|| qpc_clock.now().ok())
                         .flatten();
-                    let arm_target_qpc = arm_qpc.and_then(|arm| {
-                        timer_arm_delta.and_then(|delta| arm.checked_add_duration(delta).ok())
-                    });
-                    let arm_result = timer.arm_relative_us(kernel_wait_us);
+                    let arm_target_qpc =
+                        arm_qpc.and_then(|arm| arm.checked_add_duration(kernel_wait_delta).ok());
+                    let arm_result = timer.arm_relative_100ns(kernel_wait_100ns);
                     if let Err(error) = arm_result {
                         return WaitResult::failed(WaitFailure::TimerArm { win32_error: error });
                     }
@@ -372,11 +371,11 @@ impl HybridWaiter {
                     });
                 }
             } else if let Some(timer) = &self.timer
-            // `sleep_us` arms and waits once. Do not arm the same timer
+            // `sleep_100ns` arms and waits once. Do not arm the same timer
             // above and then re-arm it to a 1 ms cap: that turns every
             // long gap into a polling loop and distorts wake metrics.
             {
-                match timer.sleep_us(kernel_wait_us.get()) {
+                match timer.sleep_100ns(kernel_wait_100ns.get()) {
                     Ok(()) => {
                         #[cfg(any(test, feature = "test-support"))]
                         {
@@ -391,10 +390,9 @@ impl HybridWaiter {
             }
 
             // Portable/degraded fallback remains bounded so a command cannot
-            // be hidden behind a long song gap.
-            std::thread::sleep(std::time::Duration::from_micros(
-                kernel_wait_us.get().min(2_000),
-            ));
+            // be hidden behind a long song gap. (20_000 100ns intervals = 2 ms)
+            let sleep_nanos = kernel_wait_100ns.get().min(20_000).saturating_mul(100);
+            std::thread::sleep(std::time::Duration::from_nanos(sleep_nanos));
             let wake_ticks = match qpc_clock.now() {
                 Ok(ticks) => ticks,
                 Err(_) => {
@@ -499,6 +497,21 @@ impl HybridWaiter {
     }
 }
 
+fn classify_kernel_wait_100ns(
+    qpc_clock: QpcClock,
+    remaining_ticks: u64,
+    spin_threshold_ticks: DurationTicks,
+) -> Result<Option<NonZeroU64>, WaitFailure> {
+    let kernel_wait_ticks = remaining_ticks
+        .checked_sub(spin_threshold_ticks.as_u64())
+        .ok_or(WaitFailure::Clock)?;
+    let kernel_wait_100ns = qpc_clock
+        .duration_to_100ns(DurationTicks::from_raw(kernel_wait_ticks))
+        .map_err(|_| WaitFailure::Clock)?;
+    Ok(NonZeroU64::new(kernel_wait_100ns))
+}
+
+#[cfg(test)]
 fn classify_kernel_wait_us(
     qpc_clock: QpcClock,
     remaining_ticks: u64,
@@ -610,8 +623,8 @@ impl Default for HybridWaiter {
 #[cfg(test)]
 mod tests {
     use super::{
-        classify_interrupt_after_refresh, classify_kernel_wait_us, classify_wake,
-        percentile_from_sorted,
+        classify_interrupt_after_refresh, classify_kernel_wait_100ns, classify_kernel_wait_us,
+        classify_wake, percentile_from_sorted,
     };
     use crate::clock::{DurationTicks, QpcClock, QpcTicks};
     use crate::wait::WaitOutcome;
@@ -735,6 +748,52 @@ mod tests {
             classify_kernel_wait_us(clock, 105, spin_threshold),
             Ok(NonZeroU64::new(1)),
             "the boundary after the first nonzero microsecond remains stable"
+        );
+    }
+
+    #[test]
+    fn kernel_wait_100ns_floors_are_safe_at_10mhz() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
+        let spin_threshold = DurationTicks::from_raw(100);
+
+        assert_eq!(
+            classify_kernel_wait_100ns(clock, 100, spin_threshold),
+            Ok(None),
+            "exactly the spin threshold must not arm a timer"
+        );
+        for ticks in 1..=9 {
+            assert_eq!(
+                classify_kernel_wait_100ns(clock, 100 + ticks, spin_threshold),
+                Ok(NonZeroU64::new(ticks)),
+                "each individual 100ns interval is precision-armed"
+            );
+        }
+        assert_eq!(
+            classify_kernel_wait_100ns(clock, 110, spin_threshold),
+            Ok(NonZeroU64::new(10)),
+            "10 100-ns intervals (1 us) arms 10 units"
+        );
+    }
+
+    #[test]
+    fn kernel_wait_100ns_floors_are_safe_at_3579545hz() {
+        let clock = QpcClock::from_frequency_hz(NonZeroU64::new(3_579_545).unwrap());
+        let spin_threshold = DurationTicks::from_raw(100);
+
+        // At 3.579545 MHz, 1 tick is ~279.37 ns = ~2.79 100-ns intervals.
+        assert_eq!(
+            classify_kernel_wait_100ns(clock, 100, spin_threshold),
+            Ok(None)
+        );
+        assert_eq!(
+            classify_kernel_wait_100ns(clock, 101, spin_threshold),
+            Ok(NonZeroU64::new(2)),
+            "1 tick at 3.58MHz floors to 2 100-ns intervals"
+        );
+        assert_eq!(
+            classify_kernel_wait_100ns(clock, 102, spin_threshold),
+            Ok(NonZeroU64::new(5)),
+            "2 ticks at 3.58MHz floors to 5 100-ns intervals"
         );
     }
 }

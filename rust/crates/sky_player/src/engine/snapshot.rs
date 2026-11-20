@@ -64,6 +64,27 @@ impl EnginePollStatus {
     }
 }
 
+/// Four canonical operational progress states of the native dispatch worker.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum WorkerProgressState {
+    Starting = 1,
+    Active = 2,
+    Paused = 3,
+    Draining = 4,
+}
+
+impl WorkerProgressState {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Starting => "starting",
+            Self::Active => "active",
+            Self::Paused => "paused",
+            Self::Draining => "draining",
+        }
+    }
+}
+
 /// Tiny frequent-poll shape. It intentionally has no dependency on the
 /// shared metrics snapshot, diagnostic strings, or variable-sized collections.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -73,6 +94,7 @@ pub struct EnginePollSnapshot {
     pub is_finished: bool,
     pub is_paused: bool,
     pub status: EnginePollStatus,
+    pub worker_progress: WorkerProgressState,
 }
 
 /// Public snapshot shape returned by

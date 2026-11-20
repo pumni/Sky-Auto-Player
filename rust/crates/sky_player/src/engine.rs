@@ -19,18 +19,24 @@ pub use config::StartupCalibrationPlacement;
 pub use config::TestWaitPolicy;
 use config::WorkerConfig;
 pub use config::{
-    BackendConfig, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, FocusOptions, NativeSessionOptions,
-    PriorityOptions, TelemetryOptions, TimingOptions, WaitOptions,
+    BackendConfig, DEFAULT_MODIFIER_HOLD_TIMEOUT_US, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US,
+    FocusOptions, NativeSessionOptions, PriorityOptions, TelemetryOptions, TimingOptions,
+    WaitOptions,
 };
 #[cfg(any(test, feature = "test-support"))]
 pub use config::{RestoreRaceHook, StartupCheckpoint, StartupOrderingHook};
 #[cfg(feature = "real-input-acceptance")]
 pub use session::NativeAcceptanceLifecycleEvidence;
-pub use session::{NativeDispatchSession, OwnerIdentityPollResult, SystemPowerSnapshot};
+pub use session::{
+    NativeDispatchSession, OwnerIdentityPollResult, SupervisorLifetimeGuard, SystemPowerSnapshot,
+};
 pub use shared::SystemPowerEndpoint;
 #[cfg(any(test, feature = "test-support"))]
 pub use shared::SystemPowerState;
-pub use snapshot::{EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot};
+pub use snapshot::{
+    EnginePollSnapshot, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot,
+    WorkerProgressState,
+};
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use telemetry::TRACE_FLAG_DEFERRED;
 #[cfg(test)]

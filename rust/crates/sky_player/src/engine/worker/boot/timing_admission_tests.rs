@@ -12,6 +12,7 @@ fn options(enable_waitable_timer: bool, enable_event_wait: bool) -> WaitOptions 
         enable_waitable_timer,
         enable_event_wait,
         supervisor_lease_timeout_us: 0,
+        modifier_hold_timeout_us: crate::engine::config::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
         #[cfg(any(test, feature = "test-support"))]
         test_spin_threshold_us: None,
         #[cfg(any(test, feature = "test-support"))]
@@ -123,4 +124,17 @@ fn timing_admission_converts_materialized_g_with_ceil_in_odd_qpc_domain() {
             .duration_from_us(config.timing.frame_us)
             .expect("T conversion")
     );
+}
+
+#[test]
+fn timing_admission_rejects_zero_modifier_hold_timeout() {
+    let mut config = WorkerConfig::default();
+    config.wait.modifier_hold_timeout_us = 0;
+    let clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).expect("QPC frequency"));
+    let effective_policy = EffectiveRuntimePolicy::for_worker(&config);
+
+    match convert(&config, clock, &effective_policy) {
+        Ok(_) => panic!("zero timeout must be rejected"),
+        Err(err) => assert!(err.contains("modifier_hold_timeout_us must be greater than zero")),
+    }
 }

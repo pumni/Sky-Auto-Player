@@ -1,7 +1,7 @@
 use super::support::{candidate_at, target_at, test_action, wait_until_qpc};
 use crate::engine::test_support::ProductionDispatchTestHarness;
 use crate::engine::worker::StagedDispatchOutcome;
-use sky_dispatch_core::model::ActionKind;
+use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
@@ -341,4 +341,265 @@ fn first_up_only_anomaly_terminates_and_later_downs_are_never_attempted() {
     let finalized = harness.finalize_for_test();
     assert_eq!(finalized.outcome_code, crate::engine::OUTCOME_ERROR);
     assert_eq!(finalized.release_obligation_mask, 1);
+}
+
+fn chord_action(index: u32, kind: ActionKind, scheduled_us: u64, scans: &[u16]) -> KeyActionInput {
+    KeyActionInput {
+        source_action_index: index,
+        kind,
+        scheduled_us,
+        scan_codes: smallvec::SmallVec::from_slice(scans),
+        reason: "production dispatch regression".into(),
+    }
+}
+
+#[test]
+fn suspend_during_partial_progress_down_terminates_error_with_retained_suspend_context() {
+    let actions = [
+        chord_action(0, ActionKind::Down, 0, &[0x15, 0x16]),
+        chord_action(1, ActionKind::Up, 20_000, &[0x15, 0x16]),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    let power = Arc::clone(&harness.system_power);
+    let interrupt = harness.interrupt.clone();
+    let clock = harness.resources.clock;
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        // Suspend notification injected during sender call
+        power.notify(true, &interrupt);
+        let started = clock.now().expect("sender QPC");
+        let completed = Some(started);
+        SendTransactionOutcome {
+            status: SendTransactionStatus::PartialProgress,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: 1, // 2-key chord has mask 3, only key 0 (mask 1) confirmed
+                skipped_mask: 0,
+                first_inserted: 1,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: Some(1),
+                last_win32_error: Some(1),
+                started_ticks: Some(started),
+                completed_ticks: completed,
+                timing_error: None,
+            },
+        }
+    });
+
+    let candidate = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage Down")
+        .expect("Down candidate");
+    assert_eq!(candidate.packet_masks, PhysicalPacket::new(0, 3));
+
+    let dispatch_outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    assert_eq!(
+        dispatch_outcome,
+        StagedDispatchOutcome::Exit,
+        "partial progress Down exits immediately"
+    );
+    assert_eq!(
+        harness.runtime.attempted_dispatch_anomalies.total_count(),
+        1,
+        "exactly one ledger attempted anomaly recorded"
+    );
+    assert_eq!(
+        harness.local_metrics.precision_packet_attempts, 1,
+        "single raw physical sender attempt recorded"
+    );
+
+    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let outcome = harness.finalize_worker_for_test(false, &mut observation);
+    assert_eq!(
+        outcome,
+        crate::engine::OUTCOME_ERROR,
+        "partial progress with concurrent suspend must terminate with Error, not SystemSuspended"
+    );
+    assert_eq!(
+        observation.terminal_trigger_reason.as_deref(),
+        Some("sender_anomaly")
+    );
+    assert!(
+        observation
+            .terminal_error
+            .as_deref()
+            .is_some_and(|e| e.contains("musical playback terminated after first sender anomaly")),
+        "nonempty attempted anomaly terminal error: {:?}",
+        observation.terminal_error
+    );
+    assert!(
+        observation
+            .secondary_errors
+            .iter()
+            .any(|e| e.contains("total=1 omitted=0 retained=1")),
+        "secondary errors reports single total attempted anomaly: {:?}",
+        observation.secondary_errors
+    );
+    assert!(
+        observation
+            .secondary_errors
+            .iter()
+            .any(|e| e.contains("system suspend requested during worker execution")),
+        "suspend context retained in secondary errors: {:?}",
+        observation.secondary_errors
+    );
+    assert!(
+        observation
+            .secondary_errors
+            .iter()
+            .any(|e| e.contains("post-call attempted anomaly")),
+        "attempted anomaly details retained: {:?}",
+        observation.secondary_errors
+    );
+    assert_eq!(
+        cleanup.lock().expect("cleanup lock").as_slice(),
+        &[(vec![0x15, 0x16], true)],
+        "verified terminal release safely cleans up confirmed partial key"
+    );
+}
+
+#[test]
+fn suspend_before_send_or_zero_progress_terminates_system_suspended_without_attempted_down() {
+    let actions = [
+        chord_action(0, ActionKind::Down, 0, &[0x15, 0x16]),
+        chord_action(1, ActionKind::Up, 20_000, &[0x15, 0x16]),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    let packet_attempts = Arc::new(Mutex::new(0u32));
+    let attempts_clone = Arc::clone(&packet_attempts);
+    let power = Arc::clone(&harness.system_power);
+    let interrupt = harness.interrupt.clone();
+    harness
+        .resources
+        .backend
+        .set_packet_emitter(move |_packet| {
+            *attempts_clone.lock().unwrap() += 1;
+            // Suspend concurrent with zero-progress before syscall
+            power.notify(true, &interrupt);
+            SendTransactionOutcome {
+                status: SendTransactionStatus::ZeroProgress,
+                evidence: SendEvidence {
+                    requested_mask: 0,
+                    confirmed_mask: 0,
+                    skipped_mask: 0,
+                    first_inserted: 0,
+                    attempts: 0,
+                    zero_progress_retries: 0,
+                    retry_reason: PacketRetryReason::None,
+                    first_win32_error: None,
+                    last_win32_error: None,
+                    started_ticks: None,
+                    completed_ticks: None,
+                    timing_error: None,
+                },
+            }
+        });
+
+    let candidate = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage Down")
+        .expect("Down candidate");
+
+    let dispatch_outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    assert_eq!(dispatch_outcome, StagedDispatchOutcome::Exit);
+
+    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let outcome = harness.finalize_worker_for_test(false, &mut observation);
+    assert_eq!(
+        outcome,
+        crate::engine::OUTCOME_SYSTEM_SUSPENDED,
+        "zero-progress with concurrent suspend terminates with SystemSuspended"
+    );
+    assert_eq!(
+        observation.terminal_trigger_reason.as_deref(),
+        Some("system_suspend")
+    );
+    assert_eq!(observation.terminal_error, None);
+    assert_eq!(
+        *packet_attempts.lock().unwrap(),
+        1,
+        "emitter was called once and reported attempts=0"
+    );
+}
+
+#[test]
+fn healthy_send_with_suspend_control_case_terminates_system_suspended() {
+    let actions = [
+        chord_action(0, ActionKind::Down, 0, &[0x15, 0x16]),
+        chord_action(1, ActionKind::Up, 20_000, &[0x15, 0x16]),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    let power = Arc::clone(&harness.system_power);
+    let interrupt = harness.interrupt.clone();
+    let clock = harness.resources.clock;
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        // Healthy send with suspend notification injected during emission
+        power.notify(true, &interrupt);
+        let started = clock.now().expect("sender QPC");
+        let completed = Some(started);
+        SendTransactionOutcome {
+            status: SendTransactionStatus::Complete,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: packet.up_mask | packet.down_mask,
+                skipped_mask: 0,
+                first_inserted: packet.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(started),
+                completed_ticks: completed,
+                timing_error: None,
+            },
+        }
+    });
+
+    let candidate = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage Down")
+        .expect("Down candidate");
+
+    let dispatch_outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    assert_eq!(dispatch_outcome, StagedDispatchOutcome::Exit);
+
+    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
+    let outcome = harness.finalize_worker_for_test(false, &mut observation);
+    assert_eq!(
+        outcome,
+        crate::engine::OUTCOME_SYSTEM_SUSPENDED,
+        "healthy send with concurrent suspend terminates with clean SystemSuspended"
+    );
+    assert_eq!(
+        observation.terminal_trigger_reason.as_deref(),
+        Some("system_suspend")
+    );
+    assert_eq!(observation.terminal_error, None);
 }

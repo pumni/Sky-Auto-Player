@@ -664,3 +664,260 @@ fn prepared_up_only_remains_release_eligible_when_late() {
     assert_eq!(outcome.status, SendTransactionStatus::Complete);
     assert_eq!(calls.load(Ordering::Relaxed), 1);
 }
+
+#[test]
+fn up_only_raw_complete_post_send_qpc_failure_is_probe_only_without_phantom_up() {
+    let raw_up_calls = Arc::new(AtomicUsize::new(0));
+    let raw_up_calls_emitter = Arc::clone(&raw_up_calls);
+    let packet = PhysicalPacket::new(0b01, 0);
+    let prepared = super::super::packet::PreparedPhysicalPacket::try_new(packet)
+        .expect("valid Up-only packet");
+
+    let mut state = TrackedKeyState::with_packet_emitter(move |sent| {
+        raw_up_calls_emitter.fetch_add(1, Ordering::AcqRel);
+        SendTransactionOutcome {
+            status: SendTransactionStatus::ClockFailureAfterSend,
+            evidence: SendEvidence {
+                requested_mask: sent.up_mask | sent.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: sent.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(crate::clock::QpcTicks::from_raw(100)),
+                completed_ticks: None,
+                timing_error: Some(crate::clock::QpcError::CounterUnavailable),
+            },
+        }
+    });
+    state.active_mask = packet.up_mask;
+
+    let cleanup_up_calls = Arc::new(AtomicUsize::new(0));
+    let cleanup_up_calls_emitter = Arc::clone(&cleanup_up_calls);
+    state.set_terminal_up_emitter_for_test(move |_| {
+        cleanup_up_calls_emitter.fetch_add(1, Ordering::AcqRel);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: 1,
+            inserted: 1,
+            started_ticks: None,
+            completed_ticks: None,
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    state.set_probe(|_, _| super::super::physical::InstrumentPhysicalState::AllUp);
+
+    let outcome = state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&prepared);
+
+    assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
+    assert_eq!(raw_up_calls.load(Ordering::Acquire), 1);
+    assert_eq!(state.needs_probe_mask & packet.up_mask, packet.up_mask);
+    assert_eq!(state.failed_release_mask & packet.up_mask, 0);
+    assert_eq!(state.active_mask & packet.up_mask, 0);
+    assert_eq!(state.needs_up_mask() & packet.up_mask, 0);
+    assert_eq!(state.release_obligation_mask(), packet.up_mask);
+    assert_eq!(
+        state.timing_error,
+        Some(crate::clock::QpcError::CounterUnavailable)
+    );
+
+    // Verified AllUp probe clears probe obligation without any duplicate raw Up
+    let cleanup = state.release_terminal_tracked_scope_for_test(0);
+    assert!(cleanup.release_outcome.released_successfully);
+    assert_eq!(
+        cleanup_up_calls.load(Ordering::Acquire),
+        0,
+        "raw-complete Up must not perform duplicate raw Up during cleanup"
+    );
+    assert_eq!(cleanup.release_outcome.attempts, 0);
+    assert_eq!(state.release_obligation_mask(), 0);
+    assert_eq!(state.needs_probe_mask, 0);
+    assert_eq!(state.failed_release_mask, 0);
+}
+
+#[test]
+fn mixed_raw_complete_post_send_qpc_failure_probe_only_up_and_raw_safety_down() {
+    let packet = PhysicalPacket::new(0b01, 0b10);
+    let prepared =
+        super::super::packet::PreparedPhysicalPacket::try_new(packet).expect("valid Mixed packet");
+
+    let mut state = TrackedKeyState::with_packet_emitter(move |sent| SendTransactionOutcome {
+        status: SendTransactionStatus::ClockFailureAfterSend,
+        evidence: SendEvidence {
+            requested_mask: sent.up_mask | sent.down_mask,
+            confirmed_mask: 0,
+            skipped_mask: 0,
+            first_inserted: sent.event_count(),
+            attempts: 1,
+            zero_progress_retries: 0,
+            retry_reason: PacketRetryReason::None,
+            first_win32_error: None,
+            last_win32_error: None,
+            started_ticks: Some(crate::clock::QpcTicks::from_raw(100)),
+            completed_ticks: None,
+            timing_error: Some(crate::clock::QpcError::CounterUnavailable),
+        },
+    });
+    state.active_mask = packet.up_mask;
+
+    let terminal_up_packets = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let captured_terminal = Arc::clone(&terminal_up_packets);
+    state.set_terminal_up_emitter_for_test(move |sent| {
+        captured_terminal
+            .lock()
+            .expect("terminal up capture")
+            .push(sent);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: sent.event_count(),
+            inserted: sent.event_count(),
+            started_ticks: None,
+            completed_ticks: None,
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    state.set_probe(|_, _| super::super::physical::InstrumentPhysicalState::AllUp);
+
+    let outcome = state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&prepared);
+
+    assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
+    assert_eq!(state.needs_probe_mask & packet.up_mask, packet.up_mask);
+    assert_eq!(state.failed_release_mask & packet.up_mask, 0);
+    assert_eq!(
+        state.possibly_active_mask & packet.down_mask,
+        packet.down_mask
+    );
+    assert_eq!(state.needs_up_mask(), packet.down_mask);
+    assert_eq!(
+        state.release_obligation_mask(),
+        packet.up_mask | packet.down_mask
+    );
+
+    let cleanup = state.release_terminal_tracked_scope_for_test(0);
+    assert!(cleanup.release_outcome.released_successfully);
+    let sent_ups = terminal_up_packets.lock().expect("terminal up capture");
+    assert_eq!(
+        *sent_ups,
+        vec![PhysicalPacket::new(packet.down_mask, 0)],
+        "only the new Down must receive physical raw Up; old Up was probe-only"
+    );
+    assert_eq!(state.release_obligation_mask(), 0);
+}
+
+#[test]
+fn raw_complete_post_send_qpc_failure_fails_closed_on_held_inconclusive_or_partial() {
+    // 1. Held probe fails closed
+    {
+        let packet = PhysicalPacket::new(0b01, 0);
+        let prepared = super::super::packet::PreparedPhysicalPacket::try_new(packet)
+            .expect("valid Up-only packet");
+        let mut state = TrackedKeyState::with_packet_emitter(move |sent| SendTransactionOutcome {
+            status: SendTransactionStatus::ClockFailureAfterSend,
+            evidence: SendEvidence {
+                requested_mask: sent.up_mask | sent.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: sent.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(crate::clock::QpcTicks::from_raw(100)),
+                completed_ticks: None,
+                timing_error: Some(crate::clock::QpcError::CounterUnavailable),
+            },
+        });
+        state.active_mask = packet.up_mask;
+        state.set_probe(|_, _| {
+            super::super::physical::InstrumentPhysicalState::Held(smallvec::smallvec![0x15])
+        });
+
+        let outcome =
+            state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&prepared);
+        assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
+        assert_eq!(state.needs_probe_mask, packet.up_mask);
+
+        let cleanup = state.release_terminal_tracked_scope_for_test(0);
+        assert!(!cleanup.release_outcome.released_successfully);
+        assert_eq!(cleanup.release_outcome.stuck_mask, packet.up_mask);
+        assert_eq!(state.release_obligation_mask(), packet.up_mask);
+    }
+
+    // 2. Inconclusive probe fails closed
+    {
+        let packet = PhysicalPacket::new(0b01, 0);
+        let prepared = super::super::packet::PreparedPhysicalPacket::try_new(packet)
+            .expect("valid Up-only packet");
+        let mut state = TrackedKeyState::with_packet_emitter(move |sent| SendTransactionOutcome {
+            status: SendTransactionStatus::ClockFailureAfterSend,
+            evidence: SendEvidence {
+                requested_mask: sent.up_mask | sent.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: sent.event_count(),
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(crate::clock::QpcTicks::from_raw(100)),
+                completed_ticks: None,
+                timing_error: Some(crate::clock::QpcError::CounterUnavailable),
+            },
+        });
+        state.active_mask = packet.up_mask;
+        state.set_probe(|_, _| super::super::physical::InstrumentPhysicalState::Inconclusive);
+
+        let outcome =
+            state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&prepared);
+        assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
+
+        let cleanup = state.release_terminal_tracked_scope_for_test(0);
+        assert!(!cleanup.release_outcome.released_successfully);
+        assert!(cleanup.release_outcome.verification_inconclusive);
+        assert_eq!(state.release_obligation_mask(), packet.up_mask);
+    }
+
+    // 3. Partial insertion retains conservative failed-release debt
+    {
+        let packet = PhysicalPacket::new(0b01, 0b10);
+        let prepared = super::super::packet::PreparedPhysicalPacket::try_new(packet)
+            .expect("valid Mixed packet");
+        let mut state = TrackedKeyState::with_packet_emitter(move |sent| SendTransactionOutcome {
+            status: SendTransactionStatus::ClockFailureAfterSend,
+            evidence: SendEvidence {
+                requested_mask: sent.up_mask | sent.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 1, // partial! (1 of 2)
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::None,
+                first_win32_error: None,
+                last_win32_error: None,
+                started_ticks: Some(crate::clock::QpcTicks::from_raw(100)),
+                completed_ticks: None,
+                timing_error: Some(crate::clock::QpcError::CounterUnavailable),
+            },
+        });
+        state.active_mask = packet.up_mask;
+
+        let outcome =
+            state.send_prepared_physical_packet_at_final_boundary_deferred_commit(&prepared);
+        assert_eq!(outcome.status, SendTransactionStatus::ClockFailureAfterSend);
+        // Partial insertion cannot prove complete raw transport; Up must retain failed-release debt
+        assert_eq!(state.failed_release_mask & packet.up_mask, packet.up_mask);
+        assert_eq!(
+            state.possibly_active_mask & packet.down_mask,
+            packet.down_mask
+        );
+        assert_eq!(
+            state.release_obligation_mask(),
+            packet.up_mask | packet.down_mask
+        );
+    }
+}
