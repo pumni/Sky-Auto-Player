@@ -1,5 +1,4 @@
-use super::support::{ProductionDispatchTestHarness, wait_until_qpc};
-use sky_dispatch_core::executor::DispatchTimingWindow;
+use super::support::ProductionDispatchTestHarness;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::{DurationTicks, QpcTicks};
 
@@ -78,24 +77,79 @@ pub(super) fn elapsed_us(
         .expect("trace duration converts to microseconds")
 }
 
+fn wait_for_deadline(
+    harness: &mut ProductionDispatchTestHarness,
+    deadline_qpc: QpcTicks,
+) -> super::super::WaitBoundary {
+    super::super::wait_for_next_boundary(super::super::WaitBoundaryInput {
+        deadline: super::super::WaitDeadline {
+            physical_target_qpc: Some(deadline_qpc),
+            spin_threshold_ticks: DurationTicks::ZERO,
+            qpc_clock: harness.resources.clock,
+        },
+        signals: super::super::WaitSignals {
+            waiter: &harness.resources.waiter,
+            interrupt: &harness.interrupt,
+        },
+        mutable: super::super::WaitMutable {
+            local_metrics: &mut harness.local_metrics,
+            terminal_error: &mut harness.runtime.terminal_error,
+        },
+    })
+}
+
+fn up_only_send_action(
+    action: Option<super::super::SchedulerAction>,
+) -> super::super::SchedulerAction {
+    let Some(action @ super::super::SchedulerAction::Send { .. }) = action else {
+        panic!("scheduler must stage an Up-only packet");
+    };
+    assert!(matches!(
+        action,
+        super::super::SchedulerAction::Send {
+            up_mask: 1,
+            down_chord: None,
+            ..
+        }
+    ));
+    action
+}
+
+fn stage_scheduler_action(
+    harness: &mut ProductionDispatchTestHarness,
+    action: super::super::SchedulerAction,
+) -> crate::engine::worker::StagedCandidate {
+    super::super::stage_scheduler_send_candidate(
+        action,
+        super::super::SchedulerStageAdmission {
+            target: &harness.target,
+            capture_up_slot_timings: false,
+        },
+        &mut harness.resources,
+        &mut harness.runtime,
+    )
+    .expect("stage scheduler-selected packet")
+    .expect("scheduler candidate is stageable")
+}
+
 #[test]
-fn pre_wait_up_prefix_uses_its_own_floor_and_keeps_down_pending() {
+fn scheduler_selects_independent_up_before_down_and_replans_after_interrupt() {
     let actions = [
         timing_action(810, ActionKind::Down, 0),
-        timing_action(811, ActionKind::Up, 20_000),
+        timing_action(811, ActionKind::Up, 300_000),
         KeyActionInput {
             source_action_index: 812,
             kind: ActionKind::Down,
-            scheduled_us: 100_000,
+            scheduled_us: 600_000,
             scan_codes: smallvec::smallvec![0x16],
-            reason: "pre-wait independent Down".into(),
+            reason: "later scheduler Down".into(),
         },
         KeyActionInput {
             source_action_index: 813,
             kind: ActionKind::Up,
-            scheduled_us: 120_000,
+            scheduled_us: 700_000,
             scan_codes: smallvec::smallvec![0x16],
-            reason: "pre-wait independent Up".into(),
+            reason: "later scheduler Up".into(),
         },
     ];
     let (mut harness, packets, epoch) = timing_harness_without_focus(&actions, &[0, 0]);
@@ -114,67 +168,101 @@ fn pre_wait_up_prefix_uses_its_own_floor_and_keeps_down_pending() {
         super::super::StagedDispatchOutcome::Dispatched
     );
 
-    let up_target = epoch
+    let now = harness.qpc_now_for_test().expect("pre-wait QPC");
+    let up_authored_target = epoch
         .checked_add_duration(DurationTicks::from_raw(
             harness
-                .qpc_duration_from_us_for_test(20_000)
+                .qpc_duration_from_us_for_test(300_000)
                 .expect("Up target conversion")
                 .as_u64(),
         ))
         .expect("Up target QPC");
-    let down_floor = epoch
+    let down_authored_target = epoch
         .checked_add_duration(DurationTicks::from_raw(
             harness
-                .qpc_duration_from_us_for_test(100_000)
+                .qpc_duration_from_us_for_test(600_000)
                 .expect("Down floor conversion")
                 .as_u64(),
         ))
-        .expect("Down floor QPC");
-    let mixed = harness
-        .stage_candidate_with_scheduler_window_for_test(
-            1,
-            harness.current_executor_chord_for_test(),
-            DispatchTimingWindow {
-                authored_target_qpc: up_target,
-                musical_up_not_before_qpc: up_target,
-                down_not_before_qpc: down_floor,
-                packet_not_before_qpc: down_floor,
-                hold_floor_mask: 0,
-                release_floor_mask: 0,
-            },
-        )
-        .expect("stage Mixed scheduler candidate")
-        .expect("Mixed candidate");
-    let now = harness.qpc_now_for_test().expect("pre-wait QPC");
-    assert!(now < down_floor);
-    let controls = super::super::FinalControlSignals {
-        quit_requested: &harness.quit_requested,
-        skip_requested: &harness.skip_requested,
-        panic_requested: &harness.panic_requested,
-        desired_pause: &harness.desired_pause,
-        supervisor_expired: &harness.supervisor_expired,
-        system_power: Some(&harness.system_power),
-    };
-    let mut mixed = mixed;
-    let up_deadline = super::super::maybe_select_earlier_up_prefix_before_wait(
-        &mut mixed,
-        now,
-        &harness.target,
-        harness.config.focus.require_focus,
-        &harness.focus_active,
-        controls,
-    )
-    .expect("pre-wait Up-prefix selection")
-    .expect("Up has an earlier independent deadline");
-    assert!(mixed.up_prefix_selected);
-    assert!(up_deadline >= up_target);
-    assert!(up_deadline < down_floor);
+        .expect("Down target QPC");
+    assert!(now < up_authored_target);
 
-    wait_until_qpc(&harness, up_deadline);
-    let send_start = harness.qpc_now_for_test().expect("Up-prefix sender QPC");
+    let (action, up_deadline, action_to_stage) =
+        super::super::evaluate_scheduler_action_for_staging(
+            &harness.resources.scheduler,
+            now,
+            harness.resources.playback.epoch,
+        )
+        .expect("production scheduler evaluation before Up deadline");
+    assert!(matches!(
+        action,
+        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == up_deadline
+    ));
+    assert!(up_deadline >= up_authored_target);
+    assert!(up_deadline < down_authored_target);
+    let first_candidate =
+        stage_scheduler_action(&mut harness, up_only_send_action(action_to_stage));
+    assert_eq!(
+        first_candidate.packet_masks,
+        sky_dispatch_win32::input::PhysicalPacket::new(1, 0)
+    );
+    assert_eq!(
+        first_candidate.timing_window.packet_not_before_qpc,
+        up_deadline
+    );
+    assert_eq!(
+        harness.pre_wait_candidate_admission_for_test(&first_candidate),
+        super::super::StagedDispatchOutcome::Dispatched
+    );
+
+    // Exercise the real interrupt event and production wait boundary. The
+    // worker drops this candidate and re-evaluates the scheduler on wake.
+    harness.interrupt.try_take();
+    assert!(harness.interrupt.signal());
+    let interrupted = wait_for_deadline(&mut harness, up_deadline);
+    assert!(matches!(
+        interrupted,
+        super::super::WaitBoundary::Interrupted(..)
+    ));
+    assert_eq!(harness.local_metrics.wait_interrupted_count, 1);
+    harness.interrupt.try_take();
+    drop(first_candidate);
+    assert_eq!(
+        packets.lock().expect("packet capture").len(),
+        1,
+        "an interrupt before the Up floor must not send the Up"
+    );
+
+    let replanned_now = harness.qpc_now_for_test().expect("QPC after interrupt");
+    assert!(replanned_now < up_deadline);
+    let (replanned_action, replanned_deadline, replanned_to_stage) =
+        super::super::evaluate_scheduler_action_for_staging(
+            &harness.resources.scheduler,
+            replanned_now,
+            harness.resources.playback.epoch,
+        )
+        .expect("scheduler re-evaluation after interrupt");
+    assert!(matches!(
+        replanned_action,
+        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == replanned_deadline
+    ));
+    assert_eq!(replanned_deadline, up_deadline);
+    let replanned_candidate =
+        stage_scheduler_action(&mut harness, up_only_send_action(replanned_to_stage));
+    assert_eq!(
+        harness.pre_wait_candidate_admission_for_test(&replanned_candidate),
+        super::super::StagedDispatchOutcome::Dispatched
+    );
+    let due = wait_for_deadline(&mut harness, replanned_deadline);
+    assert!(matches!(
+        due,
+        super::super::WaitBoundary::Due { target_qpc, .. } if target_qpc == replanned_deadline
+    ));
+    let send_start = harness.qpc_now_for_test().expect("Up-only sender QPC");
+    assert!(send_start >= replanned_deadline);
     harness.set_mock_sender_start_qpc_for_test(send_start);
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(mixed, false),
+        harness.dispatch_staged_candidate_for_test(replanned_candidate, false),
         super::super::StagedDispatchOutcome::Dispatched
     );
     let packets = packets.lock().expect("packet capture");
@@ -187,7 +275,7 @@ fn pre_wait_up_prefix_uses_its_own_floor_and_keeps_down_pending() {
         packets[1]
             .1
             .started_ticks
-            .is_some_and(|started| started >= up_deadline)
+            .is_some_and(|started| started >= replanned_deadline)
     );
     assert_eq!(
         harness

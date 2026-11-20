@@ -1143,7 +1143,6 @@ fn mixed_packet_with_final_modifier_rejection_replans_as_up_only() {
         harness.dispatch_staged_candidate_for_test(first, false),
         StagedDispatchOutcome::Dispatched
     ));
-
     let mixed_target = epoch
         .checked_add_duration(DurationTicks::from_raw(
             qpc_offset(&harness, 20_000).as_u64(),
@@ -1278,6 +1277,16 @@ fn terminal_control_races_at_final_gate_do_not_attempt_or_advance_down_onset() {
 
 #[test]
 fn terminal_control_races_at_final_gate_do_not_attempt_up_only() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
     #[derive(Clone, Copy)]
     enum Race {
         Quit,
@@ -1829,6 +1838,10 @@ fn post_focus_race_hook_invalidates_target_mixed_fails_closed_without_down() {
         harness.dispatch_staged_candidate_for_test(first, false),
         StagedDispatchOutcome::Dispatched
     ));
+    // Keep this case focused on generation revalidation. Separate focus-required
+    // target races cover fresh HWND/PID admission; the shared test foreground
+    // override must not make the target-generation assertion scheduling-sensitive.
+    harness.config.focus.require_focus = false;
 
     let mixed_target = epoch
         .checked_add_duration(DurationTicks::from_raw(

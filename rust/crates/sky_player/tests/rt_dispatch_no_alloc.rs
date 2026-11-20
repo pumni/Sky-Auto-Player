@@ -376,6 +376,83 @@ fn production_staged_worker_mixed_to_up_prefix_no_alloc() {
 }
 
 #[test]
+fn production_staged_worker_mixed_up_down_packet_no_alloc() {
+    struct ForegroundOverrideReset;
+
+    impl Drop for ForegroundOverrideReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+        }
+    }
+
+    let _lock = TEST_LOCK.lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
+    let clock = clock();
+    let actions = [
+        action(0, ActionKind::Down, 0, &[0x15]),
+        action(1, ActionKind::Up, 20_000, &[0x15]),
+        action(2, ActionKind::Down, 20_000, &[0x16]),
+        action(3, ActionKind::Up, 40_000, &[0x16]),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    harness.configure_focus_owner_for_test(1, 101);
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0, 0]);
+    harness
+        .attach_executor_for_test()
+        .expect("executor invariants");
+    let epoch = reanchor_in_the_past(&mut harness, clock);
+    let down_now = clock.now().expect("initial Down QPC");
+    let down_chord = harness.current_executor_chord_for_test();
+    let down_outcome = stage_and_dispatch(&mut harness, epoch, down_now, 0, down_chord);
+    assert!(matches!(down_outcome, StagedDispatchOutcome::Dispatched));
+
+    let authored_target = QpcTicks::from_raw(
+        epoch
+            .as_u64()
+            .checked_add(qpc_duration(clock, 20_000))
+            .expect("Mixed authored target"),
+    );
+    let down_completion = packets
+        .lock()
+        .expect("Down packet capture")
+        .first()
+        .and_then(|(_, evidence)| evidence.completed_ticks)
+        .expect("Down completion QPC");
+    let hold_floor = QpcTicks::from_raw(
+        down_completion
+            .as_u64()
+            .checked_add(qpc_duration(clock, 17_167))
+            .expect("Mixed hold floor"),
+    );
+    wait_until(authored_target.max(hold_floor));
+
+    let mixed_now = clock.now().expect("Mixed pre-call QPC");
+    let mixed_chord = harness.current_executor_chord_for_test();
+    enable_counting();
+    let mixed_outcome = stage_and_dispatch(&mut harness, epoch, mixed_now, 1, mixed_chord);
+    let allocations = disable_counting();
+
+    assert_eq!(allocations, 0, "healthy full Mixed packet allocated");
+    assert!(matches!(mixed_outcome, StagedDispatchOutcome::Dispatched));
+    let packets = packets.lock().expect("packet capture");
+    assert_eq!(packets.len(), 2);
+    assert_eq!(packets[1].0, PhysicalPacket::new(1, 2));
+    assert_eq!(packets[1].1.attempts, 1);
+    drop(packets);
+    assert!(
+        harness.current_executor_chord_for_test().is_none(),
+        "full Mixed commit must consume the Down chord"
+    );
+    assert_eq!(
+        harness.release_obligation_mask_for_test(),
+        2,
+        "Up A must release while Down B creates its physical release obligation"
+    );
+    assert_eq!(harness.in_flight_mask_for_test(), 0);
+}
+
+#[test]
 fn lifecycle_resume_barrier_g_minus_one_waits_without_allocating_or_sending() {
     let _lock = TEST_LOCK.lock();
     use sky_dispatch_core::executor::DispatchDecision;

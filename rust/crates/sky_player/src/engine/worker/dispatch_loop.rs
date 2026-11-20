@@ -373,9 +373,6 @@ pub struct StagedCandidate {
     pub(crate) trace_kind: u8,
     pub(crate) up_slot_timing_summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
     pub(crate) up_slot_timings: Option<SmallVec<[sky_dispatch_core::executor::UpSlotTiming; 15]>>,
-    /// Selects the prepared Up prefix while retaining the staged Down in the
-    /// executor for the next scheduler pass.
-    pub(crate) up_prefix_selected: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -451,58 +448,6 @@ fn effective_packet(
         up_slot_timing_summary: candidate.up_slot_timing_summary,
         up_slot_timings: candidate.up_slot_timings.as_deref(),
     })
-}
-
-fn pre_wait_up_prefix_is_authorized(
-    candidate: &StagedCandidate,
-    target: &SessionTarget,
-    require_focus: bool,
-    focus_active: &AtomicBool,
-    control_signals: FinalControlSignals<'_>,
-) -> bool {
-    let Some(expected) = candidate.target_stamp else {
-        return false;
-    };
-    candidate.packet_masks.up_mask != 0
-        && candidate.packet_masks.down_mask != 0
-        && target_stamp_still_current(target, expected)
-        && focus_matches(require_focus, focus_active)
-        && matches!(
-            final_control_precheck(control_signals),
-            FinalControlAdmission::Allowed
-        )
-}
-
-fn maybe_select_earlier_up_prefix_before_wait(
-    candidate: &mut StagedCandidate,
-    now_qpc: sky_dispatch_win32::clock::QpcTicks,
-    target: &SessionTarget,
-    require_focus: bool,
-    focus_active: &AtomicBool,
-    control_signals: FinalControlSignals<'_>,
-) -> Result<Option<sky_dispatch_win32::clock::QpcTicks>, String> {
-    let down_waits_longer = candidate.packet_masks.up_mask != 0
-        && candidate.packet_masks.down_mask != 0
-        && candidate.timing_window.musical_up_not_before_qpc
-            < candidate.timing_window.down_not_before_qpc
-        && now_qpc < candidate.timing_window.down_not_before_qpc;
-    if !down_waits_longer
-        || !pre_wait_up_prefix_is_authorized(
-            candidate,
-            target,
-            require_focus,
-            focus_active,
-            control_signals,
-        )
-    {
-        return Ok(None);
-    }
-
-    let up_deadline = effective_packet(candidate, true)?
-        .timing_window
-        .packet_not_before_qpc;
-    candidate.up_prefix_selected = true;
-    Ok(Some(now_qpc.max(up_deadline)))
 }
 
 fn proven_raw_zero_down_only(
@@ -778,7 +723,6 @@ pub(crate) fn stage_candidate(
         trace_kind,
         up_slot_timing_summary,
         up_slot_timings,
-        up_prefix_selected: false,
     }))
 }
 
@@ -804,7 +748,7 @@ pub(crate) fn dispatch_staged_candidate(
     let progress_clock = ctx.progress_clock;
     let metrics = ctx.metrics;
     let staged_candidate = candidate;
-    let mut select_up_prefix = staged_candidate.up_prefix_selected;
+    let mut select_up_prefix = false;
     let mut candidate = match effective_packet(&staged_candidate, select_up_prefix) {
         Ok(candidate) => candidate,
         Err(error) => {
@@ -2137,7 +2081,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             {
                 continue;
             }
-            let mut candidate = match action_to_stage {
+            let candidate = match action_to_stage {
                 Some(send_action @ SchedulerAction::Send { .. }) => {
                     match stage_scheduler_send_candidate(
                         send_action,
@@ -2168,7 +2112,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 }
                 None | Some(SchedulerAction::Finished | SchedulerAction::Wait { .. }) => None,
             };
-            let mut wait_target_qpc =
+            let wait_target_qpc =
                 candidate
                     .as_ref()
                     .map_or(scheduler_wait_target_qpc, |candidate| {
@@ -2199,33 +2143,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         control_signals,
                         &mut core.runtime,
                     ) {
-                        StagedDispatchOutcome::Dispatched => {
-                            let fallback_control_signals = FinalControlSignals {
-                                quit_requested,
-                                skip_requested,
-                                panic_requested,
-                                desired_pause,
-                                supervisor_expired,
-                                system_power: Some(system_power),
-                            };
-                            if let Some(candidate) = candidate.as_mut() {
-                                match maybe_select_earlier_up_prefix_before_wait(
-                                    candidate,
-                                    now_ticks,
-                                    target,
-                                    config.focus.require_focus,
-                                    focus_active,
-                                    fallback_control_signals,
-                                ) {
-                                    Ok(Some(up_deadline)) => wait_target_qpc = up_deadline,
-                                    Ok(None) => {}
-                                    Err(error) => {
-                                        core.runtime.terminal_error = Some(error);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
+                        StagedDispatchOutcome::Dispatched => {}
                         StagedDispatchOutcome::Replan => {
                             let target_stale = candidate
                                 .as_ref()
@@ -2262,9 +2180,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         );
                     }
                     #[cfg(any(test, feature = "test-support"))]
-                    if candidate.as_ref().is_some_and(|candidate| {
-                        candidate.packet_masks.down_mask != 0 && !candidate.up_prefix_selected
-                    }) && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
+                    if candidate
+                        .as_ref()
+                        .is_some_and(|candidate| candidate.packet_masks.down_mask != 0)
+                        && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
                         && let Some(candidate) = candidate.as_ref()
                     {
                         hook.record_down_window(
@@ -2283,23 +2202,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                     .saturating_sub(resources.playback.epoch.as_u64()),
                             )
                         },
-                        |candidate| {
-                            if candidate.up_prefix_selected {
-                                candidate.up_slot_timing_summary.map_or(
-                                    candidate.authored_target_ticks,
-                                    |summary| {
-                                        TimelineTicks::from_raw(
-                                            summary
-                                                .authored_target_qpc
-                                                .as_u64()
-                                                .saturating_sub(resources.playback.epoch.as_u64()),
-                                        )
-                                    },
-                                )
-                            } else {
-                                candidate.authored_target_ticks
-                            }
-                        },
+                        |candidate| candidate.authored_target_ticks,
                     );
 
                     match wait_for_next_boundary(WaitBoundaryInput {
