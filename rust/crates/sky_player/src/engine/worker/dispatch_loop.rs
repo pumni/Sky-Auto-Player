@@ -262,21 +262,6 @@ pub(crate) fn validate_resume_prerequisites(
     if !target.is_valid() || !target.is_current(target_stamp.hwnd, target_stamp.generation) {
         return Err("target invalidated while paused".to_string());
     }
-    if target.owner_process_identity_required() {
-        let Some(authority) = target.owner_authority_for_generation(target_stamp.generation) else {
-            return Err("target owner authority unavailable on resume".to_string());
-        };
-        let identity = authority.identity();
-        if identity.hwnd != target_stamp.hwnd {
-            return Err("target HWND mismatch on resume".to_string());
-        }
-        let continuity = authority.continuity();
-        if continuity != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous {
-            return Err(format!(
-                "target process identity continuity broken on resume: {continuity:?}"
-            ));
-        }
-    }
     if require_focus {
         let Some(release_owner) = backend.session_release_owner_proof() else {
             return Err("session release owner proof unavailable on resume".to_string());
@@ -299,23 +284,35 @@ pub(crate) fn validate_resume_prerequisites(
             if authority.identity().hwnd != target_stamp.hwnd {
                 return Err("session release owner authority HWND mismatch on resume".to_string());
             }
-            if authority.continuity()
-                != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
-            {
-                return Err(format!(
-                    "session release owner authority continuity broken on resume: {:?}",
-                    authority.continuity()
-                ));
-            }
             if let Some(target_authority) =
                 target.owner_authority_for_generation(target_stamp.generation)
                 && authority.identity().owner_pid != target_authority.identity().owner_pid
             {
                 return Err("session release owner authority PID mismatch on resume".to_string());
             }
+            let continuity = authority.continuity();
+            if continuity != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous {
+                return Err(format!(
+                    "session release owner authority continuity broken on resume: {continuity:?}"
+                ));
+            }
         }
         if !target.release_owner_proof_is_current(release_owner) {
             return Err("session release owner proof is not current on resume".to_string());
+        }
+    } else if target.owner_process_identity_required() {
+        let Some(authority) = target.owner_authority_for_generation(target_stamp.generation) else {
+            return Err("target owner authority unavailable on resume".to_string());
+        };
+        let identity = authority.identity();
+        if identity.hwnd != target_stamp.hwnd {
+            return Err("target HWND mismatch on resume".to_string());
+        }
+        let continuity = authority.continuity();
+        if continuity != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous {
+            return Err(format!(
+                "target process identity continuity broken on resume: {continuity:?}"
+            ));
         }
     }
     Ok(())
@@ -1669,6 +1666,16 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         break;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
+                    if supervisor_expired.is_expired()
+                        || supervisor_expired
+                            .check_expired(resumed_ticks, timing.lease_timeout_ticks)
+                    {
+                        core.runtime.verified_target = None;
+                        core.runtime.focus_restore_started_ticks = None;
+                        core.runtime.terminal_error =
+                            Some("supervisor lease expired while paused".to_string());
+                        break;
+                    }
                     if let Err(error) = resources
                         .playback
                         .exit_pause(PauseReason::Focus, resumed_ticks)
@@ -1678,10 +1685,15 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             Some(format!("playback clock failure: {error}"));
                         break;
                     }
-                    shared.publication.worker_progress.store(
-                        crate::engine::WorkerProgressState::Active as u8,
-                        Ordering::Release,
-                    );
+                    let progress_state = if resources.playback.is_paused() {
+                        crate::engine::WorkerProgressState::Paused
+                    } else {
+                        crate::engine::WorkerProgressState::Active
+                    };
+                    shared
+                        .publication
+                        .worker_progress
+                        .store(progress_state as u8, Ordering::Release);
                     shared
                         .publication
                         .progress_clock
@@ -1877,6 +1889,15 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         break;
                     }
                     let resumed_ticks = qpc_ticks_or_terminal!();
+                    if supervisor_expired.is_expired()
+                        || supervisor_expired
+                            .check_expired(resumed_ticks, timing.lease_timeout_ticks)
+                    {
+                        core.runtime.verified_target = None;
+                        core.runtime.terminal_error =
+                            Some("supervisor lease expired while paused".to_string());
+                        break;
+                    }
                     if let Err(error) = resources
                         .playback
                         .exit_pause(PauseReason::Manual, resumed_ticks)
@@ -1886,10 +1907,15 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             Some(format!("playback clock failure: {error}"));
                         break;
                     }
-                    shared.publication.worker_progress.store(
-                        crate::engine::WorkerProgressState::Active as u8,
-                        Ordering::Release,
-                    );
+                    let progress_state = if resources.playback.is_paused() {
+                        crate::engine::WorkerProgressState::Paused
+                    } else {
+                        crate::engine::WorkerProgressState::Active
+                    };
+                    shared
+                        .publication
+                        .worker_progress
+                        .store(progress_state as u8, Ordering::Release);
                     shared
                         .publication
                         .progress_clock

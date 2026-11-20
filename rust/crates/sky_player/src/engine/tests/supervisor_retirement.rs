@@ -1097,3 +1097,296 @@ fn active_worker_preserves_earlier_terminal_cause_over_subsequent_supervisor_exp
         "genuinely earlier 'quit' trigger reason must be preserved"
     );
 }
+
+#[test]
+fn overlapping_focus_and_manual_pause_focus_restored_first_remains_paused() {
+    let _lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let sched = schedule_long(&[0x15, 0x16]);
+    let mut options = test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.focus.require_focus = true;
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind target owner");
+    session.set_focus_hint(true);
+
+    session.arm(0).expect("arm worker loop");
+
+    wait_until(
+        Duration::from_secs(3),
+        || session.worker_progress() == WorkerProgressState::Active,
+        "transition to Active",
+    );
+
+    // 1. Enter manual pause:
+    session.pause().expect("manual pause");
+    wait_until(
+        Duration::from_secs(3),
+        || session.worker_progress() == WorkerProgressState::Paused,
+        "transition to Paused",
+    );
+
+    // 2. Also lose focus while paused:
+    session.set_focus_hint(false);
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(session.worker_progress(), WorkerProgressState::Paused);
+
+    // 3. Restore focus FIRST:
+    session.set_focus_hint(true);
+    // Worker loop processes focus restoration, but manual pause is still active!
+    // Worker progress MUST remain Paused, NOT Active!
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        session.worker_progress(),
+        WorkerProgressState::Paused,
+        "worker_progress must remain Paused when focus restores while manual pause is still active"
+    );
+    assert!(session.snapshot().is_paused);
+
+    // 4. Now resume manual pause SECOND:
+    session.resume().expect("manual resume");
+    wait_until(
+        Duration::from_secs(3),
+        || session.worker_progress() == WorkerProgressState::Active,
+        "transition back to Active only when both pauses are cleared",
+    );
+    assert_eq!(session.worker_progress(), WorkerProgressState::Active);
+    assert!(!session.snapshot().is_paused);
+
+    session.quit().expect("quit worker");
+    assert!(session.join(Duration::from_secs(3)).expect("worker join"));
+}
+
+#[test]
+fn overlapping_focus_and_manual_pause_manual_resumed_first_remains_paused() {
+    let _lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let sched = schedule_long(&[0x15, 0x16]);
+    let mut options = test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.focus.require_focus = true;
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind target owner");
+    session.set_focus_hint(true);
+
+    session.arm(0).expect("arm worker loop");
+
+    wait_until(
+        Duration::from_secs(3),
+        || session.worker_progress() == WorkerProgressState::Active,
+        "transition to Active",
+    );
+
+    // 1. Lose focus:
+    session.set_focus_hint(false);
+    wait_until(
+        Duration::from_secs(3),
+        || session.worker_progress() == WorkerProgressState::Paused,
+        "transition to Paused on focus lost",
+    );
+
+    // 2. Also enter manual pause:
+    session.pause().expect("manual pause");
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(session.worker_progress(), WorkerProgressState::Paused);
+
+    // 3. Resume manual pause FIRST:
+    session.resume().expect("manual resume");
+    // Worker loop processes manual resume, but focus is still lost!
+    // Worker progress MUST remain Paused, NOT Active!
+    std::thread::sleep(Duration::from_millis(50));
+    assert_eq!(
+        session.worker_progress(),
+        WorkerProgressState::Paused,
+        "worker_progress must remain Paused when manual resumes while focus is still lost"
+    );
+    assert!(session.snapshot().is_paused);
+
+    // 4. Now restore focus SECOND:
+    session.set_focus_hint(true);
+    wait_until(
+        Duration::from_secs(3),
+        || session.worker_progress() == WorkerProgressState::Active,
+        "transition back to Active only when both pauses are cleared",
+    );
+    assert_eq!(session.worker_progress(), WorkerProgressState::Active);
+    assert!(!session.snapshot().is_paused);
+
+    session.quit().expect("quit worker");
+    assert!(session.join(Duration::from_secs(3)).expect("worker join"));
+}
+
+#[test]
+fn validate_resume_prerequisites_samples_continuity_once_and_rejects_broken() {
+    use crate::engine::shared::{SessionTarget, SupervisorLeaseState};
+    use crate::engine::worker::{TargetStamp, validate_resume_prerequisites};
+    use sky_dispatch_core::time::DurationTicks;
+    use sky_dispatch_win32::clock::QpcTicks;
+    use sky_dispatch_win32::focus::WindowIdentityAuthority;
+    use sky_dispatch_win32::input::{InstrumentKeyProfileSpec, ReleaseOwnerProof, TrackedKeyState};
+
+    let target = SessionTarget::new(TARGET_HWND, 1, true);
+    let authority = Arc::new(WindowIdentityAuthority::synthetic_for_test(
+        TARGET_HWND,
+        TARGET_PID,
+    ));
+    target.bind_owner_identity_authority(TARGET_HWND, 1, TARGET_PID, authority.clone());
+
+    let target_stamp = TargetStamp {
+        hwnd: TARGET_HWND,
+        generation: 1,
+    };
+    let lease = SupervisorLeaseState::new(QpcTicks::from_raw(1_000));
+    let lease_timeout = DurationTicks::from_raw(1_000_000);
+    let now = QpcTicks::from_raw(2_000);
+
+    let profile = InstrumentKeyProfileSpec::canonical().keys;
+    let valid_proof = ReleaseOwnerProof::new_with_foreground_policy(
+        TARGET_HWND,
+        1,
+        Some(TARGET_PID),
+        Some(authority.clone()),
+        true,
+    )
+    .expect("valid proof");
+    let valid_backend =
+        TrackedKeyState::from_terminal_release_residual(profile, valid_proof, 0, 0, 0)
+            .expect("valid backend");
+
+    // Break continuity on the retained authority:
+    authority.set_process_identity_status_for_test(
+        sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated,
+    );
+
+    let result = validate_resume_prerequisites(
+        now,
+        &target,
+        target_stamp,
+        &lease,
+        lease_timeout,
+        true,
+        &valid_backend,
+    );
+    assert!(
+        result
+            .as_ref()
+            .is_err_and(|e| e.contains("continuity broken on resume")),
+        "should reject broken continuity: {:?}",
+        result
+    );
+}
+
+#[test]
+fn fresh_lease_check_at_resume_decision_fails_closed_when_expired_during_cleanup() {
+    let _lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _reset = ForegroundOverrideReset;
+    install_foreground(TARGET_HWND, TARGET_PID);
+
+    let sched = schedule_long(&[0x15, 0x16]);
+    let mut options = test_session_options(
+        sched,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.focus.require_focus = true;
+    options.wait.supervisor_lease_timeout_us = 5_000_000; // 5s timeout so worker stays alive while paused
+
+    let session = NativeDispatchSession::new(options).expect("session admission");
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                TARGET_PID,
+            ),
+            TARGET_PID,
+        )
+        .expect("bind target owner");
+    session.set_focus_hint(true);
+
+    let _guard = session.supervisor_lifetime_guard();
+    session.arm(0).expect("arm worker loop");
+
+    wait_until(
+        Duration::from_secs(3),
+        || session.worker_progress() == WorkerProgressState::Active,
+        "transition to Active",
+    );
+
+    session.pause().expect("manual pause");
+    wait_until(
+        Duration::from_secs(3),
+        || session.worker_progress() == WorkerProgressState::Paused,
+        "transition to Paused",
+    );
+
+    // Latch lease expired right before resume decision:
+    session
+        .shared_arc_for_test()
+        .commands
+        .supervisor_expired
+        .latch_expired();
+
+    // Resume worker:
+    session.resume().expect("manual resume");
+
+    // The fresh lease check with resumed_ticks immediately before exit_pause
+    // must catch the expired lease and terminate the worker fail-closed!
+    assert!(
+        session.join(Duration::from_secs(3)).expect("worker join"),
+        "worker must terminate on expired lease"
+    );
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
+    let err = snapshot.terminal_error.as_deref().unwrap_or_default();
+    let trigger = snapshot
+        .terminal_trigger_reason
+        .as_deref()
+        .unwrap_or_default();
+    assert!(
+        err.contains("supervisor lease expired") || trigger.contains("supervisor_lease_expired"),
+        "expected lease expired error or trigger, got err={err}, trigger={trigger}"
+    );
+}

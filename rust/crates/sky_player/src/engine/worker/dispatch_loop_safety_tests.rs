@@ -1578,3 +1578,307 @@ fn up_only_process_exit_at_crossing_fails_closed() {
             .contains("prepared_down_owner_process_terminated")
     );
 }
+
+#[test]
+fn post_focus_race_hook_flips_focus_active_aborts_down_only() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
+    let actions = [
+        test_action(1, ActionKind::Down, 0, 0x15),
+        test_action(2, ActionKind::Up, 20_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.configure_focus_owner_for_test(1, 101);
+    let packets = harness.configure_mock_packet_sender_for_test(&[]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage Down")
+        .expect("Down candidate");
+
+    harness.set_post_focus_revalidation_race_hook(|focus_active, _target, _, _, _, _, _| {
+        focus_active.store(false, Ordering::Release);
+    });
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Replan
+    );
+    assert_eq!(packets.lock().expect("packet capture").len(), 0);
+    assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(sky_dispatch_core::clock::PauseReason::Focus)
+    );
+    assert_eq!(harness.runtime.verified_target_for_test(), None);
+}
+
+#[test]
+fn post_focus_race_hook_invalidates_target_fails_closed_down_only() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
+    let actions = [
+        test_action(1, ActionKind::Down, 0, 0x15),
+        test_action(2, ActionKind::Up, 20_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.configure_focus_owner_for_test(1, 101);
+    let packets = harness.configure_mock_packet_sender_for_test(&[]);
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage Down")
+        .expect("Down candidate");
+
+    harness.set_post_focus_revalidation_race_hook(|_focus_active, target, _, _, _, _, _| {
+        target.invalidate_target();
+    });
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Exit
+    );
+    assert_eq!(packets.lock().expect("packet capture").len(), 0);
+    assert_eq!(harness.local_metrics.final_gate_target_changes, 1);
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_ref()
+            .unwrap()
+            .contains("prepared_down_target_changed")
+    );
+}
+
+#[test]
+fn post_focus_race_hook_flips_focus_active_mixed_dispatches_safe_up_and_aborts_down() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
+    let actions = [
+        test_action(32, ActionKind::Down, 0, 0x15),
+        test_action(33, ActionKind::Up, 20_000, 0x15),
+        test_action(34, ActionKind::Down, 20_000, 0x16),
+        test_action(35, ActionKind::Up, 40_000, 0x16),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.configure_focus_owner_for_test(1, 101);
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage first Down")
+        .expect("first Down candidate");
+    let first_now = harness.qpc_now_for_test().expect("first Down QPC");
+    harness.set_mock_sender_start_qpc_for_test(first_now);
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    ));
+
+    let mixed_target = epoch
+        .checked_add_duration(DurationTicks::from_raw(
+            qpc_offset(&harness, 20_000).as_u64(),
+        ))
+        .expect("mixed target");
+    while harness.qpc_now_for_test().expect("wait for mixed target") < mixed_target {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let (up_mask, down_chord, timing_window) = staged_send_at(&mut harness, mixed_target, epoch);
+    assert_eq!(up_mask, 1);
+    assert_eq!(down_chord.map(|chord| chord.source_action_index), Some(34));
+    let mixed = harness
+        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+        .expect("stage mixed packet")
+        .expect("mixed candidate");
+    assert_eq!(mixed.packet_masks, PhysicalPacket::new(1, 2));
+
+    harness.set_post_focus_revalidation_race_hook(|focus_active, _target, _, _, _, _, _| {
+        focus_active.store(false, Ordering::Release);
+    });
+    harness.set_mock_sender_start_qpc_for_test(mixed_target);
+
+    let outcome = harness.dispatch_staged_candidate_for_test(mixed, false);
+    assert_eq!(
+        outcome,
+        StagedDispatchOutcome::Replan,
+        "focus rejection of mixed Down replans without sending Down while focus is lost"
+    );
+    assert_eq!(
+        packets
+            .lock()
+            .expect("packet capture")
+            .iter()
+            .map(|(packet, _)| *packet)
+            .collect::<Vec<_>>(),
+        vec![PhysicalPacket::new(0, 1)],
+        "the rejected Down key is absent and musical Up is held until focus restore or safety cleanup"
+    );
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    assert_eq!(harness.local_metrics.final_gate_focus_losses, 1);
+    assert!(
+        harness
+            .resources
+            .playback
+            .has_pause_reason(sky_dispatch_core::clock::PauseReason::Focus)
+    );
+    let finalized = harness.finalize_for_test();
+    assert_eq!(finalized.attempted_mask, 1);
+    assert_eq!(finalized.release_obligation_mask, 0);
+    assert_eq!(
+        cleanup.lock().expect("safety cleanup capture").as_slice(),
+        &[(vec![0x15], true)],
+        "terminal tracked safety Up remains available while musical focus is lost"
+    );
+}
+
+#[test]
+fn post_focus_race_hook_invalidates_target_mixed_fails_closed_without_down() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
+    let actions = [
+        test_action(32, ActionKind::Down, 0, 0x15),
+        test_action(33, ActionKind::Up, 20_000, 0x15),
+        test_action(34, ActionKind::Down, 20_000, 0x16),
+        test_action(35, ActionKind::Up, 40_000, 0x16),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let epoch = harness.qpc_now_for_test().expect("test epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor playback");
+    harness.configure_focus_owner_for_test(1, 101);
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let first = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage first Down")
+        .expect("first Down candidate");
+    let first_now = harness.qpc_now_for_test().expect("first Down QPC");
+    harness.set_mock_sender_start_qpc_for_test(first_now);
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(first, false),
+        StagedDispatchOutcome::Dispatched
+    ));
+
+    let mixed_target = epoch
+        .checked_add_duration(DurationTicks::from_raw(
+            qpc_offset(&harness, 20_000).as_u64(),
+        ))
+        .expect("mixed target");
+    while harness.qpc_now_for_test().expect("wait for mixed target") < mixed_target {
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    let (up_mask, down_chord, timing_window) = staged_send_at(&mut harness, mixed_target, epoch);
+    let mixed = harness
+        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+        .expect("stage mixed packet")
+        .expect("mixed candidate");
+    assert_eq!(mixed.packet_masks, PhysicalPacket::new(1, 2));
+
+    harness.set_post_focus_revalidation_race_hook(|_focus_active, target, _, _, _, _, _| {
+        target.invalidate_target();
+    });
+    harness.set_mock_sender_start_qpc_for_test(mixed_target);
+
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(mixed, false),
+        StagedDispatchOutcome::Exit
+    );
+    assert_eq!(
+        packets
+            .lock()
+            .expect("packet capture")
+            .iter()
+            .map(|(packet, _)| *packet)
+            .collect::<Vec<_>>(),
+        vec![PhysicalPacket::new(0, 1)],
+        "zero Down packets sent after target invalidation"
+    );
+    assert_eq!(harness.local_metrics.final_gate_target_changes, 1);
+    assert!(
+        harness
+            .runtime
+            .terminal_error
+            .as_ref()
+            .unwrap()
+            .contains("prepared_down_target_changed")
+    );
+    let finalized = harness.finalize_for_test();
+    assert_eq!(finalized.attempted_mask, 0);
+    assert_eq!(finalized.release_obligation_mask, 1);
+    assert_eq!(finalized.failed_release_mask, 1);
+    assert!(
+        cleanup.lock().expect("safety cleanup capture").is_empty(),
+        "invalid target prevents unsafe key emission during terminal cleanup"
+    );
+}

@@ -272,6 +272,22 @@ pub(crate) fn final_down_target_hint(target: &FinalTargetSignals<'_>) -> FinalDo
 }
 
 #[inline(always)]
+pub(crate) fn final_down_atomic_revalidation(
+    target: &SessionTarget,
+    expected: TargetStamp,
+    require_focus: bool,
+    focus_active: &AtomicBool,
+) -> FinalDownVerdict {
+    if !target.is_valid() || !target.is_current(expected.hwnd, expected.generation) {
+        return FinalDownVerdict::TargetChanged;
+    }
+    if !focus_matches(require_focus, focus_active) {
+        return FinalDownVerdict::FocusLost;
+    }
+    FinalDownVerdict::Allowed
+}
+
+#[inline(always)]
 pub(crate) fn final_down_modifier_verdict(backend: &TrackedKeyState) -> FinalDownVerdict {
     match backend.observe_modifiers_before_down() {
         ModifierKeyObservation::NoHeldObserved => FinalDownVerdict::Allowed,
@@ -795,6 +811,28 @@ pub(crate) fn verify_final_packet_admission(
             control_signals.desired_pause,
             system_power,
         );
+    }
+
+    if packet_kind.has_down() {
+        let final_target_verdict =
+            final_down_atomic_revalidation(target, expected, require_focus, focus_active);
+        if final_target_verdict != FinalDownVerdict::Allowed {
+            apply_final_down_rejection(final_target_verdict, runtime, metrics);
+            if final_target_verdict == FinalDownVerdict::FocusLost
+                && let Err(step) =
+                    handle_final_focus_loss(qpc_clock, playback, runtime, progress_clock)
+            {
+                return match step {
+                    DispatchStep::Terminate(error) => FinalDownAdmissionResult::Terminal(error),
+                };
+            }
+            if final_target_verdict == FinalDownVerdict::TargetChanged {
+                return FinalDownAdmissionResult::Terminal(
+                    "prepared_down_target_changed".to_string(),
+                );
+            }
+            return FinalDownAdmissionResult::Replan;
+        }
     }
 
     // 6. Final control state check immediately before raw send.

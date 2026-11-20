@@ -1048,11 +1048,12 @@ impl NativeDispatchSession {
         anchor: Option<crate::engine::shared::ProgressClockSnapshot>,
         clock: QpcClock,
     ) -> u64 {
-        let epoch_raw = self.shared.publication.epoch_qpc.load(Ordering::Acquire);
-        if epoch_raw == 0 {
+        let epoch = anchor.map(|a| a.epoch_qpc).unwrap_or_else(|| {
+            QpcTicks::from_raw(self.shared.publication.epoch_qpc.load(Ordering::Acquire))
+        });
+        if epoch == QpcTicks::ZERO {
             return 0;
         }
-        let epoch = QpcTicks::from_raw(epoch_raw);
         let reference_now = if let Some(anchor) = anchor
             && (anchor.paused || anchor.frozen)
         {

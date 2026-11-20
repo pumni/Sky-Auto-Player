@@ -516,17 +516,26 @@ fn preroll_manual_pause_retains_countdown_and_resumes_without_error() {
     // Resume playback.
     session.resume().expect("resume after preroll pause");
     let resume_deadline = Instant::now() + Duration::from_secs(2);
-    loop {
-        let snapshot = session.snapshot_lite();
+    let post_resume = loop {
+        let snapshot = session.snapshot();
         if !snapshot.is_paused {
-            break;
+            break snapshot;
         }
         assert!(
             Instant::now() < resume_deadline,
             "session did not unpause: {snapshot:?}"
         );
         std::thread::sleep(Duration::from_millis(5));
-    }
+    };
+    assert!(
+        post_resume.pre_roll_remaining_us > 0,
+        "pre_roll_remaining_us must remain non-zero upon resume while still in preroll: {post_resume:?}"
+    );
+    assert_eq!(
+        post_resume.status,
+        EnginePollStatus::Preroll.as_str(),
+        "status must remain Preroll after resuming while countdown is active: {post_resume:?}"
+    );
 
     // Worker must finish successfully without terminal error.
     assert!(
@@ -536,6 +545,167 @@ fn preroll_manual_pause_retains_countdown_and_resumes_without_error() {
     let final_snapshot = session.snapshot();
     assert_eq!(final_snapshot.terminal_error, None);
     assert_eq!(final_snapshot.status, EnginePollStatus::Finished.as_str());
+}
+
+fn preroll_test_options(scheduled_down_us: u64, scheduled_up_us: u64) -> NativeSessionOptions {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: scheduled_down_us,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "preroll-down".to_string().into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: scheduled_up_us,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "preroll-up".to_string().into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("compile schedule");
+    let mut options = support::test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.telemetry.mode = TelemetryMode::Off;
+    options
+}
+
+#[test]
+fn repeated_preroll_pause_retains_countdown_across_resumptions() {
+    let options = preroll_test_options(100_000, 200_000);
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session.bind_initial_target_for_test(123);
+    session.set_focus_hint(true);
+    // Arm with 600ms pre-roll.
+    session.arm(600_000).expect("arm request");
+
+    // Wait until preroll is active.
+    let preroll_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot_lite();
+        if snapshot.is_running && snapshot.status == EnginePollStatus::Preroll.as_str() {
+            break;
+        }
+        assert!(Instant::now() < preroll_deadline, "preroll did not start");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // First pause:
+    session.pause().expect("first pause during preroll");
+    let pause1_deadline = Instant::now() + Duration::from_secs(2);
+    let rem1 = loop {
+        let snapshot = session.snapshot();
+        if snapshot.is_paused {
+            break snapshot.pre_roll_remaining_us;
+        }
+        assert!(
+            Instant::now() < pause1_deadline,
+            "first pause not acknowledged"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(rem1 > 100_000, "countdown retained: {rem1}");
+    std::thread::sleep(Duration::from_millis(50));
+
+    // First resume:
+    session.resume().expect("first resume");
+    let resume1_deadline = Instant::now() + Duration::from_secs(2);
+    let post_resume1 = loop {
+        let snapshot = session.snapshot();
+        if !snapshot.is_paused {
+            break snapshot;
+        }
+        assert!(Instant::now() < resume1_deadline, "first unpause timed out");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(post_resume1.pre_roll_remaining_us > 0);
+    assert_eq!(post_resume1.status, EnginePollStatus::Preroll.as_str());
+
+    // Second pause while still in preroll:
+    session.pause().expect("second pause during preroll");
+    let pause2_deadline = Instant::now() + Duration::from_secs(2);
+    let rem2 = loop {
+        let snapshot = session.snapshot();
+        if snapshot.is_paused {
+            break snapshot.pre_roll_remaining_us;
+        }
+        assert!(
+            Instant::now() < pause2_deadline,
+            "second pause not acknowledged"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(rem2 > 50_000, "second countdown retained: {rem2}");
+    std::thread::sleep(Duration::from_millis(50));
+
+    // Second resume:
+    session.resume().expect("second resume");
+    let resume2_deadline = Instant::now() + Duration::from_secs(2);
+    let post_resume2 = loop {
+        let snapshot = session.snapshot();
+        if !snapshot.is_paused {
+            break snapshot;
+        }
+        assert!(
+            Instant::now() < resume2_deadline,
+            "second unpause timed out"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    assert!(post_resume2.pre_roll_remaining_us > 0);
+    assert_eq!(post_resume2.status, EnginePollStatus::Preroll.as_str());
+
+    // Finish successfully:
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let final_snapshot = session.snapshot();
+    assert_eq!(final_snapshot.terminal_error, None);
+    assert_eq!(final_snapshot.status, EnginePollStatus::Finished.as_str());
+}
+
+#[test]
+fn frozen_terminal_projection_preserves_preroll_countdown_at_termination() {
+    let options = preroll_test_options(100_000, 200_000);
+    let session = NativeDispatchSession::new(options).expect("test session admission");
+    session.bind_initial_target_for_test(123);
+    session.set_focus_hint(true);
+    // Arm with generous 1s preroll.
+    session.arm(1_000_000).expect("arm request");
+
+    // Wait until in preroll:
+    let preroll_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot();
+        if snapshot.is_running && snapshot.status == EnginePollStatus::Preroll.as_str() {
+            break;
+        }
+        assert!(Instant::now() < preroll_deadline, "preroll did not start");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+
+    // Quit session while in preroll:
+    session.quit().expect("quit during preroll");
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+
+    let terminal_snapshot1 = session.snapshot();
+    assert_eq!(terminal_snapshot1.status, EnginePollStatus::Quit.as_str());
+    let frozen_remaining = terminal_snapshot1.pre_roll_remaining_us;
+
+    // Sleep 50ms and snapshot again: frozen remaining must not drift!
+    std::thread::sleep(Duration::from_millis(50));
+    let terminal_snapshot2 = session.snapshot();
+    assert_eq!(
+        terminal_snapshot2.pre_roll_remaining_us, frozen_remaining,
+        "frozen terminal projection must remain consistent across queries"
+    );
 }
 
 #[test]
