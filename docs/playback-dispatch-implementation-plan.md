@@ -14,7 +14,7 @@ Mục tiêu là giảm công việc giữa lúc packet đủ điều kiện và 
 
 - **Leader** sở hữu kiến trúc, các invariant, phạm vi, thứ tự gói, quyết định thay đổi chính sách, review và kết luận nghiệm thu. Quyết định mới được ghi trong PR. Chủ repo giữ quyền quyết định merge và cấp phép test vật lý.
 - **Implementation agent** sở hữu triển khai và xác minh theo các gói dưới đây. Được tự chọn tên biến, vị trí helper, tổ chức commit và cách tái sử dụng test seam trong phạm vi đã chốt. Đưa mâu thuẫn contract, thay đổi bảo đảm an toàn, wire schema hoặc dữ liệu thiếu lên PR kèm code path và bằng chứng. Tiếp tục phần không phụ thuộc trong lúc chờ quyết định.
-- Fetch nhánh có sẵn và checkout trên máy Windows. Tất cả commit và fixup được push fast-forward vào nhánh này. Dùng detached worktree nếu cần đọc baseline hoặc build hai binary. Không tạo thêm nhánh công việc, rewite lịch sử đã push, force-push, mở PR phụ hay merge main vào nhánh trong lúc review nếu Leader chưa yêu cầu.
+- Fetch nhánh có sẵn và checkout trên máy Windows. Tất cả commit và fixup được push fast-forward vào nhánh này. Dùng detached worktree nếu cần đọc baseline hoặc build hai binary. Không tạo thêm nhánh công việc, viết lại lịch sử đã push, force-push, mở PR phụ hay merge main vào nhánh trong lúc review nếu Leader chưa yêu cầu.
 - Mỗi gói là một lát cắt hoàn chỉnh xuyên scheduler, adapter, lifecycle, tests và contract khi có liên quan. Có thể chia commit trong gói theo ý nghĩa. Push khi lát cắt sẵn sàng review và ghi comment bàn giao trên draft PR. Có thể tiếp tục phần gói sau đã được giao sau khi đã bàn giao SHA. CI đang chạy hoặc đỏ không trì hoãn review. Check bắt buộc của repo vẫn áp dụng cho quyết định merge.
 - CI, source review, local gates và benchmark có trạng thái độc lập. Lỗi baseline phải được chứng minh bằng cùng command trên baseline sạch trước khi gọi là pre-existing. Leader review theo SHA, để lại finding có mức độ, file/line và kết quả cần sửa. Author sửa trên cùng nhánh và ghi SHA sửa trong thread liên quan.
 
@@ -85,14 +85,16 @@ Thực hiện trên kiến trúc Gói 1. Xem [metrics](../rust/crates/sky_player
 
 ## 6. Kiểm tra Windows và tiêu chí review
 
-Chạy từ repo root, dùng toolchain pin. Với từng gói chạy test liên quan rồi format/lint và `git diff --check` trước khi bàn giao. Gói 3 chạy bộ cuối cùng theo fencing README/runbook. Ghi lệnh thực tế và kết quả, không ghi pass cho lệnh chưa chạy.
+Chạy từ repo root, dùng toolchain pin. Với từng gói chạy test liên quan rồi format/lint và `git diff --check` trước khi bàn giao. Gói 3 chạy bộ kiểm tra cuối theo runbook. Ghi lệnh thực tế và kết quả, không ghi pass cho lệnh chưa chạy.
 
 ```powershell
 rustc -Vv
 cargo -V
 git diff --check
+git diff --check a425ba017d2455952c758133068284dc6de89aa3 HEAD
 cargo fmt --manifest-path rust/Cargo.toml --all --check
 cargo xtask check rust
+cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core -p sky_dispatch_win32 -p sky_player --lib
 cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc -- --test-threads=1
 cargo test --locked --manifest-path rust/xtask/Cargo.toml audits::security::tests -- --test-threads=1
 cargo check --locked --manifest-path rust/Cargo.toml -p sky_player -p sky_dispatch_win32 --all-targets --features sky_player/real-input-acceptance
