@@ -719,10 +719,15 @@ impl TrackedKeyState {
             }
         }
         if packet.up_mask != 0 && !outcome.is_success() {
-            self.active_mask &= !confirmed_mask;
-            self.possibly_active_mask &= !confirmed_mask;
-            self.failed_release_mask &= !confirmed_mask;
-            self.failed_release_mask |= packet.up_mask & !confirmed_mask;
+            let raw_complete_qpc_failure =
+                matches!(outcome.status, SendTransactionStatus::ClockFailureAfterSend)
+                    && outcome.has_complete_raw_transport_for(packet);
+            if !raw_complete_qpc_failure {
+                self.active_mask &= !confirmed_mask;
+                self.possibly_active_mask &= !confirmed_mask;
+                self.failed_release_mask &= !confirmed_mask;
+                self.failed_release_mask |= packet.up_mask & !confirmed_mask;
+            }
         }
         if !defer_journal_commit {
             self.in_flight_mask &= !(packet.up_mask | packet.down_mask);
