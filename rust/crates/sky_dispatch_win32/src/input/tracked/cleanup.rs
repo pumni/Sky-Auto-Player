@@ -209,6 +209,9 @@ impl TrackedKeyState {
             terminal_qpc_fallback |= drain_decision.terminal_requested;
             let is_worker_terminal = share_worker_terminal_budget
                 && (terminal_qpc_fallback || drain_decision.terminal_requested);
+            if is_worker_terminal && self.terminal_raw_up_invocations < raw_up_invocations {
+                self.terminal_raw_up_invocations = raw_up_invocations;
+            }
             let background_terminal = allow_background_terminal_up
                 && drain_decision.terminal_requested
                 && !drain_decision.origin_foreground;
@@ -220,7 +223,7 @@ impl TrackedKeyState {
 
             let background_already_invoked = if is_worker_terminal {
                 self.terminal_background_raw_up_invocations != 0
-                    || self.terminal_raw_up_invocations.max(raw_up_invocations) >= max_raw_up_calls
+                    || self.terminal_raw_up_invocations >= max_raw_up_calls
             } else {
                 raw_up_invocations != 0
             };
@@ -237,7 +240,7 @@ impl TrackedKeyState {
                 if background_terminal {
                     self.terminal_background_raw_up_invocations
                 } else {
-                    self.terminal_raw_up_invocations.max(raw_up_invocations)
+                    self.terminal_raw_up_invocations
                 }
             } else {
                 raw_up_invocations
@@ -293,9 +296,15 @@ impl TrackedKeyState {
                 };
                 raw_up_invocations =
                     raw_up_invocations.saturating_add(u8::from(emitted.evidence.attempts != 0));
-                if is_worker_terminal && emitted.evidence.attempts != 0 {
-                    self.terminal_raw_up_invocations =
-                        self.terminal_raw_up_invocations.max(raw_up_invocations);
+                let is_terminal_attempt = share_worker_terminal_budget
+                    && (terminal_qpc_fallback || background_terminal_drain);
+                if is_terminal_attempt && emitted.evidence.attempts != 0 {
+                    if self.terminal_raw_up_invocations < raw_up_invocations.saturating_sub(1) {
+                        self.terminal_raw_up_invocations = raw_up_invocations.saturating_sub(1);
+                    }
+                    self.terminal_raw_up_invocations = self
+                        .terminal_raw_up_invocations
+                        .saturating_add(u8::from(emitted.evidence.attempts != 0));
                     if background_terminal_drain {
                         self.terminal_background_raw_up_invocations = self
                             .terminal_background_raw_up_invocations

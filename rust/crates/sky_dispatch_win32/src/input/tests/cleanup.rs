@@ -944,6 +944,325 @@ fn stop_upgrades_a_pause_drain_without_resetting_its_bounded_sender() {
 }
 
 #[test]
+fn partial_first_cleanup_2_plus_2_never_exceeds_four_raw_calls() {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 120;
+    let raw_calls = Arc::new(AtomicUsize::new(0));
+    let raw_calls_for_emitter = Arc::clone(&raw_calls);
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 1;
+    backend.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 10, None, None).expect("test release origin"),
+    );
+    backend.set_terminal_up_emitter_for_test(move |packet| {
+        raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: 0,
+            started_ticks: Some(QpcTicks::ZERO),
+            completed_ticks: Some(QpcTicks::ZERO),
+            win32_error: 5,
+            timing_error: None,
+        }
+    });
+    backend.set_probe(|_, _| InstrumentPhysicalState::Held(smallvec::smallvec![0x15]));
+
+    let drain_samples = Cell::new(0usize);
+    let outcome1 = backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, proof| {
+            assert_eq!(proof.target_hwnd(), TARGET);
+            Ok(())
+        },
+        || {
+            let sample = drain_samples.get();
+            drain_samples.set(sample + 1);
+            if sample >= 4 {
+                Err("transient drain error before 3rd attempt".into())
+            } else {
+                Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: true,
+                })
+            }
+        },
+    );
+
+    assert_eq!(outcome1.release_outcome.attempts, 2);
+    assert_eq!(outcome1.send_attempts.len(), 2);
+    assert_eq!(raw_calls.load(Ordering::Acquire), 2);
+    assert_eq!(backend.terminal_raw_up_invocations, 2);
+    assert_eq!(backend.release_obligation_mask(), 1);
+
+    let outcome2 = backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, proof| {
+            assert_eq!(proof.target_hwnd(), TARGET);
+            Ok(())
+        },
+        || {
+            Ok(crate::input::CleanupDrainDecision {
+                terminal_requested: true,
+                origin_foreground: true,
+            })
+        },
+    );
+
+    assert_eq!(
+        outcome2.release_outcome.attempts, 2,
+        "finalizer permits exactly 2 attempts before exhausting 4-call budget"
+    );
+    assert_eq!(
+        raw_calls.load(Ordering::Acquire),
+        4,
+        "aggregate physical raw Up attempts across both invocations never exceed 4"
+    );
+    assert_eq!(
+        outcome2.send_attempts.len(),
+        4,
+        "cumulative evidence reflects all 4 actual attempts"
+    );
+    assert_eq!(backend.terminal_raw_up_invocations, 4);
+    assert_eq!(
+        backend.release_obligation_mask(),
+        1,
+        "unresolved debt remains safely quarantined"
+    );
+    assert!(!outcome2.release_outcome.released_successfully);
+}
+
+#[test]
+fn partial_first_cleanup_1_plus_3_never_exceeds_four_raw_calls() {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 121;
+    let raw_calls = Arc::new(AtomicUsize::new(0));
+    let raw_calls_for_emitter = Arc::clone(&raw_calls);
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 1;
+    backend.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 11, None, None).expect("test release origin"),
+    );
+    backend.set_terminal_up_emitter_for_test(move |packet| {
+        raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: 0,
+            started_ticks: Some(QpcTicks::ZERO),
+            completed_ticks: Some(QpcTicks::ZERO),
+            win32_error: 5,
+            timing_error: None,
+        }
+    });
+    backend.set_probe(|_, _| InstrumentPhysicalState::Held(smallvec::smallvec![0x15]));
+
+    let drain_samples = Cell::new(0usize);
+    let outcome1 = backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, _| Ok(()),
+        || {
+            let sample = drain_samples.get();
+            drain_samples.set(sample + 1);
+            if sample >= 2 {
+                Err("transient drain error after 1 attempt".into())
+            } else {
+                Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: true,
+                })
+            }
+        },
+    );
+
+    assert_eq!(outcome1.release_outcome.attempts, 1);
+    assert_eq!(raw_calls.load(Ordering::Acquire), 1);
+    assert_eq!(backend.terminal_raw_up_invocations, 1);
+
+    let outcome2 = backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, _| Ok(()),
+        || {
+            Ok(crate::input::CleanupDrainDecision {
+                terminal_requested: true,
+                origin_foreground: true,
+            })
+        },
+    );
+
+    assert_eq!(
+        outcome2.release_outcome.attempts, 3,
+        "1+3 boundary: finalizer performs exactly 3 attempts"
+    );
+    assert_eq!(
+        raw_calls.load(Ordering::Acquire),
+        4,
+        "total attempts capped strictly at 4"
+    );
+    assert_eq!(outcome2.send_attempts.len(), 4);
+    assert_eq!(backend.terminal_raw_up_invocations, 4);
+    assert_eq!(backend.release_obligation_mask(), 1);
+}
+
+#[test]
+fn partial_first_cleanup_3_plus_1_never_exceeds_four_raw_calls() {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 122;
+    let raw_calls = Arc::new(AtomicUsize::new(0));
+    let raw_calls_for_emitter = Arc::clone(&raw_calls);
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 1;
+    backend.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 12, None, None).expect("test release origin"),
+    );
+    backend.set_terminal_up_emitter_for_test(move |packet| {
+        raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: 0,
+            started_ticks: Some(QpcTicks::ZERO),
+            completed_ticks: Some(QpcTicks::ZERO),
+            win32_error: 5,
+            timing_error: None,
+        }
+    });
+    backend.set_probe(|_, _| InstrumentPhysicalState::Held(smallvec::smallvec![0x15]));
+
+    let drain_samples = Cell::new(0usize);
+    let outcome1 = backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, _| Ok(()),
+        || {
+            let sample = drain_samples.get();
+            drain_samples.set(sample + 1);
+            if sample >= 6 {
+                Err("transient drain error after 3 attempts".into())
+            } else {
+                Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: true,
+                })
+            }
+        },
+    );
+
+    assert_eq!(outcome1.release_outcome.attempts, 3);
+    assert_eq!(raw_calls.load(Ordering::Acquire), 3);
+    assert_eq!(backend.terminal_raw_up_invocations, 3);
+
+    let outcome2 = backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, _| Ok(()),
+        || {
+            Ok(crate::input::CleanupDrainDecision {
+                terminal_requested: true,
+                origin_foreground: true,
+            })
+        },
+    );
+
+    assert_eq!(
+        outcome2.release_outcome.attempts, 1,
+        "3+1 boundary: finalizer performs exactly 1 attempt"
+    );
+    assert_eq!(
+        raw_calls.load(Ordering::Acquire),
+        4,
+        "total attempts capped strictly at 4"
+    );
+    assert_eq!(outcome2.send_attempts.len(), 4);
+    assert_eq!(backend.terminal_raw_up_invocations, 4);
+    assert_eq!(backend.release_obligation_mask(), 1);
+}
+
+#[test]
+fn stop_upgrade_between_outer_and_inner_pre_send_sample_counts_against_budget() {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 123;
+    let raw_calls = Arc::new(AtomicUsize::new(0));
+    let raw_calls_for_emitter = Arc::clone(&raw_calls);
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 1;
+    backend.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 13, None, None).expect("test release origin"),
+    );
+    backend.set_terminal_up_emitter_for_test(move |packet| {
+        raw_calls_for_emitter.fetch_add(1, Ordering::AcqRel);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: 0,
+            started_ticks: Some(QpcTicks::ZERO),
+            completed_ticks: Some(QpcTicks::ZERO),
+            win32_error: 5,
+            timing_error: None,
+        }
+    });
+    backend.set_probe(|_, _| InstrumentPhysicalState::Held(smallvec::smallvec![0x15]));
+
+    let drain_samples = Cell::new(0usize);
+    let outcome1 = backend.release_tracked_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, _| Ok(()),
+        || {
+            let sample = drain_samples.get();
+            drain_samples.set(sample + 1);
+            match sample {
+                0 => Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: false,
+                    origin_foreground: true,
+                }),
+                1 => Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: true,
+                }),
+                _ => Err("stop after inner-promoted attempt".into()),
+            }
+        },
+    );
+
+    assert_eq!(outcome1.release_outcome.attempts, 1);
+    assert_eq!(raw_calls.load(Ordering::Acquire), 1);
+    assert_eq!(
+        backend.terminal_raw_up_invocations, 1,
+        "inner promotion is counted against persistent terminal budget"
+    );
+
+    let outcome2 = backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, _| Ok(()),
+        || {
+            Ok(crate::input::CleanupDrainDecision {
+                terminal_requested: true,
+                origin_foreground: true,
+            })
+        },
+    );
+
+    assert_eq!(
+        outcome2.release_outcome.attempts, 3,
+        "finalizer permits exactly 3 remaining attempts (1+3)"
+    );
+    assert_eq!(
+        raw_calls.load(Ordering::Acquire),
+        4,
+        "total attempts strictly capped to 4"
+    );
+    assert_eq!(outcome2.send_attempts.len(), 4);
+    assert_eq!(backend.terminal_raw_up_invocations, 4);
+    assert_eq!(backend.release_obligation_mask(), 1);
+}
+
+#[test]
 fn terminal_background_drain_sends_one_best_effort_up_and_keeps_probe_residual() {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
