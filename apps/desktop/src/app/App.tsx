@@ -77,20 +77,18 @@ export function App({ bridge }: AppProps) {
     recordStartupTelemetry('react.shell_ready');
   }, [bootstrapState]);
 
+  const appearanceMode =
+    settings?.appearance_mode ?? bootstrap?.settings.appearance_mode ?? 'system';
+  const palette = settings?.palette ?? bootstrap?.settings.palette ?? 'graphite';
+
   useLayoutEffect(() => {
-    applyAppearance(
-      resolveAppearance(
-        settings?.appearance_mode ?? bootstrap?.settings.appearance_mode ?? 'system',
-        systemMode,
-        settings?.palette ?? bootstrap?.settings.palette ?? 'graphite',
-      ),
-    );
+    applyAppearance(resolveAppearance(appearanceMode, systemMode, palette));
     if (bootstrapState === 'ready' && bootstrap && appearanceReady) {
       revealStartupWindow('bootstrap-ready');
     } else if (bootstrapState === 'fatal' && appearanceReady) {
       revealStartupWindow('bootstrap-failed');
     }
-  }, [bootstrap, bootstrapState, settings, systemMode, appearanceReady]);
+  }, [appearanceMode, palette, bootstrap, bootstrapState, systemMode, appearanceReady]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

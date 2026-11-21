@@ -254,4 +254,36 @@ describe('SongDetailsView', () => {
       expect(screen.queryByRole('alert')).toBeNull();
     });
   });
+
+  it('ignores in-flight recommendation failure or success when song selection changes before response arrives', async () => {
+    const bridge = createMockBridge();
+    let rejectPatch!: (reason: any) => void;
+    bridge.patchSettings = () =>
+      new Promise((_, rej) => {
+        rejectPatch = rej;
+      });
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = selectRowAtIndex(store.getState().library, 0);
+    const second = selectRowAtIndex(store.getState().library, 1);
+    if (!first || !second) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    render(<SongDetailsView useStore={store} />);
+    const applyButton = screen.getByRole('button', { name: 'Apply recommendation' });
+    fireEvent.click(applyButton);
+    expect(screen.getByRole('button', { name: 'Applying…' })).toBeDisabled();
+
+    // Switch to second song while request is in-flight
+    await act(async () => store.getState().selectSong(second.song_id));
+
+    // Now reject the pending request for song 1
+    await act(async () => {
+      rejectPatch(new Error('Song 1 failed'));
+    });
+
+    // Song 2 should NOT have role="alert" or show Song 1's error
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
 });

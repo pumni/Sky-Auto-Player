@@ -8,11 +8,13 @@ interface WindowCaptionControlsProps {
 export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) {
   const [maximized, setMaximized] = useState(false);
   const [windowActive, setWindowActive] = useState(() => document.hasFocus());
-  const disposedRef = useRef(false);
+  const mountedRef = useRef(true);
+  const rafIdRef = useRef<number | null>(null);
+  const timeoutIdRef = useRef<number | null>(null);
 
   const refreshMaximized = useCallback(() => {
     void controls.isMaximized().then((value) => {
-      if (!disposedRef.current) setMaximized(value);
+      if (mountedRef.current) setMaximized(value);
     });
   }, [controls]);
 
@@ -21,33 +23,56 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
 
     const requestFrame = window.requestAnimationFrame;
     if (typeof requestFrame !== 'function') {
-      window.setTimeout(refreshMaximized, 50);
+      if (timeoutIdRef.current !== null) window.clearTimeout(timeoutIdRef.current);
+      timeoutIdRef.current = window.setTimeout(() => {
+        timeoutIdRef.current = null;
+        refreshMaximized();
+      }, 50);
       return;
     }
 
-    requestFrame(() => {
-      if (disposedRef.current) return;
-      requestFrame(() => {
-        if (!disposedRef.current) refreshMaximized();
+    if (rafIdRef.current !== null) window.cancelAnimationFrame(rafIdRef.current);
+    rafIdRef.current = requestFrame(() => {
+      rafIdRef.current = requestFrame(() => {
+        rafIdRef.current = null;
+        if (mountedRef.current) refreshMaximized();
       });
     });
   }, [refreshMaximized]);
 
   useEffect(() => {
-    disposedRef.current = false;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (timeoutIdRef.current !== null) {
+        window.clearTimeout(timeoutIdRef.current);
+        timeoutIdRef.current = null;
+      }
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
     let unsubscribe: (() => void) | undefined;
 
-    refreshMaximized();
+    void controls.isMaximized().then((value) => {
+      if (!disposed) setMaximized(value);
+    });
+
     void controls.onResize(refreshSettled).then((cleanup) => {
-      if (disposedRef.current) cleanup();
+      if (disposed) cleanup();
       else unsubscribe = cleanup;
     });
 
     return () => {
-      disposedRef.current = true;
+      disposed = true;
       unsubscribe?.();
     };
-  }, [controls, refreshMaximized, refreshSettled]);
+  }, [controls, refreshSettled]);
 
   useEffect(() => {
     const activate = () => setWindowActive(true);

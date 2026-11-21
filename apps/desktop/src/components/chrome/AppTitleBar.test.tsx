@@ -203,4 +203,32 @@ describe('AppTitleBar', () => {
     expect(isMaximized).toHaveBeenCalledTimes(3);
     vi.unstubAllGlobals();
   });
+
+  it('properly cleans up onResize listener on unmount', async () => {
+    const { bootstrap, useStore } = await testBootstrap();
+    let listenerCount = 0;
+    const unsub = vi.fn(() => {
+      listenerCount--;
+    });
+    const onResize = vi.fn(async () => {
+      listenerCount++;
+      return unsub;
+    });
+    const controls: WindowControls = {
+      minimize: vi.fn(async () => undefined),
+      toggleMaximize: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      isMaximized: vi.fn(async () => false),
+      onResize,
+    };
+
+    const { unmount } = render(
+      <AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />,
+    );
+
+    await waitFor(() => expect(onResize).toHaveBeenCalled());
+    unmount();
+
+    expect(unsub).toHaveBeenCalled();
+  });
 });

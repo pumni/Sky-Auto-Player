@@ -285,17 +285,17 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
     );
   }, [useStore, virtualizer]);
 
-  const library = useStore((store) => store.library);
+  const selectedSongId = useStore((store) => store.library.selectedSongId);
+  const pages = useStore((store) => store.library.pages);
   const activeDescendantId = useMemo(() => {
-    const selectedId = library.selectedSongId;
-    if (!selectedId) return undefined;
+    if (!selectedSongId) return undefined;
     for (const item of renderedItems) {
-      if (selectRowAtIndex(library, pageOffset + item.index)?.song_id === selectedId) {
-        return `song-row-${selectedId}`;
+      if (selectRowAtIndex({ pages }, pageOffset + item.index)?.song_id === selectedSongId) {
+        return `song-row-${selectedSongId}`;
       }
     }
     return undefined;
-  }, [library, renderedItems, pageOffset]);
+  }, [selectedSongId, pages, renderedItems, pageOffset]);
 
   const moveActive = (nextLocalIndex: number) => {
     if (rowCount === 0) return;

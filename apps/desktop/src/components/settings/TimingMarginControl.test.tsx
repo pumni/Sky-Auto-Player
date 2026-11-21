@@ -239,4 +239,102 @@ describe('TimingMarginControl', () => {
       resolveWrite?.(900);
     });
   });
+
+  it('reverts optimistic value when onChange resolves to null', async () => {
+    let resolveWrite: ((val: number | null) => void) | null = null;
+    render(
+      <TimingMarginControl
+        value={800}
+        options={options}
+        recommendation={recommendation}
+        density="compact"
+        onChange={() =>
+          new Promise((resolve) => {
+            resolveWrite = resolve;
+          })
+        }
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    expect(screen.getByText('900 µs')).toBeInTheDocument();
+
+    await act(async () => {
+      resolveWrite?.(null);
+    });
+
+    expect(screen.getByText('800 µs')).toBeInTheDocument();
+  });
+
+  it('reverts optimistic value when onChange rejects', async () => {
+    let rejectWrite: ((err: Error) => void) | null = null;
+    render(
+      <TimingMarginControl
+        value={800}
+        options={options}
+        recommendation={recommendation}
+        density="compact"
+        onChange={() =>
+          new Promise((_, reject) => {
+            rejectWrite = reject;
+          })
+        }
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    expect(screen.getByText('900 µs')).toBeInTheDocument();
+
+    await act(async () => {
+      rejectWrite?.(new Error('Backend error'));
+    });
+
+    expect(screen.getByText('800 µs')).toBeInTheDocument();
+  });
+
+  it('handles out-of-order promise completion where older completes after newer', async () => {
+    let resolveOlder: ((val: number) => void) | null = null;
+    let resolveNewer: ((val: number) => void) | null = null;
+    let callCount = 0;
+
+    render(
+      <TimingMarginControl
+        value={800}
+        options={options}
+        recommendation={recommendation}
+        density="compact"
+        onChange={() => {
+          callCount++;
+          if (callCount === 1) {
+            return new Promise((res) => {
+              resolveOlder = res;
+            });
+          }
+          return new Promise((res) => {
+            resolveNewer = res;
+          });
+        }}
+      />,
+    );
+
+    // Click 1 (800 -> 900)
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    expect(screen.getByText('900 µs')).toBeInTheDocument();
+
+    // Click 2 (900 -> 1000)
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    expect(screen.getByText('1000 µs')).toBeInTheDocument();
+
+    // Newer resolves first with 1000
+    await act(async () => {
+      resolveNewer?.(1000);
+    });
+    expect(screen.getByText('1000 µs')).toBeInTheDocument();
+
+    // Older resolves later with 900 (should NOT overwrite 1000)
+    await act(async () => {
+      resolveOlder?.(900);
+    });
+    expect(screen.getByText('1000 µs')).toBeInTheDocument();
+  });
 });

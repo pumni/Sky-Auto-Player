@@ -74,11 +74,13 @@ export function TimingMarginControl({
           if (currentMutationId < mutationIdRef.current) {
             return { ...previous, pending: remaining };
           }
-          const finalValue = confirmedValue !== null ? confirmedValue : previous.value;
-          if (remaining === 0) {
-            return finalValue !== value ? { value: finalValue, pending: 0 } : null;
+          if (confirmedValue === null) {
+            return remaining === 0 ? null : { ...previous, pending: remaining };
           }
-          return { value: finalValue, pending: remaining };
+          if (remaining === 0) {
+            return confirmedValue !== value ? { value: confirmedValue, pending: 0 } : null;
+          }
+          return { value: confirmedValue, pending: remaining };
         });
       })
       .catch(() => {
@@ -86,10 +88,10 @@ export function TimingMarginControl({
         setOptimistic((previous) => {
           if (previous === null) return null;
           const remaining = Math.max(0, previous.pending - 1);
-          if (remaining === 0) {
-            return null;
+          if (currentMutationId < mutationIdRef.current) {
+            return { ...previous, pending: remaining };
           }
-          return { ...previous, pending: remaining };
+          return remaining === 0 ? null : { ...previous, pending: remaining };
         });
       });
   };

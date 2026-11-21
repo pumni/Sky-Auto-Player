@@ -99,7 +99,11 @@ function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: Se
         previous ? { ...previous, inFlight: [...previous.inFlight, nextDraft] } : null,
       );
       void search(nextDraft)
-        .catch(() => {})
+        .catch((error: unknown) => {
+          if (import.meta.env.DEV) {
+            console.error('Search request failed:', error);
+          }
+        })
         .finally(() => {
           if (!mountedRef.current) return;
           setDraftState((previous) => {

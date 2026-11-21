@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { MousePointer2 } from 'lucide-react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { selectSelectedDetail, selectSongById } from '../../state/store';
@@ -41,6 +41,14 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
   const [applyError, setApplyError] = useState<string | null>(null);
   const [prevSelectedSongId, setPrevSelectedSongId] = useState(selectedSongId);
   const scrollRef = useScrollVisibility<HTMLElement>();
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   if (selectedSongId !== prevSelectedSongId) {
     setPrevSelectedSongId(selectedSongId);
@@ -92,9 +100,10 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
     if (!hasActionableRecommendation || recommendationMatchesCurrent || applyingRecommendation) {
       return;
     }
+    const targetSongId = selectedSongId;
+    if (!targetSongId) return;
     setApplyingRecommendation(true);
     setApplyError(null);
-    const targetSongId = selectedSongId;
     try {
       const result = await patchSettings({
         playbackDefaults: {
@@ -102,17 +111,21 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
           ...(recommendedTempo !== null ? { tempoScale: recommendedTempo } : {}),
         },
       });
-      if (selectedSongId !== targetSongId) return;
+      if (!mountedRef.current || useStore.getState().library.selectedSongId !== targetSongId)
+        return;
       if (!result) {
         setApplyError('Failed to apply recommendation. Please retry.');
       }
     } catch (error) {
-      if (selectedSongId !== targetSongId) return;
+      if (!mountedRef.current || useStore.getState().library.selectedSongId !== targetSongId)
+        return;
       setApplyError(
         error instanceof Error ? error.message : 'Failed to apply recommendation. Please retry.',
       );
     } finally {
-      setApplyingRecommendation(false);
+      if (mountedRef.current && useStore.getState().library.selectedSongId === targetSongId) {
+        setApplyingRecommendation(false);
+      }
     }
   };
   return (

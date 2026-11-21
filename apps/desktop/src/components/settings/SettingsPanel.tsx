@@ -44,13 +44,22 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
   const [category, setCategory] = useState<SettingsCategory>('playback');
 
   useEffect(() => {
+    let timerId: number | null = null;
     if (open) {
       wasOpen.current = true;
       dialogRef.current?.focus();
     } else if (wasOpen.current) {
       wasOpen.current = false;
-      window.setTimeout(() => settingsTriggerRef?.current?.focus(), 0);
+      timerId = window.setTimeout(() => {
+        timerId = null;
+        settingsTriggerRef?.current?.focus();
+      }, 0);
     }
+    return () => {
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+    };
   }, [open, settingsTriggerRef]);
 
   if (!open || !settings) return null;
