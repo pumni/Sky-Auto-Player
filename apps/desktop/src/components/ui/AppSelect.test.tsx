@@ -96,4 +96,25 @@ describe('AppSelect', () => {
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
     await waitFor(() => expect(combobox).toHaveFocus());
   });
+
+  it('dismisses popover on Tab key press without trapping focus', async () => {
+    const onChange = vi.fn();
+    render(
+      <AppSelect
+        value="a"
+        options={SAMPLE_OPTIONS}
+        onChange={onChange}
+        ariaLabel="Mode"
+        listboxLabel="Mode"
+      />,
+    );
+
+    const combobox = screen.getByRole('combobox', { name: 'Mode' });
+    fireEvent.click(combobox);
+    expect(screen.getByRole('listbox')).toBeInTheDocument();
+
+    const listbox = screen.getByRole('listbox');
+    fireEvent.keyDown(listbox, { key: 'Tab' });
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+  });
 });

@@ -1,15 +1,22 @@
 import { ChevronRight, X } from 'lucide-react';
+import type { RefObject } from 'react';
 import { Tab, TabList } from 'react-aria-components';
 import type { UtilityView } from '../../state/store';
 
 interface UtilityHeaderProps {
   activeView: UtilityView;
   presentationMode: 'docked' | 'overlay';
+  collapseButtonRef?: RefObject<HTMLButtonElement | null> | undefined;
   onCollapse?: () => void;
   onClose: () => void;
 }
 
-export function UtilityHeader({ presentationMode, onCollapse, onClose }: UtilityHeaderProps) {
+export function UtilityHeader({
+  presentationMode,
+  collapseButtonRef,
+  onCollapse,
+  onClose,
+}: UtilityHeaderProps) {
   const showCollapse = presentationMode === 'docked' && onCollapse !== undefined;
 
   return (
@@ -19,6 +26,7 @@ export function UtilityHeader({ presentationMode, onCollapse, onClose }: Utility
       </div>
       {showCollapse ? (
         <button
+          ref={collapseButtonRef}
           className="icon-button icon-button-boxed utility-collapse-button"
           type="button"
           aria-label="Collapse Inspector"

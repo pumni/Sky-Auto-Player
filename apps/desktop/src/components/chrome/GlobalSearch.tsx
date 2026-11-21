@@ -98,19 +98,21 @@ function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: Se
       setDraftState((previous) =>
         previous ? { ...previous, inFlight: [...previous.inFlight, nextDraft] } : null,
       );
-      void search(nextDraft).finally(() => {
-        if (!mountedRef.current) return;
-        setDraftState((previous) => {
-          if (!previous) return null;
-          if (previous.draft === nextDraft) return null;
-          const remaining = previous.inFlight.filter((item) => item !== nextDraft);
-          return {
-            ...previous,
-            baseQuery: nextDraft,
-            inFlight: remaining,
-          };
+      void search(nextDraft)
+        .catch(() => {})
+        .finally(() => {
+          if (!mountedRef.current) return;
+          setDraftState((previous) => {
+            if (!previous) return null;
+            if (previous.draft === nextDraft) return null;
+            const remaining = previous.inFlight.filter((item) => item !== nextDraft);
+            return {
+              ...previous,
+              baseQuery: nextDraft,
+              inFlight: remaining,
+            };
+          });
         });
-      });
     }, 120);
   };
 

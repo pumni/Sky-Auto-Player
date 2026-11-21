@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
@@ -141,5 +141,76 @@ describe('UtilityPane', () => {
     expect(screen.queryByRole('button', { name: 'Collapse Inspector' })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: 'Close utility' }));
     await waitFor(() => expect(store.getState().utility.open).toBe(false));
+  });
+
+  it('restores focus to Expand Inspector button when collapsing and to Collapse Inspector button when expanding', async () => {
+    const store = createOpenStore();
+    function InteractiveCollapsible() {
+      const [isCollapsed, setIsCollapsed] = useState(false);
+      const triggerRef = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <button ref={triggerRef} type="button">
+            Outside element
+          </button>
+          <UtilityPane
+            presentationMode="docked"
+            collapsed={isCollapsed}
+            onToggleCollapsed={() => setIsCollapsed((prev) => !prev)}
+            onExpand={() => setIsCollapsed(false)}
+            utilityTriggerRef={triggerRef}
+            useStore={store}
+          />
+        </>
+      );
+    }
+
+    render(<InteractiveCollapsible />);
+    const collapseButton = screen.getByRole('button', { name: 'Collapse Inspector' });
+    collapseButton.focus();
+    expect(collapseButton).toHaveFocus();
+
+    fireEvent.click(collapseButton);
+
+    const expandButton = await screen.findByRole('button', { name: 'Expand Inspector' });
+    expect(expandButton).toHaveFocus();
+
+    fireEvent.click(expandButton);
+
+    const reExpandedCollapseButton = await screen.findByRole('button', {
+      name: 'Collapse Inspector',
+    });
+    expect(reExpandedCollapseButton).toHaveFocus();
+  });
+
+  it('does not steal focus when collapsed prop changes without focus inside inspector', async () => {
+    const store = createOpenStore();
+    function ExternalToggleFixture({ isCollapsed }: { isCollapsed: boolean }) {
+      const triggerRef = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <button ref={triggerRef} type="button">
+            Outside element
+          </button>
+          <UtilityPane
+            presentationMode="docked"
+            collapsed={isCollapsed}
+            onToggleCollapsed={() => {}}
+            onExpand={() => {}}
+            utilityTriggerRef={triggerRef}
+            useStore={store}
+          />
+        </>
+      );
+    }
+
+    const { rerender } = render(<ExternalToggleFixture isCollapsed={false} />);
+    const outsideBtn = screen.getByRole('button', { name: 'Outside element' });
+    outsideBtn.focus();
+    expect(outsideBtn).toHaveFocus();
+
+    rerender(<ExternalToggleFixture isCollapsed={true} />);
+    expect(screen.getByRole('button', { name: 'Expand Inspector' })).toBeInTheDocument();
+    expect(outsideBtn).toHaveFocus();
   });
 });

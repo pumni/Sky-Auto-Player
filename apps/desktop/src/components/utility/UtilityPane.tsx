@@ -4,13 +4,15 @@ import {
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
+  useRef,
   useState,
   type ReactNode,
   type RefObject,
 } from 'react';
 import { Button, Tabs, TabPanel } from 'react-aria-components';
 import { Tooltip, TooltipTrigger } from 'react-aria-components/Tooltip';
-import type { DesktopStoreHook } from '../../state/store';
+import type { DesktopStoreHook, UtilityView } from '../../state/store';
 import { SongDetailsView } from './SongDetailsView';
 import { UtilityHeader } from './UtilityHeader';
 
@@ -76,6 +78,39 @@ export function UtilityPane({
   const utility = useStore((store) => store.utility);
   const closeUtility = useStore((store) => store.closeUtility);
   const setUtilityView = useStore((store) => store.setUtilityView);
+  const paneRef = useRef<HTMLElement>(null);
+  const expandButtonRef = useRef<HTMLButtonElement>(null);
+  const collapseButtonRef = useRef<HTMLButtonElement>(null);
+  const pendingFocusTransition = useRef<'toCollapsed' | 'toExpanded' | null>(null);
+
+  useLayoutEffect(() => {
+    if (pendingFocusTransition.current === 'toCollapsed') {
+      pendingFocusTransition.current = null;
+      expandButtonRef.current?.focus();
+    } else if (pendingFocusTransition.current === 'toExpanded') {
+      pendingFocusTransition.current = null;
+      collapseButtonRef.current?.focus();
+    }
+  }, [collapsed]);
+
+  const handleToggleCollapsed = useCallback(() => {
+    if (paneRef.current?.contains(document.activeElement)) {
+      pendingFocusTransition.current = collapsed ? 'toExpanded' : 'toCollapsed';
+    }
+    onToggleCollapsed?.();
+  }, [collapsed, onToggleCollapsed]);
+
+  const handleRailExpand = useCallback(
+    (targetView: UtilityView) => {
+      if (paneRef.current?.contains(document.activeElement)) {
+        pendingFocusTransition.current = 'toExpanded';
+      }
+      setUtilityView(targetView);
+      onExpand?.();
+    },
+    [onExpand, setUtilityView],
+  );
+
   const restoreFocus = useCallback(
     (previousFocus: Element | null) => {
       window.queueMicrotask(() => {
@@ -118,6 +153,7 @@ export function UtilityPane({
   if (isCollapsedRail) {
     return (
       <section
+        ref={paneRef}
         id="utility-inspector"
         className="utility-surface is-collapsed"
         role="region"
@@ -134,11 +170,12 @@ export function UtilityPane({
       >
         <div className="utility-collapsed-header">
           <button
+            ref={expandButtonRef}
             className="icon-button icon-button-boxed utility-collapse-button"
             type="button"
             aria-label="Expand Inspector"
             title="Expand Inspector"
-            onClick={onToggleCollapsed}
+            onClick={handleToggleCollapsed}
           >
             <ChevronLeft size={17} aria-hidden="true" />
           </button>
@@ -148,19 +185,13 @@ export function UtilityPane({
             label="Song Details"
             active={utility.activeView === 'details'}
             icon={<FileMusic size={18} />}
-            onPress={() => {
-              setUtilityView('details');
-              onExpand?.();
-            }}
+            onPress={() => handleRailExpand('details')}
           />
           <UtilityRailItem
             label="Runtime"
             active={utility.activeView === 'diagnostics'}
             icon={<Activity size={18} />}
-            onPress={() => {
-              setUtilityView('diagnostics');
-              onExpand?.();
-            }}
+            onPress={() => handleRailExpand('diagnostics')}
           />
         </div>
       </section>
@@ -169,6 +200,7 @@ export function UtilityPane({
 
   return (
     <section
+      ref={paneRef}
       id="utility-inspector"
       className="utility-surface"
       role="region"
@@ -192,7 +224,8 @@ export function UtilityPane({
         <UtilityHeader
           activeView={utility.activeView}
           presentationMode={presentationMode}
-          {...(onToggleCollapsed ? { onCollapse: onToggleCollapsed } : {})}
+          collapseButtonRef={collapseButtonRef}
+          {...(onToggleCollapsed ? { onCollapse: handleToggleCollapsed } : {})}
           onClose={close}
         />
         <div className="utility-content">

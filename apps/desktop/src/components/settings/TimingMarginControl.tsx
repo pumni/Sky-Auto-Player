@@ -1,5 +1,5 @@
 import { Minus, Plus } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { PlaybackOptionSets, TimingMarginRecommendation } from '../../bridge/DesktopBridge';
 import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
 
@@ -12,10 +12,8 @@ interface TimingMarginControlProps {
 }
 
 interface OptimisticMarginState {
-  baseProp: number;
   value: number;
   pending: number;
-  confirmed: number | null;
 }
 
 export function TimingMarginControl({
@@ -34,48 +32,62 @@ export function TimingMarginControl({
     recommendedMargin >= min &&
     recommendedMargin <= max &&
     recommendedMargin % step === 0;
-  const [override, setOverride] = useState<OptimisticMarginState | null>(null);
-  const activeOverride = override !== null && override.baseProp === value ? override : null;
-  const requestedValue = activeOverride ? activeOverride.value : value;
+
+  const [optimistic, setOptimistic] = useState<OptimisticMarginState | null>(null);
+  const [prevPropValue, setPrevPropValue] = useState(value);
+  const mountedRef = useRef(true);
+  const mutationIdRef = useRef(0);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  if (value !== prevPropValue) {
+    setPrevPropValue(value);
+    if (!optimistic || optimistic.pending === 0 || value === optimistic.value) {
+      setOptimistic(null);
+    }
+  }
+
+  const activeOptimistic =
+    optimistic !== null && (optimistic.pending > 0 || optimistic.value !== value)
+      ? optimistic
+      : null;
+  const requestedValue = activeOptimistic ? activeOptimistic.value : value;
 
   const requestValue = (nextValue: number) => {
-    setOverride((previous) => {
-      const active = previous !== null && previous.baseProp === value ? previous : null;
-      return {
-        baseProp: value,
-        value: nextValue,
-        pending: (active?.pending ?? 0) + 1,
-        confirmed: active?.confirmed ?? null,
-      };
-    });
+    const currentMutationId = ++mutationIdRef.current;
+    setOptimistic((previous) => ({
+      value: nextValue,
+      pending: (previous?.pending ?? 0) + 1,
+    }));
 
     void onChange(nextValue)
       .then((confirmedValue) => {
-        setOverride((previous) => {
-          if (previous === null || previous.baseProp !== value) return previous;
+        if (!mountedRef.current) return;
+        setOptimistic((previous) => {
+          if (previous === null) return null;
           const remaining = Math.max(0, previous.pending - 1);
-          const nextConfirmed = confirmedValue !== null ? confirmedValue : previous.confirmed;
-          if (remaining === 0) {
-            return nextConfirmed !== null
-              ? { baseProp: value, value: nextConfirmed, pending: 0, confirmed: nextConfirmed }
-              : null;
+          if (currentMutationId < mutationIdRef.current) {
+            return { ...previous, pending: remaining };
           }
-          return { ...previous, pending: remaining, confirmed: nextConfirmed };
+          const finalValue = confirmedValue !== null ? confirmedValue : previous.value;
+          if (remaining === 0) {
+            return finalValue !== value ? { value: finalValue, pending: 0 } : null;
+          }
+          return { value: finalValue, pending: remaining };
         });
       })
       .catch(() => {
-        setOverride((previous) => {
-          if (previous === null || previous.baseProp !== value) return previous;
+        if (!mountedRef.current) return;
+        setOptimistic((previous) => {
+          if (previous === null) return null;
           const remaining = Math.max(0, previous.pending - 1);
           if (remaining === 0) {
-            return previous.confirmed !== null
-              ? {
-                  baseProp: value,
-                  value: previous.confirmed,
-                  pending: 0,
-                  confirmed: previous.confirmed,
-                }
-              : null;
+            return null;
           }
           return { ...previous, pending: remaining };
         });

@@ -86,6 +86,8 @@ export function AppSelect<T extends string = string>({
       event.preventDefault();
       event.stopPropagation();
       closeAndRefocus();
+    } else if (event.key === 'Tab') {
+      setOpen(false);
     }
   };
 

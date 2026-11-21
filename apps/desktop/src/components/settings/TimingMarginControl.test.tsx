@@ -162,4 +162,81 @@ describe('TimingMarginControl', () => {
     expect(changes).toEqual([900]);
     expect(changes).not.toContain(5_300);
   });
+
+  it('does not resurrect old optimistic override when authoritative prop changes away and back', async () => {
+    let confirmWrite: ((value: number) => void) | null = null;
+    const { rerender } = render(
+      <TimingMarginControl
+        value={800}
+        options={options}
+        recommendation={recommendation}
+        density="compact"
+        onChange={() =>
+          new Promise((resolve) => {
+            confirmWrite = resolve;
+          })
+        }
+      />,
+    );
+
+    // 1. User requests 900
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    expect(screen.getByText('900 µs')).toBeInTheDocument();
+
+    // 2. Write confirms 900
+    await act(async () => {
+      confirmWrite?.(900);
+    });
+
+    // 3. Parent updates prop to 900
+    rerender(
+      <TimingMarginControl
+        value={900}
+        options={options}
+        recommendation={recommendation}
+        density="compact"
+        onChange={async (v) => v}
+      />,
+    );
+    expect(screen.getByText('900 µs')).toBeInTheDocument();
+
+    // 4. External settings restore prop back to 800
+    rerender(
+      <TimingMarginControl
+        value={800}
+        options={options}
+        recommendation={recommendation}
+        density="compact"
+        onChange={async (v) => v}
+      />,
+    );
+
+    // The display must be authoritative 800 µs, NOT stale 900 µs!
+    expect(screen.getByText('800 µs')).toBeInTheDocument();
+  });
+
+  it('safely handles unmount during in-flight async update', async () => {
+    let resolveWrite: ((val: number) => void) | null = null;
+    const { unmount } = render(
+      <TimingMarginControl
+        value={800}
+        options={options}
+        recommendation={recommendation}
+        density="compact"
+        onChange={() =>
+          new Promise((resolve) => {
+            resolveWrite = resolve;
+          })
+        }
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    unmount();
+
+    // Resolving after unmount should not throw
+    await act(async () => {
+      resolveWrite?.(900);
+    });
+  });
 });

@@ -190,4 +190,68 @@ describe('SongDetailsView', () => {
       recommendation?.recommended_tempo_scale,
     );
   });
+
+  it('displays inline error with role="alert" when patchSettings returns null, keeps retry enabled, and succeeds when retried', async () => {
+    const bridge = createMockBridge();
+    let shouldFailPatch = true;
+    const originalPatch = bridge.patchSettings.bind(bridge);
+    bridge.patchSettings = async (patch) => {
+      if (shouldFailPatch) {
+        throw new Error('Failed to apply recommendation. Please retry.');
+      }
+      return originalPatch(patch);
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = selectRowAtIndex(store.getState().library, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    render(<SongDetailsView useStore={store} />);
+    const applyButton = screen.getByRole('button', { name: 'Apply recommendation' });
+    expect(applyButton).toBeEnabled();
+
+    // Click apply, which fails
+    fireEvent.click(applyButton);
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toHaveTextContent(/failed to apply recommendation/i);
+    });
+    const retryButton = screen.getByRole('button', { name: 'Retry recommendation' });
+    expect(retryButton).toBeEnabled();
+
+    // Now retry after backend succeeds
+    shouldFailPatch = false;
+    fireEvent.click(retryButton);
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Recommended settings applied' })).toBeDisabled();
+    });
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('clears recommendation apply error when a different song is selected', async () => {
+    const bridge = createMockBridge();
+    bridge.patchSettings = async () => {
+      throw new Error('Failed to apply recommendation.');
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = selectRowAtIndex(store.getState().library, 0);
+    const second = selectRowAtIndex(store.getState().library, 1);
+    if (!first || !second) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    render(<SongDetailsView useStore={store} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply recommendation' }));
+    await waitFor(() => {
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+    });
+
+    // Select different song
+    await act(async () => store.getState().selectSong(second.song_id));
+    await waitFor(() => {
+      expect(screen.queryByRole('alert')).toBeNull();
+    });
+  });
 });

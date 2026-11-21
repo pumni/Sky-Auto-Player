@@ -3,6 +3,7 @@ import {
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent,
@@ -79,14 +80,15 @@ interface PendingKeyboardNavigation {
   scopeKey: string;
 }
 
-function observeHeightOnly(
+function observeDimensions(
   instance: { scrollElement: HTMLDivElement | null },
   cb: (rect: { width: number; height: number }) => void,
 ) {
   const element = instance.scrollElement;
   if (!element) return;
   let lastHeight = Math.round(element.getBoundingClientRect().height);
-  cb({ width: 0, height: lastHeight });
+  let lastWidth = Math.round(element.getBoundingClientRect().width);
+  cb({ width: lastWidth, height: lastHeight });
   if (typeof ResizeObserver === 'undefined') return;
   const observer = new ResizeObserver((entries) => {
     const entry = entries[0];
@@ -95,9 +97,15 @@ function observeHeightOnly(
         entry?.contentRect.height ??
         element.getBoundingClientRect().height,
     );
-    if (nextHeight === lastHeight) return;
+    const nextWidth = Math.round(
+      entry?.borderBoxSize?.[0]?.inlineSize ??
+        entry?.contentRect.width ??
+        element.getBoundingClientRect().width,
+    );
+    if (nextHeight === lastHeight && nextWidth === lastWidth) return;
     lastHeight = nextHeight;
-    cb({ width: 0, height: nextHeight });
+    lastWidth = nextWidth;
+    cb({ width: nextWidth, height: nextHeight });
   });
   observer.observe(element, { box: 'border-box' });
   return () => observer.disconnect();
@@ -135,7 +143,7 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
     getScrollElement: () => parentRef.current,
     estimateSize: () => 46,
     overscan: 10,
-    observeElementRect: observeHeightOnly,
+    observeElementRect: observeDimensions,
   });
   useImperativeHandle(
     locateSelectedRef,
@@ -186,18 +194,21 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
   }, [committedPage, isBuiltin, pageOffset, useStore, virtualizer]);
 
   const virtualItems = virtualizer.getVirtualItems();
-  const renderedItems =
-    virtualItems.length > 0
-      ? virtualItems
-      : [
-          ...Array.from({ length: Math.min(rowCount, 20) }, (_, index) => ({
-            index,
-            start: index * 46,
-          })),
-          ...(keyboardIndex !== null && keyboardIndex >= 20 && keyboardIndex < rowCount
-            ? [{ index: keyboardIndex, start: keyboardIndex * 46 }]
-            : []),
-        ];
+  const renderedItems = useMemo(
+    () =>
+      virtualItems.length > 0
+        ? virtualItems
+        : [
+            ...Array.from({ length: Math.min(rowCount, 20) }, (_, index) => ({
+              index,
+              start: index * 46,
+            })),
+            ...(keyboardIndex !== null && keyboardIndex >= 20 && keyboardIndex < rowCount
+              ? [{ index: keyboardIndex, start: keyboardIndex * 46 }]
+              : []),
+          ],
+    [keyboardIndex, rowCount, virtualItems],
+  );
   const first = renderedItems[0]?.index ?? 0;
   const last = renderedItems.at(-1)?.index ?? -1;
   useEffect(() => {
@@ -274,16 +285,17 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
     );
   }, [useStore, virtualizer]);
 
-  const activeDescendantId = useStore((store) => {
-    const selectedId = store.library.selectedSongId;
+  const library = useStore((store) => store.library);
+  const activeDescendantId = useMemo(() => {
+    const selectedId = library.selectedSongId;
     if (!selectedId) return undefined;
     for (const item of renderedItems) {
-      if (selectRowAtIndex(store.library, pageOffset + item.index)?.song_id === selectedId) {
+      if (selectRowAtIndex(library, pageOffset + item.index)?.song_id === selectedId) {
         return `song-row-${selectedId}`;
       }
     }
     return undefined;
-  });
+  }, [library, renderedItems, pageOffset]);
 
   const moveActive = (nextLocalIndex: number) => {
     if (rowCount === 0) return;

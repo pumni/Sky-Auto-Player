@@ -38,7 +38,14 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
   const conversionModeId = useId();
   const targetPitchId = useId();
   const [applyingRecommendation, setApplyingRecommendation] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [prevSelectedSongId, setPrevSelectedSongId] = useState(selectedSongId);
   const scrollRef = useScrollVisibility<HTMLElement>();
+
+  if (selectedSongId !== prevSelectedSongId) {
+    setPrevSelectedSongId(selectedSongId);
+    setApplyError(null);
+  }
 
   if (!selectedSongId || !selectedRow) {
     return (
@@ -86,13 +93,24 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
       return;
     }
     setApplyingRecommendation(true);
+    setApplyError(null);
+    const targetSongId = selectedSongId;
     try {
-      await patchSettings({
+      const result = await patchSettings({
         playbackDefaults: {
           ...(recommendedHold !== null ? { holdFrames: recommendedHold } : {}),
           ...(recommendedTempo !== null ? { tempoScale: recommendedTempo } : {}),
         },
       });
+      if (selectedSongId !== targetSongId) return;
+      if (!result) {
+        setApplyError('Failed to apply recommendation. Please retry.');
+      }
+    } catch (error) {
+      if (selectedSongId !== targetSongId) return;
+      setApplyError(
+        error instanceof Error ? error.message : 'Failed to apply recommendation. Please retry.',
+      );
     } finally {
       setApplyingRecommendation(false);
     }
@@ -344,8 +362,15 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
                     ? 'Recommended settings applied'
                     : applyingRecommendation
                       ? 'Applying…'
-                      : 'Apply recommendation'}
+                      : applyError
+                        ? 'Retry recommendation'
+                        : 'Apply recommendation'}
                 </button>
+                {applyError && (
+                  <p className="inline-error" role="alert">
+                    {applyError}
+                  </p>
+                )}
               </div>
             )}
           </section>
