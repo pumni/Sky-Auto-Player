@@ -1,7 +1,9 @@
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, render, renderHook, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as runtime from '../platform/runtime';
 import * as systemAppearance from '../platform/systemAppearance';
+import type { ColorMode } from './resolveAppearance';
 import { useSystemAppearance } from './useSystemAppearance';
 
 describe('useSystemAppearance', () => {
@@ -103,5 +105,92 @@ describe('useSystemAppearance', () => {
     // Even on error, ready becomes true so UI does not hang forever
     expect(hook.result.current.ready).toBe(true);
     hook.unmount();
+  });
+
+  it('handles setup -> cleanup -> setup lifecycle without subscription leaks and receives theme updates', async () => {
+    vi.spyOn(runtime, 'isTauriRuntime').mockReturnValue(true);
+    let subscribeCount = 0;
+    const unsubscribeFn = vi.fn();
+    let themeCallback: ((mode: ColorMode) => void) | undefined;
+    let resolveReady!: () => void;
+
+    vi.spyOn(systemAppearance, 'subscribeSystemAppearance').mockImplementation((cb) => {
+      subscribeCount += 1;
+      themeCallback = cb;
+      return {
+        ready: new Promise<void>((resolve) => {
+          resolveReady = resolve;
+        }),
+        unsubscribe: unsubscribeFn,
+      };
+    });
+
+    // 1. Initial setup
+    const hook1 = renderHook(() => useSystemAppearance());
+    expect(subscribeCount).toBe(1);
+    expect(hook1.result.current.ready).toBe(false);
+
+    // 2. Cleanup (simulating StrictMode unmount)
+    hook1.unmount();
+    expect(unsubscribeFn).toHaveBeenCalledTimes(1);
+
+    // 3. Remount (setup again)
+    const hook2 = renderHook(() => useSystemAppearance());
+    expect(subscribeCount).toBe(2);
+    expect(hook2.result.current.ready).toBe(false);
+
+    // Resolve ready for active subscription
+    await act(async () => {
+      resolveReady();
+    });
+    expect(hook2.result.current.ready).toBe(true);
+
+    // Native theme changes update subscribers
+    await act(async () => {
+      themeCallback?.('light');
+    });
+    expect(hook2.result.current.mode).toBe('light');
+
+    // Final unmount cleans up without leaks
+    hook2.unmount();
+    expect(unsubscribeFn).toHaveBeenCalledTimes(2);
+  });
+
+  it('operates correctly inside React StrictMode wrapper', async () => {
+    vi.spyOn(runtime, 'isTauriRuntime').mockReturnValue(true);
+    let subscribeCount = 0;
+    const unsubscribeFn = vi.fn();
+    let resolveReady!: () => void;
+
+    vi.spyOn(systemAppearance, 'subscribeSystemAppearance').mockImplementation(() => {
+      subscribeCount += 1;
+      return {
+        ready: new Promise<void>((resolve) => {
+          resolveReady = resolve;
+        }),
+        unsubscribe: unsubscribeFn,
+      };
+    });
+
+    function Consumer() {
+      const { ready, mode } = useSystemAppearance();
+      return <div data-testid="mode">{ready ? mode : 'loading'}</div>;
+    }
+
+    const { unmount } = render(
+      <StrictMode>
+        <Consumer />
+      </StrictMode>,
+    );
+
+    expect(subscribeCount).toBeGreaterThanOrEqual(1);
+
+    await act(async () => {
+      resolveReady();
+    });
+    expect(screen.getByTestId('mode')).not.toHaveTextContent('loading');
+
+    unmount();
+    expect(unsubscribeFn).toHaveBeenCalled();
   });
 });

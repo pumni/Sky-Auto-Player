@@ -385,4 +385,34 @@ describe('SongDetailsView', () => {
     expect(screen.queryByRole('alert')).toBeNull();
     expect(screen.getByRole('button', { name: 'Apply recommendation' })).toBeEnabled();
   });
+
+  it('safely handles unmount while recommendation apply request is in-flight', async () => {
+    const bridge = createMockBridge();
+    let resolvePatch!: (val: Settings) => void;
+    const patchCalled = new Promise<void>((done) => {
+      bridge.patchSettings = () =>
+        new Promise((res) => {
+          resolvePatch = res;
+          done();
+        });
+    });
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = selectRowAtIndex(store.getState().library, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    const { unmount } = render(<SongDetailsView useStore={store} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply recommendation' }));
+    await patchCalled;
+    expect(screen.getByRole('button', { name: 'Applying…' })).toBeDisabled();
+
+    unmount();
+
+    // Resolving after unmount should not throw
+    await act(async () => {
+      resolvePatch(store.getState().settings as Settings);
+    });
+  });
 });

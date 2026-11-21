@@ -45,6 +45,11 @@ export function TimingMarginControl({
   const [prevPropValue, setPrevPropValue] = useState(value);
   const mountedRef = useRef(true);
   const mutationIdRef = useRef(0);
+  const latestPropValueRef = useRef(value);
+
+  useEffect(() => {
+    latestPropValueRef.current = value;
+  }, [value]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -55,15 +60,10 @@ export function TimingMarginControl({
 
   if (value !== prevPropValue) {
     setPrevPropValue(value);
-    if (
-      mutationState.pending.length === 0 ||
-      (mutationState.confirmed !== null && mutationState.confirmed.value === value)
-    ) {
-      setMutationState((prev) => ({
-        pending: prev.pending,
-        confirmed: null,
-      }));
-    }
+    setMutationState((prev) => ({
+      pending: prev.pending,
+      confirmed: null,
+    }));
   }
 
   const activePending = mutationState.pending.filter(
@@ -105,7 +105,9 @@ export function TimingMarginControl({
           return {
             pending: nextPendingCleaned,
             confirmed:
-              nextConfirmed !== null && nextConfirmed.value !== value ? nextConfirmed : null,
+              nextConfirmed !== null && nextConfirmed.value !== latestPropValueRef.current
+                ? nextConfirmed
+                : null,
           };
         });
       })
