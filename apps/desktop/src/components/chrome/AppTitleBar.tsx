@@ -1,10 +1,8 @@
 import { Download, RefreshCw, Settings } from 'lucide-react';
 import { Button } from 'react-aria-components';
 import { useMemo, type RefObject } from 'react';
-import brandMark32Url from '../../assets/brand/app-icon-32.png';
-import brandMark40Url from '../../assets/brand/app-icon-40.png';
-import brandMark48Url from '../../assets/brand/app-icon-48.png';
-import brandMark64Url from '../../assets/brand/app-icon-64.png';
+import brandMarkDarkUrl from '../../assets/brand/mark-no-bg.svg';
+import brandMarkLightUrl from '../../assets/brand/mark-mono-dark.svg';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { createWindowControls, type WindowControls } from '../../platform/windowControls';
@@ -41,62 +39,76 @@ export function AppTitleBar({
       data-tauri-drag-region="deep"
       data-update-available={update.state === 'available' ? 'true' : 'false'}
     >
-      <div className="app-titlebar-leading" data-tauri-drag-region="deep">
-        <div className="app-titlebar-brand">
-          <img
-            className="app-titlebar-icon"
-            src={brandMark32Url}
-            srcSet={`${brandMark32Url} 1x, ${brandMark40Url} 1.25x, ${brandMark48Url} 1.5x, ${brandMark64Url} 2x`}
-            sizes="24px"
-            alt=""
-            width="24"
-            height="24"
-            draggable={false}
-          />
-          <span className="visually-hidden">Sky Auto Player</span>
+      <div className="app-titlebar-left-zone" data-tauri-drag-region="deep">
+        <div className="app-titlebar-leading" data-tauri-drag-region="deep">
+          <div className="app-titlebar-brand">
+            <img
+              className="app-titlebar-icon app-titlebar-icon-dark"
+              src={brandMarkDarkUrl}
+              alt=""
+              width="28"
+              height="28"
+              draggable={false}
+            />
+            <img
+              className="app-titlebar-icon app-titlebar-icon-light"
+              src={brandMarkLightUrl}
+              alt=""
+              width="28"
+              height="28"
+              draggable={false}
+            />
+            <span className="visually-hidden">Sky Auto Player</span>
+          </div>
         </div>
+        <div className="titlebar-drag-space" aria-hidden="true" data-tauri-drag-region="true" />
       </div>
-      <div className="titlebar-drag-space" aria-hidden="true" data-tauri-drag-region="true" />
       <GlobalSearch {...(searchInputRef ? { inputRef: searchInputRef } : {})} useStore={useStore} />
-      <div
-        className="titlebar-drag-space-trailing"
-        aria-hidden="true"
-        data-tauri-drag-region="true"
-      />
-      <div className="app-titlebar-end" data-tauri-drag-region="false">
-        <div className="app-titlebar-actions" data-tauri-drag-region="false">
-          {update.state === 'available' && (
-            <span
-              className="update-indicator-shell"
-              title={`Update available: ${updateVersion}. Open update details.`}
-            >
-              <Button
-                className="update-indicator"
-                aria-label={`Open update ${updateVersion}`}
-                onPress={() => setUpdateDialogOpen(true)}
+      <div className="app-titlebar-right-zone" data-tauri-drag-region="deep">
+        <div
+          className="titlebar-drag-space-trailing"
+          aria-hidden="true"
+          data-tauri-drag-region="true"
+        />
+        <div className="app-titlebar-end" data-tauri-drag-region="false">
+          <div className="app-titlebar-actions" data-tauri-drag-region="false">
+            {update.state === 'available' && (
+              <span
+                className="update-indicator-shell"
+                title={`Update available: ${updateVersion}. Open update details.`}
               >
-                <Download size={15} aria-hidden="true" />
-                <span className="update-indicator-dot" aria-hidden="true" />
-                <span className="visually-hidden">Update available</span>
-              </Button>
-            </span>
-          )}
-          <Button className="icon-button" aria-label="Reload library" onPress={() => void reload()}>
-            <RefreshCw size={17} aria-hidden="true" />
-          </Button>
-          <Button
-            ref={settingsTriggerRef}
-            className="icon-button"
-            aria-label="Open settings"
-            onPress={() => {
-              onSettingsOpen?.();
-              setSettingsOpen(true);
-            }}
-          >
-            <Settings size={17} aria-hidden="true" />
-          </Button>
+                <Button
+                  className="update-indicator"
+                  aria-label={`Open update ${updateVersion}`}
+                  onPress={() => setUpdateDialogOpen(true)}
+                >
+                  <Download size={15} aria-hidden="true" />
+                  <span className="update-indicator-dot" aria-hidden="true" />
+                  <span className="visually-hidden">Update available</span>
+                </Button>
+              </span>
+            )}
+            <Button
+              className="icon-button"
+              aria-label="Reload library"
+              onPress={() => void reload()}
+            >
+              <RefreshCw size={17} aria-hidden="true" />
+            </Button>
+            <Button
+              ref={settingsTriggerRef}
+              className="icon-button"
+              aria-label="Open settings"
+              onPress={() => {
+                onSettingsOpen?.();
+                setSettingsOpen(true);
+              }}
+            >
+              <Settings size={17} aria-hidden="true" />
+            </Button>
+          </div>
+          <WindowCaptionControls controls={controls} />
         </div>
-        <WindowCaptionControls controls={controls} />
       </div>
     </header>
   );

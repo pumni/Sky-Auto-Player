@@ -1,3 +1,4 @@
+import { Minus, Plus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { PlaybackOptionSets, TimingMarginRecommendation } from '../../bridge/DesktopBridge';
 import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
@@ -8,6 +9,16 @@ interface TimingMarginControlProps {
   recommendation: TimingMarginRecommendation;
   density: 'compact' | 'full';
   onChange: (value: number) => Promise<number | null>;
+}
+
+interface InFlightMutation {
+  id: number;
+  value: number;
+}
+
+interface MutationState {
+  pending: InFlightMutation[];
+  confirmed: { id: number; value: number } | null;
 }
 
 export function TimingMarginControl({
@@ -26,26 +37,86 @@ export function TimingMarginControl({
     recommendedMargin >= min &&
     recommendedMargin <= max &&
     recommendedMargin % step === 0;
-  const [requestedValue, setRequestedValue] = useState(value);
-  const authoritativeValue = useRef(value);
-  const pendingWrites = useRef(0);
+
+  const [mutationState, setMutationState] = useState<MutationState>({
+    pending: [],
+    confirmed: null,
+  });
+  const [prevPropValue, setPrevPropValue] = useState(value);
+  const mountedRef = useRef(true);
+  const mutationIdRef = useRef(0);
+  const latestPropValueRef = useRef(value);
 
   useEffect(() => {
-    authoritativeValue.current = value;
-    if (pendingWrites.current === 0) setRequestedValue(value);
+    latestPropValueRef.current = value;
   }, [value]);
 
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  if (value !== prevPropValue) {
+    setPrevPropValue(value);
+    setMutationState((prev) => ({
+      pending: prev.pending,
+      confirmed: null,
+    }));
+  }
+
+  const activePending = mutationState.pending.filter(
+    (m) => mutationState.confirmed === null || m.id > mutationState.confirmed.id,
+  );
+  const latestPending = activePending.at(-1);
+  const requestedValue =
+    latestPending !== undefined
+      ? latestPending.value
+      : mutationState.confirmed !== null
+        ? mutationState.confirmed.value
+        : value;
+
   const requestValue = (nextValue: number) => {
-    pendingWrites.current += 1;
-    setRequestedValue(nextValue);
+    const mutationId = ++mutationIdRef.current;
+    setMutationState((prev) => ({
+      ...prev,
+      pending: [...prev.pending, { id: mutationId, value: nextValue }],
+    }));
+
     void onChange(nextValue)
       .then((confirmedValue) => {
-        if (confirmedValue !== null) authoritativeValue.current = confirmedValue;
+        if (!mountedRef.current) return;
+        setMutationState((prev) => {
+          const nextPending = prev.pending.filter((m) => m.id !== mutationId);
+          if (confirmedValue === null) {
+            return {
+              ...prev,
+              pending: nextPending,
+            };
+          }
+          const isNewerConfirmation = prev.confirmed === null || mutationId >= prev.confirmed.id;
+          const nextConfirmed = isNewerConfirmation
+            ? { id: mutationId, value: confirmedValue }
+            : prev.confirmed;
+          const nextPendingCleaned = isNewerConfirmation
+            ? nextPending.filter((m) => m.id > mutationId)
+            : nextPending;
+          return {
+            pending: nextPendingCleaned,
+            confirmed:
+              nextConfirmed !== null && nextConfirmed.value !== latestPropValueRef.current
+                ? nextConfirmed
+                : null,
+          };
+        });
       })
-      .catch(() => undefined)
-      .finally(() => {
-        pendingWrites.current -= 1;
-        if (pendingWrites.current === 0) setRequestedValue(authoritativeValue.current);
+      .catch(() => {
+        if (!mountedRef.current) return;
+        setMutationState((prev) => ({
+          ...prev,
+          pending: prev.pending.filter((m) => m.id !== mutationId),
+        }));
       });
   };
 
@@ -75,7 +146,7 @@ export function TimingMarginControl({
           disabled={requestedValue <= min}
           onClick={() => requestValue(Math.max(min, requestedValue - step))}
         >
-          −
+          <Minus size={14} aria-hidden="true" />
         </button>
         <output aria-live="polite">{requestedValue} µs</output>
         <button
@@ -85,7 +156,7 @@ export function TimingMarginControl({
           disabled={requestedValue >= max}
           onClick={() => requestValue(Math.min(max, requestedValue + step))}
         >
-          +
+          <Plus size={14} aria-hidden="true" />
         </button>
       </div>
       {density === 'full' && (

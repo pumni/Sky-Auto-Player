@@ -67,9 +67,9 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
       };
     });
     expect(expanded.navigator.width).toBe(240);
-    expect(expanded.navigatorPadding).toEqual(['12px', '8px', '12px', '8px']);
-    expect(expanded.headingMinHeight).toBe('36px');
-    expect(expanded.headingMarginBottom).toBe('8px');
+    expect(expanded.navigatorPadding).toEqual(['0px', '8px', '12px', '8px']);
+    expect(expanded.headingMinHeight).toBe('40px');
+    expect(expanded.headingMarginBottom).toBe('6px');
     expect(expanded.primaryRowGap).toBe('4px');
     expect(expanded.rows).toHaveLength(4);
     for (const row of expanded.rows) {
@@ -320,7 +320,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     return { color: style.color, background: style.backgroundColor };
   });
   expect(collapsedToggleStyle).toEqual({
-    color: 'rgb(166, 166, 166)',
+    color: 'rgb(166, 168, 173)',
     background: 'rgba(0, 0, 0, 0)',
   });
   await collapseButton.hover();
@@ -329,7 +329,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     return { color: style.color, background: style.backgroundColor };
   });
   expect(collapsedToggleHover).toEqual({
-    color: 'rgb(212, 212, 212)',
+    color: 'rgb(226, 228, 232)',
     background: 'rgb(53, 54, 58)',
   });
   const pane = await page.locator('.navigator-workbench-pane').boundingBox();
@@ -510,10 +510,10 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
       rows,
     };
   });
-  expect(expanded.navigatorPadding).toEqual(['12px', '8px', '12px', '8px']);
+  expect(expanded.navigatorPadding).toEqual(['0px', '8px', '12px', '8px']);
   expect(expanded.headingStyle).toEqual({
-    minHeight: '36px',
-    marginBottom: '8px',
+    minHeight: '40px',
+    marginBottom: '6px',
     paddingTop: '0px',
     paddingRight: '0px',
     paddingBottom: '0px',

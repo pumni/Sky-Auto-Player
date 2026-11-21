@@ -181,7 +181,7 @@ test('Titlebar Search uses the available center axis and Player controls stay vi
   expect(searchBox).not.toBeNull();
   expect(idleBox).not.toBeNull();
   if (searchBox && idleBox) {
-    expect(Math.abs(searchBox.x + searchBox.width / 2 - titlebarFreeCenter)).toBeLessThanOrEqual(2);
+    expect(Math.abs(searchBox.x + searchBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
     expect(Math.abs(idleBox.x + idleBox.width / 2 - viewportCenter)).toBeLessThanOrEqual(2);
   }
 

@@ -11,16 +11,20 @@ export const MIN_NAVIGATOR_WIDTH = 200;
 export const COMPACT_NAVIGATOR_WIDTH = 48;
 export const DEFAULT_NAVIGATOR_WIDTH = 240;
 export const MAX_NAVIGATOR_WIDTH = 340;
+export const COMPACT_UTILITY_WIDTH = 48;
 export const MIN_UTILITY_WIDTH = 280;
 export const DEFAULT_UTILITY_WIDTH = 320;
 export const MAX_UTILITY_WIDTH = 440;
 
-export type NavigatorPreference = 'expanded' | 'collapsed';
+export type PanePreference = 'expanded' | 'collapsed';
+export type NavigatorPreference = PanePreference;
+export type UtilityPreference = PanePreference;
 
 export interface WorkbenchPreferencesV5 {
   version: 5;
   navigatorPreference: NavigatorPreference;
   expandedNavigatorWidth: number;
+  utilityPreference: UtilityPreference;
   utilityWidth: number;
   utilityOpen: boolean;
 }
@@ -45,6 +49,7 @@ export function normalizeWorkbenchPreferences(
       MIN_NAVIGATOR_WIDTH,
       MAX_NAVIGATOR_WIDTH,
     ),
+    utilityPreference: candidate?.utilityPreference === 'collapsed' ? 'collapsed' : 'expanded',
     utilityWidth: clamp(
       typeof candidate?.utilityWidth === 'number' && Number.isFinite(candidate.utilityWidth)
         ? candidate.utilityWidth

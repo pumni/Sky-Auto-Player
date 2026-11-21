@@ -91,7 +91,7 @@ for (const viewport of [
       ),
     ).toBeVisible();
     const basicControls = await profile
-      .locator('.profile-fields > label select')
+      .locator('.profile-fields .app-select-trigger')
       .evaluateAll((selects) =>
         selects.map((select) => {
           const box = select.getBoundingClientRect();

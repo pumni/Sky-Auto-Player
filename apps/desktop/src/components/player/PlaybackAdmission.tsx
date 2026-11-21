@@ -52,33 +52,49 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
         </div>
         <div className="admission-actions">
           <div className="admission-decisions">
-            {prepared.decisions.map((decision, index) => {
-              const variant = prepared.variants.find((item) => item.decision === decision.decision);
-              const status = variant?.timing_advisory?.status;
-              const estimateLabel =
-                status === 'modeled_risk'
-                  ? 'Modeled timing pressure'
-                  : status === 'no_modeled_risk'
-                    ? 'No modeled timing pressure'
-                    : 'View timing estimate';
-              return (
-                <div className="admission-option" key={decision.decision}>
-                  <button
-                    className={`button${decision.decision === 'proceed' ? ' button-primary' : ''}`}
-                    type="button"
-                    disabled={transportOperation !== null}
-                    ref={index === 0 ? admissionActionRef : undefined}
-                    onClick={() => void start(decision.decision)}
-                  >
-                    {admissionDecisionLabel(decision.decision, decision.label)}
-                  </button>
-                  <details className="admission-option-estimate">
-                    <summary>{estimateLabel}</summary>
-                    <TimingAdvisory advisory={variant?.timing_advisory} />
-                  </details>
-                </div>
-              );
-            })}
+            {(() => {
+              const primaryDecision = prepared.decisions.some(
+                (item) => item.decision === 'use_recommended',
+              )
+                ? 'use_recommended'
+                : 'proceed';
+              return prepared.decisions.map((decision, index) => {
+                const variant = prepared.variants.find(
+                  (item) => item.decision === decision.decision,
+                );
+                const status = variant?.timing_advisory?.status;
+                const isPrimary = decision.decision === primaryDecision;
+                const estimateLabel =
+                  status === 'modeled_risk'
+                    ? 'Modeled timing pressure'
+                    : status === 'no_modeled_risk'
+                      ? 'No modeled timing pressure'
+                      : 'View timing estimate';
+                return (
+                  <div className="admission-option" key={decision.decision}>
+                    <button
+                      className={`button${isPrimary ? ' button-primary' : ''}`}
+                      type="button"
+                      disabled={transportOperation !== null}
+                      ref={
+                        isPrimary ||
+                        (!prepared.decisions.some((d) => d.decision === primaryDecision) &&
+                          index === 0)
+                          ? admissionActionRef
+                          : undefined
+                      }
+                      onClick={() => void start(decision.decision)}
+                    >
+                      {admissionDecisionLabel(decision.decision, decision.label)}
+                    </button>
+                    <details className="admission-option-estimate">
+                      <summary>{estimateLabel}</summary>
+                      <TimingAdvisory advisory={variant?.timing_advisory} />
+                    </details>
+                  </div>
+                );
+              });
+            })()}
           </div>
           <button
             className="button admission-cancel"

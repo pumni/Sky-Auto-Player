@@ -36,6 +36,10 @@ export function createSettingsSlice(context: SettingsSliceContext): SettingsSlic
         set({ settingsState: 'loading', settingsError: null });
         try {
           const settings = await bridge.patchSettings(patch);
+          if (!settings) {
+            set({ settingsState: 'ready', settingsError: 'Failed to update settings.' });
+            return null;
+          }
           const playback = get().playback;
           if (patch.autoPlay !== undefined && patch.autoPlay !== get().settings?.auto_play) {
             context.onAutoPlayChanged();

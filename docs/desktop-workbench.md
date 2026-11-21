@@ -46,7 +46,8 @@ resizing to its displayed 200px size, and the CRC-16 was validated. This is not 
 bank account belongs to the displayed recipient; the user must verify `Nguyen Duc Hoa`
 with a real bank app before releasing the change. The QR is purely static; there is no
 external QR API request, backend payment tracking, or new persisted setting.
-Only Copy account and Copy note actions are present. The previous MoMo QR asset and PSP
+The Donate Settings panel displays the static VietQR image alongside the bank, account, and
+transfer-note summary without clipboard copy buttons. The previous MoMo QR asset and PSP
 information are removed from the current branch tree.
 
 ## Inspector presentation

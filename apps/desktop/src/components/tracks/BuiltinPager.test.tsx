@@ -385,4 +385,39 @@ describe('BuiltinPager', () => {
     expect(container.querySelector('[aria-label="Built-in Songs pages"]')).toBeNull();
     expect(screen.queryByText(/Page 1 of 0/)).toBeNull();
   });
+
+  it('does not re-select text during multi-digit typing and cancels with Escape', async () => {
+    const store = createDesktopStore(createMockBridge({ catalogCount: 2500 }));
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+    render(<BuiltinPager useStore={store} />);
+
+    const jumpButton = screen.getByRole('button', { name: /Jump to page/i });
+    fireEvent.click(jumpButton);
+    const input = screen.getByRole('textbox', { name: /Page number/i }) as HTMLInputElement;
+    await waitFor(() => expect(input).toHaveFocus());
+
+    // Initially selected upon entering edit mode
+    expect(input.selectionStart).toBe(0);
+    expect(input.selectionEnd).toBe(1);
+
+    // Simulate typing '2'
+    fireEvent.change(input, { target: { value: '2' } });
+    input.setSelectionRange(1, 1);
+    expect(input.value).toBe('2');
+    expect(input.selectionStart).toBe(1);
+
+    // Typing second digit '4' should not reset selection
+    fireEvent.change(input, { target: { value: '24' } });
+    input.setSelectionRange(2, 2);
+    expect(input.value).toBe('24');
+    expect(input.selectionStart).toBe(2);
+
+    // Escape cancels editing and restores focus
+    fireEvent.keyDown(input, { key: 'Escape' });
+    await waitFor(() => expect(screen.queryByRole('textbox')).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /Jump to page/i })).toHaveFocus(),
+    );
+  });
 });

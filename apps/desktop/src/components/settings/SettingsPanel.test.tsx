@@ -87,20 +87,24 @@ describe('SettingsPanel playback timing', () => {
     const palette = screen.getByLabelText('Dark palette');
 
     await act(async () => {
-      fireEvent.change(palette, { target: { value: 'slate' } });
+      fireEvent.click(palette);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('option', { name: 'Slate' }));
     });
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent('Could not save settings.'),
     );
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     expect(store.getState().settings?.palette).toBe('graphite');
-    expect(palette).toHaveValue('graphite');
-    expect(palette.querySelector('option[value="graphite"]')?.textContent).toBe(
-      'Graphite (Default)',
-    );
+    expect(palette).toHaveAttribute('data-value', 'graphite');
+    expect(palette).toHaveTextContent('Graphite (Default)');
 
     await act(async () => {
-      fireEvent.change(palette, { target: { value: 'classic' } });
+      fireEvent.click(palette);
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('option', { name: 'Classic' }));
     });
     await waitFor(() => expect(store.getState().settings?.palette).toBe('classic'));
     expect(screen.queryByRole('alert')).toBeNull();

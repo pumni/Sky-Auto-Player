@@ -1,9 +1,9 @@
 :root {
   color-scheme: light dark;
   --startup-background: #121314;
-  --startup-foreground: #d4d4d4;
-  --startup-secondary: #a6a6a6;
-  --startup-accent: #b2a5e9;
+  --startup-foreground: #e2e4e8;
+  --startup-secondary: #a6a8ad;
+  --startup-accent: #9aa8ff;
 }
 
 @media (prefers-color-scheme: light) {
@@ -12,16 +12,16 @@
     --startup-background: #ffffff;
     --startup-foreground: #252a31;
     --startup-secondary: #535f6c;
-    --startup-accent: #0b58a5;
+    --startup-accent: #3449b5;
   }
 }
 
 html[data-color-mode='dark'] {
   color-scheme: dark;
   --startup-background: #121314;
-  --startup-foreground: #d4d4d4;
-  --startup-secondary: #a6a6a6;
-  --startup-accent: #b2a5e9;
+  --startup-foreground: #e2e4e8;
+  --startup-secondary: #a6a8ad;
+  --startup-accent: #9aa8ff;
 }
 
 html[data-color-mode='light'] {
@@ -29,7 +29,7 @@ html[data-color-mode='light'] {
   --startup-background: #ffffff;
   --startup-foreground: #252a31;
   --startup-secondary: #535f6c;
-  --startup-accent: #0b58a5;
+  --startup-accent: #3449b5;
 }
 
 html,

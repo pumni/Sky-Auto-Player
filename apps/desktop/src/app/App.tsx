@@ -45,7 +45,9 @@ function isEditableTarget(target: EventTarget | null): boolean {
     target instanceof HTMLTextAreaElement ||
     target instanceof HTMLSelectElement ||
     target.isContentEditable ||
-    target.closest('[contenteditable="true"]') !== null
+    target.closest(
+      '[contenteditable="true"], [role="combobox"], [role="listbox"], [role="option"]',
+    ) !== null
   );
 }
 
@@ -71,24 +73,22 @@ export function App({ bridge }: AppProps) {
   }, [useStore]);
 
   useEffect(() => {
-    if (useStore.getState().bootstrapState !== 'ready') return;
+    if (bootstrapState !== 'ready') return;
     recordStartupTelemetry('react.shell_ready');
-  }, [bootstrap, useStore]);
+  }, [bootstrapState]);
+
+  const appearanceMode =
+    settings?.appearance_mode ?? bootstrap?.settings.appearance_mode ?? 'system';
+  const palette = settings?.palette ?? bootstrap?.settings.palette ?? 'graphite';
 
   useLayoutEffect(() => {
-    applyAppearance(
-      resolveAppearance(
-        settings?.appearance_mode ?? bootstrap?.settings.appearance_mode ?? 'system',
-        systemMode,
-        settings?.palette ?? bootstrap?.settings.palette ?? 'graphite',
-      ),
-    );
+    applyAppearance(resolveAppearance(appearanceMode, systemMode, palette));
     if (bootstrapState === 'ready' && bootstrap && appearanceReady) {
       revealStartupWindow('bootstrap-ready');
     } else if (bootstrapState === 'fatal' && appearanceReady) {
       revealStartupWindow('bootstrap-failed');
     }
-  }, [bootstrap, bootstrapState, settings, systemMode, appearanceReady]);
+  }, [appearanceMode, palette, bootstrap, bootstrapState, systemMode, appearanceReady]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

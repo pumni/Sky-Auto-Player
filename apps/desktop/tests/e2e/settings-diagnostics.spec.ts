@@ -111,7 +111,9 @@ test('Settings modal has no serious accessibility violations and closes accessib
   const settingsContent = dialog.locator('.settings-content');
   const initialContentWidth = await settingsContent.evaluate((element) => element.clientWidth);
   expect(initialBox).not.toBeNull();
-  await expect(dialog.getByLabel('Hold').locator('option[value="1"]')).toHaveText('1 frame');
+  const holdCombobox = dialog.getByRole('combobox', { name: 'Hold' });
+  await expect(holdCombobox).toHaveAttribute('data-value', '1');
+  await expect(holdCombobox).toContainText('1 frame');
   for (const category of [
     'Appearance',
     'Diagnostics',
@@ -484,7 +486,10 @@ test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
     /No active playback session|Timing unavailable|Latest sender pre-call max/,
   );
   await expectNoSeriousAccessibilityViolations(page);
-  await panel.getByRole('button', { name: 'Close utility' }).click();
+  await panel.getByRole('button', { name: 'Collapse Inspector' }).click();
+  await expect(panel.getByRole('button', { name: 'Expand Inspector' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Expand Inspector' }).click();
+  await page.getByRole('button', { name: 'Close utility panel' }).click();
   await expect(panel).toBeHidden();
   await expect(page.getByRole('button', { name: 'Open utility panel' })).toBeFocused();
 });
@@ -493,9 +498,11 @@ test('all supported palettes round-trip through the settings surface', async ({ 
   const settingsButton = page.getByRole('button', { name: 'Open settings' });
   await settingsButton.click();
   await page.getByRole('button', { name: 'Appearance' }).click();
-  const palette = page.getByLabel('Dark palette');
+  const palette = page.getByRole('combobox', { name: 'Dark palette' });
   for (const id of ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
-    await palette.selectOption(id);
+    await palette.click();
+    await page.locator(`.app-select-option[data-value="${id}"]`).click();
+    await expect(page.locator('.app-select-popover')).toBeHidden();
     await expect(page.locator('html')).toHaveAttribute('data-palette', id);
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
     await expect
@@ -540,7 +547,7 @@ test('Diagnostics drawer is bounded and accessible at the minimum viewport', asy
   );
   await diagnosticsDrawer.getByRole('tab', { name: 'Events' }).click();
   await expectNoSeriousAccessibilityViolations(page);
-  await diagnosticsDrawer.getByRole('button', { name: 'Close utility' }).click();
+  await page.getByRole('button', { name: 'Close utility panel' }).click();
   await expect(diagnosticsDrawer).toBeHidden();
   await expect(page.getByRole('button', { name: 'Open utility panel' })).toBeFocused();
   await trigger.click();

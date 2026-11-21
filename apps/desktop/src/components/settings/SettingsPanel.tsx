@@ -1,11 +1,31 @@
 import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
-import { X } from 'lucide-react';
+import {
+  Activity,
+  Heart,
+  Info,
+  Palette,
+  RefreshCw,
+  SlidersHorizontal,
+  Wrench,
+  X,
+  type LucideIcon,
+} from 'lucide-react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import type { DesktopStore as StoreState, DesktopStoreHook } from '../../state/store';
 import { SETTINGS_CATEGORIES, SettingsCategoryContent } from './SettingsCategoryContent';
 import type { SettingsCategory } from './SettingsCategoryContent';
+
+const CATEGORY_ICONS: Record<SettingsCategory, LucideIcon> = {
+  playback: SlidersHorizontal,
+  appearance: Palette,
+  diagnostics: Activity,
+  updates: RefreshCw,
+  advanced: Wrench,
+  donate: Heart,
+  about: Info,
+};
 
 interface SettingsPanelProps {
   bootstrap: Bootstrap;
@@ -24,13 +44,22 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
   const [category, setCategory] = useState<SettingsCategory>('playback');
 
   useEffect(() => {
+    let timerId: number | null = null;
     if (open) {
       wasOpen.current = true;
       dialogRef.current?.focus();
     } else if (wasOpen.current) {
       wasOpen.current = false;
-      window.setTimeout(() => settingsTriggerRef?.current?.focus(), 0);
+      timerId = window.setTimeout(() => {
+        timerId = null;
+        settingsTriggerRef?.current?.focus();
+      }, 0);
     }
+    return () => {
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+    };
   }, [open, settingsTriggerRef]);
 
   if (!open || !settings) return null;
@@ -46,8 +75,8 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
     >
       <Modal>
         <Dialog ref={dialogRef} aria-label="Settings" className="settings-dialog">
-          <div className="dialog-heading">
-            <div>
+          <div className="dialog-heading settings-dialog-heading">
+            <div className="settings-dialog-title">
               <p className="eyebrow">PREFERENCES</p>
               <h2 id="settings-title">Settings</h2>
             </div>
@@ -64,17 +93,24 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
 
           <div className="settings-layout">
             <nav className="settings-nav" aria-label="Settings categories">
-              {SETTINGS_CATEGORIES.map((item) => (
-                <button
-                  key={item.id}
-                  className={`settings-nav-item${category === item.id ? ' is-active' : ''}`}
-                  type="button"
-                  aria-current={category === item.id ? 'page' : undefined}
-                  onClick={() => setCategory(item.id)}
-                >
-                  {item.label}
-                </button>
-              ))}
+              {SETTINGS_CATEGORIES.map((item) => {
+                const Icon = CATEGORY_ICONS[item.id];
+                const isGroupStart = item.id === 'donate';
+                return (
+                  <button
+                    key={item.id}
+                    className={`settings-nav-item${category === item.id ? ' is-active' : ''}${
+                      isGroupStart ? ' is-group-start' : ''
+                    }`}
+                    type="button"
+                    aria-current={category === item.id ? 'page' : undefined}
+                    onClick={() => setCategory(item.id)}
+                  >
+                    <Icon size={15} className="settings-nav-icon" aria-hidden="true" />
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
             </nav>
 
             <div ref={contentRef} className="settings-content scroll-surface">
@@ -86,16 +122,21 @@ export function SettingsPanel({ bootstrap, settingsTriggerRef, useStore }: Setti
               />
             </div>
           </div>
-          {settingsError !== null && (
-            <p className="inline-error settings-save-error" role="alert">
-              Could not save settings. {settingsError}
-            </p>
-          )}
-          {category !== 'donate' && (
-            <p className="settings-note settings-footer-note">
-              Settings are validated and persisted by the native runtime.
-            </p>
-          )}
+
+          <div className="settings-footer">
+            {settingsError !== null && (
+              <p className="inline-error settings-save-error" role="alert">
+                Could not save settings. {settingsError}
+              </p>
+            )}
+            {category !== 'donate' ? (
+              <p className="settings-note settings-footer-note">
+                Settings are validated and persisted by the native runtime.
+              </p>
+            ) : (
+              <span className="settings-footer-spacer" aria-hidden="true" />
+            )}
+          </div>
         </Dialog>
       </Modal>
     </ModalOverlay>
