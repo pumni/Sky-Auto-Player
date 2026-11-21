@@ -1028,13 +1028,14 @@ fn sender_failure_record(
         .down_chord
         .as_ref()
         .map_or_else(|| "none".to_string(), |chord| chord.chord_index.to_string());
+    let packet = candidate.packet();
     format!(
         "source_action={} source_chord={} up_mask=0x{:04x} down_mask=0x{:04x} requested={} confirmed_count={} first_inserted={} attempts={} status={:?} retry_reason={:?} win32_error={:?} pre_call_qpc={} completion_qpc={} timing_error={:?}",
         candidate.source_action_index,
         source_chord,
-        candidate.packet_masks.up_mask,
-        candidate.packet_masks.down_mask,
-        candidate.packet_masks.event_count(),
+        packet.up_mask,
+        packet.down_mask,
+        packet.event_count(),
         evidence.confirmed_mask.count_ones(),
         evidence.first_inserted,
         evidence.attempts,
@@ -1052,12 +1053,13 @@ fn gate_rejection_record(candidate: &EffectivePacket<'_>, reason: &str) -> Strin
         .down_chord
         .as_ref()
         .map_or_else(|| "none".to_string(), |chord| chord.chord_index.to_string());
+    let packet = candidate.packet();
     format!(
         "dispatch gate rejected before SendInput: source_action={} source_chord={} up_mask=0x{:04x} down_mask=0x{:04x} requested={} confirmed_count=unavailable first_inserted=unavailable attempts=0 status=gate_rejected win32_error=unavailable pre_call_qpc=unavailable completion_qpc=unavailable: {reason}",
         candidate.source_action_index,
         source_chord,
-        candidate.packet_masks.up_mask,
-        candidate.packet_masks.down_mask,
-        candidate.packet_masks.event_count(),
+        packet.up_mask,
+        packet.down_mask,
+        packet.event_count(),
     )
 }

@@ -351,7 +351,6 @@ pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
 
 #[derive(Debug)]
 pub struct StagedCandidate {
-    pub(crate) up_mask: u16,
     pub(crate) down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
     pub(crate) packet_masks: sky_dispatch_win32::input::PhysicalPacket,
     pub(crate) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
@@ -374,8 +373,6 @@ pub struct StagedCandidate {
 #[derive(Clone, Copy)]
 struct EffectivePacket<'a> {
     view: sky_dispatch_win32::input::PreparedPacketView<'a>,
-    packet_masks: sky_dispatch_win32::input::PhysicalPacket,
-    up_mask: u16,
     down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
     authored_target_ticks: TimelineTicks,
     authored_target_qpc: sky_dispatch_win32::clock::QpcTicks,
@@ -389,27 +386,97 @@ struct EffectivePacket<'a> {
     up_slot_timings: Option<&'a [sky_dispatch_core::executor::UpSlotTiming]>,
 }
 
-fn effective_packet(
-    candidate: &StagedCandidate,
-    select_up_prefix: bool,
-) -> Result<EffectivePacket<'_>, String> {
-    if !select_up_prefix {
-        return Ok(EffectivePacket {
-            view: candidate.prepared_packet.as_view(),
-            packet_masks: candidate.packet_masks,
-            up_mask: candidate.up_mask,
-            down_chord: candidate.down_chord,
-            authored_target_ticks: candidate.authored_target_ticks,
-            authored_target_qpc: candidate.authored_target_qpc,
-            down_authored_target_ticks: candidate.down_authored_target_ticks,
-            down_authored_target_qpc: candidate.down_authored_target_qpc,
-            timing_window: candidate.timing_window,
-            target_stamp: candidate.target_stamp,
-            source_action_index: candidate.source_action_index,
-            trace_kind: candidate.trace_kind,
-            up_slot_timing_summary: candidate.up_slot_timing_summary,
-            up_slot_timings: candidate.up_slot_timings.as_deref(),
+impl EffectivePacket<'_> {
+    #[inline]
+    fn packet(&self) -> sky_dispatch_win32::input::PhysicalPacket {
+        self.view.packet()
+    }
+
+    #[inline]
+    fn kind(&self) -> MusicalPacketKind {
+        let packet = self.packet();
+        MusicalPacketKind::from_masks(packet.down_mask, packet.up_mask)
+            .expect("prepared effective packet has a non-zero mask")
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum FinalAdmissionGateBoundary {
+    Entered,
+    Returned,
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct FinalAdmissionGateMarker {
+    pub(crate) boundary: FinalAdmissionGateBoundary,
+    pub(crate) packet: sky_dispatch_win32::input::PhysicalPacket,
+    pub(crate) qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
+}
+
+#[inline(always)]
+fn sample_precision_gate_qpc(
+    observer_enabled: bool,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    runtime: Option<&mut super::WorkerRuntime>,
+) -> Option<sky_dispatch_win32::clock::QpcTicks> {
+    if !observer_enabled {
+        return None;
+    }
+
+    #[cfg(test)]
+    if let Some(runtime) = runtime {
+        let sample_index = runtime.precision_gate_qpc_sample_count_for_test;
+        runtime.precision_gate_qpc_sample_count_for_test = sample_index.saturating_add(1);
+        if runtime.precision_gate_qpc_sample_failure_index_for_test == Some(sample_index) {
+            return None;
+        }
+    }
+
+    #[cfg(not(test))]
+    let _ = runtime;
+
+    qpc_clock.now().ok()
+}
+
+#[cfg(test)]
+fn record_final_admission_gate_marker(
+    runtime: &super::WorkerRuntime,
+    boundary: FinalAdmissionGateBoundary,
+    packet: sky_dispatch_win32::input::PhysicalPacket,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+) {
+    if let Some(hook) = runtime.final_admission_gate_hook_for_test.as_ref() {
+        hook(FinalAdmissionGateMarker {
+            boundary,
+            packet,
+            qpc: qpc_clock.now().ok(),
         });
+    }
+}
+
+fn effective_packet(candidate: &StagedCandidate) -> EffectivePacket<'_> {
+    EffectivePacket {
+        view: candidate.prepared_packet.as_view(),
+        down_chord: candidate.down_chord,
+        authored_target_ticks: candidate.authored_target_ticks,
+        authored_target_qpc: candidate.authored_target_qpc,
+        down_authored_target_ticks: candidate.down_authored_target_ticks,
+        down_authored_target_qpc: candidate.down_authored_target_qpc,
+        timing_window: candidate.timing_window,
+        target_stamp: candidate.target_stamp,
+        source_action_index: candidate.source_action_index,
+        trace_kind: candidate.trace_kind,
+        up_slot_timing_summary: candidate.up_slot_timing_summary,
+        up_slot_timings: candidate.up_slot_timings.as_deref(),
+    }
+}
+
+fn effective_up_prefix(candidate: &StagedCandidate) -> Result<EffectivePacket<'_>, String> {
+    let original_packet = candidate.prepared_packet.packet();
+    if original_packet.up_mask == 0 || original_packet.down_mask == 0 {
+        return Err("Up-prefix fallback requires a prepared Mixed packet".to_string());
     }
 
     let summary = candidate
@@ -420,7 +487,6 @@ fn effective_packet(
         .prepared_packet
         .up_prefix_view()
         .ok_or_else(|| "prepared Mixed packet has no initialized Up prefix".to_string())?;
-    let packet_masks = sky_dispatch_win32::input::PhysicalPacket::new(candidate.up_mask, 0);
     let timing_window = candidate
         .up_only_timing_window
         .ok_or_else(|| "staged Mixed packet is missing its Up-only timing window".to_string())?;
@@ -430,8 +496,6 @@ fn effective_packet(
 
     Ok(EffectivePacket {
         view,
-        packet_masks,
-        up_mask: packet_masks.up_mask,
         down_chord: None,
         authored_target_ticks,
         authored_target_qpc: timing_window.authored_target_qpc,
@@ -450,7 +514,7 @@ fn proven_raw_zero_down_only(
     candidate: &EffectivePacket<'_>,
     outcome: sky_dispatch_win32::input::SendTransactionOutcome,
 ) -> bool {
-    let packet = candidate.packet_masks;
+    let packet = candidate.packet();
     let evidence = outcome.evidence;
     let Some(started) = evidence.started_ticks else {
         return false;
@@ -459,8 +523,7 @@ fn proven_raw_zero_down_only(
         return false;
     };
 
-    candidate.up_mask == 0
-        && packet.up_mask == 0
+    packet.up_mask == 0
         && packet.down_mask != 0
         && candidate.down_chord.is_some_and(|chord| {
             chord.source_action_index == candidate.source_action_index
@@ -640,7 +703,8 @@ pub(crate) fn stage_candidate(
         .scheduler
         .up_slot_timing_summary(up_mask, resources.playback.epoch)
         .map_err(|error| format!("Up slot timing summary arithmetic failure: {error}"))?;
-    let prepared_up_timing_window = if up_mask == 0 {
+    let mixed_packet = up_mask != 0 && down_mask != 0;
+    let prepared_up_timing_window = if !mixed_packet {
         None
     } else {
         Some(up_only_timing_window(
@@ -703,7 +767,6 @@ pub(crate) fn stage_candidate(
     };
 
     Ok(Some(StagedCandidate {
-        up_mask,
         down_chord,
         packet_masks,
         prepared_packet,
@@ -744,18 +807,12 @@ pub(crate) fn dispatch_staged_candidate(
     let progress_clock = ctx.progress_clock;
     let metrics = ctx.metrics;
     let staged_candidate = candidate;
-    let mut select_up_prefix = false;
-    let mut candidate = match effective_packet(&staged_candidate, select_up_prefix) {
-        Ok(candidate) => candidate,
-        Err(error) => {
-            runtime.terminal_error = Some(error);
-            return DispatchAttemptOutcome::Exit;
-        }
-    };
-    let mut has_down = candidate.packet_masks.down_mask != 0;
+    let mut candidate = effective_packet(&staged_candidate);
 
     #[cfg(any(test, feature = "test-support"))]
-    if has_down && let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+    if candidate.kind().has_down()
+        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
+    {
         hook.record_down_window(
             candidate.timing_window.authored_target_qpc.as_u64(),
             candidate.timing_window.packet_not_before_qpc.as_u64(),
@@ -766,7 +823,7 @@ pub(crate) fn dispatch_staged_candidate(
             .down_chord
             .as_ref()
             .map_or(0, |c| c.source_action_index);
-        hook.maybe_inject_hol_stall(candidate.packet_masks.down_mask, source_idx, qpc_clock);
+        hook.maybe_inject_hol_stall(candidate.packet().down_mask, source_idx, qpc_clock);
     }
 
     if staged_candidate.packet_masks.up_mask != 0
@@ -796,23 +853,23 @@ pub(crate) fn dispatch_staged_candidate(
     let expected_target = candidate
         .target_stamp
         .expect("musical packet target stamp is captured during staging");
-    let up_origin = if candidate.packet_masks.up_mask != 0 {
+    let up_origin = if candidate.packet().up_mask != 0 {
         match resources
             .backend
-            .release_owner_proof_for_mask(candidate.packet_masks.up_mask)
+            .release_owner_proof_for_mask(candidate.packet().up_mask)
         {
             Ok(Some(proof)) => Some(proof),
             Ok(None) => {
                 runtime.terminal_error = Some(format!(
                     "musical Up owner proof is missing for mask 0x{:04x}; release obligation retained",
-                    candidate.packet_masks.up_mask
+                    candidate.packet().up_mask
                 ));
                 return DispatchAttemptOutcome::Exit;
             }
             Err(error) => {
                 runtime.terminal_error = Some(format!(
                     "musical Up owner proof is missing or conflicted for mask 0x{:04x}; release obligation retained: {error}",
-                    candidate.packet_masks.up_mask
+                    candidate.packet().up_mask
                 ));
                 return DispatchAttemptOutcome::Exit;
             }
@@ -821,17 +878,21 @@ pub(crate) fn dispatch_staged_candidate(
         None
     };
 
-    let (admission_result, precision_gate_start_qpc, precision_gate_end_qpc) = loop {
-        let packet_kind = MusicalPacketKind::from_masks(
-            candidate.packet_masks.down_mask,
-            candidate.packet_masks.up_mask,
-        )
-        .expect("musical packet has non-zero mask");
+    // Keep one optional start for the complete final-admission sequence. A
+    // Mixed modifier rejection and its Up-prefix re-admission are one measured
+    // gate interval, even when this candidate arrived without a wake sample.
+    let precision_gate_start_qpc =
+        sample_precision_gate_qpc(observer.is_some(), qpc_clock, Some(&mut *runtime));
+    let (admission_result, precision_gate_end_qpc) = loop {
+        let packet_kind = candidate.kind();
 
-        // Qualification traces use the existing optional target-crossing and
-        // final-policy fields for this gate's start/end. A sample failure is
-        // reported as unavailable and never changes admission.
-        let precision_gate_start_qpc = observer.and_then(|_| qpc_clock.now().ok());
+        #[cfg(test)]
+        record_final_admission_gate_marker(
+            runtime,
+            FinalAdmissionGateBoundary::Entered,
+            candidate.packet(),
+            qpc_clock,
+        );
 
         if !packet_kind.has_down() {
             match final_control_precheck(control_signals) {
@@ -862,25 +923,34 @@ pub(crate) fn dispatch_staged_candidate(
             local_metrics,
             packet_kind,
         );
-        let precision_gate_end_qpc = observer.and_then(|_| qpc_clock.now().ok());
+        #[cfg(test)]
+        record_final_admission_gate_marker(
+            runtime,
+            FinalAdmissionGateBoundary::Returned,
+            candidate.packet(),
+            qpc_clock,
+        );
         match admission {
-            FinalDownAdmissionResult::ModifierHeld
-                if packet_kind == MusicalPacketKind::Mixed && !select_up_prefix =>
-            {
+            FinalDownAdmissionResult::ModifierHeld if packet_kind == MusicalPacketKind::Mixed => {
                 // The modifier blocks only the Down half. Reuse the staged
                 // packet's initialized Up prefix, then run the complete fresh
                 // Up-only admission contract before any sender effects.
-                select_up_prefix = true;
-                candidate = match effective_packet(&staged_candidate, select_up_prefix) {
+                candidate = match effective_up_prefix(&staged_candidate) {
                     Ok(candidate) => candidate,
                     Err(error) => {
                         runtime.terminal_error = Some(error);
                         return DispatchAttemptOutcome::Exit;
                     }
                 };
-                has_down = false;
             }
-            other => break (other, precision_gate_start_qpc, precision_gate_end_qpc),
+            other => {
+                // This is the final admission in the sequence. Missing or
+                // failed optional timing evidence remains unavailable and
+                // cannot alter the already-computed admission result.
+                let precision_gate_end_qpc =
+                    sample_precision_gate_qpc(observer.is_some(), qpc_clock, Some(&mut *runtime));
+                break (other, precision_gate_end_qpc);
+            }
         }
     };
 
@@ -904,7 +974,7 @@ pub(crate) fn dispatch_staged_candidate(
     {
         runtime.terminal_error = Some(format!(
             "musical Up origin owner differs from current packet owner; up_mask=0x{:04x}; release obligation retained",
-            candidate.up_mask
+            candidate.packet().up_mask
         ));
         return DispatchAttemptOutcome::Exit;
     }
@@ -912,10 +982,7 @@ pub(crate) fn dispatch_staged_candidate(
     let previous_sendinput_completion_qpc = runtime.last_physical_send_completion_qpc;
     let previous_sender_completion_known = runtime.last_physical_send_completion_qpc.is_some();
 
-    let physical_packet = sky_dispatch_win32::input::PhysicalPacket::new(
-        candidate.packet_masks.up_mask,
-        candidate.packet_masks.down_mask,
-    );
+    let physical_packet = candidate.packet();
     if resources.backend.session_release_owner_proof().is_none() {
         runtime.terminal_error = Some(
             "session release owner proof is missing at the prepared packet sender".to_string(),
@@ -938,8 +1005,8 @@ pub(crate) fn dispatch_staged_candidate(
         && let Some(hook) = runtime.startup_ordering_hook.as_ref()
     {
         hook.record_packet_sender_attempt(PacketSenderAttemptEvidence {
-            has_down,
-            has_up: candidate.packet_masks.up_mask != 0,
+            has_down: physical_packet.down_mask != 0,
+            has_up: physical_packet.up_mask != 0,
             sender_start_qpc_ticks: send_result
                 .evidence
                 .started_ticks
@@ -980,7 +1047,7 @@ pub(crate) fn dispatch_staged_candidate(
         },
     );
 
-    if has_down && send_result.evidence.attempts != 0 {
+    if physical_packet.down_mask != 0 && send_result.evidence.attempts != 0 {
         // Crossing the syscall boundary consumes this authored onset even if
         // the sender cannot prove count or timing completion.
         runtime.musical_physical_attempt_started = true;
@@ -1119,7 +1186,7 @@ pub(crate) fn dispatch_staged_candidate(
             .production_forensics
             .observe_lifecycle(super::dispatch::observation::ObserverLifecycle::ResetAll);
 
-        if has_down {
+        if physical_packet.down_mask != 0 {
             let chord = candidate
                 .down_chord
                 .expect("Down-bearing packet retains its authored chord identity");
@@ -1152,15 +1219,17 @@ pub(crate) fn dispatch_staged_candidate(
     };
 
     #[cfg(any(test, feature = "test-support"))]
-    if candidate.up_mask != 0
-        && candidate.packet_masks.down_mask == 0
+    if physical_packet.up_mask != 0
+        && physical_packet.down_mask == 0
         && let Some(hook) = runtime.startup_ordering_hook.as_ref()
     {
         hook.wait_after_successful_up();
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    if has_down && let Some(hook) = runtime.startup_ordering_hook.as_ref() {
+    if physical_packet.down_mask != 0
+        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
+    {
         hook.visit_startup_checkpoint(super::super::config::StartupCheckpoint::FirstDownCommitted);
     }
     let (source_action_target_ticks, source_action_target_qpc) = source_action_target(
@@ -1180,9 +1249,8 @@ pub(crate) fn dispatch_staged_candidate(
     }
     runtime.last_physical_send_completion_qpc = Some(completion_qpc);
 
-    let confirmed_up_mask = send_result.evidence.confirmed_mask & candidate.up_mask;
-    let confirmed_down_mask =
-        send_result.evidence.confirmed_mask & candidate.packet_masks.down_mask;
+    let confirmed_up_mask = send_result.evidence.confirmed_mask & physical_packet.up_mask;
+    let confirmed_down_mask = send_result.evidence.confirmed_mask & physical_packet.down_mask;
 
     if let Err(error) = resources.scheduler.on_send_completed_at(
         confirmed_up_mask,
@@ -1194,7 +1262,7 @@ pub(crate) fn dispatch_staged_candidate(
     }
     if let Err(error) = resources
         .backend
-        .commit_physical_packet(candidate.packet_masks.up_mask | candidate.packet_masks.down_mask)
+        .commit_physical_packet(physical_packet.up_mask | physical_packet.down_mask)
     {
         runtime.terminal_error = Some(format!("transport journal commit failed: {error}"));
         return DispatchAttemptOutcome::Exit;
@@ -1206,7 +1274,7 @@ pub(crate) fn dispatch_staged_candidate(
 
     let pre_call_qpc = send_result.evidence.started_ticks;
     runtime.defer_production_packet_result(
-        candidate.packet_masks,
+        physical_packet,
         candidate.source_action_index,
         source_action_target_qpc,
         pre_call_qpc,
@@ -1270,7 +1338,7 @@ pub(crate) fn dispatch_staged_candidate(
             dispatch_ready_qpc: None,
             wake_qpc,
             precision_handoff,
-            requested_packet: candidate.packet_masks,
+            requested_packet: physical_packet,
             confirmed_mask: send_result.evidence.confirmed_mask,
             skipped_mask: send_result.evidence.skipped_mask,
             trace: crate::engine::worker::dispatch::observation::DownTraceObservation {

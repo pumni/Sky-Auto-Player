@@ -314,6 +314,13 @@ pub(crate) struct WorkerRuntime {
     #[cfg(test)]
     pub(crate) final_lease_qpc_sample_override_for_test:
         Option<Result<QpcTicks, sky_dispatch_win32::clock::QpcError>>,
+    #[cfg(test)]
+    pub(crate) final_admission_gate_hook_for_test:
+        Option<Arc<dyn Fn(dispatch_loop::FinalAdmissionGateMarker) + Send + Sync>>,
+    #[cfg(test)]
+    pub(crate) precision_gate_qpc_sample_count_for_test: u8,
+    #[cfg(test)]
+    pub(crate) precision_gate_qpc_sample_failure_index_for_test: Option<u8>,
     focus_restore_started_ticks: Option<QpcTicks>,
     pub(crate) modifier_hold_started_ticks: Option<QpcTicks>,
     last_dispatch_deadline_wake_qpc: Option<QpcTicks>,

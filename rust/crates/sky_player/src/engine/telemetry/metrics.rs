@@ -515,15 +515,6 @@ impl WorkerMetricsLocal {
         self.physical_target_to_wake_max_ticks = self
             .physical_target_to_wake_max_ticks
             .max(observer.physical_target_to_wake_max_ticks);
-        self.wait_planned_gap_hot_lateness_max_us = self
-            .wait_planned_gap_hot_lateness_max_us
-            .max(observer.wait_planned_gap_hot_lateness_max_us);
-        self.wait_planned_gap_cold_lateness_max_us = self
-            .wait_planned_gap_cold_lateness_max_us
-            .max(observer.wait_planned_gap_cold_lateness_max_us);
-        self.physical_target_to_wake_max_us = self
-            .physical_target_to_wake_max_us
-            .max(observer.physical_target_to_wake_max_us);
         self.dispatch_occupancy_max_us = self
             .dispatch_occupancy_max_us
             .max(observer.dispatch_occupancy_max_us);

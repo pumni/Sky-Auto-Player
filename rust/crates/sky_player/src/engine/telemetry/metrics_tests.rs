@@ -474,6 +474,65 @@ fn publication_derives_floor_delay_microseconds_from_qpc_ticks() {
 }
 
 #[test]
+fn live_and_terminal_lateness_projection_uses_merged_ticks_at_nondefault_qpc_frequency() {
+    let shared = SharedMetrics::default();
+    let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
+    let dispatch = WorkerMetricsLocal {
+        wait_planned_gap_hot_lateness_max_ticks: 1_234,
+        wait_planned_gap_hot_lateness_max_us: 111,
+        wait_planned_gap_cold_lateness_max_ticks: 45_678,
+        wait_planned_gap_cold_lateness_max_us: 222,
+        physical_target_to_wake_max_ticks: 12_345,
+        physical_target_to_wake_max_us: 333,
+        ..WorkerMetricsLocal::default()
+    };
+    let observer = WorkerMetricsLocal {
+        wait_planned_gap_hot_lateness_max_ticks: 23_459,
+        wait_planned_gap_hot_lateness_max_us: 999_999,
+        wait_planned_gap_cold_lateness_max_ticks: 3_456,
+        wait_planned_gap_cold_lateness_max_us: 888_888,
+        physical_target_to_wake_max_ticks: 98_765,
+        physical_target_to_wake_max_us: 777_777,
+        ..WorkerMetricsLocal::default()
+    };
+
+    assert!(shared.snapshot.try_publish_dispatch(dispatch.clone()));
+    assert!(shared.snapshot.try_publish_observer(observer.clone()));
+
+    let live = shared.snapshot.load(qpc_clock);
+    assert_eq!(live.wait_planned_gap_hot_lateness_max_ticks, 23_459);
+    assert_eq!(live.wait_planned_gap_hot_lateness_max_us, 2_345);
+    assert_eq!(live.wait_planned_gap_cold_lateness_max_ticks, 45_678);
+    assert_eq!(live.wait_planned_gap_cold_lateness_max_us, 4_567);
+    assert_eq!(live.physical_target_to_wake_max_ticks, 98_765);
+    assert_eq!(live.physical_target_to_wake_max_us, 9_876);
+
+    let mut terminal_source = dispatch.clone();
+    terminal_source.merge_observer(&observer);
+    assert_eq!(
+        terminal_source.wait_planned_gap_hot_lateness_max_us,
+        dispatch.wait_planned_gap_hot_lateness_max_us
+    );
+    assert_eq!(
+        terminal_source.wait_planned_gap_cold_lateness_max_us,
+        dispatch.wait_planned_gap_cold_lateness_max_us
+    );
+    assert_eq!(
+        terminal_source.physical_target_to_wake_max_us,
+        dispatch.physical_target_to_wake_max_us
+    );
+    publish_terminal_metrics(&terminal_source, &shared, qpc_ticks(1));
+
+    let terminal = shared.snapshot.load(qpc_clock);
+    assert_eq!(terminal.wait_planned_gap_hot_lateness_max_ticks, 23_459);
+    assert_eq!(terminal.wait_planned_gap_hot_lateness_max_us, 2_345);
+    assert_eq!(terminal.wait_planned_gap_cold_lateness_max_ticks, 45_678);
+    assert_eq!(terminal.wait_planned_gap_cold_lateness_max_us, 4_567);
+    assert_eq!(terminal.physical_target_to_wake_max_ticks, 98_765);
+    assert_eq!(terminal.physical_target_to_wake_max_us, 9_876);
+}
+
+#[test]
 fn precision_timing_summary_keeps_exact_boundaries_and_lower_bounds() {
     let mut metrics = WorkerMetricsLocal::default();
     metrics.observe_precision_packet_result(PrecisionPacketTimingObservation {
