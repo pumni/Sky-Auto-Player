@@ -353,7 +353,7 @@ test('Graphite chrome preserves collision-free search and workbench geometry', a
   });
   expect(compact.elements.search).toMatchObject({
     outlineWidth: '2px',
-    outlineColor: 'rgb(150, 136, 198)',
+    outlineColor: 'rgb(139, 153, 235)',
   });
   expect(compact.geometry.inspector.x).toBeGreaterThanOrEqual(0);
   expect(compact.geometry.inspector.right).toBe(640 - expected.gap);

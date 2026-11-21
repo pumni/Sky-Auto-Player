@@ -175,7 +175,7 @@ async function expectFilledWhite(control: Locator, expectedBackground: string) {
     sameColor(style.background, expectedBackground),
     `expected ${expectedBackground}; received ${style.background}`,
   ).toBe(true);
-  expect(style.foreground).toBe('rgb(255, 255, 255)');
+  expect(['rgb(255, 255, 255)', 'rgb(17, 19, 26)']).toContain(style.foreground);
   expect(contrastRatio(style.foreground, style.background)).toBeGreaterThanOrEqual(4.5);
   if (style.iconColor !== null) {
     expect(style.iconColor).toBe(style.foreground);
@@ -223,7 +223,7 @@ test('Graphite transport keeps Play, Pause, and Resume in the filled primary rol
   await expect(disabledPlay).toBeDisabled();
   const disabledStyle = await colors(disabledPlay);
   expect(sameColor(disabledStyle.background, await token(page, '--surface-raised'))).toBe(true);
-  expect(disabledStyle.foreground).toBe('rgb(139, 140, 144)');
+  expect(disabledStyle.foreground).toBe('rgb(108, 110, 115)');
   expect(disabledStyle.opacity).toBe('1');
   await disabledPlay.hover();
   expect(sameColor((await colors(disabledPlay)).background, disabledStyle.background)).toBe(true);
@@ -236,10 +236,10 @@ test('Graphite transport keeps Play, Pause, and Resume in the filled primary rol
   const fillPressed = await token(page, '--workbench-accent-fill-pressed');
   await expectFilledWhite(enabledPlay, fill);
   const hoverStyle = await expectVisibleHover(enabledPlay, fillHover);
-  expect(hoverStyle.foreground).toBe('rgb(255, 255, 255)');
+  expect(hoverStyle.foreground).toBe('rgb(17, 19, 26)');
   const pressedStyle = await pressWithoutClick(page, enabledPlay);
   expect(sameColor(pressedStyle.background, fillPressed)).toBe(true);
-  expect(pressedStyle.foreground).toBe('rgb(255, 255, 255)');
+  expect(pressedStyle.foreground).toBe('rgb(17, 19, 26)');
   expect(contrastRatio(pressedStyle.foreground, pressedStyle.background)).toBeGreaterThanOrEqual(
     4.5,
   );
@@ -267,21 +267,21 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   const controlPressed = await token(page, '--workbench-control-pressed');
   const toggleOn = await token(page, '--workbench-toggle-on');
   const toggleOff = await token(page, '--workbench-toggle-off');
-  expect(toggleOn).toBe('#b2a5e9');
+  expect(toggleOn).toBe('#9aa8ff');
   expect(toggleOff).toBe('#808187');
   const transparent = 'rgba(0, 0, 0, 0)';
   const activeLibrary = page.locator('.library-nav-item.is-active').first();
   const activeLibraryStyle = await colors(activeLibrary);
   expect(sameColor(activeLibraryStyle.background, selectionFill)).toBe(true);
-  expect(activeLibraryStyle.foreground).toBe('rgb(212, 212, 212)');
-  expect(activeLibraryStyle.iconColor).toBe('rgb(178, 165, 233)');
+  expect(activeLibraryStyle.foreground).toBe('rgb(226, 228, 232)');
+  expect(activeLibraryStyle.iconColor).toBe('rgb(154, 168, 255)');
   expect(
     contrastRatio(activeLibraryStyle.iconColor!, activeLibraryStyle.background),
   ).toBeGreaterThanOrEqual(3);
   await activeLibrary.hover();
   const activeLibraryHover = await colors(activeLibrary);
   expect(sameColor(activeLibraryHover.background, selectionFill)).toBe(true);
-  expect(activeLibraryHover.iconColor).toBe('rgb(178, 165, 233)');
+  expect(activeLibraryHover.iconColor).toBe('rgb(154, 168, 255)');
   await page.mouse.move(0, 0);
   await page.keyboard.press('Tab');
   await activeLibrary.evaluate((element) => element.focus());
@@ -300,20 +300,20 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   await expect(activeSettings).toHaveAttribute('aria-current', 'page');
   const activeSettingsStyle = await colors(activeSettings);
   expect(sameColor(activeSettingsStyle.background, selectionFill)).toBe(true);
-  expect(activeSettingsStyle.foreground).toBe('rgb(178, 165, 233)');
+  expect(activeSettingsStyle.foreground).toBe('rgb(154, 168, 255)');
   expect(
     contrastRatio(activeSettingsStyle.foreground, activeSettingsStyle.background),
   ).toBeGreaterThanOrEqual(3);
   await activeSettings.hover();
   const activeSettingsHover = await colors(activeSettings);
   expect(sameColor(activeSettingsHover.background, selectedHover)).toBe(true);
-  expect(activeSettingsHover.foreground).toBe('rgb(178, 165, 233)');
+  expect(activeSettingsHover.foreground).toBe('rgb(154, 168, 255)');
   await settings.getByRole('button', { name: 'Appearance', exact: true }).focus();
   await page.keyboard.press('Shift+Tab');
   await expect(activeSettings).toBeFocused();
   expect(await activeSettings.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
   const activeSettingsFocus = await colors(activeSettings);
-  expect(activeSettingsFocus.foreground).toBe('rgb(178, 165, 233)');
+  expect(activeSettingsFocus.foreground).toBe('rgb(154, 168, 255)');
   expect(
     contrastRatio(activeSettingsFocus.foreground, activeSettingsFocus.background),
   ).toBeGreaterThanOrEqual(3);
@@ -452,10 +452,10 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   await autoPlay.click();
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'false');
   expect(await controlGeometry(autoPlay)).toEqual(autoPlayOnGeometry);
-  await expectForeground(autoPlay, 'rgb(212, 212, 212)');
+  await expectForeground(autoPlay, 'rgb(226, 228, 232)');
   const autoPlayOffHover = await colors(autoPlay);
   expect(sameColor(autoPlayOffHover.background, controlHover)).toBe(true);
-  expect(autoPlayOffHover.foreground).toBe('rgb(212, 212, 212)');
+  expect(autoPlayOffHover.foreground).toBe('rgb(226, 228, 232)');
   expect(
     contrastRatio(autoPlayOffHover.foreground, autoPlayOffHover.background),
   ).toBeGreaterThanOrEqual(3);
@@ -494,25 +494,25 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   await utility.click();
   await expect(utility).toHaveAttribute('aria-expanded', 'true');
   await page.mouse.move(0, 0);
-  await expectForeground(utility, 'rgb(178, 165, 233)');
+  await expectForeground(utility, 'rgb(154, 168, 255)');
   const utilityStyle = await colors(utility);
   expect(sameColor(utilityStyle.background, transparent)).toBe(true);
-  expect(utilityStyle.foreground).toBe('rgb(178, 165, 233)');
+  expect(utilityStyle.foreground).toBe('rgb(154, 168, 255)');
   expect(
     contrastRatio(utilityStyle.foreground, await token(page, '--workbench-inspector')),
   ).toBeGreaterThanOrEqual(3);
   await utility.hover();
-  await expectForeground(utility, 'rgb(192, 180, 241)');
+  await expectForeground(utility, 'rgb(176, 188, 255)');
   const utilityHover = await colors(utility);
   expect(sameColor(utilityHover.background, controlHover)).toBe(true);
-  expect(utilityHover.foreground).toBe('rgb(192, 180, 241)');
+  expect(utilityHover.foreground).toBe('rgb(176, 188, 255)');
   await page.mouse.move(0, 0);
   const detailsTab = page.locator('.utility-view-tabs [role=tab][aria-selected=true]');
   await expect(detailsTab).toHaveAccessibleName('Details');
   const detailsStyle = await colors(detailsTab);
   expect(detailsStyle.borderRadius).toBe('0px');
   expect(sameColor(detailsStyle.background, 'rgb(36, 37, 38)')).toBe(true);
-  expect(detailsStyle.foreground).toBe('rgb(178, 165, 233)');
+  expect(detailsStyle.foreground).toBe('rgb(154, 168, 255)');
   expect(detailsStyle.borderBottomWidth).toBe('2px');
   expect(detailsStyle.borderBottomStyle).toBe('solid');
   expect(sameColor(detailsStyle.borderBottom, await token(page, '--selection-indicator'))).toBe(
@@ -526,23 +526,23 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   const runtimeRest = await colors(runtimeTab);
   expect(runtimeRest.borderRadius).toBe('0px');
   expect(sameColor(runtimeRest.background, transparent)).toBe(true);
-  expect(runtimeRest.foreground).toBe('rgb(166, 166, 166)');
+  expect(runtimeRest.foreground).toBe('rgb(166, 168, 173)');
   expect(runtimeRest.borderBottomWidth).toBe('2px');
   expect(runtimeRest.borderBottomStyle).toBe('solid');
   expect(sameColor(runtimeRest.borderBottom, transparent)).toBe(true);
   await runtimeTab.hover();
   const runtimeInactiveHover = await colors(runtimeTab);
   expect(sameColor(runtimeInactiveHover.background, 'rgb(48, 49, 53)')).toBe(true);
-  expect(runtimeInactiveHover.foreground).toBe('rgb(212, 212, 212)');
+  expect(runtimeInactiveHover.foreground).toBe('rgb(226, 228, 232)');
   expect(runtimeInactiveHover.borderRadius).toBe('0px');
   await page.mouse.move(0, 0);
 
   await detailsTab.hover();
   const detailsHover = await colors(detailsTab);
   expect(sameColor(detailsHover.background, 'rgb(48, 49, 53)')).toBe(true);
-  expect(detailsHover.foreground).toBe('rgb(178, 165, 233)');
+  expect(detailsHover.foreground).toBe('rgb(154, 168, 255)');
   expect(detailsHover.borderBottomWidth).toBe('2px');
-  expect(sameColor(detailsHover.borderBottom, 'rgb(178, 165, 233)')).toBe(true);
+  expect(sameColor(detailsHover.borderBottom, 'rgb(154, 168, 255)')).toBe(true);
   await page.mouse.move(0, 0);
 
   await detailsTab.focus();
@@ -552,15 +552,15 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   expect(await runtimeTab.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
   const runtimeFocus = await colors(runtimeTab);
   expect(sameColor(runtimeFocus.background, 'rgb(36, 37, 38)')).toBe(true);
-  expect(runtimeFocus.foreground).toBe('rgb(178, 165, 233)');
+  expect(runtimeFocus.foreground).toBe('rgb(154, 168, 255)');
   expect(runtimeFocus.borderRadius).toBe('0px');
   expect(runtimeFocus.borderBottomWidth).toBe('2px');
-  expect(sameColor(runtimeFocus.borderBottom, 'rgb(178, 165, 233)')).toBe(true);
+  expect(sameColor(runtimeFocus.borderBottom, 'rgb(154, 168, 255)')).toBe(true);
   expect(runtimeFocus.outlineWidth).toBe('2px');
   await runtimeTab.hover();
   const runtimeHover = await colors(runtimeTab);
   expect(sameColor(runtimeHover.background, 'rgb(48, 49, 53)')).toBe(true);
-  expect(runtimeHover.foreground).toBe('rgb(178, 165, 233)');
+  expect(runtimeHover.foreground).toBe('rgb(154, 168, 255)');
   expect(
     contrastRatio(runtimeHover.foreground, await token(page, '--workbench-inspector')),
   ).toBeGreaterThanOrEqual(3);
@@ -718,7 +718,7 @@ test('Graphite text actions use a raised action role while ghost icon controls s
   const updateRest = await colors(checkUpdates);
   expect(sameColor(updateRest.background, actionRest)).toBe(true);
   expect(sameColor(updateRest.border, actionEdge)).toBe(true);
-  expect(updateRest.foreground).toBe('rgb(212, 212, 212)');
+  expect(updateRest.foreground).toBe('rgb(226, 228, 232)');
   await checkUpdates.hover();
   const updateHover = await colors(checkUpdates);
   expect(sameColor(updateHover.background, actionHover)).toBe(true);
@@ -803,11 +803,11 @@ test('Graphite hierarchy leaves the five existing palette accent contracts uncha
     .locator('html')
     .evaluate((element) => element.setAttribute('data-palette', 'graphite'));
   expect(await readPalette()).toEqual([
-    'rgb(178, 165, 233)',
-    'rgb(192, 180, 241)',
-    'rgb(255, 255, 255)',
+    'rgb(154, 168, 255)',
+    'rgb(176, 188, 255)',
+    'rgb(17, 19, 26)',
   ]);
-  expect(sameColor(await token(page, '--workbench-accent-fill'), '#705eae')).toBe(true);
+  expect(sameColor(await token(page, '--workbench-accent-fill'), '#8e9dff')).toBe(true);
   const startupMark = await page.evaluate(() => {
     const element = document.createElement('div');
     element.className = 'startup-mark';
@@ -820,7 +820,7 @@ test('Graphite hierarchy leaves the five existing palette accent contracts uncha
     element.remove();
     return colors;
   });
-  expect(startupMark.foreground).toBe('rgb(255, 255, 255)');
+  expect(startupMark.foreground).toBe('rgb(17, 19, 26)');
   expect(sameColor(startupMark.background, await token(page, '--workbench-accent-fill'))).toBe(
     true,
   );

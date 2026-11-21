@@ -231,7 +231,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
   expect(idleCollapseStyle).toEqual({
     borderColor: 'rgba(0, 0, 0, 0)',
     backgroundColor: 'rgba(0, 0, 0, 0)',
-    color: 'rgb(166, 166, 166)',
+    color: 'rgb(166, 168, 173)',
     boxShadow: 'none',
   });
   await collapseButton.hover();
@@ -247,7 +247,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
   expect(hoverCollapseStyle).toEqual({
     borderColor: 'rgba(0, 0, 0, 0)',
     backgroundColor: 'rgb(53, 54, 58)',
-    color: 'rgb(212, 212, 212)',
+    color: 'rgb(226, 228, 232)',
     boxShadow: 'none',
   });
   await page.mouse.move(0, 0);
@@ -267,7 +267,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
   expect(focusCollapseStyle).toEqual({
     outlineWidth: '2px',
     outlineStyle: 'solid',
-    outlineColor: 'rgb(178, 165, 233)',
+    outlineColor: 'rgb(154, 168, 255)',
     outlineOffset: '1px',
     boxShadow: 'none',
   });
@@ -367,7 +367,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       '--workbench-control-pressed': '#404246',
       '--workbench-control-disabled': '#6c6e73',
       '--workbench-control-danger-hover': '#452d32',
-      '--selection-bg': '#25242c',
+      '--selection-bg': '#222534',
       '--border-subtle': '#2a2b2c',
       '--border-strong': '#393b3e',
       '--control-border': '#72777d',
@@ -384,13 +384,13 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       '--radius-control': '8px',
       '--radius-panel': '10px',
       '--radius-dialog': '14px',
-      '--text-primary': '#d4d4d4',
-      '--text-secondary': '#a6a6a6',
-      '--text-tertiary': '#929292',
-      '--accent': '#b2a5e9',
-      '--accent-hover': '#c0b4f1',
-      '--on-accent': '#ffffff',
-      '--focus-ring': '#b2a5e9',
+      '--text-primary': '#e2e4e8',
+      '--text-secondary': '#a6a8ad',
+      '--text-tertiary': '#94979e',
+      '--accent': '#9aa8ff',
+      '--accent-hover': '#b0bcff',
+      '--on-accent': '#11131a',
+      '--focus-ring': '#9aa8ff',
     });
 
     expect(populated.elements.titlebar?.backgroundColor).toBe('rgb(25, 26, 27)');
@@ -452,8 +452,8 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
     expect(populatedGeometry.inspector.width).toBeGreaterThanOrEqual(280);
     expect(populatedGeometry.inspector.right).toBeLessThanOrEqual(1366);
     expect(populated.elements.playerDock?.backgroundColor).toBe('rgb(25, 26, 27)');
-    expect(populated.elements.selectedRow?.backgroundColor).toBe('rgb(37, 36, 44)');
-    expect(populated.elements.playingRow?.backgroundColor).toBe('rgb(25, 26, 27)');
+    expect(populated.elements.selectedRow?.backgroundColor).toBe('rgb(34, 37, 52)');
+    expect(populated.elements.playingRow?.backgroundColor).toBe('rgb(26, 29, 40)');
     expect(populated.elements.navigatorHeading).toMatchObject({
       fontSize: '13px',
       fontWeight: '600',
@@ -470,7 +470,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
     expect(populated.elements.selectedRow?.height).toBe('46px');
     expect(populated.elements.selectedTitle).toMatchObject({ fontSize: '13px', fontWeight: '600' });
     expect(populated.elements.playingTitle).toMatchObject({
-      color: 'rgb(178, 165, 233)',
+      color: 'rgb(154, 168, 255)',
       fontSize: '13px',
       fontWeight: '650',
     });
@@ -490,7 +490,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       borderTopWidth: '1px',
       borderTopColor: 'rgb(61, 63, 67)',
       outlineWidth: '2px',
-      outlineColor: 'rgb(150, 136, 198)',
+      outlineColor: 'rgb(139, 153, 235)',
     });
     expect(compact.elements.pageHeading).toMatchObject({ fontSize: '13px', fontWeight: '600' });
     expect(compact.elements.resultCount?.fontSize).toBe('11px');

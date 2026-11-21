@@ -612,7 +612,11 @@
 }
 
 .settings-palette-preview.is-standby {
-  opacity: 0.78;
+  background: var(--surface-panel);
+}
+
+.settings-palette-preview.is-standby .settings-palette-swatches {
+  opacity: 0.72;
 }
 
 .settings-palette-preview-copy {
@@ -628,7 +632,7 @@
 }
 
 .settings-palette-preview-meta {
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
   font-size: 11.5px;
 }
 

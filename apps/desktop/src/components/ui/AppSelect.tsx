@@ -55,6 +55,12 @@ export function AppSelect<T extends string = string>({
     queueMicrotask(() => triggerRef.current?.focus());
   };
 
+  const handleItemAction = (itemValue: T) => {
+    if (itemValue === value) {
+      closeAndRefocus();
+    }
+  };
+
   const handleTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
     if (disabled) return;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
@@ -159,6 +165,9 @@ export function AppSelect<T extends string = string>({
         containerPadding={12}
         shouldFlip
         className={popoverClasses}
+        {...(ariaLabelledBy
+          ? { 'aria-labelledby': ariaLabelledBy }
+          : { 'aria-label': `${resolvedListboxLabel} options` })}
         {...(popoverStyle ? { style: popoverStyle } : {})}
       >
         <div onKeyDown={handlePopoverKeyDown}>
@@ -182,6 +191,8 @@ export function AppSelect<T extends string = string>({
                 isDisabled={option.disabled === true}
                 className="app-select-option"
                 data-value={option.value}
+                onAction={() => handleItemAction(option.value)}
+                onPress={() => handleItemAction(option.value)}
               >
                 {({ isSelected }) => (
                   <>

@@ -59,6 +59,9 @@ describe('AppSelect', () => {
     fireEvent.click(combobox);
     expect(combobox).toHaveAttribute('aria-expanded', 'true');
 
+    const dialog = screen.getByRole('dialog', { name: 'Base Hold options' });
+    expect(dialog).toBeInTheDocument();
+
     const listbox = screen.getByRole('listbox', { name: 'Base Hold' });
     expect(listbox).toBeInTheDocument();
     expect(screen.getByRole('option', { name: /Alpha/ })).toHaveAttribute('aria-selected', 'true');

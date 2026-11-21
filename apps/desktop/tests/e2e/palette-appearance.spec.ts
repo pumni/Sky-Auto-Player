@@ -52,21 +52,21 @@ const expected = {
     controlBorder: '#72777d',
     controlHover: '#222324',
     controlPressed: '#404246',
-    selectionBg: '#25242c',
-    accent: '#b2a5e9',
-    accentHover: '#c0b4f1',
-    accentFill: '#705eae',
-    accentFillHover: '#7564b4',
-    accentFillPressed: '#6553a0',
+    selectionBg: '#222534',
+    accent: '#9aa8ff',
+    accentHover: '#b0bcff',
+    accentFill: '#8e9dff',
+    accentFillHover: '#a3b0ff',
+    accentFillPressed: '#7888f0',
     borderStrong: '#393b3e',
     canvas: '#121314',
     surfaceRaised: '#242526',
-    onAccent: '#ffffff',
-    focusRing: '#b2a5e9',
-    searchFocus: '#9688c6',
-    toggleActive: '#b2a5e9',
+    onAccent: '#11131a',
+    focusRing: '#9aa8ff',
+    searchFocus: '#8b99eb',
+    toggleActive: '#9aa8ff',
     toggleInactive: '#808187',
-    textTertiary: '#929292',
+    textTertiary: '#94979e',
     onDanger: '#ffffff',
   },
   aurora: {
@@ -188,23 +188,23 @@ const graphiteRoleTokens = {
   '--workbench-control-pressed': '#404246',
   '--workbench-control-disabled': '#6c6e73',
   '--workbench-control-danger-hover': '#452d32',
-  '--workbench-selected': '#25242c',
+  '--workbench-selected': '#222534',
   '--workbench-divider': '#2a2b2c',
   '--workbench-critical-edge': '#393b3e',
   '--workbench-control-boundary': '#72777d',
-  '--workbench-text-primary': '#d4d4d4',
-  '--workbench-text-secondary': '#a6a6a6',
-  '--workbench-text-tertiary': '#929292',
-  '--workbench-accent': '#b2a5e9',
-  '--workbench-accent-hover': '#c0b4f1',
-  '--workbench-accent-fill': '#705eae',
-  '--workbench-accent-fill-hover': '#7564b4',
-  '--workbench-accent-fill-pressed': '#6553a0',
-  '--workbench-toggle-on': '#b2a5e9',
-  '--workbench-focus': '#b2a5e9',
+  '--workbench-text-primary': '#e2e4e8',
+  '--workbench-text-secondary': '#a6a8ad',
+  '--workbench-text-tertiary': '#94979e',
+  '--workbench-accent': '#9aa8ff',
+  '--workbench-accent-hover': '#b0bcff',
+  '--workbench-accent-fill': '#8e9dff',
+  '--workbench-accent-fill-hover': '#a3b0ff',
+  '--workbench-accent-fill-pressed': '#7888f0',
+  '--workbench-toggle-on': '#9aa8ff',
+  '--workbench-focus': '#9aa8ff',
   '--workbench-search-surface': '#202123',
   '--workbench-search-idle-edge': '#3d3f43',
-  '--workbench-search-focus': '#9688c6',
+  '--workbench-search-focus': '#8b99eb',
 } as const;
 
 const stableStatusTokens = {
@@ -460,9 +460,9 @@ test('all palette tokens and contrast gates match the locked contract', async ({
     const expectedTokenValues = {
       '--control-border': values.controlBorder,
       '--selection-bg': values.selectionBg,
-      '--selection-control': palette === 'graphite' ? '#302d38' : values.selectionBg,
-      '--selection-control-hover': palette === 'graphite' ? '#3b3646' : values.controlHover,
-      '--selection-control-pressed': palette === 'graphite' ? '#474151' : values.controlPressed,
+      '--selection-control': palette === 'graphite' ? '#2b2f42' : values.selectionBg,
+      '--selection-control-hover': palette === 'graphite' ? '#34394f' : values.controlHover,
+      '--selection-control-pressed': palette === 'graphite' ? '#3e445e' : values.controlPressed,
       '--accent': palette === 'graphite' ? values.accent : values.accentFill,
       '--accent-hover': palette === 'graphite' ? values.accentHover : values.accentFillHover,
       '--accent-fill': values.accentFill,
@@ -558,6 +558,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
   await expect(page.locator('html')).not.toHaveAttribute('data-palette');
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
   await expect.poll(() => tokenValues(page, paletteTokenNames)).toEqual(defaultTokens);
+  await selectPalette(page, 'graphite');
   await selectPalette(page, 'aurora');
 });
 
@@ -603,17 +604,17 @@ test('Graphite is the new-install palette and keeps its graphite setting ID', as
     '--workbench-control-pressed': '#404246',
     '--workbench-control-disabled': '#6c6e73',
     '--workbench-control-danger-hover': '#452d32',
-    '--selection-bg': '#25242c',
+    '--selection-bg': '#222534',
     '--border-subtle': '#2a2b2c',
     '--border-strong': '#393b3e',
     '--control-border': '#72777d',
-    '--text-primary': '#d4d4d4',
-    '--text-secondary': '#a6a6a6',
-    '--text-tertiary': '#929292',
-    '--accent': '#b2a5e9',
-    '--accent-hover': '#c0b4f1',
-    '--on-accent': '#ffffff',
-    '--focus-ring': '#b2a5e9',
+    '--text-primary': '#e2e4e8',
+    '--text-secondary': '#a6a8ad',
+    '--text-tertiary': '#94979e',
+    '--accent': '#9aa8ff',
+    '--accent-hover': '#b0bcff',
+    '--on-accent': '#11131a',
+    '--focus-ring': '#9aa8ff',
   } as const;
   const expectedGraphiteTokens = {
     ...graphiteTokens,
@@ -780,6 +781,7 @@ test('Settings modal geometry, roles, and focus order are shared across palettes
   for (const palette of palettes) {
     await paletteSelect.click();
     await page.locator(`.app-select-option[data-value="${palette}"]`).click();
+    await expect(page.locator('.app-select-popover')).toBeHidden();
     await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
     await expect(dialog.getByRole('region', { name: 'Appearance' })).toBeVisible();
@@ -959,7 +961,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('button', { name: 'Playback', exact: true }).click();
-  const settingsSelect = settings.locator('.settings-section select').first();
+  const settingsSelect = settings.locator('.settings-section .app-select-trigger').first();
   await assertBorderUsesToken(page, settingsSelect, '--control-border');
   await settings
     .locator('.settings-section')
@@ -995,7 +997,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   const profilePopover = page.locator('.profile-popover');
   await assertBorderUsesToken(
     page,
-    profile.locator('.profile-fields select').first(),
+    profile.locator('.profile-fields .app-select-trigger').first(),
     '--control-border',
   );
   await assertBorderUsesToken(page, profilePopover, '--border-strong');
@@ -1003,10 +1005,10 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   await expect(profile).toBeHidden();
 
   const update = page.locator('.update-indicator');
-  await assertBorderUsesToken(page, update, '--border-strong');
-  await assertBackgroundUsesToken(page, update, '--surface-raised');
+  await assertBorderUsesToken(page, update, '--workbench-control-rest-edge');
+  await assertBackgroundUsesToken(page, update, '--workbench-control-rest');
   await update.hover();
-  await assertBackgroundUsesToken(page, update, '--control-hover');
+  await assertBackgroundUsesToken(page, update, '--workbench-control-hover');
   await assertBackgroundUsesToken(page, page.locator('.update-indicator-dot'), '--accent-ink');
 
   const navigator = page.getByRole('navigation', { name: 'Library' });

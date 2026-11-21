@@ -27,7 +27,7 @@ const lightTokens = {
   '--surface-raised': '#ffffff',
   '--control-hover': '#eef2f6',
   '--control-pressed': '#e2e8f0',
-  '--selection-bg': '#eaf2fd',
+  '--selection-bg': '#eaeffe',
   '--border-subtle': '#dfe4eb',
   '--border-strong': '#b1bbc6',
   '--control-border': '#808a96',
@@ -35,10 +35,10 @@ const lightTokens = {
   '--text-primary': '#252a31',
   '--text-secondary': '#535f6c',
   '--text-tertiary': '#5d6976',
-  '--accent-ink': '#0b58a5',
-  '--accent-fill': '#0b63c5',
-  '--accent-fill-hover': '#0958ae',
-  '--accent-fill-pressed': '#084c98',
+  '--accent-ink': '#3449b5',
+  '--accent-fill': '#3c54cf',
+  '--accent-fill-hover': '#3248ba',
+  '--accent-fill-pressed': '#293da3',
   '--success-fg': '#1f7a47',
   '--success-bg': '#e9f5ed',
   '--success-border': '#1f7a47',
@@ -53,10 +53,10 @@ const lightTokens = {
   '--workbench-inspector': '#f4f6f9',
   '--chrome-surface': '#f7f8fa',
   '--workbench-control-disabled': '#8a94a0',
-  '--workbench-playing-indicator': '#0b58a5',
+  '--workbench-playing-indicator': '#3449b5',
   '--workbench-search-surface': '#ffffff',
   '--workbench-search-idle-edge': '#8a94a0',
-  '--workbench-search-focus': '#0b58a5',
+  '--workbench-search-focus': '#3449b5',
   '--caption-text': '#535f6c',
   '--overlay-backdrop': 'rgb(37 42 49 / 38%)',
 } as const;
@@ -340,8 +340,8 @@ test('Light selected and playing rows remain distinct with accessible contrast',
       playingIndicator: playingStyle.borderLeftColor,
     };
   });
-  expect(rowStyles.selectedBackground).toBe('rgb(234, 242, 253)');
-  expect(rowStyles.playingBackground).toBe('rgb(242, 246, 251)');
+  expect(rowStyles.selectedBackground).toBe('rgb(234, 239, 254)');
+  expect(rowStyles.playingBackground).toBe('rgb(244, 246, 254)');
   expect(rowStyles.selectedBackground).not.toBe(rowStyles.playingBackground);
   expect(rowStyles.selectedIndicator).not.toBe(rowStyles.playingIndicator);
   expect(
@@ -382,12 +382,12 @@ test('Graphite Dark keeps selected and playing rows distinct without changing it
       playingIndicatorToken: token('--workbench-playing-indicator'),
     };
   });
-  expect(rowStyles.selectedBackground).toBe('rgb(37, 36, 44)');
-  expect(rowStyles.playingBackground).toBe('rgb(30, 29, 37)');
+  expect(rowStyles.selectedBackground).toBe('rgb(34, 37, 52)');
+  expect(rowStyles.playingBackground).toBe('rgb(26, 29, 40)');
   expect(rowStyles.selectedBackground).not.toBe(rowStyles.playingBackground);
   expect(rowStyles.workbenchDivider).toBe('#2a2b2c');
-  expect(rowStyles.playingIndicatorToken).toBe('#b2a5e9');
-  expect(rowStyles.playingIndicator).toBe('rgb(178, 165, 233)');
+  expect(rowStyles.playingIndicatorToken).toBe('#9aa8ff');
+  expect(rowStyles.playingIndicator).toBe('rgb(154, 168, 255)');
   expect(rowStyles.selectedIndicator).not.toBe(rowStyles.playingIndicator);
   const summary = await textAudit(page, 'Graphite Dark populated library');
   expect(summary.minimumApplicableRatio).toBeGreaterThanOrEqual(4.5);
@@ -502,7 +502,7 @@ test('Light keyboard focus, hover, pressed, disabled, forced colors, and reduced
     colorMode: 'light',
     forcedColors: false,
     inputFocusVisible: true,
-    outlineColor: 'rgb(11, 88, 165)',
+    outlineColor: 'rgb(52, 73, 181)',
     outlineStyle: 'solid',
     outlineWidth: '2px',
     reducedMotion: true,
@@ -567,7 +567,7 @@ test('Light keyboard focus, hover, pressed, disabled, forced colors, and reduced
   });
   expect(likeHover.isHovered).toBe(true);
   expect(likeHover.rowIsHovered).toBe(true);
-  expect(likeHover.rowBackground).toBe('rgb(234, 242, 253)');
+  expect(likeHover.rowBackground).toBe('rgb(234, 239, 254)');
   expect(['rgba(0, 0, 0, 0)', 'rgb(238, 242, 246)']).toContain(likeHover.background);
   expect(contrastRatio(likeHover.color, likeHover.renderedBackground)).toBeGreaterThanOrEqual(3);
 
