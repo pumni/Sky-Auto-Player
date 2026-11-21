@@ -7,6 +7,7 @@ import type { SystemAppearanceSubscription } from '../platform/systemAppearance'
 let sharedMode: ColorMode | null = null;
 let sharedReady = false;
 let activeSubscription: SystemAppearanceSubscription | null = null;
+let subscriptionGeneration = 0;
 const subscribers = new Set<(state: { mode: ColorMode; ready: boolean }) => void>();
 
 export function useSystemAppearance(): { mode: ColorMode; ready: boolean } {
@@ -19,25 +20,37 @@ export function useSystemAppearance(): { mode: ColorMode; ready: boolean } {
     subscribers.add(setState);
 
     if (!activeSubscription) {
+      const generation = ++subscriptionGeneration;
       sharedReady = !isTauriRuntime();
       sharedMode = readBrowserSystemMode();
       activeSubscription = subscribeSystemAppearance((nextMode) => {
+        if (generation !== subscriptionGeneration) return;
         sharedMode = nextMode;
         for (const sub of subscribers) {
           sub({ mode: nextMode, ready: sharedReady });
         }
       });
-      void activeSubscription.ready.then(() => {
-        sharedReady = true;
-        for (const sub of subscribers) {
-          sub({ mode: sharedMode ?? 'dark', ready: true });
-        }
-      });
+      void activeSubscription.ready
+        .then(() => {
+          if (generation !== subscriptionGeneration) return;
+          sharedReady = true;
+          for (const sub of subscribers) {
+            sub({ mode: sharedMode ?? 'dark', ready: true });
+          }
+        })
+        .catch(() => {
+          if (generation !== subscriptionGeneration) return;
+          sharedReady = true;
+          for (const sub of subscribers) {
+            sub({ mode: sharedMode ?? 'dark', ready: true });
+          }
+        });
     }
 
     return () => {
       subscribers.delete(setState);
       if (subscribers.size === 0) {
+        subscriptionGeneration += 1;
         activeSubscription?.unsubscribe();
         activeSubscription = null;
         sharedMode = null;

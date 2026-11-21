@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Settings } from '../../bridge/DesktopBridge';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { selectRowAtIndex, selectSelectedDetail, createDesktopStore } from '../../state/store';
 import { SongDetailsView } from './SongDetailsView';
@@ -238,7 +239,7 @@ describe('SongDetailsView', () => {
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
     const first = selectRowAtIndex(store.getState().library, 0);
-    const second = selectRowAtIndex(store.getState().library, 1);
+    const second = selectRowAtIndex(store.getState().library, 5);
     if (!first || !second) throw new Error('mock library is too small');
     await act(async () => store.getState().selectSong(first.song_id));
 
@@ -257,7 +258,7 @@ describe('SongDetailsView', () => {
 
   it('ignores in-flight recommendation failure or success when song selection changes before response arrives', async () => {
     const bridge = createMockBridge();
-    let rejectPatch!: (reason: any) => void;
+    let rejectPatch!: (reason: unknown) => void;
     bridge.patchSettings = () =>
       new Promise((_, rej) => {
         rejectPatch = rej;
@@ -266,7 +267,7 @@ describe('SongDetailsView', () => {
     const store = createDesktopStore(bridge);
     await act(async () => store.getState().initialize());
     const first = selectRowAtIndex(store.getState().library, 0);
-    const second = selectRowAtIndex(store.getState().library, 1);
+    const second = selectRowAtIndex(store.getState().library, 5);
     if (!first || !second) throw new Error('mock library is too small');
     await act(async () => store.getState().selectSong(first.song_id));
 
@@ -278,6 +279,9 @@ describe('SongDetailsView', () => {
     // Switch to second song while request is in-flight
     await act(async () => store.getState().selectSong(second.song_id));
 
+    // Song 2's button must be immediately enabled and actionable, NOT stuck in 'Applying…'
+    expect(screen.getByRole('button', { name: 'Apply recommendation' })).toBeEnabled();
+
     // Now reject the pending request for song 1
     await act(async () => {
       rejectPatch(new Error('Song 1 failed'));
@@ -285,5 +289,100 @@ describe('SongDetailsView', () => {
 
     // Song 2 should NOT have role="alert" or show Song 1's error
     expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Apply recommendation' })).toBeEnabled();
+  });
+
+  it('allows applying recommendation on Song B while Song A apply is still pending, applying Song B successfully', async () => {
+    const bridge = createMockBridge();
+    let resolvePatchSong1!: (val: Settings) => void;
+    const originalPatch = bridge.patchSettings.bind(bridge);
+    let patchCount = 0;
+
+    bridge.patchSettings = (patch) => {
+      patchCount += 1;
+      if (patchCount === 1) {
+        return new Promise((res) => {
+          resolvePatchSong1 = res;
+        });
+      }
+      return originalPatch(patch);
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = selectRowAtIndex(store.getState().library, 0);
+    const second = selectRowAtIndex(store.getState().library, 5);
+    if (!first || !second) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    render(<SongDetailsView useStore={store} />);
+    // Apply on song A
+    fireEvent.click(screen.getByRole('button', { name: 'Apply recommendation' }));
+    expect(screen.getByRole('button', { name: 'Applying…' })).toBeDisabled();
+
+    // Switch to song B
+    await act(async () => store.getState().selectSong(second.song_id));
+    const buttonB = screen.getByRole('button', { name: 'Apply recommendation' });
+    expect(buttonB).toBeEnabled();
+
+    // Apply on song B
+    fireEvent.click(buttonB);
+    expect(screen.getByRole('button', { name: 'Applying…' })).toBeDisabled();
+
+    // Now resolve song A's pending patch
+    await act(async () => {
+      resolvePatchSong1(null as unknown as Settings);
+    });
+
+    // Once song A completes, song B's queued mutation executes and succeeds
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: 'Recommended settings applied' })).toBeDisabled();
+    });
+
+    // Song B view remains clean
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('does not clobber fresh Song A state when switching A -> B -> A and old in-flight request arrives', async () => {
+    const bridge = createMockBridge();
+    let resolvePatchSongA1!: (val: Settings) => void;
+    let patchCount = 0;
+
+    bridge.patchSettings = () => {
+      patchCount += 1;
+      return new Promise((res) => {
+        if (patchCount === 1) resolvePatchSongA1 = res;
+      });
+    };
+
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const first = selectRowAtIndex(store.getState().library, 0);
+    const second = selectRowAtIndex(store.getState().library, 5);
+    if (!first || !second) throw new Error('mock library is too small');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    render(<SongDetailsView useStore={store} />);
+    // Apply request A1
+    fireEvent.click(screen.getByRole('button', { name: 'Apply recommendation' }));
+    expect(screen.getByRole('button', { name: 'Applying…' })).toBeDisabled();
+
+    // Switch to song B
+    await act(async () => store.getState().selectSong(second.song_id));
+    expect(screen.getByRole('button', { name: 'Apply recommendation' })).toBeEnabled();
+
+    // Switch back to song A
+    await act(async () => store.getState().selectSong(first.song_id));
+    // Song A is fresh: enabled and NOT stuck in 'Applying…'
+    expect(screen.getByRole('button', { name: 'Apply recommendation' })).toBeEnabled();
+
+    // Now resolve old request A1 with failure (null)
+    await act(async () => {
+      resolvePatchSongA1(null as unknown as Settings);
+    });
+
+    // Fresh Song A must NOT display error from old A1
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Apply recommendation' })).toBeEnabled();
   });
 });

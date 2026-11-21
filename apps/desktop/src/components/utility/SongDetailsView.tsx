@@ -37,11 +37,12 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
   );
   const conversionModeId = useId();
   const targetPitchId = useId();
-  const [applyingRecommendation, setApplyingRecommendation] = useState(false);
-  const [applyError, setApplyError] = useState<string | null>(null);
+  const [applyingSongId, setApplyingSongId] = useState<string | null>(null);
+  const [applyError, setApplyError] = useState<{ songId: string; message: string } | null>(null);
   const [prevSelectedSongId, setPrevSelectedSongId] = useState(selectedSongId);
   const scrollRef = useScrollVisibility<HTMLElement>();
   const mountedRef = useRef(true);
+  const activeRequestIdRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -50,8 +51,13 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
     };
   }, []);
 
+  useEffect(() => {
+    activeRequestIdRef.current += 1;
+  }, [selectedSongId]);
+
   if (selectedSongId !== prevSelectedSongId) {
     setPrevSelectedSongId(selectedSongId);
+    setApplyingSongId(null);
     setApplyError(null);
   }
 
@@ -96,13 +102,17 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
     (recommendedTempo === null ||
       Math.abs(playbackDefaults.tempo_scale - recommendedTempo) < 0.001);
 
+  const isApplying = applyingSongId !== null && applyingSongId === selectedSongId;
+  const currentError = applyError?.songId === selectedSongId ? applyError.message : null;
+
   const applyRecommendation = async () => {
-    if (!hasActionableRecommendation || recommendationMatchesCurrent || applyingRecommendation) {
+    if (!hasActionableRecommendation || recommendationMatchesCurrent || isApplying) {
       return;
     }
     const targetSongId = selectedSongId;
     if (!targetSongId) return;
-    setApplyingRecommendation(true);
+    const requestId = ++activeRequestIdRef.current;
+    setApplyingSongId(targetSongId);
     setApplyError(null);
     try {
       const result = await patchSettings({
@@ -111,20 +121,23 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
           ...(recommendedTempo !== null ? { tempoScale: recommendedTempo } : {}),
         },
       });
-      if (!mountedRef.current || useStore.getState().library.selectedSongId !== targetSongId)
-        return;
+      if (!mountedRef.current || activeRequestIdRef.current !== requestId) return;
       if (!result) {
-        setApplyError('Failed to apply recommendation. Please retry.');
+        setApplyError({
+          songId: targetSongId,
+          message: 'Failed to apply recommendation. Please retry.',
+        });
       }
     } catch (error) {
-      if (!mountedRef.current || useStore.getState().library.selectedSongId !== targetSongId)
-        return;
-      setApplyError(
-        error instanceof Error ? error.message : 'Failed to apply recommendation. Please retry.',
-      );
+      if (!mountedRef.current || activeRequestIdRef.current !== requestId) return;
+      setApplyError({
+        songId: targetSongId,
+        message:
+          error instanceof Error ? error.message : 'Failed to apply recommendation. Please retry.',
+      });
     } finally {
-      if (mountedRef.current && useStore.getState().library.selectedSongId === targetSongId) {
-        setApplyingRecommendation(false);
+      if (mountedRef.current && activeRequestIdRef.current === requestId) {
+        setApplyingSongId(null);
       }
     }
   };
@@ -368,20 +381,20 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
                 <button
                   type="button"
                   className="button song-details-apply-button"
-                  disabled={recommendationMatchesCurrent || applyingRecommendation}
+                  disabled={recommendationMatchesCurrent || isApplying}
                   onClick={() => void applyRecommendation()}
                 >
                   {recommendationMatchesCurrent
                     ? 'Recommended settings applied'
-                    : applyingRecommendation
+                    : isApplying
                       ? 'Applying…'
-                      : applyError
+                      : currentError
                         ? 'Retry recommendation'
                         : 'Apply recommendation'}
                 </button>
-                {applyError && (
+                {currentError && (
                   <p className="inline-error" role="alert">
-                    {applyError}
+                    {currentError}
                   </p>
                 )}
               </div>

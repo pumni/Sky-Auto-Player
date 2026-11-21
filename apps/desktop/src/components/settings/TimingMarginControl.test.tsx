@@ -337,4 +337,297 @@ describe('TimingMarginControl', () => {
     });
     expect(screen.getByText('1000 µs')).toBeInTheDocument();
   });
+
+  describe('mixed two-request completion matrix', () => {
+    it('newer null first, older success second -> renders older confirmed 900', async () => {
+      let resolveOlder!: (val: number | null) => void;
+      let resolveNewer!: (val: number | null) => void;
+      let callCount = 0;
+
+      render(
+        <TimingMarginControl
+          value={800}
+          options={options}
+          recommendation={recommendation}
+          density="compact"
+          onChange={() => {
+            callCount++;
+            return new Promise((res) => {
+              if (callCount === 1) resolveOlder = res;
+              else resolveNewer = res;
+            });
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      expect(screen.getByText('1000 µs')).toBeInTheDocument();
+
+      // Newer resolves with null (fails)
+      await act(async () => {
+        resolveNewer(null);
+      });
+      // Should show the older pending request (900) while it is still in flight
+      expect(screen.getByText('900 µs')).toBeInTheDocument();
+
+      // Older resolves with 900 (success)
+      await act(async () => {
+        resolveOlder(900);
+      });
+      expect(screen.getByText('900 µs')).toBeInTheDocument();
+    });
+
+    it('older success first, newer null second -> renders older confirmed 900', async () => {
+      let resolveOlder!: (val: number | null) => void;
+      let resolveNewer!: (val: number | null) => void;
+      let callCount = 0;
+
+      render(
+        <TimingMarginControl
+          value={800}
+          options={options}
+          recommendation={recommendation}
+          density="compact"
+          onChange={() => {
+            callCount++;
+            return new Promise((res) => {
+              if (callCount === 1) resolveOlder = res;
+              else resolveNewer = res;
+            });
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+
+      // Older resolves with 900
+      await act(async () => {
+        resolveOlder(900);
+      });
+      expect(screen.getByText('1000 µs')).toBeInTheDocument(); // newer 1000 still in flight
+
+      // Newer resolves with null (fails)
+      await act(async () => {
+        resolveNewer(null);
+      });
+      // Must settle to the confirmed 900, not 1000 or 800!
+      expect(screen.getByText('900 µs')).toBeInTheDocument();
+    });
+
+    it('older null first, newer success second -> renders newer confirmed 1000', async () => {
+      let resolveOlder!: (val: number | null) => void;
+      let resolveNewer!: (val: number | null) => void;
+      let callCount = 0;
+
+      render(
+        <TimingMarginControl
+          value={800}
+          options={options}
+          recommendation={recommendation}
+          density="compact"
+          onChange={() => {
+            callCount++;
+            return new Promise((res) => {
+              if (callCount === 1) resolveOlder = res;
+              else resolveNewer = res;
+            });
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+
+      // Older fails first
+      await act(async () => {
+        resolveOlder(null);
+      });
+      expect(screen.getByText('1000 µs')).toBeInTheDocument();
+
+      // Newer succeeds
+      await act(async () => {
+        resolveNewer(1000);
+      });
+      expect(screen.getByText('1000 µs')).toBeInTheDocument();
+    });
+
+    it('newer success first, older null second -> renders newer confirmed 1000', async () => {
+      let resolveOlder!: (val: number | null) => void;
+      let resolveNewer!: (val: number | null) => void;
+      let callCount = 0;
+
+      render(
+        <TimingMarginControl
+          value={800}
+          options={options}
+          recommendation={recommendation}
+          density="compact"
+          onChange={() => {
+            callCount++;
+            return new Promise((res) => {
+              if (callCount === 1) resolveOlder = res;
+              else resolveNewer = res;
+            });
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+
+      // Newer succeeds first
+      await act(async () => {
+        resolveNewer(1000);
+      });
+      expect(screen.getByText('1000 µs')).toBeInTheDocument();
+
+      // Older fails second
+      await act(async () => {
+        resolveOlder(null);
+      });
+      expect(screen.getByText('1000 µs')).toBeInTheDocument();
+    });
+
+    it('both null -> settles to authoritative 800', async () => {
+      let resolveOlder!: (val: number | null) => void;
+      let resolveNewer!: (val: number | null) => void;
+      let callCount = 0;
+
+      render(
+        <TimingMarginControl
+          value={800}
+          options={options}
+          recommendation={recommendation}
+          density="compact"
+          onChange={() => {
+            callCount++;
+            return new Promise((res) => {
+              if (callCount === 1) resolveOlder = res;
+              else resolveNewer = res;
+            });
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+
+      await act(async () => {
+        resolveOlder(null);
+      });
+      await act(async () => {
+        resolveNewer(null);
+      });
+      expect(screen.getByText('800 µs')).toBeInTheDocument();
+    });
+
+    it('older reject, newer success -> renders newer confirmed 1000', async () => {
+      let rejectOlder!: (err: Error) => void;
+      let resolveNewer!: (val: number) => void;
+      let callCount = 0;
+
+      render(
+        <TimingMarginControl
+          value={800}
+          options={options}
+          recommendation={recommendation}
+          density="compact"
+          onChange={() => {
+            callCount++;
+            if (callCount === 1) {
+              return new Promise((_, rej) => {
+                rejectOlder = rej;
+              });
+            }
+            return new Promise((res) => {
+              resolveNewer = res;
+            });
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+
+      await act(async () => {
+        rejectOlder(new Error('Network error'));
+      });
+      await act(async () => {
+        resolveNewer(1000);
+      });
+      expect(screen.getByText('1000 µs')).toBeInTheDocument();
+    });
+
+    it('older success, newer reject -> renders older confirmed 900', async () => {
+      let resolveOlder!: (val: number) => void;
+      let rejectNewer!: (err: Error) => void;
+      let callCount = 0;
+
+      render(
+        <TimingMarginControl
+          value={800}
+          options={options}
+          recommendation={recommendation}
+          density="compact"
+          onChange={() => {
+            callCount++;
+            if (callCount === 1) {
+              return new Promise((res) => {
+                resolveOlder = res;
+              });
+            }
+            return new Promise((_, rej) => {
+              rejectNewer = rej;
+            });
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+
+      await act(async () => {
+        resolveOlder(900);
+      });
+      await act(async () => {
+        rejectNewer(new Error('Network error'));
+      });
+      expect(screen.getByText('900 µs')).toBeInTheDocument();
+    });
+
+    it('both reject -> settles to authoritative 800', async () => {
+      let rejectOlder!: (err: Error) => void;
+      let rejectNewer!: (err: Error) => void;
+      let callCount = 0;
+
+      render(
+        <TimingMarginControl
+          value={800}
+          options={options}
+          recommendation={recommendation}
+          density="compact"
+          onChange={() => {
+            callCount++;
+            return new Promise((_, rej) => {
+              if (callCount === 1) rejectOlder = rej;
+              else rejectNewer = rej;
+            });
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+
+      await act(async () => {
+        rejectOlder(new Error('error 1'));
+      });
+      await act(async () => {
+        rejectNewer(new Error('error 2'));
+      });
+      expect(screen.getByText('800 µs')).toBeInTheDocument();
+    });
+  });
 });

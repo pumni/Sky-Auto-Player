@@ -11,9 +11,14 @@ interface TimingMarginControlProps {
   onChange: (value: number) => Promise<number | null>;
 }
 
-interface OptimisticMarginState {
+interface InFlightMutation {
+  id: number;
   value: number;
-  pending: number;
+}
+
+interface MutationState {
+  pending: InFlightMutation[];
+  confirmed: { id: number; value: number } | null;
 }
 
 export function TimingMarginControl({
@@ -33,7 +38,10 @@ export function TimingMarginControl({
     recommendedMargin <= max &&
     recommendedMargin % step === 0;
 
-  const [optimistic, setOptimistic] = useState<OptimisticMarginState | null>(null);
+  const [mutationState, setMutationState] = useState<MutationState>({
+    pending: [],
+    confirmed: null,
+  });
   const [prevPropValue, setPrevPropValue] = useState(value);
   const mountedRef = useRef(true);
   const mutationIdRef = useRef(0);
@@ -47,52 +55,66 @@ export function TimingMarginControl({
 
   if (value !== prevPropValue) {
     setPrevPropValue(value);
-    if (!optimistic || optimistic.pending === 0 || value === optimistic.value) {
-      setOptimistic(null);
+    if (
+      mutationState.pending.length === 0 ||
+      (mutationState.confirmed !== null && mutationState.confirmed.value === value)
+    ) {
+      setMutationState((prev) => ({
+        pending: prev.pending,
+        confirmed: null,
+      }));
     }
   }
 
-  const activeOptimistic =
-    optimistic !== null && (optimistic.pending > 0 || optimistic.value !== value)
-      ? optimistic
-      : null;
-  const requestedValue = activeOptimistic ? activeOptimistic.value : value;
+  const activePending = mutationState.pending.filter(
+    (m) => mutationState.confirmed === null || m.id > mutationState.confirmed.id,
+  );
+  const latestPending = activePending.at(-1);
+  const requestedValue =
+    latestPending !== undefined
+      ? latestPending.value
+      : mutationState.confirmed !== null
+        ? mutationState.confirmed.value
+        : value;
 
   const requestValue = (nextValue: number) => {
-    const currentMutationId = ++mutationIdRef.current;
-    setOptimistic((previous) => ({
-      value: nextValue,
-      pending: (previous?.pending ?? 0) + 1,
+    const mutationId = ++mutationIdRef.current;
+    setMutationState((prev) => ({
+      ...prev,
+      pending: [...prev.pending, { id: mutationId, value: nextValue }],
     }));
 
     void onChange(nextValue)
       .then((confirmedValue) => {
         if (!mountedRef.current) return;
-        setOptimistic((previous) => {
-          if (previous === null) return null;
-          const remaining = Math.max(0, previous.pending - 1);
-          if (currentMutationId < mutationIdRef.current) {
-            return { ...previous, pending: remaining };
-          }
+        setMutationState((prev) => {
+          const nextPending = prev.pending.filter((m) => m.id !== mutationId);
           if (confirmedValue === null) {
-            return remaining === 0 ? null : { ...previous, pending: remaining };
+            return {
+              ...prev,
+              pending: nextPending,
+            };
           }
-          if (remaining === 0) {
-            return confirmedValue !== value ? { value: confirmedValue, pending: 0 } : null;
-          }
-          return { value: confirmedValue, pending: remaining };
+          const isNewerConfirmation = prev.confirmed === null || mutationId >= prev.confirmed.id;
+          const nextConfirmed = isNewerConfirmation
+            ? { id: mutationId, value: confirmedValue }
+            : prev.confirmed;
+          const nextPendingCleaned = isNewerConfirmation
+            ? nextPending.filter((m) => m.id > mutationId)
+            : nextPending;
+          return {
+            pending: nextPendingCleaned,
+            confirmed:
+              nextConfirmed !== null && nextConfirmed.value !== value ? nextConfirmed : null,
+          };
         });
       })
       .catch(() => {
         if (!mountedRef.current) return;
-        setOptimistic((previous) => {
-          if (previous === null) return null;
-          const remaining = Math.max(0, previous.pending - 1);
-          if (currentMutationId < mutationIdRef.current) {
-            return { ...previous, pending: remaining };
-          }
-          return remaining === 0 ? null : { ...previous, pending: remaining };
-        });
+        setMutationState((prev) => ({
+          ...prev,
+          pending: prev.pending.filter((m) => m.id !== mutationId),
+        }));
       });
   };
 

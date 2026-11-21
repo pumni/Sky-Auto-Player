@@ -13,14 +13,15 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
   const timeoutIdRef = useRef<number | null>(null);
 
   const refreshMaximized = useCallback(() => {
-    void controls.isMaximized().then((value) => {
-      if (mountedRef.current) setMaximized(value);
-    });
+    void controls
+      .isMaximized()
+      .then((value) => {
+        if (mountedRef.current) setMaximized(value);
+      })
+      .catch(() => {});
   }, [controls]);
 
   const refreshSettled = useCallback(() => {
-    refreshMaximized();
-
     const requestFrame = window.requestAnimationFrame;
     if (typeof requestFrame !== 'function') {
       if (timeoutIdRef.current !== null) window.clearTimeout(timeoutIdRef.current);
@@ -59,20 +60,31 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
     let disposed = false;
     let unsubscribe: (() => void) | undefined;
 
-    void controls.isMaximized().then((value) => {
-      if (!disposed) setMaximized(value);
-    });
+    void controls
+      .isMaximized()
+      .then((value) => {
+        if (!disposed) setMaximized(value);
+      })
+      .catch(() => {});
 
-    void controls.onResize(refreshSettled).then((cleanup) => {
-      if (disposed) cleanup();
-      else unsubscribe = cleanup;
-    });
+    const handleResize = () => {
+      refreshMaximized();
+      refreshSettled();
+    };
+
+    void controls
+      .onResize(handleResize)
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unsubscribe = cleanup;
+      })
+      .catch(() => {});
 
     return () => {
       disposed = true;
       unsubscribe?.();
     };
-  }, [controls, refreshSettled]);
+  }, [controls, refreshMaximized, refreshSettled]);
 
   useEffect(() => {
     const activate = () => setWindowActive(true);
@@ -98,7 +110,7 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         aria-label="Minimize window"
         title="Minimize window"
         data-tauri-drag-region="false"
-        onClick={() => void controls.minimize()}
+        onClick={() => void controls.minimize().catch(() => {})}
       >
         <span className="caption-glyph caption-glyph-minimize" aria-hidden="true" />
       </button>
@@ -108,7 +120,12 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         aria-label={maximizeLabel}
         title={maximizeLabel}
         data-tauri-drag-region="false"
-        onClick={() => void controls.toggleMaximize().finally(refreshSettled)}
+        onClick={() =>
+          void controls
+            .toggleMaximize()
+            .catch(() => {})
+            .finally(refreshSettled)
+        }
       >
         <span
           className={`caption-glyph ${maximized ? 'caption-glyph-restore' : 'caption-glyph-maximize'}`}
@@ -121,7 +138,7 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         aria-label="Close window"
         title="Close window"
         data-tauri-drag-region="false"
-        onClick={() => void controls.close()}
+        onClick={() => void controls.close().catch(() => {})}
       >
         <span className="caption-glyph caption-glyph-close" aria-hidden="true" />
       </button>
