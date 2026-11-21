@@ -196,6 +196,23 @@ mod tests {
     }
 
     #[test]
+    fn six_sample_p99_outlier_can_reach_the_existing_spin_cap() {
+        let mut six_samples = [50_u64, 50, 50, 50, 50, 50_000];
+        six_samples.sort_unstable();
+        let p99 = six_samples[((six_samples.len() * 99).saturating_add(99) / 100) - 1];
+        assert_eq!(p99, six_samples[5]);
+        assert_eq!(
+            calibrated_spin_threshold_us(WakeErrorStats {
+                p99_us: p99,
+                robust_us: 50,
+                ..WakeErrorStats::default()
+            }),
+            DEFAULT_SPIN_THRESHOLD_US,
+            "the production cap remains reachable when the six-sample p99 is an outlier"
+        );
+    }
+
+    #[test]
     fn failed_calibration_uses_the_fallback() {
         assert_eq!(select_spin_threshold_us(None), DEFAULT_SPIN_THRESHOLD_US);
     }

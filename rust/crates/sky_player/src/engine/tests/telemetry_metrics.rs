@@ -1,6 +1,46 @@
 use super::support::*;
 use super::*;
 
+fn trace_span_us(
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    start: Option<u64>,
+    end: Option<u64>,
+) -> Option<u64> {
+    let ticks = end?.checked_sub(start?)?;
+    qpc_clock
+        .duration_to_us(sky_dispatch_win32::clock::DurationTicks::from_raw(ticks))
+        .ok()
+}
+
+fn trace_duration_us(
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    ticks: Option<u64>,
+) -> Option<u64> {
+    qpc_clock
+        .duration_to_us(sky_dispatch_win32::clock::DurationTicks::from_raw(ticks?))
+        .ok()
+}
+
+fn print_mock_span_stats(label: &str, samples: &mut [u64]) {
+    if samples.is_empty() {
+        println!("mock_dispatch_measurement {label} count=0 unavailable");
+        return;
+    }
+    samples.sort_unstable();
+    let nearest_rank = |percentile: usize| {
+        let rank = (samples.len() * percentile).div_ceil(100).max(1);
+        samples[rank - 1]
+    };
+    println!(
+        "mock_dispatch_measurement {label} count={} p50_us={} p95_us={} p99_us={} max_us={}",
+        samples.len(),
+        nearest_rank(50),
+        nearest_rank(95),
+        nearest_rank(99),
+        samples[samples.len() - 1],
+    );
+}
+
 fn assert_snapshot_common_projection(
     full: &crate::engine::EngineSnapshot,
     lite: &crate::engine::EngineProgressSnapshot,
@@ -307,9 +347,119 @@ fn production_qualification_observer_keeps_requested_ring_capture() {
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry JSON"))
             .expect("valid telemetry JSON");
-    assert_eq!(telemetry["records"].as_array().map(Vec::len), Some(2));
+    let records = telemetry["records"].as_array().expect("trace records");
+    assert_eq!(records.len(), 2);
     assert_eq!(telemetry["attempted"], 2);
     assert_eq!(telemetry["accepted"], 2);
+    let qpc_clock = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
+    let mut wake_to_gate_start_us = Vec::new();
+    let mut timer_return_to_wake_us = Vec::new();
+    let mut gate_start_to_end_us = Vec::new();
+    let mut gate_end_to_pre_call_us = Vec::new();
+    let mut pre_call_to_completion_us = Vec::new();
+    let mut physical_floor_displacement_us = Vec::new();
+    let mut hold_floor_displacement_us = Vec::new();
+    let mut release_floor_displacement_us = Vec::new();
+    let mut eligible_to_pre_call_us = Vec::new();
+    for record in records {
+        assert_eq!(record["target_crossing_qpc_available"], true);
+        assert_eq!(record["final_policy_qpc_available"], true);
+        assert_eq!(record["pre_call_qpc_available"], true);
+        assert_eq!(record["sendinput_completion_qpc_available"], true);
+        let gate_start = record["target_crossing_qpc_ticks"]
+            .as_u64()
+            .expect("final gate start QPC");
+        let gate_end = record["final_policy_qpc_ticks"]
+            .as_u64()
+            .expect("final gate end QPC");
+        let pre_call = record["pre_call_qpc_ticks"]
+            .as_u64()
+            .expect("SendInput pre-call QPC");
+        let completion = record["sendinput_completion_qpc_ticks"]
+            .as_u64()
+            .expect("SendInput completion QPC");
+        assert!(gate_start <= gate_end);
+        assert!(gate_end <= pre_call);
+        assert!(pre_call <= completion);
+        if let Some(span) = trace_span_us(
+            qpc_clock,
+            record["wake_qpc_ticks"].as_u64(),
+            Some(gate_start),
+        ) {
+            wake_to_gate_start_us.push(span);
+        }
+        if let Some(span) = trace_span_us(
+            qpc_clock,
+            record["timer_return_qpc_ticks"].as_u64(),
+            record["wake_qpc_ticks"].as_u64(),
+        ) {
+            timer_return_to_wake_us.push(span);
+        }
+        if let Some(span) = trace_span_us(qpc_clock, Some(gate_start), Some(gate_end)) {
+            gate_start_to_end_us.push(span);
+        }
+        if let Some(span) = trace_span_us(qpc_clock, Some(gate_end), Some(pre_call)) {
+            gate_end_to_pre_call_us.push(span);
+        }
+        if let Some(span) = trace_span_us(qpc_clock, Some(pre_call), Some(completion)) {
+            pre_call_to_completion_us.push(span);
+        }
+        if record["floor_displacement_available"] == true {
+            if let Some(span) = trace_duration_us(
+                qpc_clock,
+                record["physical_floor_displacement_ticks"].as_u64(),
+            ) {
+                physical_floor_displacement_us.push(span);
+            }
+            if let Some(span) =
+                trace_duration_us(qpc_clock, record["hold_floor_displacement_ticks"].as_u64())
+            {
+                hold_floor_displacement_us.push(span);
+            }
+            if let Some(span) = trace_duration_us(
+                qpc_clock,
+                record["release_floor_displacement_ticks"].as_u64(),
+            ) {
+                release_floor_displacement_us.push(span);
+            }
+        }
+        if let Some(span) = trace_span_us(
+            qpc_clock,
+            record["physical_eligibility_qpc_ticks"].as_u64(),
+            Some(pre_call),
+        ) {
+            eligible_to_pre_call_us.push(span);
+        }
+        if record["wake_qpc_available"] == true {
+            let wake = record["wake_qpc_ticks"].as_u64().expect("wake QPC");
+            assert!(wake <= gate_start);
+        }
+    }
+    print_mock_span_stats("wake_to_gate_start", &mut wake_to_gate_start_us);
+    print_mock_span_stats("timer_return_to_wake", &mut timer_return_to_wake_us);
+    print_mock_span_stats("gate_start_to_end", &mut gate_start_to_end_us);
+    print_mock_span_stats("gate_end_to_pre_call", &mut gate_end_to_pre_call_us);
+    print_mock_span_stats("pre_call_to_completion", &mut pre_call_to_completion_us);
+    print_mock_span_stats(
+        "physical_floor_displacement",
+        &mut physical_floor_displacement_us,
+    );
+    print_mock_span_stats("hold_floor_displacement", &mut hold_floor_displacement_us);
+    print_mock_span_stats(
+        "release_floor_displacement",
+        &mut release_floor_displacement_us,
+    );
+    print_mock_span_stats("eligible_to_pre_call", &mut eligible_to_pre_call_us);
+    println!(
+        "mock_dispatch_measurement cpu_spin aggregate worker_cpu_us={} process_cpu_us={} idle_wakes={} spin_us={:?} spin_expected={} spin_missing={} spin_dropped={}",
+        snapshot.worker_cpu_time_us,
+        snapshot.process_cpu_time_us,
+        snapshot.idle_wake_count,
+        snapshot.spin_time_us,
+        snapshot.spin_observation_expected_samples,
+        snapshot.spin_observation_missing_samples,
+        snapshot.spin_observation_dropped_samples,
+    );
 }
 
 #[test]
@@ -1205,16 +1355,54 @@ fn cpu_metrics_sampling_is_due_only_at_the_interval_boundary() {
 }
 
 #[test]
+fn cpu_metrics_sampling_uses_the_same_interval_in_a_non_microsecond_qpc_domain() {
+    let qpc_clock = sky_dispatch_win32::clock::QpcClock::from_frequency_hz(
+        std::num::NonZeroU64::new(10_000_000).expect("nonzero test frequency"),
+    );
+    let interval = qpc_clock
+        .duration_from_us(100_000)
+        .expect("CPU sample interval conversion")
+        .as_u64();
+    assert_eq!(interval, 1_000_000);
+    assert!(!cpu_metrics_sample_due(interval - 1, 0, interval));
+    assert!(cpu_metrics_sample_due(interval, 0, interval));
+}
+
+#[test]
 fn healthy_metric_publication_is_throttled_but_force_is_immediate() {
     let shared = SharedMetrics::default();
     let mut local = WorkerMetricsLocal::default();
     let qpc_clock = QpcClock::from_frequency_hz(std::num::NonZeroU64::new(1_000_000).unwrap());
-    try_publish_metrics(&mut local, &shared, qpc_clock, 0, false);
-    try_publish_metrics(&mut local, &shared, qpc_clock, 49_999, false);
+    try_publish_metrics(
+        &mut local,
+        &shared,
+        qpc_clock,
+        sky_dispatch_win32::clock::QpcTicks::from_raw(0),
+        false,
+    );
+    try_publish_metrics(
+        &mut local,
+        &shared,
+        qpc_clock,
+        sky_dispatch_win32::clock::QpcTicks::from_raw(49_999),
+        false,
+    );
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 0);
-    try_publish_metrics(&mut local, &shared, qpc_clock, 50_000, false);
+    try_publish_metrics(
+        &mut local,
+        &shared,
+        qpc_clock,
+        sky_dispatch_win32::clock::QpcTicks::from_raw(50_000),
+        false,
+    );
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 1);
-    try_publish_metrics(&mut local, &shared, qpc_clock, 50_001, true);
+    try_publish_metrics(
+        &mut local,
+        &shared,
+        qpc_clock,
+        sky_dispatch_win32::clock::QpcTicks::from_raw(50_001),
+        true,
+    );
     assert_eq!(shared.publish_count.load(Ordering::Relaxed), 2);
 }
 

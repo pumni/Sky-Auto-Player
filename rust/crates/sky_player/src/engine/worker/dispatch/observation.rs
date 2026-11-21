@@ -110,10 +110,11 @@ pub struct DownTraceObservation {
 }
 
 /// Raw QPC boundaries for the physical dispatch handoff. The optional wake
-/// field is retained for diagnostic/report compatibility; normal production
-/// dispatch now has one direct target wait and uses the same wake as the
-/// target crossing. Test-support direct-boundary dispatch may provide a
-/// deterministic synthetic crossing without running the waiter.
+/// field is retained for diagnostic/report compatibility. When the observer
+/// is enabled, `target_crossing_qpc` samples the start of final packet
+/// admission and `final_policy_qpc` samples its return boundary; either may be
+/// unavailable if its optional QPC read fails. Test-support direct-boundary
+/// dispatch may provide a deterministic synthetic crossing without a waiter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PrecisionHandoffEvidence {
     pub admission_wake_qpc: Option<QpcTicks>,

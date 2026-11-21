@@ -2603,28 +2603,116 @@ fn quit_after_armed_publication_wait_and_first_down_gate_never_sends() {
 
 #[test]
 fn focus_loss_at_first_down_admission_never_sends_physical_down() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
     let (session, hook, send_calls) = checkpointed_session(
         startup_boundary_schedule(),
         StartupCheckpoint::FirstDownAdmission,
         1,
-        false,
+        true,
     );
+
+    const TARGET_HWND: isize = 123;
+    const OWNER_PID: u32 = 77;
+    session.bind_initial_target_for_test(TARGET_HWND);
+    session
+        .bind_window_identity_authority_for_test(
+            sky_dispatch_win32::focus::WindowIdentityAuthority::synthetic_for_test(
+                TARGET_HWND,
+                OWNER_PID,
+            ),
+            OWNER_PID,
+        )
+        .expect("bind synthetic foreground owner");
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(TARGET_HWND));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(OWNER_PID)));
+    session.set_focus_hint(true);
+    assert_eq!(
+        sky_dispatch_win32::focus::foreground_window_owner_matches(TARGET_HWND, OWNER_PID),
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::Match,
+        "foreground and owner must be valid before the focus loss"
+    );
+
     session.arm(50_000).expect("worker arm request");
     assert!(
         hook.wait_for_startup_checkpoint(Duration::from_secs(5)),
         "reached FirstDownAdmission"
     );
-    // Simulate focus loss immediately before SendInput
-    session.set_focus_hint(false);
+
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+    // The worker is stopped immediately before final admission. Keep the
+    // foreground HWND/PID proof valid and inject only the focus transition;
+    // the test seam avoids public Arm-cancellation bookkeeping at this point.
+    session.set_focus_hint_for_final_admission_test(false);
     hook.release_startup_checkpoint();
-    // Cleanly tear down session
-    let _ = session.quit();
-    let _ = session.join(Duration::from_secs(2));
+
+    let focus_rejection_deadline = Instant::now() + Duration::from_secs(2);
+    while hook.final_gate_focus_rejection_count_for_test() == 0
+        && Instant::now() < focus_rejection_deadline
+    {
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat while final admission rejects focus");
+        std::thread::yield_now();
+    }
+    assert_eq!(
+        hook.final_gate_focus_rejection_count_for_test(),
+        1,
+        "final admission must report its focus rejection before teardown"
+    );
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+    assert_eq!(
+        sky_dispatch_win32::focus::foreground_window_owner_matches(TARGET_HWND, OWNER_PID),
+        sky_dispatch_win32::focus::ForegroundOwnerMatch::Match,
+        "target owner and foreground remain valid when the focus hint is rejected"
+    );
+
+    let focus_pause_deadline = Instant::now() + Duration::from_secs(2);
+    let mut progress = session.snapshot_lite();
+    while !progress.is_paused && Instant::now() < focus_pause_deadline {
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat while final admission rejects focus");
+        std::thread::yield_now();
+        progress = session.snapshot_lite();
+    }
+    assert!(progress.is_paused, "focus rejection must enter focus pause");
+    assert!(!progress.has_terminal_error);
     assert_eq!(
         send_calls.load(Ordering::Acquire),
         0,
-        "zero physical down sender attempts after focus loss at final gate"
+        "focus-required final admission must make zero musical sender attempts"
     );
+
+    session
+        .quit()
+        .expect("quit after focus rejection was observed");
+    assert!(
+        session
+            .join(Duration::from_secs(5))
+            .expect("join after focus loss")
+    );
+    let terminal = session.snapshot();
+    assert_eq!(terminal.status, EnginePollStatus::Quit.as_str());
+    assert_eq!(terminal.terminal_trigger_reason.as_deref(), Some("quit"));
+    assert!(terminal.terminal_error.is_none());
+    assert_eq!(terminal.precision_packet_attempts, 0);
+    assert_eq!(terminal.final_gate_focus_losses, 1);
+    assert_eq!(hook.final_gate_focus_rejection_count_for_test(), 1);
+    assert_eq!(terminal.final_gate_target_changes, 0);
+    assert_eq!(terminal.final_gate_control_rejections, 0);
+    assert_eq!(terminal.final_gate_lease_expirations, 0);
+    assert_eq!(terminal.final_release_obligation_mask, 0);
+    assert_eq!(terminal.release_attempts_total, 0);
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
 }
 
 #[test]

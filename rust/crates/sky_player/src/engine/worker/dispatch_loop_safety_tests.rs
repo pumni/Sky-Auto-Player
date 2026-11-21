@@ -125,9 +125,8 @@ fn attempted_mixed_down_terminates_after_one_packet_and_verified_cleanup() {
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
     let anomaly = harness
         .runtime
-        .attempted_dispatch_anomalies
-        .details()
-        .first()
+        .attempted_dispatch_anomaly
+        .detail()
         .expect("preserved raw anomaly evidence");
     assert!(anomaly.contains("source_action=12"), "{anomaly}");
     assert!(
@@ -230,13 +229,7 @@ fn failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_ob
             .as_deref()
             .is_some_and(|error| error.contains("tracked safety cleanup failed"))
     );
-    assert_eq!(
-        harness
-            .runtime
-            .attempted_dispatch_anomalies
-            .retained_count(),
-        1
-    );
+    assert!(harness.runtime.attempted_dispatch_anomaly.is_recorded());
 }
 
 #[test]
@@ -1045,9 +1038,8 @@ fn attempted_musical_up_only_is_not_replayed_and_terminates_before_next_down() {
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
     let anomaly = harness
         .runtime
-        .attempted_dispatch_anomalies
-        .details()
-        .first()
+        .attempted_dispatch_anomaly
+        .detail()
         .expect("Up anomaly");
     assert!(anomaly.contains("source_action=41"), "{anomaly}");
     assert!(
@@ -1143,7 +1135,6 @@ fn mixed_packet_with_final_modifier_rejection_replans_as_up_only() {
         harness.dispatch_staged_candidate_for_test(first, false),
         StagedDispatchOutcome::Dispatched
     ));
-
     let mixed_target = epoch
         .checked_add_duration(DurationTicks::from_raw(
             qpc_offset(&harness, 20_000).as_u64(),
@@ -1278,6 +1269,16 @@ fn terminal_control_races_at_final_gate_do_not_attempt_or_advance_down_onset() {
 
 #[test]
 fn terminal_control_races_at_final_gate_do_not_attempt_up_only() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
     #[derive(Clone, Copy)]
     enum Race {
         Quit,
@@ -1829,6 +1830,10 @@ fn post_focus_race_hook_invalidates_target_mixed_fails_closed_without_down() {
         harness.dispatch_staged_candidate_for_test(first, false),
         StagedDispatchOutcome::Dispatched
     ));
+    // Keep this case focused on generation revalidation. Separate focus-required
+    // target races cover fresh HWND/PID admission; the shared test foreground
+    // override must not make the target-generation assertion scheduling-sensitive.
+    harness.config.focus.require_focus = false;
 
     let mixed_target = epoch
         .checked_add_duration(DurationTicks::from_raw(

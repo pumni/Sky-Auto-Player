@@ -1,5 +1,5 @@
 use super::{
-    AttemptedDispatchAnomalies, TerminalTrigger, TrackedKeyState, WorkerMetricsLocal,
+    AttemptedDispatchAnomaly, TerminalTrigger, TrackedKeyState, WorkerMetricsLocal,
     WorkerSchedulingGuards, current_process_cpu_time_us, current_thread_cpu_time_us,
     publish_backend_metrics,
 };
@@ -67,7 +67,7 @@ pub(super) struct FinalizeState {
     pub(super) abort_counts: HashMap<&'static str, u64>,
     pub(super) terminal_error: Option<String>,
     pub(super) secondary_errors: Vec<String>,
-    pub(super) attempted_dispatch_anomalies: AttemptedDispatchAnomalies,
+    pub(super) attempted_dispatch_anomaly: AttemptedDispatchAnomaly,
     pub(super) last_published_error: Option<String>,
     pub(super) terminal_trigger: Option<TerminalTrigger>,
 }
@@ -126,6 +126,8 @@ pub(crate) struct FinalizeTestObservation {
     pub(crate) terminal_error: Option<String>,
     pub(crate) secondary_errors: Vec<String>,
     pub(crate) operation_trace: Option<Arc<Mutex<Vec<&'static str>>>>,
+    #[cfg(test)]
+    pub(crate) terminal_metrics_publication_count: u64,
 }
 
 mod finalize;

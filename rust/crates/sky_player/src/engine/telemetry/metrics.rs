@@ -2,7 +2,7 @@ use parking_lot::{Mutex, RwLock};
 #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::time::DurationTicks;
-use sky_dispatch_win32::clock::QpcClock;
+use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -77,8 +77,8 @@ pub struct WorkerMetricsLocal {
     /// Essential production scalar evidence measured immediately before the
     /// prepared SendInput call.
     ///
-    /// This remains the public snapshot field.  The producer updates the
-    /// tick-domain companion below and publication derives this value once.
+    /// This remains the public snapshot field. The producer updates the
+    /// tick-domain companion below and the snapshot reader derives this value.
     pub max_sendinput_pre_call_lateness_us: u64,
     pub(crate) max_sendinput_pre_call_lateness_ticks: u64,
     /// Mutually-exclusive production pre-call lateness buckets. These are
@@ -515,15 +515,6 @@ impl WorkerMetricsLocal {
         self.physical_target_to_wake_max_ticks = self
             .physical_target_to_wake_max_ticks
             .max(observer.physical_target_to_wake_max_ticks);
-        self.wait_planned_gap_hot_lateness_max_us = self
-            .wait_planned_gap_hot_lateness_max_us
-            .max(observer.wait_planned_gap_hot_lateness_max_us);
-        self.wait_planned_gap_cold_lateness_max_us = self
-            .wait_planned_gap_cold_lateness_max_us
-            .max(observer.wait_planned_gap_cold_lateness_max_us);
-        self.physical_target_to_wake_max_us = self
-            .physical_target_to_wake_max_us
-            .max(observer.physical_target_to_wake_max_us);
         self.dispatch_occupancy_max_us = self
             .dispatch_occupancy_max_us
             .max(observer.dispatch_occupancy_max_us);
@@ -562,15 +553,16 @@ pub(crate) struct SnapshotBuffer {
 }
 
 impl SnapshotBuffer {
-    pub(crate) fn load(&self) -> WorkerMetricsLocal {
+    pub(crate) fn load(&self, qpc_clock: QpcClock) -> WorkerMetricsLocal {
         let dispatch = self.dispatch.read();
         let observer = self.observer.read();
-        if self.terminal_published.load(Ordering::Acquire) {
-            return dispatch.clone();
-        }
         let mut value = dispatch.clone();
-        value.merge_observer(&observer);
-        value
+        if !self.terminal_published.load(Ordering::Acquire) {
+            value.merge_observer(&observer);
+        }
+        drop(observer);
+        drop(dispatch);
+        project_metrics_for_snapshot(value, qpc_clock)
     }
 
     /// Dispatch publication never waits for a snapshot reader. If readout
@@ -595,10 +587,10 @@ impl SnapshotBuffer {
         true
     }
 
-    /// Terminal publication replaces the live dispatch projection and clears
-    /// the observer slot in one lock acquisition order. Readers hold both
-    /// read guards together, so they see either the prior live projection or
-    /// the merged terminal projection without double-counting observer data.
+    /// Terminal publication replaces the live dispatch source and clears the
+    /// observer slot in one lock acquisition order. Readers hold both read
+    /// guards together, so they see either the prior live pair or the merged
+    /// terminal source without double-counting observer data.
     fn try_publish_terminal(&self, local: &mut WorkerMetricsLocal) -> bool {
         let Some(mut dispatch) = self.dispatch.try_write() else {
             return false;
@@ -616,8 +608,9 @@ impl SnapshotBuffer {
 #[derive(Default)]
 pub(crate) struct SharedMetrics {
     pub(crate) snapshot: SnapshotBuffer,
-    pub(crate) last_publish_us: AtomicU64,
-    pub(crate) last_observer_publish_us: AtomicU64,
+    pub(crate) last_publish_ticks: AtomicU64,
+    pub(crate) last_observer_publish_ticks: AtomicU64,
+    publish_interval_ticks: AtomicU64,
     pub(crate) live_diagnostics_enabled: AtomicBool,
     pub(crate) is_paused: AtomicBool,
     pub(crate) panicked: AtomicBool,
@@ -656,35 +649,49 @@ pub(crate) struct SharedMetrics {
     pub(crate) publish_count: AtomicU64,
 }
 
+const LIVE_METRICS_PUBLISH_INTERVAL_US: u64 = 50_000;
+
+impl SharedMetrics {
+    /// Cache the unchanged publication cadence in this session's QPC domain.
+    /// Callers that use a default test instance can leave it unset; the
+    /// publisher then computes the interval from its supplied clock.
+    pub(crate) fn configure_qpc_clock(&self, qpc_clock: QpcClock) {
+        if let Ok(interval) = qpc_clock.duration_from_us(LIVE_METRICS_PUBLISH_INTERVAL_US) {
+            self.publish_interval_ticks
+                .store(interval.as_u64(), Ordering::Release);
+        }
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn try_publish_metrics(
     local: &mut WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
-    now_us: u64,
+    now_ticks: QpcTicks,
     force: bool,
 ) -> bool {
-    try_publish_metrics_with_update(local, shared, qpc_clock, now_us, force, |_| {})
+    try_publish_metrics_with_update(local, shared, qpc_clock, now_ticks, force, |_| {})
 }
 
-/// Apply dispatch-owned projection fields only when a snapshot is due and its
+/// Apply dispatch-owned source updates only when a snapshot is due and its
 /// nonblocking writer slot is available.
 pub(crate) fn try_publish_metrics_with_update(
     local: &mut WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
-    now_us: u64,
+    now_ticks: QpcTicks,
     force: bool,
-    before_project: impl FnOnce(&mut WorkerMetricsLocal),
+    before_publish: impl FnOnce(&mut WorkerMetricsLocal),
 ) -> bool {
     try_publish_metrics_from(
         local,
         shared,
         qpc_clock,
-        now_us,
+        now_ticks,
         force,
         SnapshotOwner::Dispatch,
-        before_project,
+        before_publish,
     )
 }
 
@@ -692,14 +699,14 @@ pub(crate) fn try_publish_observer_metrics(
     local: &mut WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
-    now_us: u64,
+    now_ticks: QpcTicks,
     force: bool,
 ) -> bool {
     try_publish_metrics_from(
         local,
         shared,
         qpc_clock,
-        now_us,
+        now_ticks,
         force,
         SnapshotOwner::Observer,
         |_| {},
@@ -716,39 +723,51 @@ fn try_publish_metrics_from(
     local: &mut WorkerMetricsLocal,
     shared: &SharedMetrics,
     qpc_clock: QpcClock,
-    now_us: u64,
+    now_ticks: QpcTicks,
     force: bool,
     owner: SnapshotOwner,
-    before_project: impl FnOnce(&mut WorkerMetricsLocal),
+    before_publish: impl FnOnce(&mut WorkerMetricsLocal),
 ) -> bool {
-    let last_publish_us = match owner {
-        SnapshotOwner::Dispatch => &shared.last_publish_us,
-        SnapshotOwner::Observer => &shared.last_observer_publish_us,
+    let last_publish_ticks = match owner {
+        SnapshotOwner::Dispatch => &shared.last_publish_ticks,
+        SnapshotOwner::Observer => &shared.last_observer_publish_ticks,
     };
-    let last = last_publish_us.load(Ordering::Relaxed);
-    if !force && now_us.saturating_sub(last) < 50_000 {
-        return true;
+    let now_ticks = now_ticks.as_u64();
+    if !force {
+        let interval_ticks = shared.publish_interval_ticks.load(Ordering::Acquire);
+        let interval_ticks = if interval_ticks == 0 {
+            let Ok(interval) = qpc_clock.duration_from_us(LIVE_METRICS_PUBLISH_INTERVAL_US) else {
+                return false;
+            };
+            interval.as_u64()
+        } else {
+            interval_ticks
+        };
+        let last = last_publish_ticks.load(Ordering::Relaxed);
+        if now_ticks.saturating_sub(last) < interval_ticks {
+            return true;
+        }
     }
     let published_ok = match owner {
         SnapshotOwner::Dispatch => {
             let Some(mut slot) = shared.snapshot.dispatch.try_write() else {
                 return false;
             };
-            before_project(local);
-            *slot = project_metrics_for_snapshot(local, qpc_clock);
+            before_publish(local);
+            *slot = local.clone();
             true
         }
         SnapshotOwner::Observer => {
             let Some(mut slot) = shared.snapshot.observer.try_write() else {
                 return false;
             };
-            before_project(local);
-            *slot = project_metrics_for_snapshot(local, qpc_clock);
+            before_publish(local);
+            *slot = local.clone();
             true
         }
     };
     if published_ok {
-        last_publish_us.store(now_us, Ordering::Relaxed);
+        last_publish_ticks.store(now_ticks, Ordering::Relaxed);
         #[cfg(test)]
         if matches!(owner, SnapshotOwner::Dispatch) {
             shared.publish_count.fetch_add(1, Ordering::Relaxed);
@@ -767,48 +786,53 @@ fn try_publish_metrics_from(
 pub(crate) fn publish_lifecycle_metrics(
     local: &WorkerMetricsLocal,
     shared: &SharedMetrics,
-    qpc_clock: QpcClock,
-    now_us: u64,
+    now_ticks: QpcTicks,
 ) {
-    let published = project_metrics_for_snapshot(local, qpc_clock);
-    *shared.snapshot.dispatch.write() = published;
-    shared.last_publish_us.store(now_us, Ordering::Relaxed);
+    *shared.snapshot.dispatch.write() = local.clone();
+    shared
+        .last_publish_ticks
+        .store(now_ticks.as_u64(), Ordering::Relaxed);
     #[cfg(test)]
     shared.publish_count.fetch_add(1, Ordering::Relaxed);
 }
 
 fn project_metrics_for_snapshot(
-    local: &WorkerMetricsLocal,
+    mut published: WorkerMetricsLocal,
     qpc_clock: QpcClock,
 ) -> WorkerMetricsLocal {
-    let mut published = local.clone();
     published.max_sendinput_pre_call_lateness_us = qpc_clock
         .duration_to_us(DurationTicks::from_raw(
-            local.max_sendinput_pre_call_lateness_ticks,
+            published.max_sendinput_pre_call_lateness_ticks,
         ))
         .unwrap_or_default();
     published.max_hold_floor_delay_us = qpc_clock
-        .duration_to_us(DurationTicks::from_raw(local.max_hold_floor_delay_ticks))
+        .duration_to_us(DurationTicks::from_raw(
+            published.max_hold_floor_delay_ticks,
+        ))
         .unwrap_or_default();
     published.max_release_floor_delay_us = qpc_clock
-        .duration_to_us(DurationTicks::from_raw(local.max_release_floor_delay_ticks))
+        .duration_to_us(DurationTicks::from_raw(
+            published.max_release_floor_delay_ticks,
+        ))
         .unwrap_or_default();
     published.wait_planned_gap_hot_lateness_max_us = qpc_clock
         .duration_to_us(DurationTicks::from_raw(
-            local.wait_planned_gap_hot_lateness_max_ticks,
+            published.wait_planned_gap_hot_lateness_max_ticks,
         ))
         .unwrap_or_default();
     published.wait_planned_gap_max_us = qpc_clock
-        .duration_to_us(DurationTicks::from_raw(local.wait_planned_gap_max_ticks))
+        .duration_to_us(DurationTicks::from_raw(
+            published.wait_planned_gap_max_ticks,
+        ))
         .unwrap_or_default();
     published.wait_planned_gap_cold_lateness_max_us = qpc_clock
         .duration_to_us(DurationTicks::from_raw(
-            local.wait_planned_gap_cold_lateness_max_ticks,
+            published.wait_planned_gap_cold_lateness_max_ticks,
         ))
         .unwrap_or_default();
     published.physical_target_to_wake_max_us = qpc_clock
         .duration_to_us(DurationTicks::from_raw(
-            local.physical_target_to_wake_max_ticks,
+            published.physical_target_to_wake_max_ticks,
         ))
         .unwrap_or_default();
     published
@@ -822,23 +846,28 @@ fn project_metrics_for_snapshot(
 pub(crate) fn publish_terminal_metrics(
     local: &WorkerMetricsLocal,
     shared: &SharedMetrics,
-    qpc_clock: QpcClock,
-    now_us: u64,
+    now_ticks: QpcTicks,
 ) {
-    let mut published = project_metrics_for_snapshot(local, qpc_clock);
+    let mut published = local.clone();
     loop {
         if shared.snapshot.try_publish_terminal(&mut published) {
             break;
         }
         std::thread::yield_now();
     }
-    shared.last_publish_us.store(now_us, Ordering::Relaxed);
+    shared
+        .last_publish_ticks
+        .store(now_ticks.as_u64(), Ordering::Relaxed);
     #[cfg(test)]
     shared.publish_count.fetch_add(1, Ordering::Relaxed);
 }
 
-pub(crate) fn cpu_metrics_sample_due(now_us: u64, last_sample_us: u64, interval_us: u64) -> bool {
-    now_us.saturating_sub(last_sample_us) >= interval_us
+pub(crate) fn cpu_metrics_sample_due(
+    now_ticks: u64,
+    last_sample_ticks: u64,
+    interval_ticks: u64,
+) -> bool {
+    now_ticks.saturating_sub(last_sample_ticks) >= interval_ticks
 }
 
 #[cfg(test)]

@@ -3,14 +3,24 @@ use super::{
     publish_lifecycle_metrics, publish_terminal_metrics, try_publish_metrics,
     try_publish_metrics_with_update, try_publish_observer_metrics,
 };
-use sky_dispatch_win32::clock::QpcClock;
+use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
 use std::num::NonZeroU64;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Barrier};
 use std::thread;
+
+fn qpc_clock() -> QpcClock {
+    QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).expect("nonzero test frequency"))
+}
+
+fn qpc_ticks(raw: u64) -> QpcTicks {
+    QpcTicks::from_raw(raw)
+}
 
 #[test]
 fn snapshot_buffer_never_publishes_torn_scalar_pair() {
     let buffer = Arc::new(SnapshotBuffer::default());
+    let qpc_clock = qpc_clock();
     let writer_buffer = Arc::clone(&buffer);
     let writer = thread::spawn(move || {
         for value in 1..=10_000u64 {
@@ -23,7 +33,7 @@ fn snapshot_buffer_never_publishes_torn_scalar_pair() {
         }
     });
     for _ in 0..10_000 {
-        let snapshot = buffer.load();
+        let snapshot = buffer.load(qpc_clock);
         assert_eq!(snapshot.late_2ms, snapshot.total_us);
     }
     writer.join().expect("snapshot writer thread");
@@ -32,6 +42,7 @@ fn snapshot_buffer_never_publishes_torn_scalar_pair() {
 #[test]
 fn concurrent_source_writers_keep_independent_snapshot_contents() {
     let buffer = Arc::new(SnapshotBuffer::default());
+    let qpc_clock = qpc_clock();
     let start = Arc::new(Barrier::new(3));
     let dispatch_buffer = Arc::clone(&buffer);
     let dispatch_start = Arc::clone(&start);
@@ -60,7 +71,7 @@ fn concurrent_source_writers_keep_independent_snapshot_contents() {
 
     start.wait();
     for _ in 0..10_000 {
-        let snapshot = buffer.load();
+        let snapshot = buffer.load(qpc_clock);
         assert_eq!(snapshot.late_2ms, snapshot.total_us);
         assert_eq!(
             snapshot.observer_degraded_samples,
@@ -80,7 +91,7 @@ fn concurrent_source_writers_keep_independent_snapshot_contents() {
         wait_window_sample_count: 10_001,
         ..WorkerMetricsLocal::default()
     }));
-    let snapshot = buffer.load();
+    let snapshot = buffer.load(qpc_clock);
     assert_eq!(snapshot.total_us, 10_001);
     assert_eq!(snapshot.late_2ms, 10_001);
     assert_eq!(snapshot.observer_degraded_samples, 10_001);
@@ -118,7 +129,7 @@ fn required_lifecycle_publication_survives_forced_snapshot_contention() {
         &mut active,
         &shared,
         qpc_clock,
-        1,
+        qpc_ticks(1),
         true
     ));
 
@@ -130,13 +141,13 @@ fn required_lifecycle_publication_survives_forced_snapshot_contention() {
         ..active.clone()
     };
     assert!(
-        !try_publish_metrics(&mut cleaned, &shared, qpc_clock, 2, true),
+        !try_publish_metrics(&mut cleaned, &shared, qpc_clock, qpc_ticks(2), true),
         "a forced packet-style publication remains best effort under reader contention"
     );
 
     drop(reader);
 
-    let stale = shared.snapshot.load();
+    let stale = shared.snapshot.load(qpc_clock);
     assert_eq!(
         stale.active_count, 1,
         "a rejected packet-style publication leaves the prior snapshot stale"
@@ -147,12 +158,12 @@ fn required_lifecycle_publication_survives_forced_snapshot_contention() {
     let writer_started = Arc::clone(&started);
     let writer = thread::spawn(move || {
         writer_started.wait();
-        publish_lifecycle_metrics(&cleaned, &writer_shared, qpc_clock, 3);
+        publish_lifecycle_metrics(&cleaned, &writer_shared, qpc_ticks(3));
     });
     started.wait();
     writer.join().expect("required lifecycle publisher");
 
-    let snapshot = shared.snapshot.load();
+    let snapshot = shared.snapshot.load(qpc_clock);
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert_eq!(snapshot.failed_release_count, 0);
@@ -169,7 +180,7 @@ fn dispatch_projection_update_runs_only_for_a_publishable_snapshot() {
         &mut local,
         &shared,
         qpc_clock,
-        49_999,
+        qpc_ticks(49_999),
         false,
         |metrics| {
             update_count += 1;
@@ -182,7 +193,7 @@ fn dispatch_projection_update_runs_only_for_a_publishable_snapshot() {
         &mut local,
         &shared,
         qpc_clock,
-        50_000,
+        qpc_ticks(50_000),
         false,
         |metrics| {
             update_count += 1;
@@ -190,14 +201,14 @@ fn dispatch_projection_update_runs_only_for_a_publishable_snapshot() {
         },
     ));
     assert_eq!(update_count, 1);
-    assert_eq!(shared.snapshot.load().active_count, 2);
+    assert_eq!(shared.snapshot.load(qpc_clock).active_count, 2);
 
     let reader = shared.snapshot.dispatch.read();
     assert!(!try_publish_metrics_with_update(
         &mut local,
         &shared,
         qpc_clock,
-        100_000,
+        qpc_ticks(100_000),
         false,
         |_| update_count += 1,
     ));
@@ -211,7 +222,7 @@ fn dispatch_projection_update_runs_only_for_a_publishable_snapshot() {
         &mut local,
         &shared,
         qpc_clock,
-        100_000,
+        qpc_ticks(100_000),
         false,
         |metrics| {
             update_count += 1;
@@ -219,7 +230,48 @@ fn dispatch_projection_update_runs_only_for_a_publishable_snapshot() {
         },
     ));
     assert_eq!(update_count, 2);
-    assert_eq!(shared.snapshot.load().active_count, 3);
+    assert_eq!(shared.snapshot.load(qpc_clock).active_count, 3);
+}
+
+#[test]
+fn configured_publication_cadence_uses_qpc_ticks_without_worker_projection() {
+    let shared = SharedMetrics::default();
+    let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
+    shared.configure_qpc_clock(qpc_clock);
+    let mut local = WorkerMetricsLocal {
+        max_sendinput_pre_call_lateness_ticks: 123_400,
+        max_sendinput_pre_call_lateness_us: 777_777,
+        ..WorkerMetricsLocal::default()
+    };
+
+    assert!(try_publish_metrics(
+        &mut local,
+        &shared,
+        qpc_clock,
+        qpc_ticks(499_999),
+        false,
+    ));
+    assert_eq!(shared.publish_count.load(Ordering::Relaxed), 0);
+    assert!(try_publish_metrics(
+        &mut local,
+        &shared,
+        qpc_clock,
+        qpc_ticks(500_000),
+        false,
+    ));
+    assert_eq!(shared.publish_count.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        shared
+            .snapshot
+            .dispatch
+            .read()
+            .max_sendinput_pre_call_lateness_us,
+        777_777,
+        "the dispatch publisher keeps source ticks and defers unit projection"
+    );
+    let projected = shared.snapshot.load(qpc_clock);
+    assert_eq!(projected.max_sendinput_pre_call_lateness_ticks, 123_400);
+    assert_eq!(projected.max_sendinput_pre_call_lateness_us, 12_340);
 }
 
 #[test]
@@ -239,7 +291,7 @@ fn terminal_snapshot_merges_and_clears_the_observer_slot_once() {
     };
     assert!(shared.snapshot.try_publish_dispatch(dispatch.clone()));
     assert!(shared.snapshot.try_publish_observer(observer.clone()));
-    let live = shared.snapshot.load();
+    let live = shared.snapshot.load(qpc_clock);
     assert_eq!(live.observer_degraded_samples, 3);
     assert_eq!(live.wait_window_sample_count, 5);
     assert_eq!(live.spin_time_us, 17);
@@ -247,16 +299,16 @@ fn terminal_snapshot_merges_and_clears_the_observer_slot_once() {
 
     let mut terminal = dispatch;
     terminal.merge_observer(&observer);
-    publish_terminal_metrics(&terminal, &shared, qpc_clock, 100);
+    publish_terminal_metrics(&terminal, &shared, qpc_ticks(100));
 
-    let published = shared.snapshot.load();
+    let published = shared.snapshot.load(qpc_clock);
     assert_eq!(published.total_us, 11);
     assert_eq!(published.observer_degraded_samples, 3);
     assert_eq!(published.wait_window_sample_count, 5);
     assert_eq!(published.spin_time_us, 17);
     assert_eq!(published.idle_wake_count, 2);
-    assert_eq!(shared.snapshot.load().spin_time_us, 17);
-    assert_eq!(shared.snapshot.load().idle_wake_count, 2);
+    assert_eq!(shared.snapshot.load(qpc_clock).spin_time_us, 17);
+    assert_eq!(shared.snapshot.load(qpc_clock).idle_wake_count, 2);
 }
 
 #[test]
@@ -300,12 +352,12 @@ fn terminal_cleanup_snapshot_is_visible_after_forced_publication_contention() {
 
     assert_eq!(terminal.active_count, 0);
     assert_eq!(terminal.observer_degraded_samples, 7);
-    let still_live = shared.snapshot.load();
+    let still_live = shared.snapshot.load(qpc_clock);
     assert_eq!(still_live.active_count, 1);
     assert_eq!(still_live.observer_degraded_samples, 7);
-    publish_terminal_metrics(&terminal, &shared, qpc_clock, 11);
+    publish_terminal_metrics(&terminal, &shared, qpc_ticks(11));
 
-    let snapshot = shared.snapshot.load();
+    let snapshot = shared.snapshot.load(qpc_clock);
     assert_eq!(snapshot.active_count, 0);
     assert_eq!(snapshot.possibly_active_count, 0);
     assert_eq!(snapshot.failed_release_count, 0);
@@ -329,21 +381,56 @@ fn observer_and_dispatch_publications_do_not_overwrite_each_other() {
         &mut dispatch,
         &shared,
         qpc_clock,
-        0,
+        qpc_ticks(0),
         true
     ));
     assert!(try_publish_observer_metrics(
         &mut observer,
         &shared,
         qpc_clock,
-        0,
+        qpc_ticks(0),
         true
     ));
 
-    let published = shared.snapshot.load();
+    let published = shared.snapshot.load(qpc_clock);
     assert_eq!(published.total_us, 9);
     assert_eq!(published.observer_degraded_samples, 2);
     assert_eq!(published.wait_window_sample_count, 6);
+}
+
+#[test]
+fn snapshot_projection_preserves_missing_and_dropped_observer_sample_accounting() {
+    let shared = SharedMetrics::default();
+    let qpc_clock = qpc_clock();
+    assert!(shared.snapshot.try_publish_dispatch(WorkerMetricsLocal {
+        spin_observation_expected_samples: 9,
+        spin_observation_missing_samples: 2,
+        spin_observation_dropped_samples: 1,
+        spin_observation_pending_samples: 0,
+        ..WorkerMetricsLocal::default()
+    }));
+    assert!(shared.snapshot.try_publish_observer(WorkerMetricsLocal {
+        observer_dropped_samples: 4,
+        observer_queue_high_watermark: 6,
+        ..WorkerMetricsLocal::default()
+    }));
+
+    let live = shared.snapshot.load(qpc_clock);
+    assert_eq!(live.spin_observation_expected_samples, 9);
+    assert_eq!(live.spin_observation_missing_samples, 2);
+    assert_eq!(live.spin_observation_dropped_samples, 1);
+    assert_eq!(live.spin_observation_pending_samples, 6);
+    assert_eq!(live.observer_dropped_samples, 4);
+    assert_eq!(live.observer_queue_high_watermark, 6);
+
+    publish_terminal_metrics(&live, &shared, qpc_ticks(7));
+    let terminal = shared.snapshot.load(qpc_clock);
+    assert_eq!(terminal.spin_observation_expected_samples, 9);
+    assert_eq!(terminal.spin_observation_missing_samples, 2);
+    assert_eq!(terminal.spin_observation_dropped_samples, 1);
+    assert_eq!(terminal.spin_observation_pending_samples, 6);
+    assert_eq!(terminal.observer_dropped_samples, 4);
+    assert_eq!(terminal.observer_queue_high_watermark, 6);
 }
 
 #[test]
@@ -358,9 +445,9 @@ fn publication_derives_public_lateness_microseconds_from_ticks() {
     };
     let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
 
-    try_publish_metrics(&mut local, &shared, qpc_clock, 0, true);
+    try_publish_metrics(&mut local, &shared, qpc_clock, qpc_ticks(0), true);
 
-    let published = shared.snapshot.load();
+    let published = shared.snapshot.load(qpc_clock);
     assert_eq!(published.max_sendinput_pre_call_lateness_ticks, 1_234);
     assert_eq!(published.max_sendinput_pre_call_lateness_us, 1_234);
     assert_eq!(published.wait_planned_gap_max_us, 2_345);
@@ -377,13 +464,72 @@ fn publication_derives_floor_delay_microseconds_from_qpc_ticks() {
     };
     let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
 
-    try_publish_metrics(&mut local, &shared, qpc_clock, 0, true);
+    try_publish_metrics(&mut local, &shared, qpc_clock, qpc_ticks(0), true);
 
-    let published = shared.snapshot.load();
+    let published = shared.snapshot.load(qpc_clock);
     assert_eq!(published.max_hold_floor_delay_ticks, 1_234);
     assert_eq!(published.max_hold_floor_delay_us, 1_234);
     assert_eq!(published.max_release_floor_delay_ticks, 2_345);
     assert_eq!(published.max_release_floor_delay_us, 2_345);
+}
+
+#[test]
+fn live_and_terminal_lateness_projection_uses_merged_ticks_at_nondefault_qpc_frequency() {
+    let shared = SharedMetrics::default();
+    let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_000).unwrap());
+    let dispatch = WorkerMetricsLocal {
+        wait_planned_gap_hot_lateness_max_ticks: 1_234,
+        wait_planned_gap_hot_lateness_max_us: 111,
+        wait_planned_gap_cold_lateness_max_ticks: 45_678,
+        wait_planned_gap_cold_lateness_max_us: 222,
+        physical_target_to_wake_max_ticks: 12_345,
+        physical_target_to_wake_max_us: 333,
+        ..WorkerMetricsLocal::default()
+    };
+    let observer = WorkerMetricsLocal {
+        wait_planned_gap_hot_lateness_max_ticks: 23_459,
+        wait_planned_gap_hot_lateness_max_us: 999_999,
+        wait_planned_gap_cold_lateness_max_ticks: 3_456,
+        wait_planned_gap_cold_lateness_max_us: 888_888,
+        physical_target_to_wake_max_ticks: 98_765,
+        physical_target_to_wake_max_us: 777_777,
+        ..WorkerMetricsLocal::default()
+    };
+
+    assert!(shared.snapshot.try_publish_dispatch(dispatch.clone()));
+    assert!(shared.snapshot.try_publish_observer(observer.clone()));
+
+    let live = shared.snapshot.load(qpc_clock);
+    assert_eq!(live.wait_planned_gap_hot_lateness_max_ticks, 23_459);
+    assert_eq!(live.wait_planned_gap_hot_lateness_max_us, 2_345);
+    assert_eq!(live.wait_planned_gap_cold_lateness_max_ticks, 45_678);
+    assert_eq!(live.wait_planned_gap_cold_lateness_max_us, 4_567);
+    assert_eq!(live.physical_target_to_wake_max_ticks, 98_765);
+    assert_eq!(live.physical_target_to_wake_max_us, 9_876);
+
+    let mut terminal_source = dispatch.clone();
+    terminal_source.merge_observer(&observer);
+    assert_eq!(
+        terminal_source.wait_planned_gap_hot_lateness_max_us,
+        dispatch.wait_planned_gap_hot_lateness_max_us
+    );
+    assert_eq!(
+        terminal_source.wait_planned_gap_cold_lateness_max_us,
+        dispatch.wait_planned_gap_cold_lateness_max_us
+    );
+    assert_eq!(
+        terminal_source.physical_target_to_wake_max_us,
+        dispatch.physical_target_to_wake_max_us
+    );
+    publish_terminal_metrics(&terminal_source, &shared, qpc_ticks(1));
+
+    let terminal = shared.snapshot.load(qpc_clock);
+    assert_eq!(terminal.wait_planned_gap_hot_lateness_max_ticks, 23_459);
+    assert_eq!(terminal.wait_planned_gap_hot_lateness_max_us, 2_345);
+    assert_eq!(terminal.wait_planned_gap_cold_lateness_max_ticks, 45_678);
+    assert_eq!(terminal.wait_planned_gap_cold_lateness_max_us, 4_567);
+    assert_eq!(terminal.physical_target_to_wake_max_ticks, 98_765);
+    assert_eq!(terminal.physical_target_to_wake_max_us, 9_876);
 }
 
 #[test]
