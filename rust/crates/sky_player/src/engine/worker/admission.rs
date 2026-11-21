@@ -320,6 +320,13 @@ pub(crate) fn apply_final_down_rejection(
     };
     record_final_gate_rejection(local_metrics, rejection);
 
+    #[cfg(test)]
+    if matches!(verdict, FinalDownVerdict::FocusLost)
+        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
+    {
+        hook.record_final_gate_focus_rejection_for_test();
+    }
+
     match verdict {
         FinalDownVerdict::ControlRejected => runtime.verified_target = None,
         FinalDownVerdict::TargetChanged

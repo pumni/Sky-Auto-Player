@@ -1482,6 +1482,18 @@ impl NativeDispatchSession {
         );
     }
 
+    /// Inject a focus transition at a synchronized final-admission checkpoint.
+    /// This unit-test-only seam avoids the public setter's startup cancellation
+    /// side effect so the test can prove that final admission itself rejects.
+    #[cfg(test)]
+    pub(crate) fn set_focus_hint_for_final_admission_test(&self, active: bool) {
+        publish_focus_hint(
+            &self.shared.commands.focus_active,
+            &self.shared.commands.interrupt,
+            active,
+        );
+    }
+
     /// Record a Windows suspend/resume transition without formatting, logging,
     /// locking, or publishing from the OS callback.
     pub fn notify_system_power(&self, suspended: bool) -> bool {
