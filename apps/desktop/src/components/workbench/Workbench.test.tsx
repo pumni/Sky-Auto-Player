@@ -178,6 +178,7 @@ describe('workbench layout persistence', () => {
       version: 5,
       navigatorPreference: 'collapsed',
       expandedNavigatorWidth: 340,
+      utilityPreference: 'expanded',
       utilityWidth: 440,
       utilityOpen: true,
     });
@@ -197,6 +198,7 @@ describe('workbench layout persistence', () => {
       version: 5,
       navigatorPreference: 'expanded',
       expandedNavigatorWidth: 340,
+      utilityPreference: 'expanded',
       utilityWidth: 340,
       utilityOpen: false,
     });
@@ -216,6 +218,7 @@ describe('workbench layout persistence', () => {
       version: 5,
       navigatorPreference: 'expanded',
       expandedNavigatorWidth: 340,
+      utilityPreference: 'expanded',
       utilityWidth: 340,
       utilityOpen: false,
     });
@@ -230,6 +233,7 @@ describe('workbench layout persistence', () => {
       version: 5,
       navigatorPreference: 'expanded',
       expandedNavigatorWidth: 280,
+      utilityPreference: 'expanded',
       utilityWidth: 440,
       utilityOpen: false,
     });
@@ -244,6 +248,7 @@ describe('workbench layout persistence', () => {
       version: 5,
       navigatorPreference: 'expanded',
       expandedNavigatorWidth: 280,
+      utilityPreference: 'expanded',
       utilityWidth: 440,
       utilityOpen: false,
     });
@@ -255,6 +260,7 @@ describe('workbench layout persistence', () => {
     window.localStorage.clear();
     window.localStorage.setItem(WORKBENCH_STORAGE_KEY, JSON.stringify({ version: 3 }));
     expect(loadWorkbenchLayout().expandedNavigatorWidth).toBe(DEFAULT_NAVIGATOR_WIDTH);
+    expect(loadWorkbenchLayout().utilityPreference).toBe('expanded');
     expect(loadWorkbenchLayout().utilityWidth).toBe(320);
     expect(loadWorkbenchLayout().utilityOpen).toBe(false);
   });
@@ -275,6 +281,7 @@ describe('workbench layout persistence', () => {
       version: 5,
       navigatorPreference: 'expanded',
       expandedNavigatorWidth: 300,
+      utilityPreference: 'expanded',
       utilityWidth: 400,
       utilityOpen: true,
     });
@@ -287,6 +294,7 @@ describe('workbench layout persistence', () => {
         version: 5,
         navigatorPreference: 'collapsed',
         expandedNavigatorWidth: 310,
+        utilityPreference: 'collapsed',
         utilityWidth: 390,
         utilityOpen: false,
       }),
@@ -296,6 +304,7 @@ describe('workbench layout persistence', () => {
       version: 5,
       navigatorPreference: 'collapsed',
       expandedNavigatorWidth: 310,
+      utilityPreference: 'collapsed',
       utilityWidth: 390,
       utilityOpen: true,
     });

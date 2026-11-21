@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
-import { selectRowAtIndex, createDesktopStore } from '../../state/store';
+import { selectRowAtIndex, selectSelectedDetail, createDesktopStore } from '../../state/store';
 import { SongDetailsView } from './SongDetailsView';
 
 describe('SongDetailsView', () => {
@@ -109,9 +109,14 @@ describe('SongDetailsView', () => {
     expect(screen.getByText(/assumed from the source song/i)).toBeInTheDocument();
 
     await act(async () => {
-      fireEvent.change(screen.getByRole('combobox', { name: 'Conversion mode' }), {
-        target: { value: 'track:0' },
-      });
+      fireEvent.click(screen.getByRole('combobox', { name: 'Conversion mode' }));
+    });
+    const firstTrackOption = screen
+      .getAllByRole('option')
+      .find((option) => option.getAttribute('data-value') === 'track:0');
+    if (!firstTrackOption) throw new Error('expected track:0 option');
+    await act(async () => {
+      fireEvent.click(firstTrackOption);
     });
     expect(getDetail).toHaveBeenLastCalledWith(
       expect.objectContaining({ conversionMode: { kind: 'single_track', track_id: 0 } }),
@@ -160,5 +165,29 @@ describe('SongDetailsView', () => {
     expect(screen.getByText('Composed v4 · schema 4 · ready')).toBeInTheDocument();
     expect(screen.getByText(/Sky Piano tuned to Ab/)).toBeInTheDocument();
     expect(screen.getByText(/assumed from the source song/i)).toBeInTheDocument();
+  });
+
+  it('applies recommended hold and tempo defaults from Song Details', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const first = selectRowAtIndex(store.getState().library, 0);
+    if (!first) throw new Error('mock library is empty');
+    await act(async () => store.getState().selectSong(first.song_id));
+
+    render(<SongDetailsView useStore={store} />);
+    const applyButton = screen.getByRole('button', { name: 'Apply recommendation' });
+    expect(applyButton).toBeEnabled();
+
+    fireEvent.click(applyButton);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Recommended settings applied' })).toBeDisabled(),
+    );
+    const recommendation = selectSelectedDetail(store.getState()).value?.recommendation;
+    expect(store.getState().settings?.playback_defaults.hold_frames).toBe(
+      recommendation?.recommended_hold_frames,
+    );
+    expect(store.getState().settings?.playback_defaults.tempo_scale).toBe(
+      recommendation?.recommended_tempo_scale,
+    );
   });
 });

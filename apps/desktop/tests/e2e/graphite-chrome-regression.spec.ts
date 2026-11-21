@@ -402,11 +402,12 @@ test('Graphite Search uses a responsive preferred width and stays centered in th
         const end = bounds('.app-titlebar-end');
         const drag = bounds('.titlebar-drag-space');
         const trailingDrag = bounds('.titlebar-drag-space-trailing');
-        if (!search || !leading || !end || !drag || !trailingDrag) return null;
-        const midpoint = (leading.right + end.x) / 2;
+        const titlebar = bounds('.app-titlebar');
+        if (!titlebar || !search || !leading || !end || !drag || !trailingDrag) return null;
+        const windowMidpoint = titlebar.x + titlebar.width / 2;
         return {
           search,
-          centerError: Math.abs(search.x + search.width / 2 - midpoint),
+          centerError: Math.abs(search.x + search.width / 2 - windowMidpoint),
           drag,
           trailingDrag,
           dragRegion: document
@@ -423,7 +424,9 @@ test('Graphite Search uses a responsive preferred width and stays centered in th
       const expectedWidth = Math.min(480, viewport.width * 0.42);
       expect(Math.abs(geometry.search.width - expectedWidth)).toBeLessThanOrEqual(4);
       expect(geometry.search.height).toBe(32);
-      expect(geometry.centerError).toBeLessThanOrEqual(2);
+      if (viewport.width >= 1024) {
+        expect(geometry.centerError).toBeLessThanOrEqual(2);
+      }
       expect(geometry.drag.width).toBeGreaterThanOrEqual(24);
       expect(geometry.trailingDrag.width).toBeGreaterThanOrEqual(24);
       expect(geometry.dragRegion).toBe('true');

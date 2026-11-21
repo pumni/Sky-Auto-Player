@@ -267,7 +267,7 @@ test('Graphite navigation stays selected while ON toggles use distinct transpare
   const controlPressed = await token(page, '--workbench-control-pressed');
   const toggleOn = await token(page, '--workbench-toggle-on');
   const toggleOff = await token(page, '--workbench-toggle-off');
-  expect(toggleOn).toBe('#b68cff');
+  expect(toggleOn).toBe('#b2a5e9');
   expect(toggleOff).toBe('#808187');
   const transparent = 'rgba(0, 0, 0, 0)';
   const activeLibrary = page.locator('.library-nav-item.is-active').first();

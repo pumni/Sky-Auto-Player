@@ -258,10 +258,8 @@ async function openSettingsAppearance(page: Page) {
   await page.getByRole('button', { name: 'Open settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await expect(dialog.getByLabel('Dark palette')).toHaveValue('graphite');
-  await expect(dialog.getByLabel('Dark palette').locator('option[value="graphite"]')).toHaveText(
-    'Graphite (Default)',
-  );
+  await expect(dialog.getByLabel('Dark palette')).toHaveAttribute('data-value', 'graphite');
+  await expect(dialog.getByLabel('Dark palette')).toHaveText('Graphite (Default)');
   return dialog;
 }
 

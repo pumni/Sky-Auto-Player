@@ -11,14 +11,31 @@ import type { DesktopStoreHook } from '../../state/store';
 import { LibraryNavigator } from '../library/LibraryNavigator';
 import { TrackBrowser } from '../tracks/TrackBrowser';
 import { UtilityPane } from '../utility/UtilityPane';
-import { ResizableSeparator } from './ResizableSeparator';
+import { ResizableSeparator, type ResizableSeparatorDragResult } from './ResizableSeparator';
 import {
   MIN_TRACK_BROWSER_WIDTH,
+  getAvailableNavigatorWidth,
+  getNavigatorWidthMax,
   getUtilityOverlayWidth,
   getUtilityPresentationMode,
-  getNavigatorWidthMax,
+  getUtilityWidthMax,
 } from './workbenchGeometry';
-import { useWorkbenchLayout } from './useWorkbenchLayout';
+import {
+  NAVIGATOR_COLLAPSE_THRESHOLD,
+  NAVIGATOR_EXPAND_THRESHOLD,
+  UTILITY_COLLAPSE_THRESHOLD,
+  UTILITY_EXPAND_THRESHOLD,
+  resolvePaneDrag,
+} from './workbenchDragPolicy';
+import {
+  COMPACT_NAVIGATOR_WIDTH,
+  COMPACT_UTILITY_WIDTH,
+  DEFAULT_NAVIGATOR_WIDTH,
+  DEFAULT_UTILITY_WIDTH,
+  MIN_NAVIGATOR_WIDTH,
+  MIN_UTILITY_WIDTH,
+  useWorkbenchLayout,
+} from './useWorkbenchLayout';
 import { WorkbenchPane } from './WorkbenchPane';
 
 interface WorkbenchProps {
@@ -29,6 +46,16 @@ interface WorkbenchProps {
 interface WorkbenchMeasurement {
   width: number;
   revision: number;
+}
+
+interface LiveResizeSession {
+  pane: 'navigator' | 'utility';
+  rawWidth: number;
+  navigator: number;
+  navigatorCollapsed: boolean;
+  utility: number;
+  utilityCollapsed: boolean;
+  lockedUtilityTopology: boolean;
 }
 
 function useWorkbenchWidth(workbenchRef: RefObject<HTMLElement | null>): WorkbenchMeasurement {
@@ -66,6 +93,8 @@ function useWorkbenchWidth(workbenchRef: RefObject<HTMLElement | null>): Workben
 
 export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const workbenchRef = useRef<HTMLElement>(null);
+  const navigatorSeparatorRef = useRef<HTMLDivElement>(null);
+  const utilitySeparatorRef = useRef<HTMLDivElement>(null);
   const viewport = useWorkbenchWidth(workbenchRef);
   const viewportWidth = viewport.width;
   const utility = useStore((store) => store.utility);
@@ -74,50 +103,150 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const utilityOverlayWidth = getUtilityOverlayWidth(viewportWidth);
   const layout = useWorkbenchLayout(viewportWidth, utilityDocked, viewport.revision);
   const previousUtilityOpenRef = useRef(utility.open);
-  const liveResizeRef = useRef<{
-    pane: 'navigator' | 'utility';
-    width: number;
-    navigator: number;
-    utility: number;
-  } | null>(null);
+  const liveResizeRef = useRef<LiveResizeSession | null>(null);
 
-  const applyLiveResize = (pane: 'navigator' | 'utility', width: number, rebase = false) => {
+  const applyLiveRawDrag = (
+    pane: 'navigator' | 'utility',
+    rawWidth: number,
+    rebase = false,
+  ): ResizableSeparatorDragResult => {
     const live = liveResizeRef.current;
     const shell = workbenchRef.current;
-    if (!live || live.pane !== pane || !shell) return;
-    const utilityWidth =
-      pane === 'utility'
-        ? Math.min(layout.utilityWidthMax, Math.max(Math.min(280, layout.utilityWidthMax), width))
-        : layout.utilityWidth;
-    const navigatorMax = getNavigatorWidthMax(viewportWidth, utilityWidth);
-    const navigatorWidth = layout.navigatorCollapsed
-      ? layout.navigatorWidth
-      : Math.min(
-          navigatorMax,
-          Math.max(200, pane === 'navigator' ? width : layout.expandedNavigatorWidth),
-        );
-    live.width = pane === 'utility' ? utilityWidth : navigatorWidth;
-    if (!rebase && live.navigator === navigatorWidth && live.utility === utilityWidth) return;
-    live.navigator = navigatorWidth;
-    live.utility = utilityWidth;
-    shell.style.setProperty('--navigator-pane-width', `${navigatorWidth}px`);
-    shell.style.setProperty('--utility-pane-width', `${utilityWidth}px`);
-    const navigator = shell.querySelector('[aria-label="Resize library navigator"]');
-    navigator?.setAttribute('aria-valuenow', String(navigatorWidth));
-    navigator?.setAttribute('aria-valuemax', String(navigatorMax));
-    shell
-      .querySelector('[aria-label="Resize utility pane"]')
-      ?.setAttribute('aria-valuenow', String(utilityWidth));
+    if (!live || live.pane !== pane || !shell) {
+      return { value: pane === 'utility' ? layout.utilityWidth : layout.navigatorWidth };
+    }
+    live.rawWidth = rawWidth;
+
+    if (pane === 'navigator') {
+      const utilityWidth = layout.utilityWidth;
+      const navigatorMax = getNavigatorWidthMax(viewportWidth, utilityWidth);
+      const canExpand =
+        getAvailableNavigatorWidth(viewportWidth, utilityWidth) >= MIN_NAVIGATOR_WIDTH;
+      const resolved = resolvePaneDrag({
+        currentCollapsed: live.navigatorCollapsed,
+        rawWidth,
+        compactWidth: COMPACT_NAVIGATOR_WIDTH,
+        minExpandedWidth: MIN_NAVIGATOR_WIDTH,
+        maxExpandedWidth: navigatorMax,
+        collapseThreshold: NAVIGATOR_COLLAPSE_THRESHOLD,
+        expandThreshold: NAVIGATOR_EXPAND_THRESHOLD,
+        canExpand,
+      });
+
+      if (resolved.collapsed !== live.navigatorCollapsed) {
+        live.navigatorCollapsed = resolved.collapsed;
+        layout.setNavigatorPreference(resolved.collapsed ? 'collapsed' : 'expanded', false);
+      }
+
+      if (rebase || live.navigator !== resolved.width) {
+        live.navigator = resolved.width;
+        shell.style.setProperty('--navigator-pane-width', `${resolved.width}px`);
+        navigatorSeparatorRef.current?.setAttribute('aria-valuemax', String(navigatorMax));
+      }
+      return { value: resolved.width, snapHint: resolved.snapHint };
+    }
+
+    const utilityMax = live.utilityCollapsed
+      ? getUtilityWidthMax(viewportWidth)
+      : layout.utilityWidthMax;
+    const minUtility = Math.min(MIN_UTILITY_WIDTH, utilityMax);
+    const canExpandUtility =
+      utilityDocked && utilityMax >= minUtility && minUtility > COMPACT_UTILITY_WIDTH;
+    const resolved = resolvePaneDrag({
+      currentCollapsed: live.utilityCollapsed,
+      rawWidth,
+      compactWidth: COMPACT_UTILITY_WIDTH,
+      minExpandedWidth: minUtility,
+      maxExpandedWidth: utilityMax,
+      collapseThreshold: UTILITY_COLLAPSE_THRESHOLD,
+      expandThreshold: UTILITY_EXPAND_THRESHOLD,
+      canExpand: canExpandUtility,
+    });
+
+    if (resolved.collapsed !== live.utilityCollapsed) {
+      live.utilityCollapsed = resolved.collapsed;
+      layout.setUtilityPreference(resolved.collapsed ? 'collapsed' : 'expanded', false);
+    }
+
+    const navigatorMax = getNavigatorWidthMax(viewportWidth, resolved.width);
+    const navigatorCanFit =
+      getAvailableNavigatorWidth(viewportWidth, resolved.width) >= MIN_NAVIGATOR_WIDTH;
+    const effectiveNavigatorCollapsed =
+      layout.navigatorCollapsed || (!live.lockedUtilityTopology && !navigatorCanFit);
+    const navigatorWidth = effectiveNavigatorCollapsed
+      ? COMPACT_NAVIGATOR_WIDTH
+      : Math.min(navigatorMax, Math.max(MIN_NAVIGATOR_WIDTH, layout.expandedNavigatorWidth));
+
+    if (rebase || live.utility !== resolved.width || live.navigator !== navigatorWidth) {
+      live.utility = resolved.width;
+      live.navigator = navigatorWidth;
+      shell.style.setProperty('--utility-pane-width', `${resolved.width}px`);
+      shell.style.setProperty('--navigator-pane-width', `${navigatorWidth}px`);
+      navigatorSeparatorRef.current?.setAttribute('aria-valuenow', String(navigatorWidth));
+      navigatorSeparatorRef.current?.setAttribute('aria-valuemax', String(navigatorMax));
+    }
+
+    return { value: resolved.width, snapHint: resolved.snapHint };
   };
 
   const beginLiveResize = (pane: 'navigator' | 'utility') => {
+    const lockUtility = pane === 'utility' && !layout.utilityCollapsed;
     liveResizeRef.current = {
       pane,
-      width: pane === 'utility' ? layout.utilityWidth : layout.navigatorWidth,
+      rawWidth: pane === 'utility' ? layout.utilityWidth : layout.navigatorWidth,
       navigator: layout.navigatorWidth,
+      navigatorCollapsed: layout.navigatorCollapsed,
       utility: layout.utilityWidth,
+      utilityCollapsed: layout.utilityCollapsed,
+      lockedUtilityTopology: lockUtility,
     };
-    if (pane === 'utility') layout.beginUtilityDrag();
+    if (lockUtility) layout.beginUtilityDrag();
+  };
+
+  const commitLiveResize = (pane: 'navigator' | 'utility', fallbackValue: number) => {
+    const live = liveResizeRef.current;
+    if (pane === 'navigator') {
+      if (live && live.pane === 'navigator') {
+        if (live.navigatorCollapsed) {
+          layout.setNavigatorPreference('collapsed', true);
+        } else {
+          layout.setNavigatorWidth(live.navigator, true);
+        }
+        return;
+      }
+      if (fallbackValue <= COMPACT_NAVIGATOR_WIDTH) {
+        layout.setNavigatorPreference('collapsed', true);
+      } else {
+        layout.setNavigatorWidth(Math.max(MIN_NAVIGATOR_WIDTH, fallbackValue), true);
+      }
+      return;
+    }
+
+    if (live && live.pane === 'utility') {
+      if (live.utilityCollapsed) {
+        layout.setUtilityPreference('collapsed', true);
+      } else {
+        layout.setUtilityWidth(live.utility, true);
+      }
+      return;
+    }
+
+    if (fallbackValue <= COMPACT_UTILITY_WIDTH) {
+      layout.setUtilityPreference('collapsed', true);
+    } else {
+      layout.setUtilityWidth(
+        Math.max(Math.min(MIN_UTILITY_WIDTH, layout.utilityWidthMax), fallbackValue),
+        true,
+      );
+    }
+  };
+
+  const endLiveResize = (pane: 'navigator' | 'utility') => {
+    const live = liveResizeRef.current;
+    liveResizeRef.current = null;
+    if (pane === 'utility' && live?.lockedUtilityTopology && !live.utilityCollapsed) {
+      layout.endUtilityDrag();
+    }
   };
 
   const rebaseLiveResize = useEffectEvent(() => {
@@ -125,20 +254,22 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
     if (!live) return;
     if (live.pane === 'utility' && !utilityDocked) {
       liveResizeRef.current = null;
-      // Discard an uncommitted session without leaving an imperative width on
-      // a pane whose React style value may not otherwise have changed.
       workbenchRef.current?.style.setProperty(
         '--navigator-pane-width',
         `${layout.navigatorWidth}px`,
       );
       workbenchRef.current?.style.setProperty('--utility-pane-width', `${layout.utilityWidth}px`);
-      workbenchRef.current
-        ?.querySelector('[aria-label="Resize library navigator"]')
-        ?.setAttribute('aria-valuenow', String(layout.navigatorWidth));
+      navigatorSeparatorRef.current?.setAttribute('aria-valuenow', String(layout.navigatorWidth));
       return;
     }
-    applyLiveResize(live.pane, live.width, true);
+    const resolved = applyLiveRawDrag(live.pane, live.rawWidth, true);
+    if (live.pane === 'utility') {
+      utilitySeparatorRef.current?.setAttribute('aria-valuenow', String(resolved.value));
+    } else {
+      navigatorSeparatorRef.current?.setAttribute('aria-valuenow', String(resolved.value));
+    }
   });
+
   useLayoutEffect(() => {
     rebaseLiveResize();
   }, [
@@ -147,6 +278,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
     utilityDocked,
     layout.utilityWidthMax,
     layout.utilityWidth,
+    layout.utilityCollapsed,
     layout.navigatorWidth,
     layout.navigatorCollapsed,
     layout.expandedNavigatorWidth,
@@ -167,6 +299,8 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
     });
     return () => window.cancelAnimationFrame(frame);
   }, [presentationMode, utility.open]);
+
+  const navigatorSeparatorDisabled = layout.navigatorCollapsed && !layout.canExpandNavigator;
 
   return (
     <main
@@ -201,19 +335,31 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
         />
       </WorkbenchPane>
       <ResizableSeparator
+        ref={navigatorSeparatorRef}
         label="Resize library navigator"
         value={layout.navigatorWidth}
-        min={layout.navigatorCollapsed ? layout.navigatorWidth : 200}
+        min={layout.navigatorCollapsed ? COMPACT_NAVIGATOR_WIDTH : MIN_NAVIGATOR_WIDTH}
         max={layout.navigatorMax}
-        defaultValue={240}
-        disabled={layout.navigatorCollapsed}
+        defaultValue={DEFAULT_NAVIGATOR_WIDTH}
+        disabled={navigatorSeparatorDisabled}
         onDragStart={() => beginLiveResize('navigator')}
-        onDragChange={(value) => applyLiveResize('navigator', value)}
-        onDragEnd={() => {
-          liveResizeRef.current = null;
+        onDragRaw={(raw) => applyLiveRawDrag('navigator', raw)}
+        onDragEnd={() => endLiveResize('navigator')}
+        onChange={(value) => {
+          if (value <= COMPACT_NAVIGATOR_WIDTH) {
+            layout.setNavigatorPreference('collapsed');
+          } else {
+            layout.setNavigatorWidth(Math.max(MIN_NAVIGATOR_WIDTH, value));
+          }
         }}
-        onChange={(value) => layout.setNavigatorWidth(value)}
-        onCommit={(value) => layout.setNavigatorWidth(value, true)}
+        onCommit={(value) => commitLiveResize('navigator', value)}
+        onDoubleClick={() => {
+          if (layout.navigatorCollapsed) {
+            layout.setNavigatorPreference('expanded', true);
+          } else {
+            layout.resetNavigatorWidth();
+          }
+        }}
       />
       <WorkbenchPane className="track-browser-workbench-pane">
         <TrackBrowser useStore={useStore} />
@@ -222,24 +368,47 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
         <>
           {utilityDocked && (
             <ResizableSeparator
+              ref={utilitySeparatorRef}
               label="Resize utility pane"
               value={layout.utilityWidth}
-              min={Math.min(280, layout.utilityWidth)}
+              min={
+                layout.utilityCollapsed
+                  ? COMPACT_UTILITY_WIDTH
+                  : Math.min(MIN_UTILITY_WIDTH, layout.utilityWidthMax)
+              }
               max={layout.utilityWidthMax}
-              defaultValue={320}
+              defaultValue={DEFAULT_UTILITY_WIDTH}
               direction={-1}
               onDragStart={() => beginLiveResize('utility')}
-              onDragChange={(value) => applyLiveResize('utility', value)}
-              onDragEnd={() => {
-                liveResizeRef.current = null;
-                layout.endUtilityDrag();
+              onDragRaw={(raw) => applyLiveRawDrag('utility', raw)}
+              onDragEnd={() => endLiveResize('utility')}
+              onChange={(value) => {
+                if (value <= COMPACT_UTILITY_WIDTH) {
+                  layout.setUtilityPreference('collapsed');
+                } else {
+                  layout.setUtilityWidth(
+                    Math.max(Math.min(MIN_UTILITY_WIDTH, layout.utilityWidthMax), value),
+                  );
+                }
               }}
-              onChange={(value) => layout.setUtilityWidth(value)}
-              onCommit={(value) => layout.setUtilityWidth(value, true)}
+              onCommit={(value) => commitLiveResize('utility', value)}
+              onDoubleClick={() => {
+                if (layout.utilityCollapsed) {
+                  layout.setUtilityPreference('expanded', true);
+                } else {
+                  layout.resetUtilityWidth();
+                }
+              }}
             />
           )}
           <WorkbenchPane
-            className={`utility-workbench-pane${presentationMode === 'overlay' ? ' is-overlay' : ''}`}
+            className={`utility-workbench-pane${
+              presentationMode === 'overlay'
+                ? ' is-overlay'
+                : layout.utilityCollapsed
+                  ? ' is-collapsed'
+                  : ''
+            }`}
             style={
               presentationMode === 'overlay'
                 ? { width: utilityOverlayWidth }
@@ -248,6 +417,14 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
           >
             <UtilityPane
               presentationMode={utilityDocked ? 'docked' : 'overlay'}
+              collapsed={utilityDocked && layout.utilityCollapsed}
+              onToggleCollapsed={() =>
+                layout.setUtilityPreference(
+                  layout.utilityCollapsed ? 'expanded' : 'collapsed',
+                  true,
+                )
+              }
+              onExpand={() => layout.setUtilityPreference('expanded', true)}
               useStore={useStore}
               utilityTriggerRef={utilityTriggerRef}
             />

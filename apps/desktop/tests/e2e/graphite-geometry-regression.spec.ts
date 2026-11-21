@@ -365,7 +365,7 @@ test('Graphite pane surfaces, compact overlay, and runtime hierarchy remain stab
       '--workbench-control-rest': 'transparent',
       '--workbench-control-hover': '#35363a',
       '--workbench-control-pressed': '#404246',
-      '--workbench-control-disabled': '#8b8c90',
+      '--workbench-control-disabled': '#6c6e73',
       '--workbench-control-danger-hover': '#452d32',
       '--selection-bg': '#25242c',
       '--border-subtle': '#2a2b2c',

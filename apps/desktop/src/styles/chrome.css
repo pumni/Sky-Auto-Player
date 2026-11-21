@@ -1,7 +1,11 @@
 .app-titlebar {
   position: relative;
   z-index: 2;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(min-content, 1fr) minmax(0, min(480px, 42vw)) minmax(
+      min-content,
+      1fr
+    );
   align-items: center;
   min-width: 0;
   height: var(--titlebar-height);
@@ -10,13 +14,21 @@
   background: var(--chrome-surface);
 }
 
+.app-titlebar-left-zone,
+.app-titlebar-right-zone {
+  display: flex;
+  align-items: center;
+  min-width: min-content;
+  height: 100%;
+}
+
 .app-titlebar-leading {
   display: flex;
   flex: 0 0 auto;
   align-items: center;
   height: 100%;
   min-width: auto;
-  padding-left: 10px;
+  padding-left: 12px;
 }
 
 .app-titlebar-brand {
@@ -29,9 +41,21 @@
 
 .app-titlebar-icon {
   display: block;
-  width: 24px;
-  height: 24px;
-  border-radius: 4px;
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+}
+
+.app-titlebar-icon-light {
+  display: none;
+}
+
+html[data-color-mode='light'] .app-titlebar-icon-dark {
+  display: none;
+}
+
+html[data-color-mode='light'] .app-titlebar-icon-light {
+  display: block;
 }
 
 .titlebar-drag-space {
@@ -49,7 +73,6 @@
 .global-search {
   position: relative;
   display: flex;
-  flex: 0 1 520px;
   align-items: center;
   width: 100%;
   max-width: 520px;
@@ -58,11 +81,9 @@
   gap: 8px;
   padding: 0 9px;
   color: var(--text-tertiary);
-  border: 1px solid var(--control-border);
+  border: 1px solid var(--workbench-search-idle-edge);
   border-radius: var(--radius-control);
   background: var(--workbench-search-surface);
-  flex-basis: min(480px, 42vw);
-  border-color: var(--workbench-search-idle-edge);
 }
 
 .global-search:focus-within {
@@ -153,7 +174,7 @@ html[data-color-mode='light'] .global-search:has(input:focus-visible) {
   height: 6px;
   border-radius: 999px;
   background: var(--accent-ink);
-  box-shadow: 0 0 0 2px var(--canvas);
+  box-shadow: 0 0 0 2px var(--chrome-surface);
   pointer-events: none;
 }
 
@@ -237,52 +258,6 @@ html[data-color-mode='light'] .global-search:has(input:focus-visible) {
   }
 }
 
-@media (forced-colors: active) {
-  .update-indicator-dot {
-    background: Highlight;
-    box-shadow: 0 0 0 2px Canvas;
-  }
-
-  .caption-button:focus-visible,
-  .global-search:focus-within {
-    outline: 2px solid Highlight;
-    outline-offset: -2px;
-  }
-
-  .caption-button-close:hover {
-    color: HighlightText;
-    background: Highlight;
-  }
-
-  .global-search:has(input:focus-visible) {
-    outline: 2px solid Highlight;
-    outline-offset: 2px;
-  }
-
-  .window-caption-controls .caption-button {
-    forced-color-adjust: auto;
-    border: 0;
-    color: ButtonText;
-    background-color: ButtonFace;
-  }
-
-  .window-caption-controls .caption-button:hover:not(:disabled) {
-    border: 0;
-    outline: 0;
-    color: HighlightText;
-    background-color: Highlight;
-  }
-
-  .window-caption-controls .caption-button:active:not(:disabled) {
-    background-color: Highlight;
-  }
-
-  .window-caption-controls .caption-button:focus-visible {
-    outline: 2px solid Highlight;
-    outline-offset: -2px;
-  }
-}
-
 .window-caption-controls .caption-button {
   width: 46px;
   height: 40px;
@@ -336,7 +311,47 @@ html[data-color-mode='light'] .global-search:has(input:focus-visible) {
 }
 
 @media (forced-colors: active) {
+  .update-indicator-dot {
+    background: Highlight;
+    box-shadow: 0 0 0 2px Canvas;
+  }
+
+  .caption-button:focus-visible,
+  .global-search:focus-within {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .caption-button-close:hover {
+    color: HighlightText;
+    background: Highlight;
+  }
+
   .global-search:has(input:focus-visible) {
-    outline-color: Highlight;
+    outline: 2px solid Highlight;
+    outline-offset: 2px;
+  }
+
+  .window-caption-controls .caption-button {
+    forced-color-adjust: auto;
+    border: 0;
+    color: ButtonText;
+    background-color: ButtonFace;
+  }
+
+  .window-caption-controls .caption-button:hover:not(:disabled) {
+    border: 0;
+    outline: 0;
+    color: HighlightText;
+    background-color: Highlight;
+  }
+
+  .window-caption-controls .caption-button:active:not(:disabled) {
+    background-color: Highlight;
+  }
+
+  .window-caption-controls .caption-button:focus-visible:not(:disabled) {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
   }
 }

@@ -60,6 +60,10 @@ describe('PlaybackAdmission recovery actions', () => {
       container.querySelector('[data-plan-fingerprint="mock-dry-run-plan"]')?.textContent,
     ).toContain('hypothetical for this dry-run');
     expect(screen.getAllByText(/Sky does not acknowledge these estimates/)).toHaveLength(3);
+    expect(screen.getByRole('button', { name: /Use recommended/i })).toHaveClass('button-primary');
+    expect(screen.getByRole('button', { name: 'Proceed with current settings' })).not.toHaveClass(
+      'button-primary',
+    );
   });
 
   it('keeps a single native confirmation decision compact and lets Not now dismiss it', async () => {

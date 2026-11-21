@@ -1,8 +1,10 @@
+import { useId, useState } from 'react';
 import { MousePointer2 } from 'lucide-react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { selectSelectedDetail, selectSongById } from '../../state/store';
 import type { SheetConversionMode, SheetPitch, SongRow } from '../../bridge/DesktopBridge';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
+import { AppSelect } from '../ui/AppSelect';
 
 interface SongDetailsViewProps {
   useStore: DesktopStoreHook;
@@ -25,12 +27,17 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
   const conversionMode = useStore((store) => store.library.conversionMode);
   const targetPitch = useStore((store) => store.library.targetPitch);
   const prepared = useStore((store) => store.playback.prepared);
+  const playbackDefaults = useStore((store) => store.settings?.playback_defaults ?? null);
+  const patchSettings = useStore((store) => store.patchSettings);
   const setConversionMode = useStore((store) => store.setSheetConversionMode);
   const setTargetPitch = useStore((store) => store.setSheetTargetPitch);
   const acknowledgeLoss = useStore((store) => store.acknowledgeSheetLoss);
   const selectedRow = useStore((store) =>
     selectSongById(store.library, store.library.selectedSongId),
   );
+  const conversionModeId = useId();
+  const targetPitchId = useId();
+  const [applyingRecommendation, setApplyingRecommendation] = useState(false);
   const scrollRef = useScrollVisibility<HTMLElement>();
 
   if (!selectedSongId || !selectedRow) {
@@ -64,6 +71,32 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
     detailError !== null ||
     song?.risk.level !== 'low' ||
     (song?.risk.reasons.length ?? 0) > 0;
+  const recommendedHold = song?.recommendation?.recommended_hold_frames ?? null;
+  const recommendedTempo = song?.recommendation?.recommended_tempo_scale ?? null;
+  const hasActionableRecommendation =
+    playbackDefaults !== null && (recommendedHold !== null || recommendedTempo !== null);
+  const recommendationMatchesCurrent =
+    hasActionableRecommendation &&
+    (recommendedHold === null || playbackDefaults.hold_frames === recommendedHold) &&
+    (recommendedTempo === null ||
+      Math.abs(playbackDefaults.tempo_scale - recommendedTempo) < 0.001);
+
+  const applyRecommendation = async () => {
+    if (!hasActionableRecommendation || recommendationMatchesCurrent || applyingRecommendation) {
+      return;
+    }
+    setApplyingRecommendation(true);
+    try {
+      await patchSettings({
+        playbackDefaults: {
+          ...(recommendedHold !== null ? { holdFrames: recommendedHold } : {}),
+          ...(recommendedTempo !== null ? { tempoScale: recommendedTempo } : {}),
+        },
+      });
+    } finally {
+      setApplyingRecommendation(false);
+    }
+  };
   return (
     <section
       ref={scrollRef}
@@ -104,17 +137,27 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
             sheet.readiness !== 'malformed' && (
               <>
                 {sheet.tracks.length > 1 && (
-                  <label className="sheet-choice">
-                    <span>Tracks</span>
-                    <select
-                      aria-label="Conversion mode"
+                  <div className="sheet-choice">
+                    <label htmlFor={conversionModeId}>Tracks</label>
+                    <AppSelect
+                      id={conversionModeId}
+                      ariaLabel="Conversion mode"
+                      listboxLabel="Conversion mode"
+                      density="compact"
                       value={
                         conversionMode.kind === 'merge_playable'
                           ? 'merge'
                           : `track:${conversionMode.track_id}`
                       }
-                      onChange={(event) => {
-                        const value = event.currentTarget.value;
+                      options={[
+                        { value: 'merge', label: 'Merge playable tracks' },
+                        ...sheet.tracks.map((track) => ({
+                          value: `track:${track.track_id}`,
+                          label: track.instrument ?? `Track ${track.track_id + 1}`,
+                          ...(track.effective_pitch ? { hint: track.effective_pitch } : {}),
+                        })),
+                      ]}
+                      onChange={(value) => {
                         const mode: SheetConversionMode =
                           value === 'merge'
                             ? { kind: 'merge_playable' }
@@ -124,40 +167,31 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
                               };
                         void setConversionMode(mode);
                       }}
-                    >
-                      <option value="merge">Merge playable tracks</option>
-                      {sheet.tracks.map((track) => (
-                        <option key={track.track_id} value={`track:${track.track_id}`}>
-                          {track.instrument ?? `Track ${track.track_id + 1}`}
-                          {track.effective_pitch ? ` · ${track.effective_pitch}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
+                    />
+                  </div>
                 )}
-                <label className="sheet-choice">
-                  <span>Target Sky Piano pitch</span>
-                  <select
-                    aria-label="Target Sky Piano pitch"
+                <div className="sheet-choice">
+                  <label htmlFor={targetPitchId}>Target Sky Piano pitch</label>
+                  <AppSelect
+                    id={targetPitchId}
+                    ariaLabel="Target Sky Piano pitch"
+                    listboxLabel="Target Sky Piano pitch"
+                    density="compact"
                     value={targetPitch ?? 'source'}
-                    onChange={(event) =>
-                      void setTargetPitch(
-                        event.currentTarget.value === 'source'
-                          ? null
-                          : (event.currentTarget.value as SheetPitch),
-                      )
+                    options={[
+                      { value: 'source', label: 'Use source song pitch', hint: 'Auto' },
+                      ...(
+                        ['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'] as const
+                      ).map((pitch) => ({
+                        value: pitch,
+                        label: pitch,
+                      })),
+                    ]}
+                    onChange={(value) =>
+                      void setTargetPitch(value === 'source' ? null : (value as SheetPitch))
                     }
-                  >
-                    <option value="source">Use source song pitch</option>
-                    {['C', 'Db', 'D', 'Eb', 'E', 'F', 'Gb', 'G', 'Ab', 'A', 'Bb', 'B'].map(
-                      (pitch) => (
-                        <option key={pitch} value={pitch}>
-                          {pitch}
-                        </option>
-                      ),
-                    )}
-                  </select>
-                </label>
+                  />
+                </div>
                 {sheet.target_pitch && (
                   <p className="sheet-pitch-warning" role="note">
                     In-game warning: use a Sky Piano tuned to {sheet.target_pitch}. The app cannot
@@ -298,6 +332,22 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
                 </dd>
               </div>
             </dl>
+            {hasActionableRecommendation && (
+              <div className="song-details-apply-row">
+                <button
+                  type="button"
+                  className="button song-details-apply-button"
+                  disabled={recommendationMatchesCurrent || applyingRecommendation}
+                  onClick={() => void applyRecommendation()}
+                >
+                  {recommendationMatchesCurrent
+                    ? 'Recommended settings applied'
+                    : applyingRecommendation
+                      ? 'Applying…'
+                      : 'Apply recommendation'}
+                </button>
+              </div>
+            )}
           </section>
         </>
       ) : (

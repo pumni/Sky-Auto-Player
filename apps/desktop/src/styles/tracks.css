@@ -63,9 +63,9 @@
   background: transparent;
   cursor: pointer;
   inset-inline-start: var(--workbench-row-inset);
-  inset-inline-end: 0;
+  inset-inline-end: var(--workbench-row-inset);
   padding-inline-start: 10px;
-  padding-inline-end: 12px;
+  padding-inline-end: 6px;
   font-size: 13px;
   font-weight: 500;
 }
@@ -87,7 +87,7 @@
 }
 
 .track-row.is-playing:not(.is-selected) {
-  background: var(--workbench-navigation);
+  background: var(--workbench-playing-bg);
 }
 
 /* Selected is the inspected row; playing is the audible/input identity.
@@ -120,7 +120,6 @@
 .track-row.is-playing .track-cell-index {
   display: grid;
   place-items: center;
-  color: var(--text-secondary);
 }
 
 .track-cell-title {
@@ -215,7 +214,7 @@
   .track-table-header {
     padding-inline: 12px;
     --track-table-header-content-padding-start: 12px;
-    --track-table-header-content-padding-end: 6px;
+    --track-table-header-content-padding-end: 10px;
     padding-inline-start: var(--track-table-header-content-padding-start);
     padding-inline-end: var(--track-table-header-content-padding-end);
   }
@@ -225,6 +224,7 @@
   }
 
   .track-row {
+    inset-inline-end: var(--workbench-row-inset-narrow);
     padding-inline-start: 4px;
     padding-inline-end: 6px;
   }
@@ -240,16 +240,16 @@
   .track-table-header {
     padding-inline: 8px;
     --track-table-header-content-padding-start: 8px;
-    --track-table-header-content-padding-end: 4px;
+    --track-table-header-content-padding-end: 10px;
     padding-inline-start: var(--track-table-header-content-padding-start);
     padding-inline-end: var(--track-table-header-content-padding-end);
   }
 
   .track-row {
     inset-inline-start: var(--workbench-row-inset-narrow);
-    inset-inline-end: 0;
+    inset-inline-end: var(--workbench-row-inset-narrow);
     padding-inline-start: 2px;
-    padding-inline-end: 4px;
+    padding-inline-end: 6px;
   }
 }
 
@@ -293,8 +293,8 @@
   gap: 4px 12px;
   min-width: 0;
   padding: 2px 12px;
-  /* Align the count with the library header instead of hugging the pane edge. */
-  padding-inline-start: 20px;
+  /* Align the count with the library header and column start rail (18px). */
+  padding-inline-start: 18px;
   border-top: 1px solid var(--border-subtle);
   color: var(--text-secondary);
 }
@@ -368,10 +368,11 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  gap: 5px;
+  width: 32px;
+  height: 32px;
   min-width: 32px;
   min-height: 32px;
-  padding: 4px 8px;
+  padding: 0;
   border: 0;
   border-radius: var(--radius-control);
   color: var(--text-secondary);
@@ -380,14 +381,6 @@
   font-size: 11px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-.builtin-pager-control {
-  width: 32px;
-  height: 32px;
-  min-width: 32px;
-  min-height: 32px;
-  padding: 0;
 }
 
 .builtin-pager-page-slot {
@@ -590,17 +583,16 @@
   align-items: baseline;
   flex: 1 1 auto;
   min-width: 0;
-  gap: 8px;
+  gap: 6px;
 }
 
 .track-browser-source-label {
   display: inline-flex;
-  align-items: baseline;
+  align-items: center;
   flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
-  min-height: 26px;
-  padding-inline: 8px;
+  padding-inline: 6px 0;
   border-radius: var(--radius-control);
   background: var(--workbench-content);
 }

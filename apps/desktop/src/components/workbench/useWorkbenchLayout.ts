@@ -9,7 +9,9 @@ import {
 } from './workbenchGeometry';
 import {
   COMPACT_NAVIGATOR_WIDTH,
+  COMPACT_UTILITY_WIDTH,
   DEFAULT_NAVIGATOR_WIDTH,
+  DEFAULT_UTILITY_WIDTH,
   MIN_NAVIGATOR_WIDTH,
   MIN_UTILITY_WIDTH,
 } from '../../state/workbenchPreferences';
@@ -21,7 +23,11 @@ import {
 } from './workbenchDragPolicy';
 import type { UtilityDragTopology } from './workbenchDragPolicy';
 import { useWorkbenchPreferences } from './useWorkbenchPreferences';
-import type { NavigatorPreference, WorkbenchPreferencesV5 } from '../../state/workbenchPreferences';
+import type {
+  NavigatorPreference,
+  UtilityPreference,
+  WorkbenchPreferencesV5,
+} from '../../state/workbenchPreferences';
 
 export {
   AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH,
@@ -40,6 +46,7 @@ export {
 } from './workbenchGeometry';
 export {
   COMPACT_NAVIGATOR_WIDTH,
+  COMPACT_UTILITY_WIDTH,
   DEFAULT_NAVIGATOR_WIDTH,
   DEFAULT_UTILITY_WIDTH,
   MAX_NAVIGATOR_WIDTH,
@@ -57,7 +64,7 @@ export {
   updateWorkbenchPreferences,
 } from '../../state/workbenchPreferences';
 export type { UtilityPresentationMode, WorkbenchGeometry } from './workbenchGeometry';
-export type { NavigatorPreference, WorkbenchPreferencesV5 };
+export type { NavigatorPreference, UtilityPreference, WorkbenchPreferencesV5 };
 export type WorkbenchLayoutStateV4 = WorkbenchPreferencesV5;
 
 export function useWorkbenchLayout(
@@ -79,23 +86,31 @@ export function useWorkbenchLayout(
   if (topology.expired) setUtilityTopology(null);
   const utilityDragCollapsed = topology.collapsed;
 
+  const utilityCollapsed = utilityDocked && layout.utilityPreference === 'collapsed';
   const expandedUtilityMax = getExpandedUtilityWidthMax(viewportWidth);
   const utilityWidthMax = getUtilityWidthMaxForDrag(viewportWidth, utilityDragCollapsed);
-  const effectiveUtilityWidth = utilityDocked
+  const expandedUtilityWidth = utilityDocked
     ? clampWorkbenchValue(
         layout.utilityWidth,
         Math.min(MIN_UTILITY_WIDTH, utilityWidthMax),
         utilityWidthMax,
       )
     : 0;
+  const effectiveUtilityWidth = !utilityDocked
+    ? 0
+    : utilityCollapsed
+      ? COMPACT_UTILITY_WIDTH
+      : expandedUtilityWidth;
   const navigatorMax = getNavigatorWidthMax(viewportWidth, effectiveUtilityWidth);
+  const canExpandNavigator =
+    getAvailableNavigatorWidth(viewportWidth, effectiveUtilityWidth) >= MIN_NAVIGATOR_WIDTH;
   const narrowWindow = viewportWidth <= AUTO_COLLAPSE_NAVIGATOR_MAX_WIDTH;
   const narrowExpansionOverride =
     narrowWindow && narrowExpansionOverrideRevision === viewportRevision;
   const responsiveCollapsed =
     layout.navigatorPreference === 'collapsed' ||
     (narrowWindow && !narrowExpansionOverride) ||
-    getAvailableNavigatorWidth(viewportWidth, effectiveUtilityWidth) < MIN_NAVIGATOR_WIDTH;
+    !canExpandNavigator;
   const navigatorCollapsed = utilityDragCollapsed ?? responsiveCollapsed;
   const navigatorWidth = navigatorCollapsed
     ? COMPACT_NAVIGATOR_WIDTH
@@ -111,8 +126,11 @@ export function useWorkbenchLayout(
     navigatorWidth,
     navigatorMax,
     navigatorCollapsed,
+    canExpandNavigator,
     utilityWidth: effectiveUtilityWidth,
+    expandedUtilityWidth: layout.utilityWidth,
     utilityWidthMax: navigatorCollapsed ? utilityWidthMax : expandedUtilityMax,
+    utilityCollapsed,
     beginUtilityDrag: () =>
       setUtilityTopology(
         createUtilityDragTopology(navigatorCollapsed, true, viewportWidth, viewportRevision),
@@ -135,11 +153,18 @@ export function useWorkbenchLayout(
       );
       update({ navigatorPreference: preference }, persist);
     },
-    setUtilityWidth: (width: number, persist = false) => update({ utilityWidth: width }, persist),
+    setUtilityWidth: (width: number, persist = false) =>
+      update({ utilityWidth: width, utilityPreference: 'expanded' }, persist),
+    setUtilityPreference: (preference: UtilityPreference, persist = false) => {
+      setUtilityTopology(null);
+      update({ utilityPreference: preference }, persist);
+    },
     resetNavigatorWidth: () =>
       update(
         { expandedNavigatorWidth: DEFAULT_NAVIGATOR_WIDTH, navigatorPreference: 'expanded' },
         true,
       ),
+    resetUtilityWidth: () =>
+      update({ utilityWidth: DEFAULT_UTILITY_WIDTH, utilityPreference: 'expanded' }, true),
   };
 }

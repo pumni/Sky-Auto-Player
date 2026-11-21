@@ -484,7 +484,10 @@ test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
     /No active playback session|Timing unavailable|Latest sender pre-call max/,
   );
   await expectNoSeriousAccessibilityViolations(page);
-  await panel.getByRole('button', { name: 'Close utility' }).click();
+  await panel.getByRole('button', { name: 'Collapse Inspector' }).click();
+  await expect(panel.getByRole('button', { name: 'Expand Inspector' })).toBeVisible();
+  await panel.getByRole('button', { name: 'Expand Inspector' }).click();
+  await page.getByRole('button', { name: 'Close utility panel' }).click();
   await expect(panel).toBeHidden();
   await expect(page.getByRole('button', { name: 'Open utility panel' })).toBeFocused();
 });
@@ -495,7 +498,8 @@ test('all supported palettes round-trip through the settings surface', async ({ 
   await page.getByRole('button', { name: 'Appearance' }).click();
   const palette = page.getByLabel('Dark palette');
   for (const id of ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
-    await palette.selectOption(id);
+    await palette.click();
+    await page.locator(`.app-select-option[data-value="${id}"]`).click();
     await expect(page.locator('html')).toHaveAttribute('data-palette', id);
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
     await expect
@@ -540,7 +544,7 @@ test('Diagnostics drawer is bounded and accessible at the minimum viewport', asy
   );
   await diagnosticsDrawer.getByRole('tab', { name: 'Events' }).click();
   await expectNoSeriousAccessibilityViolations(page);
-  await diagnosticsDrawer.getByRole('button', { name: 'Close utility' }).click();
+  await page.getByRole('button', { name: 'Close utility panel' }).click();
   await expect(diagnosticsDrawer).toBeHidden();
   await expect(page.getByRole('button', { name: 'Open utility panel' })).toBeFocused();
   await trigger.click();

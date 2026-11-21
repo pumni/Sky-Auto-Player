@@ -60,10 +60,12 @@ describe('PlayerTools playback modes and profile', () => {
     await act(async () => store.getState().selectSong(row.song_id));
     render(<PlayerTools useStore={store} />);
 
-    await act(async () =>
-      screen.getByRole('button', { name: 'Configure playback profile' }).click(),
-    );
+    const trigger = screen.getByRole('button', { name: 'Configure playback profile' });
+    expect(trigger).toHaveAttribute('aria-expanded', 'false');
+    await act(async () => trigger.click());
+    expect(trigger).toHaveAttribute('aria-expanded', 'true');
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
+    expect(within(dialog).getByText(row.title)).toBeInTheDocument();
     expect(
       within(dialog).getByText('Try these settings without sending any physical keyboard input.'),
     ).toBeInTheDocument();

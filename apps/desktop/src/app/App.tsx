@@ -45,7 +45,9 @@ function isEditableTarget(target: EventTarget | null): boolean {
     target instanceof HTMLTextAreaElement ||
     target instanceof HTMLSelectElement ||
     target.isContentEditable ||
-    target.closest('[contenteditable="true"]') !== null
+    target.closest(
+      '[contenteditable="true"], [role="combobox"], [role="listbox"], [role="option"]',
+    ) !== null
   );
 }
 
@@ -71,9 +73,9 @@ export function App({ bridge }: AppProps) {
   }, [useStore]);
 
   useEffect(() => {
-    if (useStore.getState().bootstrapState !== 'ready') return;
+    if (bootstrapState !== 'ready') return;
     recordStartupTelemetry('react.shell_ready');
-  }, [bootstrap, useStore]);
+  }, [bootstrapState]);
 
   useLayoutEffect(() => {
     applyAppearance(

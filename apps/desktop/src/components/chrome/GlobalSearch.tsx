@@ -46,28 +46,73 @@ interface SearchInputProps extends GlobalSearchProps {
   placeholder: string;
 }
 
+interface SearchDraftState {
+  baseQuery: string;
+  draft: string;
+  inFlight: readonly string[];
+}
+
 function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: SearchInputProps) {
   const search = useStore((store) => store.search);
-  const [draft, setDraft] = useState(query);
-  const submittedQueryRef = useRef<string | null>(null);
+  const [draftState, setDraftState] = useState<SearchDraftState | null>(null);
+  const debounceTimerRef = useRef<number | null>(null);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
-    if (submittedQueryRef.current === query) {
-      submittedQueryRef.current = null;
-      return;
-    }
-    setDraft(query);
-  }, [query]);
-
-  useEffect(() => {
-    const timeout = window.setTimeout(() => {
-      if (draft !== query) {
-        submittedQueryRef.current = draft;
-        void search(draft);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (debounceTimerRef.current !== null) {
+        window.clearTimeout(debounceTimerRef.current);
+        debounceTimerRef.current = null;
       }
+    };
+  }, []);
+
+  const isOwnDraft =
+    draftState !== null && (draftState.baseQuery === query || draftState.inFlight.includes(query));
+  const inputValue = isOwnDraft ? draftState.draft : query;
+
+  const handleChange = (nextDraft: string) => {
+    if (debounceTimerRef.current !== null) {
+      window.clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
+
+    setDraftState((previous) => {
+      const keepInFlight =
+        previous !== null && (previous.baseQuery === query || previous.inFlight.includes(query))
+          ? previous.inFlight
+          : [];
+      return {
+        baseQuery: query,
+        draft: nextDraft,
+        inFlight: keepInFlight,
+      };
+    });
+
+    if (nextDraft === query) return;
+
+    debounceTimerRef.current = window.setTimeout(() => {
+      debounceTimerRef.current = null;
+      setDraftState((previous) =>
+        previous ? { ...previous, inFlight: [...previous.inFlight, nextDraft] } : null,
+      );
+      void search(nextDraft).finally(() => {
+        if (!mountedRef.current) return;
+        setDraftState((previous) => {
+          if (!previous) return null;
+          if (previous.draft === nextDraft) return null;
+          const remaining = previous.inFlight.filter((item) => item !== nextDraft);
+          return {
+            ...previous,
+            baseQuery: nextDraft,
+            inFlight: remaining,
+          };
+        });
+      });
     }, 120);
-    return () => window.clearTimeout(timeout);
-  }, [draft, query, search]);
+  };
 
   return (
     <label className="global-search" data-tauri-drag-region="false">
@@ -75,8 +120,8 @@ function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: Se
       <span className="visually-hidden">{searchLabel}</span>
       <input
         ref={inputRef}
-        value={draft}
-        onChange={(event) => setDraft(event.target.value)}
+        value={inputValue}
+        onChange={(event) => handleChange(event.target.value)}
         placeholder={placeholder}
         type="search"
         spellCheck={false}

@@ -23,14 +23,14 @@ const viewports = [
 const lightTokens = {
   '--canvas': '#ffffff',
   '--surface-panel': '#f7f8fa',
-  '--surface-secondary': '#fafbfc',
+  '--surface-secondary': '#f4f6f9',
   '--surface-raised': '#ffffff',
   '--control-hover': '#eef2f6',
   '--control-pressed': '#e2e8f0',
   '--selection-bg': '#eaf2fd',
   '--border-subtle': '#dfe4eb',
   '--border-strong': '#b1bbc6',
-  '--control-border': '#767f8a',
+  '--control-border': '#808a96',
   '--scrollbar-thumb': '#808b97',
   '--text-primary': '#252a31',
   '--text-secondary': '#535f6c',
@@ -50,12 +50,12 @@ const lightTokens = {
   '--danger-border': '#b4232f',
   '--workbench-content': '#ffffff',
   '--workbench-navigation': '#f7f8fa',
-  '--workbench-inspector': '#fafbfc',
+  '--workbench-inspector': '#f4f6f9',
   '--chrome-surface': '#f7f8fa',
-  '--workbench-control-disabled': '#626e7a',
-  '--workbench-playing-indicator': '#767f8a',
+  '--workbench-control-disabled': '#8a94a0',
+  '--workbench-playing-indicator': '#0b58a5',
   '--workbench-search-surface': '#ffffff',
-  '--workbench-search-idle-edge': '#767f8a',
+  '--workbench-search-idle-edge': '#8a94a0',
   '--workbench-search-focus': '#0b58a5',
   '--caption-text': '#535f6c',
   '--overlay-backdrop': 'rgb(37 42 49 / 38%)',
@@ -206,8 +206,8 @@ async function openSettingsAppearance(page: Page) {
   await page.getByRole('button', { name: 'Open settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await expect(dialog.getByLabel('Theme')).toHaveValue('system');
-  await expect(dialog.getByLabel('Dark palette')).toHaveValue('graphite');
+  await expect(dialog.getByLabel('Theme')).toHaveAttribute('data-value', 'system');
+  await expect(dialog.getByLabel('Dark palette')).toHaveAttribute('data-value', 'graphite');
   return dialog;
 }
 
@@ -270,7 +270,8 @@ test('Light mode covers every Graphite alias while Dark tokens round-trip unchan
 
   const darkBefore = await readTokens(darkRegressionTokens);
   const dialog = await openSettingsAppearance(page);
-  await dialog.getByLabel('Theme').selectOption('light');
+  await dialog.getByLabel('Theme').click();
+  await page.locator('.app-select-option[data-value="light"]').click();
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
 
   const themeCss = await readFile(resolve(process.cwd(), 'src/styles/themes.css'), 'utf8');
@@ -311,7 +312,8 @@ test('Light mode covers every Graphite alias while Dark tokens round-trip unchan
     search: 'rgb(255, 255, 255)',
   });
 
-  await dialog.getByLabel('Theme').selectOption('dark');
+  await dialog.getByLabel('Theme').click();
+  await page.locator('.app-select-option[data-value="dark"]').click();
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
   await expect.poll(() => readTokens(darkRegressionTokens)).toEqual(darkBefore);
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
@@ -339,7 +341,7 @@ test('Light selected and playing rows remain distinct with accessible contrast',
     };
   });
   expect(rowStyles.selectedBackground).toBe('rgb(234, 242, 253)');
-  expect(rowStyles.playingBackground).toBe('rgb(247, 248, 250)');
+  expect(rowStyles.playingBackground).toBe('rgb(242, 246, 251)');
   expect(rowStyles.selectedBackground).not.toBe(rowStyles.playingBackground);
   expect(rowStyles.selectedIndicator).not.toBe(rowStyles.playingIndicator);
   expect(
@@ -381,7 +383,7 @@ test('Graphite Dark keeps selected and playing rows distinct without changing it
     };
   });
   expect(rowStyles.selectedBackground).toBe('rgb(37, 36, 44)');
-  expect(rowStyles.playingBackground).toBe('rgb(25, 26, 27)');
+  expect(rowStyles.playingBackground).toBe('rgb(30, 29, 37)');
   expect(rowStyles.selectedBackground).not.toBe(rowStyles.playingBackground);
   expect(rowStyles.workbenchDivider).toBe('#2a2b2c');
   expect(rowStyles.playingIndicatorToken).toBe('#b2a5e9');

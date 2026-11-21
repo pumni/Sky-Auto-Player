@@ -89,8 +89,8 @@ async function readInspectorHeaderGeometry(page: Page) {
       '.utility-tabs',
       '.utility-header',
       '.utility-header-title',
-      '.utility-close-button',
-      '.utility-close-button svg',
+      '.utility-header > button',
+      '.utility-header > button svg',
       '.utility-view-tabs',
       '.utility-view-tabs [role="tab"]:first-child',
       '.utility-view-tabs [role="tab"]:last-child',
@@ -402,8 +402,8 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
     const baselineHeader = geometryFor('empty', '.utility-header');
     const baselineTabs = geometryFor('empty', '.utility-view-tabs');
     const baselineTitle = geometryFor('empty', '.utility-header-title');
-    const baselineClose = geometryFor('empty', '.utility-close-button');
-    const baselineCloseIcon = geometryFor('empty', '.utility-close-button svg');
+    const baselineClose = geometryFor('empty', '.utility-header > button');
+    const baselineCloseIcon = geometryFor('empty', '.utility-header > button svg');
     const baselineSurface = geometryFor('empty', '.utility-surface');
     const baselineDetailsTab = geometryFor('empty', '.utility-view-tabs [role="tab"]:first-child');
     const baselineRuntimeTab = geometryFor('empty', '.utility-view-tabs [role="tab"]:last-child');
@@ -454,8 +454,8 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       const header = geometryFor(state, '.utility-header');
       const tabs = geometryFor(state, '.utility-view-tabs');
       const headerTitle = geometryFor(state, '.utility-header-title');
-      const close = geometryFor(state, '.utility-close-button');
-      const closeIcon = geometryFor(state, '.utility-close-button svg');
+      const close = geometryFor(state, '.utility-header > button');
+      const closeIcon = geometryFor(state, '.utility-header > button svg');
       const surface = geometryFor(state, '.utility-surface');
       expect(Math.abs(header.x - baselineHeader.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(header.y - baselineHeader.y)).toBeLessThanOrEqual(1);
@@ -503,8 +503,8 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       '.utility-tabs',
       '.utility-header',
       '.utility-header-title',
-      '.utility-close-button',
-      '.utility-close-button svg',
+      '.utility-header > button',
+      '.utility-header > button svg',
       '.utility-view-tabs',
       '.utility-content',
     ];

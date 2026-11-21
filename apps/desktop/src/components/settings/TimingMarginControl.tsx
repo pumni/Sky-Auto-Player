@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { Minus, Plus } from 'lucide-react';
+import { useState } from 'react';
 import type { PlaybackOptionSets, TimingMarginRecommendation } from '../../bridge/DesktopBridge';
 import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
 
@@ -8,6 +9,13 @@ interface TimingMarginControlProps {
   recommendation: TimingMarginRecommendation;
   density: 'compact' | 'full';
   onChange: (value: number) => Promise<number | null>;
+}
+
+interface OptimisticMarginState {
+  baseProp: number;
+  value: number;
+  pending: number;
+  confirmed: number | null;
 }
 
 export function TimingMarginControl({
@@ -26,26 +34,51 @@ export function TimingMarginControl({
     recommendedMargin >= min &&
     recommendedMargin <= max &&
     recommendedMargin % step === 0;
-  const [requestedValue, setRequestedValue] = useState(value);
-  const authoritativeValue = useRef(value);
-  const pendingWrites = useRef(0);
-
-  useEffect(() => {
-    authoritativeValue.current = value;
-    if (pendingWrites.current === 0) setRequestedValue(value);
-  }, [value]);
+  const [override, setOverride] = useState<OptimisticMarginState | null>(null);
+  const activeOverride = override !== null && override.baseProp === value ? override : null;
+  const requestedValue = activeOverride ? activeOverride.value : value;
 
   const requestValue = (nextValue: number) => {
-    pendingWrites.current += 1;
-    setRequestedValue(nextValue);
+    setOverride((previous) => {
+      const active = previous !== null && previous.baseProp === value ? previous : null;
+      return {
+        baseProp: value,
+        value: nextValue,
+        pending: (active?.pending ?? 0) + 1,
+        confirmed: active?.confirmed ?? null,
+      };
+    });
+
     void onChange(nextValue)
       .then((confirmedValue) => {
-        if (confirmedValue !== null) authoritativeValue.current = confirmedValue;
+        setOverride((previous) => {
+          if (previous === null || previous.baseProp !== value) return previous;
+          const remaining = Math.max(0, previous.pending - 1);
+          const nextConfirmed = confirmedValue !== null ? confirmedValue : previous.confirmed;
+          if (remaining === 0) {
+            return nextConfirmed !== null
+              ? { baseProp: value, value: nextConfirmed, pending: 0, confirmed: nextConfirmed }
+              : null;
+          }
+          return { ...previous, pending: remaining, confirmed: nextConfirmed };
+        });
       })
-      .catch(() => undefined)
-      .finally(() => {
-        pendingWrites.current -= 1;
-        if (pendingWrites.current === 0) setRequestedValue(authoritativeValue.current);
+      .catch(() => {
+        setOverride((previous) => {
+          if (previous === null || previous.baseProp !== value) return previous;
+          const remaining = Math.max(0, previous.pending - 1);
+          if (remaining === 0) {
+            return previous.confirmed !== null
+              ? {
+                  baseProp: value,
+                  value: previous.confirmed,
+                  pending: 0,
+                  confirmed: previous.confirmed,
+                }
+              : null;
+          }
+          return { ...previous, pending: remaining };
+        });
       });
   };
 
@@ -75,7 +108,7 @@ export function TimingMarginControl({
           disabled={requestedValue <= min}
           onClick={() => requestValue(Math.max(min, requestedValue - step))}
         >
-          −
+          <Minus size={14} aria-hidden="true" />
         </button>
         <output aria-live="polite">{requestedValue} µs</output>
         <button
@@ -85,7 +118,7 @@ export function TimingMarginControl({
           disabled={requestedValue >= max}
           onClick={() => requestValue(Math.min(max, requestedValue + step))}
         >
-          +
+          <Plus size={14} aria-hidden="true" />
         </button>
       </div>
       {density === 'full' && (

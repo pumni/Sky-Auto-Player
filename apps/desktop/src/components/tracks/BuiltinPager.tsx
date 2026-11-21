@@ -37,15 +37,6 @@ function BuiltinPagerNavigation({
   const pageInstructionsId = useId();
   const pageErrorId = useId();
 
-  useEffect(() => {
-    if (!editing) return;
-    const focusTimer = window.setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 0);
-    return () => window.clearTimeout(focusTimer);
-  }, [editing]);
-
   const pageDigits = String(pageCount).length;
   // Reserve both tabular digit groups plus two ch for the spaced slash.
   const indicatorCharacters = pageDigits * 2 + 2;
@@ -151,7 +142,13 @@ function BuiltinPagerNavigation({
               Page number
             </label>
             <input
-              ref={inputRef}
+              ref={(node) => {
+                inputRef.current = node;
+                if (node) {
+                  node.focus();
+                  node.select();
+                }
+              }}
               id={pageInputId}
               type="text"
               inputMode="numeric"

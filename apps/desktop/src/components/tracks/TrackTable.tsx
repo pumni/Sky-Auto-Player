@@ -79,6 +79,30 @@ interface PendingKeyboardNavigation {
   scopeKey: string;
 }
 
+function observeHeightOnly(
+  instance: { scrollElement: HTMLDivElement | null },
+  cb: (rect: { width: number; height: number }) => void,
+) {
+  const element = instance.scrollElement;
+  if (!element) return;
+  let lastHeight = Math.round(element.getBoundingClientRect().height);
+  cb({ width: 0, height: lastHeight });
+  if (typeof ResizeObserver === 'undefined') return;
+  const observer = new ResizeObserver((entries) => {
+    const entry = entries[0];
+    const nextHeight = Math.round(
+      entry?.borderBoxSize?.[0]?.blockSize ??
+        entry?.contentRect.height ??
+        element.getBoundingClientRect().height,
+    );
+    if (nextHeight === lastHeight) return;
+    lastHeight = nextHeight;
+    cb({ width: 0, height: nextHeight });
+  });
+  observer.observe(element, { box: 'border-box' });
+  return () => observer.disconnect();
+}
+
 export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const scrollVisibilityRef = useScrollVisibility<HTMLDivElement>();
@@ -111,6 +135,7 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
     getScrollElement: () => parentRef.current,
     estimateSize: () => 46,
     overscan: 10,
+    observeElementRect: observeHeightOnly,
   });
   useImperativeHandle(
     locateSelectedRef,
@@ -249,35 +274,16 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
     );
   }, [useStore, virtualizer]);
 
-  useEffect(() => {
-    const grid = parentRef.current;
-    if (!grid) return;
-    const syncActiveDescendant = () => {
-      const selectedSongId = useStore.getState().library.selectedSongId;
-      const selectedRow = selectedSongId
-        ? document.getElementById(`song-row-${selectedSongId}`)
-        : null;
-      const activeDescendant =
-        selectedRow && grid.contains(selectedRow) && selectedRow.getAttribute('role') === 'row'
-          ? selectedRow.id
-          : null;
-      if (activeDescendant) grid.setAttribute('aria-activedescendant', activeDescendant);
-      else grid.removeAttribute('aria-activedescendant');
-    };
-    const unsubscribe = useStore.subscribe(
-      (state) => state.library.selectedSongId,
-      syncActiveDescendant,
-    );
-    // Virtual rows can unmount without a store selection change when the viewport moves.
-    const observer = new MutationObserver(syncActiveDescendant);
-    observer.observe(grid, { childList: true, subtree: true });
-    syncActiveDescendant();
-    return () => {
-      unsubscribe();
-      observer.disconnect();
-      grid.removeAttribute('aria-activedescendant');
-    };
-  }, [useStore]);
+  const activeDescendantId = useStore((store) => {
+    const selectedId = store.library.selectedSongId;
+    if (!selectedId) return undefined;
+    for (const item of renderedItems) {
+      if (selectRowAtIndex(store.library, pageOffset + item.index)?.song_id === selectedId) {
+        return `song-row-${selectedId}`;
+      }
+    }
+    return undefined;
+  });
 
   const moveActive = (nextLocalIndex: number) => {
     if (rowCount === 0) return;
@@ -375,6 +381,7 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
       className="track-table scroll-surface"
       role="grid"
       aria-label={isBuiltin ? `Built-in Songs, page ${committedPage}` : 'Songs'}
+      aria-activedescendant={activeDescendantId}
       aria-rowcount={rowCount + 1}
       aria-busy={pendingPage !== null || undefined}
       aria-multiselectable="false"

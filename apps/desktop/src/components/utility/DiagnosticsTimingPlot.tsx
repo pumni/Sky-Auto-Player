@@ -12,8 +12,8 @@ export function DiagnosticsTimingPlot({
   hasActiveSession: boolean;
   dryRun: boolean;
 }) {
-  const width = 560;
-  const height = 132;
+  const width = 300;
+  const height = 140;
   const availableSamples = samples.filter(
     (sample) =>
       sample.backend_status !== 'unavailable' &&
@@ -85,21 +85,41 @@ export function DiagnosticsTimingPlot({
       />
     );
   }
+  const formatAxisUs = (valueUs: number): string => {
+    if (valueUs === 0) return '0';
+    if (valueUs >= 1_000) return `${(valueUs / 1_000).toFixed(1)} ms`;
+    return `${Math.round(valueUs)} µs`;
+  };
   const values = availableSamples.map((sample) => sample.max_sendinput_pre_call_lateness_us!);
   const minimum = 0;
   const maximum = Math.max(0, ...values);
-  const range = Math.max(1, maximum - minimum);
-  const plotTop = 4;
-  const plotBottom = height - 4;
+  const scaleMax = Math.max(100, Math.ceil(maximum / 100) * 100);
+  const range = Math.max(1, scaleMax - minimum);
+  const plotLeft = 48;
+  const plotRight = width - 10;
+  const plotTop = 14;
+  const plotBottom = height - 14;
+  const plotWidth = plotRight - plotLeft;
   const yFor = (value: number) => plotBottom - ((value - minimum) / range) * (plotBottom - plotTop);
-  const points = values
-    .map((value, index) => {
-      const x = values.length <= 1 ? 0 : (index / (values.length - 1)) * width;
-      return `${x.toFixed(1)},${yFor(value).toFixed(1)}`;
-    })
-    .join(' ');
+  const coords = values.map((value, index) => {
+    const x =
+      values.length <= 1
+        ? plotLeft + plotWidth / 2
+        : plotLeft + (index / (values.length - 1)) * plotWidth;
+    return { x, y: yFor(value) };
+  });
+  const points = coords.map((point) => `${point.x.toFixed(1)},${point.y.toFixed(1)}`).join(' ');
+  const firstPoint = coords[0];
+  const lastPoint = coords[coords.length - 1];
+  const areaPoints =
+    coords.length >= 2 && firstPoint && lastPoint
+      ? `${firstPoint.x.toFixed(1)},${plotBottom.toFixed(1)} ${points} ${lastPoint.x.toFixed(1)},${plotBottom.toFixed(1)}`
+      : '';
   const latest = values.length ? values[values.length - 1] : null;
   const zeroY = yFor(0);
+  const midValue = scaleMax / 2;
+  const midY = yFor(midValue);
+  const maxY = yFor(scaleMax);
   const latestSample = availableSamples[availableSamples.length - 1];
   return (
     <figure className="diagnostics-plot">
@@ -115,8 +135,23 @@ export function DiagnosticsTimingPlot({
           Cumulative session maximum observed at each diagnostics snapshot; it does not decrease
           after recovery. Completion latency is reported separately.
         </desc>
-        <line x1="0" y1={zeroY} x2={width} y2={zeroY} className="plot-zero-axis" />
+        <line x1={plotLeft} y1={maxY} x2={plotRight} y2={maxY} className="plot-grid-line" />
+        <line x1={plotLeft} y1={midY} x2={plotRight} y2={midY} className="plot-grid-line" />
+        <line x1={plotLeft} y1={zeroY} x2={plotRight} y2={zeroY} className="plot-zero-axis" />
+        <text x={plotLeft - 8} y={maxY + 4} textAnchor="end" className="plot-axis-label">
+          {formatAxisUs(scaleMax)}
+        </text>
+        <text x={plotLeft - 8} y={midY + 4} textAnchor="end" className="plot-axis-label">
+          {formatAxisUs(midValue)}
+        </text>
+        <text x={plotLeft - 8} y={zeroY + 4} textAnchor="end" className="plot-axis-label">
+          0
+        </text>
+        {areaPoints && <polygon points={areaPoints} className="plot-area" />}
         {points && <polyline points={points} className="plot-line" />}
+        {lastPoint && (
+          <circle cx={lastPoint.x} cy={lastPoint.y} r="3.5" className="plot-latest-dot" />
+        )}
       </svg>
       <figcaption>
         {latest === null

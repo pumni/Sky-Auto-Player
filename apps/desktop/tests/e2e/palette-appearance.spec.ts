@@ -64,7 +64,7 @@ const expected = {
     onAccent: '#ffffff',
     focusRing: '#b2a5e9',
     searchFocus: '#9688c6',
-    toggleActive: '#b68cff',
+    toggleActive: '#b2a5e9',
     toggleInactive: '#808187',
     textTertiary: '#929292',
     onDanger: '#ffffff',
@@ -186,7 +186,7 @@ const graphiteRoleTokens = {
   '--workbench-control-rest': 'transparent',
   '--workbench-control-hover': '#35363a',
   '--workbench-control-pressed': '#404246',
-  '--workbench-control-disabled': '#8b8c90',
+  '--workbench-control-disabled': '#6c6e73',
   '--workbench-control-danger-hover': '#452d32',
   '--workbench-selected': '#25242c',
   '--workbench-divider': '#2a2b2c',
@@ -200,7 +200,7 @@ const graphiteRoleTokens = {
   '--workbench-accent-fill': '#705eae',
   '--workbench-accent-fill-hover': '#7564b4',
   '--workbench-accent-fill-pressed': '#6553a0',
-  '--workbench-toggle-on': '#b68cff',
+  '--workbench-toggle-on': '#b2a5e9',
   '--workbench-focus': '#b2a5e9',
   '--workbench-search-surface': '#202123',
   '--workbench-search-idle-edge': '#3d3f43',
@@ -208,9 +208,9 @@ const graphiteRoleTokens = {
 } as const;
 
 const stableStatusTokens = {
-  '--success-fg': '#56d69a',
+  '--success-fg': '#64c496',
   '--success-bg': '#143326',
-  '--success-border': '#3fa976',
+  '--success-border': '#489e74',
   '--warning-fg': '#f5c451',
   '--warning-bg': '#3a2c11',
   '--warning-border': '#b4862d',
@@ -473,7 +473,7 @@ test('all palette tokens and contrast gates match the locked contract', async ({
       '--toggle-active-ink': values.toggleActive,
       '--toggle-inactive-ink': values.toggleInactive,
       '--search-focus-ring': values.searchFocus,
-      '--selection-row-indicator': palette === 'graphite' ? values.controlBorder : values.accent,
+      '--selection-row-indicator': values.controlBorder,
       '--primary-fill': values.accentFill,
       '--primary-fill-hover': values.accentFillHover,
       '--primary-fill-pressed': values.accentFillPressed,
@@ -572,17 +572,22 @@ test('Graphite is the new-install palette and keeps its graphite setting ID', as
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
   const palette = settings.getByLabel('Dark palette');
-  await expect(palette).toHaveValue('graphite');
-  await expect(palette.locator('option')).toHaveCount(6);
-  await expect(palette.locator('option[value="graphite"]')).toHaveText('Graphite (Default)');
-  await palette.selectOption('slate');
+  await expect(palette).toHaveAttribute('data-value', 'graphite');
+  await expect(palette).toHaveText('Graphite (Default)');
+  await palette.click();
+  await expect(page.locator('.app-select-option')).toHaveCount(6);
+  await expect(page.locator('.app-select-option[data-value="graphite"]')).toContainText(
+    'Graphite (Default)',
+  );
+  await page.locator('.app-select-option[data-value="slate"]').click();
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'slate');
-  await palette.selectOption('graphite');
+  await palette.click();
+  await page.locator('.app-select-option[data-value="graphite"]').click();
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
   await settings.getByRole('button', { name: 'Close settings' }).click();
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await expect(page.getByLabel('Dark palette')).toHaveValue('graphite');
+  await expect(page.getByLabel('Dark palette')).toHaveAttribute('data-value', 'graphite');
   await page.getByRole('button', { name: 'Close settings' }).click();
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
 
@@ -596,7 +601,7 @@ test('Graphite is the new-install palette and keeps its graphite setting ID', as
     '--workbench-control-rest': 'transparent',
     '--workbench-control-hover': '#35363a',
     '--workbench-control-pressed': '#404246',
-    '--workbench-control-disabled': '#8b8c90',
+    '--workbench-control-disabled': '#6c6e73',
     '--workbench-control-danger-hover': '#452d32',
     '--selection-bg': '#25242c',
     '--border-subtle': '#2a2b2c',
@@ -773,7 +778,8 @@ test('Settings modal geometry, roles, and focus order are shared across palettes
   if (captureMatrix) mkdirSync(evidenceDirectory, { recursive: true });
 
   for (const palette of palettes) {
-    await paletteSelect.selectOption(palette);
+    await paletteSelect.click();
+    await page.locator(`.app-select-option[data-value="${palette}"]`).click();
     await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
     await expect(dialog.getByRole('region', { name: 'Appearance' })).toBeVisible();
@@ -789,11 +795,11 @@ test('Settings modal geometry, roles, and focus order are shared across palettes
         return { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height };
       };
       const navigationElement = element.querySelector<HTMLElement>('.settings-nav');
-      const themeElement = element.querySelector<HTMLSelectElement>(
-        '.settings-section label:first-of-type select',
+      const themeElement = element.querySelector<HTMLButtonElement>(
+        '.settings-section .settings-field-group:first-of-type .app-select-trigger',
       );
-      const paletteElement = element.querySelector<HTMLSelectElement>(
-        '.settings-section label:nth-of-type(2) select',
+      const paletteElement = element.querySelector<HTMLButtonElement>(
+        '.settings-section .settings-field-group:nth-of-type(2) .app-select-trigger',
       );
       const themeLabel = themeElement?.labels?.[0]?.textContent?.trim() ?? null;
       const paletteLabel = paletteElement?.labels?.[0]?.textContent?.trim() ?? null;
@@ -805,8 +811,10 @@ test('Settings modal geometry, roles, and focus order are shared across palettes
           navigation: rect('.settings-nav'),
           content: rect('.settings-content'),
           section: rect('.settings-section'),
-          theme: rect('.settings-section label:first-of-type select'),
-          palette: rect('.settings-section label:nth-of-type(2) select'),
+          theme: rect('.settings-section .settings-field-group:first-of-type .app-select-trigger'),
+          palette: rect(
+            '.settings-section .settings-field-group:nth-of-type(2) .app-select-trigger',
+          ),
         },
         roles: {
           dialog: { role: element.getAttribute('role'), name: element.getAttribute('aria-label') },
@@ -912,7 +920,7 @@ test('semantic consumers and interaction states use the locked hierarchy', async
   const openSettings = page.getByRole('button', { name: 'Open settings' });
   await pressAndReadBackground(page, openSettings, transparentBackground);
 
-  await assertBorderUsesToken(page, page.locator('.global-search'), '--control-border');
+  await assertBorderUsesToken(page, page.locator('.global-search'), '--workbench-search-idle-edge');
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   const selectedRow = page.locator('.track-row.is-selected');
   await expect(selectedRow).toHaveCount(1);

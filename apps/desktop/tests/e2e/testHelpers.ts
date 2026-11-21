@@ -245,11 +245,16 @@ export async function startSelectedSong(page: Page) {
   return player;
 }
 
+export async function chooseAppSelectOption(page: Page, trigger: Locator, value: string) {
+  await trigger.click();
+  await page.locator(`.app-select-option[data-value="${value}"]`).click();
+}
+
 export async function selectPalette(page: Page, palette: PaletteId) {
   await page.getByRole('button', { name: 'Open settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await dialog.getByLabel('Dark palette').selectOption(palette);
+  await chooseAppSelectOption(page, dialog.getByLabel('Dark palette'), palette);
   await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
   await dialog.getByRole('button', { name: 'Close settings' }).click();
