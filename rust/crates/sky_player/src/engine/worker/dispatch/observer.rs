@@ -354,7 +354,6 @@ pub(crate) fn drain_down_send_outcome(
     metrics: &SharedMetrics,
     telemetry: &mut TelemetryCollector,
     qpc_clock: QpcClock,
-    now_us: u64,
     now_qpc_ticks: sky_dispatch_win32::clock::QpcTicks,
     timing: &WorkerTimingState,
 ) -> Result<(), DispatchStep> {
@@ -552,7 +551,13 @@ pub(crate) fn drain_down_send_outcome(
             local_metrics,
         );
     }
-    try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, force_publish);
+    try_publish_observer_metrics(
+        local_metrics,
+        metrics,
+        qpc_clock,
+        now_qpc_ticks,
+        force_publish,
+    );
     Ok(())
 }
 #[allow(clippy::too_many_arguments)]
@@ -599,7 +604,6 @@ pub(crate) fn drain_one_observer(
                 metrics,
                 telemetry,
                 qpc_clock,
-                now_us,
                 now_qpc_ticks,
                 timing,
             )?,
@@ -612,7 +616,7 @@ pub(crate) fn drain_one_observer(
                     metrics,
                     telemetry,
                     qpc_clock,
-                    now_us,
+                    now_qpc_ticks,
                 },
             )?,
             DispatchObservation::Wait(wait) => {
@@ -642,11 +646,7 @@ pub(crate) fn drain_one_observer(
             Ok(duration) => qpc_clock.duration_to_us(duration).unwrap_or_default(),
             Err(_) => 0,
         };
-        if let Ok(wall_now_us) =
-            qpc_clock.duration_to_us(DurationTicks::from_raw(drain_end.as_u64()))
-        {
-            super::super::update_deferred_worker_metrics(local_metrics, timing, wall_now_us);
-        }
+        super::super::update_deferred_worker_metrics(local_metrics, timing, qpc_clock, drain_end);
         super::super::health::observe_observer_health(
             drain_us,
             health.options.observer_warn_us,
@@ -663,7 +663,7 @@ pub(crate) fn drain_one_observer(
         #[cfg(not(any(test, feature = "test-support")))]
         let is_immediate_publish = matches!(observation, DispatchObservation::Wait(_));
         if is_immediate_publish {
-            try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_us, false);
+            try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_qpc_ticks, false);
         }
         Ok(Some(drain_us))
     })();

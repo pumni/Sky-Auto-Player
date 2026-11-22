@@ -50,6 +50,11 @@ requires an unpressed modifier set and a valid supervisor lease. The check
 uses a fresh foreground HWND/PID query and process-liveness proof. Cached focus
 state and callback notifications cannot grant admission.
 
+When supervisor lease age checking is enabled, the current sender applies its
+lease proof to Up-only packets as well as Down-bearing packets. An expired or
+unproven lease is terminal for either packet kind. Up-only packets remain
+independent of modifier state; this lease behavior is retained intentionally.
+
 ### Modifier hold and replan policy
 
 - When a modifier key is detected as `Held`, the worker enters a soft wait
@@ -102,6 +107,20 @@ control/admission replans are separate; they do not resume playback after a
 sender anomaly.
 Required QPC samples and the production waiter policy remain part of the
 timing contract.
+
+Worker metrics keep QPC tick counters as their source values and retain the
+existing 50 ms live-publication cadence. A snapshot reader copies the dispatch
+and observer source slots as one readout, then derives public microsecond
+fields after releasing the slots. This keeps unit conversion out of the
+dispatch publisher while preserving the public snapshot and telemetry schema.
+Observer sample expectations, pending work, missing samples, and queue drops
+remain explicit in the snapshot.
+
+Terminal metrics publish once after terminal cleanup, observer shutdown,
+telemetry export, and scheduling-guard teardown, and before the typed terminal
+result becomes visible. The desktop treats live snapshots as progress and
+diagnostic data; worker join remains the fence for retirement and release
+ownership transfer.
 
 ## Pause, Resume, and Journal
 

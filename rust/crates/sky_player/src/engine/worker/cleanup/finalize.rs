@@ -8,7 +8,7 @@ use super::{
 #[cfg(any(test, feature = "test-support"))]
 use parking_lot::Mutex;
 use sky_dispatch_core::time::DurationTicks;
-use sky_dispatch_win32::clock::QpcError;
+use sky_dispatch_win32::clock::{QpcError, QpcTicks};
 #[cfg(any(test, feature = "test-support", feature = "real-input-acceptance"))]
 use sky_dispatch_win32::input::GuardedReleaseOutcome;
 #[cfg(feature = "real-input-acceptance")]
@@ -57,7 +57,7 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         mut abort_counts,
         mut terminal_error,
         mut secondary_errors,
-        mut attempted_dispatch_anomalies,
+        mut attempted_dispatch_anomaly,
         mut last_published_error,
         mut terminal_trigger,
     } = state;
@@ -390,6 +390,10 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     // and observer teardown. It cannot delay or alter terminal release.
     pending_production_forensics.drain_after_cleanup(&mut local_metrics);
     let end_ticks = qpc_clock.now();
+    let terminal_publish_ticks = end_ticks
+        .as_ref()
+        .map(|ticks| ticks.as_u64())
+        .unwrap_or_default();
     let end_qpc = end_ticks.and_then(|ticks| {
         qpc_clock
             .duration_to_us(DurationTicks::from_raw(ticks.as_u64()))
@@ -443,12 +447,12 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     }
     // Apply the anomaly latch only after stronger worker, cleanup, scheduler,
     // observer, and terminal-QPC errors have been collected. This preserves a
-    // more specific primary error while making every attempted anomaly
-    // terminal even when all retained details have been omitted or drained.
-    if let Some(summary) = attempted_dispatch_anomalies.terminal_error_summary() {
+    // more specific primary error while preserving the first attempted
+    // anomaly as terminal even after its detail is moved to secondary errors.
+    if let Some(summary) = attempted_dispatch_anomaly.terminal_error_summary() {
         record_termination_error(&mut terminal_error, &mut secondary_errors, summary);
     }
-    attempted_dispatch_anomalies.append_details_to(&mut secondary_errors);
+    attempted_dispatch_anomaly.append_detail_to(&mut secondary_errors);
     if system_power.system_suspend_terminal()
         && !secondary_errors
             .iter()
@@ -513,7 +517,6 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
             / local_metrics.playback_wall_time_us as u128)
             as u64;
     }
-    publish_terminal_metrics(&local_metrics, metrics, qpc_clock, end_us);
     metrics.is_paused.store(false, Ordering::Relaxed);
     let telemetry = match Arc::try_unwrap(telemetry) {
         Ok(telemetry) => telemetry.into_inner(),
@@ -541,15 +544,23 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
     if telemetry.output.observer_queue_dropped > 0 {
         telemetry.output.truncated = true;
     }
+    *telemetry_output.lock() = Some(std::mem::take(&mut telemetry.output));
     #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "telemetry_export");
-    *telemetry_output.lock() = Some(std::mem::take(&mut telemetry.output));
     drop(scheduling);
     *priority_acquired.lock() = "off".to_string();
     local_metrics.power_throttling_disabled = false;
     #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "scheduling_guards_released");
+    #[cfg(any(test, feature = "test-support"))]
     record_finalization_event(&operation_trace, "terminal_metrics_publication");
-    publish_terminal_metrics(&local_metrics, metrics, qpc_clock, end_us);
+    // Publish exactly once after terminal ownership cleanup, telemetry export,
+    // and scheduling teardown, but before exposing the typed terminal result.
+    publish_terminal_metrics(
+        &local_metrics,
+        metrics,
+        QpcTicks::from_raw(terminal_publish_ticks),
+    );
     let cleanup_panicked = matches!(&cleanup_result, Err(TerminalCleanupFailure::Panicked(_)));
     let terminal_outcome = if terminal_error.is_some()
         || cleanup_panicked
@@ -602,6 +613,8 @@ pub(crate) fn finalize_worker(context: FinalizeInput<'_>) -> u8 {
         terminal_error: terminal_error.clone(),
         residual,
     });
+    #[cfg(any(test, feature = "test-support"))]
+    record_finalization_event(&operation_trace, "terminal_result_publication");
     match (worker_result, cleanup_result) {
         (Err(payload), _) => resume_unwind(payload),
         (Ok(_), Err(TerminalCleanupFailure::Panicked(payload))) => resume_unwind(payload),

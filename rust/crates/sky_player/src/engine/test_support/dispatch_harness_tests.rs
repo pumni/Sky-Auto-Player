@@ -839,7 +839,13 @@ fn live_scheduler_partial_chord_send_is_not_replayed_and_consumed_after_cleanup(
     assert_eq!(accounting.cancelled, 2);
     assert_eq!(harness.current_executor_chord_for_test(), None);
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
-    assert!(harness.runtime.attempted_dispatch_anomalies.details()[0].contains("attempts=1"));
+    assert!(
+        harness
+            .runtime
+            .attempted_dispatch_anomaly
+            .detail()
+            .is_some_and(|detail| detail.contains("attempts=1"))
+    );
 
     let mut observation = FinalizeTestObservation::default();
     let _ = harness.finalize_worker_for_test(false, &mut observation);

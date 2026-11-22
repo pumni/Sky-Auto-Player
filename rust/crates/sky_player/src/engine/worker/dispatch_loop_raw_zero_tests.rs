@@ -173,13 +173,7 @@ fn proven_raw_zero_down_only_clears_only_the_new_obligation_and_terminates() {
     drop(captured);
     assert_eq!(harness.release_obligation_mask_for_test() & 0b0010, 0);
     assert_eq!(harness.runtime.last_physical_send_completion_qpc, None);
-    assert_eq!(
-        harness
-            .runtime
-            .attempted_dispatch_anomalies
-            .retained_count(),
-        1
-    );
+    assert!(harness.runtime.attempted_dispatch_anomaly.is_recorded());
     assert_eq!(
         cleanup.lock().expect("cleanup capture").as_slice(),
         &[(vec![0x15], true)],
@@ -237,13 +231,7 @@ fn raw_zero_does_not_create_a_completion_floor_or_send_later_events() {
     assert_eq!(captured[1].1.first_inserted, 0);
     drop(captured);
     assert_eq!(harness.runtime.last_physical_send_completion_qpc, None);
-    assert_eq!(
-        harness
-            .runtime
-            .attempted_dispatch_anomalies
-            .retained_count(),
-        1
-    );
+    assert!(harness.runtime.attempted_dispatch_anomaly.is_recorded());
     assert!(
         harness
             .runtime
@@ -388,9 +376,8 @@ fn raw_zero_classifier_rejects_short_packet_and_contradictory_qpc() {
         assert!(!cleanup.lock().expect("cleanup capture").is_empty());
         let anomaly = harness
             .runtime
-            .attempted_dispatch_anomalies
-            .details()
-            .first()
+            .attempted_dispatch_anomaly
+            .detail()
             .expect("attempted anomaly remains sticky");
         if contradictory_qpc {
             assert!(
@@ -650,13 +637,7 @@ fn raw_zero_with_concurrent_stop_skip_or_lease_expiry_cleans_up_and_does_not_con
             "the attempted B cursor advances, but C is not attempted after a terminal signal"
         );
         assert!(!cleanup.lock().expect("cleanup capture").is_empty());
-        assert_eq!(
-            harness
-                .runtime
-                .attempted_dispatch_anomalies
-                .retained_count(),
-            1
-        );
+        assert!(harness.runtime.attempted_dispatch_anomaly.is_recorded());
         let _ = harness.finalize_for_test();
     }
 }
@@ -935,6 +916,19 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         fallback.dispatch_staged_candidate_for_test(candidate, false),
         StagedDispatchOutcome::Dispatched
     );
+    let selected_packets = fallback_packets.lock().expect("selected packet capture");
+    assert_eq!(selected_packets.len(), 1, "Up-prefix uses one sender call");
+    assert_eq!(selected_packets[0].0, PhysicalPacket::new(1, 0));
+    assert_eq!(selected_packets[0].1.attempts, 1);
+    drop(selected_packets);
+    assert_eq!(
+        fallback
+            .current_executor_chord_for_test()
+            .map(|chord| chord.down_mask),
+        Some(2),
+        "Up-prefix must leave the staged Down onset pending"
+    );
+    assert_eq!(fallback.release_obligation_mask_for_test(), 0);
     report_counts("mixed-to-up-only", &fallback, &fallback_packets);
     let _ = fallback.finalize_for_test();
 

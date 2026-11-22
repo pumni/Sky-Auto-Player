@@ -451,7 +451,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     worker_timing.start_wall_time_us = initial_now_us;
     worker_timing.start_thread_cpu_us = start_thread_cpu_us;
     worker_timing.start_process_cpu_us = start_process_cpu_us;
-    worker_timing.last_cpu_metrics_sample_us = initial_now_us;
+    worker_timing.last_cpu_metrics_sample_ticks = initial_now_ticks.as_u64();
     core.timing = Some(worker_timing);
     if effective_policy.observer_enabled {
         #[cfg(any(test, feature = "test-support"))]
@@ -581,7 +581,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
                 && let Ok(now_us) = qpc_clock.duration_to_us(DurationTicks::from_raw(now.as_u64()))
             {
                 timing.start_wall_time_us = now_us;
-                timing.last_cpu_metrics_sample_us = now_us;
+                timing.last_cpu_metrics_sample_ticks = now.as_u64();
             }
         }
     }
@@ -803,7 +803,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     worker.epoch_qpc = epoch_qpc;
     if let Some(timing) = core.timing.as_mut() {
         timing.start_wall_time_us = epoch_wall_us;
-        timing.last_cpu_metrics_sample_us = epoch_wall_us;
+        timing.last_cpu_metrics_sample_ticks = epoch_qpc.as_u64();
         timing.start_thread_cpu_us = playback_start_thread_cpu_us;
         timing.start_process_cpu_us = playback_start_process_cpu_us;
     }

@@ -183,7 +183,7 @@ pub(crate) struct UpObservationDrainContext<'a> {
     pub(crate) metrics: &'a crate::engine::SharedMetrics,
     pub(crate) telemetry: &'a mut TelemetryCollector,
     pub(crate) qpc_clock: sky_dispatch_win32::clock::QpcClock,
-    pub(crate) now_us: u64,
+    pub(crate) now_qpc_ticks: sky_dispatch_win32::clock::QpcTicks,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -196,7 +196,7 @@ pub(crate) fn drain_up_send_outcome(
     let metrics = ctx.metrics;
     let telemetry = ctx.telemetry;
     let qpc_clock = ctx.qpc_clock;
-    let now_us = ctx.now_us;
+    let now_qpc_ticks = ctx.now_qpc_ticks;
     let health_budget = crate::engine::worker::health::build_dispatch_budget(
         crate::engine::worker::DispatchPath::UpOnly {
             up_count: observation.requested_mask.count_ones() as usize,
@@ -358,7 +358,7 @@ pub(crate) fn drain_up_send_outcome(
         local_metrics,
         metrics,
         qpc_clock,
-        now_us,
+        now_qpc_ticks,
         !super::timing::is_clean_dispatch_observation(super::observation::up_dispatch_evidence(
             observation,
         )) || observation.trace.recovery_required,

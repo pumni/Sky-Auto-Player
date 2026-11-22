@@ -142,7 +142,7 @@ pub use sky_dispatch_core::executor::{DispatchExecutor, DispatchTimingWindow};
 #[cfg(any(test, feature = "test-support"))]
 pub use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-use sky_dispatch_win32::clock::{QpcClock, QpcError, QpcTicks, qpc_frequency_checked};
+use sky_dispatch_win32::clock::{QpcClock, QpcTicks, qpc_frequency_checked};
 use sky_dispatch_win32::cpu::{current_process_cpu_time_us, current_thread_cpu_time_us};
 use sky_dispatch_win32::event::OwnedEvent;
 pub(crate) use sky_dispatch_win32::input::TrackedKeyState;
