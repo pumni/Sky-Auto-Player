@@ -468,7 +468,6 @@ test('Playback Behavior stays usable in a compact Settings viewport', async ({ p
   }
 });
 
-
 test('Settings backdrop stays within the viewport without outer scrollbars', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
