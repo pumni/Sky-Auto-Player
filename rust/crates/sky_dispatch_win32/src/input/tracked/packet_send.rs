@@ -24,6 +24,7 @@ pub(super) struct CleanupSendContext<'a, 'b> {
     pub(super) drain_control:
         &'a mut dyn FnMut() -> Result<super::super::outcome::CleanupDrainDecision, String>,
     pub(super) background_terminal_drain: &'a mut bool,
+    pub(super) background_terminal_attempt: &'a mut bool,
     pub(super) raw_up_invocations: u8,
     pub(super) attempts: &'a mut u8,
 }
@@ -197,10 +198,15 @@ impl TrackedKeyState {
         if !drain_decision.origin_foreground && !background_terminal {
             return Err("tracked cleanup origin is not foreground".into());
         }
-        *context.background_terminal_drain |= background_terminal;
         if background_terminal && context.raw_up_invocations != 0 {
             return Err("background terminal Up budget already used".into());
         }
+
+        // The loop's earlier drain sample is only a preflight. Record the
+        // background classification from this fresh decision, which admitted
+        // the sender attempt.
+        *context.background_terminal_attempt = background_terminal;
+        *context.background_terminal_drain |= background_terminal;
 
         // Count after admission and immediately before entering the sender. If
         // the sender unwinds, quarantine diagnostics retain the admitted try.
