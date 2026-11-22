@@ -40,6 +40,13 @@ Rust/React boundary. See [`v4-release-authority.md`](v4-release-authority.md)
 for the generator, validator, strictly monotonic post-qualification promotion,
 and final public endpoint verification.
 
+When **Check for updates automatically** is enabled, the desktop performs one
+silent Stable-channel update check after each successful application bootstrap.
+A persisted successful or failed check from an earlier launch does not throttle
+the new launch. There is no periodic polling while the app stays open. Disabling
+automatic checks prevents the startup request; **Settings → Updates → Check for
+updates** always remains available and bypasses the automatic-check preference.
+
 ## 3. Trust root and Authenticode governance
 
 - **Tauri Updater Trust:** Public root embedded in `apps/desktop/src-tauri/tauri.conf.json`.

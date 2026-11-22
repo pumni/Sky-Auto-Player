@@ -1061,15 +1061,15 @@ fn opaque_id() -> Result<String, String> {
 pub(crate) fn check_disposition(
     origin: UpdateCheckOrigin,
     preferences: &sky_app_core::settings::UpdatePreferences,
-    now: i64,
+    _now: i64,
 ) -> UpdateCheckDisposition {
-    if origin == UpdateCheckOrigin::Background {
-        if !preferences.auto_check {
-            return UpdateCheckDisposition::Disabled;
-        }
-        if !sky_app_core::update::should_auto_check(preferences, now) {
-            return UpdateCheckDisposition::Throttled;
-        }
+    // The desktop sends one background check after bootstrap on each app
+    // launch. Never suppress it using a timestamp from a previous launch.
+    // Explicit manual checks remain available even with Auto Check disabled.
+    if origin == UpdateCheckOrigin::Background
+        && !sky_app_core::update::should_check_on_launch(preferences)
+    {
+        return UpdateCheckDisposition::Disabled;
     }
     UpdateCheckDisposition::Performed
 }
@@ -1432,65 +1432,38 @@ mod tests {
     }
 
     #[test]
-    fn check_disposition_matrix_enforces_background_throttling_and_manual_bypass() {
+    fn check_disposition_checks_on_each_launch_and_respects_auto_check() {
         use crate::ui_events::{UpdateCheckDisposition, UpdateCheckOrigin};
         use sky_app_core::settings::UpdatePreferences;
 
         let mut prefs = UpdatePreferences::default();
         let now = 1_700_000_000;
 
-        // Fresh default: background check is performed
         assert_eq!(
             super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
             UpdateCheckDisposition::Performed
         );
 
-        // Auto check disabled: background check is disabled
         prefs.auto_check = false;
         assert_eq!(
             super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
             UpdateCheckDisposition::Disabled
         );
-        // Manual check ignores auto_check = false
         assert_eq!(
             super::check_disposition(UpdateCheckOrigin::Manual, &prefs, now),
             UpdateCheckDisposition::Performed
         );
 
-        // Re-enable auto_check, recent success check (< 24h)
+        // Previous launches' successes must not hide a newly published version.
         prefs.auto_check = true;
-        prefs.last_check_ts = now - 1000;
-        assert_eq!(
-            super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
-            UpdateCheckDisposition::Throttled
-        );
-        // Manual check bypasses throttling
-        assert_eq!(
-            super::check_disposition(UpdateCheckOrigin::Manual, &prefs, now),
-            UpdateCheckDisposition::Performed
-        );
-
-        // >= 24h (86_400s) elapsed: background check is performed
-        prefs.last_check_ts = now - 86_400;
+        prefs.last_check_ts = now - 100;
         assert_eq!(
             super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
             UpdateCheckDisposition::Performed
         );
 
-        // Recent failure (< 300s)
-        prefs.last_check_ts = 0;
-        prefs.last_error_ts = now - 100;
-        assert_eq!(
-            super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
-            UpdateCheckDisposition::Throttled
-        );
-        assert_eq!(
-            super::check_disposition(UpdateCheckOrigin::Manual, &prefs, now),
-            UpdateCheckDisposition::Performed
-        );
-
-        // >= 300s elapsed after error: background check is performed
-        prefs.last_error_ts = now - 300;
+        // Even a recent failed check must be retried on the next app launch.
+        prefs.last_error_ts = now - 20;
         assert_eq!(
             super::check_disposition(UpdateCheckOrigin::Background, &prefs, now),
             UpdateCheckDisposition::Performed

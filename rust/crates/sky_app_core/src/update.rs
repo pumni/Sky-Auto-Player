@@ -27,6 +27,13 @@ pub fn channel_policy(channel: &UpdateChannel) -> ChannelPolicy {
     }
 }
 
+/// Decide whether a fresh desktop launch should check for updates. A previous
+/// launch's success or failure timestamp must not suppress this launch's check.
+pub fn should_check_on_launch(preferences: &UpdatePreferences) -> bool {
+    preferences.auto_check
+}
+
+/// Interval policy for any separately scheduled background retries.
 pub fn should_auto_check(preferences: &UpdatePreferences, now_ts: i64) -> bool {
     if !preferences.auto_check {
         return false;
@@ -71,6 +78,18 @@ mod tests {
         };
         assert!(!should_auto_check(&preferences, 1_500));
         assert!(should_auto_check(&preferences, 1_000 + 86_400));
+    }
+
+    #[test]
+    fn launch_check_ignores_persisted_timestamps_but_respects_opt_out() {
+        let mut preferences = UpdatePreferences {
+            last_check_ts: 1_700_000_000,
+            last_error_ts: 1_700_000_100,
+            ..Default::default()
+        };
+        assert!(should_check_on_launch(&preferences));
+        preferences.auto_check = false;
+        assert!(!should_check_on_launch(&preferences));
     }
 
     #[test]
