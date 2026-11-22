@@ -409,13 +409,13 @@ test('update dialog traps keyboard focus and restores it after Escape and outsid
 
   const dialog = page.getByRole('dialog', { name: 'Software update' });
   const close = dialog.getByRole('button', { name: 'Close update' });
-  const skip = dialog.getByRole('button', { name: 'Skip this version' });
+  const updateAndRestart = dialog.getByRole('button', { name: 'Update and restart' });
   await expect(dialog).toBeVisible();
-  await skip.focus();
+  await updateAndRestart.focus();
   await page.keyboard.press('Tab');
   await expect(close).toBeFocused();
   await page.keyboard.press('Shift+Tab');
-  await expect(skip).toBeFocused();
+  await expect(updateAndRestart).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await expect(trigger).toBeFocused();

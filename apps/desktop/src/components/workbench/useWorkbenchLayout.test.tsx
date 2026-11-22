@@ -178,6 +178,33 @@ describe('Inspector topology and preference ownership', () => {
     expect(renders).toBe(before + 1);
     expect(writes).toHaveBeenCalledTimes(1);
   });
+
+  it('supports collapsing docked Inspector to a 48px rail while preserving expanded utilityWidth', () => {
+    const { result } = renderHook(() => useWorkbenchLayout(1200, true));
+
+    act(() => result.current.setUtilityWidth(380, true));
+    expect(result.current.utilityCollapsed).toBe(false);
+    expect(result.current.utilityWidth).toBe(380);
+    expect(result.current.expandedUtilityWidth).toBe(380);
+
+    act(() => result.current.setUtilityPreference('collapsed', true));
+    expect(result.current.utilityCollapsed).toBe(true);
+    expect(result.current.utilityWidth).toBe(48);
+    expect(result.current.expandedUtilityWidth).toBe(380);
+    expect(result.current.geometry.utilityWidth).toBe(48);
+    expect(JSON.parse(localStorage.getItem(WORKBENCH_STORAGE_KEY)!)).toMatchObject({
+      utilityPreference: 'collapsed',
+      utilityWidth: 380,
+    });
+
+    act(() => result.current.setUtilityPreference('expanded', true));
+    expect(result.current.utilityCollapsed).toBe(false);
+    expect(result.current.utilityWidth).toBe(380);
+    expect(JSON.parse(localStorage.getItem(WORKBENCH_STORAGE_KEY)!)).toMatchObject({
+      utilityPreference: 'expanded',
+      utilityWidth: 380,
+    });
+  });
 });
 
 describe('shared palette geometry boundary', () => {

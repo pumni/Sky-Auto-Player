@@ -62,6 +62,9 @@ const createBrowserBridge = async () => {
       ? { catalogCount: mockCatalogCount }
       : {}),
     ...(mockLibraryState === 'empty' ? { catalogRows: [] } : {}),
+    ...(mockLibraryState === 'unavailable' || mockParams.get('mockBuiltinAvailable') === '0'
+      ? { builtinAvailable: false, builtinSongIds: [], catalogRows: [] }
+      : {}),
     ...(Number.isFinite(mockSearchDelay) && mockSearchDelay > 0
       ? { searchDelayMs: Math.min(mockSearchDelay, 5_000) }
       : {}),

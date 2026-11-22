@@ -6,6 +6,7 @@ import {
   DiagnosticsEmptyState,
   DiagnosticsMetric as Metric,
   DiagnosticsMetricGroup as MetricGroup,
+  type DiagnosticsTone,
 } from './DiagnosticsReadouts';
 
 export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopStoreHook }) {
@@ -79,49 +80,70 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
   const transportFailureCount = latest
     ? latest.sendinput_partial_events + latest.sendinput_zero_progress_failures
     : 0;
-  const senderSummary = dryRun
+  const senderSummary: { status: string; detail: string; tone: DiagnosticsTone } = dryRun
     ? {
         status: 'Not measured',
         detail:
           'Dry-run playback sends no physical input; sender health and timing are not measured.',
+        tone: 'neutral',
       }
     : !backendMetricsAvailable
       ? {
           status: 'Unavailable',
           detail: 'Sender-side diagnostics are unavailable for this dispatch profile.',
+          tone: 'neutral',
         }
       : latest?.physical_session && !latest.player_attached
         ? {
             status: 'Error',
             detail: 'The physical session is active, but no native player is attached.',
+            tone: 'danger',
           }
         : latest?.last_error
           ? {
               status: 'Error',
               detail: `Last error: ${latest.last_error}`,
+              tone: 'danger',
             }
           : latest?.backend_status === 'error'
             ? {
                 status: 'Error',
                 detail: 'Sender-side backend reported an error.',
+                tone: 'danger',
               }
             : latest?.backend_status === 'degraded'
               ? {
                   status: 'Attention',
                   detail: 'Sender-side backend reported degraded health.',
+                  tone: 'warning',
                 }
               : latest?.player_attached && latest.sender_sample_count === 0
                 ? {
                     status: 'Waiting',
                     detail:
                       'The physical player is attached; no SendInput call has been sampled yet.',
+                    tone: 'neutral',
                   }
                 : senderSuppressionCount === 0 && transportFailureCount === 0
-                  ? { status: 'Healthy', detail: 'No Down suppression recorded this session.' }
+                  ? {
+                      status: 'Healthy',
+                      detail: 'No Down suppression recorded this session.',
+                      tone: 'healthy',
+                    }
                   : {
                       status: 'Attention',
                       detail: `${latest?.final_gate_focus_losses ?? 0} focus rejections; ${latest?.final_gate_target_changes ?? 0} target / owner rejections; ${transportFailureCount} SendInput transport failures.`,
+                      tone: 'warning',
                     };
+  const backendTone: DiagnosticsTone = dryRun
+    ? 'neutral'
+    : latest?.backend_status === 'healthy'
+      ? 'healthy'
+      : latest?.backend_status === 'degraded'
+        ? 'warning'
+        : latest?.backend_status === 'error'
+          ? 'danger'
+          : 'neutral';
   return (
     <TabPanel id="performance" className="diagnostics-panel">
       {diagnostics.error ? (
@@ -162,7 +184,11 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
         />
       ) : (
         <>
-          <section className="diagnostics-sender-summary" aria-label="Sender-side status">
+          <section
+            className="diagnostics-sender-summary"
+            data-tone={senderSummary.tone}
+            aria-label="Sender-side status"
+          >
             <strong>Sender-side status: {senderSummary.status}</strong>
             <span>{senderSummary.detail}</span>
           </section>
@@ -179,6 +205,7 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
             <Metric
               label="Sender backend"
               value={dryRun ? 'Not measured' : backendStatusLabel(latest.backend_status)}
+              tone={backendTone}
             />
           </MetricGroup>
           <MetricGroup title="Timing">

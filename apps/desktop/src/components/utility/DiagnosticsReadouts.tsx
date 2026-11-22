@@ -32,12 +32,28 @@ export function DiagnosticsMetricGroup({
   );
 }
 
-export function DiagnosticsMetric({ label, value }: { label: string; value: string }) {
+export type DiagnosticsTone = 'healthy' | 'warning' | 'danger' | 'neutral';
+
+export function DiagnosticsMetric({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: string;
+  tone?: DiagnosticsTone | undefined;
+}) {
   const isNumber = /^[-+]?(?:\d|\.\d)/.test(value);
+  const valueClass = [
+    isNumber ? 'is-number' : 'is-status',
+    tone && tone !== 'neutral' ? `is-tone-${tone}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
   return (
     <div className="diagnostics-metric">
       <span>{label}</span>
-      <strong className={isNumber ? 'is-number' : 'is-status'}>{value}</strong>
+      <strong className={valueClass}>{value}</strong>
     </div>
   );
 }

@@ -3,12 +3,19 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
-  useState,
   type KeyboardEvent,
   type PointerEvent,
+  type Ref,
 } from 'react';
+import type { DragSnapHint } from './workbenchDragPolicy';
+
+export interface ResizableSeparatorDragResult {
+  value: number;
+  snapHint?: DragSnapHint;
+}
 
 interface ResizableSeparatorProps {
+  ref?: Ref<HTMLDivElement>;
   label: string;
   value: number;
   min: number;
@@ -22,13 +29,23 @@ interface ResizableSeparatorProps {
   onDragStart?: () => void;
   onDragEnd?: () => void;
   onDragChange?: (value: number) => void;
+  /** Optional raw-width drag handler supporting snap/collapse hysteresis. */
+  onDragRaw?: (rawValue: number) => ResizableSeparatorDragResult;
+  onDoubleClick?: () => void;
 }
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, Math.round(value)));
 }
 
+function assignRef<T>(target: Ref<T> | undefined, value: T | null) {
+  if (!target) return;
+  if (typeof target === 'function') target(value);
+  else target.current = value;
+}
+
 export function ResizableSeparator({
+  ref,
   label,
   value,
   min,
@@ -41,8 +58,10 @@ export function ResizableSeparator({
   onDragStart,
   onDragEnd,
   onDragChange,
+  onDragRaw,
+  onDoubleClick,
 }: ResizableSeparatorProps) {
-  const separatorRef = useRef<HTMLDivElement>(null);
+  const separatorRef = useRef<HTMLDivElement | null>(null);
   const dragRef = useRef<{
     pointerId: number;
     startX: number;
@@ -51,20 +70,21 @@ export function ResizableSeparator({
   } | null>(null);
   const dragValueRef = useRef(value);
   const frameRef = useRef<number | null>(null);
-  const latestRef = useRef({ min, max, direction, onChange, onDragChange });
-  const [dragging, setDragging] = useState(false);
+  const latestRef = useRef({ min, max, direction, onChange, onDragChange, onDragRaw });
 
-  useEffect(() => {
-    if (!dragging) return;
-    document.body.classList.add('is-resizing');
-    return () => document.body.classList.remove('is-resizing');
-  }, [dragging]);
+  const setDraggingClass = (active: boolean) => {
+    document.body.classList.toggle('is-resizing', active);
+    separatorRef.current?.classList.toggle('is-dragging', active);
+    if (!active) separatorRef.current?.removeAttribute('data-snap-hint');
+  };
 
   useEffect(
     () => () => {
       if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
-      dragRef.current = null;
-      document.body.classList.remove('is-resizing');
+      if (dragRef.current !== null) {
+        dragRef.current = null;
+        document.body.classList.remove('is-resizing');
+      }
     },
     [],
   );
@@ -72,8 +92,23 @@ export function ResizableSeparator({
   const applyLatest = useCallback(() => {
     const drag = dragRef.current;
     if (!drag) return;
-    const { min, max, direction, onChange, onDragChange } = latestRef.current;
-    const next = clamp(drag.startValue + direction * (drag.lastX - drag.startX), min, max);
+    const { min, max, direction, onChange, onDragChange, onDragRaw } = latestRef.current;
+    const raw = Math.round(drag.startValue + direction * (drag.lastX - drag.startX));
+
+    if (onDragRaw) {
+      const resolved = onDragRaw(raw);
+      if (resolved.snapHint) {
+        separatorRef.current?.setAttribute('data-snap-hint', resolved.snapHint);
+      } else {
+        separatorRef.current?.removeAttribute('data-snap-hint');
+      }
+      if (resolved.value === dragValueRef.current) return;
+      dragValueRef.current = resolved.value;
+      separatorRef.current?.setAttribute('aria-valuenow', String(resolved.value));
+      return;
+    }
+
+    const next = clamp(raw, min, max);
     if (next === dragValueRef.current) return;
     dragValueRef.current = next;
     separatorRef.current?.setAttribute('aria-valuenow', String(next));
@@ -92,10 +127,11 @@ export function ResizableSeparator({
   // Only a real bounds change can require a frame without new pointer input.
   useLayoutEffect(() => {
     const previous = latestRef.current;
-    latestRef.current = { min, max, direction, onChange, onDragChange };
-    if (previous.min !== min || previous.max !== max || previous.direction !== direction)
+    latestRef.current = { min, max, direction, onChange, onDragChange, onDragRaw };
+    if (previous.min !== min || previous.max !== max || previous.direction !== direction) {
       schedule();
-  }, [min, max, direction, onChange, onDragChange, schedule]);
+    }
+  }, [min, max, direction, onChange, onDragChange, onDragRaw, schedule]);
 
   const finishDrag = () => {
     if (!dragRef.current) return;
@@ -103,7 +139,7 @@ export function ResizableSeparator({
     frameRef.current = null;
     applyLatest();
     dragRef.current = null;
-    setDragging(false);
+    setDraggingClass(false);
     onCommit?.(dragValueRef.current);
     onDragEnd?.();
   };
@@ -118,7 +154,7 @@ export function ResizableSeparator({
       lastX: event.clientX,
     };
     dragValueRef.current = value;
-    setDragging(true);
+    setDraggingClass(true);
     onDragStart?.();
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -158,8 +194,11 @@ export function ResizableSeparator({
 
   return (
     <div
-      ref={separatorRef}
-      className={`resizable-separator${dragging ? ' is-dragging' : ''}${disabled ? ' is-disabled' : ''}`}
+      ref={(node) => {
+        separatorRef.current = node;
+        assignRef(ref, node);
+      }}
+      className={`resizable-separator${disabled ? ' is-disabled' : ''}`}
       role="separator"
       aria-label={label}
       aria-orientation="vertical"
@@ -179,6 +218,10 @@ export function ResizableSeparator({
       }}
       onDoubleClick={() => {
         if (disabled) return;
+        if (onDoubleClick) {
+          onDoubleClick();
+          return;
+        }
         const next = clamp(defaultValue, min, max);
         dragValueRef.current = next;
         onChange(next);

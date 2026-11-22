@@ -46,7 +46,8 @@ resizing to its displayed 200px size, and the CRC-16 was validated. This is not 
 bank account belongs to the displayed recipient; the user must verify `Nguyen Duc Hoa`
 with a real bank app before releasing the change. The QR is purely static; there is no
 external QR API request, backend payment tracking, or new persisted setting.
-Only Copy account and Copy note actions are present. The previous MoMo QR asset and PSP
+The Donate Settings panel displays the static VietQR image alongside the bank, account, and
+transfer-note summary without clipboard copy buttons. The previous MoMo QR asset and PSP
 information are removed from the current branch tree.
 
 ## Inspector presentation
@@ -152,17 +153,26 @@ Graphite remains the default dark palette with persisted ID `graphite`; Settings
 palette-specific dark colors stay in `apps/desktop/src/styles/themes.css`. Light uses a separate
 semantic token override and does not introduce a palette ID.
 
-Production Graphite is the existing A palette: accent ink and focus `#B2A5E9`, primary fill
-`#705EAE`, hover `#7564B4`, pressed `#6553A0`, selected surface `#25242C`, search focus `#9688C6`,
-and active toggle ink `#B68CFF`. Semantic roles remain separate: accent text/ink, primary action
-fill and on-fill text, focus indication, search focus, selected surfaces/indicators, toggle state,
-and danger/warning/success. Compatibility `--workbench-*` aliases resolve through those roles.
+Production Graphite uses the unified Sky Indigo palette: accent ink and focus `#9AA8FF`, primary
+action fill `#8E9DFF`, hover `#A3B0FF`, pressed `#7888F0`, with dark on-accent text/icons
+`#11131A` (`--on-accent`). In Dark Graphite, the primary Play/Pause/Resume transport and dialog
+actions employ a light Indigo background paired with dark foreground content (`#11131A` on `#8E9DFF`,
+providing >= 7.4:1 contrast ratio, exceeding WCAG AA and meeting WCAG AAA requirements). This prevents eye strain
+while preserving visual hierarchy and clarity. The selected surface is `#222534`, search focus is
+`#8B99EB`, and active toggle ink is `#9AA8FF`. Semantic roles remain strictly separated:
+accent text/ink (`--accent-ink`), primary action fill (`--accent-fill`) and on-fill content (`--on-accent`),
+focus indication (`--focus-ring`), search focus (`--search-focus-ring`), selected surfaces (`--selection-bg`)
+and indicators, toggle state (`--toggle-active-ink`), and status roles (danger/warning/success).
+Compatibility `--workbench-*` aliases resolve through those canonical roles.
 
-Light uses a separate Clean Windows Light token set: white content, a near-white shell and
-Navigator, charcoal text, hairline neutral separators, and restrained Windows blue. Graphite's
-component-specific workbench aliases are overridden in the theme layer so they cannot leave dark
-surfaces behind in Light mode. Component styles consume semantic variables; the six dark palette
-IDs and their rendered role values remain unchanged. Package B's browser captures and computed
+Light appearance uses a corresponding Clean Windows Light Sky Indigo pairing: primary action fill
+`#3C54CF`, hover `#3248BA`, pressed `#293DA3`, with crisp white on-accent text/icons `#FFFFFF`
+(`--on-accent`), accent ink `#3449B5`, focus ring `#3449B5`, search focus `#3449B5`, and active toggle
+ink `#3449B5`. White content canvas (`#FFFFFF`), a near-white shell and Navigator (`#F7F8FA`), charcoal
+primary text (`#252A31`), hairline neutral separators (`#DFE4EB`), and selection surface (`#EAEFFE`)
+maintain WCAG AA compliance across all states. Graphite's component-specific workbench aliases are
+overridden in the theme layer so they cannot leave dark surfaces behind in Light mode. Component styles
+consume semantic variables; the six dark palette IDs and their rendered role values remain unchanged. Package B's browser captures and computed
 contrast report are recorded in [`issue-565-package-b evidence`](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-565-package-b/README.md).
 Package C's Windows/WebView2, startup, focus and contrast qualification is recorded in
 [`issue-565-package-c evidence`](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-565-package-c/README.md). It distinguishes the

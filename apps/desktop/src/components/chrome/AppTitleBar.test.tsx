@@ -203,4 +203,103 @@ describe('AppTitleBar', () => {
     expect(isMaximized).toHaveBeenCalledTimes(3);
     vi.unstubAllGlobals();
   });
+
+  it('properly cleans up onResize listener on unmount', async () => {
+    const { bootstrap, useStore } = await testBootstrap();
+    let listenerCount = 0;
+    const unsub = vi.fn(() => {
+      listenerCount--;
+    });
+    const onResize = vi.fn(async () => {
+      listenerCount++;
+      return unsub;
+    });
+    const controls: WindowControls = {
+      minimize: vi.fn(async () => undefined),
+      toggleMaximize: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      isMaximized: vi.fn(async () => false),
+      onResize,
+    };
+
+    const { unmount } = render(
+      <AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />,
+    );
+
+    await waitFor(() => expect(onResize).toHaveBeenCalled());
+    unmount();
+
+    expect(unsub).toHaveBeenCalled();
+  });
+
+  it('handles rejections in window control promises without crashing or unhandled errors', async () => {
+    const { bootstrap, useStore } = await testBootstrap();
+    const minimize = vi.fn(async () => {
+      throw new Error('IPC minimize failed');
+    });
+    const toggleMaximize = vi.fn(async () => {
+      throw new Error('IPC maximize failed');
+    });
+    const close = vi.fn(async () => {
+      throw new Error('IPC close failed');
+    });
+    const isMaximized = vi.fn(async () => {
+      throw new Error('IPC isMaximized failed');
+    });
+    const onResize = vi.fn(async () => {
+      throw new Error('IPC onResize failed');
+    });
+    const controls: WindowControls = {
+      minimize,
+      toggleMaximize,
+      close,
+      isMaximized,
+      onResize,
+    };
+
+    render(<AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />);
+
+    // Clicking buttons should not throw uncaught errors
+    fireEvent.click(screen.getByRole('button', { name: 'Minimize window' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Maximize window' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close window' }));
+
+    expect(minimize).toHaveBeenCalledOnce();
+    expect(toggleMaximize).toHaveBeenCalledOnce();
+    expect(close).toHaveBeenCalledOnce();
+  });
+
+  it('cleans up delayed onResize registration if component unmounts before onResize resolves', async () => {
+    const { bootstrap, useStore } = await testBootstrap();
+    let resolveRegistration!: (cleanup: () => void) => void;
+    const unsub = vi.fn();
+    const onResize = vi.fn(
+      () =>
+        new Promise<() => void>((resolve) => {
+          resolveRegistration = resolve;
+        }),
+    );
+    const controls: WindowControls = {
+      minimize: vi.fn(async () => undefined),
+      toggleMaximize: vi.fn(async () => undefined),
+      close: vi.fn(async () => undefined),
+      isMaximized: vi.fn(async () => false),
+      onResize,
+    };
+
+    const { unmount } = render(
+      <AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />,
+    );
+
+    // Unmount before onResize promise resolves
+    unmount();
+
+    // Now onResize resolves
+    await act(async () => {
+      resolveRegistration(unsub);
+    });
+
+    // unsub must have been called because component was already disposed!
+    expect(unsub).toHaveBeenCalledOnce();
+  });
 });
