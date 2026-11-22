@@ -1,5 +1,20 @@
 /* Palette selectors contain color roles only. Shared dimensions live in tokens.css and component styles. */
 /* Semantic palette roles stay canonical; workbench aliases retain component-specific surfaces. */
+/* Semantic accent contract:
+   - --accent-ink: Foreground accent for text/icons
+   - --accent-ink-hover: Hover foreground accent
+   - --accent-fill: Primary action background
+   - --accent-fill-hover: Primary hover background
+   - --accent-fill-pressed: Primary pressed background
+   - --on-accent: Foreground content on accent fill (dark on light indigo in Dark Graphite; white on deep indigo in Light)
+   - --focus-ring: Keyboard focus indicator
+   - --search-focus-ring: Search-specific focus indicator
+   - --toggle-active-ink: Enabled/active toggle emphasis
+   - --selection-bg: Selected navigation/row background
+   - --selection-indicator: Selected-state accent marker
+   - Compatibility aliases (--primary-fill, --on-primary, --workbench-accent-ink, --workbench-accent-fill, --workbench-toggle-on)
+     resolve through these canonical roles.
+*/
 :root {
   --canvas: #121314;
   --surface-panel: #191a1b;

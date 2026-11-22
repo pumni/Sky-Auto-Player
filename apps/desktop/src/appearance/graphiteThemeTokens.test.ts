@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { PALETTES } from '../components/settings/SettingsCategoryContent';
 
 const themesCssPath = resolve(__dirname, '../styles/themes.css');
 const themesCss = readFileSync(themesCssPath, 'utf8');
@@ -185,5 +186,85 @@ describe('Graphite Unified Sky Indigo theme tokens', () => {
     expect(resolveToken(lightTokens, '--selection-bg')).not.toBe(
       resolveToken(lightTokens, '--workbench-playing-bg'),
     );
+  });
+
+  it('locks exact Dark Graphite and Light primary action states and foreground contrasts', () => {
+    // Dark Graphite: light Indigo background with dark on-accent foreground
+    const darkOnAccent = resolveToken(darkTokens, '--on-accent');
+    expect(darkOnAccent).toBe('#11131a');
+    expect(resolveToken(darkTokens, '--accent-fill')).toBe('#8e9dff');
+    expect(resolveToken(darkTokens, '--accent-fill-hover')).toBe('#a3b0ff');
+    expect(resolveToken(darkTokens, '--accent-fill-pressed')).toBe('#7888f0');
+    expect(
+      contrastRatio(darkOnAccent, resolveToken(darkTokens, '--accent-fill')),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(darkOnAccent, resolveToken(darkTokens, '--accent-fill-hover')),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(darkOnAccent, resolveToken(darkTokens, '--accent-fill-pressed')),
+    ).toBeGreaterThanOrEqual(4.5);
+
+    // Light appearance: deep Indigo background with white on-accent foreground
+    const lightOnAccent = resolveToken(lightTokens, '--on-accent');
+    expect(lightOnAccent).toBe('#ffffff');
+    expect(resolveToken(lightTokens, '--accent-fill')).toBe('#3c54cf');
+    expect(resolveToken(lightTokens, '--accent-fill-hover')).toBe('#3248ba');
+    expect(resolveToken(lightTokens, '--accent-fill-pressed')).toBe('#293da3');
+    expect(
+      contrastRatio(lightOnAccent, resolveToken(lightTokens, '--accent-fill')),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(lightOnAccent, resolveToken(lightTokens, '--accent-fill-hover')),
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(
+      contrastRatio(lightOnAccent, resolveToken(lightTokens, '--accent-fill-pressed')),
+    ).toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('meets WCAG AA contrast across all six Dark Palette primary fill and on-accent pairs', () => {
+    const paletteIds = [
+      'graphite',
+      'aurora',
+      'minimalist',
+      'slate',
+      'cyberpunk',
+      'classic',
+    ] as const;
+    for (const id of paletteIds) {
+      const tokens =
+        id === 'graphite'
+          ? darkTokens
+          : extractBlock(new RegExp(`html\\[data-palette='${id}'\\]\\s*\\{([\\s\\S]*?)\\r?\\n\\}`));
+      const fill = resolveToken(tokens, '--accent-fill');
+      const onAccent = resolveToken(tokens, '--on-accent');
+      const ratio = contrastRatio(onAccent, fill);
+      expect(
+        ratio,
+        `Palette ${id} primary fill (${fill}) with on-accent (${onAccent}) contrast ratio: ${ratio}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('guarantees palette preview swatches match canonical theme declarations across all six palettes', () => {
+    for (const palette of PALETTES) {
+      const tokens =
+        palette.id === 'graphite'
+          ? darkTokens
+          : extractBlock(
+              new RegExp(`html\\[data-palette='${palette.id}'\\]\\s*\\{([\\s\\S]*?)\\r?\\n\\}`),
+            );
+      const expectedCanvas = resolveToken(tokens, '--canvas');
+      const expectedPanel = resolveToken(tokens, '--surface-panel');
+      const expectedRaised = resolveToken(tokens, '--surface-raised');
+      const expectedAccentFill = resolveToken(tokens, '--accent-fill');
+
+      expect(palette.swatches[0], `${palette.id} canvas swatch`).toBe(expectedCanvas);
+      expect(palette.swatches[1], `${palette.id} panel swatch`).toBe(expectedPanel);
+      expect(palette.swatches[2], `${palette.id} raised surface swatch`).toBe(expectedRaised);
+      expect(palette.swatches[3], `${palette.id} primary accent fill swatch`).toBe(
+        expectedAccentFill,
+      );
+    }
   });
 });
