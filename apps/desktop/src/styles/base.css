@@ -618,13 +618,18 @@ h3 {
   .icon-button:not(.button-primary):not(.button-danger),
   .caption-button,
   .library-menu-item,
-  .library-nav-item,
-  .settings-nav-item,
+  .library-nav-item:not(.is-active),
+  .settings-nav-item:not(.is-active),
   .track-actions-button,
   .track-like-button,
   [role='tab']
 ):disabled,
-:is(.library-menu-item, .library-nav-item, .settings-nav-item, [role='tab'])[aria-disabled='true'] {
+:is(
+  .library-menu-item,
+  .library-nav-item:not(.is-active),
+  .settings-nav-item:not(.is-active),
+  [role='tab']
+)[aria-disabled='true'] {
   border-color: transparent;
   color: var(--workbench-control-disabled);
   background-color: transparent;

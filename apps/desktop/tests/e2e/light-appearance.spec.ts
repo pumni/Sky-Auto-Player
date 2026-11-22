@@ -449,6 +449,26 @@ test('Light contrast holds in pagination loading, empty library, Calibration, an
 
   await openLightApp(page, 'mockLibraryState=empty');
   await expect(page.locator('.empty-state strong')).toHaveText('No Built-in Songs are available');
+  const emptyBuiltinNav = page.locator('.library-primary-items .library-nav-item').first();
+  await expect(emptyBuiltinNav).toBeVisible();
+  await expect(emptyBuiltinNav.locator('.library-nav-item-label')).toHaveText('Built-in Songs');
+  await expect(emptyBuiltinNav).toHaveClass(/is-active/);
+  await expect(emptyBuiltinNav).toHaveAttribute('aria-current', 'page');
+  await expect(emptyBuiltinNav).toBeEnabled();
+  const emptyNavStyles = await emptyBuiltinNav.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const label = element.querySelector('.library-nav-item-label');
+    const labelStyle = label ? getComputedStyle(label) : style;
+    return {
+      color: labelStyle.color,
+      backgroundColor: style.backgroundColor,
+    };
+  });
+  expect(emptyNavStyles.color).toBe('rgb(37, 42, 49)');
+  expect(emptyNavStyles.backgroundColor).toBe('rgb(234, 239, 254)');
+  expect(
+    contrastRatio(emptyNavStyles.color, emptyNavStyles.backgroundColor),
+  ).toBeGreaterThanOrEqual(4.5);
   await textAudit(page, 'Light empty library');
   await expectNoSeriousAccessibilityViolations(page);
 
@@ -689,6 +709,124 @@ test('Light preserves approved geometry across native and compact browser sizes'
   await page.setViewportSize({ width: 640, height: 448 });
   await openInspector(page, 'Runtime');
   await expect(page.locator('.utility-workbench-pane')).toHaveClass(/is-overlay/);
+  await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('Light and Graphite library navigation states hold contrast across empty, unavailable, loading, and active combinations', async ({
+  page,
+}) => {
+  // 1. Light mode - Available library (default)
+  await openLightApp(page);
+  const activeNav = page.locator('.library-primary-items .library-nav-item').first();
+  await expect(activeNav).toBeVisible();
+  await expect(activeNav).toHaveClass(/is-active/);
+  await expect(activeNav).toBeEnabled();
+  const availableStyles = await activeNav.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const label = element.querySelector('.library-nav-item-label');
+    return {
+      color: (label ? getComputedStyle(label) : style).color,
+      backgroundColor: style.backgroundColor,
+    };
+  });
+  expect(availableStyles.color).toBe('rgb(37, 42, 49)');
+  expect(availableStyles.backgroundColor).toBe('rgb(234, 239, 254)');
+  expect(
+    contrastRatio(availableStyles.color, availableStyles.backgroundColor),
+  ).toBeGreaterThanOrEqual(4.5);
+  await textAudit(page, 'Light available library');
+  await expectNoSeriousAccessibilityViolations(page);
+
+  // 2. Light mode - Unavailable library (active + disabled combination)
+  await openLightApp(page, 'mockBuiltinAvailable=0');
+  await expect(page.locator('.empty-state strong')).toHaveText('Built-in Songs are unavailable');
+  const unavailableNav = page.locator('.library-primary-items .library-nav-item').first();
+  await expect(unavailableNav).toBeVisible();
+  await expect(unavailableNav).toBeDisabled();
+  await expect(unavailableNav).toHaveClass(/is-active/);
+  const unavailableStyles = await unavailableNav.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const label = element.querySelector('.library-nav-item-label');
+    return {
+      color: (label ? getComputedStyle(label) : style).color,
+      backgroundColor: style.backgroundColor,
+    };
+  });
+  expect(unavailableStyles.color).toBe('rgb(37, 42, 49)');
+  expect(unavailableStyles.backgroundColor).toBe('rgb(234, 239, 254)');
+  expect(
+    contrastRatio(unavailableStyles.color, unavailableStyles.backgroundColor),
+  ).toBeGreaterThanOrEqual(4.5);
+  await textAudit(page, 'Light unavailable library');
+  await expectNoSeriousAccessibilityViolations(page);
+
+  // 3. Light mode - Navigation failure (error state)
+  await openLightApp(page, 'mockNavigationFailures=1');
+  await expect(page.locator('[role="alert"]')).toContainText(
+    'Couldn’t check Built-in Songs or playlists',
+  );
+  const errorNav = page.locator('.library-primary-items .library-nav-item').first();
+  await expect(errorNav).toBeVisible();
+  await expect(errorNav).toBeDisabled();
+  await expect(errorNav).toHaveClass(/is-active/);
+  const errorStyles = await errorNav.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const label = element.querySelector('.library-nav-item-label');
+    return {
+      color: (label ? getComputedStyle(label) : style).color,
+      backgroundColor: style.backgroundColor,
+    };
+  });
+  expect(errorStyles.color).toBe('rgb(37, 42, 49)');
+  expect(errorStyles.backgroundColor).toBe('rgb(234, 239, 254)');
+  expect(contrastRatio(errorStyles.color, errorStyles.backgroundColor)).toBeGreaterThanOrEqual(4.5);
+  await textAudit(page, 'Light navigation error');
+  await expectNoSeriousAccessibilityViolations(page);
+
+  // 4. Dark Graphite - Empty library
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce', forcedColors: 'none' });
+  await page.goto('/?mockLibraryState=empty');
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
+  const darkNav = page.locator('.library-primary-items .library-nav-item').first();
+  await expect(darkNav).toBeVisible();
+  await expect(darkNav).toHaveClass(/is-active/);
+  await expect(darkNav).toBeEnabled();
+  const darkStyles = await darkNav.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const label = element.querySelector('.library-nav-item-label');
+    return {
+      color: (label ? getComputedStyle(label) : style).color,
+      backgroundColor: style.backgroundColor,
+    };
+  });
+  expect(darkStyles.color).toBe('rgb(226, 228, 232)');
+  expect(darkStyles.backgroundColor).toBe('rgb(34, 37, 52)');
+  expect(contrastRatio(darkStyles.color, darkStyles.backgroundColor)).toBeGreaterThanOrEqual(4.5);
+  await textAudit(page, 'Graphite Dark empty library');
+  await expectNoSeriousAccessibilityViolations(page);
+
+  // 5. Dark Graphite - Unavailable library (active + disabled combination)
+  await page.goto('/?mockBuiltinAvailable=0');
+  await expect(page.locator('.empty-state strong')).toHaveText('Built-in Songs are unavailable');
+  const darkUnavailableNav = page.locator('.library-primary-items .library-nav-item').first();
+  await expect(darkUnavailableNav).toBeVisible();
+  await expect(darkUnavailableNav).toBeDisabled();
+  await expect(darkUnavailableNav).toHaveClass(/is-active/);
+  const darkUnavailableStyles = await darkUnavailableNav.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const label = element.querySelector('.library-nav-item-label');
+    return {
+      color: (label ? getComputedStyle(label) : style).color,
+      backgroundColor: style.backgroundColor,
+    };
+  });
+  expect(darkUnavailableStyles.color).toBe('rgb(226, 228, 232)');
+  expect(darkUnavailableStyles.backgroundColor).toBe('rgb(34, 37, 52)');
+  expect(
+    contrastRatio(darkUnavailableStyles.color, darkUnavailableStyles.backgroundColor),
+  ).toBeGreaterThanOrEqual(4.5);
+  await textAudit(page, 'Graphite Dark unavailable library');
   await expectNoSeriousAccessibilityViolations(page);
 });
 

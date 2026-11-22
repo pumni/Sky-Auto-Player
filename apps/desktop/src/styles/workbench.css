@@ -232,12 +232,12 @@ body.is-resizing .workbench-pane {
   background: var(--control-hover);
 }
 
-.library-nav-item:disabled {
+.library-nav-item:not(.is-active):disabled {
   color: var(--workbench-control-disabled);
   cursor: not-allowed;
 }
 
-.library-nav-item:disabled:hover {
+.library-nav-item:not(.is-active):disabled:hover {
   color: var(--workbench-control-disabled);
   background: transparent;
 }
@@ -1993,7 +1993,11 @@ body.is-resizing .workbench-pane {
 }
 
 .library-nav-item.is-active,
-.library-nav-action-row.is-active {
+.library-nav-action-row.is-active,
+.library-nav-item.is-active:disabled,
+.library-nav-action-row.is-active:disabled,
+.library-nav-item.is-active[aria-disabled='true'],
+.library-nav-action-row.is-active[aria-disabled='true'] {
   color: var(--text-primary);
   background-color: var(--selection-bg);
 }
