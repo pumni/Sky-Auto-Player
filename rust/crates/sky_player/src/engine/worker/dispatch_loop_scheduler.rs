@@ -304,56 +304,7 @@ fn evaluate_scheduler_action_for_staging(
 
 struct SchedulerStageAdmission<'a> {
     target: &'a SessionTarget,
-    require_focus: bool,
-    focus_active: &'a AtomicBool,
     capture_up_slot_timings: bool,
-    control_signals: FinalControlSignals<'a>,
-}
-
-fn stage_up_only_after_mixed_replan(
-    up_mask: u16,
-    timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
-    admission: SchedulerStageAdmission<'_>,
-    resources: &mut super::WorkerResources,
-    runtime: &mut super::WorkerRuntime,
-) -> Result<Option<StagedCandidate>, String> {
-    if up_mask == 0
-        || !focus_matches(admission.require_focus, admission.focus_active)
-        || !matches!(
-            final_control_precheck(admission.control_signals),
-            FinalControlAdmission::Allowed
-        )
-    {
-        return Ok(None);
-    }
-
-    let Some(mut candidate) = stage_candidate(
-        up_mask,
-        None,
-        timing_window,
-        admission.capture_up_slot_timings,
-        admission.target,
-        resources,
-        runtime,
-    )?
-    else {
-        return Ok(None);
-    };
-    candidate.timing_window = up_only_timing_window(
-        candidate.timing_window,
-        candidate.up_slot_timing_summary,
-    )?;
-    candidate.authored_target_qpc = candidate.timing_window.authored_target_qpc;
-    candidate.authored_target_ticks = sky_dispatch_core::time::TimelineTicks::from_raw(
-        candidate
-            .authored_target_qpc
-            .checked_duration_since(resources.playback.epoch)
-            .map_err(|error| {
-                format!("Up-only authored target precedes playback epoch: {error}")
-            })?
-            .as_u64(),
-    );
-    Ok(Some(candidate))
 }
 
 fn up_only_timing_window(
@@ -362,7 +313,7 @@ fn up_only_timing_window(
 ) -> Result<sky_dispatch_core::executor::DispatchTimingWindow, String> {
     let summary = summary
         .filter(|summary| summary.slot_count != 0)
-        .ok_or_else(|| "Up-only fallback has no active scheduler Up slots".to_string())?;
+        .ok_or_else(|| "Up-only selection has no active scheduler Up slots".to_string())?;
     timing_window.authored_target_qpc = summary.authored_target_qpc;
     timing_window.musical_up_not_before_qpc = summary.musical_up_not_before_qpc;
     timing_window.down_not_before_qpc = summary.authored_target_qpc;
@@ -392,24 +343,6 @@ fn stage_scheduler_send_candidate(
         timing_window,
         admission.capture_up_slot_timings,
         admission.target,
-        resources,
-        runtime,
-    )
-}
-
-fn stage_up_only_for_mixed_replan(
-    candidate: &StagedCandidate,
-    staging: SchedulerStageAdmission<'_>,
-    resources: &mut super::WorkerResources,
-    runtime: &mut super::WorkerRuntime,
-) -> Result<Option<StagedCandidate>, String> {
-    if candidate.target_stamp.is_none() {
-        return Ok(None);
-    }
-    stage_up_only_after_mixed_replan(
-        candidate.up_mask,
-        candidate.timing_window,
-        staging,
         resources,
         runtime,
     )
@@ -1087,7 +1020,7 @@ mod scheduler_tests {
 }
 
 fn sender_failure_record(
-    candidate: &StagedCandidate,
+    candidate: &EffectivePacket<'_>,
     outcome: &sky_dispatch_win32::input::SendTransactionOutcome,
 ) -> String {
     let evidence = outcome.evidence;
@@ -1095,13 +1028,14 @@ fn sender_failure_record(
         .down_chord
         .as_ref()
         .map_or_else(|| "none".to_string(), |chord| chord.chord_index.to_string());
+    let packet = candidate.packet();
     format!(
         "source_action={} source_chord={} up_mask=0x{:04x} down_mask=0x{:04x} requested={} confirmed_count={} first_inserted={} attempts={} status={:?} retry_reason={:?} win32_error={:?} pre_call_qpc={} completion_qpc={} timing_error={:?}",
         candidate.source_action_index,
         source_chord,
-        candidate.packet_masks.up_mask,
-        candidate.packet_masks.down_mask,
-        candidate.packet_masks.event_count(),
+        packet.up_mask,
+        packet.down_mask,
+        packet.event_count(),
         evidence.confirmed_mask.count_ones(),
         evidence.first_inserted,
         evidence.attempts,
@@ -1114,17 +1048,18 @@ fn sender_failure_record(
     )
 }
 
-fn gate_rejection_record(candidate: &StagedCandidate, reason: &str) -> String {
+fn gate_rejection_record(candidate: &EffectivePacket<'_>, reason: &str) -> String {
     let source_chord = candidate
         .down_chord
         .as_ref()
         .map_or_else(|| "none".to_string(), |chord| chord.chord_index.to_string());
+    let packet = candidate.packet();
     format!(
         "dispatch gate rejected before SendInput: source_action={} source_chord={} up_mask=0x{:04x} down_mask=0x{:04x} requested={} confirmed_count=unavailable first_inserted=unavailable attempts=0 status=gate_rejected win32_error=unavailable pre_call_qpc=unavailable completion_qpc=unavailable: {reason}",
         candidate.source_action_index,
         source_chord,
-        candidate.packet_masks.up_mask,
-        candidate.packet_masks.down_mask,
-        candidate.packet_masks.event_count(),
+        packet.up_mask,
+        packet.down_mask,
+        packet.event_count(),
     )
 }

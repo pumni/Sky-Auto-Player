@@ -56,11 +56,12 @@ pub(crate) enum FinalGateRejection {
     LeaseUnproven,
 }
 
-/// Take the single enabled-lease age sample for eligible Down traffic and
-/// apply the bounded supervisor proof. A disabled timeout preserves the
-/// existing diagnostic-only behavior without reading QPC or lease state.
+/// Take the single enabled-lease age sample for an admitted packet and apply
+/// the bounded supervisor proof. Both Down-bearing and Up-only packets use
+/// this policy. A disabled timeout preserves the existing diagnostic-only
+/// behavior without reading QPC or lease state.
 #[inline(always)]
-pub(crate) fn final_down_lease_age_proof(
+pub(crate) fn final_packet_lease_age_proof(
     lease: &SupervisorLeaseState,
     timeout_ticks: DurationTicks,
     qpc_clock: QpcClock,
@@ -318,6 +319,13 @@ pub(crate) fn apply_final_down_rejection(
         FinalDownVerdict::LeaseUnproven => FinalGateRejection::LeaseUnproven,
     };
     record_final_gate_rejection(local_metrics, rejection);
+
+    #[cfg(test)]
+    if matches!(verdict, FinalDownVerdict::FocusLost)
+        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
+    {
+        hook.record_final_gate_focus_rejection_for_test();
+    }
 
     match verdict {
         FinalDownVerdict::ControlRejected => runtime.verified_target = None,
@@ -638,11 +646,6 @@ impl MusicalPacketKind {
     pub(crate) fn has_down(self) -> bool {
         matches!(self, Self::DownOnly | Self::Mixed)
     }
-
-    #[inline(always)]
-    pub(crate) fn has_up(self) -> bool {
-        matches!(self, Self::UpOnly | Self::Mixed)
-    }
 }
 
 #[derive(Debug)]
@@ -719,7 +722,7 @@ pub(crate) fn verify_final_packet_admission(
     }
 
     // 4. Supervisor lease proof with bounded age sample.
-    let lease_proof = match final_down_lease_age_proof(
+    let lease_proof = match final_packet_lease_age_proof(
         control_signals.supervisor_expired,
         lease_timeout_ticks,
         qpc_clock,

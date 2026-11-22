@@ -4,7 +4,7 @@ use super::support::{
 };
 
 #[test]
-fn complete_transport_with_sender_timing_error_reconciles_before_continuation() {
+fn complete_transport_with_sender_timing_error_is_reconciled_by_terminal_cleanup() {
     use sky_dispatch_win32::clock::QpcError;
 
     let mut harness = ProductionDispatchTestHarness::new_down_only();
@@ -48,9 +48,8 @@ fn complete_transport_with_sender_timing_error_reconciles_before_continuation() 
     assert!(
         harness
             .runtime
-            .attempted_dispatch_anomalies
-            .details()
-            .first()
+            .attempted_dispatch_anomaly
+            .detail()
             .is_some_and(|record| record.contains("timing_error=Some(CounterUnavailable)"))
     );
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
@@ -119,9 +118,8 @@ fn complete_status_without_completion_qpc_is_reconciled_without_fabricating_time
     assert!(
         harness
             .runtime
-            .attempted_dispatch_anomalies
-            .details()
-            .first()
+            .attempted_dispatch_anomaly
+            .detail()
             .is_some_and(|error| error.contains("completion_qpc=unavailable"))
     );
     assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
@@ -185,9 +183,8 @@ fn complete_status_without_pre_call_qpc_is_reconciled_without_fabricating_time()
     assert!(
         harness
             .runtime
-            .attempted_dispatch_anomalies
-            .details()
-            .first()
+            .attempted_dispatch_anomaly
+            .detail()
             .is_some_and(|error| error.contains("pre_call_qpc=unavailable"))
     );
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);
@@ -253,9 +250,8 @@ fn complete_status_with_invalid_qpc_order_is_reconciled_without_clock_substituti
     assert!(
         harness
             .runtime
-            .attempted_dispatch_anomalies
-            .details()
-            .first()
+            .attempted_dispatch_anomaly
+            .detail()
             .is_some_and(|error| error.contains("completion_qpc="))
     );
     assert_eq!(harness.local_metrics.precision_packet_attempts, 1);

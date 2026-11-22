@@ -642,6 +642,13 @@ mod tests {
     }
 
     #[test]
+    fn six_sample_p99_is_the_maximum_by_nearest_rank() {
+        let mut samples = [10_u64, 20, 30, 40, 50, 60];
+        samples.sort_unstable();
+        assert_eq!(percentile_from_sorted(&samples, 99), 60);
+    }
+
+    #[test]
     fn interrupt_before_target_is_classified_as_interrupted() {
         assert_eq!(
             classify_wake(QpcTicks::from_raw(10), QpcTicks::from_raw(11)),

@@ -291,6 +291,8 @@ pub struct StartupOrderingHook {
     startup_checkpoint_lock: std::sync::Mutex<()>,
     startup_checkpoint_cv: std::sync::Condvar,
     #[cfg(test)]
+    final_gate_focus_rejection_count: AtomicU64,
+    #[cfg(test)]
     complete_startup_calibration_after_checkpoint: AtomicBool,
     panic_startup_checkpoint: AtomicU8,
     fail_worker_spawn: AtomicBool,
@@ -527,6 +529,18 @@ impl StartupOrderingHook {
         self.startup_checkpoint_released
             .store(true, Ordering::Release);
         self.startup_checkpoint_cv.notify_all();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_final_gate_focus_rejection_for_test(&self) {
+        self.final_gate_focus_rejection_count
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn final_gate_focus_rejection_count_for_test(&self) -> u64 {
+        self.final_gate_focus_rejection_count
+            .load(Ordering::Acquire)
     }
 
     pub(crate) fn visit_startup_checkpoint(&self, checkpoint: StartupCheckpoint) {

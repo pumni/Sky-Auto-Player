@@ -79,8 +79,8 @@ impl Worker<'_> {
                 abort_counts: std::mem::take(&mut core.errors.abort_counts),
                 terminal_error: std::mem::take(&mut core.runtime.terminal_error),
                 secondary_errors: std::mem::take(&mut core.errors.secondary),
-                attempted_dispatch_anomalies: std::mem::take(
-                    &mut core.runtime.attempted_dispatch_anomalies,
+                attempted_dispatch_anomaly: std::mem::take(
+                    &mut core.runtime.attempted_dispatch_anomaly,
                 ),
                 last_published_error: std::mem::take(&mut core.errors.last_published),
                 terminal_trigger: core.runtime.terminal_trigger.take(),

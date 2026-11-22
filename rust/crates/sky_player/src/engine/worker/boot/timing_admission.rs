@@ -1,6 +1,6 @@
 use crate::engine::config::{EffectiveRuntimePolicy, WorkerConfig};
 use crate::engine::worker::WorkerTimingState;
-use crate::engine::{DurationTicks, QpcClock};
+use crate::engine::{CPU_METRICS_SAMPLE_INTERVAL_US, DurationTicks, QpcClock};
 
 pub(super) struct ConvertedTiming {
     pub(super) min_hold_ticks: DurationTicks,
@@ -73,6 +73,9 @@ pub(super) fn convert(
     let pre_call_10ms_ticks = qpc_clock
         .duration_from_us(10_001)
         .map_err(|error| format!("SendInput 10ms threshold conversion failed: {error:?}"))?;
+    let cpu_metrics_sample_interval_ticks = qpc_clock
+        .duration_from_us(CPU_METRICS_SAMPLE_INTERVAL_US)
+        .map_err(|error| format!("CPU metrics sample interval conversion failed: {error:?}"))?;
 
     Ok(ConvertedTiming {
         min_hold_ticks,
@@ -94,10 +97,11 @@ pub(super) fn convert(
             pre_call_2ms_ticks,
             pre_call_5ms_ticks,
             pre_call_10ms_ticks,
+            cpu_metrics_sample_interval_ticks,
             start_wall_time_us: 0,
             start_thread_cpu_us: 0,
             start_process_cpu_us: 0,
-            last_cpu_metrics_sample_us: 0,
+            last_cpu_metrics_sample_ticks: 0,
         },
     })
 }

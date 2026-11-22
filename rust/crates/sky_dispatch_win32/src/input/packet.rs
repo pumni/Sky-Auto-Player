@@ -22,6 +22,7 @@ pub const MAX_PACKET_EVENTS: usize = MAX_KEYS;
 pub struct PreparedPhysicalPacket {
     packet: PhysicalPacket,
     length: u8,
+    up_length: u8,
     #[cfg(windows)]
     inputs:
         [MaybeUninit<windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT>; MAX_PACKET_EVENTS],
@@ -34,6 +35,7 @@ pub struct PreparedPhysicalPacket {
 #[derive(Clone, Copy)]
 pub struct PreparedPacketView<'a> {
     packet: PhysicalPacket,
+    length: u8,
     #[cfg(windows)]
     inputs: &'a [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT],
 }
@@ -81,6 +83,7 @@ impl PreparedPhysicalPacket {
         Ok(Self {
             packet,
             length: length as u8,
+            up_length: packet.up_mask.count_ones() as u8,
             #[cfg(windows)]
             inputs,
         })
@@ -96,11 +99,12 @@ impl PreparedPhysicalPacket {
         self.length
     }
 
-    pub(crate) fn as_view(&self) -> PreparedPacketView<'_> {
+    pub fn as_view(&self) -> PreparedPacketView<'_> {
         #[cfg(windows)]
         {
             PreparedPacketView {
                 packet: self.packet,
+                length: self.length,
                 inputs: self.initialized_inputs(),
             }
         }
@@ -108,7 +112,39 @@ impl PreparedPhysicalPacket {
         {
             PreparedPacketView {
                 packet: self.packet,
+                length: self.length,
             }
+        }
+    }
+
+    /// Borrow the already initialized Up prefix of a prepared packet.
+    ///
+    /// Physical packet construction writes all Up events before any Down
+    /// events, so this view shares the original storage and needs no second
+    /// INPUT construction. The stored Up length was computed and validated
+    /// when the packet was prepared, before the dispatch deadline.
+    pub fn up_prefix_view(&self) -> Option<PreparedPacketView<'_>> {
+        if self.up_length == 0 {
+            return None;
+        }
+
+        #[cfg(windows)]
+        {
+            let inputs = self
+                .initialized_inputs()
+                .get(..usize::from(self.up_length))?;
+            Some(PreparedPacketView {
+                packet: PhysicalPacket::new(self.packet.up_mask, 0),
+                length: self.up_length,
+                inputs,
+            })
+        }
+        #[cfg(not(windows))]
+        {
+            Some(PreparedPacketView {
+                packet: PhysicalPacket::new(self.packet.up_mask, 0),
+                length: self.up_length,
+            })
         }
     }
 
@@ -131,8 +167,8 @@ impl<'a> PreparedPacketView<'a> {
     }
 
     #[inline]
-    fn event_count(self) -> u8 {
-        self.packet.event_count()
+    pub fn event_count(self) -> u8 {
+        self.length
     }
 }
 
@@ -1138,6 +1174,31 @@ mod tests {
                 .expect("fifteen-key packet prepares");
             assert_eq!(prepared.event_count(), MAX_PACKET_EVENTS as u8);
         }
+    }
+
+    #[test]
+    fn prepared_mixed_up_prefix_is_a_borrowed_initialized_prefix() {
+        for up_count in [1_u32, 5, 14] {
+            let up_mask = (1_u16 << up_count) - 1;
+            let down_count = 15 - up_count;
+            let down_mask = ((1_u16 << down_count) - 1) << up_count;
+            let packet = PhysicalPacket::new(up_mask, down_mask);
+            let prepared = PreparedPhysicalPacket::try_new(packet).expect("valid Mixed packet");
+            let full = prepared.as_view();
+            let prefix = prepared.up_prefix_view().expect("non-empty Up prefix");
+
+            assert_eq!(full.packet(), packet);
+            assert_eq!(full.event_count(), 15);
+            assert_eq!(prefix.packet(), PhysicalPacket::new(up_mask, 0));
+            assert_eq!(prefix.event_count(), up_count as u8);
+            assert_eq!(prefix.packet().event_count(), prefix.event_count());
+            #[cfg(windows)]
+            assert_eq!(prefix.inputs.as_ptr(), full.inputs.as_ptr());
+        }
+
+        let down_only = PreparedPhysicalPacket::try_new(PhysicalPacket::new(0, 1))
+            .expect("valid Down-only packet");
+        assert!(down_only.up_prefix_view().is_none());
     }
 
     #[test]

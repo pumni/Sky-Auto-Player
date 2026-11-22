@@ -80,14 +80,6 @@ impl TrackedKeyState {
         outcome
     }
 
-    #[cfg(test)]
-    pub(crate) fn send_prepared_physical_packet_view(
-        &mut self,
-        prepared: PreparedPacketView<'_>,
-    ) -> SendTransactionOutcome {
-        self.send_prepared_physical_packet_view_with_commit_policy(prepared, false)
-    }
-
     fn send_prepared_physical_packet_view_with_commit_policy(
         &mut self,
         prepared: PreparedPacketView<'_>,
@@ -521,7 +513,7 @@ impl TrackedKeyState {
         &mut self,
         prepared: &PreparedPhysicalPacket,
     ) -> SendTransactionOutcome {
-        self.send_prepared_physical_packet_view(prepared.as_view())
+        self.send_prepared_physical_packet_view_with_commit_policy(prepared.as_view(), false)
     }
 
     /// Production scheduler path: retain the in-flight transport journal until
@@ -531,12 +523,14 @@ impl TrackedKeyState {
         &mut self,
         prepared: &PreparedPhysicalPacket,
     ) -> SendTransactionOutcome {
-        self.send_prepared_physical_packet_at_final_boundary_deferred_commit_inner(prepared)
+        self.send_prepared_physical_packet_at_final_boundary_deferred_commit_inner(
+            prepared.as_view(),
+        )
     }
 
     fn send_prepared_physical_packet_at_final_boundary_deferred_commit_inner(
         &mut self,
-        prepared: &PreparedPhysicalPacket,
+        prepared: PreparedPacketView<'_>,
     ) -> SendTransactionOutcome {
         #[cfg(any(test, feature = "test-support"))]
         if prepared.packet().down_mask != 0
@@ -544,14 +538,14 @@ impl TrackedKeyState {
         {
             hook(prepared.packet().down_mask);
         }
-        self.send_prepared_physical_packet_view_with_commit_policy(prepared.as_view(), true)
+        self.send_prepared_physical_packet_view_with_commit_policy(prepared, true)
     }
 
     /// Worker-owned final-boundary sender which freezes the release origin
     /// before the syscall can create an in-flight or uncertain Down obligation.
     pub fn send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target(
         &mut self,
-        prepared: &PreparedPhysicalPacket,
+        prepared: PreparedPacketView<'_>,
         target_hwnd: isize,
         target_generation: u64,
     ) -> SendTransactionOutcome {
