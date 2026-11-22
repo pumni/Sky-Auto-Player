@@ -215,8 +215,6 @@ impl TrackedKeyState {
                 withheld_reason = Some("tracked cleanup origin is not foreground".into());
                 break;
             }
-            background_terminal_drain |= background_terminal;
-
             let cumulative_raw_calls = if is_worker_terminal {
                 if background_terminal {
                     start_terminal_background_invocations
@@ -285,6 +283,7 @@ impl TrackedKeyState {
                     Some(control) => control,
                     None => &mut default_drain_control,
                 };
+                let mut background_terminal_attempt = false;
                 let emitted = match self.do_emit_up_once(
                     prepared,
                     super::packet_send::CleanupSendContext {
@@ -293,6 +292,7 @@ impl TrackedKeyState {
                         admission: attempt_admission,
                         drain_control: drain_control_callback,
                         background_terminal_drain: &mut background_terminal_drain,
+                        background_terminal_attempt: &mut background_terminal_attempt,
                         raw_up_invocations: cumulative_raw_calls,
                         attempts: &mut attempts,
                     },
@@ -305,7 +305,7 @@ impl TrackedKeyState {
                 };
                 raw_up_invocations =
                     raw_up_invocations.saturating_add(u8::from(emitted.evidence.attempts != 0));
-                if background_terminal && emitted.evidence.attempts != 0 {
+                if background_terminal_attempt && emitted.evidence.attempts != 0 {
                     background_raw_up_invocations = background_raw_up_invocations.saturating_add(1);
                 }
                 let is_terminal_attempt = share_worker_terminal_budget

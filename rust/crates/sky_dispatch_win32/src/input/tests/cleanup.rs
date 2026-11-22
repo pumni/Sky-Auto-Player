@@ -1510,6 +1510,96 @@ fn terminal_background_drain_sends_one_best_effort_up_and_keeps_probe_residual()
 }
 
 #[test]
+fn final_background_admission_consumes_budget_after_foreground_precheck() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const TARGET: isize = 112;
+    let send_calls = Arc::new(AtomicUsize::new(0));
+    let sends = Arc::clone(&send_calls);
+    let mut backend = TrackedKeyState::new();
+    backend.active_mask = 1;
+    backend.set_release_owner_proof_for_test(
+        1,
+        crate::input::ReleaseOwnerProof::new(TARGET, 8, None, None).expect("test release origin"),
+    );
+    backend.set_terminal_up_emitter_for_test(move |packet| {
+        assert!(packet.is_up_only());
+        assert_eq!(packet.up_mask, 1);
+        assert_eq!(packet.down_mask, 0);
+        sends.fetch_add(1, Ordering::AcqRel);
+        super::super::outcome::TerminalUpTransportResult {
+            requested: packet.event_count(),
+            inserted: packet.event_count(),
+            started_ticks: None,
+            completed_ticks: None,
+            win32_error: 0,
+            timing_error: None,
+        }
+    });
+    backend.set_probe(|_, _| InstrumentPhysicalState::Inconclusive);
+
+    let mut drain_samples = 0;
+    let first = backend.release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+        TARGET,
+        |_, proof| {
+            assert_eq!(proof.target_hwnd(), TARGET);
+            Ok(())
+        },
+        || {
+            let sample = drain_samples;
+            drain_samples += 1;
+            Ok(match sample {
+                0 => crate::input::CleanupDrainDecision {
+                    terminal_requested: false,
+                    origin_foreground: true,
+                },
+                1 => crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: false,
+                },
+                _ => panic!("unexpected cleanup control sample {sample}"),
+            })
+        },
+    );
+
+    assert_eq!(drain_samples, 2, "outer and final send checks both ran");
+    assert_eq!(send_calls.load(Ordering::Acquire), 1);
+    assert_eq!(first.release_outcome.attempts, 1);
+    assert_eq!(first.needs_up_mask, 1, "background Up keeps its obligation");
+    assert_eq!(backend.release_obligation_mask(), 1);
+    assert_eq!(backend.needs_up_mask(), 1);
+    assert_eq!(backend.terminal_raw_up_invocations, 1);
+    assert_eq!(backend.terminal_background_raw_up_invocations, 1);
+
+    let finalizer = backend
+        .release_terminal_tracked_scope_with_attempt_admission_and_drain_control(
+            TARGET,
+            |_, proof| {
+                assert_eq!(proof.target_hwnd(), TARGET);
+                Ok(())
+            },
+            || {
+                Ok(crate::input::CleanupDrainDecision {
+                    terminal_requested: true,
+                    origin_foreground: false,
+                })
+            },
+        );
+
+    assert_eq!(finalizer.release_outcome.attempts, 0);
+    assert_eq!(
+        send_calls.load(Ordering::Acquire),
+        1,
+        "finalizer must send no second Up"
+    );
+    assert_eq!(backend.terminal_raw_up_invocations, 1);
+    assert_eq!(backend.terminal_background_raw_up_invocations, 1);
+    assert_eq!(finalizer.needs_up_mask, 1);
+    assert_eq!(backend.release_obligation_mask(), 1);
+    assert_eq!(backend.needs_up_mask(), 1);
+}
+
+#[test]
 fn recovery_final_foreground_loss_with_qpc_fallback_withholds_raw_up() {
     use std::cell::Cell;
     use std::sync::atomic::{AtomicUsize, Ordering};
