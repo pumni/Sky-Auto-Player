@@ -85,6 +85,25 @@ async function startFirstSong(store: ReturnType<typeof createDesktopStore>) {
 }
 
 describe('desktop store', () => {
+  it('checks updates once after bootstrap on each fresh app launch', async () => {
+    const bridge = createMockBridge();
+    const check = vi.spyOn(bridge, 'checkForUpdate');
+
+    const firstLaunch = createDesktopStore(bridge);
+    await act(async () => firstLaunch.getState().initialize());
+    await waitFor(() => expect(check).toHaveBeenCalledTimes(1));
+    await act(async () => firstLaunch.getState().initialize());
+    expect(check).toHaveBeenCalledTimes(1);
+
+    const secondLaunch = createDesktopStore(bridge);
+    await act(async () => secondLaunch.getState().initialize());
+    await waitFor(() => expect(check).toHaveBeenCalledTimes(2));
+    expect(check.mock.calls.map(([request]) => request.origin)).toEqual([
+      'background',
+      'background',
+    ]);
+  });
+
   it('defaults Shuffle off and persists Auto Play on', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());

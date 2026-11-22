@@ -1289,7 +1289,7 @@
 
 @media (max-height: 620px) {
   .settings-dialog {
-    height: min(640px, calc(100dvh - 24px));
+    height: min(640px, calc(100dvh - 32px));
     padding: 14px 16px 10px;
   }
 
@@ -1354,7 +1354,7 @@
 
 @media (max-width: 600px) {
   .settings-dialog {
-    height: min(680px, calc(100dvh - 24px));
+    height: min(680px, calc(100dvh - 32px));
     padding: 14px 14px 10px;
   }
 

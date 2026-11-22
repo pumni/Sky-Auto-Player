@@ -468,6 +468,55 @@ test('Playback Behavior stays usable in a compact Settings viewport', async ({ p
   }
 });
 
+test('Settings backdrop stays within the viewport without outer scrollbars', async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 560 });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+
+  for (const viewport of [
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+    { width: 560, height: 448 },
+    { width: 440, height: 360 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(dialog).toBeVisible();
+    const geometry = await page.evaluate(() => {
+      const backdrop = document.querySelector<HTMLElement>('.modal-backdrop');
+      const settingsDialog = document.querySelector<HTMLElement>('.settings-dialog');
+      const content = settingsDialog?.querySelector<HTMLElement>('.settings-content');
+      if (!backdrop || !settingsDialog || !content) return null;
+      const rect = settingsDialog.getBoundingClientRect();
+      return {
+        backdropClientWidth: backdrop.clientWidth,
+        backdropScrollWidth: backdrop.scrollWidth,
+        backdropClientHeight: backdrop.clientHeight,
+        backdropScrollHeight: backdrop.scrollHeight,
+        left: rect.left,
+        right: rect.right,
+        top: rect.top,
+        bottom: rect.bottom,
+        viewportWidth: window.innerWidth,
+        viewportHeight: window.innerHeight,
+        contentClientHeight: content.clientHeight,
+        contentScrollHeight: content.scrollHeight,
+      };
+    });
+    expect(geometry).not.toBeNull();
+    if (!geometry) continue;
+    expect(geometry.backdropScrollWidth).toBeLessThanOrEqual(geometry.backdropClientWidth + 1);
+    expect(geometry.backdropScrollHeight).toBeLessThanOrEqual(geometry.backdropClientHeight + 1);
+    expect(geometry.left).toBeGreaterThanOrEqual(15);
+    expect(geometry.top).toBeGreaterThanOrEqual(15);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth - 15);
+    expect(geometry.bottom).toBeLessThanOrEqual(geometry.viewportHeight - 15);
+    if (viewport.width === 440) {
+      expect(geometry.contentScrollHeight).toBeGreaterThan(geometry.contentClientHeight);
+    }
+  }
+});
+
 test('wide Diagnostics integrates as a workbench pane', async ({ page }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/');
