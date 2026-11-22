@@ -500,6 +500,10 @@ criteria = "safe-to-deploy"
 version = "1.2.2"
 criteria = "safe-to-deploy"
 
+[[exemptions.form_urlencoded]]
+version = "1.2.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.futures-channel]]
 version = "0.3.34"
 criteria = "safe-to-deploy"
