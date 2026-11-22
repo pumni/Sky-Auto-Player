@@ -284,8 +284,8 @@ test('Graphite appearance preserves semantic colors, hit targets, contrast, and 
     searchSurfaceToken: '#202123',
     searchEdge: 'rgb(61, 63, 67)',
     searchEdgeToken: '#3d3f43',
-    focusRing: 'rgb(150, 136, 198)',
-    focusRingToken: '#9688c6',
+    focusRing: 'rgb(139, 153, 235)',
+    focusRingToken: '#8b99eb',
   };
   expect(appearances).toHaveLength(4);
   for (const [index, item] of appearances.entries()) {

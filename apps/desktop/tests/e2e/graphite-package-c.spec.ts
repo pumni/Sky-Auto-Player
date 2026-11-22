@@ -169,6 +169,7 @@ async function applyVariant(page: Page, variant: Variant) {
         --primary-fill-hover: ${previewTokens.primaryFillHover};
         --primary-fill-pressed: ${previewTokens.primaryFillPressed};
         --focus-ring: ${previewTokens.focusRing};
+        --on-primary: #ffffff;
       }
     `,
   });
@@ -258,10 +259,8 @@ async function openSettingsAppearance(page: Page) {
   await page.getByRole('button', { name: 'Open settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await expect(dialog.getByLabel('Dark palette')).toHaveValue('graphite');
-  await expect(dialog.getByLabel('Dark palette').locator('option[value="graphite"]')).toHaveText(
-    'Graphite (Default)',
-  );
+  await expect(dialog.getByLabel('Dark palette')).toHaveAttribute('data-value', 'graphite');
+  await expect(dialog.getByLabel('Dark palette')).toHaveText('Graphite (Default)');
   return dialog;
 }
 
@@ -492,25 +491,34 @@ test('Graphite A and Soft Graphite preview consume semantic roles with contrast 
     const expected =
       variant === 'A-current'
         ? {
-            accentInk: '#b2a5e9',
-            primaryFill: '#705eae',
-            primaryFillHover: '#7564b4',
-            primaryFillPressed: '#6553a0',
-            focusRing: '#b2a5e9',
+            accentInk: '#9aa8ff',
+            accentInkHover: '#b0bcff',
+            primaryFill: '#8e9dff',
+            primaryFillHover: '#a3b0ff',
+            primaryFillPressed: '#7888f0',
+            focusRing: '#9aa8ff',
+            searchFocusRing: '#8b99eb',
+            selectionSurface: '#222534',
+            toggleActiveInk: '#9aa8ff',
+            workbenchAccentInk: '#9aa8ff',
+            workbenchToggleOn: '#9aa8ff',
+            workbenchSearchFocus: '#8b99eb',
+            workbenchFocus: '#9aa8ff',
+            workbenchAccentFill: '#8e9dff',
           }
-        : previewTokens;
-    expect(tokens).toMatchObject({
-      ...expected,
-      accentInkHover: '#c0b4f1',
-      searchFocusRing: '#9688c6',
-      selectionSurface: '#25242c',
-      toggleActiveInk: '#b68cff',
-      workbenchAccentInk: expected.accentInk,
-      workbenchToggleOn: '#b68cff',
-      workbenchSearchFocus: '#9688c6',
-      workbenchFocus: expected.focusRing,
-      workbenchAccentFill: expected.primaryFill,
-    });
+        : {
+            ...previewTokens,
+            accentInkHover: '#b0bcff',
+            searchFocusRing: '#8b99eb',
+            selectionSurface: '#222534',
+            toggleActiveInk: previewTokens.accentInk,
+            workbenchAccentInk: previewTokens.accentInk,
+            workbenchToggleOn: previewTokens.accentInk,
+            workbenchSearchFocus: '#8b99eb',
+            workbenchFocus: previewTokens.focusRing,
+            workbenchAccentFill: previewTokens.primaryFill,
+          };
+    expect(tokens).toMatchObject(expected);
     await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
 

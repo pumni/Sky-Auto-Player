@@ -345,16 +345,11 @@ pub fn validate(root: &Path) -> Result<()> {
     }
     let titlebar =
         fs::read_to_string(root.join("apps/desktop/src/components/chrome/AppTitleBar.tsx"))?;
-    for asset in [
-        "app-icon-32.png",
-        "app-icon-40.png",
-        "app-icon-48.png",
-        "app-icon-64.png",
-    ] {
-        if !titlebar.contains(asset) {
-            return Err(format!("desktop titlebar is missing density asset {asset}").into());
-        }
-    }
+    validate_desktop_titlebar_brand(
+        &titlebar,
+        &root.join("apps/desktop/src/assets/brand"),
+        &branding,
+    )?;
     for (name, size) in [
         ("app-icon-32.png", 32),
         ("app-icon-40.png", 40),
@@ -476,6 +471,37 @@ pub fn validate(root: &Path) -> Result<()> {
     Ok(())
 }
 
+pub fn validate_desktop_titlebar_brand(
+    titlebar_source: &str,
+    desktop_brand_dir: &Path,
+    canonical_branding_dir: &Path,
+) -> Result<()> {
+    for asset in ["mark-no-bg.svg", "mark-mono-dark.svg"] {
+        if !titlebar_source.contains(asset) {
+            return Err(format!("desktop titlebar is missing brand asset {asset}").into());
+        }
+    }
+    for (desktop_asset, canonical_asset) in [
+        ("mark-no-bg.svg", "sky-auto-player-mark-no-bg.svg"),
+        ("mark-mono-dark.svg", "sky-auto-player-mark-mono-dark.svg"),
+    ] {
+        let desktop_path = desktop_brand_dir.join(desktop_asset);
+        let canonical_path = canonical_branding_dir.join(canonical_asset);
+        if !desktop_path.exists() {
+            return Err(format!("desktop brand asset missing: {desktop_asset}").into());
+        }
+        let (desktop_text, desktop_doc) = validate_svg(&desktop_path, "0 0 128 128", &[])?;
+        let (canonical_text, _) = validate_svg(&canonical_path, "0 0 128 128", &[])?;
+        if desktop_text != canonical_text {
+            return Err(format!("desktop brand asset drift: {desktop_asset}").into());
+        }
+        if desktop_doc.root_element().attribute("viewBox") != Some("0 0 128 128") {
+            return Err(format!("{desktop_asset}: invalid viewBox").into());
+        }
+    }
+    Ok(())
+}
+
 fn document_view_box(path: &Path) -> Result<&'static str> {
     let text = fs::read_to_string(path)?;
     if text.contains("viewBox=\"0 0 540 180\"") {
@@ -526,6 +552,42 @@ mod tests {
     #[test]
     fn current_branding_passes_validation() {
         validate(&crate::repo::root()).expect("branding assets");
+    }
+
+    #[test]
+    fn desktop_titlebar_svg_branding_passes_validation() {
+        let root = crate::repo::root();
+        let titlebar =
+            fs::read_to_string(root.join("apps/desktop/src/components/chrome/AppTitleBar.tsx"))
+                .expect("titlebar component");
+        validate_desktop_titlebar_brand(
+            &titlebar,
+            &root.join("apps/desktop/src/assets/brand"),
+            &root.join("branding"),
+        )
+        .expect("titlebar branding");
+    }
+
+    #[test]
+    fn desktop_titlebar_svg_branding_rejects_missing_assets() {
+        let root = crate::repo::root();
+        let titlebar_missing_dark = "import brandMarkDarkUrl from '../../assets/brand/other.svg';\nimport brandMarkLightUrl from '../../assets/brand/mark-mono-dark.svg';";
+        let err = validate_desktop_titlebar_brand(
+            titlebar_missing_dark,
+            &root.join("apps/desktop/src/assets/brand"),
+            &root.join("branding"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("mark-no-bg.svg"));
+
+        let titlebar_missing_light = "import brandMarkDarkUrl from '../../assets/brand/mark-no-bg.svg';\nimport brandMarkLightUrl from '../../assets/brand/other.svg';";
+        let err = validate_desktop_titlebar_brand(
+            titlebar_missing_light,
+            &root.join("apps/desktop/src/assets/brand"),
+            &root.join("branding"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("mark-mono-dark.svg"));
     }
 
     #[test]

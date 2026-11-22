@@ -1083,7 +1083,7 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
     expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(playerBox.y + playerBox.height);
   }
   await expect(
-    confirmation.getByRole('button', { name: 'Proceed with current settings' }),
+    confirmation.getByRole('button', { name: 'Use recommended settings' }),
   ).toBeFocused();
   await expect(
     confirmation.getByRole('button', { name: 'Test playback (no input)' }),

@@ -8,43 +8,80 @@ interface WindowCaptionControlsProps {
 export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) {
   const [maximized, setMaximized] = useState(false);
   const [windowActive, setWindowActive] = useState(() => document.hasFocus());
-  const disposedRef = useRef(false);
+  const mountedRef = useRef(true);
+  const rafIdRef = useRef<number | null>(null);
+  const timeoutIdRef = useRef<number | null>(null);
 
   const refreshMaximized = useCallback(() => {
-    void controls.isMaximized().then((value) => {
-      if (!disposedRef.current) setMaximized(value);
-    });
+    void controls
+      .isMaximized()
+      .then((value) => {
+        if (mountedRef.current) setMaximized(value);
+      })
+      .catch(() => {});
   }, [controls]);
 
   const refreshSettled = useCallback(() => {
-    refreshMaximized();
-
     const requestFrame = window.requestAnimationFrame;
     if (typeof requestFrame !== 'function') {
-      window.setTimeout(refreshMaximized, 50);
+      if (timeoutIdRef.current !== null) window.clearTimeout(timeoutIdRef.current);
+      timeoutIdRef.current = window.setTimeout(() => {
+        timeoutIdRef.current = null;
+        refreshMaximized();
+      }, 50);
       return;
     }
 
-    requestFrame(() => {
-      if (disposedRef.current) return;
-      requestFrame(() => {
-        if (!disposedRef.current) refreshMaximized();
+    if (rafIdRef.current !== null) window.cancelAnimationFrame(rafIdRef.current);
+    rafIdRef.current = requestFrame(() => {
+      rafIdRef.current = requestFrame(() => {
+        rafIdRef.current = null;
+        if (mountedRef.current) refreshMaximized();
       });
     });
   }, [refreshMaximized]);
 
   useEffect(() => {
-    disposedRef.current = false;
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (timeoutIdRef.current !== null) {
+        window.clearTimeout(timeoutIdRef.current);
+        timeoutIdRef.current = null;
+      }
+      if (rafIdRef.current !== null) {
+        window.cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    let disposed = false;
     let unsubscribe: (() => void) | undefined;
 
-    refreshMaximized();
-    void controls.onResize(refreshSettled).then((cleanup) => {
-      if (disposedRef.current) cleanup();
-      else unsubscribe = cleanup;
-    });
+    void controls
+      .isMaximized()
+      .then((value) => {
+        if (!disposed) setMaximized(value);
+      })
+      .catch(() => {});
+
+    const handleResize = () => {
+      refreshMaximized();
+      refreshSettled();
+    };
+
+    void controls
+      .onResize(handleResize)
+      .then((cleanup) => {
+        if (disposed) cleanup();
+        else unsubscribe = cleanup;
+      })
+      .catch(() => {});
 
     return () => {
-      disposedRef.current = true;
+      disposed = true;
       unsubscribe?.();
     };
   }, [controls, refreshMaximized, refreshSettled]);
@@ -73,7 +110,7 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         aria-label="Minimize window"
         title="Minimize window"
         data-tauri-drag-region="false"
-        onClick={() => void controls.minimize()}
+        onClick={() => void controls.minimize().catch(() => {})}
       >
         <span className="caption-glyph caption-glyph-minimize" aria-hidden="true" />
       </button>
@@ -83,7 +120,12 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         aria-label={maximizeLabel}
         title={maximizeLabel}
         data-tauri-drag-region="false"
-        onClick={() => void controls.toggleMaximize().finally(refreshSettled)}
+        onClick={() =>
+          void controls
+            .toggleMaximize()
+            .catch(() => {})
+            .finally(refreshSettled)
+        }
       >
         <span
           className={`caption-glyph ${maximized ? 'caption-glyph-restore' : 'caption-glyph-maximize'}`}
@@ -96,7 +138,7 @@ export function WindowCaptionControls({ controls }: WindowCaptionControlsProps) 
         aria-label="Close window"
         title="Close window"
         data-tauri-drag-region="false"
-        onClick={() => void controls.close()}
+        onClick={() => void controls.close().catch(() => {})}
       >
         <span className="caption-glyph caption-glyph-close" aria-hidden="true" />
       </button>

@@ -63,11 +63,15 @@ describe('SettingsCategoryContent', () => {
       />,
     );
 
-    const palette = screen.getByLabelText('Dark palette');
+    const palette = screen.getByRole('combobox', { name: 'Dark palette' });
+    expect(palette).toHaveAttribute('data-value', 'graphite');
+    await act(async () => palette.click());
+
+    const options = screen.getAllByRole('option');
     expect(
-      Array.from((palette as HTMLSelectElement).options).map((option) => [
-        option.value,
-        option.textContent,
+      options.map((option) => [
+        option.getAttribute('data-value'),
+        option.querySelector('.app-select-option-label')?.textContent,
       ]),
     ).toEqual([
       ['graphite', 'Graphite (Default)'],
@@ -78,10 +82,7 @@ describe('SettingsCategoryContent', () => {
       ['classic', 'Classic'],
     ]);
 
-    await act(async () => {
-      (palette as HTMLSelectElement).value = 'slate';
-      palette.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await act(async () => screen.getByRole('option', { name: 'Slate' }).click());
     await waitFor(() => expect(store.getState().settings?.palette).toBe('slate'));
     expect(store.getState().settings?.appearance_mode).toBe('system');
   });
@@ -97,11 +98,15 @@ describe('SettingsCategoryContent', () => {
       />,
     );
 
-    const theme = screen.getByLabelText('Theme');
+    const theme = screen.getByRole('combobox', { name: 'Theme' });
+    expect(theme).toHaveAttribute('data-value', 'system');
+    await act(async () => theme.click());
+
+    const themeOptions = screen.getAllByRole('option');
     expect(
-      Array.from((theme as HTMLSelectElement).options).map((option) => [
-        option.value,
-        option.textContent,
+      themeOptions.map((option) => [
+        option.getAttribute('data-value'),
+        option.querySelector('.app-select-option-label')?.textContent,
       ]),
     ).toEqual([
       ['system', 'Follow Windows (recommended)'],
@@ -109,19 +114,40 @@ describe('SettingsCategoryContent', () => {
       ['dark', 'Dark'],
     ]);
 
-    await act(async () => {
-      (theme as HTMLSelectElement).value = 'light';
-      theme.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    await act(async () => screen.getByRole('option', { name: 'Light' }).click());
     await waitFor(() => expect(store.getState().settings?.appearance_mode).toBe('light'));
     expect(store.getState().settings?.palette).toBe('graphite');
 
-    const palette = screen.getByLabelText('Dark palette');
-    await act(async () => {
-      (palette as HTMLSelectElement).value = 'slate';
-      palette.dispatchEvent(new Event('change', { bubbles: true }));
-    });
+    const palette = screen.getByRole('combobox', { name: 'Dark palette' });
+    await act(async () => palette.click());
+    await act(async () => screen.getByRole('option', { name: 'Slate' }).click());
     await waitFor(() => expect(store.getState().settings?.palette).toBe('slate'));
     expect(store.getState().settings?.appearance_mode).toBe('light');
+  });
+
+  it('keeps exact accessible checkbox labels in Diagnostics and Updates', async () => {
+    const { store, bootstrap, settings } = await initializedStore();
+    const { rerender } = render(
+      <SettingsCategoryContent
+        category="diagnostics"
+        bootstrap={bootstrap}
+        settings={settings}
+        useStore={store}
+      />,
+    );
+    expect(screen.getByRole('checkbox', { name: 'Allow anonymous telemetry' })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: 'Verbose playback HUD' })).toBeInTheDocument();
+
+    rerender(
+      <SettingsCategoryContent
+        category="updates"
+        bootstrap={bootstrap}
+        settings={settings}
+        useStore={store}
+      />,
+    );
+    expect(
+      screen.getByRole('checkbox', { name: 'Check for updates automatically' }),
+    ).toBeInTheDocument();
   });
 });

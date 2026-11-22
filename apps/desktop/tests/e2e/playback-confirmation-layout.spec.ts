@@ -17,7 +17,7 @@ for (const viewport of [
     await expect(confirmation).toBeVisible();
     await expect(confirmation.getByText('Medium timing risk')).toBeVisible();
     await expect(
-      confirmation.getByRole('button', { name: 'Proceed with current settings' }),
+      confirmation.getByRole('button', { name: 'Use recommended settings' }),
     ).toBeFocused();
     const notNow = confirmation.getByRole('button', { name: 'Not now' });
     await expect(notNow).toBeVisible();

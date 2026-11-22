@@ -278,6 +278,7 @@ h3 {
   .utility-surface,
   .player-bar,
   .settings-dialog,
+  .calibration-dialog,
   .library-dialog {
     border-color: CanvasText;
     color: CanvasText;
@@ -444,6 +445,7 @@ h3 {
 }
 
 .settings-dialog,
+.calibration-dialog,
 .library-dialog {
   border-color: var(--border-strong);
   border-radius: var(--workbench-radius-2xl);
@@ -465,8 +467,7 @@ h3 {
 }
 
 .library-menu-popover,
-.track-menu-popover,
-.profile-popover {
+.track-menu-popover {
   border-color: var(--border-strong);
   border-radius: var(--workbench-radius-xl);
   background: var(--surface-raised);
@@ -617,13 +618,18 @@ h3 {
   .icon-button:not(.button-primary):not(.button-danger),
   .caption-button,
   .library-menu-item,
-  .library-nav-item,
-  .settings-nav-item,
+  .library-nav-item:not(.is-active),
+  .settings-nav-item:not(.is-active),
   .track-actions-button,
   .track-like-button,
   [role='tab']
 ):disabled,
-:is(.library-menu-item, .library-nav-item, .settings-nav-item, [role='tab'])[aria-disabled='true'] {
+:is(
+  .library-menu-item,
+  .library-nav-item:not(.is-active),
+  .settings-nav-item:not(.is-active),
+  [role='tab']
+)[aria-disabled='true'] {
   border-color: transparent;
   color: var(--workbench-control-disabled);
   background-color: transparent;

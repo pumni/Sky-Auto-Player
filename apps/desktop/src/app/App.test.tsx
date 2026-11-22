@@ -238,7 +238,8 @@ describe('desktop application shell', () => {
     });
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
-    expect(screen.getByLabelText('Dark palette')).toHaveValue('graphite');
+    expect(screen.getByLabelText('Dark palette')).toHaveAttribute('data-value', 'graphite');
+    expect(screen.getByLabelText('Dark palette')).toHaveTextContent('Graphite (Default)');
     fireEvent.click(screen.getByRole('button', { name: 'About' }));
     expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveTextContent('3.5.0-mock');
     expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveTextContent('Native ABI');
@@ -390,13 +391,15 @@ describe('desktop application shell', () => {
     await screen.findByRole('dialog', { name: 'Settings' });
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
     const theme = await screen.findByLabelText('Theme');
-    fireEvent.change(theme, { target: { value: 'light' } });
+    fireEvent.click(theme);
+    fireEvent.click(screen.getByRole('option', { name: 'Light' }));
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('light'));
 
     nativeWindow.emitTheme('dark');
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('light'));
 
-    fireEvent.change(theme, { target: { value: 'system' } });
+    fireEvent.click(theme);
+    fireEvent.click(screen.getByRole('option', { name: /Follow Windows/ }));
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('dark'));
   });
 

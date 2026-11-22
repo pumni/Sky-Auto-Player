@@ -1,6 +1,6 @@
 [package]
 name = "sky_desktop_shell"
-version = "4.4.1"
+version = "4.5.0"
 workspace = "../../../rust"
 edition.workspace = true
 rust-version.workspace = true
@@ -52,7 +52,7 @@ sky_native_adapters = { path = "../../../rust/crates/sky_native_adapters" }
 ts-rs = { version = "=12.0.1", features = ["serde-json-impl"] }
 thiserror = "2"
 getrandom = "0.4"
-url = "2.5.8"
+url = "2.5.9"
 
 [target.'cfg(windows)'.dependencies]
 raw-window-handle = "0.6"

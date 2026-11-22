@@ -427,7 +427,16 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   await expect(
     runtime.getByText('Mode: Dry run · no physical input sent', { exact: true }),
   ).toBeVisible();
-  await expect(runtime.getByText('Sender samples', { exact: true })).toBeVisible();
+  await expect(
+    runtime.getByText('Dry run · sender timing not measured', { exact: true }),
+  ).toBeVisible();
+  await expect(
+    runtime.getByText(
+      'This session sends no physical keyboard input. Start normal playback to collect physical sender measurements.',
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(runtime.getByText('Sender samples', { exact: true })).toHaveCount(0);
   await expect(runtimePlayer.locator('.player-track-copy strong')).toHaveText('Candle Run');
   measurements['runtime-1366x768'] = await page.evaluate(() => {
     const inspector = document.querySelector<HTMLElement>('.utility-surface');
@@ -435,6 +444,8 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     return {
       viewport: { width: innerWidth, height: innerHeight },
       inspector: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+      dryRun: true,
+      dryRunNotice: document.querySelector('.diagnostics-empty-state')?.textContent?.trim() ?? null,
       playbackSummary:
         document.querySelector('.diagnostics-playback-summary')?.textContent?.trim() ?? null,
       senderSummary:

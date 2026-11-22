@@ -296,6 +296,10 @@ describe('UpdateDialog', () => {
     render(<UpdateDialog useStore={useStore} />);
 
     expect(screen.getByText('Downloading update (32000/40000 bytes)')).toBeInTheDocument();
+    const progress = document.querySelector<HTMLProgressElement>('progress.update-progress-bar');
+    expect(progress).not.toBeNull();
+    expect(progress?.value).toBe(32_000);
+    expect(progress?.max).toBe(40_000);
   });
 
   it.each([

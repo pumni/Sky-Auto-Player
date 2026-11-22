@@ -21,6 +21,7 @@ export function useWorkbenchPreferences() {
       if (
         previous.navigatorPreference === candidate.navigatorPreference &&
         previous.expandedNavigatorWidth === candidate.expandedNavigatorWidth &&
+        previous.utilityPreference === candidate.utilityPreference &&
         previous.utilityWidth === candidate.utilityWidth &&
         previous.utilityOpen === candidate.utilityOpen
       )
@@ -33,6 +34,7 @@ export function useWorkbenchPreferences() {
       const persisted = updateWorkbenchPreferences({
         navigatorPreference: next.navigatorPreference,
         expandedNavigatorWidth: next.expandedNavigatorWidth,
+        utilityPreference: next.utilityPreference,
         utilityWidth: next.utilityWidth,
       });
       replace(persisted);

@@ -38,12 +38,10 @@ function BuiltinPagerNavigation({
   const pageErrorId = useId();
 
   useEffect(() => {
-    if (!editing) return;
-    const focusTimer = window.setTimeout(() => {
-      inputRef.current?.focus();
-      inputRef.current?.select();
-    }, 0);
-    return () => window.clearTimeout(focusTimer);
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
   }, [editing]);
 
   const pageDigits = String(pageCount).length;

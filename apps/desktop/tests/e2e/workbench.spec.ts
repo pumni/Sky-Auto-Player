@@ -89,8 +89,8 @@ async function readInspectorHeaderGeometry(page: Page) {
       '.utility-tabs',
       '.utility-header',
       '.utility-header-title',
-      '.utility-close-button',
-      '.utility-close-button svg',
+      '.utility-header > button',
+      '.utility-header > button svg',
       '.utility-view-tabs',
       '.utility-view-tabs [role="tab"]:first-child',
       '.utility-view-tabs [role="tab"]:last-child',
@@ -402,8 +402,8 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
     const baselineHeader = geometryFor('empty', '.utility-header');
     const baselineTabs = geometryFor('empty', '.utility-view-tabs');
     const baselineTitle = geometryFor('empty', '.utility-header-title');
-    const baselineClose = geometryFor('empty', '.utility-close-button');
-    const baselineCloseIcon = geometryFor('empty', '.utility-close-button svg');
+    const baselineClose = geometryFor('empty', '.utility-header > button');
+    const baselineCloseIcon = geometryFor('empty', '.utility-header > button svg');
     const baselineSurface = geometryFor('empty', '.utility-surface');
     const baselineDetailsTab = geometryFor('empty', '.utility-view-tabs [role="tab"]:first-child');
     const baselineRuntimeTab = geometryFor('empty', '.utility-view-tabs [role="tab"]:last-child');
@@ -433,10 +433,10 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
         expect(tab.borderBottomStyle).toBe('solid');
       }
       expect(selectedTab.backgroundColor).toBe('rgb(36, 37, 38)');
-      expect(selectedTab.color).toBe('rgb(178, 165, 233)');
-      expect(selectedTab.borderBottomColor).toBe('rgb(178, 165, 233)');
+      expect(selectedTab.color).toBe('rgb(154, 168, 255)');
+      expect(selectedTab.borderBottomColor).toBe('rgb(154, 168, 255)');
       expect(inactiveTab.backgroundColor).toBe('rgba(0, 0, 0, 0)');
-      expect(inactiveTab.color).toBe('rgb(166, 166, 166)');
+      expect(inactiveTab.color).toBe('rgb(166, 168, 173)');
       expect(inactiveTab.borderBottomColor).toBe('rgba(0, 0, 0, 0)');
       const textAlignment = tabTextAlignment[state];
       expect(textAlignment).toHaveLength(2);
@@ -454,8 +454,8 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       const header = geometryFor(state, '.utility-header');
       const tabs = geometryFor(state, '.utility-view-tabs');
       const headerTitle = geometryFor(state, '.utility-header-title');
-      const close = geometryFor(state, '.utility-close-button');
-      const closeIcon = geometryFor(state, '.utility-close-button svg');
+      const close = geometryFor(state, '.utility-header > button');
+      const closeIcon = geometryFor(state, '.utility-header > button svg');
       const surface = geometryFor(state, '.utility-surface');
       expect(Math.abs(header.x - baselineHeader.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(header.y - baselineHeader.y)).toBeLessThanOrEqual(1);
@@ -471,8 +471,8 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       expect(Math.abs(close.y - baselineClose.y)).toBeLessThanOrEqual(1);
       expect(Math.abs(closeIcon.x - baselineCloseIcon.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(closeIcon.y - baselineCloseIcon.y)).toBeLessThanOrEqual(1);
-      expect(Math.abs(close.width - 32)).toBeLessThanOrEqual(0.1);
-      expect(Math.abs(close.height - 32)).toBeLessThanOrEqual(0.1);
+      expect(Math.abs(close.width - 30)).toBeLessThanOrEqual(0.1);
+      expect(Math.abs(close.height - 30)).toBeLessThanOrEqual(0.1);
       expect(Math.abs(surface.width - baselineSurface.width)).toBeLessThanOrEqual(1);
       expect(Math.abs(close.right - (header.right - 14))).toBeLessThanOrEqual(1);
       expect(Math.abs(tabs.x - (header.x + 14))).toBeLessThanOrEqual(1);
@@ -503,8 +503,8 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       '.utility-tabs',
       '.utility-header',
       '.utility-header-title',
-      '.utility-close-button',
-      '.utility-close-button svg',
+      '.utility-header > button',
+      '.utility-header > button svg',
       '.utility-view-tabs',
       '.utility-content',
     ];

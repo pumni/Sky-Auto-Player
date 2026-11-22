@@ -1,5 +1,20 @@
 /* Palette selectors contain color roles only. Shared dimensions live in tokens.css and component styles. */
 /* Semantic palette roles stay canonical; workbench aliases retain component-specific surfaces. */
+/* Semantic accent contract:
+   - --accent-ink: Foreground accent for text/icons
+   - --accent-ink-hover: Hover foreground accent
+   - --accent-fill: Primary action background
+   - --accent-fill-hover: Primary hover background
+   - --accent-fill-pressed: Primary pressed background
+   - --on-accent: Foreground content on accent fill (dark on light indigo in Dark Graphite; white on deep indigo in Light)
+   - --focus-ring: Keyboard focus indicator
+   - --search-focus-ring: Search-specific focus indicator
+   - --toggle-active-ink: Enabled/active toggle emphasis
+   - --selection-bg: Selected navigation/row background
+   - --selection-indicator: Selected-state accent marker
+   - Compatibility aliases (--primary-fill, --on-primary, --workbench-accent-ink, --workbench-accent-fill, --workbench-toggle-on)
+     resolve through these canonical roles.
+*/
 :root {
   --canvas: #121314;
   --surface-panel: #191a1b;
@@ -7,12 +22,12 @@
   --surface-raised: #242526;
   --control-hover: #222324;
   --control-pressed: #404246;
-  --selection-bg: #25242c;
+  --selection-bg: #222534;
   --selection-row: var(--selection-bg);
   --selection-navigation: var(--selection-bg);
-  --selection-control: #302d38;
-  --selection-control-hover: #3b3646;
-  --selection-control-pressed: #474151;
+  --selection-control: #2b2f42;
+  --selection-control-hover: #34394f;
+  --selection-control-pressed: #3e445e;
   --selection-indicator: var(--accent-ink);
   --selection-row-indicator: var(--control-border);
   --border-subtle: #2a2b2c;
@@ -20,24 +35,24 @@
   --control-border: #72777d;
   --scrollbar-thumb: var(--border-strong);
   --scrollbar-thumb-hover: var(--text-tertiary);
-  --text-primary: #d4d4d4;
-  --text-secondary: #a6a6a6;
-  --text-tertiary: #929292;
-  --accent: #b2a5e9;
-  --accent-hover: #c0b4f1;
-  --accent-ink: #b2a5e9;
-  --accent-ink-hover: #c0b4f1;
-  --accent-fill: #705eae;
-  --accent-fill-hover: #7564b4;
-  --accent-fill-pressed: #6553a0;
-  --on-accent: #ffffff;
-  --focus-ring: #b2a5e9;
-  --search-focus-ring: #9688c6;
-  --toggle-active-ink: #b68cff;
+  --text-primary: #e2e4e8;
+  --text-secondary: #a6a8ad;
+  --text-tertiary: #94979e;
+  --accent: #9aa8ff;
+  --accent-hover: #b0bcff;
+  --accent-ink: #9aa8ff;
+  --accent-ink-hover: #b0bcff;
+  --accent-fill: #8e9dff;
+  --accent-fill-hover: #a3b0ff;
+  --accent-fill-pressed: #7888f0;
+  --on-accent: #11131a;
+  --focus-ring: #9aa8ff;
+  --search-focus-ring: #8b99eb;
+  --toggle-active-ink: var(--accent-ink);
   --toggle-inactive-ink: #808187;
-  --success-fg: #56d69a;
+  --success-fg: #64c496;
   --success-bg: #143326;
-  --success-border: #3fa976;
+  --success-border: #489e74;
   --warning-fg: #f5c451;
   --warning-bg: #3a2c11;
   --warning-border: #b4862d;
@@ -60,7 +75,7 @@
   --workbench-control-hover: #35363a;
   --workbench-control-pressed: #404246;
   --workbench-caption-hover: #303135;
-  --workbench-control-disabled: #8b8c90;
+  --workbench-control-disabled: #6c6e73;
   --workbench-action-edge: #393b3e;
   --workbench-action-hover-edge: #5b5e63;
   --workbench-action-hover: #303135;
@@ -77,14 +92,15 @@
   --workbench-selected-control-hover: var(--selection-control-hover);
   --workbench-selected-control-pressed: var(--selection-control-pressed);
   --workbench-divider: #2a2b2c;
+  --workbench-playing-bg: #1a1d28;
   --workbench-playing-indicator: var(--accent-ink);
   --workbench-pane-edge: #313336;
   --workbench-overlay-edge: #72777d;
   --workbench-critical-edge: #393b3e;
   --workbench-control-boundary: #72777d;
-  --workbench-text-primary: #d4d4d4;
-  --workbench-text-secondary: #a6a6a6;
-  --workbench-text-tertiary: #929292;
+  --workbench-text-primary: #e2e4e8;
+  --workbench-text-secondary: #a6a8ad;
+  --workbench-text-tertiary: #94979e;
   --workbench-accent: var(--workbench-accent-ink);
   --workbench-accent-hover: var(--workbench-accent-ink-hover);
   --workbench-focus: var(--focus-ring);
@@ -246,12 +262,12 @@ html[data-palette='classic'] {
   --chrome-surface: var(--surface-panel);
   --workbench-hover: var(--control-hover);
   --workbench-pressed: var(--control-pressed);
-  --workbench-control-rest: var(--surface-raised);
-  --workbench-control-rest-edge: var(--border-strong);
+  --workbench-control-rest: transparent;
+  --workbench-control-rest-edge: transparent;
   --workbench-control-hover: var(--control-hover);
   --workbench-control-pressed: var(--control-pressed);
   --workbench-caption-hover: var(--control-hover);
-  --workbench-control-disabled: var(--text-tertiary);
+  --workbench-control-disabled: color-mix(in srgb, var(--text-tertiary) 72%, var(--surface-panel));
   --workbench-action-edge: var(--border-strong);
   --workbench-action-hover-edge: var(--control-border);
   --workbench-action-hover: var(--control-hover);
@@ -263,7 +279,8 @@ html[data-palette='classic'] {
   --selection-control-hover: var(--control-hover);
   --selection-control-pressed: var(--control-pressed);
   --workbench-divider: var(--border-subtle);
-  --workbench-pane-edge: var(--border-strong);
+  --workbench-playing-bg: color-mix(in srgb, var(--accent-ink) 8%, var(--workbench-content));
+  --workbench-pane-edge: var(--border-subtle);
   --workbench-overlay-edge: var(--control-border);
   --workbench-critical-edge: var(--border-strong);
   --workbench-control-boundary: var(--control-border);
@@ -273,9 +290,9 @@ html[data-palette='classic'] {
   --workbench-accent: var(--accent);
   --workbench-accent-hover: var(--accent-hover);
   --workbench-search-surface: var(--surface-raised);
-  --workbench-search-idle-edge: var(--control-border);
+  --workbench-search-idle-edge: var(--border-strong);
   --selection-indicator: var(--accent-ink);
-  --selection-row-indicator: var(--accent-ink);
+  --selection-row-indicator: var(--control-border);
   --ghost-control-rest: var(--workbench-control-rest);
   --ghost-control-hover: var(--workbench-control-hover);
   --ghost-control-pressed: var(--workbench-control-pressed);
@@ -297,39 +314,39 @@ html[data-color-mode='light'] {
   /* General surfaces and text */
   --canvas: #ffffff;
   --surface-panel: #f7f8fa;
-  --surface-secondary: #fafbfc;
+  --surface-secondary: #f4f6f9;
   --surface-raised: #ffffff;
   --control-hover: #eef2f6;
   --control-pressed: #e2e8f0;
-  --selection-bg: #eaf2fd;
+  --selection-bg: #eaeffe;
   --selection-row: var(--selection-bg);
   --selection-navigation: var(--selection-bg);
   --selection-control: var(--selection-bg);
   --selection-control-hover: var(--control-hover);
   --selection-control-pressed: var(--control-pressed);
   --selection-indicator: var(--accent-ink);
-  --selection-row-indicator: var(--accent-ink);
+  --selection-row-indicator: var(--control-border);
   --border-subtle: #dfe4eb;
   --border-strong: #b1bbc6;
-  --control-border: #767f8a;
+  --control-border: #808a96;
   --scrollbar-thumb: #808b97;
   --scrollbar-thumb-hover: var(--text-tertiary);
   --text-primary: #252a31;
   --text-secondary: #535f6c;
   --text-tertiary: #5d6976;
 
-  /* Restrained Windows blue accent and status colors */
-  --accent: #0b63c5;
-  --accent-hover: #0958ae;
-  --accent-ink: #0b58a5;
-  --accent-ink-hover: #084783;
-  --accent-fill: #0b63c5;
-  --accent-fill-hover: #0958ae;
-  --accent-fill-pressed: #084c98;
+  /* Unified Sky Indigo accent and status colors */
+  --accent: #3c54cf;
+  --accent-hover: #3248ba;
+  --accent-ink: #3449b5;
+  --accent-ink-hover: #283a96;
+  --accent-fill: #3c54cf;
+  --accent-fill-hover: #3248ba;
+  --accent-fill-pressed: #293da3;
   --on-accent: #ffffff;
-  --focus-ring: #0b58a5;
-  --search-focus-ring: #0b58a5;
-  --toggle-active-ink: #0b58a5;
+  --focus-ring: #3449b5;
+  --search-focus-ring: #3449b5;
+  --toggle-active-ink: #3449b5;
   --toggle-inactive-ink: #5d6976;
   --success-fg: #1f7a47;
   --success-bg: #e9f5ed;
@@ -357,7 +374,7 @@ html[data-color-mode='light'] {
   --workbench-control-hover: var(--control-hover);
   --workbench-control-pressed: var(--control-pressed);
   --workbench-caption-hover: var(--control-hover);
-  --workbench-control-disabled: #626e7a;
+  --workbench-control-disabled: #8a94a0;
   --workbench-action-edge: var(--control-border);
   --workbench-action-hover-edge: var(--control-border);
   --workbench-action-hover: var(--control-hover);
@@ -374,7 +391,8 @@ html[data-color-mode='light'] {
   --workbench-selected-control-hover: var(--selection-control-hover);
   --workbench-selected-control-pressed: var(--selection-control-pressed);
   --workbench-divider: var(--border-subtle);
-  --workbench-playing-indicator: var(--control-border);
+  --workbench-playing-bg: #f4f6fe;
+  --workbench-playing-indicator: var(--accent-ink);
   --workbench-pane-edge: var(--border-subtle);
   --workbench-overlay-edge: var(--control-border);
   --workbench-critical-edge: var(--danger-border);
@@ -386,7 +404,7 @@ html[data-color-mode='light'] {
   --workbench-accent-hover: var(--accent-ink-hover);
   --workbench-focus: var(--focus-ring);
   --workbench-search-surface: var(--surface-raised);
-  --workbench-search-idle-edge: var(--control-border);
+  --workbench-search-idle-edge: #8a94a0;
   --workbench-search-focus: var(--search-focus-ring);
 
   /* Shared control, caption, overlay, dialog, and player aliases */
@@ -504,6 +522,30 @@ html[data-color-mode='light'] {
     color: Highlight;
   }
 
+  :root .app-select-trigger {
+    border-color: ButtonText;
+    color: ButtonText;
+    background: ButtonFace;
+  }
+
+  :root .app-select-popover {
+    border-color: CanvasText;
+    color: CanvasText;
+    background: Canvas;
+    box-shadow: none;
+  }
+
+  :root .app-select-option[data-selected] {
+    forced-color-adjust: none;
+    color: HighlightText;
+    background: Highlight;
+  }
+
+  :root .app-select-option[data-selected] .app-select-check-slot,
+  :root .app-select-option[data-selected] .app-select-option-hint {
+    color: HighlightText;
+  }
+
   :root
     :is(
       .button-primary,
@@ -518,6 +560,7 @@ html[data-color-mode='light'] {
       .settings-nav-item,
       .track-actions-button,
       .track-like-button,
+      .app-select-trigger,
       [role='tab']
     ):focus-visible,
   :root input:focus-visible,

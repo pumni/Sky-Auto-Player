@@ -41,4 +41,32 @@ describe('TrackTable built-in page semantics', () => {
     expect(within(lastRow).getByRole('gridcell', { name: '238' })).toBeInTheDocument();
     expect(store.getState().library.selectedSongId).toBe(rows[237]?.song_id);
   });
+
+  it('manages aria-activedescendant correctly based on selected song presence', async () => {
+    const rows = Array.from({ length: 50 }, (_, index) => ({
+      song_id: (index + 1).toString(16).padStart(32, '0'),
+      title: `Track fixture ${String(index + 1).padStart(3, '0')}`,
+      format_label: 'TXT',
+      duration_us: 1_000_000,
+      note_count: 1,
+      risk_level: 'low' as const,
+      metadata_state: 'ready' as const,
+      liked: false,
+    }));
+    const store = createDesktopStore(
+      createMockBridge({
+        catalogRows: rows,
+        builtinSongIds: rows.map((row) => row.song_id),
+      }),
+    );
+    await act(async () => store.getState().initialize());
+    await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
+    render(<TrackTable useStore={store} />);
+
+    const grid = screen.getByRole('grid', { name: 'Built-in Songs, page 1' });
+    expect(grid).not.toHaveAttribute('aria-activedescendant');
+
+    await act(async () => store.getState().selectSong(rows[0]!.song_id));
+    expect(grid).toHaveAttribute('aria-activedescendant', `song-row-${rows[0]!.song_id}`);
+  });
 });

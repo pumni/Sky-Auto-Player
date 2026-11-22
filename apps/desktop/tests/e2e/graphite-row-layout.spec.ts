@@ -270,12 +270,13 @@ function expectRowGeometry(
   }
   const compactColumns = browserWidth <= 440;
   const narrowColumns = browserWidth > 440 && browserWidth <= 520;
-  const expectedInset = compactColumns ? 4 : 6;
+  const expectedInsetStart = compactColumns ? 4 : 6;
+  const expectedInsetEnd = compactColumns || narrowColumns ? 4 : 6;
   const expectedRowPadding = compactColumns
-    ? { left: 2, right: 4, headerLeft: 8, headerRight: 4 }
+    ? { left: 2, right: 6, headerLeft: 8, headerRight: 10 }
     : narrowColumns
-      ? { left: 4, right: 6, headerLeft: 12, headerRight: 6 }
-      : { left: 10, right: 12, headerLeft: 18, headerRight: 12 };
+      ? { left: 4, right: 6, headerLeft: 12, headerRight: 10 }
+      : { left: 10, right: 6, headerLeft: 18, headerRight: 12 };
   const divider = geometry.trackGrid.divider;
   expect(Math.abs(frame.x - (scrollport.x + scrollport.clientLeft!))).toBeLessThanOrEqual(1);
   expect(Math.abs(frame.width - scrollport.clientWidth!)).toBeLessThanOrEqual(1);
@@ -309,10 +310,10 @@ function expectRowGeometry(
     const row = geometry.rows[key];
     if (!row?.rect) throw new Error(`The ${key} row has no bounding box`);
     expect(row.rowFillInsets).not.toBeNull();
-    expect(Math.abs(row.rowFillInsets!.left - expectedInset)).toBeLessThanOrEqual(2);
-    expect(Math.abs(row.rowFillInsets!.right)).toBeLessThanOrEqual(1);
-    expect(row.style.insetInlineStart).toBe(`${expectedInset}px`);
-    expect(row.style.insetInlineEnd).toBe('0px');
+    expect(Math.abs(row.rowFillInsets!.left - expectedInsetStart)).toBeLessThanOrEqual(2);
+    expect(Math.abs(row.rowFillInsets!.right - expectedInsetEnd)).toBeLessThanOrEqual(2);
+    expect(row.style.insetInlineStart).toBe(`${expectedInsetStart}px`);
+    expect(row.style.insetInlineEnd).toBe(`${expectedInsetEnd}px`);
     expect(row.style.paddingInlineStart).toBe(`${expectedRowPadding.left}px`);
     expect(row.style.paddingInlineEnd).toBe(`${expectedRowPadding.right}px`);
     expect(geometry.surfaces.columnHeader?.paddingInlineStart).toBe(
@@ -480,7 +481,7 @@ test('Graphite row surfaces, collapsed navigation, and dock geometry remain func
   }
   expect(wide.surfaces.columnRule?.borderBottomWidth).toBe('0px');
   expect(wide.trackGrid.divider?.color).toBe('rgb(42, 43, 44)');
-  expect(wide.rows.selected?.style.backgroundColor).toBe('rgb(37, 36, 44)');
+  expect(wide.rows.selected?.style.backgroundColor).toBe('rgb(34, 37, 52)');
   expect(wide.rows.hovered?.style.backgroundColor).toBe('rgb(34, 35, 36)');
   expect(wide.rows.playing?.ariaCurrent).toBe('true');
   expect(wide.rows.selected?.ariaSelected).toBe('true');
