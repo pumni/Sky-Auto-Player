@@ -198,6 +198,10 @@ function Get-DispatchM3GitCheckoutIdentity {
     if ($LASTEXITCODE -ne 0) { throw 'could not resolve checkout branch' }
     $topLevel = (& git -C $fullPath rev-parse --show-toplevel).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'could not resolve checkout top level' }
+    # Git may canonicalize a worktree path differently from the caller (for
+    # example, when TEMP uses a short 8.3 path). Use Git's checkout root for
+    # both identity fields so clean source manifests have one stable path.
+    $fullPath = Get-DispatchM3PathIdentity $topLevel
     $gitDirOutput = (& git -C $fullPath rev-parse --git-dir).Trim()
     if ($LASTEXITCODE -ne 0) { throw 'could not resolve checkout git directory' }
     $commonDirOutput = (& git -C $fullPath rev-parse --git-common-dir).Trim()

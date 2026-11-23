@@ -1875,8 +1875,8 @@ try {
     function New-PclV3ManifestFixture {
         param([ValidateSet('Baseline', 'Candidate')] [string]$Role)
         $isBaseline = $Role -eq 'Baseline'
-        $sourceRoot = if ($isBaseline) { $pclV3BaselineRoot } else { $playbackCoreRepoRoot }
         $sourceIdentity = if ($isBaseline) { $pclV3BaselineIdentity } else { $pclV3RunnerIdentity }
+        $sourceRoot = $sourceIdentity.root
         $lockPath = Join-Path $sourceRoot 'rust\Cargo.lock'
         $outputRoot = Join-Path $pclV3TempRoot ($Role.ToLowerInvariant() + '-output')
         $checkout = ConvertTo-PclV3CheckoutFixture $sourceIdentity
