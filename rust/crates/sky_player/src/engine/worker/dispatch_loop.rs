@@ -1735,6 +1735,12 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             if manual_pause && !resources.playback.has_pause_reason(PauseReason::Manual) {
                 core.runtime.verified_target = None;
                 if !resources.playback.is_paused() {
+                    #[cfg(any(test, feature = "test-support"))]
+                    if command_timing.needs_acknowledgment() {
+                        command_timing.record_pause_cleanup_obligation_mask(
+                            resources.backend.release_obligation_mask(),
+                        );
+                    }
                     if let Err(error) = suspend_live_input_for_dispatch_with_control(
                         &mut resources.backend,
                         &mut resources.scheduler,
@@ -1907,6 +1913,13 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         core.runtime.terminal_error =
                             Some(format!("playback clock failure: {error}"));
                         break;
+                    }
+                    #[cfg(any(test, feature = "test-support"))]
+                    if !resources.playback.is_paused()
+                        && let Ok(elapsed_ticks) = resources.playback.get_elapsed(resumed_ticks)
+                    {
+                        command_timing
+                            .record_manual_resume_commit(resumed_ticks, elapsed_ticks.as_u64());
                     }
                     let progress_state = if resources.playback.is_paused() {
                         crate::engine::WorkerProgressState::Paused

@@ -193,6 +193,7 @@ pub(crate) fn create_mock_backend(
                 release.wait();
             }
         }
+        let send_started_qpc_ticks = qpc_clock.now().ok().map(|ticks| ticks.as_u64());
         let outcome = physical_packet_outcome(
             qpc_clock,
             &script_packet,
@@ -210,6 +211,7 @@ pub(crate) fn create_mock_backend(
                     status: outcome.status,
                     confirmed_mask: outcome.evidence.confirmed_mask,
                     attempts: outcome.evidence.attempts,
+                    send_started_qpc_ticks,
                 });
         }
         outcome

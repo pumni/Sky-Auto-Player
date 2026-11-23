@@ -1129,6 +1129,15 @@ impl NativeDispatchSession {
         }
     }
 
+    /// Return the playback worker's QPC and timeline position at its most
+    /// recent committed manual Resume. Available only to test and native
+    /// acceptance builds so caller-side command timestamps cannot stand in
+    /// for worker evidence.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn manual_resume_commit_for_test(&self) -> Option<(u64, u64)> {
+        self.shared.commands.command_timing.manual_resume_commit()
+    }
+
     pub fn resume(&self) -> Result<(), String> {
         if self.shared.lifecycle.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
             return Err("session commands require a running worker".to_string());

@@ -447,6 +447,13 @@ fn run_windows(args: RunArgs) -> i32 {
         Err(error) => return write_report(&args, Verdict::Fail, &error, json!({})),
     };
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots); let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
+    let active_cleanup_key_mask = plan
+        .schedule
+        .down_chords
+        .first()
+        .and_then(|chord| chord.intents.first())
+        .map(|intent| 1_u16 << intent.key_slot)
+        .unwrap_or(0);
     let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(args.scenario, plan.profile.as_ref(), &expected_down, &expected_up);
     let authored_timestamp_group_targets = authored_timestamp_group_projection(&plan.schedule);
     let authored_timestamp_group_count = plan.schedule.authored_timestamp_group_count;
@@ -528,6 +535,9 @@ fn run_windows(args: RunArgs) -> i32 {
     let mut pause_cleanup_verified_qpc_ticks = None;
     let mut resume_requested_qpc_ticks = None;
     let mut resume_call_completed_qpc_ticks = None;
+    let mut pause_cleanup_obligation_mask = None;
+    let mut resume_worker_commit_qpc_ticks = None;
+    let mut resume_worker_commit_elapsed_ticks = None;
     let mut pause_cleanup_verified = false;
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     if args.scenario == Scenario::OwnerProcessTermination {
@@ -655,14 +665,14 @@ fn run_windows(args: RunArgs) -> i32 {
             return code;
         }
         first_physical_commit_observed = true;
-        pause_requested_qpc_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
-            .ok()
-            .map(|ticks| ticks.as_u64());
-        if let Err(error) = session.pause() {
-            let _ = session.quit();
-            let _ = session.join(Duration::from_secs(5));
-            inconclusive!(&error, json!({}));
-        }
+        let pause_generation = match session.pause_with_timing_token() {
+            Ok(generation) => generation,
+            Err(error) => {
+                let _ = session.quit();
+                let _ = session.join(Duration::from_secs(5));
+                inconclusive!(&error, json!({}));
+            }
+        };
         pause_observed = wait_for_focus_pause(&session);
         if !pause_observed {
             let _ = session.quit();
@@ -686,9 +696,38 @@ fn run_windows(args: RunArgs) -> i32 {
                 snapshot_json(&session.snapshot()),
             );
         }
-        pause_cleanup_verified_qpc_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
-            .ok()
-            .map(|ticks| ticks.as_u64());
+        let pause_timing_deadline = Instant::now() + Duration::from_secs(2);
+        let pause_timing = loop {
+            match session.pause_timing_result(pause_generation) {
+                Ok(Some(timing)) => break timing,
+                Ok(None) => {
+                    if Instant::now() >= pause_timing_deadline {
+                        let _ = session.quit();
+                        let _ = session.join(Duration::from_secs(5));
+                        inconclusive!("worker pause timing did not publish cleanup acknowledgment", snapshot_json(&session.snapshot()));
+                    }
+                    thread::yield_now();
+                }
+                Err(error) => {
+                    let _ = session.quit();
+                    let _ = session.join(Duration::from_secs(5));
+                    inconclusive!(&error, snapshot_json(&session.snapshot()));
+                }
+            }
+        };
+        pause_requested_qpc_ticks = Some(pause_timing.requested_ticks.as_u64());
+        pause_cleanup_verified_qpc_ticks = Some(pause_timing.acknowledged_ticks.as_u64());
+        pause_cleanup_obligation_mask = Some(pause_timing.cleanup_obligation_mask);
+        if active_cleanup_key_mask == 0
+            || pause_timing.cleanup_obligation_mask & active_cleanup_key_mask == 0
+        {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!(
+                "worker did not observe the active key's release obligation; the first Up cannot be qualified as pause cleanup",
+                json!({"cleanup_obligation_mask": pause_timing.cleanup_obligation_mask, "active_key_mask": active_cleanup_key_mask})
+            );
+        }
         // Resume immediately after the worker has acknowledged verified
         // cleanup. The final event-sequence assertion proves cleanup Up
         // precedes the next same-key authored Down.
@@ -704,6 +743,20 @@ fn run_windows(args: RunArgs) -> i32 {
             .ok()
             .map(|ticks| ticks.as_u64());
         resume_requested = true;
+        let resume_commit_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Some((commit_qpc, commit_elapsed)) = session.manual_resume_commit_for_test() {
+                resume_worker_commit_qpc_ticks = Some(commit_qpc);
+                resume_worker_commit_elapsed_ticks = Some(commit_elapsed);
+                break;
+            }
+            if Instant::now() >= resume_commit_deadline {
+                let _ = session.quit();
+                let _ = session.join(Duration::from_secs(5));
+                inconclusive!("worker did not publish its committed manual Resume QPC", snapshot_json(&session.snapshot()));
+            }
+            thread::yield_now();
+        }
         false
     } else if args.scenario == Scenario::TargetHwndChange {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before target-change proof", json!({})); } session.invalidate_target_for_test(); target_changed = true; false
@@ -898,7 +951,7 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("authored_timestamp_group_count".to_string(), json!(authored_timestamp_group_count));
         object.insert("down_generation_count".to_string(), json!(down_generation_count));
         object.insert("physical_packet_attempt_count".to_string(), json!(snapshot.precision_packet_attempts));
-        object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "pause_cleanup_verified": pause_cleanup_verified, "pause_requested_qpc_ticks": pause_requested_qpc_ticks, "pause_cleanup_verified_qpc_ticks": pause_cleanup_verified_qpc_ticks, "resume_requested_qpc_ticks": resume_requested_qpc_ticks, "resume_call_completed_qpc_ticks": resume_call_completed_qpc_ticks, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
+        object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "pause_cleanup_verified": pause_cleanup_verified, "pause_cleanup_obligation_mask": pause_cleanup_obligation_mask, "pause_requested_qpc_ticks": pause_requested_qpc_ticks, "pause_cleanup_verified_qpc_ticks": pause_cleanup_verified_qpc_ticks, "resume_requested_qpc_ticks": resume_requested_qpc_ticks, "resume_call_completed_qpc_ticks": resume_call_completed_qpc_ticks, "resume_worker_commit_qpc_ticks": resume_worker_commit_qpc_ticks, "resume_worker_commit_elapsed_ticks": resume_worker_commit_elapsed_ticks, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         object.insert("expected_authored_up_slots".to_string(), json!(plan.expected_authored_up_slots)); object.insert("expected_safety_up_slots".to_string(), json!(plan.expected_safety_up_slots)); object.insert("ambiguous_packet_outcome_injection_requested".to_string(), json!(args.scenario == Scenario::AmbiguousPacket)); object.insert("preflight_user_held_injection_requested".to_string(), json!(args.scenario == Scenario::PreflightUserHeld));
         if args.scenario == Scenario::SuspendResume {
             object.insert("system_suspend_fixture".to_string(), json!({"injection_method": "NativeDispatchSession::notify_system_power(true)", "physical_os_suspend_performed": false, "resume_notified": false, "physical_session_terminal": system_suspend_terminal_observed}));
@@ -963,21 +1016,27 @@ fn run_windows(args: RunArgs) -> i32 {
             || !pause_observed
             || !pause_cleanup_verified
             || !resume_requested
+            || !matches!(pause_cleanup_obligation_mask, Some(mask) if mask & 1 != 0)
             || !matches!(
                 (
                     pause_requested_qpc_ticks,
                     pause_cleanup_verified_qpc_ticks,
                     resume_requested_qpc_ticks,
                     resume_call_completed_qpc_ticks,
+                    resume_worker_commit_qpc_ticks,
+                    resume_worker_commit_elapsed_ticks,
                 ),
-                (Some(pause), Some(cleanup), Some(resume), Some(completed))
-                    if pause <= cleanup && cleanup <= resume && resume <= completed
+                (Some(pause), Some(cleanup), Some(resume), Some(completed), Some(worker_commit), Some(_elapsed))
+                    if pause <= cleanup
+                        && cleanup <= resume
+                        && resume <= completed
+                        && completed <= worker_commit
             ))
     {
         return write_report(
             &args,
             Verdict::Fail,
-            "active-key pause/resume evidence is missing its verified-cleanup boundary",
+            "active-key pause/resume evidence is missing verified active-key cleanup or worker-committed Resume ordering",
             details,
         );
     }

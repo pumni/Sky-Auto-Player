@@ -12,6 +12,7 @@ pub enum MockSendInputCapture {
         status: sky_dispatch_win32::input::SendTransactionStatus,
         confirmed_mask: u16,
         attempts: u8,
+        send_started_qpc_ticks: Option<u64>,
     },
     SingleEmitter {
         scan_codes: Vec<u16>,

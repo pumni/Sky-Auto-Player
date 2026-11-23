@@ -48,7 +48,10 @@ function Get-QualificationReportSchemaVersion {
         [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')]
         [string]$Profile
     )
-    if ($Profile -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')) { return 2 }
+    # Schema v2 removes the retired post-cleanup delay fields from the shared
+    # qualification report projection. All profiles using that projection must
+    # advertise the same report schema, independently of their manifest schema.
+    if ($Profile -in @('DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')) { return 2 }
     1
 }
 

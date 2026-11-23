@@ -536,11 +536,29 @@ if ($qualifierSource -notmatch "ValidateSet\('Canary', 'Smoke', 'Compare', 'Fina
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Force
-if ((Get-QualificationReportSchemaVersion -Profile 'PlaybackCoreLifecycle') -ne 2 -or
-    (Get-QualificationReportSchemaVersion -Profile 'PlaybackCoreLifecycleV2') -ne 2 -or
-    (Get-QualificationReportSchemaVersion -Profile 'DispatchCore') -ne 1 -or
-    -not $qualifierSource.Contains('$qualificationReportSchemaVersion = Get-QualificationReportSchemaVersion -Profile $QualificationProfile')) {
-    throw 'PlaybackCoreLifecycle report schema v2 boundary changed or leaked into historical profiles'
+$reportSchemaSelectionFixtures = @(
+    @{ Profile = 'DispatchCleanupM3'; Expected = 2 },
+    @{ Profile = 'DispatchSessionRedesignM3'; Expected = 2 },
+    @{ Profile = 'PlaybackCoreLifecycle'; Expected = 2 },
+    @{ Profile = 'PlaybackCoreLifecycleV2'; Expected = 2 },
+    @{ Profile = 'DispatchCore'; Expected = 1 },
+    @{ Profile = 'Scheduler'; Expected = 1 }
+)
+$successReportSchemaFixture = [ordered]@{}
+foreach ($fixture in $reportSchemaSelectionFixtures) {
+    $selectedSchemaVersion = Get-QualificationReportSchemaVersion -Profile $fixture.Profile
+    $successReportSchemaFixture[$fixture.Profile] = $selectedSchemaVersion
+    if ($selectedSchemaVersion -ne $fixture.Expected) {
+        throw ('success report schema selection changed for profile ' + $fixture.Profile)
+    }
+}
+if ($successReportSchemaFixture.DispatchCleanupM3 -ne 2 -or
+    $successReportSchemaFixture.DispatchSessionRedesignM3 -ne 2 -or
+    $successReportSchemaFixture.PlaybackCoreLifecycle -ne 2 -or
+    $successReportSchemaFixture.PlaybackCoreLifecycleV2 -ne 2 -or
+    -not $qualifierSource.Contains('$qualificationReportSchemaVersion = Get-QualificationReportSchemaVersion -Profile $QualificationProfile') -or
+    -not $qualifierSource.Contains('schema_version = $qualificationReportSchemaVersion')) {
+    throw 'shared current report projection schema v2 boundary changed or leaked into unrelated profiles'
 }
 if (-not (Get-Command Get-DispatchCleanupM3Profile -ErrorAction SilentlyContinue)) {
     throw 'DispatchCleanupM3 profile helper must remain available after manifest module initialization'
@@ -1619,7 +1637,27 @@ try {
         -RunId 'offline-zero-attempts-v2' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
         -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount 0 `
         -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath -SummarySchemaVersion 2
-    if ($zeroFailureArtifacts.Summary.schema_version -ne 1 -or $zeroFailureArtifactsV2.Summary.schema_version -ne 2) {
+    $cleanupFailureSchemaVersion = Get-QualificationReportSchemaVersion -Profile 'DispatchCleanupM3'
+    $sessionRedesignFailureSchemaVersion = Get-QualificationReportSchemaVersion -Profile 'DispatchSessionRedesignM3'
+    $dispatchCoreFailureSchemaVersion = Get-QualificationReportSchemaVersion -Profile 'DispatchCore'
+    $zeroCleanupFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $zeroAttemptError `
+        -RunId 'offline-zero-attempts-cleanup-m3' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
+        -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount 0 `
+        -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath -SummarySchemaVersion $cleanupFailureSchemaVersion
+    $zeroSessionRedesignFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $zeroAttemptError `
+        -RunId 'offline-zero-attempts-session-redesign-m3' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
+        -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount 0 `
+        -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath -SummarySchemaVersion $sessionRedesignFailureSchemaVersion
+    $zeroDispatchCoreFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $zeroAttemptError `
+        -RunId 'offline-zero-attempts-dispatch-core' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
+        -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount 0 `
+        -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath -SummarySchemaVersion $dispatchCoreFailureSchemaVersion
+    if ($zeroFailureArtifacts.Summary.schema_version -ne 1 -or $zeroFailureArtifactsV2.Summary.schema_version -ne 2 -or
+        $cleanupFailureSchemaVersion -ne 2 -or $sessionRedesignFailureSchemaVersion -ne 2 -or
+        $zeroCleanupFailureArtifacts.Summary.schema_version -ne $cleanupFailureSchemaVersion -or
+        $zeroSessionRedesignFailureArtifacts.Summary.schema_version -ne $sessionRedesignFailureSchemaVersion -or
+        $dispatchCoreFailureSchemaVersion -ne 1 -or
+        $zeroDispatchCoreFailureArtifacts.Summary.schema_version -ne $dispatchCoreFailureSchemaVersion) {
         throw 'runner failure summaries did not preserve the selected current report schema version'
     }
     Write-QualificationRunnerFailureArtifacts -Artifacts $zeroFailureArtifacts -EvidenceRoot $offlineFailureRoot `

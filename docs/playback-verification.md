@@ -40,6 +40,14 @@ foreground recovery, bounded cleanup, quarantine, and watcher fallback.
 Report focused command output rather than treating a browser mock as a native
 sender test.
 
+The current report projection uses report schema version 2 for
+**DispatchCleanupM3**, **DispatchSessionRedesignM3**, **PlaybackCoreLifecycle**,
+and **PlaybackCoreLifecycleV2** because these profiles share the projection
+that omits the retired post-cleanup delay fields. Other profiles retain their
+existing report schema version. This report version is separate from each
+harness binary manifest schema; historical v2/v3 evidence readers and the
+explicit lifecycle trace schema v4 remain unchanged.
+
 Run the desktop check from the desktop package and the website checks from
 the website package:
 

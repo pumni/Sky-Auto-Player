@@ -648,6 +648,7 @@ fn worker_pause_drain_stop_upgrade_preserves_budget_origin_and_residual() {
                     status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
                     confirmed_mask: 1,
                     attempts: 1,
+                    ..
                 } if packet.down_mask == 1 && packet.up_mask == 0
             )
         });
