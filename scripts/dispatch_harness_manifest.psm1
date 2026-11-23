@@ -432,7 +432,13 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
         (Get-ManifestProperty $qualificationPlan 'pair_count') -ne $profile.PairCount -or
         (Get-ManifestProperty $qualificationPlan 'sample_seconds') -ne $profile.SampleSeconds -or
         $scriptProvenance.Count -ne $expectedRunnerPaths.Count) {
-        throw ('PlaybackCoreLifecycle ' + $ExpectedRole + ' manifest profile, source, runner, target, workload, or build identity is invalid')
+        throw ('PlaybackCoreLifecycle ' + $ExpectedRole + ' manifest profile, source, runner, target, workload, or build identity is invalid: ' +
+            'schema=' + (Get-ManifestProperty $Manifest 'schema_version') + '/' + $profile.HarnessManifestSchemaVersion +
+            '; source=' + $sourceRevision + '/' + $sourceTree + '; expected=' + $expectedRevision + '/' + $expectedTree +
+            '; branch=' + (Get-ManifestProperty $Manifest 'source_branch') + '/' + $expectedBranch +
+            '; runner=' + $runnerRevision + '/' + $candidateRevision + '; runner-tree=' + $runnerTree + '/' + $candidateTree +
+            '; clean=' + (Get-ManifestProperty $Manifest 'source_tree_clean') + '/' + (Get-ManifestProperty $Manifest 'runner_source_clean') +
+            '; lock=' + $cargoLockSha256 + '; provenance=' + $scriptProvenance.Count + '/' + $expectedRunnerPaths.Count)
     }
 
     if ($profile.Version -eq 3) {
