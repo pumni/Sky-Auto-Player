@@ -17,11 +17,11 @@ for (const viewport of [
     await expect(confirmation).toBeVisible();
     await expect(confirmation.getByText('Medium timing risk')).toBeVisible();
     await expect(
-      confirmation.getByRole('button', { name: 'Use recommended settings' }),
+      confirmation.getByRole('button', { name: 'Proceed with current settings' }),
     ).toBeFocused();
     const notNow = confirmation.getByRole('button', { name: 'Not now' });
     await expect(notNow).toBeVisible();
-    await expect(confirmation.locator('.admission-option')).toHaveCount(3);
+    await expect(confirmation.locator('.admission-option')).toHaveCount(1);
 
     const panel = await confirmation.boundingBox();
     const dismiss = await notNow.boundingBox();
