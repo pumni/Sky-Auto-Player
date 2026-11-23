@@ -1,0 +1,8 @@
+{
+  "actions": [
+    { "at_us": 0, "kind": "down", "scan_codes": [21] },
+    { "at_us": 16667, "kind": "up", "scan_codes": [21] },
+    { "at_us": 1000000, "kind": "down", "scan_codes": [21] },
+    { "at_us": 1016667, "kind": "up", "scan_codes": [21] }
+  ]
+}

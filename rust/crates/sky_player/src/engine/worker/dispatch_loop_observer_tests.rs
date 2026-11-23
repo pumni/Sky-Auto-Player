@@ -809,6 +809,7 @@ fn telemetry_ring_drop_accounts_each_coalesced_up_slot() {
             scan_code: 21,
             source_action_index: 5,
             authored_up_offset_ticks: TimelineTicks::from_raw(100),
+            paired_up_not_before_offset_ticks: TimelineTicks::from_raw(100),
             release_not_before_qpc: sky_dispatch_win32::clock::QpcTicks::from_raw(1_120),
         },
         sky_dispatch_core::executor::UpSlotTiming {
@@ -816,6 +817,7 @@ fn telemetry_ring_drop_accounts_each_coalesced_up_slot() {
             scan_code: 22,
             source_action_index: 6,
             authored_up_offset_ticks: TimelineTicks::from_raw(110),
+            paired_up_not_before_offset_ticks: TimelineTicks::from_raw(110),
             release_not_before_qpc: sky_dispatch_win32::clock::QpcTicks::from_raw(1_145),
         },
     ]);

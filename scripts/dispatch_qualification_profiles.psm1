@@ -70,7 +70,7 @@ function Get-PlaybackCoreLifecycleProfile {
         HarnessManifestSchemaVersion = 1
         BaselineRevision = '2544daa13eb23fdf03bd922e65b96fcffaba421c'
         BaselineTree = '155882714df131ddc9b9985133a1f0611736b7cd'
-        CandidateLineageBranch = 'refactor/playback-core-lifecycle'
+        CandidateLineageBranch = 'refactor/playback-remove-release-gap'
         Target = 'x86_64-pc-windows-msvc'
         CargoProfile = 'dist'
         RequiredFeatures = @('real-input-acceptance')
@@ -322,7 +322,7 @@ function Get-PlaybackCoreLifecycleRunnerIdentity {
     $identity = Get-DispatchM3GitCheckoutIdentity $RunnerRoot
     if (-not $identity.clean -or $identity.checkout.top_level -ne $identity.root -or
         $identity.branch -ne $profile.CandidateLineageBranch) {
-        throw 'PlaybackCoreLifecycle runner must be a clean checkout on refactor/playback-core-lifecycle'
+        throw ('PlaybackCoreLifecycle runner must be a clean checkout on ' + $profile.CandidateLineageBranch)
     }
     $remoteLine = @(& git -C $identity.root ls-remote origin ('refs/heads/' + $profile.CandidateLineageBranch) 2>&1)
     $remoteExit = $LASTEXITCODE

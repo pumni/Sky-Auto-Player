@@ -11,8 +11,8 @@
 pub mod adapter_support {
     pub use sky_dispatch_core::compile::{CompileError, MAX_ACTIONS, MAX_REASON_BYTES};
     pub use sky_dispatch_core::executor::{
-        DispatchExecutor, PreparedDispatchMemoryMetrics, PreparedDispatchSchedule,
-        PreparedUnmatchedUpMetadata,
+        DispatchDecision, DispatchExecutor, PreparedDispatchMemoryMetrics,
+        PreparedDispatchSchedule, PreparedUnmatchedUpMetadata,
     };
     pub use sky_dispatch_core::model::{
         ActionKind, CompileMemoryMetrics, CompiledDownChord, CompiledDownIntent, KeyActionInput,
@@ -27,6 +27,7 @@ pub mod adapter_support {
         run_calibration_json,
     };
     pub use sky_dispatch_win32::clock::QpcError;
+    pub use sky_dispatch_win32::clock::QpcTicks;
     pub use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
     pub use sky_dispatch_win32::mmcss::PriorityMode;
 

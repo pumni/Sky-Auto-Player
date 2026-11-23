@@ -790,7 +790,7 @@ fn native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_sourc
 }
 
 #[test]
-fn native_prepare_short_up_gap_confirmation_offers_only_proceed_without_recommendation() {
+fn native_prepare_short_up_gap_confirmation_offers_proceed_and_dry_run_without_recommendation() {
     fn input(
         song_id: &str,
         song: &super::Song,
@@ -859,10 +859,14 @@ fn native_prepare_short_up_gap_confirmation_offers_only_proceed_without_recommen
     );
     assert_eq!(confirmation.risk.level, "medium");
     assert_eq!(confirmation.risk.short_up_gap_repeat_count, 1);
-    assert_eq!(confirmation.decisions.len(), 1);
+    assert_eq!(confirmation.decisions.len(), 2);
     assert_eq!(
         confirmation.decisions[0].decision,
         crate::commands::PlaybackDecision::Proceed
+    );
+    assert_eq!(
+        confirmation.decisions[1].decision,
+        crate::commands::PlaybackDecision::DryRun
     );
     let recommendation = confirmation
         .song
@@ -871,7 +875,7 @@ fn native_prepare_short_up_gap_confirmation_offers_only_proceed_without_recommen
         .expect("risk summary remains available");
     assert!(recommendation.recommended_hold_frames.is_none());
     assert!(recommendation.recommended_tempo_scale.is_none());
-    assert_eq!(confirmation.variants.len(), 1);
+    assert_eq!(confirmation.variants.len(), 2);
     let proceed = confirmation.variants.first().expect("Proceed variant");
     assert_eq!(proceed.decision, crate::commands::PlaybackDecision::Proceed);
     assert_eq!(proceed.config.hold_frames, base_config.hold_frames);
@@ -899,7 +903,7 @@ fn native_prepare_short_up_gap_confirmation_offers_only_proceed_without_recommen
         .find(|(id, _)| id == prepared_id)
         .map(|(_, record)| record)
         .expect("retained prepared plan");
-    assert_eq!(record.variants.len(), 1);
+    assert_eq!(record.variants.len(), 2);
     let native_proceed = record
         .variants
         .get(&crate::commands::PlaybackDecision::Proceed)
@@ -921,6 +925,19 @@ fn native_prepare_short_up_gap_confirmation_offers_only_proceed_without_recommen
     assert_eq!(native_proceed.config.dry_run, proceed.config.dry_run);
     assert!(native_proceed.prepared_schedule.is_some());
     assert!(!advisory.dry_run_is_hypothetical);
+    let dry_run = confirmation
+        .variants
+        .iter()
+        .find(|variant| variant.decision == crate::commands::PlaybackDecision::DryRun)
+        .expect("Dry Run confirmation variant");
+    assert!(dry_run.config.dry_run);
+    assert!(
+        dry_run
+            .timing_advisory
+            .as_ref()
+            .expect("Dry Run advisory")
+            .dry_run_is_hypothetical
+    );
 }
 
 #[test]

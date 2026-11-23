@@ -39,6 +39,8 @@ pub struct MusicalSlot {
     pub active_generation: Option<GenerationId>,
     /// Exact authored Up offset for this generation.
     pub authored_up_offset_ticks: TimelineTicks,
+    /// Prepared Up eligibility floor, including the checked Down + H QPC floor.
+    pub paired_up_not_before_offset_ticks: TimelineTicks,
     /// Physical hold floor: successful Down completion QPC + H.
     pub release_not_before_qpc: QpcTicks,
     /// Exact authored source action index of the paired Up.
@@ -50,6 +52,7 @@ impl Default for MusicalSlot {
         Self {
             active_generation: None,
             authored_up_offset_ticks: TimelineTicks::ZERO,
+            paired_up_not_before_offset_ticks: TimelineTicks::ZERO,
             release_not_before_qpc: QpcTicks::ZERO,
             paired_up_source_action_index: 0,
         }
@@ -64,7 +67,8 @@ pub struct DownIntentTicks {
     pub scan_code: u16,
     pub source_action_index: u32,
     pub reason_id: crate::model::ReasonId,
-    pub paired_up_offset_ticks: TimelineTicks,
+    pub authored_up_offset_ticks: TimelineTicks,
+    pub paired_up_not_before_offset_ticks: TimelineTicks,
     pub paired_up_offset_us: u64,
     pub paired_up_source_action_index: u32,
 }
@@ -224,16 +228,17 @@ where
             .map_err(|error| format!("prepared hold-floor conversion overflow: {error}"))?;
         let intent_start = intents.len();
         for intent in &chord.intents {
-            let authored_up_ticks =
+            let authored_up_offset_ticks =
                 timestamp_ticks(intent.paired_up_offset_us, DownArenaTimestampKind::PairedUp)?;
-            let paired_up_offset_ticks = authored_up_ticks.max(earliest_up_ticks);
+            let paired_up_not_before_offset_ticks = authored_up_offset_ticks.max(earliest_up_ticks);
             intents.push(DownIntentTicks {
                 generation_id: intent.generation_id,
                 key_slot: intent.key_slot,
                 scan_code: intent.scan_code,
                 source_action_index: intent.source_action_index,
                 reason_id: intent.reason_id,
-                paired_up_offset_ticks,
+                authored_up_offset_ticks,
+                paired_up_not_before_offset_ticks,
                 paired_up_offset_us: intent.paired_up_offset_us,
                 paired_up_source_action_index: intent.paired_up_source_action_index,
             });
@@ -636,6 +641,7 @@ pub struct UpSlotTiming {
     pub scan_code: u16,
     pub source_action_index: u32,
     pub authored_up_offset_ticks: TimelineTicks,
+    pub paired_up_not_before_offset_ticks: TimelineTicks,
     pub release_not_before_qpc: QpcTicks,
 }
 
@@ -645,6 +651,7 @@ impl UpSlotTiming {
         scan_code: 0,
         source_action_index: 0,
         authored_up_offset_ticks: TimelineTicks::ZERO,
+        paired_up_not_before_offset_ticks: TimelineTicks::ZERO,
         release_not_before_qpc: QpcTicks::ZERO,
     };
 }
@@ -661,6 +668,21 @@ pub struct UpSlotTimingSummary {
 }
 
 impl DispatchExecutor {
+    /// Bound the capacity-backed storage required to create an executor for a
+    /// canonical schedule without allocating it.
+    pub fn estimated_memory_bytes(schedule: &RuntimeSchedule) -> Result<usize, String> {
+        let intent_count = schedule
+            .down_chords
+            .iter()
+            .try_fold(0usize, |count, chord| {
+                count.checked_add(chord.intents.len())
+            })
+            .ok_or_else(|| "executor Down intent count overflow".to_string())?;
+        checked_executor_storage_bytes(schedule.down_chords.len(), intent_count)?
+            .checked_add(std::mem::size_of::<Self>())
+            .ok_or_else(|| "executor total memory size overflow".to_string())
+    }
+
     /// Create fresh mutable session state from a plan prepared before Arm.
     /// The authored arrays are moved without rebuilding or reallocating.
     pub fn from_prepared_schedule(plan: PreparedDispatchSchedule) -> Self {
@@ -829,6 +851,7 @@ impl DispatchExecutor {
                     scan_code,
                     source_action_index: slot.paired_up_source_action_index,
                     authored_up_offset_ticks: slot.authored_up_offset_ticks,
+                    paired_up_not_before_offset_ticks: slot.paired_up_not_before_offset_ticks,
                     release_not_before_qpc: slot.release_not_before_qpc,
                 });
             }
@@ -866,7 +889,11 @@ impl DispatchExecutor {
             let authored_up_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
                 slot.authored_up_offset_ticks.as_u64(),
             ))?;
-            let release_not_before_qpc = authored_up_qpc.max(slot.release_not_before_qpc);
+            let prepared_up_not_before_qpc = epoch_qpc.checked_add_duration(
+                DurationTicks::from_raw(slot.paired_up_not_before_offset_ticks.as_u64()),
+            )?;
+            let release_not_before_qpc =
+                prepared_up_not_before_qpc.max(slot.release_not_before_qpc);
             slot_count += 1;
             first_source_action_index.get_or_insert(slot.paired_up_source_action_index);
             authored_target_qpc = Some(
@@ -879,7 +906,7 @@ impl DispatchExecutor {
                     current.max(release_not_before_qpc)
                 }),
             );
-            if slot.release_not_before_qpc > authored_up_qpc {
+            if release_not_before_qpc > authored_up_qpc {
                 hold_floor_mask |= slot_mask;
             }
         }
@@ -911,7 +938,12 @@ impl DispatchExecutor {
             let authored_up_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
                 slot.authored_up_offset_ticks.as_u64(),
             ))?;
-            let due = authored_up_qpc.max(slot.release_not_before_qpc);
+            let prepared_up_not_before_qpc = epoch_qpc.checked_add_duration(
+                DurationTicks::from_raw(slot.paired_up_not_before_offset_ticks.as_u64()),
+            )?;
+            let due = authored_up_qpc
+                .max(prepared_up_not_before_qpc)
+                .max(slot.release_not_before_qpc);
             earliest = Some(earliest.map_or(due, |current: QpcTicks| current.min(due)));
         }
         Ok(earliest)
@@ -1034,7 +1066,12 @@ impl DispatchExecutor {
                 let authored_up_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
                     slot.authored_up_offset_ticks.as_u64(),
                 ))?;
-                let due = authored_up_qpc.max(slot.release_not_before_qpc);
+                let prepared_up_not_before_qpc = epoch_qpc.checked_add_duration(
+                    DurationTicks::from_raw(slot.paired_up_not_before_offset_ticks.as_u64()),
+                )?;
+                let due = authored_up_qpc
+                    .max(prepared_up_not_before_qpc)
+                    .max(slot.release_not_before_qpc);
                 if now_qpc >= due {
                     up_ready_mask |= 1 << slot_idx;
                     up_packet_not_before_qpc =
@@ -1043,7 +1080,7 @@ impl DispatchExecutor {
                         up_authored_target_qpc
                             .map_or(authored_up_qpc, |value| value.min(authored_up_qpc)),
                     );
-                    if slot.release_not_before_qpc > authored_up_qpc {
+                    if due > authored_up_qpc {
                         up_hold_floor_mask |= 1 << slot_idx;
                     }
                 } else {
@@ -1088,7 +1125,12 @@ impl DispatchExecutor {
                     let authored_up_qpc = epoch_qpc.checked_add_duration(
                         DurationTicks::from_raw(slot.authored_up_offset_ticks.as_u64()),
                     )?;
-                    let key_release_due = authored_up_qpc.max(slot.release_not_before_qpc);
+                    let prepared_up_not_before_qpc = epoch_qpc.checked_add_duration(
+                        DurationTicks::from_raw(slot.paired_up_not_before_offset_ticks.as_u64()),
+                    )?;
+                    let key_release_due = authored_up_qpc
+                        .max(prepared_up_not_before_qpc)
+                        .max(slot.release_not_before_qpc);
                     chord_earliest_due_qpc = chord_earliest_due_qpc.max(key_release_due);
                 }
             }
@@ -1274,7 +1316,8 @@ impl DispatchExecutor {
             for intent in chord_intents {
                 let slot = &mut self.slots[intent.key_slot as usize];
                 slot.active_generation = Some(intent.generation_id);
-                slot.authored_up_offset_ticks = intent.paired_up_offset_ticks;
+                slot.authored_up_offset_ticks = intent.authored_up_offset_ticks;
+                slot.paired_up_not_before_offset_ticks = intent.paired_up_not_before_offset_ticks;
                 slot.paired_up_source_action_index = intent.paired_up_source_action_index;
                 slot.release_not_before_qpc = new_up_floor.unwrap_or(QpcTicks::ZERO);
             }

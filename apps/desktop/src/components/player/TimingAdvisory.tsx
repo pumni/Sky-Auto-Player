@@ -11,6 +11,16 @@ const statusLabel: Record<GenerationTimingAdvisoryDto['status'], string> = {
   short_up_gap_risk: 'Short same-key Up gap risk',
 };
 
+const dispatchModelStatusLabel: Record<
+  GenerationTimingAdvisoryDto['dispatch_model_status'],
+  string
+> = {
+  not_analyzed: 'Executor model not analyzed',
+  unavailable: 'Executor model unavailable',
+  no_modeled_risk: 'No modeled executor pressure',
+  modeled_risk: 'Modeled executor pressure',
+};
+
 export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
   if (!advisory) {
     return (
@@ -45,14 +55,29 @@ export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
             ` · minimum hold H: ${advisory.effective_hold_floor_h_us} µs`}
         </span>
       )}
+      <div className="timing-model-advisory" data-status={advisory.dispatch_model_status}>
+        <strong>{dispatchModelStatusLabel[advisory.dispatch_model_status]}</strong>
+        <span>{advisory.dispatch_model_explanation}</span>
+        <span>
+          {advisory.modeled_send_count} modeled sends · {advisory.modeled_negative_slack_send_count}{' '}
+          late boundaries · {advisory.modeled_h_floor_displaced_send_count} H-floor delays (max{' '}
+          {advisory.max_modeled_h_floor_displacement_us} µs) ·{' '}
+          {advisory.modeled_head_of_line_send_count} head-of-line delays (max{' '}
+          {advisory.max_modeled_head_of_line_delay_us} µs) · max lateness{' '}
+          {advisory.max_modeled_lateness_us} µs
+        </span>
+      </div>
       {advisory.dry_run_is_hypothetical && (
         <span>This is a prepared dry-run schedule; no input is sent.</span>
       )}
       <details>
         <summary>About this check</summary>
         <span>
-          The advisory counts canonical Down generations and same-key authored Up-to-Down gaps. It
-          does not model receiver timing or change authored timing, hold, tempo, or playback.
+          The advisory counts canonical Down generations and authored Up-to-Down gaps. Its
+          illustrative execution model reuses the production DispatchExecutor with{' '}
+          {advisory.estimated_sender_setup_us} µs sender setup, {advisory.estimated_per_input_us} µs
+          per input, and {advisory.estimated_post_send_us} µs post-send assumptions. It does not
+          model receiver observation or change authored timing, hold, tempo, admission, or playback.
         </span>
         <span>
           Bounds: {advisory.generation_limit} generations, {advisory.work_limit_units} key visits,

@@ -549,6 +549,16 @@ pub enum TimingAdvisoryStatus {
     ShortUpGapRisk,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum DispatchModelStatus {
+    NotAnalyzed,
+    Unavailable,
+    NoModeledRisk,
+    ModeledRisk,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
 #[serde(deny_unknown_fields)]
@@ -564,6 +574,18 @@ pub struct GenerationTimingAdvisoryDto {
     pub working_memory_limit_bytes: u64,
     pub short_up_gap_repeat_count: u64,
     pub effective_hold_floor_h_us: Option<u64>,
+    pub dispatch_model_status: DispatchModelStatus,
+    pub dispatch_model_explanation: String,
+    pub modeled_send_count: u64,
+    pub modeled_negative_slack_send_count: u64,
+    pub modeled_h_floor_displaced_send_count: u64,
+    pub max_modeled_h_floor_displacement_us: u64,
+    pub modeled_head_of_line_send_count: u64,
+    pub max_modeled_head_of_line_delay_us: u64,
+    pub max_modeled_lateness_us: u64,
+    pub estimated_sender_setup_us: u64,
+    pub estimated_per_input_us: u64,
+    pub estimated_post_send_us: u64,
     pub dry_run_is_hypothetical: bool,
 }
 
@@ -1238,8 +1260,9 @@ pub fn startup_window_revealed(
 #[cfg(test)]
 mod tests {
     use super::{
-        AppearanceMode, GenerationTimingAdvisoryDto, PlaybackCommandAckDto, PlaybackConfigDto,
-        PlaybackDecision, PlaybackPlanVariantDto, SettingsDto, SettingsPatch, TimingAdvisoryStatus,
+        AppearanceMode, DispatchModelStatus, GenerationTimingAdvisoryDto, PlaybackCommandAckDto,
+        PlaybackConfigDto, PlaybackDecision, PlaybackPlanVariantDto, SettingsDto, SettingsPatch,
+        TimingAdvisoryStatus,
     };
     use serde_json::json;
 
@@ -1433,6 +1456,18 @@ mod tests {
                 working_memory_limit_bytes: 67_108_864,
                 short_up_gap_repeat_count: 1,
                 effective_hold_floor_h_us: Some(17_467),
+                dispatch_model_status: DispatchModelStatus::ModeledRisk,
+                dispatch_model_explanation: "Illustrative executor pressure".into(),
+                modeled_send_count: 4,
+                modeled_negative_slack_send_count: 1,
+                modeled_h_floor_displaced_send_count: 1,
+                max_modeled_h_floor_displacement_us: 13,
+                modeled_head_of_line_send_count: 1,
+                max_modeled_head_of_line_delay_us: 8,
+                max_modeled_lateness_us: 21,
+                estimated_sender_setup_us: 10,
+                estimated_per_input_us: 3,
+                estimated_post_send_us: 5,
                 dry_run_is_hypothetical: false,
             }),
         };
@@ -1460,6 +1495,18 @@ mod tests {
                     "working_memory_limit_bytes": 67_108_864,
                     "short_up_gap_repeat_count": 1,
                     "effective_hold_floor_h_us": 17_467,
+                    "dispatch_model_status": "modeled_risk",
+                    "dispatch_model_explanation": "Illustrative executor pressure",
+                    "modeled_send_count": 4,
+                    "modeled_negative_slack_send_count": 1,
+                    "modeled_h_floor_displaced_send_count": 1,
+                    "max_modeled_h_floor_displacement_us": 13,
+                    "modeled_head_of_line_send_count": 1,
+                    "max_modeled_head_of_line_delay_us": 8,
+                    "max_modeled_lateness_us": 21,
+                    "estimated_sender_setup_us": 10,
+                    "estimated_per_input_us": 3,
+                    "estimated_post_send_us": 5,
                     "dry_run_is_hypothetical": false
                 }
             })
@@ -1468,6 +1515,11 @@ mod tests {
             serde_json::to_value(TimingAdvisoryStatus::NoShortUpGapRisk)
                 .expect("serialize no-risk status"),
             json!("no_short_up_gap_risk")
+        );
+        assert_eq!(
+            serde_json::to_value(DispatchModelStatus::NoModeledRisk)
+                .expect("serialize execution-model status"),
+            json!("no_modeled_risk")
         );
     }
 }

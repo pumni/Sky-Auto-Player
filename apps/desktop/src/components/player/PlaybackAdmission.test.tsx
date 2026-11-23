@@ -25,7 +25,7 @@ async function setupPlaying(emitSnapshots = true) {
 describe('PlaybackAdmission recovery actions', () => {
   afterEach(cleanup);
 
-  it('shows the short-gap warning with Proceed only and unchanged settings', async () => {
+  it('shows the short-gap warning with Proceed and Dry Run while preserving settings', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const row = selectRowAtIndex(store.getState().library, 0);
@@ -38,8 +38,8 @@ describe('PlaybackAdmission recovery actions', () => {
       screen.getByText(/Proceed keeps the authored timing and selected settings unchanged/),
     ).toBeInTheDocument();
     expect(
-      screen.getByText(/2 feasible same-key repeats have an authored Up-to-Down gap/),
-    ).toBeInTheDocument();
+      screen.getAllByText(/2 feasible same-key repeats have an authored Up-to-Down gap/),
+    ).not.toHaveLength(0);
     expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
     expect(container.querySelector('.admission-option-estimate summary')).toHaveTextContent(
       'Short same-key Up gap risk',
@@ -53,15 +53,15 @@ describe('PlaybackAdmission recovery actions', () => {
     expect(container.querySelector('[data-plan-fingerprint="mock-plan"]')).toHaveTextContent(
       'Bounds: 50000 generations, 3000000 key visits, and 64 MiB working memory.',
     );
-    expect(screen.getAllByRole('button')).toHaveLength(2);
+    expect(screen.getAllByRole('button')).toHaveLength(3);
     expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toHaveClass(
       'button-primary',
     );
     expect(screen.queryByRole('button', { name: /Use recommended/i })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Run a dry-run/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Test playback (no input)' })).toBeEnabled();
   });
 
-  it('keeps the single Proceed decision compact and lets Not now dismiss it', async () => {
+  it('keeps Proceed and Dry Run decisions compact and lets Not now dismiss them', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const row = selectRowAtIndex(store.getState().library, 0);
@@ -73,14 +73,15 @@ describe('PlaybackAdmission recovery actions', () => {
     if (!prepared || prepared.admission !== 'confirmation_required') {
       throw new Error('expected a prepared playback requiring confirmation');
     }
-    expect(prepared.decisions.map((decision) => decision.decision)).toEqual(['proceed']);
-    expect(prepared.variants.map((variant) => variant.decision)).toEqual(['proceed']);
+    expect(prepared.decisions.map((decision) => decision.decision)).toEqual(['proceed', 'dry_run']);
+    expect(prepared.variants.map((variant) => variant.decision)).toEqual(['proceed', 'dry_run']);
 
     const { container } = render(<PlaybackAdmission useStore={store} />);
-    expect(container.querySelectorAll('.admission-option')).toHaveLength(1);
+    expect(container.querySelectorAll('.admission-option')).toHaveLength(2);
     expect(screen.getByText(prepared.risk.headline)).toBeVisible();
     expect(screen.getByText(prepared.risk.reasons[0]!)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Test playback (no input)' })).toBeEnabled();
     const collapse = container.querySelector('details.admission-option-estimate');
     expect(collapse).not.toBeNull();
     expect(collapse).not.toHaveAttribute('open');

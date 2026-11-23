@@ -561,7 +561,7 @@ impl NativePlaybackService {
         let short_up_gap_only = risk.short_up_gap_repeat_count > 0
             && schedule.short_up_gap_repeat_count > 0
             && schedule.impossible_same_key_repeats == 0
-            && risk.dense_clusters.is_empty()
+            && risk.dense_clusters.len() <= 5
             && risk.max_polyphony <= 8
             && risk.suggested_hold_frames.is_none()
             && risk.suggested_tempo_scale.is_none();
@@ -589,6 +589,7 @@ impl NativePlaybackService {
                 label: "Proceed with current settings".into(),
             });
             if plan_source.is_none()
+                && !short_up_gap_only
                 && let (Some(hold_frames), Some(tempo_scale)) =
                     (risk.suggested_hold_frames, risk.suggested_tempo_scale)
                 && (hold_frames != config.hold_frames || tempo_scale != config.tempo_scale)
@@ -732,7 +733,7 @@ impl NativePlaybackService {
                     }
                 }
             }
-            if !config.dry_run && !short_up_gap_only {
+            if !config.dry_run {
                 let dry_run_config = PlaybackConfigDto {
                     dry_run: true,
                     ..config.clone()
@@ -2611,7 +2612,7 @@ pub(in crate::native_runtime) fn sender_trace_export_json(
         })
         .count();
     serde_json::to_string(&serde_json::json!({
-        "export_schema_version": 4,
+        "export_schema_version": 5,
         "raw_packet_trace_status": "not_captured",
         "session_id": active.session_id,
         "song_id": active.song_id,

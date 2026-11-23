@@ -382,6 +382,27 @@ function Get-DeadlineCrossingToPreCallSample {
     }
 }
 
+function Get-TelemetryDownChordIdentity {
+    param($Record, [int]$SchemaVersion)
+    $identity = switch ($SchemaVersion) {
+        25 { [pscustomobject]@{ kind = 'compiled_packet_index_v25'; available_field = 'compiled_packet_index_available'; value_field = 'compiled_packet_index' } }
+        26 { [pscustomobject]@{ kind = 'authored_down_chord_index_v26'; available_field = 'authored_down_chord_index_available'; value_field = 'authored_down_chord_index' } }
+        default { [pscustomobject]@{ kind = 'unsupported_schema_v' + $SchemaVersion; available_field = $null; value_field = $null } }
+    }
+    $available = $false
+    $value = $null
+    if ($null -ne $identity.available_field) {
+        $available = [bool](Get-OptionalProperty $Record $identity.available_field)
+        if ($available) { $value = Get-OptionalProperty $Record $identity.value_field }
+    }
+    [pscustomobject]@{
+        available = $available
+        value = $value
+        kind = $identity.kind
+        schema_version = $SchemaVersion
+    }
+}
+
 function Get-TimingMetrics {
     param($Report)
     $details = Get-OptionalProperty $Report 'details'
@@ -449,6 +470,7 @@ function Get-TimingMetrics {
         missing_H_pair = 0
         missing_G_pair = 0
         duplicate_event_identity = 0
+        missing_down_chord_identity = 0
     }
     $seenDownChords = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
     $lastDownAuthored = $null
@@ -480,11 +502,15 @@ function Get-TimingMetrics {
                     }
                 }
             }
-            $downChordIndex = if ([bool]$record.authored_down_chord_index_available) { [string]$record.authored_down_chord_index } else { 'none' }
-            $identity = [string]$downChordIndex + '/' + [string]$record.event_index
+            $downChordIdentity = Get-TelemetryDownChordIdentity $record ([int]$telemetry.schema_version)
+            $downChordIndex = if ($downChordIdentity.available) { [string]$downChordIdentity.value } else { 'none' }
+            $identity = $downChordIdentity.kind + '/' + [string]$downChordIndex + '/' + [string]$record.event_index
             if ($seenDownChords.Add($identity)) {
                 $identityRecords.Add([ordered]@{
-                    authored_down_chord_index = if ([bool]$record.authored_down_chord_index_available) { $record.authored_down_chord_index } else { $null }
+                    down_chord_index = $downChordIdentity.value
+                    down_chord_identity_available = $downChordIdentity.available
+                    down_chord_identity_kind = $downChordIdentity.kind
+                    down_chord_identity_schema_version = $downChordIdentity.schema_version
                     event_index = $record.event_index
                     source_action_index = $record.source_action_index
                     kind = $kindName
@@ -493,6 +519,7 @@ function Get-TimingMetrics {
                     down_chord_width = $downWidth
                     send_attempts = $record.send_attempts
                 })
+                if (-not $downChordIdentity.available) { $counts.missing_down_chord_identity++ }
                 if ($null -ne $lastDownAuthored -and $identity -ne $lastDownIdentity) {
                     $gapTicks = [double]$record.authored_offset_ticks - [double]$lastDownAuthored
                     if ($gapTicks -lt 0) { $counts.negative_order++ }

@@ -67,6 +67,7 @@ $requiredFunctions = @(
     'Get-ComparisonDescription',
     'Get-PairedMetrics',
     'Get-DeadlineCrossingToPreCallSample',
+    'Get-TelemetryDownChordIdentity',
     'Get-TimingMetrics',
     'Invoke-NativeCaseFailStopSequence',
     'Assert-SchedulerManifestIdentity',
@@ -80,6 +81,24 @@ foreach ($name in $requiredFunctions) {
     }, $true)
     if ($null -eq $functionAst) { throw "missing runner function: $name" }
     Invoke-Expression $functionAst.Extent.Text
+}
+$identityFixture25 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_25.json') -Raw | ConvertFrom-Json
+$identityFixture26 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_26.json') -Raw | ConvertFrom-Json
+$identityMetrics25 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture25 } })
+$identityMetrics26 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture26 } })
+$identityRecord25 = @($identityMetrics25.event_chord_identities)[0]
+$identityRecord26 = @($identityMetrics26.event_chord_identities)[0]
+if ($identityRecord25.down_chord_index -ne 17 -or
+    $identityRecord25.down_chord_identity_kind -ne 'compiled_packet_index_v25' -or
+    $identityRecord25.down_chord_identity_schema_version -ne 25 -or
+    -not $identityRecord25.down_chord_identity_available -or
+    $identityRecord26.down_chord_index -ne 23 -or
+    $identityRecord26.down_chord_identity_kind -ne 'authored_down_chord_index_v26' -or
+    $identityRecord26.down_chord_identity_schema_version -ne 26 -or
+    -not $identityRecord26.down_chord_identity_available -or
+    $identityMetrics25.counts.missing_down_chord_identity -ne 0 -or
+    $identityMetrics26.counts.missing_down_chord_identity -ne 0) {
+    throw 'qualification reader did not preserve versioned v25/v26 Down chord identity'
 }
 $caseRunnerPath = Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'
 $caseRunnerTokens = $null
@@ -1616,7 +1635,7 @@ $playbackCoreWorkerBootSource = Get-Content -LiteralPath (Join-Path $PSScriptRoo
 $playbackCoreWorkerFinalizeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\cleanup\finalize.rs') -Raw
 if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -or
     -not $playbackCoreProfileSource.Contains("BaselineRevision = '2544daa13eb23fdf03bd922e65b96fcffaba421c'") -or
-    -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = 'refactor/playback-core-lifecycle'") -or
+    -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = 'refactor/playback-remove-release-gap'") -or
     -not $playbackCoreProfileSource.Contains("'near-minimum-retrigger'") -or
     -not $playbackCoreBuilderSource.Contains('Assert-PlaybackCoreLifecycleSourceCheckout') -or
     -not $playbackCoreBuilderSource.Contains("['qualification_plan'] = [ordered]@{") -or

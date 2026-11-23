@@ -25,7 +25,8 @@ struct IntentOracle {
     reason: String,
     paired_up_source_action_index: u32,
     paired_up_offset_us: u64,
-    paired_up_offset_ticks: u64,
+    authored_up_offset_ticks: u64,
+    paired_up_not_before_offset_ticks: u64,
 }
 
 fn qpc_ceil(microseconds: u64) -> TimelineTicks {
@@ -116,7 +117,8 @@ fn intent_oracle(schedule: &RuntimeSchedule, intents: &[DownIntentTicks]) -> Vec
             reason: schedule.reason_table[usize::from(intent.reason_id)].clone(),
             paired_up_source_action_index: intent.paired_up_source_action_index,
             paired_up_offset_us: intent.paired_up_offset_us,
-            paired_up_offset_ticks: intent.paired_up_offset_ticks.as_u64(),
+            authored_up_offset_ticks: intent.authored_up_offset_ticks.as_u64(),
+            paired_up_not_before_offset_ticks: intent.paired_up_not_before_offset_ticks.as_u64(),
         })
         .collect()
 }
@@ -176,7 +178,8 @@ fn canonical_generation_arena_arrays_and_qpc_rounding_match_the_reference() {
             reason: "first chord".into(),
             paired_up_source_action_index: 11,
             paired_up_offset_us: 1_301,
-            paired_up_offset_ticks: 4_657,
+            authored_up_offset_ticks: 4_657,
+            paired_up_not_before_offset_ticks: 4_657,
         },
         IntentOracle {
             source_action_index: 10,
@@ -186,7 +189,8 @@ fn canonical_generation_arena_arrays_and_qpc_rounding_match_the_reference() {
             reason: "first chord".into(),
             paired_up_source_action_index: 12,
             paired_up_offset_us: 1_701,
-            paired_up_offset_ticks: 6_089,
+            authored_up_offset_ticks: 6_089,
+            paired_up_not_before_offset_ticks: 6_089,
         },
         IntentOracle {
             source_action_index: 13,
@@ -196,7 +200,8 @@ fn canonical_generation_arena_arrays_and_qpc_rounding_match_the_reference() {
             reason: "second A".into(),
             paired_up_source_action_index: 14,
             paired_up_offset_us: 2_501,
-            paired_up_offset_ticks: 8_953,
+            authored_up_offset_ticks: 8_953,
+            paired_up_not_before_offset_ticks: 8_953,
         },
         IntentOracle {
             source_action_index: 15,
@@ -206,7 +211,8 @@ fn canonical_generation_arena_arrays_and_qpc_rounding_match_the_reference() {
             reason: "third C".into(),
             paired_up_source_action_index: 16,
             paired_up_offset_us: 3_201,
-            paired_up_offset_ticks: 11_459,
+            authored_up_offset_ticks: 11_459,
+            paired_up_not_before_offset_ticks: 11_459,
         },
     ];
 
@@ -220,6 +226,10 @@ fn canonical_generation_arena_arrays_and_qpc_rounding_match_the_reference() {
     assert_eq!(legacy_intents, expected_intents);
 
     let memory = prepared.memory_metrics();
+    assert_eq!(
+        DispatchExecutor::estimated_memory_bytes(&schedule).expect("executor memory estimate"),
+        legacy.memory_metrics().total_bytes
+    );
     assert_eq!(memory.chord_count, 3);
     assert_eq!(memory.chord_capacity, 3);
     assert_eq!(memory.intent_count, 4);
@@ -233,7 +243,7 @@ fn canonical_generation_arena_arrays_and_qpc_rounding_match_the_reference() {
             + std::mem::size_of::<PreparedDispatchSchedule>()
     );
     if usize::BITS == 64 {
-        assert_eq!(memory.plan_capacity_bytes, 568);
+        assert_eq!(memory.plan_capacity_bytes, 600);
         assert_eq!(memory.overlapping_peak_capacity_bytes, 3_410);
     }
     assert_eq!(legacy.memory_metrics().chord_count, 3);

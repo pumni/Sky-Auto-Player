@@ -518,16 +518,6 @@ pub fn analyze_schedule_with_context(
             dense.len()
         ));
     }
-    if schedule.short_up_gap_repeat_count > 0 {
-        if severity == "low" {
-            severity = "medium";
-        }
-        reasons.push("short same-key Up gaps");
-        recommendations.push(format!(
-            "{} physically feasible same-key repeat(s) have an Up-to-Down gap shorter than one frame; the game may miss a short Up pulse.",
-            schedule.short_up_gap_repeat_count
-        ));
-    }
     if schedule.max_polyphony > 8 {
         severity = if severity == "low" {
             "medium"
@@ -540,16 +530,25 @@ pub fn analyze_schedule_with_context(
             schedule.max_polyphony
         ));
     }
+    let severity_before_short_gap = severity;
+    if schedule.short_up_gap_repeat_count > 0 {
+        if severity == "low" {
+            severity = "medium";
+        }
+        reasons.push("short same-key Up gaps");
+        recommendations.push(format!(
+            "{} physically feasible same-key repeat(s) have an Up-to-Down gap shorter than one frame; the game may miss a short Up pulse.",
+            schedule.short_up_gap_repeat_count
+        ));
+    }
     if let Some(interval) = schedule.shortest_same_key_interval_us {
         recommendations.push(format!(
             "Shortest same-key repeat interval: {:.1}ms.",
             interval as f64 / 1_000.0
         ));
     }
-    let short_gap_only = schedule.short_up_gap_repeat_count > 0
-        && schedule.impossible_same_key_repeats == 0
-        && dense.is_empty()
-        && schedule.max_polyphony <= 8;
+    let short_gap_only =
+        schedule.short_up_gap_repeat_count > 0 && severity_before_short_gap == "low";
     let (suggested_hold_frames, suggested_tempo_scale) = if short_gap_only {
         // A short authored Up gap requires user acknowledgement. Automatically
         // changing hold or tempo would change the risk under review.
@@ -559,16 +558,18 @@ pub fn analyze_schedule_with_context(
             schedule.recommended_hold_frames,
             schedule.recommended_tempo_scale,
         )
-    } else if schedule.max_polyphony >= 5 || (!dense.is_empty() && severity != "low") {
+    } else if schedule.max_polyphony >= 5
+        || (!dense.is_empty() && severity_before_short_gap != "low")
+    {
         (
             Some(1.5),
-            Some(if severity != "low" {
+            Some(if severity_before_short_gap != "low" {
                 current_tempo_scale.min(0.95)
             } else {
                 current_tempo_scale
             }),
         )
-    } else if severity == "medium" {
+    } else if severity_before_short_gap == "medium" {
         (Some(1.25), Some(current_tempo_scale.min(0.95)))
     } else {
         (Some(current_hold_frames), Some(current_tempo_scale))
@@ -815,6 +816,57 @@ mod tests {
                     recommendation.contains("game may miss a short Up pulse")
                 }));
             }
+        }
+    }
+
+    #[test]
+    fn short_gap_only_does_not_recommend_timing_changes_with_one_to_five_dense_clusters() {
+        let policy = crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 0)
+            .expect("valid policy");
+        for cluster_count in 1usize..=5 {
+            let mut notes = Vec::new();
+            let mut source_index = 0;
+            for cluster in 0..cluster_count {
+                let cluster_start_ms = i64::try_from(cluster * 200).expect("test time range");
+                for (key_index, key) in KEY_NAMES.iter().take(7).enumerate() {
+                    notes.push(Note {
+                        time_ms: cluster_start_ms
+                            + i64::try_from(key_index * 10).expect("test time range"),
+                        key: (*key).into(),
+                        source_index,
+                    });
+                    source_index += 1;
+                }
+                notes.push(Note {
+                    time_ms: cluster_start_ms + 17,
+                    key: KEY_NAMES[0].into(),
+                    source_index,
+                });
+                source_index += 1;
+            }
+            let schedule = build_schedule_with_policy(
+                &Song {
+                    name: "Short Up gap with sparse dense clusters".into(),
+                    notes,
+                },
+                1.0,
+                &policy,
+            )
+            .expect("short-gap schedule");
+            assert_eq!(schedule.short_up_gap_repeat_count, cluster_count);
+            assert_eq!(schedule.impossible_same_key_repeats, 0);
+
+            let risk = analyze_schedule(&schedule);
+            assert_eq!(risk.dense_clusters.len(), cluster_count);
+            assert!(risk.max_polyphony <= 8);
+            assert_eq!(risk.severity, "medium");
+            assert!(
+                risk.recommendations
+                    .iter()
+                    .any(|reason| { reason.contains("game may miss a short Up pulse") })
+            );
+            assert_eq!(risk.suggested_hold_frames, None);
+            assert_eq!(risk.suggested_tempo_scale, None);
         }
     }
 

@@ -268,7 +268,12 @@ fn prepared_plan_rounds_qpc_offsets_up_and_checkpoints_validation() {
     );
     assert_eq!(plan.min_hold_ticks.as_u64(), 36);
     assert_eq!(plan.resume_cleanup_delay_ticks.as_u64(), 26);
-    assert_eq!(plan.down_intents[0].paired_up_offset_ticks.as_u64(), 179);
+    assert_eq!(
+        plan.down_intents[0]
+            .paired_up_not_before_offset_ticks
+            .as_u64(),
+        179
+    );
     assert_eq!(plan.down_chords[1].scheduled_ticks.as_u64(), 179);
     assert_eq!(plan.down_chords[2].scheduled_ticks.as_u64(), 183);
     assert_eq!(plan.down_chords[3].scheduled_ticks.as_u64(), 205);
@@ -451,9 +456,39 @@ fn paired_up_qpc_normalization_adds_rounded_down_and_hold_ticks() {
     .expect("authored H boundary is normalized into QPC ticks");
     assert_eq!(prepared.down_intents[0].paired_up_offset_us, 18_167);
     assert_eq!(
-        prepared.down_intents[0].paired_up_offset_ticks.as_u64(),
+        prepared.down_intents[0].authored_up_offset_ticks.as_u64(),
+        65_030
+    );
+    assert_eq!(
+        prepared.down_intents[0]
+            .paired_up_not_before_offset_ticks
+            .as_u64(),
         65_031
     );
+
+    let down_due = prepared.down_chords[0].scheduled_ticks;
+    let mut executor = DispatchExecutor::from_prepared_schedule(prepared);
+    let down = executor.evaluate(down_due);
+    let DispatchAction::Send {
+        up_mask: 0,
+        down_chord: Some(chord),
+    } = down
+    else {
+        panic!("initial Down is due");
+    };
+    executor
+        .on_send_completed(0, chord.down_mask, down_due)
+        .expect("commit Down");
+    assert_eq!(
+        executor.evaluate(TimelineTicks::from_raw(65_030)),
+        DispatchAction::Wait {
+            deadline_ticks: TimelineTicks::from_raw(65_031)
+        }
+    );
+    assert!(matches!(
+        executor.evaluate(TimelineTicks::from_raw(65_031)),
+        DispatchAction::Send { up_mask: 1, .. }
+    ));
 }
 
 #[test]

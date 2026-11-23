@@ -60,6 +60,19 @@ function mockTimingAdvisory(
     working_memory_limit_bytes: 67_108_864,
     short_up_gap_repeat_count: hasShortGapRisk ? 2 : 0,
     effective_hold_floor_h_us: 17_467,
+    dispatch_model_status: 'modeled_risk',
+    dispatch_model_explanation:
+      'The illustrative executor model found 1 late send, 1 H-floor displacement, and 1 head-of-line delay.',
+    modeled_send_count: 4,
+    modeled_negative_slack_send_count: 1,
+    modeled_h_floor_displaced_send_count: 1,
+    max_modeled_h_floor_displacement_us: 13,
+    modeled_head_of_line_send_count: 1,
+    max_modeled_head_of_line_delay_us: 8,
+    max_modeled_lateness_us: 21,
+    estimated_sender_setup_us: 10,
+    estimated_per_input_us: 3,
+    estimated_post_send_us: 5,
     dry_run_is_hypothetical: dryRun,
   };
 }
@@ -1249,7 +1262,17 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
       const preparedId = `prepared-${++preparedPlaybackSequence}-${found.song_id}`;
       preparedConfigs.set(preparedId, request.config);
       preparedSongIds.set(preparedId, found.song_id);
-      preparedVariantConfigs.set(preparedId, new Map([['proceed', request.config]]));
+      const dryRunConfig = { ...request.config, dry_run: true };
+      const hasDryRunVariant = risk !== 'low' && !request.config.dry_run;
+      preparedVariantConfigs.set(
+        preparedId,
+        new Map([
+          ['proceed', request.config],
+          ...(hasDryRunVariant ? ([['dry_run', dryRunConfig]] as const) : []),
+        ]),
+      );
+      const shortGapReason =
+        '2 feasible same-key repeats have an authored Up-to-Down gap shorter than one frame. The game may miss a short Up pulse.';
       return {
         prepared_id: preparedId,
         song: {
@@ -1267,7 +1290,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                 : [
                     found.song_id === mockId(LONG_CONTENT_INDEX)
                       ? LONG_CONTENT_REASON
-                      : '2 feasible same-key repeats have an authored Up-to-Down gap shorter than one frame. The game may miss a short Up pulse.',
+                      : shortGapReason,
                   ],
             recommendations: [],
             short_up_gap_repeat_count: risk === 'low' ? 0 : 2,
@@ -1286,13 +1309,20 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
               : [
                   found.song_id === mockId(LONG_CONTENT_INDEX)
                     ? LONG_CONTENT_REASON
-                    : 'Dense note transitions may need a slower tempo.',
+                    : shortGapReason,
                 ],
-          recommendations: ['Keep the selected settings.'],
-          short_up_gap_repeat_count: 0,
+          recommendations: [],
+          short_up_gap_repeat_count: risk === 'low' ? 0 : 2,
         },
         decisions:
-          risk === 'low' ? [] : [{ decision: 'proceed', label: 'Proceed with current settings' }],
+          risk === 'low'
+            ? []
+            : [
+                { decision: 'proceed', label: 'Proceed with current settings' },
+                ...(hasDryRunVariant
+                  ? [{ decision: 'dry_run' as const, label: 'Run a dry-run first' }]
+                  : []),
+              ],
         plan_fingerprint: 'mock-plan',
         variants:
           risk === 'low'
@@ -1319,6 +1349,20 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                     request.config.dry_run,
                   ),
                 },
+                ...(hasDryRunVariant
+                  ? [
+                      {
+                        decision: 'dry_run' as const,
+                        config: dryRunConfig,
+                        plan_fingerprint: 'mock-dry-run-plan',
+                        timing_advisory: mockTimingAdvisory(
+                          'mock-dry-run-plan',
+                          'short_up_gap_risk',
+                          true,
+                        ),
+                      },
+                    ]
+                  : []),
               ],
         error_code: null,
         error_message: null,

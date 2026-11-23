@@ -33,6 +33,14 @@ Preparation compiles and validates the immutable dispatch schedule before a
 worker starts. The worker moves prepared storage into its executor; it does not
 compile or materialize the sheet. Healthy dispatch does not allocate.
 
+Prepare reports two independent timing signals. The authored Up-gap check counts
+feasible same-key repeats whose authored Up-to-next-Down gap is shorter than one
+frame. A bounded offline estimate also advances the canonical schedule through
+the production `DispatchExecutor` with explicit sender-cost assumptions and
+reports lateness, H-floor displacement, and head-of-line delay. The estimate is
+diagnostic only: it does not change admission, schedule timing, or playback, and
+does not predict whether the game observes an Up pulse.
+
 ## Session authority and final admission
 
 A physical session binds one immutable target HWND, owner PID, retained process

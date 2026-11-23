@@ -1,11 +1,17 @@
 use super::*;
-use crate::commands::{GenerationTimingAdvisoryDto, PlaybackConfigDto, TimingAdvisoryStatus};
+use crate::commands::{
+    DispatchModelStatus, GenerationTimingAdvisoryDto, PlaybackConfigDto, TimingAdvisoryStatus,
+};
 use sky_app_core::timing::MaterializedTimingPolicy;
 
 const MAX_TIMING_ADVISORY_GENERATIONS: usize = 50_000;
 const MAX_TIMING_ADVISORY_WORK_UNITS: u64 = 3_000_000;
 const MAX_TIMING_ADVISORY_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_KEY_VISITS_PER_GENERATION: u64 = sky_player::adapter_support::MAX_KEYS as u64;
+const MAX_KEY_VISITS_PER_GENERATION: u64 = 60;
+const MODEL_QPC_FREQUENCY_HZ: u64 = 1_000_000;
+const ESTIMATED_SENDER_SETUP_US: u64 = 10;
+const ESTIMATED_PER_INPUT_US: u64 = 3;
+const ESTIMATED_POST_SEND_US: u64 = 5;
 
 #[cfg(test)]
 pub(super) fn analyze_variant(
@@ -26,9 +32,7 @@ pub(super) fn analyze_variant(
         );
     }
     match super::session::compile_dispatch_schedule(schedule, cancelled) {
-        Ok(compiled) => {
-            analyze_compiled_stream(&compiled, result, policy.frame_us, cancelled, || {})
-        }
+        Ok(compiled) => analyze_compiled_stream(&compiled, result, policy, cancelled, || {}),
         Err(error) => unavailable(
             result,
             &format!("The canonical generation schedule could not be inspected: {error}"),
@@ -104,19 +108,13 @@ fn analyze_compiled_variant_with_hook(
     if let Err(reason) = validate_policy(config, policy) {
         return unavailable(result, &reason);
     }
-    analyze_compiled_stream(
-        compiled,
-        result,
-        policy.frame_us,
-        cancelled,
-        before_analysis,
-    )
+    analyze_compiled_stream(compiled, result, policy, cancelled, before_analysis)
 }
 
 fn analyze_compiled_stream(
     compiled: &sky_player::adapter_support::RuntimeSchedule,
     mut result: GenerationTimingAdvisoryDto,
-    frame_us: u64,
+    policy: &MaterializedTimingPolicy,
     cancelled: &AtomicBool,
     before_analysis: impl FnOnce(),
 ) -> GenerationTimingAdvisoryDto {
@@ -152,22 +150,24 @@ fn analyze_compiled_stream(
             );
         }
     };
-    let memory_bytes = match compiled.memory_metrics() {
+    let compiled_memory_bytes = match compiled.memory_metrics() {
         Ok(metrics) => metrics
             .heap_payload_bytes
             .checked_add(metrics.struct_bytes)
-            .and_then(|bytes| {
-                bytes
-                    .max(metrics.compile_memory.phase_peak_capacity_bytes)
-                    .try_into()
-                    .ok()
-            }),
+            .map(|bytes| bytes.max(metrics.compile_memory.phase_peak_capacity_bytes)),
         Err(_) => None,
     };
-    if memory_bytes.is_none_or(|bytes: u64| bytes > MAX_TIMING_ADVISORY_MEMORY_BYTES) {
+    let executor_memory_bytes =
+        sky_player::adapter_support::DispatchExecutor::estimated_memory_bytes(compiled).ok();
+    let total_memory_bytes = compiled_memory_bytes
+        .zip(executor_memory_bytes)
+        .and_then(|(compiled, executor)| compiled.checked_add(executor));
+    if total_memory_bytes.is_none_or(|bytes| {
+        bytes > usize::try_from(MAX_TIMING_ADVISORY_MEMORY_BYTES).unwrap_or(usize::MAX)
+    }) {
         return unavailable(
             result,
-            "The compiled generation schedule exceeds the offline advisory memory budget.",
+            "The prepared generation schedule and executor simulation exceed the offline advisory memory budget.",
         );
     }
     result.work_limit_units = MAX_TIMING_ADVISORY_WORK_UNITS;
@@ -206,7 +206,7 @@ fn analyze_compiled_stream(
                         "A same-key Down precedes the prior paired authored Up.",
                     );
                 };
-                if gap_us < frame_us {
+                if gap_us < policy.frame_us {
                     result.short_up_gap_repeat_count += 1;
                 }
             }
@@ -219,7 +219,6 @@ fn analyze_compiled_stream(
             *prior_up = Some(generation.paired_up_offset_us);
         }
     }
-    let _ = work_units;
     result.status = if result.short_up_gap_repeat_count > 0 {
         TimingAdvisoryStatus::ShortUpGapRisk
     } else {
@@ -233,7 +232,253 @@ fn analyze_compiled_stream(
     } else {
         "No feasible same-key repeat has an authored Up-to-Down gap shorter than one frame.".into()
     };
+
+    let simulated = match simulate_dispatch_schedule(compiled, policy, cancelled) {
+        Ok(summary) => summary,
+        Err(reason) => {
+            if cancelled.load(Ordering::Acquire) {
+                return unavailable(
+                    result,
+                    "analysis was cancelled while simulating the executor schedule",
+                );
+            }
+            return dispatch_model_unavailable(result, &reason);
+        }
+    };
+    result.modeled_send_count = simulated.send_count;
+    result.modeled_negative_slack_send_count = simulated.negative_slack_send_count;
+    result.modeled_h_floor_displaced_send_count = simulated.h_floor_displaced_send_count;
+    result.max_modeled_h_floor_displacement_us = simulated.max_h_floor_displacement_us;
+    result.modeled_head_of_line_send_count = simulated.head_of_line_send_count;
+    result.max_modeled_head_of_line_delay_us = simulated.max_head_of_line_delay_us;
+    result.max_modeled_lateness_us = simulated.max_lateness_us;
+    result.dispatch_model_status = if simulated.negative_slack_send_count > 0
+        || simulated.h_floor_displaced_send_count > 0
+        || simulated.head_of_line_send_count > 0
+    {
+        DispatchModelStatus::ModeledRisk
+    } else {
+        DispatchModelStatus::NoModeledRisk
+    };
+    result.dispatch_model_explanation = match result.dispatch_model_status {
+        DispatchModelStatus::NoModeledRisk => format!(
+            "The illustrative executor model found no lateness, H-floor displacement, or head-of-line delay across {} sends.",
+            simulated.send_count
+        ),
+        DispatchModelStatus::ModeledRisk => format!(
+            "The illustrative executor model found {} late send(s), {} H-floor displacement(s), and {} head-of-line delay(s).",
+            simulated.negative_slack_send_count,
+            simulated.h_floor_displaced_send_count,
+            simulated.head_of_line_send_count
+        ),
+        DispatchModelStatus::NotAnalyzed | DispatchModelStatus::Unavailable => {
+            "The illustrative executor model could not be analyzed.".into()
+        }
+    };
+    let _ = work_units;
     result
+}
+
+#[derive(Default)]
+struct DispatchSimulationSummary {
+    send_count: u64,
+    negative_slack_send_count: u64,
+    h_floor_displaced_send_count: u64,
+    max_h_floor_displacement_us: u64,
+    head_of_line_send_count: u64,
+    max_head_of_line_delay_us: u64,
+    max_lateness_us: u64,
+}
+
+fn simulate_dispatch_schedule(
+    schedule: &sky_player::adapter_support::RuntimeSchedule,
+    policy: &MaterializedTimingPolicy,
+    cancelled: &AtomicBool,
+) -> Result<DispatchSimulationSummary, String> {
+    let hold_ticks = us_to_ticks_ceil(policy.min_hold_us, MODEL_QPC_FREQUENCY_HZ)?;
+    let mut executor = sky_player::adapter_support::DispatchExecutor::new_with_cancellation(
+        schedule,
+        sky_player::adapter_support::DurationTicks::from_raw(hold_ticks),
+        sky_player::adapter_support::DurationTicks::ZERO,
+        |us| {
+            us_to_ticks_ceil(us, MODEL_QPC_FREQUENCY_HZ)
+                .map(sky_player::adapter_support::TimelineTicks::from_raw)
+        },
+        || {
+            if cancelled.load(Ordering::Acquire) {
+                Err("cancelled".into())
+            } else {
+                Ok(())
+            }
+        },
+    )?;
+    let compiled_metrics = schedule
+        .memory_metrics()
+        .map_err(|error| format!("compiled schedule memory accounting failed: {error}"))?;
+    let retained_schedule_bytes = compiled_metrics
+        .heap_payload_bytes
+        .checked_add(compiled_metrics.struct_bytes)
+        .ok_or_else(|| "compiled schedule memory accounting overflow".to_string())?
+        .max(compiled_metrics.compile_memory.phase_peak_capacity_bytes);
+    let actual_executor_bytes = executor
+        .try_memory_metrics()
+        .map_err(|error| format!("executor memory accounting failed: {error}"))?
+        .total_bytes;
+    if retained_schedule_bytes
+        .checked_add(actual_executor_bytes)
+        .is_none_or(|bytes| {
+            bytes > usize::try_from(MAX_TIMING_ADVISORY_MEMORY_BYTES).unwrap_or(usize::MAX)
+        })
+    {
+        return Err("the prepared generation schedule and executor exceed the offline advisory memory budget".into());
+    }
+    let epoch = sky_player::adapter_support::QpcTicks::ZERO;
+    let max_iterations = usize::try_from(schedule.generation_count)
+        .ok()
+        .and_then(|count| count.checked_mul(2))
+        .and_then(|count| count.checked_add(16))
+        .ok_or_else(|| "executor simulation iteration bound overflow".to_string())?;
+    let mut summary = DispatchSimulationSummary::default();
+    let mut now = epoch;
+    let mut previous_worker_free = None;
+    let mut iterations = 0usize;
+
+    loop {
+        if iterations.is_multiple_of(256) && cancelled.load(Ordering::Acquire) {
+            return Err("cancelled".into());
+        }
+        iterations = iterations
+            .checked_add(1)
+            .ok_or_else(|| "executor simulation iteration overflow".to_string())?;
+        if iterations > max_iterations {
+            return Err("the executor simulation exceeded its bounded iteration count".into());
+        }
+        match executor
+            .evaluate_at(now, epoch)
+            .map_err(|error| format!("executor timeline arithmetic failed: {error}"))?
+        {
+            sky_player::adapter_support::DispatchDecision::Finished => break,
+            sky_player::adapter_support::DispatchDecision::Wait { deadline_qpc }
+                if deadline_qpc > now =>
+            {
+                now = deadline_qpc;
+            }
+            sky_player::adapter_support::DispatchDecision::Wait { .. } => {
+                return Err("the executor returned a non-advancing wait deadline".into());
+            }
+            sky_player::adapter_support::DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                timing_window,
+            } => {
+                let down_mask = down_chord.map_or(0, |chord| chord.down_mask);
+                if up_mask & down_mask != 0 || up_mask | down_mask == 0 {
+                    return Err("the executor returned an invalid physical send mask".into());
+                }
+                let authored_target = timing_window.authored_target_qpc.as_u64();
+                let mut h_constraint = 0u64;
+                let mut h_displacement = 0u64;
+                for timing in executor.up_slot_timings(up_mask) {
+                    let authored_up = timing.authored_up_offset_ticks.as_u64();
+                    let prepared_up_floor = timing.paired_up_not_before_offset_ticks.as_u64();
+                    let physical_up_floor = timing.release_not_before_qpc.as_u64();
+                    let floor = authored_up.max(prepared_up_floor).max(physical_up_floor);
+                    h_constraint = h_constraint.max(floor);
+                    h_displacement = h_displacement.max(floor.saturating_sub(authored_up));
+                }
+                let resume_constraint = if down_mask != 0 {
+                    executor
+                        .resume_barrier_qpc()
+                        .map_or(0, |barrier| barrier.as_u64())
+                } else {
+                    0
+                };
+                let floor_ready = authored_target.max(h_constraint).max(resume_constraint);
+                let constraint_ready = h_constraint
+                    .max(resume_constraint)
+                    .max(previous_worker_free.unwrap_or(0));
+                let ready = now.as_u64().max(floor_ready);
+                let slack = i128::from(authored_target) - i128::from(constraint_ready);
+                let lateness = ready
+                    .checked_sub(authored_target)
+                    .ok_or_else(|| "executor model produced negative lateness".to_string())?;
+                if slack < 0 {
+                    summary.negative_slack_send_count = summary
+                        .negative_slack_send_count
+                        .checked_add(1)
+                        .ok_or_else(|| "negative-slack send count overflow".to_string())?;
+                }
+                if h_displacement > 0 {
+                    summary.h_floor_displaced_send_count = summary
+                        .h_floor_displaced_send_count
+                        .checked_add(1)
+                        .ok_or_else(|| "H-floor send count overflow".to_string())?;
+                    summary.max_h_floor_displacement_us =
+                        summary.max_h_floor_displacement_us.max(h_displacement);
+                }
+                let hol_delay = previous_worker_free
+                    .map(|free| free.saturating_sub(floor_ready))
+                    .unwrap_or(0);
+                if hol_delay > 0 {
+                    summary.head_of_line_send_count = summary
+                        .head_of_line_send_count
+                        .checked_add(1)
+                        .ok_or_else(|| "head-of-line send count overflow".to_string())?;
+                    summary.max_head_of_line_delay_us =
+                        summary.max_head_of_line_delay_us.max(hol_delay);
+                }
+                summary.send_count = summary
+                    .send_count
+                    .checked_add(1)
+                    .ok_or_else(|| "modeled send count overflow".to_string())?;
+                summary.max_lateness_us = summary.max_lateness_us.max(lateness);
+
+                let event_count = u64::from(up_mask.count_ones() + down_mask.count_ones());
+                let sender_envelope = ESTIMATED_SENDER_SETUP_US
+                    .checked_add(
+                        ESTIMATED_PER_INPUT_US
+                            .checked_mul(event_count)
+                            .ok_or_else(|| "estimated SendInput cost overflow".to_string())?,
+                    )
+                    .ok_or_else(|| "estimated sender envelope overflow".to_string())?;
+                let sender_completion = ready
+                    .checked_add(sender_envelope)
+                    .ok_or_else(|| "estimated sender completion overflow".to_string())?;
+                let worker_free = sender_completion
+                    .checked_add(ESTIMATED_POST_SEND_US)
+                    .ok_or_else(|| "estimated post-send time overflow".to_string())?;
+                executor.on_send_completed_at(
+                    up_mask,
+                    down_mask,
+                    sky_player::adapter_support::QpcTicks::from_raw(sender_completion),
+                )?;
+                previous_worker_free = Some(worker_free);
+                now = sky_player::adapter_support::QpcTicks::from_raw(worker_free);
+            }
+        }
+    }
+    if cancelled.load(Ordering::Acquire) {
+        return Err("cancelled".into());
+    }
+    Ok(summary)
+}
+
+fn us_to_ticks_ceil(microseconds: u64, frequency_hz: u64) -> Result<u64, String> {
+    let numerator = u128::from(microseconds)
+        .checked_mul(u128::from(frequency_hz))
+        .and_then(|value| value.checked_add(999_999))
+        .ok_or_else(|| "microseconds-to-QPC conversion overflow".to_string())?;
+    u64::try_from(numerator / 1_000_000)
+        .map_err(|_| "microseconds-to-QPC result exceeds the timeline range".to_string())
+}
+
+fn dispatch_model_unavailable(
+    mut advisory: GenerationTimingAdvisoryDto,
+    reason: &str,
+) -> GenerationTimingAdvisoryDto {
+    advisory.dispatch_model_status = DispatchModelStatus::Unavailable;
+    advisory.dispatch_model_explanation = reason.to_owned();
+    advisory
 }
 
 fn validate_policy(
@@ -275,6 +520,18 @@ fn empty_advisory(
         working_memory_limit_bytes: MAX_TIMING_ADVISORY_MEMORY_BYTES,
         short_up_gap_repeat_count: 0,
         effective_hold_floor_h_us: Some(effective_hold_floor_h_us),
+        dispatch_model_status: DispatchModelStatus::NotAnalyzed,
+        dispatch_model_explanation: "The illustrative executor model has not been computed.".into(),
+        modeled_send_count: 0,
+        modeled_negative_slack_send_count: 0,
+        modeled_h_floor_displaced_send_count: 0,
+        max_modeled_h_floor_displacement_us: 0,
+        modeled_head_of_line_send_count: 0,
+        max_modeled_head_of_line_delay_us: 0,
+        max_modeled_lateness_us: 0,
+        estimated_sender_setup_us: ESTIMATED_SENDER_SETUP_US,
+        estimated_per_input_us: ESTIMATED_PER_INPUT_US,
+        estimated_post_send_us: ESTIMATED_POST_SEND_US,
         dry_run_is_hypothetical: dry_run,
     }
 }
@@ -285,6 +542,8 @@ fn unavailable(
 ) -> GenerationTimingAdvisoryDto {
     advisory.status = TimingAdvisoryStatus::Unavailable;
     advisory.explanation = reason.to_owned();
+    advisory.dispatch_model_status = DispatchModelStatus::Unavailable;
+    advisory.dispatch_model_explanation = reason.to_owned();
     advisory
 }
 
@@ -366,6 +625,11 @@ mod tests {
         assert_eq!(advisory.unmatched_up_count, Some(1));
         assert_eq!(advisory.short_up_gap_repeat_count, 1);
         assert_eq!(advisory.effective_hold_floor_h_us, Some(policy.min_hold_us));
+        assert_eq!(
+            advisory.dispatch_model_status,
+            DispatchModelStatus::ModeledRisk
+        );
+        assert!(advisory.max_modeled_h_floor_displacement_us > 0);
     }
 
     #[test]
@@ -389,6 +653,43 @@ mod tests {
         );
         assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
         assert_eq!(advisory.short_up_gap_repeat_count, 0);
+    }
+
+    #[test]
+    fn executor_model_reports_late_up_and_hol_independently_of_one_frame_authored_gap() {
+        let config = config(false);
+        let policy = policy(&config);
+        let h = policy.min_hold_us;
+        let frame = policy.frame_us;
+        let authored = schedule(&[
+            (ActionKind::Down, 0, 0x15),
+            (ActionKind::Down, 10, 0x16),
+            (ActionKind::Up, h, 0x15),
+            (ActionKind::Up, h + 10, 0x16),
+            (ActionKind::Down, h + frame, 0x15),
+            (ActionKind::Up, h * 2 + frame, 0x15),
+        ]);
+
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "modeled-pressure-with-one-frame-gap",
+            &AtomicBool::new(false),
+        );
+
+        assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
+        assert_eq!(advisory.short_up_gap_repeat_count, 0);
+        assert_eq!(
+            advisory.dispatch_model_status,
+            DispatchModelStatus::ModeledRisk
+        );
+        assert!(advisory.modeled_negative_slack_send_count > 0);
+        assert!(advisory.modeled_h_floor_displaced_send_count > 0);
+        assert!(advisory.max_modeled_h_floor_displacement_us > 0);
+        assert!(advisory.modeled_head_of_line_send_count > 0);
+        assert!(advisory.max_modeled_head_of_line_delay_us > 0);
+        assert!(advisory.max_modeled_lateness_us > 0);
     }
 
     #[test]

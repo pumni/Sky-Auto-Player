@@ -19,9 +19,15 @@ for (const viewport of [
     await expect(
       confirmation.getByRole('button', { name: 'Proceed with current settings' }),
     ).toBeFocused();
+    await expect(
+      confirmation.getByRole('button', { name: 'Test playback (no input)' }),
+    ).toBeVisible();
+    await expect(
+      confirmation.getByRole('button', { name: 'Use recommended settings' }),
+    ).toHaveCount(0);
     const notNow = confirmation.getByRole('button', { name: 'Not now' });
     await expect(notNow).toBeVisible();
-    await expect(confirmation.locator('.admission-option')).toHaveCount(1);
+    await expect(confirmation.locator('.admission-option')).toHaveCount(2);
 
     const panel = await confirmation.boundingBox();
     const dismiss = await notNow.boundingBox();
