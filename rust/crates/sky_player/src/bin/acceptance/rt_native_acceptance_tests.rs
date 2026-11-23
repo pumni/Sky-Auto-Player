@@ -1,5 +1,6 @@
 use super::{
     ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US, AdmissionVariantChoice, CalibrationPlacement,
+    active_cleanup_resume_evidence_is_ordered, active_cleanup_resumed_down_sender_qpc_ticks,
     DRAIN_DEADLINE_MS, DrainClock, DrainMode, DrainResult, EVENT_SCHEMA_VERSION, EventRecord,
     EventWindow, EventWindowReader, FULL_INSTRUMENT_MASK, INPUT_POLICY,
     MaterializedInstrumentKeyProfile, NativeCleanupEvidence, PHYSICAL_INSTRUMENT_SCAN_CODES,
@@ -18,6 +19,87 @@ use super::generation_stress::{
     strict_physical_forensics_qualification, SHORT_UP_GAP_STRESS_MIN_HOLD_SAMPLES,
 };
 use sky_dispatch_core::{accounting::GenerationAccounting, model::MAX_KEYS};
+
+#[test]
+fn active_cleanup_resume_ordering_uses_worker_commit_and_down_sender_qpc() {
+    assert!(active_cleanup_resume_evidence_is_ordered(
+        Some(100),
+        Some(110),
+        Some(120),
+        Some(125), // caller returned after worker commit
+        Some(122),
+        Some(123),
+    ));
+    assert!(active_cleanup_resume_evidence_is_ordered(
+        Some(100),
+        Some(110),
+        Some(120),
+        None, // caller-return sampling is diagnostic only
+        Some(122),
+        Some(123),
+    ));
+    assert!(!active_cleanup_resume_evidence_is_ordered(
+        Some(100),
+        Some(110),
+        Some(120),
+        Some(125),
+        Some(122),
+        Some(121), // same-key Down sender sampled before worker commit
+    ));
+    assert!(!active_cleanup_resume_evidence_is_ordered(
+        Some(100),
+        Some(110),
+        Some(123),
+        Some(125),
+        Some(122), // Resume request cannot follow the worker commit
+        Some(124),
+    ));
+}
+
+#[test]
+fn active_cleanup_resume_sender_qpc_requires_unique_measured_same_key_down() {
+    let telemetry = serde_json::json!({
+        "records": [
+            {
+                "source_action_index": 0,
+                "down_mask": 1,
+                "up_mask": 0,
+                "pre_call_qpc_available": true,
+                "pre_call_qpc_ticks": 90
+            },
+            {
+                "source_action_index": 2,
+                "down_mask": 1,
+                "up_mask": 0,
+                "pre_call_qpc_available": true,
+                "pre_call_qpc_ticks": 123
+            }
+        ]
+    });
+    assert_eq!(
+        active_cleanup_resumed_down_sender_qpc_ticks(&telemetry),
+        Some(123)
+    );
+
+    let unavailable = serde_json::json!({
+        "records": [{
+            "source_action_index": 2,
+            "down_mask": 1,
+            "up_mask": 0,
+            "pre_call_qpc_available": false,
+            "pre_call_qpc_ticks": 0
+        }]
+    });
+    assert_eq!(active_cleanup_resumed_down_sender_qpc_ticks(&unavailable), None);
+
+    let ambiguous = serde_json::json!({
+        "records": [
+            {"source_action_index": 2, "down_mask": 1, "up_mask": 0, "pre_call_qpc_available": true, "pre_call_qpc_ticks": 123},
+            {"source_action_index": 2, "down_mask": 1, "up_mask": 0, "pre_call_qpc_available": true, "pre_call_qpc_ticks": 124}
+        ]
+    });
+    assert_eq!(active_cleanup_resumed_down_sender_qpc_ticks(&ambiguous), None);
+}
 
 fn base_arguments(scenario: &str) -> Vec<String> {
     [

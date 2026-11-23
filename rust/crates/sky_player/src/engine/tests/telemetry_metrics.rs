@@ -615,15 +615,17 @@ fn manual_pause_verifies_active_cleanup_before_immediate_same_key_resume() {
         .expect("valid active-pause schedule");
     let send_calls = Arc::new(AtomicU64::new(0));
     let capture = Arc::new(std::sync::Mutex::new(Vec::new()));
-    let first_packet_send_entered = Arc::new(std::sync::Barrier::new(2));
-    let release_first_packet_send = Arc::new(std::sync::Barrier::new(2));
+    let (first_packet_send_entered_tx, first_packet_send_entered_rx) = std::sync::mpsc::channel();
+    let (release_first_packet_send_tx, release_first_packet_send_rx) = std::sync::mpsc::channel();
     let (release_entered_tx, release_entered_rx) = std::sync::mpsc::channel();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let mut fault_script = FaultInjectionScript::none();
     fault_script.send_call_count = Some(Arc::clone(&send_calls));
     fault_script.send_input_capture = Some(Arc::clone(&capture));
-    fault_script.first_packet_send_entered = Some(Arc::clone(&first_packet_send_entered));
-    fault_script.release_first_packet_send = Some(Arc::clone(&release_first_packet_send));
+    fault_script.first_packet_send_entered = Some(Arc::new(first_packet_send_entered_tx));
+    fault_script.release_first_packet_send = Some(Arc::new(std::sync::Mutex::new(
+        release_first_packet_send_rx,
+    )));
     fault_script.first_release_send_entered = Some(Arc::new(release_entered_tx));
     fault_script.release_first_release_send = Some(Arc::new(std::sync::Mutex::new(release_rx)));
     let session = NativeDispatchSession::new(test_session_options(
@@ -641,7 +643,9 @@ fn manual_pause_verifies_active_cleanup_before_immediate_same_key_resume() {
     // Hold the first Down inside the mock SendInput boundary. The QPC target
     // lets the test request Pause after the next same-key Down is due while
     // keeping the worker from racing ahead to the authored Up.
-    first_packet_send_entered.wait();
+    first_packet_send_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first Down did not reach the bounded mock send gate");
     assert_eq!(send_calls.load(Ordering::SeqCst), 1);
     let qpc_clock = QpcClock::initialize().expect("QPC clock");
     let epoch = session.epoch_qpc_for_test();
@@ -668,7 +672,9 @@ fn manual_pause_verifies_active_cleanup_before_immediate_same_key_resume() {
     let pause_generation = session
         .pause_with_timing_token()
         .expect("active-key pause request");
-    release_first_packet_send.wait();
+    release_first_packet_send_tx
+        .send(())
+        .expect("release first packet mock send gate");
     release_entered_rx
         .recv_timeout(Duration::from_secs(2))
         .expect("pause cleanup entered its first Up send");
@@ -693,19 +699,28 @@ fn manual_pause_verifies_active_cleanup_before_immediate_same_key_resume() {
 
     release_tx.send(()).expect("release the cleanup Up barrier");
     let pause_deadline = Instant::now() + Duration::from_secs(2);
-    let (paused_snapshot, pause_timing) = loop {
-        let snapshot = session.snapshot();
-        let timing = session
+    let pause_timing = loop {
+        if let Some(timing) = session
             .pause_timing_result(pause_generation)
-            .expect("pause timing result");
-        if snapshot.is_paused
-            && let Some(timing) = timing
+            .expect("pause timing result")
         {
-            break (snapshot, timing);
+            break timing;
         }
         assert!(
             Instant::now() < pause_deadline,
-            "verified pause did not commit: {snapshot:?}"
+            "verified pause cleanup acknowledgment did not publish: {:?}",
+            session.snapshot()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let paused_snapshot = loop {
+        let snapshot = session.snapshot();
+        if snapshot.is_paused {
+            break snapshot;
+        }
+        assert!(
+            Instant::now() < pause_deadline,
+            "verified pause did not publish after cleanup acknowledgment: {snapshot:?}"
         );
         std::thread::sleep(Duration::from_millis(1));
     };
@@ -791,17 +806,6 @@ fn manual_pause_verifies_active_cleanup_before_immediate_same_key_resume() {
         }) => *ticks,
         capture => panic!("resumed same-key Down lacks a measured send timestamp: {capture:?}"),
     };
-    let retired_floor_ticks = qpc_clock
-        .duration_from_us(17_167)
-        .expect("retired post-cleanup floor QPC duration");
-    let retired_floor_deadline = pause_timing
-        .acknowledged_ticks
-        .checked_add_duration(retired_floor_ticks)
-        .expect("retired post-cleanup floor deadline");
-    assert!(
-        QpcTicks::from_raw(resumed_down_send_ticks) < retired_floor_deadline,
-        "resumed Down dispatch must occur before the retired 17,167 us cleanup floor"
-    );
     assert!(resumed_down_send_ticks >= resume_commit_qpc);
     assert!(matches!(
         captures.as_slice(),

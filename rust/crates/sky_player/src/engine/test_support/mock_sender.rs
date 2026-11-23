@@ -187,10 +187,16 @@ pub(crate) fn create_mock_backend(
         let idx = call_index_packet.fetch_add(1, Ordering::Relaxed) as usize;
         if idx == 0 {
             if let Some(entered) = &first_packet_send_entered {
-                entered.wait();
+                entered
+                    .send(())
+                    .expect("test observer must remain attached to first packet gate");
             }
             if let Some(release) = &release_first_packet_send {
-                release.wait();
+                release
+                    .lock()
+                    .expect("first packet gate receiver lock")
+                    .recv_timeout(Duration::from_secs(5))
+                    .expect("test must release first packet within the bounded gate timeout");
             }
         }
         let send_started_qpc_ticks = qpc_clock.now().ok().map(|ticks| ticks.as_u64());

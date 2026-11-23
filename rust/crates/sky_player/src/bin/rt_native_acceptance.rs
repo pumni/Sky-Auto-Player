@@ -168,6 +168,48 @@ fn authored_timestamp_group_projection(
         })
         .collect()
 }
+fn active_cleanup_resume_evidence_is_ordered(
+    pause_request_qpc_ticks: Option<u64>,
+    cleanup_ack_qpc_ticks: Option<u64>,
+    resume_request_qpc_ticks: Option<u64>,
+    _resume_call_completed_qpc_ticks: Option<u64>,
+    resume_worker_commit_qpc_ticks: Option<u64>,
+    resume_down_sender_pre_call_qpc_ticks: Option<u64>,
+) -> bool {
+    matches!(
+        (
+            pause_request_qpc_ticks,
+            cleanup_ack_qpc_ticks,
+            resume_request_qpc_ticks,
+            resume_worker_commit_qpc_ticks,
+            resume_down_sender_pre_call_qpc_ticks,
+        ),
+        (Some(pause), Some(cleanup), Some(resume), Some(worker_commit), Some(sender_down))
+            if pause <= cleanup
+                && cleanup <= resume
+                && resume <= worker_commit
+                && worker_commit <= sender_down
+    )
+}
+
+fn active_cleanup_resumed_down_sender_qpc_ticks(telemetry: &Value) -> Option<u64> {
+    let records = telemetry.get("records")?.as_array()?;
+    let mut resumed_downs = records.iter().filter(|record| {
+        record.get("source_action_index").and_then(Value::as_u64) == Some(2)
+            && record.get("down_mask").and_then(Value::as_u64) == Some(1)
+            && record.get("up_mask").and_then(Value::as_u64) == Some(0)
+    });
+    let record = resumed_downs.next()?;
+    if resumed_downs.next().is_some()
+        || record
+            .get("pre_call_qpc_available")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return None;
+    }
+    record.get("pre_call_qpc_ticks").and_then(Value::as_u64)
+}
 #[derive(Debug, Clone)]
 struct AuthorizedTargets {
     sink: ReadyRecord,
@@ -894,6 +936,10 @@ fn run_windows(args: RunArgs) -> i32 {
     let down_sender_attempt_count = acceptance_hook
         .as_deref()
         .map(|hook| hook.down_sender_attempt_count());
+    let resume_down_sender_pre_call_qpc_ticks =
+        (args.scenario == Scenario::PauseResumeActiveCleanup)
+            .then(|| active_cleanup_resumed_down_sender_qpc_ticks(&timing_telemetry))
+            .flatten();
     let mut details = snapshot_json(&snapshot); attach_sink_window_provenance(&mut details, &fresh_sink, sink_cursor, &sink_events, sink_expected_down.len() + sink_expected_up.len(), args.scenario);
     if let Value::Object(object) = &mut details {
         object.insert("calibration_placement".to_string(), json!(args.calibration_placement.label()));
@@ -951,7 +997,7 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("authored_timestamp_group_count".to_string(), json!(authored_timestamp_group_count));
         object.insert("down_generation_count".to_string(), json!(down_generation_count));
         object.insert("physical_packet_attempt_count".to_string(), json!(snapshot.precision_packet_attempts));
-        object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "pause_cleanup_verified": pause_cleanup_verified, "pause_cleanup_obligation_mask": pause_cleanup_obligation_mask, "pause_requested_qpc_ticks": pause_requested_qpc_ticks, "pause_cleanup_verified_qpc_ticks": pause_cleanup_verified_qpc_ticks, "resume_requested_qpc_ticks": resume_requested_qpc_ticks, "resume_call_completed_qpc_ticks": resume_call_completed_qpc_ticks, "resume_worker_commit_qpc_ticks": resume_worker_commit_qpc_ticks, "resume_worker_commit_elapsed_ticks": resume_worker_commit_elapsed_ticks, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
+        object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "pause_cleanup_verified": pause_cleanup_verified, "pause_cleanup_obligation_mask": pause_cleanup_obligation_mask, "pause_requested_qpc_ticks": pause_requested_qpc_ticks, "pause_cleanup_verified_qpc_ticks": pause_cleanup_verified_qpc_ticks, "resume_requested_qpc_ticks": resume_requested_qpc_ticks, "resume_call_completed_qpc_ticks": resume_call_completed_qpc_ticks, "resume_worker_commit_qpc_ticks": resume_worker_commit_qpc_ticks, "resume_worker_commit_elapsed_ticks": resume_worker_commit_elapsed_ticks, "resume_down_sender_pre_call_qpc_ticks": resume_down_sender_pre_call_qpc_ticks, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         object.insert("expected_authored_up_slots".to_string(), json!(plan.expected_authored_up_slots)); object.insert("expected_safety_up_slots".to_string(), json!(plan.expected_safety_up_slots)); object.insert("ambiguous_packet_outcome_injection_requested".to_string(), json!(args.scenario == Scenario::AmbiguousPacket)); object.insert("preflight_user_held_injection_requested".to_string(), json!(args.scenario == Scenario::PreflightUserHeld));
         if args.scenario == Scenario::SuspendResume {
             object.insert("system_suspend_fixture".to_string(), json!({"injection_method": "NativeDispatchSession::notify_system_power(true)", "physical_os_suspend_performed": false, "resume_notified": false, "physical_session_terminal": system_suspend_terminal_observed}));
@@ -1017,20 +1063,14 @@ fn run_windows(args: RunArgs) -> i32 {
             || !pause_cleanup_verified
             || !resume_requested
             || !matches!(pause_cleanup_obligation_mask, Some(mask) if mask & 1 != 0)
-            || !matches!(
-                (
-                    pause_requested_qpc_ticks,
-                    pause_cleanup_verified_qpc_ticks,
-                    resume_requested_qpc_ticks,
-                    resume_call_completed_qpc_ticks,
-                    resume_worker_commit_qpc_ticks,
-                    resume_worker_commit_elapsed_ticks,
-                ),
-                (Some(pause), Some(cleanup), Some(resume), Some(completed), Some(worker_commit), Some(_elapsed))
-                    if pause <= cleanup
-                        && cleanup <= resume
-                        && resume <= completed
-                        && completed <= worker_commit
+            || resume_worker_commit_elapsed_ticks.is_none()
+            || !active_cleanup_resume_evidence_is_ordered(
+                pause_requested_qpc_ticks,
+                pause_cleanup_verified_qpc_ticks,
+                resume_requested_qpc_ticks,
+                resume_call_completed_qpc_ticks,
+                resume_worker_commit_qpc_ticks,
+                resume_down_sender_pre_call_qpc_ticks,
             ))
     {
         return write_report(

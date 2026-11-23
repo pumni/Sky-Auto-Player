@@ -1868,9 +1868,6 @@ fn post_focus_race_hook_flips_focus_active_up_only_focus_required_replans_and_ab
             qpc_offset(&harness, 20_000).as_u64(),
         ))
         .expect("up target");
-    while harness.qpc_now_for_test().expect("wait for up target") < up_target {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
     let (up_mask, down_chord, timing_window) = staged_send_at(&mut harness, up_target, epoch);
     assert_eq!(up_mask, 1);
     assert_eq!(down_chord, None);
@@ -1966,9 +1963,6 @@ fn post_focus_race_hook_invalidates_target_up_only_focus_required_fails_closed_w
             qpc_offset(&harness, 20_000).as_u64(),
         ))
         .expect("up target");
-    while harness.qpc_now_for_test().expect("wait for up target") < up_target {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
     let (up_mask, down_chord, timing_window) = staged_send_at(&mut harness, up_target, epoch);
     assert_eq!(up_mask, 1);
     let up_only = harness
@@ -2052,9 +2046,6 @@ fn post_focus_race_hook_invalidates_target_up_only_focus_not_required_fails_clos
             qpc_offset(&harness, 20_000).as_u64(),
         ))
         .expect("up target");
-    while harness.qpc_now_for_test().expect("wait for up target") < up_target {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
     let (up_mask, down_chord, timing_window) = staged_send_at(&mut harness, up_target, epoch);
     assert_eq!(up_mask, 1);
     let up_only = harness
