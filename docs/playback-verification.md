@@ -177,6 +177,33 @@ event projections, or send input; full-stream equality is asserted on each
 paired run before its measurement is accepted. The runnable native protocol and
 **-OwnerApprovedReceiveOnlyRun** approval requirements above also apply to v2.
 
+### PlaybackCoreLifecycleV3: cookie-patched successor baseline
+
+V3 is a separate requalification profile for the `cookie 0.18.3` lock update.
+V1 and V2 manifests and evidence remain pinned to their original source trees;
+V3 rejects them by profile name and schema. Its harness manifest schema is 3,
+while the shared report projection remains schema 2 because its report fields
+and lifecycle semantics are unchanged.
+
+The V3 baseline successor is **4bc4a8409d3250da012be6e92f6681e721c17f3a**,
+tree **8e2ce7c115458d95b9e13aa144b3d6cc16c083a4**. It has the exact V2 anchor
+**1d00c3b71fbf1f94003865bad6c4eba6d8dcd902** as parent and changes only
+`rust/Cargo.lock`, pinning `cookie 0.18.3`. Pin this commit at
+`refs/heads/qualification/playback-core-lifecycle-v3-baseline`; the V3 runner
+checks that the remote ref still points to the pinned SHA. V3 stores the
+lineage anchor and successor SHA/tree/parent/lock hash separately. The PR candidate must descend
+from the immutable V2 anchor, remain a sibling of the baseline successor, and
+match the successor's Cargo.lock bytes. The runner rejects a successor with a
+different parent/tree/patch, dirty source, mismatched lock hash, or candidate
+that is not the exact pushed PR branch tip.
+
+V3 keeps the V2 workload matrix, including 120 paired sessions and 10
+candidate-only safety sessions (130 planned total), with the same target,
+toolchain, `dist` profile, `real-input-acceptance` feature, authored-stream
+parity contract, 500 us margins, observer, pair order, and 60 fps workload.
+Native qualification remains subject to the same owner-approved ReceiveOnly
+machine and input-scope requirements. A V3 `PlanOnly` run plans 130 sessions+and records zero native attempts; it is not native gameplay evidence.
+
 After an authorized run, **lifecycle-metrics.json** records candidate source,
 tree, manifest and binary hashes with machine/boot and receiver identity.
 Stop-to-release latency ends at a worker-side QPC sample taken after terminal

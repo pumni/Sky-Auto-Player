@@ -498,7 +498,7 @@ try { Assert-FrameSnapshotManifestIdentity -Manifest $wrongFramePinnedHash -Expe
 if (-not $wrongFrameHashRejected) { throw 'FrameSnapshot accepted a baseline source tree hash other than the pinned tree' }
 
 $frameBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
-$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2'\)"
+$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3'\)"
 if ($frameBuilderSource -notmatch $m3ProfileSet -or
     $acceptanceSource -notmatch $m3ProfileSet) {
     throw 'FrameSnapshot profile is missing from an immutable build or case-runner boundary'
@@ -541,6 +541,7 @@ $reportSchemaSelectionFixtures = @(
     @{ Profile = 'DispatchSessionRedesignM3'; Expected = 2 },
     @{ Profile = 'PlaybackCoreLifecycle'; Expected = 2 },
     @{ Profile = 'PlaybackCoreLifecycleV2'; Expected = 2 },
+    @{ Profile = 'PlaybackCoreLifecycleV3'; Expected = 2 },
     @{ Profile = 'DispatchCore'; Expected = 1 },
     @{ Profile = 'Scheduler'; Expected = 1 }
 )
@@ -556,6 +557,7 @@ if ($successReportSchemaFixture.DispatchCleanupM3 -ne 2 -or
     $successReportSchemaFixture.DispatchSessionRedesignM3 -ne 2 -or
     $successReportSchemaFixture.PlaybackCoreLifecycle -ne 2 -or
     $successReportSchemaFixture.PlaybackCoreLifecycleV2 -ne 2 -or
+    $successReportSchemaFixture.PlaybackCoreLifecycleV3 -ne 2 -or
     -not $qualifierSource.Contains('$qualificationReportSchemaVersion = Get-QualificationReportSchemaVersion -Profile $QualificationProfile') -or
     -not $qualifierSource.Contains('schema_version = $qualificationReportSchemaVersion')) {
     throw 'shared current report projection schema v2 boundary changed or leaked into unrelated profiles'
@@ -1716,9 +1718,12 @@ $playbackCoreBaselineNativeSource = (& git -C $playbackCoreRepoRoot show '2544da
 if ($LASTEXITCODE -ne 0) { throw 'could not read the frozen PlaybackCoreLifecycle baseline native acceptance source' }
 $playbackCoreWorkerBootSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\boot.rs') -Raw
 $playbackCoreWorkerFinalizeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\cleanup\finalize.rs') -Raw
-if (-not $playbackCoreProfileSource.Contains("Name = if (`$Version -eq 1) { 'PlaybackCoreLifecycle' } else { 'PlaybackCoreLifecycleV2' }") -or
-    -not $playbackCoreProfileSource.Contains("BaselineRevision = if (`$Version -eq 1) { '2544daa13eb23fdf03bd922e65b96fcffaba421c' } else { '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' }") -or
-    -not $playbackCoreProfileSource.Contains("BaselineTree = if (`$Version -eq 1) { '155882714df131ddc9b9985133a1f0611736b7cd' } else { '25a20291b9cf84b1283804f451b33e3c4605507c' }") -or
+if (-not $playbackCoreProfileSource.Contains("Name = switch (`$Version)") -or
+    -not $playbackCoreProfileSource.Contains("BaselineRevision = switch (`$Version)") -or
+    -not $playbackCoreProfileSource.Contains("BaselineTree = switch (`$Version)") -or
+    -not $playbackCoreProfileSource.Contains("'PlaybackCoreLifecycleV3'") -or
+    -not $playbackCoreProfileSource.Contains("LineageAnchorRevision = if (`$Version -eq 3)") -or
+    -not $playbackCoreProfileSource.Contains('Assert-PlaybackCoreLifecycleV3BaselineSuccessor') -or
     -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = if (`$Version -eq 1) { 'refactor/playback-core-lifecycle' } else { 'refactor/playback-remove-release-gap' }") -or
     -not $playbackCoreProfileSource.Contains("'near-minimum-retrigger'") -or
     -not $playbackCoreBuilderSource.Contains('Assert-PlaybackCoreLifecycleSourceCheckout') -or
@@ -1738,6 +1743,7 @@ if (-not $playbackCoreProfileSource.Contains("Name = if (`$Version -eq 1) { 'Pla
     -not $playbackCoreProfileSource.Contains("target_class = 'project-owned-non-game-receive-only'") -or
     -not $playbackCoreRunnerSource.Contains('New-PlaybackCoreLifecycleMeasurementReport') -or
     -not $playbackCoreRunnerSource.Contains('PlaybackCoreLifecycleV2') -or
+    -not $playbackCoreRunnerSource.Contains('PlaybackCoreLifecycleV3') -or
     -not $playbackCoreRunnerSource.Contains('Assert-PlaybackCoreLifecyclePairedWorkloadParity') -or
     -not $playbackCoreRunnerSource.Contains("'lifecycle-metrics.json'") -or
     -not $playbackCoreProfileSource.Contains("'scripts/lib/playback_core_lifecycle_collector.psm1'") -or
@@ -1767,6 +1773,7 @@ if (-not $playbackCoreProfileSource.Contains("Name = if (`$Version -eq 1) { 'Pla
 
 $pclV1Profile = Get-PlaybackCoreLifecycleProfile
 $pclV2Profile = Get-PlaybackCoreLifecycleProfile -Version 2
+$pclV3Profile = Get-PlaybackCoreLifecycleProfile -Version 3
 if ($pclV1Profile.Name -ne 'PlaybackCoreLifecycle' -or
     $pclV1Profile.BaselineRevision -ne '2544daa13eb23fdf03bd922e65b96fcffaba421c' -or
     $pclV1Profile.CandidateLineageBranch -ne 'refactor/playback-core-lifecycle' -or
@@ -1779,8 +1786,208 @@ if ($pclV1Profile.Name -ne 'PlaybackCoreLifecycle' -or
     $pclV2Profile.SafetyScenarios[-2] -ne 'short-up-gap-stress' -or
     $pclV2Profile.SafetyScenarios[-1] -ne 'pause-resume-active-cleanup' -or
     $pclV2Profile.HarnessManifestSchemaVersion -ne 2 -or
-    $pclV2Profile.AuthoredPrefixParityContract -ne 'timestamp-kind-scan-mask-v1') {
+    $pclV2Profile.AuthoredPrefixParityContract -ne 'timestamp-kind-scan-mask-v1' -or
+    $pclV3Profile.Name -ne 'PlaybackCoreLifecycleV3' -or
+    $pclV3Profile.WorkloadVersion -ne 'playback-core-lifecycle-v3-cookie-0183-v1' -or
+    $pclV3Profile.HarnessManifestSchemaVersion -ne 3 -or
+    $pclV3Profile.BaselineRevision -ne '4bc4a8409d3250da012be6e92f6681e721c17f3a' -or
+    $pclV3Profile.BaselineTree -ne '8e2ce7c115458d95b9e13aa144b3d6cc16c083a4' -or
+    $pclV3Profile.LineageAnchorRevision -ne '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' -or
+    $pclV3Profile.BaselineSuccessorParentRevision -ne $pclV2Profile.BaselineRevision -or
+    $pclV3Profile.BaselineSuccessorRef -ne 'refs/heads/qualification/playback-core-lifecycle-v3-baseline' -or
+    $pclV3Profile.BaselineSuccessorLockSha256 -ne 'baaf6e57419a1f28d9a880d655a48863676fe2fe0ddcd9a1467153912af13b68' -or
+    $pclV3Profile.AuthoredPrefixParityContract -ne $pclV2Profile.AuthoredPrefixParityContract -or
+    $pclV3Profile.SafetyScenarios.Count -ne $pclV2Profile.SafetyScenarios.Count -or
+    (Get-PlaybackCoreLifecycleProfileForName -Name 'PlaybackCoreLifecycleV3').Version -ne 3) {
     throw 'PlaybackCoreLifecycleV2 changed the immutable v1 profile or failed to pin its strict PR-base identity and workload contract'
+}
+
+$pclV3BaselineSuccessor = Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $playbackCoreRepoRoot
+if ($pclV3BaselineSuccessor.revision -ne $pclV3Profile.BaselineSuccessorRevision -or
+    $pclV3BaselineSuccessor.tree -ne $pclV3Profile.BaselineSuccessorTree -or
+    $pclV3BaselineSuccessor.parent_revision -ne $pclV3Profile.LineageAnchorRevision -or
+    ($pclV3BaselineSuccessor.changed_paths -join '|') -ne 'rust/Cargo.lock' -or
+    $pclV3BaselineSuccessor.lock_sha256 -ne $pclV3Profile.BaselineSuccessorLockSha256) {
+    throw 'PlaybackCoreLifecycleV3 baseline successor is not the clean, lock-only cookie upgrade from the immutable V2 anchor'
+}
+$pclV3BaselineShaRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $playbackCoreRepoRoot -Revision ('0' * 40)) } catch { $pclV3BaselineShaRejected = $true }
+if (-not $pclV3BaselineShaRejected) { throw 'PlaybackCoreLifecycleV3 accepted a baseline successor with the wrong revision' }
+$pclV3BaselineTreeRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $playbackCoreRepoRoot -ExpectedTree ('0' * 40)) } catch { $pclV3BaselineTreeRejected = $true }
+if (-not $pclV3BaselineTreeRejected) { throw 'PlaybackCoreLifecycleV3 accepted a baseline successor with the wrong tree identity' }
+$pclV3BaselineLockRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $playbackCoreRepoRoot -ExpectedLockSha256 ('0' * 64)) } catch { $pclV3BaselineLockRejected = $true }
+if (-not $pclV3BaselineLockRejected) { throw 'PlaybackCoreLifecycleV3 accepted a baseline successor with the wrong lock hash' }
+$pclV3CandidateRevision = (& git -C $playbackCoreRepoRoot rev-parse HEAD).Trim()
+$pclV3StaleRemoteRejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecycleV3CandidateLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision ('0' * 40))
+} catch { $pclV3StaleRemoteRejected = $true }
+if (-not $pclV3StaleRemoteRejected) { throw 'PlaybackCoreLifecycleV3 accepted a candidate that does not match the remote PR head' }
+$pclV3WrongAnchorRejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecycleV3CandidateLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c')
+} catch { $pclV3WrongAnchorRejected = $true }
+if (-not $pclV3WrongAnchorRejected) { throw 'PlaybackCoreLifecycleV3 accepted a candidate outside the V2 anchor lineage' }
+
+function ConvertTo-PclV3CheckoutFixture {
+    param($Identity)
+    [ordered]@{
+        root = $Identity.root
+        top_level = $Identity.checkout.top_level
+        git_dir = $Identity.checkout.git_dir
+        git_common_dir = $Identity.checkout.git_common_dir
+        revision = $Identity.revision
+        tree = $Identity.tree
+        branch = $Identity.branch
+        clean = $Identity.clean
+    }
+}
+
+$pclV3TempRoot = Join-Path $env:TEMP ('pcl-v3-manifest-contract-' + [guid]::NewGuid().ToString('N'))
+$pclV3BaselineRoot = Join-Path $pclV3TempRoot 'baseline-worktree'
+New-Item -ItemType Directory -Path $pclV3TempRoot | Out-Null
+try {
+    & git -C $playbackCoreRepoRoot worktree add --detach $pclV3BaselineRoot $pclV3Profile.BaselineRevision | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'could not create the pinned V3 baseline worktree for manifest contract tests' }
+    Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
+    $pclV3RunnerIdentity = Get-DispatchM3GitCheckoutIdentity $playbackCoreRepoRoot
+    $pclV3BaselineIdentity = Get-DispatchM3GitCheckoutIdentity $pclV3BaselineRoot
+    $pclV3RustcVersion = (& rustc -Vv) -join [Environment]::NewLine
+    if ($LASTEXITCODE -ne 0) { throw 'could not identify rustc for V3 manifest contract fixtures' }
+    $pclV3CargoVersion = (& cargo -V).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'could not identify cargo for V3 manifest contract fixtures' }
+    $pclV3BuilderPath = Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1'
+    $pclV3BuilderHash = (Get-FileHash -LiteralPath $pclV3BuilderPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $pclV3RunnerProvenance = @($pclV3Profile.RunnerProvenancePaths | ForEach-Object {
+        $sourcePath = $_
+        $fullPath = Join-Path $playbackCoreRepoRoot ($sourcePath.Replace('/', '\'))
+        [pscustomobject]@{
+            source_path = $sourcePath
+            evidence_path = 'runner-provenance/' + $sourcePath.Replace('/', '\')
+            sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    })
+    function New-PclV3ManifestFixture {
+        param([ValidateSet('Baseline', 'Candidate')] [string]$Role)
+        $isBaseline = $Role -eq 'Baseline'
+        $sourceRoot = if ($isBaseline) { $pclV3BaselineRoot } else { $playbackCoreRepoRoot }
+        $sourceIdentity = if ($isBaseline) { $pclV3BaselineIdentity } else { $pclV3RunnerIdentity }
+        $lockPath = Join-Path $sourceRoot 'rust\Cargo.lock'
+        $outputRoot = Join-Path $pclV3TempRoot ($Role.ToLowerInvariant() + '-output')
+        $checkout = ConvertTo-PclV3CheckoutFixture $sourceIdentity
+        $runnerCheckout = ConvertTo-PclV3CheckoutFixture $pclV3RunnerIdentity
+        [pscustomobject][ordered]@{
+            schema_version = 3
+            qualification_profile = $pclV3Profile.Name
+            workload_version = $pclV3Profile.WorkloadVersion
+            source_role = $Role
+            source_revision = $sourceIdentity.revision
+            source_tree_sha = $sourceIdentity.tree
+            source_branch = $sourceIdentity.branch
+            source_tree_clean = $sourceIdentity.clean
+            clean_build = $true
+            base_source_revision = $pclV3Profile.BaselineRevision
+            base_source_tree_sha = $pclV3Profile.BaselineTree
+            baseline_source_revision = $pclV3Profile.BaselineRevision
+            baseline_source_tree_sha = $pclV3Profile.BaselineTree
+            candidate_source_revision = $pclV3RunnerIdentity.revision
+            candidate_source_tree_sha = $pclV3RunnerIdentity.tree
+            cargo_profile = $pclV3Profile.CargoProfile
+            cargo_features = @($pclV3Profile.RequiredFeatures)
+            qpc_read_counting = $false
+            observer_mode = 'qualification-on'
+            receiveonly_observer_mode = $pclV3Profile.ObserverMode
+            receiveonly_observer_version = $pclV3Profile.ObserverVersion
+            receiveonly_observer_schema_version = $pclV3Profile.ObserverSchemaVersion
+            receiveonly_observer_event_schema_version = $pclV3Profile.ObserverEventSchemaVersion
+            guard_mode = 'frozen'
+            performance_timing_margin_us = $pclV3Profile.PerformanceTimingMarginUs
+            safety_timing_margin_us = $pclV3Profile.SafetyTimingMarginUs
+            target = $pclV3Profile.Target
+            target_identity_status = 'NOT_RUN'
+            target_identity = $pclV3Profile.TargetIdentity
+            rustc_version = $pclV3RustcVersion
+            cargo_version = $pclV3CargoVersion
+            cargo_clean_exit_code = 0
+            cargo_build_exit_code = 0
+            binary_name = 'rt-native-acceptance.exe'
+            binary_sha256 = 'a' * 64
+            builder_script_sha256 = $pclV3BuilderHash
+            source_root = $sourceRoot
+            source_checkout_identity = $checkout
+            runner_source_revision = $pclV3RunnerIdentity.revision
+            runner_source_tree_sha = $pclV3RunnerIdentity.tree
+            runner_source_branch = $pclV3RunnerIdentity.branch
+            runner_source_root = $playbackCoreRepoRoot
+            runner_source_clean = $pclV3RunnerIdentity.clean
+            runner_source_checkout_identity = $runnerCheckout
+            candidate_lineage_branch = $pclV3Profile.CandidateLineageBranch
+            candidate_lineage_tip_revision = $pclV3RunnerIdentity.revision
+            candidate_lineage_verified = $true
+            lineage_anchor_revision = $pclV3Profile.LineageAnchorRevision
+            baseline_successor_revision = $pclV3Profile.BaselineSuccessorRevision
+            baseline_successor_tree_sha = $pclV3Profile.BaselineSuccessorTree
+            baseline_successor_parent_revision = $pclV3Profile.BaselineSuccessorParentRevision
+            baseline_successor_ref = $pclV3Profile.BaselineSuccessorRef
+            baseline_successor_lock_sha256 = $pclV3Profile.BaselineSuccessorLockSha256
+            output_root = $outputRoot
+            cargo_target_dir = Join-Path $outputRoot 'cargo-target'
+            cargo_lock_path = $lockPath
+            cargo_lock_sha256 = (Get-FileHash -LiteralPath $lockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            qualification_plan = [pscustomobject]@{
+                pair_order = $pclV3Profile.PairOrder
+                pair_count = $pclV3Profile.PairCount
+                sample_seconds = $pclV3Profile.SampleSeconds
+            }
+            runner_script_provenance = $pclV3RunnerProvenance
+        }
+    }
+    $pclV3ValidBaseline = New-PclV3ManifestFixture -Role Baseline
+    $pclV3ValidCandidate = New-PclV3ManifestFixture -Role Candidate
+    Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3ValidBaseline -ExpectedRole Baseline -RepositoryRoot $playbackCoreRepoRoot | Out-Null
+    Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3ValidCandidate -ExpectedRole Candidate -RepositoryRoot $playbackCoreRepoRoot | Out-Null
+
+    foreach ($mutation in @(
+            [pscustomobject]@{ name = 'baseline SHA'; role = 'Baseline'; apply = { param($m) $m.source_revision = '0' * 40 } },
+            [pscustomobject]@{ name = 'baseline tree'; role = 'Baseline'; apply = { param($m) $m.source_tree_sha = '0' * 40 } },
+            [pscustomobject]@{ name = 'lock hash'; role = 'Baseline'; apply = { param($m) $m.cargo_lock_sha256 = '0' * 64 } },
+            [pscustomobject]@{ name = 'dirty source'; role = 'Baseline'; apply = { param($m) $m.source_tree_clean = $false; $m.source_checkout_identity.clean = $false } },
+            [pscustomobject]@{ name = 'toolchain'; role = 'Baseline'; apply = { param($m) $m.rustc_version = 'release: 0.0.0' } },
+            [pscustomobject]@{ name = 'target'; role = 'Baseline'; apply = { param($m) $m.target = 'aarch64-pc-windows-msvc' } },
+            [pscustomobject]@{ name = 'features'; role = 'Baseline'; apply = { param($m) $m.cargo_features = @('wrong-feature') } },
+            [pscustomobject]@{ name = 'workload'; role = 'Baseline'; apply = { param($m) $m.workload_version = 'wrong-workload' } },
+            [pscustomobject]@{ name = 'successor ref'; role = 'Baseline'; apply = { param($m) $m.baseline_successor_ref = 'refs/heads/moved-baseline' } },
+            [pscustomobject]@{ name = 'candidate lock hash'; role = 'Candidate'; apply = { param($m) $m.cargo_lock_sha256 = '0' * 64 } }
+        )) {
+        $sourceFixture = if ($mutation.role -eq 'Baseline') { $pclV3ValidBaseline } else { $pclV3ValidCandidate }
+        $mutatedFixture = $sourceFixture | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        & $mutation.apply $mutatedFixture
+        $rejected = $false
+        try { Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $mutatedFixture -ExpectedRole $mutation.role -RepositoryRoot $playbackCoreRepoRoot | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw ('PlaybackCoreLifecycleV3 accepted a mismatched ' + $mutation.name) }
+    }
+    $pclV3WrongSchema = $pclV3ValidCandidate | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $pclV3WrongSchema.qualification_profile = 'PlaybackCoreLifecycleV2'
+    $pclV3WrongSchema.schema_version = 2
+    $pclV3WrongSchemaRejected = $false
+    try { Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3WrongSchema -ExpectedRole Candidate -RepositoryRoot $playbackCoreRepoRoot | Out-Null } catch { $pclV3WrongSchemaRejected = $true }
+    if (-not $pclV3WrongSchemaRejected) { throw 'PlaybackCoreLifecycleV2 accepted a V3 manifest contract' }
+} finally {
+    $resolvedTempRoot = [System.IO.Path]::GetFullPath($pclV3TempRoot)
+    $resolvedSystemTemp = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+    if (-not $resolvedTempRoot.StartsWith($resolvedSystemTemp, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not $resolvedTempRoot.Split([System.IO.Path]::DirectorySeparatorChar)[-1].StartsWith('pcl-v3-manifest-contract-', [System.StringComparison]::Ordinal)) {
+        throw 'refusing to remove an unexpected V3 qualification test directory'
+    }
+    if (Test-Path -LiteralPath $pclV3BaselineRoot) {
+        & git -C $playbackCoreRepoRoot worktree remove --force $pclV3BaselineRoot | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'could not remove the temporary V3 baseline contract worktree' }
+    }
+    if (Test-Path -LiteralPath $pclV3TempRoot) { Remove-Item -LiteralPath $pclV3TempRoot -Recurse -Force }
 }
 
 $pclBaselineProjection = [pscustomobject]@{ details = [pscustomobject]@{ authored_packet_targets = @(

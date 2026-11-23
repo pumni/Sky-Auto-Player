@@ -435,6 +435,37 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
         throw ('PlaybackCoreLifecycle ' + $ExpectedRole + ' manifest profile, source, runner, target, workload, or build identity is invalid')
     }
 
+    if ($profile.Version -eq 3) {
+        $successor = Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $runnerRoot
+        $lineageAnchor = [string](Get-ManifestProperty $Manifest 'lineage_anchor_revision')
+        $successorRevision = [string](Get-ManifestProperty $Manifest 'baseline_successor_revision')
+        $successorTree = [string](Get-ManifestProperty $Manifest 'baseline_successor_tree_sha')
+        $successorParent = [string](Get-ManifestProperty $Manifest 'baseline_successor_parent_revision')
+        $successorRef = [string](Get-ManifestProperty $Manifest 'baseline_successor_ref')
+        $successorLockSha = [string](Get-ManifestProperty $Manifest 'baseline_successor_lock_sha256')
+        if ($lineageAnchor -ne $profile.LineageAnchorRevision -or
+            $successorRevision -ne $successor.revision -or
+            $successorTree -ne $successor.tree -or
+            $successorParent -ne $successor.parent_revision -or
+            $successorRef -ne $profile.BaselineSuccessorRef -or
+            $successorLockSha -ne $profile.BaselineSuccessorLockSha256) {
+            throw 'PlaybackCoreLifecycleV3 manifest lineage anchor or baseline-successor provenance is invalid'
+        }
+        & git -C $runnerRoot merge-base --is-ancestor $profile.LineageAnchorRevision $runnerRevision
+        if ($LASTEXITCODE -ne 0) { throw 'PlaybackCoreLifecycleV3 candidate is not descended from the immutable V2 lineage anchor' }
+        & git -C $runnerRoot merge-base --is-ancestor $profile.BaselineSuccessorRevision $runnerRevision
+        if ($LASTEXITCODE -eq 0) { throw 'PlaybackCoreLifecycleV3 baseline successor must remain a sibling of the candidate lineage' }
+        if ($ExpectedRole -eq 'Baseline' -and $cargoLockSha256 -ne $profile.BaselineSuccessorLockSha256) {
+            throw 'PlaybackCoreLifecycleV3 baseline manifest lock hash differs from the pinned successor lock'
+        }
+        if ($ExpectedRole -eq 'Candidate' -and $cargoLockSha256 -ne $profile.BaselineSuccessorLockSha256) {
+            throw 'PlaybackCoreLifecycleV3 candidate lock hash differs from the pinned baseline successor lock'
+        }
+    } elseif ($null -ne (Get-ManifestProperty $Manifest 'lineage_anchor_revision') -or
+        $null -ne (Get-ManifestProperty $Manifest 'baseline_successor_revision')) {
+        throw 'V1/V2 PlaybackCoreLifecycle manifests must not carry V3 successor-lineage fields'
+    }
+
     foreach ($checkout in @($sourceCheckout, $runnerCheckout)) {
         foreach ($key in @('root', 'top_level', 'git_dir', 'git_common_dir', 'revision', 'tree', 'branch', 'clean')) {
             if ($null -eq (Get-ManifestProperty $checkout $key)) { throw ('PlaybackCoreLifecycle checkout identity omitted ' + $key) }
@@ -501,6 +532,15 @@ function Assert-PlaybackCoreLifecycleRunnerProvenance {
         [string](Get-ManifestProperty $Manifest 'candidate_lineage_branch') -ne $RunnerIdentity.candidate_lineage_branch -or
         -not [bool]$RunnerIdentity.clean -or -not [bool]$RunnerIdentity.candidate_lineage_verified) {
         throw 'PlaybackCoreLifecycle manifest runner differs from the clean pushed candidate checkout'
+    }
+    if ([string](Get-ManifestProperty $Manifest 'qualification_profile') -eq 'PlaybackCoreLifecycleV3' -and
+        ([string](Get-ManifestProperty $Manifest 'lineage_anchor_revision') -ne [string]$RunnerIdentity.lineage_anchor_revision -or
+            [string](Get-ManifestProperty $Manifest 'baseline_successor_revision') -ne [string]$RunnerIdentity.baseline_successor_revision -or
+            [string](Get-ManifestProperty $Manifest 'baseline_successor_tree_sha') -ne [string]$RunnerIdentity.baseline_successor_tree_sha -or
+            [string](Get-ManifestProperty $Manifest 'baseline_successor_parent_revision') -ne [string]$RunnerIdentity.baseline_successor_parent_revision -or
+            [string](Get-ManifestProperty $Manifest 'baseline_successor_ref') -ne [string]$RunnerIdentity.baseline_successor_ref -or
+            [string](Get-ManifestProperty $Manifest 'baseline_successor_lock_sha256') -ne [string]$RunnerIdentity.baseline_successor_lock_sha256)) {
+        throw 'PlaybackCoreLifecycleV3 manifest differs from its verified lock-only baseline successor provenance'
     }
     $runnerCheckout = Get-ManifestProperty $Manifest 'runner_source_checkout_identity'
     foreach ($key in @('top_level', 'git_dir', 'git_common_dir')) {
@@ -675,7 +715,7 @@ function Assert-ImmutableHarnessManifestIntegrity {
             }
         }
     }
-    if ((Get-ManifestProperty $Manifest 'qualification_profile') -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')) {
+    if ((Get-ManifestProperty $Manifest 'qualification_profile') -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')) {
         Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $Manifest -ExpectedRole ([string](Get-ManifestProperty $Manifest 'source_role')) | Out-Null
         $manifestOutputRoot = [System.IO.Path]::GetFullPath([string](Get-ManifestProperty $Manifest 'output_root'))
         if (-not [string]::Equals($manifestOutputRoot, [System.IO.Path]::GetDirectoryName($manifestFullPath), [System.StringComparison]::OrdinalIgnoreCase)) {

@@ -47,7 +47,7 @@ function Get-DispatchSessionRedesignM3Profile {
 }
 
 function Get-PlaybackCoreLifecycleProfile {
-    param([ValidateSet(1, 2)] [int]$Version = 1)
+    param([ValidateSet(1, 2, 3)] [int]$Version = 1)
     $performanceWorkloads = @(
         'mixed-up-down',
         'dense-alternating',
@@ -65,15 +65,21 @@ function Get-PlaybackCoreLifecycleProfile {
         'skip-cleanup',
         'supervisor-lease-expiry'
     )
-    if ($Version -eq 2) { $safetyScenarios += @('short-up-gap-stress', 'pause-resume-active-cleanup') }
+    if ($Version -ge 2) { $safetyScenarios += @('short-up-gap-stress', 'pause-resume-active-cleanup') }
     [pscustomobject]@{
         Version = $Version
-        Name = if ($Version -eq 1) { 'PlaybackCoreLifecycle' } else { 'PlaybackCoreLifecycleV2' }
-        WorkloadVersion = if ($Version -eq 1) { 'playback-core-lifecycle-v1' } else { 'playback-core-lifecycle-v2' }
+        Name = switch ($Version) { 1 { 'PlaybackCoreLifecycle' } 2 { 'PlaybackCoreLifecycleV2' } 3 { 'PlaybackCoreLifecycleV3' } }
+        WorkloadVersion = switch ($Version) { 1 { 'playback-core-lifecycle-v1' } 2 { 'playback-core-lifecycle-v2' } 3 { 'playback-core-lifecycle-v3-cookie-0183-v1' } }
         HarnessManifestSchemaVersion = $Version
-        BaselineRevision = if ($Version -eq 1) { '2544daa13eb23fdf03bd922e65b96fcffaba421c' } else { '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' }
-        BaselineTree = if ($Version -eq 1) { '155882714df131ddc9b9985133a1f0611736b7cd' } else { '25a20291b9cf84b1283804f451b33e3c4605507c' }
-        AuthoredPrefixParityContract = if ($Version -eq 2) { 'timestamp-kind-scan-mask-v1' } else { $null }
+        BaselineRevision = switch ($Version) { 1 { '2544daa13eb23fdf03bd922e65b96fcffaba421c' } 2 { '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' } 3 { '4bc4a8409d3250da012be6e92f6681e721c17f3a' } }
+        BaselineTree = switch ($Version) { 1 { '155882714df131ddc9b9985133a1f0611736b7cd' } 2 { '25a20291b9cf84b1283804f451b33e3c4605507c' } 3 { '8e2ce7c115458d95b9e13aa144b3d6cc16c083a4' } }
+        LineageAnchorRevision = if ($Version -eq 3) { '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' } else { $null }
+        BaselineSuccessorRevision = if ($Version -eq 3) { '4bc4a8409d3250da012be6e92f6681e721c17f3a' } else { $null }
+        BaselineSuccessorTree = if ($Version -eq 3) { '8e2ce7c115458d95b9e13aa144b3d6cc16c083a4' } else { $null }
+        BaselineSuccessorParentRevision = if ($Version -eq 3) { '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' } else { $null }
+        BaselineSuccessorRef = if ($Version -eq 3) { 'refs/heads/qualification/playback-core-lifecycle-v3-baseline' } else { $null }
+        BaselineSuccessorLockSha256 = if ($Version -eq 3) { 'baaf6e57419a1f28d9a880d655a48863676fe2fe0ddcd9a1467153912af13b68' } else { $null }
+        AuthoredPrefixParityContract = if ($Version -ge 2) { 'timestamp-kind-scan-mask-v1' } else { $null }
         CandidateLineageBranch = if ($Version -eq 1) { 'refactor/playback-core-lifecycle' } else { 'refactor/playback-remove-release-gap' }
         Target = 'x86_64-pc-windows-msvc'
         CargoProfile = 'dist'
@@ -128,8 +134,8 @@ function Get-PlaybackCoreLifecycleProfile {
 }
 
 function Get-PlaybackCoreLifecycleProfileForName {
-    param([Parameter(Mandatory)] [ValidateSet('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')] [string]$Name)
-    $version = if ($Name -eq 'PlaybackCoreLifecycleV2') { 2 } else { 1 }
+    param([Parameter(Mandatory)] [ValidateSet('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')] [string]$Name)
+    $version = switch ($Name) { 'PlaybackCoreLifecycle' { 1 } 'PlaybackCoreLifecycleV2' { 2 } 'PlaybackCoreLifecycleV3' { 3 } }
     Get-PlaybackCoreLifecycleProfile -Version $version
 }
 
@@ -326,9 +332,84 @@ function Assert-DispatchSessionRedesignM3SourceCheckout {
     $identity
 }
 
+function Assert-PlaybackCoreLifecycleV3BaselineSuccessor {
+    param(
+        [Parameter(Mandatory)] [string]$RepositoryRoot,
+        [string]$Revision,
+        [string]$ExpectedTree,
+        [string]$ExpectedLockSha256
+    )
+    $profile = Get-PlaybackCoreLifecycleProfile -Version 3
+    if (-not $Revision) { $Revision = $profile.BaselineSuccessorRevision }
+    if (-not $ExpectedTree) { $ExpectedTree = $profile.BaselineSuccessorTree }
+    if (-not $ExpectedLockSha256) { $ExpectedLockSha256 = $profile.BaselineSuccessorLockSha256 }
+    if ($Revision -ne $profile.BaselineSuccessorRevision) {
+        throw 'PlaybackCoreLifecycleV3 baseline successor revision differs from its immutable pin'
+    }
+    if ($ExpectedTree -ne $profile.BaselineSuccessorTree) {
+        throw 'PlaybackCoreLifecycleV3 baseline successor expected tree differs from its immutable pin'
+    }
+    if ($ExpectedLockSha256 -ne $profile.BaselineSuccessorLockSha256) {
+        throw 'PlaybackCoreLifecycleV3 baseline successor expected lock hash differs from its immutable pin'
+    }
+    & git -C $RepositoryRoot cat-file -e ($revision + '^{commit}')
+    if ($LASTEXITCODE -ne 0) { throw 'PlaybackCoreLifecycleV3 baseline successor commit is unavailable' }
+    $parent = (& git -C $RepositoryRoot rev-parse ($revision + '^')).Trim()
+    if ($LASTEXITCODE -ne 0 -or $parent -ne $profile.BaselineSuccessorParentRevision) {
+        throw 'PlaybackCoreLifecycleV3 baseline successor must have the exact V2 anchor as its parent'
+    }
+    $tree = (& git -C $RepositoryRoot rev-parse ($revision + '^{tree}')).Trim()
+    if ($LASTEXITCODE -ne 0 -or $tree -ne $profile.BaselineSuccessorTree) {
+        throw 'PlaybackCoreLifecycleV3 baseline successor tree differs from its pinned identity'
+    }
+    $changedPaths = @(& git -C $RepositoryRoot diff-tree --no-commit-id --name-only -r $revision)
+    if ($LASTEXITCODE -ne 0 -or $changedPaths.Count -ne 1 -or $changedPaths[0] -ne 'rust/Cargo.lock') {
+        throw 'PlaybackCoreLifecycleV3 baseline successor must change rust/Cargo.lock only'
+    }
+    $patch = (& git -C $RepositoryRoot diff ($revision + '^') $revision -- rust/Cargo.lock) -join [Environment]::NewLine
+    $changedLines = @($patch -split '\r?\n' | Where-Object { $_ -match '^[+-](?![+-])' })
+    $expectedChangedLines = @(
+        '-version = "0.18.2"',
+        '+version = "0.18.3"',
+        '-checksum = "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87"',
+        '+checksum = "d55f2d6c30eeec7d5c6f98bd4395d4abb1895629eab97ee6522d340623615f8a"'
+    )
+    if ($LASTEXITCODE -ne 0 -or
+        $changedLines.Count -ne $expectedChangedLines.Count -or
+        (@(Compare-Object -ReferenceObject $expectedChangedLines -DifferenceObject $changedLines -SyncWindow 0)).Count -ne 0) {
+        throw 'PlaybackCoreLifecycleV3 baseline successor lock delta is not the exact cookie 0.18.2 to 0.18.3 patch'
+    }
+    [pscustomobject]@{
+        revision = $revision
+        tree = $tree
+        parent_revision = $parent
+        lock_sha256 = $ExpectedLockSha256
+        changed_paths = $changedPaths
+    }
+}
+
+function Assert-PlaybackCoreLifecycleV3CandidateLineage {
+    param(
+        [Parameter(Mandatory)] [string]$RepositoryRoot,
+        [Parameter(Mandatory)] [string]$CandidateRevision,
+        [Parameter(Mandatory)] [string]$RemoteTipRevision
+    )
+    $profile = Get-PlaybackCoreLifecycleProfile -Version 3
+    if ($CandidateRevision -notmatch '^[0-9a-f]{40}$' -or
+        $CandidateRevision -ne $RemoteTipRevision) {
+        throw 'PlaybackCoreLifecycleV3 candidate must match the exact remote PR branch tip'
+    }
+    & git -C $RepositoryRoot merge-base --is-ancestor $profile.LineageAnchorRevision $CandidateRevision
+    if ($LASTEXITCODE -ne 0) { throw 'PlaybackCoreLifecycleV3 candidate is not descended from the immutable V2 lineage anchor' }
+    & git -C $RepositoryRoot merge-base --is-ancestor $profile.BaselineSuccessorRevision $CandidateRevision
+    if ($LASTEXITCODE -eq 0) { throw 'PlaybackCoreLifecycleV3 baseline successor must remain a sibling of the candidate lineage' }
+    $true
+}
+
 function Get-PlaybackCoreLifecycleRunnerIdentity {
-    param([Parameter(Mandatory)] [string]$RunnerRoot, [ValidateSet(1, 2)] [int]$ProfileVersion = 1)
+    param([Parameter(Mandatory)] [string]$RunnerRoot, [ValidateSet(1, 2, 3)] [int]$ProfileVersion = 1)
     $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
+    if ($ProfileVersion -eq 3) { $baselineSuccessor = Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $RunnerRoot }
     $identity = Get-DispatchM3GitCheckoutIdentity $RunnerRoot
     if (-not $identity.clean -or $identity.checkout.top_level -ne $identity.root -or
         $identity.branch -ne $profile.CandidateLineageBranch) {
@@ -340,9 +421,20 @@ function Get-PlaybackCoreLifecycleRunnerIdentity {
     $remoteRows = @($remoteLine | ForEach-Object { [string]$_ } | Where-Object { $_ -match ('^([0-9a-f]{40})\s+refs/heads/' + [regex]::Escape($profile.CandidateLineageBranch) + '$') })
     if ($remoteRows.Count -ne 1) { throw 'origin does not advertise exactly one PlaybackCoreLifecycle candidate branch tip' }
     $lineageTip = [regex]::Match($remoteRows[0], '^([0-9a-f]{40})').Groups[1].Value
-    if ($identity.revision -ne $lineageTip) { throw 'PlaybackCoreLifecycle runner must match the pushed candidate branch tip' }
-    & git -C $identity.root merge-base --is-ancestor $profile.BaselineRevision $lineageTip
-    if ($LASTEXITCODE -ne 0) { throw 'PlaybackCoreLifecycle candidate is not descended from the pinned redesign baseline' }
+    if ($ProfileVersion -eq 3) {
+        Assert-PlaybackCoreLifecycleV3CandidateLineage -RepositoryRoot $identity.root -CandidateRevision $identity.revision -RemoteTipRevision $lineageTip | Out-Null
+        $baselineRefOutput = @(& git -C $identity.root ls-remote origin $profile.BaselineSuccessorRef 2>&1)
+        $baselineRefExit = $LASTEXITCODE
+        if ($baselineRefExit -ne 0) { throw ('could not verify PlaybackCoreLifecycleV3 baseline successor ref: ' + ($baselineRefOutput -join ' ')) }
+        $baselineRefRows = @($baselineRefOutput | ForEach-Object { [string]$_ } | Where-Object { $_ -match ('^([0-9a-f]{40})\s+' + [regex]::Escape($profile.BaselineSuccessorRef) + '$') })
+        if ($baselineRefRows.Count -ne 1 -or [regex]::Match($baselineRefRows[0], '^([0-9a-f]{40})').Groups[1].Value -ne $profile.BaselineSuccessorRevision) {
+            throw 'PlaybackCoreLifecycleV3 pinned baseline successor ref is missing or does not point to the exact B1 commit'
+        }
+    } else {
+        if ($identity.revision -ne $lineageTip) { throw 'PlaybackCoreLifecycle runner must match the pushed candidate branch tip' }
+        & git -C $identity.root merge-base --is-ancestor $profile.BaselineRevision $lineageTip
+        if ($LASTEXITCODE -ne 0) { throw 'PlaybackCoreLifecycle candidate is not descended from the pinned redesign baseline' }
+    }
     [pscustomobject]@{
         root = $identity.root
         revision = $identity.revision
@@ -355,6 +447,12 @@ function Get-PlaybackCoreLifecycleRunnerIdentity {
         candidate_lineage_branch = $profile.CandidateLineageBranch
         candidate_lineage_tip_revision = $lineageTip
         candidate_lineage_verified = $true
+        lineage_anchor_revision = if ($ProfileVersion -eq 3) { $profile.LineageAnchorRevision } else { $null }
+        baseline_successor_revision = if ($ProfileVersion -eq 3) { $baselineSuccessor.revision } else { $null }
+        baseline_successor_tree_sha = if ($ProfileVersion -eq 3) { $baselineSuccessor.tree } else { $null }
+        baseline_successor_parent_revision = if ($ProfileVersion -eq 3) { $baselineSuccessor.parent_revision } else { $null }
+        baseline_successor_ref = if ($ProfileVersion -eq 3) { $profile.BaselineSuccessorRef } else { $null }
+        baseline_successor_lock_sha256 = if ($ProfileVersion -eq 3) { $baselineSuccessor.lock_sha256 } else { $null }
     }
 }
 
@@ -363,7 +461,7 @@ function Assert-PlaybackCoreLifecycleSourceCheckout {
         [Parameter(Mandatory)] [string]$SourceRoot,
         [Parameter(Mandatory)] [ValidateSet('Baseline', 'Candidate')] [string]$SourceRole,
         [Parameter(Mandatory)] [string]$RunnerRoot,
-        [ValidateSet(1, 2)] [int]$ProfileVersion = 1
+        [ValidateSet(1, 2, 3)] [int]$ProfileVersion = 1
     )
     $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
     $identity = Get-DispatchM3GitCheckoutIdentity $SourceRoot
@@ -384,4 +482,4 @@ function Assert-PlaybackCoreLifecycleSourceCheckout {
     $identity
 }
 
-Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-PlaybackCoreLifecycleProfileForName, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout
+Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-PlaybackCoreLifecycleProfileForName, Assert-PlaybackCoreLifecycleV3BaselineSuccessor, Assert-PlaybackCoreLifecycleV3CandidateLineage, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout

@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')]
+    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')]
     [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
 [ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'short-up-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-active-cleanup', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
@@ -40,7 +40,7 @@ Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
 $isSessionRedesignProfile = $QualificationProfile -eq 'DispatchSessionRedesignM3'
-$isPlaybackCoreLifecycle = $QualificationProfile -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')
+$isPlaybackCoreLifecycle = $QualificationProfile -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')
 $usesSessionQualificationContracts = $isDispatchCleanupM3 -or $isSessionRedesignProfile -or $isPlaybackCoreLifecycle
 $dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
 $sessionRedesignProfile = if ($isSessionRedesignProfile) { Get-DispatchSessionRedesignM3Profile } else { $null }
@@ -67,7 +67,7 @@ if ($usesSessionQualificationContracts) {
     }
 }
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
-$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')
+$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')
 $receiveOnlyObserverVersion = if ($qualifiedProfile) {
     'scheduler-receiveonly-queue-v3-compat3'
 } else {

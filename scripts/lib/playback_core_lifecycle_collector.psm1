@@ -107,13 +107,13 @@ function New-PlaybackCoreLifecycleMeasurementReport {
         [string]$ControlBinarySha256,
         [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string]$RunnerMachineName,
         [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string]$RunnerOsBootTimeUtc,
-        [ValidateSet(1, 2)] [int]$ProfileVersion = 1
+        [ValidateSet(1, 2, 3)] [int]$ProfileVersion = 1
     )
 
     $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
-    if ($ProfileVersion -eq 2 -and
+    if ($ProfileVersion -ge 2 -and
         ($ControlManifestSha256 -notmatch '^[0-9a-f]{64}$' -or $ControlBinarySha256 -notmatch '^[0-9a-f]{64}$')) {
-        throw 'PlaybackCoreLifecycleV2 requires the exact pinned baseline manifest and binary hashes'
+        throw ($profile.Name + ' requires the exact pinned baseline manifest and binary hashes')
     }
     if ($profile.PairOrder -ne 'AB/BA alternating' -or $profile.PairCount -ne 6) {
         throw 'PlaybackCoreLifecycle Start coverage expects the frozen six-pair alternating AB/BA order'
@@ -158,7 +158,7 @@ function New-PlaybackCoreLifecycleMeasurementReport {
                     protocol_decision_required = if ($ProfileVersion -eq 1) {
                         'The frozen v1 baseline has no Armed QPC; the mandatory immediate-successor metric remains INCOMPLETE.'
                     } else {
-                        'PlaybackCoreLifecycleV2 requires all 60 candidate worker-join to immediate-successor Armed transitions; missing or invalid evidence keeps the metric INCOMPLETE.'
+                        ($profile.Name + ' requires all 60 candidate worker-join to immediate-successor Armed transitions; missing or invalid evidence keeps the metric INCOMPLETE.')
                     }
                 }
                 samples = @()
@@ -167,7 +167,7 @@ function New-PlaybackCoreLifecycleMeasurementReport {
             raw_up_syscall_count = [ordered]@{ status = 'INCOMPLETE'; sample_count = 0; p50 = $null; p95 = $null; p99 = $null; max = $null; samples = @() }
             incompleteness = @('no qualification rows were supplied')
         }
-        if ($ProfileVersion -eq 2) {
+        if ($ProfileVersion -ge 2) {
             $emptyReport['qualification_profile'] = $profile.Name
             $emptyReport['workload_version'] = $profile.WorkloadVersion
             $emptyReport['authored_prefix_parity_contract'] = $profile.AuthoredPrefixParityContract
@@ -180,7 +180,7 @@ function New-PlaybackCoreLifecycleMeasurementReport {
     $controlRows = @($orderedRows | Where-Object { (Get-PclCollectorProperty $_ 'role') -eq 'control' })
     $candidateIdentityInvalidRunIds = @{}
     $controlIdentityInvalidRunIds = @{}
-    if ($ProfileVersion -eq 2) {
+    if ($ProfileVersion -ge 2) {
         foreach ($pair in @($orderedRows | Where-Object { [int](Get-PclCollectorProperty $_ 'sample_seconds') -eq 15 } | Group-Object { [string](Get-PclCollectorProperty $_ 'pair_id') })) {
             $pairRows = @($pair.Group)
             $baselinePrefix = @($pairRows | Where-Object { (Get-PclCollectorProperty $_ 'role') -eq 'control' })
@@ -197,7 +197,7 @@ function New-PlaybackCoreLifecycleMeasurementReport {
                 (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_tail_sha256') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_tail_sha256') -or
                 (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_tail_event_count') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_tail_event_count') -or
                 (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_tail_group_count') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_tail_group_count')) {
-                throw ('PlaybackCoreLifecycleV2 pair lacks identical full authored timestamp/kind/scan-mask sequence and measured-window evidence: ' + $pair.Name)
+                throw ($profile.Name + ' pair lacks identical full authored timestamp/kind/scan-mask sequence and measured-window evidence: ' + $pair.Name)
             }
         }
     }
@@ -275,7 +275,7 @@ function New-PlaybackCoreLifecycleMeasurementReport {
         }
     }
 
-    $controlIdentity = if ($ProfileVersion -eq 2) {
+    $controlIdentity = if ($ProfileVersion -ge 2) {
         [pscustomobject]@{
             revision = $profile.BaselineRevision
             tree = $profile.BaselineTree
@@ -291,7 +291,7 @@ function New-PlaybackCoreLifecycleMeasurementReport {
         $tree = [string](Get-PclCollectorProperty $row 'source_tree_sha')
         $manifest = [string](Get-PclCollectorProperty $row 'manifest_sha256')
         $binary = [string](Get-PclCollectorProperty $row 'harness_sha256')
-        if ($ProfileVersion -eq 2) {
+        if ($ProfileVersion -ge 2) {
             if ($revision -ne $profile.BaselineRevision -or $tree -ne $profile.BaselineTree -or
                 $manifest -ne $ControlManifestSha256 -or $binary -ne $ControlBinarySha256) {
                 $controlIdentityInvalidRunIds[$runId] = 'pinned baseline source/manifest/binary identity mismatch'
@@ -344,16 +344,16 @@ function New-PlaybackCoreLifecycleMeasurementReport {
     $eligibleCandidateToControl = 0
     $seenPlannedRoleTransitions = @{}
     foreach ($entry in $candidateIdentityInvalidRunIds.GetEnumerator()) {
-        $incompleteness.Add('PlaybackCoreLifecycleV2 ' + $entry.Value + ': ' + $entry.Key)
+        $incompleteness.Add($profile.Name + ' ' + $entry.Value + ': ' + $entry.Key)
         $startMetricIncomplete = $true
     }
     foreach ($entry in $controlIdentityInvalidRunIds.GetEnumerator()) {
-        $incompleteness.Add('PlaybackCoreLifecycleV2 ' + $entry.Value + ': ' + $entry.Key)
+        $incompleteness.Add($profile.Name + ' ' + $entry.Value + ': ' + $entry.Key)
         $startMetricIncomplete = $true
     }
-    if ($ProfileVersion -eq 2) {
+    if ($ProfileVersion -ge 2) {
         foreach ($runId in $candidateQpcInvalidRunIds.Keys) {
-            $incompleteness.Add('PlaybackCoreLifecycleV2 candidate QPC source/frequency evidence is missing or invalid: ' + $runId)
+            $incompleteness.Add($profile.Name + ' candidate QPC source/frequency evidence is missing or invalid: ' + $runId)
             $startMetricIncomplete = $true
         }
     }
@@ -385,14 +385,14 @@ function New-PlaybackCoreLifecycleMeasurementReport {
             $commonEvidenceIssues.Add('candidate source/tree/manifest/binary provenance is invalid')
         }
         if ($rowMachine -ne $RunnerMachineName -or $rowBootTime -ne $RunnerOsBootTimeUtc -or
-            ($ProfileVersion -eq 2 -and $candidateIdentityInvalidRunIds.ContainsKey($runId) -and
+            ($ProfileVersion -ge 2 -and $candidateIdentityInvalidRunIds.ContainsKey($runId) -and
                 $candidateIdentityInvalidRunIds[$runId] -match 'machine/boot')) {
             $commonEvidenceIssues.Add('machine/boot provenance is invalid')
         }
         if ((Get-PclCollectorProperty $measurement 'schema_version') -ne 2 -or
             $null -eq $frequency -or $frequency -le 0 -or
             $clockSource -ne 'Windows QueryPerformanceCounter' -or
-            ($ProfileVersion -eq 2 -and $candidateQpcInvalidRunIds.ContainsKey($runId))) {
+            ($ProfileVersion -ge 2 -and $candidateQpcInvalidRunIds.ContainsKey($runId))) {
             $commonEvidenceIssues.Add('schema-v2 QPC source/frequency evidence is invalid')
         }
         if ($sessionRunId -ne $runId -or $sessionScenario -ne 'stop-cleanup') {
@@ -662,9 +662,9 @@ function New-PlaybackCoreLifecycleMeasurementReport {
         $startMetricIncomplete = $true
         $incompleteness.Add('worker-joined-to-next-Start observed transition coverage differs from the frozen six-pair AB/BA plan')
     }
-    if ($ProfileVersion -eq 2 -and $incompleteStartTransitionCount -gt 0 -and $joinedInvalid.Count -eq 0) {
+    if ($ProfileVersion -ge 2 -and $incompleteStartTransitionCount -gt 0 -and $joinedInvalid.Count -eq 0) {
         $startMetricIncomplete = $true
-        $incompleteness.Add('PlaybackCoreLifecycleV2 requires 60 valid immediate-successor Armed samples; measured ' + $joinedSamples.Count)
+        $incompleteness.Add($profile.Name + ' requires 60 valid immediate-successor Armed samples; measured ' + $joinedSamples.Count)
     }
     if ($rawUpSamples.Count -eq 0) { $rawUpMetricIncomplete = $true; $incompleteness.Add('no actual raw Up syscall count was collected') }
 
@@ -677,13 +677,13 @@ function New-PlaybackCoreLifecycleMeasurementReport {
     $rawUpSummary = Get-PclNearestRankSummary $rawUpValues
     $launchDiagnosticSummary = Get-PclNearestRankSummary $launchDiagnosticValues
     $eligibleTransitionCount = $eligibleCandidateToCandidate
-    if ($ProfileVersion -eq 2) { $eligibleTransitionCount += $eligibleCandidateToControl }
-    $measurementDescription = if ($ProfileVersion -eq 2) {
+    if ($ProfileVersion -ge 2) { $eligibleTransitionCount += $eligibleCandidateToControl }
+    $measurementDescription = if ($ProfileVersion -ge 2) {
         'immediately following timed session Armed publication QPC minus candidate worker join QPC for candidate or pinned-baseline successor, with exact row/session identities, machine/boot and matching Windows QPC source/frequency'
     } else {
         'immediately following timed session Armed publication QPC minus candidate worker join QPC; v1 baseline Armed evidence is unavailable'
     }
-    $protocolDescription = if ($ProfileVersion -eq 2) {
+    $protocolDescription = if ($ProfileVersion -ge 2) {
         'All 60 candidate worker-join to immediate-successor Armed transitions are required; any missing or invalid baseline/candidate evidence makes this metric and the overall report INCOMPLETE.'
     } else {
         'The pinned v1 baseline does not emit worker Armed QPC evidence; its 30 candidate→baseline transitions remain unavailable and keep this required metric INCOMPLETE.'
@@ -720,7 +720,7 @@ function New-PlaybackCoreLifecycleMeasurementReport {
                     [ordered]@{
                         prior_role = 'candidate'; next_role = 'control'
                         planned_count = $expectedTransitionsPerRolePair; observed_count = $observedCandidateToControl
-                        eligible_count = if ($ProfileVersion -eq 2) { $eligibleCandidateToControl } else { 0 }
+                        eligible_count = if ($ProfileVersion -ge 2) { $eligibleCandidateToControl } else { 0 }
                         measured_count = @($joinedSamples | Where-Object { $_.next_role -eq 'control' }).Count
                         unavailable_count = $joinedUnavailable.Count
                         invalid_count = @($joinedInvalid | Where-Object { $_.next_role -eq 'control' }).Count
@@ -738,7 +738,7 @@ function New-PlaybackCoreLifecycleMeasurementReport {
         raw_up_syscall_count = [ordered]@{ status = if ($rawUpSamples.Count -gt 0 -and -not $rawUpMetricIncomplete) { 'COMPLETE' } else { 'INCOMPLETE' }; measurement = 'sum of worker TerminalSendAttemptEvidence.raw_calls for candidate stop-cleanup runs; ReleaseAllOutcome.attempts is not used'; statistics = $rawUpSummary; samples = $rawUpSamples.ToArray() }
         incompleteness = $incompleteness.ToArray()
     }
-    if ($ProfileVersion -eq 2) {
+    if ($ProfileVersion -ge 2) {
         $measurementReport['qualification_profile'] = $profile.Name
         $measurementReport['workload_version'] = $profile.WorkloadVersion
         $measurementReport['authored_prefix_parity_contract'] = $profile.AuthoredPrefixParityContract

@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory)]
     [ValidateSet('Canary', 'Smoke', 'Compare', 'Final')]
     [string]$Stage,
-    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')]
+    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')]
     [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
     [string]$CandidateManifest,
@@ -32,13 +32,13 @@ Import-Module (Join-Path $PSScriptRoot 'lib\playback_core_lifecycle_collector.ps
 $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
 $isSessionRedesignProfile = $QualificationProfile -eq 'DispatchSessionRedesignM3'
-$isPlaybackCoreLifecycle = $QualificationProfile -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')
+$isPlaybackCoreLifecycle = $QualificationProfile -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')
 $qualificationReportSchemaVersion = Get-QualificationReportSchemaVersion -Profile $QualificationProfile
 $usesSessionQualificationContracts = $isDispatchCleanupM3 -or $isSessionRedesignProfile
 $dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
 $sessionRedesignProfile = if ($isSessionRedesignProfile) { Get-DispatchSessionRedesignM3Profile } else { $null }
 $playbackCoreProfile = if ($isPlaybackCoreLifecycle) { Get-PlaybackCoreLifecycleProfileForName -Name $QualificationProfile } else { $null }
-$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')
+$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')
 $baseRevision = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineRevision } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.BaselineRevision } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.BaselineRevision } elseif ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } elseif ($QualificationProfile -eq 'Scheduler') { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' } else { '843cc0c6a1392dfff0ca4b017551bd1ffb180579' }
 $baseTree = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineTree } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.BaselineTree } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.BaselineTree } elseif ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } elseif ($QualificationProfile -eq 'Scheduler') { 'f554c41b23a3969d02ed29842d4178f6143c9d86' } else { $null }
 $expectedBranch = if ($isDispatchCleanupM3) { $dispatchCleanupM3.CandidateLineageBranch } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.CandidateLineageBranch } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.CandidateLineageBranch } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } else { 'perf/dispatch-core-20261109' }
@@ -725,7 +725,7 @@ function Get-PlaybackCoreLifecycleTimedRowDisposition {
     }
     $rowStatus = $Status
     $rowReason = $Reason
-    if ($Profile -eq 'PlaybackCoreLifecycleV2' -and $SampleSeconds -gt 0 -and
+    if ($Profile -in @('PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3') -and $SampleSeconds -gt 0 -and
         $Status -eq 'PASS' -and -not $identityComplete) {
         $rowStatus = 'INCOMPLETE'
         $rowReason = $Reason + '; attribution-dependent timed results are ineligible: ' + $attributionReason
@@ -1019,7 +1019,7 @@ function Invoke-PairedWorkloads {
                     if ($completedCase.case_exit_code -ne 0 -or $completedCase.status -ne 'PASS') { $script:stoppedAtFirstNativeFailure = $true; return }
                     $pairRows.Add($completedCase)
                 }
-                if ($QualificationProfile -eq 'PlaybackCoreLifecycleV2') {
+                if ($QualificationProfile -in @('PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')) {
                     $controlRow = @($pairRows | Where-Object { $_.role -eq 'control' })[0]
                     $candidateRow = @($pairRows | Where-Object { $_.role -eq 'candidate' })[0]
                     Assert-PlaybackCoreLifecyclePairedWorkloadParity `
@@ -1047,6 +1047,7 @@ if ($Profile -eq 'DispatchCleanupM3') { return 'DispatchCleanupM3 accepted M2 ca
 if ($Profile -eq 'DispatchSessionRedesignM3') { return 'DispatchSessionRedesignM3 exact branch candidate vs pinned d0f65e7c412041a6d502f81f469872198db7adc5 baseline; candidate safety precedes paired native A/B observations' }
 if ($Profile -eq 'PlaybackCoreLifecycle') { return 'C1-TIMED-R2 vs Candidate-R2; C0 not timed-qualified' }
 if ($Profile -eq 'PlaybackCoreLifecycleV2') { return 'PlaybackCoreLifecycleV2 exact branch candidate vs pinned same-lock baseline with paired authored-stream contracts' }
+if ($Profile -eq 'PlaybackCoreLifecycleV3') { return 'PlaybackCoreLifecycleV3 candidate descended from the V2 lineage anchor vs lock-only cookie-updated baseline successor with paired authored-stream contracts' }
 if ($Profile -eq 'FrameSnapshot') { return 'FrameSnapshot baseline vs FrameSnapshot candidate; same frame-snapshot-v1 workload and zero-margin performance policy' }
 if ($Profile -eq 'Scheduler') { return 'C0 Scheduler baseline vs Scheduler-Candidate' }
 if ($Control -and $Control.guard_mode -eq 'frozen' -and $Candidate.guard_mode -eq 'adaptive') { return 'Frozen vs Adaptive' }
@@ -1056,7 +1057,7 @@ if ($Control -and $Control.guard_mode -eq 'frozen' -and $Candidate.guard_mode -e
 function Assert-QualificationTimingMargin {
     param(
         [ValidateSet('Canary', 'Smoke', 'Compare', 'Final')] [string]$RequestedStage,
-        [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')] [string]$Profile,
+        [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')] [string]$Profile,
         [ValidateSet(0, 500)] [int]$MarginUs,
         [int]$PairCount,
         [int]$SampleDurationSeconds
