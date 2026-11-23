@@ -506,6 +506,7 @@ pub struct RiskSummaryDto {
     pub headline: String,
     pub reasons: Vec<String>,
     pub recommendations: Vec<String>,
+    pub short_up_gap_repeat_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -543,49 +544,26 @@ pub struct RiskDecisionDto {
 #[serde(rename_all = "snake_case")]
 pub enum TimingAdvisoryStatus {
     NotAnalyzed,
-    InvalidAssumptions,
     Unavailable,
-    NoModeledRisk,
-    ModeledRisk,
+    NoShortUpGapRisk,
+    ShortUpGapRisk,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
 #[ts(export)]
 #[serde(deny_unknown_fields)]
-pub struct TimingAdvisoryAssumptionsDto {
-    pub qpc_frequency_hz: u64,
-    pub estimated_sender_setup_us: u64,
-    pub estimated_per_input_us: u64,
-    pub estimated_post_send_us: u64,
-    pub estimated_metadata_cost_us: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
-#[ts(export)]
-#[serde(deny_unknown_fields)]
-pub struct WholeStreamTimingAdvisoryDto {
+pub struct GenerationTimingAdvisoryDto {
     pub status: TimingAdvisoryStatus,
     pub plan_fingerprint: String,
     pub explanation: String,
-    pub total_packet_count: Option<u64>,
-    pub packet_count_inspected: u64,
-    pub packet_count_analyzed: u64,
-    pub packet_limit: u64,
+    pub total_authored_timestamp_group_count: Option<u64>,
+    pub down_generation_count: Option<u64>,
+    pub unmatched_up_count: Option<u64>,
+    pub generation_limit: u64,
     pub work_limit_units: u64,
     pub working_memory_limit_bytes: u64,
-    pub negative_slack_packet_count: u64,
-    pub h_floor_displaced_packet_count: u64,
-    pub max_h_floor_displacement_us: u64,
-    pub g_floor_displaced_packet_count: u64,
-    pub max_g_floor_displacement_us: u64,
-    pub head_of_line_packet_count: u64,
-    pub max_head_of_line_delay_us: u64,
+    pub short_up_gap_repeat_count: u64,
     pub effective_hold_floor_h_us: Option<u64>,
-    pub authored_release_gap_floor_g_us: Option<u64>,
-    pub physical_release_gap_floor_g_us: Option<u64>,
-    pub structural_same_key_cycle_minimum_us: Option<u64>,
-    pub assumptions: TimingAdvisoryAssumptionsDto,
-    pub receiver_acknowledged: bool,
     pub dry_run_is_hypothetical: bool,
 }
 
@@ -598,7 +576,7 @@ pub struct PlaybackPlanVariantDto {
     pub plan_fingerprint: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub timing_advisory: Option<WholeStreamTimingAdvisoryDto>,
+    pub timing_advisory: Option<GenerationTimingAdvisoryDto>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -1260,9 +1238,8 @@ pub fn startup_window_revealed(
 #[cfg(test)]
 mod tests {
     use super::{
-        AppearanceMode, PlaybackCommandAckDto, PlaybackConfigDto, PlaybackDecision,
-        PlaybackPlanVariantDto, SettingsDto, SettingsPatch, TimingAdvisoryAssumptionsDto,
-        TimingAdvisoryStatus, WholeStreamTimingAdvisoryDto,
+        AppearanceMode, GenerationTimingAdvisoryDto, PlaybackCommandAckDto, PlaybackConfigDto,
+        PlaybackDecision, PlaybackPlanVariantDto, SettingsDto, SettingsPatch, TimingAdvisoryStatus,
     };
     use serde_json::json;
 
@@ -1444,35 +1421,18 @@ mod tests {
             decision: PlaybackDecision::Proceed,
             config,
             plan_fingerprint: "plan-a".into(),
-            timing_advisory: Some(WholeStreamTimingAdvisoryDto {
-                status: TimingAdvisoryStatus::ModeledRisk,
+            timing_advisory: Some(GenerationTimingAdvisoryDto {
+                status: TimingAdvisoryStatus::ShortUpGapRisk,
                 plan_fingerprint: "plan-a".into(),
-                explanation: "Illustrative model pressure".into(),
-                total_packet_count: Some(2),
-                packet_count_inspected: 2,
-                packet_count_analyzed: 2,
-                packet_limit: 50_000,
+                explanation: "1 feasible repeat has a short authored Up gap".into(),
+                total_authored_timestamp_group_count: Some(3),
+                down_generation_count: Some(2),
+                unmatched_up_count: Some(1),
+                generation_limit: 50_000,
                 work_limit_units: 3_000_000,
                 working_memory_limit_bytes: 67_108_864,
-                negative_slack_packet_count: 1,
-                h_floor_displaced_packet_count: 1,
-                max_h_floor_displacement_us: 21,
-                g_floor_displaced_packet_count: 0,
-                max_g_floor_displacement_us: 0,
-                head_of_line_packet_count: 0,
-                max_head_of_line_delay_us: 0,
+                short_up_gap_repeat_count: 1,
                 effective_hold_floor_h_us: Some(17_467),
-                authored_release_gap_floor_g_us: Some(17_467),
-                physical_release_gap_floor_g_us: Some(16_667),
-                structural_same_key_cycle_minimum_us: Some(34_934),
-                assumptions: TimingAdvisoryAssumptionsDto {
-                    qpc_frequency_hz: 1_000_000,
-                    estimated_sender_setup_us: 10,
-                    estimated_per_input_us: 3,
-                    estimated_post_send_us: 5,
-                    estimated_metadata_cost_us: 1,
-                },
-                receiver_acknowledged: false,
                 dry_run_is_hypothetical: false,
             }),
         };
@@ -1489,42 +1449,25 @@ mod tests {
                 },
                 "plan_fingerprint": "plan-a",
                 "timing_advisory": {
-                    "status": "modeled_risk",
+                    "status": "short_up_gap_risk",
                     "plan_fingerprint": "plan-a",
-                    "explanation": "Illustrative model pressure",
-                    "total_packet_count": 2,
-                    "packet_count_inspected": 2,
-                    "packet_count_analyzed": 2,
-                    "packet_limit": 50_000,
+                    "explanation": "1 feasible repeat has a short authored Up gap",
+                    "total_authored_timestamp_group_count": 3,
+                    "down_generation_count": 2,
+                    "unmatched_up_count": 1,
+                    "generation_limit": 50_000,
                     "work_limit_units": 3_000_000,
                     "working_memory_limit_bytes": 67_108_864,
-                    "negative_slack_packet_count": 1,
-                    "h_floor_displaced_packet_count": 1,
-                    "max_h_floor_displacement_us": 21,
-                    "g_floor_displaced_packet_count": 0,
-                    "max_g_floor_displacement_us": 0,
-                    "head_of_line_packet_count": 0,
-                    "max_head_of_line_delay_us": 0,
+                    "short_up_gap_repeat_count": 1,
                     "effective_hold_floor_h_us": 17_467,
-                    "authored_release_gap_floor_g_us": 17_467,
-                    "physical_release_gap_floor_g_us": 16_667,
-                    "structural_same_key_cycle_minimum_us": 34_934,
-                    "assumptions": {
-                        "qpc_frequency_hz": 1_000_000,
-                        "estimated_sender_setup_us": 10,
-                        "estimated_per_input_us": 3,
-                        "estimated_post_send_us": 5,
-                        "estimated_metadata_cost_us": 1
-                    },
-                    "receiver_acknowledged": false,
                     "dry_run_is_hypothetical": false
                 }
             })
         );
         assert_eq!(
-            serde_json::to_value(TimingAdvisoryStatus::NoModeledRisk)
+            serde_json::to_value(TimingAdvisoryStatus::NoShortUpGapRisk)
                 .expect("serialize no-risk status"),
-            json!("no_modeled_risk")
+            json!("no_short_up_gap_risk")
         );
     }
 }

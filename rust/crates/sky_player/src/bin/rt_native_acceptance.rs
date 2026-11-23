@@ -2,7 +2,7 @@
 #![recursion_limit = "512"]
 #[rustfmt::skip]
 mod acceptance {
-#[path = "release_gap_stress.rs"] mod release_gap_stress;
+#[path = "generation_stress.rs"] mod generation_stress;
 #[path = "snapshot_report.rs"] mod snapshot_report;
 #[path = "scenarios.rs"] mod scenarios;
 #[path = "acceptance_limits.rs"] mod acceptance_limits;
@@ -33,10 +33,10 @@ use evidence_report::{Verdict, write_report};
 use sink_event_log::read_log_window_status;
 use acceptance_limits::*;
 pub(super) use entrypoint::main;
-use release_gap_stress::{attach_sink_window_provenance, healthy_generation_qualification, production_visibility_qualification, scenario_plan as release_gap_scenario_plan};
+use generation_stress::{attach_sink_window_provenance, generation_stress_scenario_plan, healthy_generation_qualification, production_visibility_qualification};
 use scenarios::{action, expected_physical_keys, scenario_plan_for_settings};
 #[cfg(test)]
-use scenarios::{acceptance_min_hold_us, acceptance_min_release_gap_us, scenario_plan};
+use scenarios::{acceptance_min_hold_us, acceptance_resume_cleanup_delay_us, scenario_plan};
 use arguments::{CalibrationPlacement, ParsedCommand, RunArgs, Scenario, parse_args};
 #[cfg(test)]
 pub(crate) use arguments::AdmissionVariantChoice;
@@ -50,9 +50,10 @@ use snapshot_report::{
     target_change_preflight_error,
 };
 #[cfg(test)]
-use release_gap_stress::RELEASE_GAP_STRESS_CYCLES;
+use generation_stress::SHORT_UP_GAP_STRESS_CYCLES;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::collections::BTreeMap;
 fn terminal_error_matches_reason(terminal_error: Option<&str>, expected: &str) -> bool {
     terminal_error.is_some_and(|error| {
         error == expected
@@ -129,6 +130,43 @@ struct ReadyRecord {
 struct ScenarioPlan {
     schedule: sky_dispatch_core::model::RuntimeSchedule, profile: Option<InstrumentKeyProfileSpec>,
     expected_down_slots: Vec<usize>, expected_up_slots: Vec<usize>, allow_unpaired_cleanup_ups: bool, expected_authored_up_slots: Vec<usize>, expected_safety_up_slots: Vec<usize>,
+}
+fn authored_timestamp_group_projection(
+    schedule: &sky_dispatch_core::model::RuntimeSchedule,
+) -> Vec<Value> {
+    let mut groups = BTreeMap::<u64, (u16, u16, Vec<u32>, Vec<u32>)>::new();
+    for chord in &schedule.down_chords {
+        for intent in &chord.intents {
+            let bit = 1u16 << intent.key_slot;
+            let group = groups.entry(chord.scheduled_us).or_default();
+            group.1 |= bit;
+            group.2.push(intent.source_action_index);
+            let up_group = groups.entry(intent.paired_up_offset_us).or_default();
+            up_group.0 |= bit;
+            up_group.3.push(intent.paired_up_source_action_index);
+        }
+    }
+    for up in &schedule.unmatched_ups {
+        let group = groups.entry(up.scheduled_us).or_default();
+        group.0 |= 1u16 << up.key_slot;
+        group.3.push(up.source_action_index);
+    }
+    groups
+        .into_iter()
+        .map(|(scheduled_us, (up_mask, down_mask, mut down_sources, mut up_sources))| {
+            down_sources.sort_unstable();
+            down_sources.dedup();
+            up_sources.sort_unstable();
+            up_sources.dedup();
+            json!({
+                "scheduled_us": scheduled_us,
+                "up_mask": up_mask,
+                "down_mask": down_mask,
+                "down_source_action_indices": down_sources,
+                "up_source_action_indices": up_sources,
+            })
+        })
+        .collect()
 }
 #[derive(Debug, Clone)]
 struct AuthorizedTargets {
@@ -365,7 +403,7 @@ fn drain_event_window(
     drain_event_window_with(&mut reader, &mut clock, mode, expected_down, expected_up)
 }
 #[cfg(any(windows, test))]
-fn needs_supervisor_progress_heartbeat(scenario: Scenario, sample_seconds: Option<u8>) -> bool { !matches!(scenario, Scenario::SupervisorLeaseExpiry | Scenario::LeaseAgeWatchdogDelayed) && (sample_seconds.is_some() || matches!(scenario, Scenario::ReleaseGapStress | Scenario::FocusLoss | Scenario::SuspendResume)) }
+fn needs_supervisor_progress_heartbeat(scenario: Scenario, sample_seconds: Option<u8>) -> bool { !matches!(scenario, Scenario::SupervisorLeaseExpiry | Scenario::LeaseAgeWatchdogDelayed) && (sample_seconds.is_some() || matches!(scenario, Scenario::ShortUpGapStress | Scenario::FocusLoss | Scenario::SuspendResume)) }
 
 #[cfg(windows)]
 fn run_windows(args: RunArgs) -> i32 {
@@ -410,7 +448,9 @@ fn run_windows(args: RunArgs) -> i32 {
     };
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots); let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(args.scenario, plan.profile.as_ref(), &expected_down, &expected_up);
-    let authored_packet_targets = plan.schedule.packets.iter().map(|packet| json!({"scheduled_us": packet.scheduled_us, "up_mask": packet.up_mask, "down_mask": packet.down_mask})).collect::<Vec<_>>();
+    let authored_timestamp_group_targets = authored_timestamp_group_projection(&plan.schedule);
+    let authored_timestamp_group_count = plan.schedule.authored_timestamp_group_count;
+    let down_generation_count = plan.schedule.generation_count;
     let (mut options, modifier_query_count, modifier_held_latch) =
         match modifier_guard::native_session_options(
             plan.schedule,
@@ -474,13 +514,13 @@ fn run_windows(args: RunArgs) -> i32 {
         inconclusive!(&error, json!({}));
     }
     if needs_supervisor_progress_heartbeat(args.scenario, args.sample_seconds)
-        && let Err(error) = release_gap_stress::start_heartbeat(Arc::clone(&session))
+        && let Err(error) = generation_stress::start_heartbeat(Arc::clone(&session))
     {
         inconclusive!(&error, json!({}));
     }
     let mut final_probe = targets.probe.clone();
-    let mut independent_helper_probe: Option<release_gap_stress::IndependentHelperLivenessProbe> = None;
-    let mut release_floor_cycles = Vec::<Value>::new();
+    let mut independent_helper_probe: Option<generation_stress::IndependentHelperLivenessProbe> = None;
+    let mut resume_barrier_cycles = Vec::<Value>::new();
     let mut watchdog_was_held = false;
     let mut owner_process_terminated_at_first_down_checkpoint = false;
     let mut system_suspend_terminal_observed = false;
@@ -596,11 +636,11 @@ fn run_windows(args: RunArgs) -> i32 {
         false
     } else if args.scenario == Scenario::PauseResume {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
-    } else if args.scenario == Scenario::PauseResumeReleaseFloor {
-        let hook = acceptance_hook.as_deref().expect("release-floor acceptance hook");
-        match lifecycle_lease_qualification::run_release_floor_case(&args, &session, hook) {
+    } else if args.scenario == Scenario::PauseResumeBarrier {
+        let hook = acceptance_hook.as_deref().expect("resume-barrier acceptance hook");
+        match lifecycle_lease_qualification::run_resume_barrier_case(&args, &session, hook) {
             Ok(cycles) => {
-                release_floor_cycles = cycles;
+                resume_barrier_cycles = cycles;
                 first_physical_commit_observed = true;
                 pause_observed = true;
                 resume_requested = true;
@@ -616,7 +656,7 @@ fn run_windows(args: RunArgs) -> i32 {
         // session-level progress point directly; the desktop monitor runtime
         // is exercised by the tauri-test regression instead.
         session.publish_supervisor_progress().expect("seed session supervisor progress");
-        independent_helper_probe = match release_gap_stress::IndependentHelperLivenessProbe::start() {
+        independent_helper_probe = match generation_stress::IndependentHelperLivenessProbe::start() {
             Ok(probe) => Some(probe),
             Err(error) => {
                 let _ = session.quit();
@@ -648,7 +688,7 @@ fn run_windows(args: RunArgs) -> i32 {
     };
     let join_timeout_seconds = args.sample_seconds.map_or_else(
         || {
-            if args.scenario == Scenario::ReleaseGapStress {
+            if args.scenario == Scenario::ShortUpGapStress {
                 60
             } else {
                 10
@@ -669,7 +709,7 @@ fn run_windows(args: RunArgs) -> i32 {
     #[cfg(not(feature = "qpc-read-counting"))]
     let qpc_read_count: Option<u64> = None;
     let independent_helper_liveness_ticks = independent_helper_probe
-        .map(release_gap_stress::IndependentHelperLivenessProbe::stop_and_read)
+        .map(generation_stress::IndependentHelperLivenessProbe::stop_and_read)
         .unwrap_or(0);
     owner_identity::clear_test_override(args.scenario);
     let snapshot = session.snapshot();
@@ -776,7 +816,7 @@ fn run_windows(args: RunArgs) -> i32 {
             object,
             lifecycle_lease_qualification::CaseDetails {
                 scenario: args.scenario,
-                release_floor_cycles: &release_floor_cycles,
+                resume_barrier_cycles: &resume_barrier_cycles,
                 watchdog_was_held,
                 hook: acceptance_hook.as_deref(),
                 terminal_outcome: snapshot.outcome.as_deref(),
@@ -798,7 +838,10 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("sink_drain_quiet_ms".to_string(), json!(DRAIN_QUIET_MS));
         object.insert("probe_zero_event_full_deadline".to_string(), json!(args.scenario.needs_focus_probe()));
         object.insert("independent_helper_liveness_ticks".to_string(), json!(independent_helper_liveness_ticks));
-        object.insert("authored_packet_targets".to_string(), json!(authored_packet_targets));
+        object.insert("authored_timestamp_group_targets".to_string(), json!(authored_timestamp_group_targets));
+        object.insert("authored_timestamp_group_count".to_string(), json!(authored_timestamp_group_count));
+        object.insert("down_generation_count".to_string(), json!(down_generation_count));
+        object.insert("physical_packet_attempt_count".to_string(), json!(snapshot.precision_packet_attempts));
         object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         object.insert("expected_authored_up_slots".to_string(), json!(plan.expected_authored_up_slots)); object.insert("expected_safety_up_slots".to_string(), json!(plan.expected_safety_up_slots)); object.insert("ambiguous_packet_outcome_injection_requested".to_string(), json!(args.scenario == Scenario::AmbiguousPacket)); object.insert("preflight_user_held_injection_requested".to_string(), json!(args.scenario == Scenario::PreflightUserHeld));
         if args.scenario == Scenario::SuspendResume {
@@ -859,12 +902,11 @@ fn run_windows(args: RunArgs) -> i32 {
     if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
     if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
-    if args.scenario == Scenario::PauseResumeReleaseFloor
-        && let Some(code) = lifecycle_lease_qualification::release_floor_failure(
+    if args.scenario == Scenario::PauseResumeBarrier
+        && let Some(code) = lifecycle_lease_qualification::resume_barrier_failure(
             &args,
-            release_floor_cycles.len(),
+            resume_barrier_cycles.len(),
             snapshot.final_release_obligation_mask,
-            snapshot.production_release_floor_violation_count,
             &details,
         )
     {
@@ -957,8 +999,6 @@ fn run_windows(args: RunArgs) -> i32 {
         args.scenario,
         snapshot.production_hold_pair_samples,
         snapshot.production_hold_floor_violation_count,
-        snapshot.production_release_floor_samples,
-        snapshot.production_release_floor_violation_count,
     );
     if visibility_verdict != Verdict::Pass { return write_report(&args, visibility_verdict, visibility_reason, details); }
     write_report(

@@ -36,47 +36,30 @@ import type {
   UpdateSnapshotPayload,
 } from './DesktopBridge';
 import type { DiagnosticsBackend } from './DesktopBridge';
-import type { WholeStreamTimingAdvisoryDto } from './generated';
+import type { GenerationTimingAdvisoryDto } from './generated';
 import { getMockUpdateFixtureOptions } from './mockUpdateFixtures';
 import type { MockUpdateFixtureOptions } from './mockUpdateFixtures';
 
 function mockTimingAdvisory(
   fingerprint: string,
-  status: WholeStreamTimingAdvisoryDto['status'],
+  status: GenerationTimingAdvisoryDto['status'],
   dryRun: boolean,
-): WholeStreamTimingAdvisoryDto {
-  const hasModeledPressure = status === 'modeled_risk';
+): GenerationTimingAdvisoryDto {
+  const hasShortGapRisk = status === 'short_up_gap_risk';
   return {
     status,
     plan_fingerprint: fingerprint,
-    explanation: hasModeledPressure
-      ? 'The illustrative model found 3 negative-slack packet(s), 2 H-floor and 1 G-floor displacement(s), and 2 head-of-line delay(s).'
-      : 'No lateness, H/G floor displacement, or head-of-line delay was modeled across 12 packets.',
-    total_packet_count: 12,
-    packet_count_inspected: 12,
-    packet_count_analyzed: 12,
-    packet_limit: 50_000,
+    explanation: hasShortGapRisk
+      ? '2 feasible same-key repeats have an authored Up-to-Down gap shorter than one frame.'
+      : 'No feasible same-key repeat has an authored Up-to-Down gap shorter than one frame.',
+    total_authored_timestamp_group_count: 12,
+    down_generation_count: 12,
+    unmatched_up_count: 0,
+    generation_limit: 50_000,
     work_limit_units: 3_000_000,
     working_memory_limit_bytes: 67_108_864,
-    negative_slack_packet_count: hasModeledPressure ? 3 : 0,
-    h_floor_displaced_packet_count: hasModeledPressure ? 2 : 0,
-    max_h_floor_displacement_us: hasModeledPressure ? 24 : 0,
-    g_floor_displaced_packet_count: hasModeledPressure ? 1 : 0,
-    max_g_floor_displacement_us: hasModeledPressure ? 8 : 0,
-    head_of_line_packet_count: hasModeledPressure ? 2 : 0,
-    max_head_of_line_delay_us: hasModeledPressure ? 16 : 0,
+    short_up_gap_repeat_count: hasShortGapRisk ? 2 : 0,
     effective_hold_floor_h_us: 17_467,
-    authored_release_gap_floor_g_us: 17_467,
-    physical_release_gap_floor_g_us: 16_667,
-    structural_same_key_cycle_minimum_us: 34_934,
-    assumptions: {
-      qpc_frequency_hz: 1_000_000,
-      estimated_sender_setup_us: 10,
-      estimated_per_input_us: 3,
-      estimated_post_send_us: 5,
-      estimated_metadata_cost_us: 1,
-    },
-    receiver_acknowledged: false,
     dry_run_is_hypothetical: dryRun,
   };
 }
@@ -297,7 +280,7 @@ export interface MockBridgeOptions {
   libraryNavigationFailures?: number;
   searchDelayMs?: number;
   diagnosticsBackendStatus?: DiagnosticsBackend;
-  readyPlanAdvisoryStatus?: WholeStreamTimingAdvisoryDto['status'];
+  readyPlanAdvisoryStatus?: GenerationTimingAdvisoryDto['status'];
   playbackDurationMs?: number;
   startDelayMs?: number;
   startResponseDelayMs?: number;
@@ -486,7 +469,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         frame_base_hold_us: frameBaseHoldUs,
         timing_margin_us: config.timing_margin_us,
         min_hold_us: frameBaseHoldUs + config.timing_margin_us,
-        min_release_gap_us: frameUs + config.timing_margin_us,
+        resume_cleanup_delay_us: frameUs + config.timing_margin_us,
         timing_margin_recommendation: settings.timing_margin_recommendation,
         pre_call_lt_250us: 0,
         pre_call_250_500us: 0,
@@ -506,9 +489,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         final_sender_window_expirations: 0,
         hold_floor_delay_boundaries: 0,
         max_hold_floor_delay_us: 0,
-        release_floor_delay_boundaries: 0,
-        release_floor_infeasible_boundaries: 0,
-        max_release_floor_delay_us: 0,
         final_gate_control_rejections: 0,
         final_gate_target_changes: 1,
         final_gate_focus_losses: 1,
@@ -776,6 +756,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                 ],
           recommendations:
             found.risk_level === 'low' ? ['Keep the selected settings.'] : ['Try 0.9× tempo.'],
+          short_up_gap_repeat_count: 0,
         },
         recommendation: {
           recommended_hold_frames: 2,
@@ -1218,6 +1199,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                   : 'Dense note transitions may need a slower tempo.',
               ],
         recommendations: ['Keep the selected settings.'],
+        short_up_gap_repeat_count: 0,
       };
       const songDetail: PreparedPlayback['song'] = {
         song_id: found.song_id,
@@ -1261,23 +1243,13 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         };
       }
       const proceedAdvisoryStatus =
-        risk === 'low' ? (options.readyPlanAdvisoryStatus ?? 'no_modeled_risk') : 'modeled_risk';
+        risk === 'low'
+          ? (options.readyPlanAdvisoryStatus ?? 'no_short_up_gap_risk')
+          : 'short_up_gap_risk';
       const preparedId = `prepared-${++preparedPlaybackSequence}-${found.song_id}`;
       preparedConfigs.set(preparedId, request.config);
       preparedSongIds.set(preparedId, found.song_id);
-      const recommendedConfig: PlaybackConfig = {
-        ...request.config,
-        tempo_scale: request.config.tempo_scale * 0.9,
-      };
-      const dryRunConfig: PlaybackConfig = { ...request.config, dry_run: true };
-      preparedVariantConfigs.set(
-        preparedId,
-        new Map([
-          ['proceed', request.config],
-          ['use_recommended', recommendedConfig],
-          ['dry_run', dryRunConfig],
-        ]),
-      );
+      preparedVariantConfigs.set(preparedId, new Map([['proceed', request.config]]));
       return {
         prepared_id: preparedId,
         song: {
@@ -1295,9 +1267,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                 : [
                     found.song_id === mockId(LONG_CONTENT_INDEX)
                       ? LONG_CONTENT_REASON
-                      : 'Dense note transitions may need a slower tempo.',
+                      : '2 feasible same-key repeats have an authored Up-to-Down gap shorter than one frame. The game may miss a short Up pulse.',
                   ],
-            recommendations: ['Keep the selected settings.'],
+            recommendations: [],
+            short_up_gap_repeat_count: risk === 'low' ? 0 : 2,
           },
           recommendation: null,
           sheet_analysis: sheetAnalysis,
@@ -1316,15 +1289,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                     : 'Dense note transitions may need a slower tempo.',
                 ],
           recommendations: ['Keep the selected settings.'],
+          short_up_gap_repeat_count: 0,
         },
         decisions:
-          risk === 'low'
-            ? []
-            : [
-                { decision: 'proceed', label: 'Proceed with current settings' },
-                { decision: 'use_recommended', label: 'Use recommended settings' },
-                { decision: 'dry_run', label: 'Run a dry-run first' },
-              ],
+          risk === 'low' ? [] : [{ decision: 'proceed', label: 'Proceed with current settings' }],
         plan_fingerprint: 'mock-plan',
         variants:
           risk === 'low'
@@ -1347,25 +1315,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                   plan_fingerprint: 'mock-plan',
                   timing_advisory: mockTimingAdvisory(
                     'mock-plan',
-                    'modeled_risk',
+                    'short_up_gap_risk',
                     request.config.dry_run,
                   ),
-                },
-                {
-                  decision: 'use_recommended',
-                  config: recommendedConfig,
-                  plan_fingerprint: 'mock-recommended-plan',
-                  timing_advisory: mockTimingAdvisory(
-                    'mock-recommended-plan',
-                    'no_modeled_risk',
-                    request.config.dry_run,
-                  ),
-                },
-                {
-                  decision: 'dry_run',
-                  config: dryRunConfig,
-                  plan_fingerprint: 'mock-dry-run-plan',
-                  timing_advisory: mockTimingAdvisory('mock-dry-run-plan', 'modeled_risk', true),
                 },
               ],
         error_code: null,
@@ -1570,7 +1522,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           frame_base_hold_us: 16_667,
           timing_margin_us: 500,
           target_hold_us: 17_167,
-          release_gap_us: 17_167,
+          resume_cleanup_delay_us: 17_167,
         },
         telemetry: {
           schema_version: 19,

@@ -93,7 +93,7 @@ pub(super) fn up_slot_trace(
         scan_code: timing.scan_code,
         source_action_index: timing.source_action_index,
         authored_offset_ticks: timing.authored_up_offset_ticks.as_u64(),
-        release_floor_offset_ticks: timing
+        up_not_before_offset_ticks: timing
             .release_not_before_qpc
             .as_u64()
             .saturating_sub(observation.epoch_qpc.as_u64()),
@@ -116,7 +116,7 @@ pub(crate) fn drain_stale_metadata_observation(
             TraceContext {
                 event_index: observation.source_action_index,
                 source_action_index: observation.source_action_index,
-                compiled_packet_index: None,
+                authored_down_chord_index: None,
                 kind: TRACE_KIND_UP,
                 outcome: trace_outcome_code("suppressed_stale_up"),
                 polyphony: observation.suppressed_intent_count,
@@ -143,11 +143,11 @@ pub(crate) fn drain_stale_metadata_observation(
                 physical_target_qpc_ticks: None,
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
-                release_floor_qpc_ticks: None,
+                down_not_before_qpc_ticks: None,
                 previous_sendinput_completion_qpc_ticks: None,
                 previous_sender_completion_known: false,
                 hold_floor_mask: 0,
-                release_floor_mask: 0,
+                resume_barrier_mask: 0,
                 final_policy_qpc_ticks: None,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,

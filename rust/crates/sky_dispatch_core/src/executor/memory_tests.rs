@@ -195,7 +195,7 @@ fn up_slot_timings_preserves_exact_authored_and_floor() {
     exec.on_send_completed(0, 1, TimelineTicks::from_raw(12_000))
         .expect("down send completed");
 
-    // After Down completion: slot 0 has exact authored up offset (25_000) and release floor (12_000 + 8_000 = 20_000)
+    // After Down completion: slot 0 has authored Up offset (25_000) and hold floor (12_000 + 8_000 = 20_000).
     let timings_after = exec.up_slot_timings(1);
     assert_eq!(timings_after.len(), 1);
     let timing = timings_after[0];
@@ -324,7 +324,7 @@ fn up_slot_timings_multiple_slots_with_distinct_authored_and_floor() {
     .expect("executor");
 
     // Complete Down at 20_000 ticks.
-    // Hold floor H = 8_000, so release floor is 20_000 + 8_000 = 28_000 for both keys.
+    // Hold floor H = 8_000, so Up is due at 20_000 + 8_000 = 28_000 for both keys.
     exec.on_send_completed(0, 0b11, TimelineTicks::from_raw(20_000))
         .expect("down send completed");
 

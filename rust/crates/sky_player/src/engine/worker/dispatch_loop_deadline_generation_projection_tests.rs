@@ -34,12 +34,12 @@ fn wait_to_packet_deadline(
 }
 
 #[test]
-fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit() {
+fn scheduler_h_floor_and_authored_repeat_trace_uses_single_sender_commits() {
     let actions = [
         timing_action(6670, ActionKind::Down, 0),
         timing_action(6671, ActionKind::Up, 20_000),
-        timing_action(6672, ActionKind::Down, 60_000),
-        timing_action(6673, ActionKind::Up, 80_000),
+        timing_action(6672, ActionKind::Down, 20_000),
+        timing_action(6673, ActionKind::Up, 40_000),
     ];
     let (mut harness, packets, epoch) = timing_harness_without_focus(&actions, &[40_000, 0, 0]);
     let clock = harness.resources.clock;
@@ -136,30 +136,32 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
     assert_eq!(harness.resources.backend.active_mask, 0);
 
-    // The confirmed Up completion starts the G floor. A same-key Down authored
-    // at 60 ms remains pending through G-1 and becomes eligible at G exactly.
-    // The real H waiter returns at or after the selected deadline. Use its
-    // recorded wake as the deterministic G evaluation input: G starts from
-    // the Up's confirmed completion and is therefore still future at this
-    // exact synthetic boundary, even if the test thread is subsequently
-    // stalled before projection.
+    // The same-key Down shares the Up's authored timestamp. It becomes eligible
+    // on a fresh scheduler evaluation after the Up transport commit, with no
+    // additional completion-relative musical gap.
     let down_b_eval_qpc = h_wake_qpc;
     super::super::reset_scheduler_evaluation_count_for_test();
-    let (down_b_action, down_b_scheduler_deadline, projected_down_b) =
+    let (down_b_action, _down_b_scheduler_deadline, projected_down_b) =
         super::super::evaluate_scheduler_action_for_staging(
             &harness.resources.scheduler,
             down_b_eval_qpc,
             epoch,
         )
         .expect("Down B scheduler projection");
-    let g_projection_evaluations = super::super::scheduler_evaluation_count_for_test();
+    let down_b_projection_evaluations = super::super::scheduler_evaluation_count_for_test();
     assert!(matches!(
         down_b_action,
-        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc > down_b_eval_qpc
+        super::super::SchedulerAction::Send {
+            up_mask: 0,
+            down_chord: Some(chord),
+            timing_window,
+        } if chord.source_action_index == 6672
+            && timing_window.resume_barrier_mask == 0
+            && timing_window.down_not_before_qpc <= down_b_eval_qpc
     ));
-    assert_eq!(g_projection_evaluations, 2);
+    assert_eq!(down_b_projection_evaluations, 1);
     let down_b = super::super::stage_scheduler_send_candidate(
-        projected_down_b.expect("Down B projects to its G deadline"),
+        projected_down_b.expect("authored Down B is immediately due after Up commit"),
         super::super::SchedulerStageAdmission {
             target: &harness.target,
             capture_up_slot_timings: false,
@@ -169,42 +171,10 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
     )
     .expect("stage Down B")
     .expect("Down B has a projected candidate");
-    let g_floor_qpc = down_b.timing_window.packet_not_before_qpc;
-    assert!(g_floor_qpc > down_b_eval_qpc);
-    assert_ne!(down_b.timing_window.release_floor_mask, 0);
-    let before_g = QpcTicks::from_raw(g_floor_qpc.as_u64() - 1);
-    assert!(matches!(
-        super::super::evaluate_scheduler_action(&harness.resources.scheduler, before_g, epoch)
-            .expect("G floor minus one tick"),
-        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == g_floor_qpc
-    ));
-    assert!(matches!(
-        super::super::evaluate_scheduler_action(&harness.resources.scheduler, g_floor_qpc, epoch)
-            .expect("exact G floor"),
-        super::super::SchedulerAction::Send { .. }
-    ));
-    assert!(matches!(
-        super::super::evaluate_scheduler_action(
-            &harness.resources.scheduler,
-            g_floor_qpc
-                .checked_add_duration(one_tick)
-                .expect("G plus one tick"),
-            epoch,
-        )
-        .expect("G floor plus one tick"),
-        super::super::SchedulerAction::Send { .. }
-    ));
-
-    let (selected_g_deadline, g_wake) =
-        wait_to_packet_deadline(&mut harness, &down_b, down_b_scheduler_deadline);
-    assert_eq!(selected_g_deadline, g_floor_qpc);
-    assert!(matches!(g_wake, super::super::WaitBoundary::Due { .. }));
-    let g_wake_qpc = harness.qpc_now_for_test().expect("G wait wake QPC");
-    assert!(
-        g_wake_qpc >= g_floor_qpc,
-        "real waiter wakes no earlier than G"
-    );
-    harness.set_mock_sender_start_qpc_for_test(g_wake_qpc);
+    assert_eq!(down_b.timing_window.resume_barrier_mask, 0);
+    assert!(down_b.timing_window.packet_not_before_qpc <= down_b_eval_qpc);
+    let repeat_not_before = down_b.timing_window.packet_not_before_qpc.as_u64();
+    harness.set_mock_sender_start_qpc_for_test(down_b_eval_qpc);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(down_b, false),
         StagedDispatchOutcome::Dispatched
@@ -235,7 +205,7 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
     assert!(harness.runtime.terminal_error.is_none());
     println!(
-        "deadline/wake/final-sender trace: current_down_evaluations=1, future_up_projection_evaluations={up_projection_evaluations}, H_eval@{heval}, H_floor_tick={h}, H_minus_1=Wait/H=Send/H_plus_1=Send, H_selected_deadline={hsel}, H_wake@{hwake}/delta={hwait}us, H_sender_start@{hstart}, future_down_projection_evaluations={g_projection_evaluations}, G_eval@{geval}, G_floor_tick={g}, G_minus_1=Wait/G=Send/G_plus_1=Send, G_selected_deadline={gsel}, G_wake@{gwake}/delta={gwait}us, G_sender_start@{gstart}, sender_raw_inserted=[1,1,1], sender_calls=3, final_masks=(active:1, release:1, inflight:0), terminal=None",
+        "deadline/wake/final-sender trace: current_down_evaluations=1, future_up_projection_evaluations={up_projection_evaluations}, H_eval@{heval}, H_floor_tick={h}, H_minus_1=Wait/H=Send/H_plus_1=Send, H_selected_deadline={hsel}, H_wake@{hwake}/delta={hwait}us, H_sender_start@{hstart}, authored_repeat_evaluations={down_b_projection_evaluations}, repeat_eval@{repeat_eval}, repeat_not_before@{repeat_not_before}, repeat_sender_start@{repeat_start}, sender_raw_inserted=[1,1,1], sender_calls=3, final_masks=(active:1, release:1, inflight:0), terminal=None",
         heval = up_eval_qpc.as_u64(),
         h = h_floor_qpc.as_u64(),
         hsel = selected_h_deadline.as_u64(),
@@ -246,15 +216,13 @@ fn scheduler_h_floor_and_g_floor_trace_wait_projection_and_single_sender_commit(
             .expect("Up sender start QPC")
             .as_u64(),
         hwait = elapsed_us(clock, up_eval_qpc, h_wake_qpc),
-        geval = down_b_eval_qpc.as_u64(),
-        g = g_floor_qpc.as_u64(),
-        gsel = selected_g_deadline.as_u64(),
-        gwake = g_wake_qpc.as_u64(),
-        gstart = sent[2]
+        down_b_projection_evaluations = down_b_projection_evaluations,
+        repeat_eval = down_b_eval_qpc.as_u64(),
+        repeat_not_before = repeat_not_before,
+        repeat_start = sent[2]
             .1
             .started_ticks
             .expect("Down B sender start QPC")
             .as_u64(),
-        gwait = elapsed_us(clock, down_b_eval_qpc, g_wake_qpc),
     );
 }

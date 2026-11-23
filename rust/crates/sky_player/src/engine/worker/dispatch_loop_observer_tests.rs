@@ -705,7 +705,7 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
     );
     for slot in slots {
         let target = packet.epoch_qpc.as_u64() + slot.authored_offset_ticks;
-        let floor = (packet.epoch_qpc.as_u64() + slot.release_floor_offset_ticks)
+        let floor = (packet.epoch_qpc.as_u64() + slot.up_not_before_offset_ticks)
             .max(target)
             .max(packet.physical_timing_window.packet_not_before_qpc.as_u64());
         assert_eq!(slot.floor_displacement_ticks, floor - target);

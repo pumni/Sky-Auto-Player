@@ -13,7 +13,8 @@ use std::time::Duration;
 
 const FRAME_US: u64 = 16_667;
 const MARGIN_US: u64 = 500;
-const GAP_US: u64 = FRAME_US + MARGIN_US;
+const HOLD_US: u64 = FRAME_US + MARGIN_US;
+const RESUME_CLEANUP_DELAY_US: u64 = FRAME_US + MARGIN_US;
 
 fn accounting(harness: &ProductionDispatchTestHarness, phase: &str) -> Value {
     let value = harness.generation_accounting_for_test();
@@ -266,29 +267,32 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
         .resume_barrier_qpc_for_test()
         .ok_or("verified cleanup did not establish a resume barrier")?;
     let timing = harness.dispatch_timing_config_for_test()?;
-    let gap_ticks = harness
-        .qpc_duration_from_us_for_test(timing.min_release_gap_us)?
+    let resume_delay_ticks = harness
+        .qpc_duration_from_us_for_test(timing.resume_cleanup_delay_us)?
         .as_u64();
-    if timing.min_release_gap_us != GAP_US
+    if timing.resume_cleanup_delay_us != RESUME_CLEANUP_DELAY_US
         || barrier.as_u64()
             != cleanup_qpc
                 .as_u64()
-                .checked_add(gap_ticks)
+                .checked_add(resume_delay_ticks)
                 .ok_or("barrier overflow")?
         || harness.release_obligation_mask_for_test() != 0
     {
-        return Err("pause cleanup did not establish verified completion + G".into());
+        return Err(
+            "pause cleanup did not establish the separate verified-cleanup resume barrier".into(),
+        );
     }
     stages.push(accounting(&harness, "after_pause_cleanup"));
 
-    let g_minus_one = QpcTicks::from_raw(barrier.as_u64() - 1);
-    let g_minus_one_decision = harness.evaluate_live_scheduler_for_test(g_minus_one, epoch)?;
-    let g_minus_one_waits = matches!(
-        g_minus_one_decision,
+    let delay_minus_one = QpcTicks::from_raw(barrier.as_u64() - 1);
+    let delay_minus_one_decision =
+        harness.evaluate_live_scheduler_for_test(delay_minus_one, epoch)?;
+    let delay_minus_one_waits = matches!(
+        delay_minus_one_decision,
         DispatchDecision::Wait { deadline_qpc } if deadline_qpc == barrier
     );
-    if !g_minus_one_waits {
-        return Err("live scheduler did not wait at G-1".into());
+    if !delay_minus_one_waits {
+        return Err("live scheduler did not wait until the resume cleanup barrier".into());
     }
     harness.set_pause_requested_for_test(false);
     let (up_mask, down_chord, timing_window) =
@@ -300,19 +304,19 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
             } => (up_mask, down_chord.map(Into::into), timing_window),
             decision => {
                 return Err(format!(
-                    "live scheduler did not allow exact G: {decision:?}"
+                    "live scheduler did not allow dispatch at the resume barrier: {decision:?}"
                 ));
             }
         };
     if up_mask != 0 || timing_window.packet_not_before_qpc != barrier {
-        return Err("exact-G scheduler decision did not preserve the barrier window".into());
+        return Err("resume-barrier scheduler decision did not preserve the barrier window".into());
     }
     let candidate = harness
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)?
-        .ok_or("exact-G Down did not stage")?;
+        .ok_or("resumed Down did not stage at the barrier")?;
     let staged_window = harness.staged_candidate_timing_window_for_test(&candidate);
     if staged_window.packet_not_before_qpc != barrier {
-        return Err("production staging changed cleanup completion + G".into());
+        return Err("production staging changed the verified-cleanup resume barrier".into());
     }
     wait_until(clock, barrier)?;
     let sender_start = clock
@@ -323,10 +327,10 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
         harness.dispatch_staged_candidate_for_test(candidate, false),
         StagedDispatchOutcome::Dispatched
     ) {
-        return Err("exact-G resumed production packet did not dispatch".into());
+        return Err("resumed production packet did not dispatch at the barrier".into());
     }
     if sender_start < barrier {
-        return Err("resumed mock sender started before cleanup completion + G".into());
+        return Err("resumed mock sender started before the verified-cleanup barrier".into());
     }
     stages.push(accounting(&harness, "after_resumed_down"));
 
@@ -389,13 +393,13 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
         "generation_accounting_owner": "live_scheduler",
         "accounting_stages": stages,
         "cleanup_completion_qpc_ticks": cleanup_qpc.as_u64(),
-        "min_release_gap_us": timing.min_release_gap_us,
-        "min_release_gap_ticks": gap_ticks,
+        "resume_cleanup_delay_us": timing.resume_cleanup_delay_us,
+        "resume_cleanup_delay_ticks": resume_delay_ticks,
         "resume_barrier_qpc_ticks": barrier.as_u64(),
         "candidate_packet_not_before_qpc_ticks": staged_window.packet_not_before_qpc.as_u64(),
         "resumed_sender_start_qpc_ticks": resumed_sender_start,
-        "g_minus_one_decision": "wait",
-        "exact_g_decision": "send",
+        "resume_delay_minus_one_decision": "wait",
+        "exact_resume_delay_decision": "send",
         "final_release_obligation_mask": final_obligation,
         "passed": true,
     }))
@@ -432,7 +436,7 @@ fn run() -> Result<Value, String> {
     let normal = run_no_pause_control(clock, frequency_hz)?;
     let paused = run_pause_resume(clock, frequency_hz)?;
     let report = json!({
-        "schema_version": 2,
+        "schema_version": 3,
         "report_kind": "dispatch_lifecycle",
         "result": "PASS",
         "provenance": {
@@ -447,11 +451,11 @@ fn run() -> Result<Value, String> {
             "frame_us": FRAME_US,
             "hold_frames": 1,
             "timing_margin_us": MARGIN_US,
-            "min_hold_us": GAP_US,
-            "min_release_gap_us": GAP_US,
+            "min_hold_us": HOLD_US,
+            "resume_cleanup_delay_us": RESUME_CLEANUP_DELAY_US,
             "qpc_frequency_hz": frequency_hz,
-            "min_release_gap_ticks": clock.duration_from_us(GAP_US)
-                .map_err(|error| format!("G conversion: {error:?}"))?.as_u64(),
+            "resume_cleanup_delay_ticks": clock.duration_from_us(RESUME_CLEANUP_DELAY_US)
+                .map_err(|error| format!("resume cleanup delay conversion: {error:?}"))?.as_u64(),
         },
         "live_scheduler": {
             "generation_accounting_owner": "live_scheduler",

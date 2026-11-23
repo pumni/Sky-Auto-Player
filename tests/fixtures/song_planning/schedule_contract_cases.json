@@ -300,80 +300,78 @@
           }
         ]
       },
-      "hold_frames": 1.0,
-      "tempo_scale": 1.0,
+      "hold_frames": 1,
+      "tempo_scale": 1,
       "fps": 60,
       "timing_margin_us": 800,
       "schedule": {
         "actions": [
           {
             "at_us": 0,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               21
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 17467,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               21
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           },
           {
             "at_us": 20000,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               22
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 37467,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               22
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           }
         ],
-        "source_duration_us": 37467,
-        "playback_duration_us": 37467,
-        "duration_us": 37467,
-        "note_count": 2,
         "deduplicated_note_count": 2,
         "duplicate_note_count": 0,
-        "compressed_holds": 0,
+        "duration_us": 37467,
         "impossible_same_key_repeats": 0,
-        "risky_same_key_repeats": 0,
         "max_polyphony": 1,
-        "shortest_same_key_interval_us": null,
         "min_same_key_up_gap_us": null,
+        "short_up_gap_repeat_count": 0,
+        "note_count": 2,
+        "playback_duration_us": 37467,
         "recommended_hold_frames": null,
-        "recommended_tempo_scale": null
+        "recommended_tempo_scale": null,
+        "shortest_same_key_interval_us": null,
+        "source_duration_us": 37467,
+        "warnings": []
       },
       "risk": {
-        "severity": "low",
-        "impossible_repeats": 0,
-        "impossible_same_key_repeats": 0,
-        "compressed_holds": 0,
+        "average_notes_per_second": 53.380308004377184,
+        "chords_count": 0,
+        "dense_clusters": [],
+        "max_chord_size": 1,
         "max_polyphony": 1,
         "min_any_note_gap_us": 20000,
         "min_same_key_gap_us": null,
-        "dense_clusters": [],
+        "peak_notes_per_second_1s": 2,
+        "reason": "No timing conflicts detected.",
         "recommendations": [
           "No timing conflicts detected. Keep the selected hold."
         ],
-        "average_notes_per_second": 53.380308004377184,
-        "peak_notes_per_second_1s": 2.0,
-        "suggested_hold_frames": 1.0,
-        "suggested_tempo_scale": 1.0,
-        "reason": "No timing conflicts detected.",
-        "max_chord_size": 1,
-        "chords_count": 0,
-        "timing_stress_rate": 0.0
+        "severity": "low",
+        "suggested_hold_frames": 1,
+        "suggested_tempo_scale": 1,
+        "timing_stress_rate": 0,
+        "short_up_gap_repeat_count": 0
       }
     },
     {
@@ -403,77 +401,73 @@
         "actions": [
           {
             "at_us": 10526,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               24,
               25
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 21744,
+            "kind": "up",
+            "reason": "mixed",
             "scan_codes": [
               24,
               25
-            ],
-            "kind": "up",
-            "reason": "mixed"
+            ]
           },
           {
             "at_us": 26316,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               24
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 37534,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               24
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           }
         ],
-        "source_duration_us": 37534,
-        "playback_duration_us": 37534,
-        "duration_us": 37534,
-        "note_count": 3,
         "deduplicated_note_count": 3,
         "duplicate_note_count": 0,
-        "compressed_holds": 0,
-        "impossible_same_key_repeats": 1,
-        "risky_same_key_repeats": 0,
+        "duration_us": 37534,
+        "impossible_same_key_repeats": 0,
         "max_polyphony": 2,
-        "shortest_same_key_interval_us": 15790,
         "min_same_key_up_gap_us": 4572,
-        "recommended_hold_frames": 1.0,
-        "recommended_tempo_scale": 0.74
+        "short_up_gap_repeat_count": 1,
+        "note_count": 3,
+        "playback_duration_us": 37534,
+        "recommended_hold_frames": null,
+        "recommended_tempo_scale": null,
+        "shortest_same_key_interval_us": 15790,
+        "source_duration_us": 37534,
+        "warnings": []
       },
       "risk": {
-        "severity": "high",
-        "impossible_repeats": 1,
-        "impossible_same_key_repeats": 1,
-        "compressed_holds": 0,
+        "average_notes_per_second": 53.28502158043374,
+        "chords_count": 1,
+        "dense_clusters": [],
+        "max_chord_size": 2,
         "max_polyphony": 2,
         "min_any_note_gap_us": 15000,
         "min_same_key_gap_us": 15000,
-        "dense_clusters": [],
+        "peak_notes_per_second_1s": 2,
+        "reason": "short same-key Up gaps detected",
         "recommendations": [
-          "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
-          "Reduce tempo or edit the arrangement so the same key has more time between downs.",
-          "Shortest same-key repeat interval: 15.8ms.",
-          "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+          "1 physically feasible same-key repeat(s) have an Up-to-Down gap shorter than one frame; the game may miss a short Up pulse.",
+          "Shortest same-key repeat interval: 15.8ms."
         ],
-        "average_notes_per_second": 53.28502158043374,
-        "peak_notes_per_second_1s": 2.0,
-        "suggested_hold_frames": 1.0,
-        "suggested_tempo_scale": 0.92,
-        "reason": "infeasible same-key repeats detected",
-        "max_chord_size": 2,
-        "chords_count": 1,
-        "timing_stress_rate": 33.33333333333333
+        "severity": "medium",
+        "suggested_hold_frames": null,
+        "suggested_tempo_scale": null,
+        "timing_stress_rate": 0,
+        "short_up_gap_repeat_count": 1
       }
     },
     {
@@ -491,80 +485,78 @@
           }
         ]
       },
-      "hold_frames": 1.0,
-      "tempo_scale": 1.0,
+      "hold_frames": 1,
+      "tempo_scale": 1,
       "fps": 60,
       "timing_margin_us": 500,
       "schedule": {
         "actions": [
           {
             "at_us": 0,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               21
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 17167,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               21
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           },
           {
             "at_us": 20000,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               22
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 37167,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               22
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           }
         ],
-        "source_duration_us": 37167,
-        "playback_duration_us": 37167,
-        "duration_us": 37167,
-        "note_count": 2,
         "deduplicated_note_count": 2,
         "duplicate_note_count": 0,
-        "compressed_holds": 0,
+        "duration_us": 37167,
         "impossible_same_key_repeats": 0,
-        "risky_same_key_repeats": 0,
         "max_polyphony": 1,
-        "shortest_same_key_interval_us": null,
         "min_same_key_up_gap_us": null,
+        "short_up_gap_repeat_count": 0,
+        "note_count": 2,
+        "playback_duration_us": 37167,
         "recommended_hold_frames": null,
-        "recommended_tempo_scale": null
+        "recommended_tempo_scale": null,
+        "shortest_same_key_interval_us": null,
+        "source_duration_us": 37167,
+        "warnings": []
       },
       "risk": {
-        "severity": "low",
-        "impossible_repeats": 0,
-        "impossible_same_key_repeats": 0,
-        "compressed_holds": 0,
+        "average_notes_per_second": 53.81117658137595,
+        "chords_count": 0,
+        "dense_clusters": [],
+        "max_chord_size": 1,
         "max_polyphony": 1,
         "min_any_note_gap_us": 20000,
         "min_same_key_gap_us": null,
-        "dense_clusters": [],
+        "peak_notes_per_second_1s": 2,
+        "reason": "No timing conflicts detected.",
         "recommendations": [
           "No timing conflicts detected. Keep the selected hold."
         ],
-        "average_notes_per_second": 53.81117658137595,
-        "peak_notes_per_second_1s": 2.0,
-        "suggested_hold_frames": 1.0,
-        "suggested_tempo_scale": 1.0,
-        "reason": "No timing conflicts detected.",
-        "max_chord_size": 1,
-        "chords_count": 0,
-        "timing_stress_rate": 0.0
+        "severity": "low",
+        "suggested_hold_frames": 1,
+        "suggested_tempo_scale": 1,
+        "timing_stress_rate": 0,
+        "short_up_gap_repeat_count": 0
       }
     },
     {
@@ -573,47 +565,45 @@
         "name": "Empty",
         "songNotes": []
       },
-      "hold_frames": 1.0,
-      "tempo_scale": 1.0,
+      "hold_frames": 1,
+      "tempo_scale": 1,
       "fps": 60,
       "timing_margin_us": 800,
       "schedule": {
         "actions": [],
-        "source_duration_us": 17467,
-        "playback_duration_us": 0,
-        "duration_us": 0,
-        "note_count": 0,
         "deduplicated_note_count": 0,
         "duplicate_note_count": 0,
-        "compressed_holds": 0,
+        "duration_us": 0,
         "impossible_same_key_repeats": 0,
-        "risky_same_key_repeats": 0,
         "max_polyphony": 0,
-        "shortest_same_key_interval_us": null,
         "min_same_key_up_gap_us": null,
+        "short_up_gap_repeat_count": 0,
+        "note_count": 0,
+        "playback_duration_us": 0,
         "recommended_hold_frames": null,
-        "recommended_tempo_scale": null
+        "recommended_tempo_scale": null,
+        "shortest_same_key_interval_us": null,
+        "source_duration_us": 17467,
+        "warnings": []
       },
       "risk": {
-        "severity": "low",
-        "impossible_repeats": 0,
-        "impossible_same_key_repeats": 0,
-        "compressed_holds": 0,
+        "average_notes_per_second": 0,
+        "chords_count": 0,
+        "dense_clusters": [],
+        "max_chord_size": 0,
         "max_polyphony": 0,
         "min_any_note_gap_us": null,
         "min_same_key_gap_us": null,
-        "dense_clusters": [],
+        "peak_notes_per_second_1s": 0,
+        "reason": "No timing conflicts detected.",
         "recommendations": [
           "No timing conflicts detected. Keep the selected hold."
         ],
-        "average_notes_per_second": 0.0,
-        "peak_notes_per_second_1s": 0.0,
-        "suggested_hold_frames": 1.0,
-        "suggested_tempo_scale": 1.0,
-        "reason": "No timing conflicts detected.",
-        "max_chord_size": 0,
-        "chords_count": 0,
-        "timing_stress_rate": 0.0
+        "severity": "low",
+        "suggested_hold_frames": 1,
+        "suggested_tempo_scale": 1,
+        "timing_stress_rate": 0,
+        "short_up_gap_repeat_count": 0
       }
     },
     {
@@ -651,166 +641,164 @@
           }
         ]
       },
-      "hold_frames": 1.0,
-      "tempo_scale": 1.0,
+      "hold_frames": 1,
+      "tempo_scale": 1,
       "fps": 60,
       "timing_margin_us": 800,
       "schedule": {
         "actions": [
           {
             "at_us": 0,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               21
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 1000,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               22
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 2000,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               23
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 3000,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               24
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 4000,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               25
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 5000,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               35
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 6000,
+            "kind": "down",
+            "reason": "onset",
             "scan_codes": [
               36
-            ],
-            "kind": "down",
-            "reason": "onset"
+            ]
           },
           {
             "at_us": 17467,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               21
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           },
           {
             "at_us": 18467,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               22
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           },
           {
             "at_us": 19467,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               23
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           },
           {
             "at_us": 20467,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               24
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           },
           {
             "at_us": 21467,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               25
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           },
           {
             "at_us": 22467,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               35
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           },
           {
             "at_us": 23467,
+            "kind": "up",
+            "reason": "release",
             "scan_codes": [
               36
-            ],
-            "kind": "up",
-            "reason": "release"
+            ]
           }
         ],
-        "source_duration_us": 23467,
-        "playback_duration_us": 23467,
-        "duration_us": 23467,
-        "note_count": 7,
         "deduplicated_note_count": 7,
         "duplicate_note_count": 0,
-        "compressed_holds": 0,
+        "duration_us": 23467,
         "impossible_same_key_repeats": 0,
-        "risky_same_key_repeats": 0,
         "max_polyphony": 7,
-        "shortest_same_key_interval_us": null,
         "min_same_key_up_gap_us": null,
+        "short_up_gap_repeat_count": 0,
+        "note_count": 7,
+        "playback_duration_us": 23467,
         "recommended_hold_frames": null,
-        "recommended_tempo_scale": null
+        "recommended_tempo_scale": null,
+        "shortest_same_key_interval_us": null,
+        "source_duration_us": 23467,
+        "warnings": []
       },
       "risk": {
-        "severity": "low",
-        "impossible_repeats": 0,
-        "impossible_same_key_repeats": 0,
-        "compressed_holds": 0,
+        "average_notes_per_second": 298.29121745429757,
+        "chords_count": 0,
+        "dense_clusters": [
+          {
+            "end_us": 6000,
+            "note_count": 7,
+            "start_us": 0
+          }
+        ],
+        "max_chord_size": 1,
         "max_polyphony": 7,
         "min_any_note_gap_us": 1000,
         "min_same_key_gap_us": null,
-        "dense_clusters": [
-          {
-            "start_us": 0,
-            "end_us": 6000,
-            "note_count": 7
-          }
-        ],
+        "peak_notes_per_second_1s": 7,
+        "reason": "No timing conflicts detected.",
         "recommendations": [
           "No timing conflicts detected. Keep the selected hold."
         ],
-        "average_notes_per_second": 298.29121745429757,
-        "peak_notes_per_second_1s": 7.0,
+        "severity": "low",
         "suggested_hold_frames": 1.5,
-        "suggested_tempo_scale": 1.0,
-        "reason": "No timing conflicts detected.",
-        "max_chord_size": 1,
-        "chords_count": 0,
-        "timing_stress_rate": 0.0
+        "suggested_tempo_scale": 1,
+        "timing_stress_rate": 0,
+        "short_up_gap_repeat_count": 0
       }
     }
   ],
@@ -823,7 +811,7 @@
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "min_hold_us": 10918,
-      "min_release_gap_us": 8834,
+      "resume_cleanup_delay_us": 8834,
       "focus_restore_grace_us": 100000
     },
     {
@@ -834,7 +822,7 @@
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "min_hold_us": 11718,
-      "min_release_gap_us": 9634,
+      "resume_cleanup_delay_us": 9634,
       "focus_restore_grace_us": 100000
     },
     {
@@ -845,7 +833,7 @@
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "min_hold_us": 11218,
-      "min_release_gap_us": 9134,
+      "resume_cleanup_delay_us": 9134,
       "focus_restore_grace_us": 100000
     },
     {
@@ -856,7 +844,7 @@
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "min_hold_us": 11218,
-      "min_release_gap_us": 9134,
+      "resume_cleanup_delay_us": 9134,
       "focus_restore_grace_us": 100000
     }
   ],
@@ -883,17 +871,17 @@
       "duration_us": 44945,
       "risk_level": "high",
       "risk_recommendations": [
-        "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+        "1 same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation.",
         "Reduce tempo or edit the arrangement so the same key has more time between downs.",
         "Shortest same-key repeat interval: 16.7ms.",
-        "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+        "One or more same-key repeats are shorter than the required hold; reduce tempo or edit the arrangement."
       ],
       "risk_min_any_note_gap_us": 15000,
       "risk_min_same_key_gap_us": 15000,
       "recommendation": {
-        "recommended_hold_frames": 1.0,
-        "recommended_tempo_scale": 0.9,
-        "summary": "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation."
+        "recommended_hold_frames": 1,
+        "recommended_tempo_scale": 0.87,
+        "summary": "1 same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation."
       }
     },
     {
@@ -918,21 +906,21 @@
       "duration_us": 43483,
       "risk_level": "high",
       "risk_recommendations": [
-        "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+        "1 same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation.",
         "Reduce tempo or edit the arrangement so the same key has more time between downs.",
         "Shortest same-key repeat interval: 15.8ms.",
-        "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+        "One or more same-key repeats are shorter than the required hold; reduce tempo or edit the arrangement."
       ],
       "risk_min_any_note_gap_us": 15000,
       "risk_min_same_key_gap_us": 15000,
       "recommendation": {
-        "recommended_hold_frames": 1.0,
-        "recommended_tempo_scale": 0.92,
-        "summary": "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation."
+        "recommended_hold_frames": 1,
+        "recommended_tempo_scale": 0.87,
+        "summary": "1 same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation."
       }
     },
     {
-      "tempo_scale": 1.0,
+      "tempo_scale": 1,
       "raw": {
         "name": "Unicode Élan",
         "songNotes": [
@@ -953,17 +941,17 @@
       "duration_us": 42167,
       "risk_level": "high",
       "risk_recommendations": [
-        "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+        "1 same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation.",
         "Reduce tempo or edit the arrangement so the same key has more time between downs.",
         "Shortest same-key repeat interval: 15.0ms.",
-        "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+        "One or more same-key repeats are shorter than the required hold; reduce tempo or edit the arrangement."
       ],
       "risk_min_any_note_gap_us": 15000,
       "risk_min_same_key_gap_us": 15000,
       "recommendation": {
-        "recommended_hold_frames": 1.0,
-        "recommended_tempo_scale": 0.92,
-        "summary": "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation."
+        "recommended_hold_frames": 1,
+        "recommended_tempo_scale": 0.87,
+        "summary": "1 same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation."
       }
     },
     {
@@ -988,17 +976,17 @@
       "duration_us": 40977,
       "risk_level": "high",
       "risk_recommendations": [
-        "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+        "1 same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation.",
         "Reduce tempo or edit the arrangement so the same key has more time between downs.",
         "Shortest same-key repeat interval: 14.3ms.",
-        "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+        "One or more same-key repeats are shorter than the required hold; reduce tempo or edit the arrangement."
       ],
       "risk_min_any_note_gap_us": 15000,
-      "risk_min_same_key_gap_us": 15000,
+      "risk_min_same_key_gap_us": 14286,
       "recommendation": {
-        "recommended_hold_frames": 1.0,
-        "recommended_tempo_scale": 0.92,
-        "summary": "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation."
+        "recommended_hold_frames": 1,
+        "recommended_tempo_scale": 0.87,
+        "summary": "1 same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation."
       }
     },
     {
@@ -1023,17 +1011,17 @@
       "duration_us": 39894,
       "risk_level": "high",
       "risk_recommendations": [
-        "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+        "1 same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation.",
         "Reduce tempo or edit the arrangement so the same key has more time between downs.",
         "Shortest same-key repeat interval: 13.6ms.",
-        "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+        "One or more same-key repeats are shorter than the required hold; reduce tempo or edit the arrangement."
       ],
       "risk_min_any_note_gap_us": 15000,
-      "risk_min_same_key_gap_us": 15000,
+      "risk_min_same_key_gap_us": 13636,
       "recommendation": {
-        "recommended_hold_frames": 1.0,
-        "recommended_tempo_scale": 0.92,
-        "summary": "1 same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation."
+        "recommended_hold_frames": 1,
+        "recommended_tempo_scale": 0.87,
+        "summary": "1 same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation."
       }
     }
   ]

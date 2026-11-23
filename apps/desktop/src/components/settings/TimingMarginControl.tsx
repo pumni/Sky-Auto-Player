@@ -164,7 +164,7 @@ export function TimingMarginControl({
           <span className="settings-note timing-margin-source">
             Source: {timingMarginRecommendationSourceLabel(recommendation.source)}
           </span>
-          <span className="settings-note">Applies to Hold and Release Gap</span>
+          <span className="settings-note">Applies to Hold and Resume Cleanup Delay</span>
         </>
       )}
     </div>

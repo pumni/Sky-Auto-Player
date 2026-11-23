@@ -135,11 +135,8 @@ fn assert_snapshot_common_projection(
         final_gate_focus_losses,
         final_gate_lease_expirations,
         final_sender_window_expirations,
-        release_floor_infeasible_boundaries,
         hold_floor_delay_boundaries,
         max_hold_floor_delay_us,
-        release_floor_delay_boundaries,
-        max_release_floor_delay_us,
         max_missed_lateness_ticks,
         keys_inserted_before_failure,
         keys_rolled_back,
@@ -149,9 +146,6 @@ fn assert_snapshot_common_projection(
         production_hold_pair_samples,
         production_min_hold_start_after_down_completion_ticks,
         production_hold_floor_violation_count,
-        production_release_floor_samples,
-        production_min_down_start_after_up_completion_ticks,
-        production_release_floor_violation_count,
         production_same_key_overlap_forensics_count,
         production_anchor_overwrite_count,
         production_unmatched_up_count,
@@ -359,7 +353,7 @@ fn production_qualification_observer_keeps_requested_ring_capture() {
     let mut pre_call_to_completion_us = Vec::new();
     let mut physical_floor_displacement_us = Vec::new();
     let mut hold_floor_displacement_us = Vec::new();
-    let mut release_floor_displacement_us = Vec::new();
+    let mut down_eligibility_displacement_us = Vec::new();
     let mut eligible_to_pre_call_us = Vec::new();
     for record in records {
         assert_eq!(record["target_crossing_qpc_available"], true);
@@ -418,9 +412,9 @@ fn production_qualification_observer_keeps_requested_ring_capture() {
             }
             if let Some(span) = trace_duration_us(
                 qpc_clock,
-                record["release_floor_displacement_ticks"].as_u64(),
+                record["down_eligibility_displacement_ticks"].as_u64(),
             ) {
-                release_floor_displacement_us.push(span);
+                down_eligibility_displacement_us.push(span);
             }
         }
         if let Some(span) = trace_span_us(
@@ -446,8 +440,8 @@ fn production_qualification_observer_keeps_requested_ring_capture() {
     );
     print_mock_span_stats("hold_floor_displacement", &mut hold_floor_displacement_us);
     print_mock_span_stats(
-        "release_floor_displacement",
-        &mut release_floor_displacement_us,
+        "down_eligibility_displacement",
+        &mut down_eligibility_displacement_us,
     );
     print_mock_span_stats("eligible_to_pre_call", &mut eligible_to_pre_call_us);
     println!(
@@ -1083,8 +1077,9 @@ fn large_runtime_schedule_starts_and_quits_cleanly() {
     }
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
         .expect("large schedule must compile");
-    assert_eq!(schedule.batches.len(), AUTHORED_ACTIONS);
-    assert_eq!(schedule.intents.len(), AUTHORED_ACTIONS);
+    assert_eq!(schedule.authored_timestamp_group_count, AUTHORED_ACTIONS);
+    assert_eq!(schedule.down_chords.len(), AUTHORED_ACTIONS / 2);
+    assert_eq!(schedule.generation_count, (AUTHORED_ACTIONS / 2) as u64);
 
     let session = NativeDispatchSession::new(test_session_options(
         schedule,
@@ -1318,8 +1313,8 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
             builds += 1;
             Ok(RtTraceRecord {
                 trace_record_index: 0,
-                compiled_packet_index: 0,
-                compiled_packet_index_available: false,
+                authored_down_chord_index: 0,
+                authored_down_chord_index_available: false,
                 source_action_index: 0,
                 event_index: 0,
                 kind: TRACE_KIND_DOWN,
@@ -1412,7 +1407,7 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("sent"),
             polyphony: 1,
@@ -1429,9 +1424,9 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             physical_target_qpc_ticks: None,
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
-            release_floor_qpc_ticks: None,
+            down_not_before_qpc_ticks: None,
             hold_floor_mask: 0,
-            release_floor_mask: 0,
+            resume_barrier_mask: 0,
             pre_call_qpc_ticks: None,
             sendinput_completion_qpc_ticks: None,
             observation_qpc_ticks: None,
@@ -1463,7 +1458,7 @@ fn native_summary_ignores_non_backend_trace() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("blocked_unfocused"),
             polyphony: 3,
@@ -1480,9 +1475,9 @@ fn native_summary_ignores_non_backend_trace() {
             physical_target_qpc_ticks: None,
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
-            release_floor_qpc_ticks: None,
+            down_not_before_qpc_ticks: None,
             hold_floor_mask: 0,
-            release_floor_mask: 0,
+            resume_barrier_mask: 0,
             pre_call_qpc_ticks: None,
             sendinput_completion_qpc_ticks: None,
             observation_qpc_ticks: None,

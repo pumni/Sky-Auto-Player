@@ -25,7 +25,7 @@ async function setupPlaying(emitSnapshots = true) {
 describe('PlaybackAdmission recovery actions', () => {
   afterEach(cleanup);
 
-  it('shows a fingerprint-matched advisory for every Prepare variant', async () => {
+  it('shows the short-gap warning with Proceed only and unchanged settings', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const row = selectRowAtIndex(store.getState().library, 0);
@@ -35,38 +35,33 @@ describe('PlaybackAdmission recovery actions', () => {
 
     const { container } = render(<PlaybackAdmission useStore={store} />);
     expect(
-      screen.getByText(/informational; they do not change the authored song/),
+      screen.getByText(/Proceed keeps the authored timing and selected settings unchanged/),
     ).toBeInTheDocument();
-    expect(screen.getAllByLabelText('Offline whole-stream timing advisory')).toHaveLength(3);
-    expect(screen.getAllByText('Modeled timing pressure').length).toBeGreaterThanOrEqual(2);
-    expect(screen.getAllByText('No modeled timing pressure').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Modeled timing pressure')[0]?.closest('summary')).not.toBeNull();
+    expect(
+      screen.getByText(/2 feasible same-key repeats have an authored Up-to-Down gap/),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
+    expect(container.querySelector('.admission-option-estimate summary')).toHaveTextContent(
+      'Short same-key Up gap risk',
+    );
     expect(
       container.querySelector('[data-plan-fingerprint="mock-plan"]')?.getAttribute('data-status'),
-    ).toBe('modeled_risk');
+    ).toBe('short_up_gap_risk');
     expect(container.querySelector('[data-plan-fingerprint="mock-plan"]')).toHaveTextContent(
-      'Maximum displacement: H 24 µs · G 8 µs · HOL 16 µs',
+      'Short authored Up gaps: 2 · minimum hold H: 17467 µs',
     );
     expect(container.querySelector('[data-plan-fingerprint="mock-plan"]')).toHaveTextContent(
-      'Bounds: 50000 packets, 3000000 key-mask visits, and an estimated 64 MiB working set.',
+      'Bounds: 50000 generations, 3000000 key visits, and 64 MiB working memory.',
     );
-    expect(
-      container
-        .querySelector('[data-plan-fingerprint="mock-recommended-plan"]')
-        ?.getAttribute('data-status'),
-    ).toBe('no_modeled_risk');
-    expect(
-      container.querySelector('[data-plan-fingerprint="mock-dry-run-plan"]')?.textContent,
-    ).toContain('hypothetical for this dry-run');
-    expect(screen.getAllByText(/Sky does not acknowledge these estimates/)).toHaveLength(3);
-    expect(screen.getByRole('button', { name: /Use recommended/i })).toHaveClass('button-primary');
-    expect(screen.getByRole('button', { name: 'Proceed with current settings' })).not.toHaveClass(
+    expect(screen.getAllByRole('button')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toHaveClass(
       'button-primary',
     );
+    expect(screen.queryByRole('button', { name: /Use recommended/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Run a dry-run/i })).not.toBeInTheDocument();
   });
 
-  it('keeps a single native confirmation decision compact and lets Not now dismiss it', async () => {
+  it('keeps the single Proceed decision compact and lets Not now dismiss it', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const row = selectRowAtIndex(store.getState().library, 0);
@@ -78,18 +73,8 @@ describe('PlaybackAdmission recovery actions', () => {
     if (!prepared || prepared.admission !== 'confirmation_required') {
       throw new Error('expected a prepared playback requiring confirmation');
     }
-    act(() =>
-      store.setState({
-        playback: {
-          ...playback,
-          prepared: {
-            ...prepared,
-            decisions: prepared.decisions.filter((decision) => decision.decision === 'proceed'),
-            variants: prepared.variants.filter((variant) => variant.decision === 'proceed'),
-          },
-        },
-      }),
-    );
+    expect(prepared.decisions.map((decision) => decision.decision)).toEqual(['proceed']);
+    expect(prepared.variants.map((variant) => variant.decision)).toEqual(['proceed']);
 
     const { container } = render(<PlaybackAdmission useStore={store} />);
     expect(container.querySelectorAll('.admission-option')).toHaveLength(1);
@@ -105,7 +90,9 @@ describe('PlaybackAdmission recovery actions', () => {
   });
 
   it('keeps ready-plan timing data without flashing an advisory before Play', async () => {
-    const store = createDesktopStore(createMockBridge({ readyPlanAdvisoryStatus: 'modeled_risk' }));
+    const store = createDesktopStore(
+      createMockBridge({ readyPlanAdvisoryStatus: 'no_short_up_gap_risk' }),
+    );
     await act(async () => store.getState().initialize());
     const row = selectRowAtIndex(store.getState().library, 1);
     if (!row) throw new Error('mock Library is empty');
@@ -124,7 +111,7 @@ describe('PlaybackAdmission recovery actions', () => {
       .playback.prepared?.variants.find(
         (variant) => variant.decision === 'proceed',
       )?.timing_advisory;
-    expect(readyAdvisory?.status).toBe('modeled_risk');
+    expect(readyAdvisory?.status).toBe('no_short_up_gap_risk');
     expect(readyAdvisory?.plan_fingerprint).toBe('mock-plan');
     expect(screen.queryByLabelText('Prepared playback timing advisory')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();

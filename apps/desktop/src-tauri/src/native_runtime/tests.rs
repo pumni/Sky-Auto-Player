@@ -49,7 +49,7 @@ fn prepare_test_schedule(
         schedule,
         qpc.frequency_hz(),
         timing.min_hold_us,
-        timing.min_release_gap_us,
+        timing.resume_cleanup_delay_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare native test schedule before session admission")
@@ -147,7 +147,7 @@ fn projection_session_with_down(
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
-        min_release_gap_us: 17_467,
+        resume_cleanup_delay_us: 17_467,
         frame_us: 16_667,
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,
@@ -736,7 +736,7 @@ fn native_handoff_test_player_with_focus(
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
-        min_release_gap_us: 17_467,
+        resume_cleanup_delay_us: 17_467,
         frame_us: 16_667,
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,

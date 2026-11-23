@@ -573,7 +573,7 @@ fn scheduler_reachable_mixed_modifier_fallback_trace_spans_both_gates_without_wa
             .current_executor_chord_for_test()
             .map(|chord| chord.down_mask),
         Some(2),
-        "the blocked Down remains pending and receives no onset or G commit"
+        "the blocked Down remains pending and receives no onset before admission"
     );
     assert_eq!(harness.generation_accounting_for_test().activated, 1);
     assert_eq!(harness.generation_accounting_for_test().released, 1);

@@ -7,21 +7,21 @@ use super::{
 use sky_dispatch_core::time::TimelineTicks;
 
 fn record_with_index(event_index: u32, kind: u8, requested: usize, sent: usize) -> RtTraceRecord {
-    record_with_packet_index(event_index, kind, requested, sent, None)
+    record_with_down_chord_index(event_index, kind, requested, sent, None)
 }
 
-fn record_with_packet_index(
+fn record_with_down_chord_index(
     event_index: u32,
     kind: u8,
     requested: usize,
     sent: usize,
-    compiled_packet_index: Option<u64>,
+    authored_down_chord_index: Option<u64>,
 ) -> RtTraceRecord {
     RtTraceRecord::dispatched(
         TraceContext {
             event_index,
             source_action_index: event_index,
-            compiled_packet_index,
+            authored_down_chord_index,
             kind,
             outcome: trace_outcome_code("sent"),
             polyphony: requested,
@@ -61,9 +61,9 @@ fn record_with_packet_index(
             physical_target_qpc_ticks: None,
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
-            release_floor_qpc_ticks: None,
+            down_not_before_qpc_ticks: None,
             hold_floor_mask: 0,
-            release_floor_mask: 0,
+            resume_barrier_mask: 0,
             observation_qpc_ticks: None,
             pre_call_ticks: Some(TimelineTicks::from_raw(1)),
             sendinput_completion_ticks: Some(TimelineTicks::from_raw(2)),
@@ -164,7 +164,7 @@ fn serialized_timestamp_provenance_distinguishes_measured_derived_and_unavailabl
     assert_eq!(value["final_policy_qpc_provenance"], "unavailable");
     assert_eq!(value["final_policy_qpc_available"], false);
     assert_eq!(value["final_policy_qpc_ticks"], 0);
-    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 25);
+    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 26);
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn derived_offsets_are_unavailable_without_their_absolute_qpc_source() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("sent"),
             polyphony: 1,
@@ -236,7 +236,7 @@ fn absent_pre_call_qpc_never_uses_a_relative_or_schedule_value_as_a_sample() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("sent"),
             polyphony: 1,
@@ -287,7 +287,7 @@ fn pre_send_transaction_failure_is_counted_without_fabricating_an_attempt() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("aborted"),
             polyphony: 1,
@@ -416,11 +416,11 @@ fn telemetry_retains_all_records_above_303() {
 }
 
 #[test]
-fn trace_sequence_is_distinct_from_compiled_packet_identity() {
+fn trace_sequence_is_distinct_from_down_chord_identity() {
     let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 4);
-    let first = record_with_packet_index(12, TRACE_KIND_UP, 1, 1, Some(37));
-    let second = record_with_packet_index(13, TRACE_KIND_UP, 1, 1, Some(41));
-    let zero_packet = record_with_packet_index(14, TRACE_KIND_UP, 1, 1, Some(0));
+    let first = record_with_down_chord_index(12, TRACE_KIND_UP, 1, 1, Some(37));
+    let second = record_with_down_chord_index(13, TRACE_KIND_UP, 1, 1, Some(41));
+    let zero_chord = record_with_down_chord_index(14, TRACE_KIND_UP, 1, 1, Some(0));
     collector
         .try_push(|| Ok(first))
         .expect("first trace record");
@@ -428,19 +428,19 @@ fn trace_sequence_is_distinct_from_compiled_packet_identity() {
         .try_push(|| Ok(second))
         .expect("second trace record");
     collector
-        .try_push(|| Ok(zero_packet))
-        .expect("zero-valued compiled packet id");
+        .try_push(|| Ok(zero_chord))
+        .expect("zero-valued authored Down chord id");
 
     let records = collector.output.records;
     assert_eq!(records[0].trace_record_index, 0);
-    assert_eq!(records[0].compiled_packet_index, 37);
-    assert!(records[0].compiled_packet_index_available);
+    assert_eq!(records[0].authored_down_chord_index, 37);
+    assert!(records[0].authored_down_chord_index_available);
     assert_eq!(records[1].trace_record_index, 1);
-    assert_eq!(records[1].compiled_packet_index, 41);
-    assert!(records[1].compiled_packet_index_available);
+    assert_eq!(records[1].authored_down_chord_index, 41);
+    assert!(records[1].authored_down_chord_index_available);
     assert_eq!(records[2].trace_record_index, 2);
-    assert_eq!(records[2].compiled_packet_index, 0);
-    assert!(records[2].compiled_packet_index_available);
+    assert_eq!(records[2].authored_down_chord_index, 0);
+    assert!(records[2].authored_down_chord_index_available);
 }
 
 #[test]
@@ -469,18 +469,18 @@ fn telemetry_sets_truncated_only_when_capacity_is_exceeded() {
 }
 
 #[test]
-fn native_telemetry_schema_25_serialized_key_sets_are_pinned() {
+fn native_telemetry_schema_26_serialized_key_sets_are_pinned() {
     let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/native-telemetry-schema-25-keys.json"
+        "../../../tests/fixtures/native-telemetry-schema-26-keys.json"
     ))
-    .expect("schema-25 key fixture");
+    .expect("schema-26 key fixture");
     let record = record_with_index(7, TRACE_KIND_UP, 1, 1);
     let mut output = super::NativeTelemetryOutput::new(TelemetryMode::Off, 0);
     output.records.push_back(record);
     output.summary.observe(&record);
 
     let value = serde_json::to_value(output).expect("serialize current telemetry output");
-    assert_eq!(value["schema_version"], 25);
+    assert_eq!(value["schema_version"], 26);
     for (value, expected_key) in [
         (&value, "NativeTelemetryOutput"),
         (&value["summary"], "NativeTelemetrySummary"),
@@ -514,12 +514,12 @@ fn native_telemetry_schema_25_serialized_key_sets_are_pinned() {
 }
 
 #[test]
-fn schema_25_missing_completion_keeps_attempt_and_error_without_timing_envelope() {
+fn schema_26_missing_completion_keeps_attempt_and_error_without_timing_envelope() {
     let record = RtTraceRecord::dispatched(
         TraceContext {
             event_index: 41,
             source_action_index: 41,
-            compiled_packet_index: Some(9),
+            authored_down_chord_index: Some(9),
             kind: TRACE_KIND_UP,
             outcome: trace_outcome_code("failed_note_off"),
             polyphony: 1,
@@ -555,9 +555,9 @@ fn schema_25_missing_completion_keeps_attempt_and_error_without_timing_envelope(
 
     let value = serde_json::to_value(output).expect("serialize attempted anomaly evidence");
     let trace = &value["records"][0];
-    assert_eq!(value["schema_version"], 25);
+    assert_eq!(value["schema_version"], 26);
     assert_eq!(trace["source_action_index"], 41);
-    assert_eq!(trace["compiled_packet_index"], 9);
+    assert_eq!(trace["authored_down_chord_index"], 9);
     assert_eq!(trace["up_mask"], 1);
     assert_eq!(trace["down_mask"], 0);
     assert_eq!(trace["send_status"], super::TRACE_SEND_STATUS_COMPLETE);
@@ -585,7 +585,7 @@ fn schema_25_reversed_sender_qpc_is_rejected_instead_of_clamped_or_reconstructed
         TraceContext {
             event_index: 42,
             source_action_index: 42,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_UP,
             outcome: trace_outcome_code("failed_note_off"),
             polyphony: 1,

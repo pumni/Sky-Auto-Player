@@ -18,7 +18,7 @@ pub(super) fn test_session_options_with_timing_margin(
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: timing_margin_us,
-        min_release_gap_us: 16_667 + timing_margin_us,
+        resume_cleanup_delay_us: 16_667 + timing_margin_us,
         frame_us: 16_667,
         frame_base_hold_us: 0,
         timing_margin_us,
@@ -32,7 +32,7 @@ pub(super) fn test_session_options_with_timing_margin(
         &schedule,
         qpc.frequency_hz(),
         timing.min_hold_us,
-        timing.min_release_gap_us,
+        timing.resume_cleanup_delay_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare native test schedule before session admission");

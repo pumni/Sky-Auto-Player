@@ -15,12 +15,12 @@ pub mod adapter_support {
         PreparedUnmatchedUpMetadata,
     };
     pub use sky_dispatch_core::model::{
-        ActionKind, CompactIntent, CompileMemoryMetrics, CompiledBatch, CompiledPacket,
-        KeyActionInput, MAX_KEYS, RuntimeSchedule,
+        ActionKind, CompileMemoryMetrics, CompiledDownChord, CompiledDownIntent, KeyActionInput,
+        MAX_KEYS, RuntimeSchedule, UnmatchedUpMetadata,
     };
     pub use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     pub use sky_dispatch_core::validation::{
-        ScheduleTimingError, validate_min_hold_and_release_gap_feasibility_ticks,
+        ScheduleTimingError, validate_min_hold_feasibility_ticks,
     };
     pub use sky_dispatch_win32::calibration::{
         CALIBRATION_SCHEMA_VERSION, CalibrationConfig, CalibrationError, HostFingerprint,
@@ -70,15 +70,13 @@ pub mod adapter_support {
         )
     }
 
-    pub fn validate_min_hold_and_release_gap_feasibility(
+    pub fn validate_min_hold_feasibility(
         schedule: &RuntimeSchedule,
         effective_min_hold_us: u64,
-        min_release_gap_us: u64,
     ) -> Result<(), ScheduleTimingError> {
-        sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility(
+        sky_dispatch_core::validation::validate_min_hold_feasibility(
             schedule,
             effective_min_hold_us,
-            min_release_gap_us,
         )
     }
 
@@ -96,4 +94,3 @@ pub mod adapter_support {
 }
 
 pub mod engine;
-pub mod timing_model;

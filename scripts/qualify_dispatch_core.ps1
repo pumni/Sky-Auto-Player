@@ -408,7 +408,7 @@ function Get-TimingMetrics {
         }
     }
     $widthValues = @{}
-    $gapValues = [ordered]@{
+    $resumeCleanupDelayValues = [ordered]@{
         hot = [System.Collections.Generic.List[double]]::new()
         cold = [System.Collections.Generic.List[double]]::new()
     }
@@ -480,11 +480,11 @@ function Get-TimingMetrics {
                     }
                 }
             }
-            $packetIndex = if ([bool]$record.compiled_packet_index_available) { [string]$record.compiled_packet_index } else { 'none' }
-            $identity = [string]$packetIndex + '/' + [string]$record.event_index
+            $downChordIndex = if ([bool]$record.authored_down_chord_index_available) { [string]$record.authored_down_chord_index } else { 'none' }
+            $identity = [string]$downChordIndex + '/' + [string]$record.event_index
             if ($seenDownChords.Add($identity)) {
                 $identityRecords.Add([ordered]@{
-                    compiled_packet_index = if ([bool]$record.compiled_packet_index_available) { $record.compiled_packet_index } else { $null }
+                    authored_down_chord_index = if ([bool]$record.authored_down_chord_index_available) { $record.authored_down_chord_index } else { $null }
                     event_index = $record.event_index
                     source_action_index = $record.source_action_index
                     kind = $kindName
@@ -498,7 +498,7 @@ function Get-TimingMetrics {
                     if ($gapTicks -lt 0) { $counts.negative_order++ }
                     else {
                         $gapUs = ($gapTicks * 1000000.0) / $frequency
-                        if ($gapUs -lt 20000.0) { $gapValues.hot.Add($gapUs) } else { $gapValues.cold.Add($gapUs) }
+                        if ($gapUs -lt 20000.0) { $resumeCleanupDelayValues.hot.Add($gapUs) } else { $resumeCleanupDelayValues.cold.Add($gapUs) }
                     }
                 }
                 $lastDownAuthored = [double]$record.authored_offset_ticks
@@ -641,8 +641,8 @@ function Get-TimingMetrics {
         down_chord_widths = $widthMetrics
         authored_gap_hot_cold_us = [ordered]@{
             hot_threshold_us = 20000
-            hot = Get-Percentiles $gapValues.hot.ToArray()
-            cold = Get-Percentiles $gapValues.cold.ToArray()
+            hot = Get-Percentiles $resumeCleanupDelayValues.hot.ToArray()
+            cold = Get-Percentiles $resumeCleanupDelayValues.cold.ToArray()
         }
         counts = $counts
         event_chord_identities = $identityRecords.ToArray()
@@ -745,8 +745,8 @@ function Invoke-NativeCase {
             -ExpectedTimingMarginUs $Margin
         if ($null -eq $invocation -or
             [long]$invocation.configured_H_us -ne $verifiedFloors.configured_H_us -or
-            [long]$invocation.configured_G_us -ne $verifiedFloors.configured_G_us) {
-            throw 'DispatchCleanupM3 invocation H/G differs from its verified run-config'
+            [long]$invocation.resume_cleanup_delay_us -ne $verifiedFloors.resume_cleanup_delay_us) {
+            throw 'DispatchCleanupM3 invocation H and resume cleanup delay differ from its verified run-config'
         }
     } elseif ($isSessionRedesignProfile -and $caseDirectory) {
         $runConfigPath = Join-Path $caseDirectory 'run-config.json'
@@ -758,12 +758,12 @@ function Invoke-NativeCase {
             -TimingMarginUs $Margin -GameFps $Fps -SampleSeconds $Sample
         if ($null -eq $invocation -or
             [long]$runConfig.expected_hold_us -ne $verifiedFloors.expected_hold_us -or
-            [long]$runConfig.expected_release_gap_us -ne $verifiedFloors.expected_release_gap_us -or
+            [long]$runConfig.expected_resume_cleanup_delay_us -ne $verifiedFloors.expected_resume_cleanup_delay_us -or
             [long]$runConfig.configured_H_us -ne $verifiedFloors.configured_H_us -or
-            [long]$runConfig.configured_G_us -ne $verifiedFloors.configured_G_us -or
+            [long]$runConfig.resume_cleanup_delay_us -ne $verifiedFloors.resume_cleanup_delay_us -or
             [long]$invocation.configured_H_us -ne $verifiedFloors.configured_H_us -or
-            [long]$invocation.configured_G_us -ne $verifiedFloors.configured_G_us) {
-            throw 'DispatchSessionRedesignM3 invocation H/G differs from its verified run-config'
+            [long]$invocation.resume_cleanup_delay_us -ne $verifiedFloors.resume_cleanup_delay_us) {
+            throw 'DispatchSessionRedesignM3 invocation H and resume cleanup delay differ from its verified run-config'
         }
     }
     $row = [pscustomobject]@{
@@ -804,7 +804,7 @@ function Invoke-NativeCase {
         session_seed = Get-OptionalProperty $invocation 'session_seed'
         seed_mode = Get-OptionalProperty $invocation 'seed_mode'
         configured_H_us = Get-OptionalProperty $invocation 'configured_H_us'
-        configured_G_us = Get-OptionalProperty $invocation 'configured_G_us'
+        resume_cleanup_delay_us = Get-OptionalProperty $invocation 'resume_cleanup_delay_us'
         scenario = $Scenario
         load = $Load
         game_fps = $Fps
@@ -824,7 +824,6 @@ function Invoke-NativeCase {
         possibly_active_count = Get-OptionalProperty $details 'possibly_active_count'
         final_release_obligation_mask = Get-OptionalProperty $details 'final_release_obligation_mask'
         production_hold_floor_violation_count = Get-OptionalProperty $details 'production_hold_floor_violation_count'
-        production_release_floor_violation_count = Get-OptionalProperty $details 'production_release_floor_violation_count'
         production_forensics_anomaly_count = Get-OptionalProperty $details 'production_forensics_anomaly_count'
         production_structural_anomaly_count = Get-OptionalProperty $details 'production_structural_anomaly_count'
         production_same_key_overlap_forensics_count = Get-OptionalProperty $details 'production_same_key_overlap_forensics_count'
@@ -1234,10 +1233,10 @@ try {
     }
 
     [string[]]$scenarios = @(
-        'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'release-gap-stress',
+        'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'short-up-gap-stress',
         'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary',
         'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change', 'owner-mismatch',
-        'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor',
+        'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-barrier',
         'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
         'lease-age-watchdog-delayed', 'noncanonical-profile'
     )
@@ -1400,8 +1399,7 @@ try {
     $hardSafety = [ordered]@{
         invalid_or_duplicate_down = '0 expected by PASS verdict; event-window reconciliation and production forensics are recorded per run'
         unexplained_missing_chord = '0 expected by PASS verdict; chord_split_events, missed boundaries, SendInput counters, and event-window counts are recorded per run'
-        hold_release_floor_violation_count = [long](@($safetyRows | ForEach-Object { [long]($_.production_hold_floor_violation_count ?? 0) } | Measure-Object -Sum).Sum)
-        hold_release_floor_violation_release_count = [long](@($safetyRows | ForEach-Object { [long]($_.production_release_floor_violation_count ?? 0) } | Measure-Object -Sum).Sum)
+        production_hold_floor_violation_count = [long](@($safetyRows | ForEach-Object { [long]($_.production_hold_floor_violation_count ?? 0) } | Measure-Object -Sum).Sum)
         production_forensics_anomaly_count = [long](@($safetyRows | ForEach-Object { [long]($_.production_forensics_anomaly_count ?? 0) } | Measure-Object -Sum).Sum)
         residual_release_obligations = @($safetyRows | Where-Object { $null -ne $_.final_release_obligation_mask -and [long]$_.final_release_obligation_mask -ne 0 }).Count
         rt_allocation = 'covered by focused rt_dispatch_no_alloc test; not instrumented by the native ReceiveOnly runner'
@@ -1420,13 +1418,13 @@ try {
         session_seed = $null
         seed_mode = 'none; deterministic workload definitions do not accept a PRNG seed'
         configured_H_us = if ($usesSessionQualificationContracts) { $reportProjection.StageSummary.configured_H_us } elseif ($Stage -in @('Canary', 'Smoke')) { [long][Math]::Ceiling(1000000.0 / 60) * 2 + $TimingMarginUs } elseif ($Stage -eq 'Compare') { [long][Math]::Ceiling(1000000.0 / 60) * 2 } else { $null }
-        configured_G_us = if ($usesSessionQualificationContracts) { $reportProjection.StageSummary.configured_G_us } elseif ($Stage -in @('Canary', 'Smoke')) { [long][Math]::Ceiling(1000000.0 / 60) + $TimingMarginUs } elseif ($Stage -eq 'Compare') { [long][Math]::Ceiling(1000000.0 / 60) } else { $null }
+        resume_cleanup_delay_us = if ($usesSessionQualificationContracts) { $reportProjection.StageSummary.resume_cleanup_delay_us } elseif ($Stage -in @('Canary', 'Smoke')) { [long][Math]::Ceiling(1000000.0 / 60) + $TimingMarginUs } elseif ($Stage -eq 'Compare') { [long][Math]::Ceiling(1000000.0 / 60) } else { $null }
     }
     if ($usesSessionQualificationContracts) {
         $sessionPlan['qualification_profile'] = $QualificationProfile
         $sessionPlan['stage_kind'] = $reportProjection.StageSummary.stage_kind
-        $sessionPlan['configured_H_G_mode'] = $reportProjection.StageSummary.configured_H_G_mode
-        $sessionPlan['configured_H_G_summary'] = $reportProjection.StageSummary.configured_H_G_summary
+        $sessionPlan['configured_hold_and_resume_cleanup_delay_mode'] = $reportProjection.StageSummary.configured_hold_and_resume_cleanup_delay_mode
+        $sessionPlan['configured_hold_and_resume_cleanup_delay_summary'] = $reportProjection.StageSummary.configured_hold_and_resume_cleanup_delay_summary
         $sessionPlan['game_fps'] = $reportProjection.StageSummary.game_fps
         $sessionPlan['game_fps_summary'] = $reportProjection.StageSummary.game_fps_summary
         $sessionPlan['timing_margin_us'] = $reportProjection.StageSummary.timing_margin_us
@@ -1491,7 +1489,7 @@ try {
             sender_envelope = 'SendInput completion QPC minus sender pre-call QPC, per syscall'
             timer_arm_target = 'only records with derived_from_timer_arm provenance are compared; target is QPC arm sample plus the relative microsecond timeout passed to SetWaitableTimer'
             timer_arm_to_return = 'timer return QPC minus matching arm QPC; timer wake residual is return QPC minus requested timer target QPC'
-            realized_H_G = 'per-key successful Down completion to authored Up pre-call (H), and successful Up completion to next Down pre-call (G)'
+            realized_hold_and_transition_timing = 'per-key successful Down completion to authored Up pre-call (H); musical Up completion to next Down pre-call is measured without a fixed floor; verified cleanup completion to resume barrier uses the separate resume cleanup delay'
             per_key_authored_up = 'Up sidecar records are retained and counted, but this summary does not consume their per-slot authored offsets or floors; per-key authored Up p95/p99 are unsupported'
             packet_aggregates = 'p95/p99 for authored lateness, floor displacement, residual, waiter handoff, and sender envelope are packet trace record or per-syscall aggregates'
             hot_cold = 'authored Down-chord schedule gap; hot < 20000 us, cold >= 20000 us'
@@ -1539,7 +1537,7 @@ try {
         'session_seed',
         'seed_mode',
         'configured_H_us',
-        'configured_G_us',
+        'resume_cleanup_delay_us',
         'scenario',
         'load',
         'game_fps',
@@ -1558,7 +1556,6 @@ try {
         'possibly_active_count',
         'final_release_obligation_mask',
         'production_hold_floor_violation_count',
-        'production_release_floor_violation_count',
         'production_forensics_anomaly_count',
         'production_structural_anomaly_count',
         'production_same_key_overlap_forensics_count',
@@ -1669,7 +1666,7 @@ try {
         '- Paired order: AB/BA alternating; six pairs per workload/load cell; 15 seconds per timed session.',
         '- Contention: two hidden PowerShell CPU workers at BelowNormal priority. Sink: identity-verified ReceiveOnly.',
         '- Percentiles use nearest-rank ceiling. No p99.9 is inferred.',
-        '- Reported: per-chord authored lateness, floor displacement, residual lateness, waiter-to-pre-call, per-syscall sender envelope, per-key realized H/G, Down/Up/Mixed, chord width and authored hot/cold gap groups.',
+        '- Reported: per-chord authored lateness, hold-floor displacement, residual lateness, waiter-to-pre-call, per-syscall sender envelope, per-key hold timing and musical Up-to-next-Down gap, verified-cleanup-to-resume delay, Down/Up/Mixed, chord width and authored hot/cold gap groups.',
         '- Timer target uses the arm QPC sample plus the relative timeout passed to the timer API; timer return is paired with the arm generation. Missing and negative-order samples remain counted.',
         '- Tail screen: candidate p95 worse than max(5 us, 10% control) or p99 worse than max(20 us, 10% control) in >=4/6 pairs in a cell prompts leader review; outliers are retained.',
         '- Native RT allocation is not instrumented in the sink runner; see focused no-allocation test result in the accompanying command record.',

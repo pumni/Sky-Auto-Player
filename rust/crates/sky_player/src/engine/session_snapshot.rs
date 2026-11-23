@@ -119,13 +119,9 @@ impl NativeDispatchSession {
             final_gate_focus_losses: local.final_gate_focus_losses,
             final_gate_lease_expirations: local.final_gate_lease_expirations,
             final_sender_window_expirations: 0,
-            release_floor_infeasible_boundaries: 0,
             hold_floor_delay_boundaries: local.hold_floor_delay_boundaries,
             max_hold_floor_delay_us: local.max_hold_floor_delay_us,
             last_hold_floor_delay_mask: local.last_hold_floor_delay_mask,
-            release_floor_delay_boundaries: local.release_floor_delay_boundaries,
-            max_release_floor_delay_us: local.max_release_floor_delay_us,
-            last_release_floor_delay_mask: local.last_release_floor_delay_mask,
             max_missed_lateness_ticks: 0,
             keys_inserted_before_failure: local.keys_inserted_before_failure,
             keys_rolled_back: local.keys_rolled_back,
@@ -136,13 +132,7 @@ impl NativeDispatchSession {
             production_min_hold_start_after_down_completion_ticks: local
                 .production_min_hold_start_after_down_completion_ticks,
             production_hold_floor_violation_count: local.production_hold_floor_violation_count,
-            production_release_floor_samples: local.production_release_floor_samples,
-            production_min_down_start_after_up_completion_ticks: local
-                .production_min_down_start_after_up_completion_ticks,
-            production_release_floor_violation_count: local
-                .production_release_floor_violation_count,
             production_hold_floor_ticks: local.production_hold_floor_ticks,
-            production_release_floor_ticks: local.production_release_floor_ticks,
             production_same_key_overlap_forensics_count: local
                 .production_same_key_overlap_forensics_count,
             production_anchor_overwrite_count: local.production_anchor_overwrite_count,

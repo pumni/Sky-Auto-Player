@@ -45,7 +45,7 @@ function Get-QualificationReportRowLabel {
 function Get-DispatchCleanupM3TimingFloors {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
+        [ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'short-up-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-barrier', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
         [string]$Scenario,
         [Parameter(Mandatory)]
         [ValidateSet(60, 120)]
@@ -58,7 +58,7 @@ function Get-DispatchCleanupM3TimingFloors {
     $frameUs = [long][Math]::Ceiling(1000000.0 / $GameFps)
     $holdFrames = if ($Scenario -eq 'hol-interleaved') { 2 } else { 1 }
     $holdUs = [long]($holdFrames * $frameUs + $TimingMarginUs)
-    $releaseGapUs = [long]($frameUs + $TimingMarginUs)
+    $resumeCleanupDelayUs = [long]($frameUs + $TimingMarginUs)
     [pscustomobject]@{
         scenario = $Scenario
         game_fps = $GameFps
@@ -66,9 +66,9 @@ function Get-DispatchCleanupM3TimingFloors {
         frame_us = $frameUs
         hold_frames = $holdFrames
         expected_hold_us = $holdUs
-        expected_release_gap_us = $releaseGapUs
+        expected_resume_cleanup_delay_us = $resumeCleanupDelayUs
         configured_H_us = $holdUs
-        configured_G_us = $releaseGapUs
+        resume_cleanup_delay_us = $resumeCleanupDelayUs
     }
 }
 
@@ -86,9 +86,9 @@ function Get-DispatchSessionRedesignM3TimingFloors {
         frame_us = $frameUs
         hold_frames = 1
         expected_hold_us = [long]($frameUs + $TimingMarginUs)
-        expected_release_gap_us = [long]($frameUs + $TimingMarginUs)
+        expected_resume_cleanup_delay_us = [long]($frameUs + $TimingMarginUs)
         configured_H_us = [long]($frameUs + $TimingMarginUs)
-        configured_G_us = [long]($frameUs + $TimingMarginUs)
+        resume_cleanup_delay_us = [long]($frameUs + $TimingMarginUs)
     }
 }
 
@@ -143,9 +143,9 @@ function Assert-PlaybackCoreLifecycleSessionIdentity {
         frame_us = $frameUs
         hold_frames = 1
         expected_hold_us = [long]($frameUs + $TimingMarginUs)
-        expected_release_gap_us = [long]($frameUs + $TimingMarginUs)
+        expected_resume_cleanup_delay_us = [long]($frameUs + $TimingMarginUs)
         configured_H_us = [long]($frameUs + $TimingMarginUs)
-        configured_G_us = [long]($frameUs + $TimingMarginUs)
+        resume_cleanup_delay_us = [long]($frameUs + $TimingMarginUs)
     }
 }
 
@@ -192,9 +192,9 @@ function Get-DispatchSessionRedesignM3StageSummary {
         performance_timing_margin_us = 500
         safety_timing_margin_us = 500
         configured_H_us = $null
-        configured_G_us = $null
-        configured_H_G_mode = 'varies_by_session'
-        configured_H_G_summary = '60 FPS H=G=17,167 us; 120 FPS H=G=8,834 us'
+        resume_cleanup_delay_us = $null
+        configured_hold_and_resume_cleanup_delay_mode = 'varies_by_session'
+        configured_hold_and_resume_cleanup_delay_summary = '60 FPS H=17,167 us; resume cleanup delay=17,167 us. 120 FPS H=8,834 us; resume cleanup delay=8,834 us'
         pairs = 6
         pair_order = 'six alternating AB/BA pairs per Quiet and Contention cell'
         timed_performance_sample_seconds = 15
@@ -227,9 +227,9 @@ function Assert-DispatchCleanupM3RunConfigTiming {
             throw ('DispatchCleanupM3 run-config ' + $field + ' does not match the native scenario hold floor')
         }
     }
-    foreach ($field in @('expected_release_gap_us', 'configured_G_us')) {
-        if ($null -eq $RunConfig.$field -or [long]$RunConfig.$field -ne $floors.configured_G_us) {
-            throw ('DispatchCleanupM3 run-config ' + $field + ' does not match the native scenario release gap')
+    foreach ($field in @('expected_resume_cleanup_delay_us', 'resume_cleanup_delay_us')) {
+        if ($null -eq $RunConfig.$field -or [long]$RunConfig.$field -ne $floors.resume_cleanup_delay_us) {
+            throw ('DispatchCleanupM3 run-config ' + $field + ' does not match the native resume cleanup delay')
         }
     }
     $floors
@@ -326,9 +326,9 @@ function Get-DispatchCleanupM3StageSummary {
     $fpsValues = @($contexts | ForEach-Object { [int]$_.game_fps } | Sort-Object -Unique)
     $marginValues = @($contexts | ForEach-Object { [int]$_.margin_us } | Sort-Object -Unique)
     $holdValues = @($floorRows | ForEach-Object { [long]$_.configured_H_us } | Sort-Object -Unique)
-    $gapValues = @($floorRows | ForEach-Object { [long]$_.configured_G_us } | Sort-Object -Unique)
+    $resumeCleanupDelayValues = @($floorRows | ForEach-Object { [long]$_.resume_cleanup_delay_us } | Sort-Object -Unique)
     $configuredH = if ($holdValues.Count -eq 1) { [long]$holdValues[0] } else { $null }
-    $configuredG = if ($gapValues.Count -eq 1) { [long]$gapValues[0] } else { $null }
+    $configuredResumeCleanupDelay = if ($resumeCleanupDelayValues.Count -eq 1) { [long]$resumeCleanupDelayValues[0] } else { $null }
     $fpsSummary = if ($fpsValues.Count -eq 1) { [string]$fpsValues[0] + ' FPS' } else { 'varies by session (' + (($fpsValues | ForEach-Object { [string]$_ }) -join ', ') + ' FPS)' }
     $marginSummary = if ($Stage -eq 'Final') {
         '0 us performance; 500 us safety; boundary cases 0/500 us'
@@ -337,8 +337,8 @@ function Get-DispatchCleanupM3StageSummary {
     } else {
         'varies by session (' + (($marginValues | ForEach-Object { [string]$_ }) -join ', ') + ' us)'
     }
-    $floorSummary = if ($null -ne $configuredH -and $null -ne $configuredG) {
-        'H=' + $configuredH + ' us; G=' + $configuredG + ' us'
+    $floorSummary = if ($null -ne $configuredH -and $null -ne $configuredResumeCleanupDelay) {
+        'H=' + $configuredH + ' us; resume cleanup delay=' + $configuredResumeCleanupDelay + ' us'
     } else {
         'varies by session; use per-session fields'
     }
@@ -378,9 +378,9 @@ function Get-DispatchCleanupM3StageSummary {
         performance_timing_margin_us = 0
         safety_timing_margin_us = 500
         configured_H_us = $configuredH
-        configured_G_us = $configuredG
-        configured_H_G_mode = if ($null -ne $configuredH -and $null -ne $configuredG) { 'common' } else { 'varies_by_session' }
-        configured_H_G_summary = $floorSummary
+        resume_cleanup_delay_us = $configuredResumeCleanupDelay
+        configured_hold_and_resume_cleanup_delay_mode = if ($null -ne $configuredH -and $null -ne $configuredResumeCleanupDelay) { 'common' } else { 'varies_by_session' }
+        configured_hold_and_resume_cleanup_delay_summary = $floorSummary
         pairs = $pairCount
         pair_order = $pairOrder
         timed_performance_sample_seconds = $timedPerformanceSampleSeconds
@@ -432,9 +432,9 @@ function Get-PlaybackCoreLifecycleStageSummary {
         performance_timing_margin_us = 500
         safety_timing_margin_us = 500
         configured_H_us = $null
-        configured_G_us = $null
-        configured_H_G_mode = 'per scenario workload profile'
-        configured_H_G_summary = 'profile-defined production H/G timing at 60 FPS with a 500 us margin'
+        resume_cleanup_delay_us = $null
+        configured_hold_and_resume_cleanup_delay_mode = 'per scenario workload profile'
+        configured_hold_and_resume_cleanup_delay_summary = 'profile-defined production H and resume cleanup delay at 60 FPS with a 500 us margin'
         pairs = $Pairs
         pair_order = 'AB/BA alternating'
         timed_performance_sample_seconds = $SampleSeconds
@@ -547,9 +547,9 @@ function New-QualificationReportProjection {
             timing_margin_values_us = $m3StageSummary.timing_margin_values_us
             timing_margin_summary = $m3StageSummary.timing_margin_summary
             configured_H_us = $m3StageSummary.configured_H_us
-            configured_G_us = $m3StageSummary.configured_G_us
-            configured_H_G_mode = $m3StageSummary.configured_H_G_mode
-            configured_H_G_summary = $m3StageSummary.configured_H_G_summary
+            resume_cleanup_delay_us = $m3StageSummary.resume_cleanup_delay_us
+            configured_hold_and_resume_cleanup_delay_mode = $m3StageSummary.configured_hold_and_resume_cleanup_delay_mode
+            configured_hold_and_resume_cleanup_delay_summary = $m3StageSummary.configured_hold_and_resume_cleanup_delay_summary
             pairs = $m3StageSummary.pairs
             sample_seconds = $m3StageSummary.timed_performance_sample_seconds
             timed_performance_samples = $m3StageSummary.timed_performance_samples
@@ -606,9 +606,9 @@ function New-QualificationReportProjection {
             timing_margin_values_us = $m3StageSummary.timing_margin_values_us
             timing_margin_summary = $m3StageSummary.timing_margin_summary
             configured_H_us = $m3StageSummary.configured_H_us
-            configured_G_us = $m3StageSummary.configured_G_us
-            configured_H_G_mode = $m3StageSummary.configured_H_G_mode
-            configured_H_G_summary = $m3StageSummary.configured_H_G_summary
+            resume_cleanup_delay_us = $m3StageSummary.resume_cleanup_delay_us
+            configured_hold_and_resume_cleanup_delay_mode = $m3StageSummary.configured_hold_and_resume_cleanup_delay_mode
+            configured_hold_and_resume_cleanup_delay_summary = $m3StageSummary.configured_hold_and_resume_cleanup_delay_summary
             timed_performance_samples = $m3StageSummary.timed_performance_samples
             sample_scope = $m3StageSummary.sample_scope
         }
@@ -638,7 +638,7 @@ function New-QualificationReportProjection {
             '- Workloads: ' + $m3StageSummary.workload_summary + '; load cells: ' + ($m3StageSummary.load_cells -join ', '),
             '- FPS: ' + $m3StageSummary.game_fps_summary + '; timing margin: ' + $m3StageSummary.timing_margin_summary,
             '- Manifest margins: performance ' + $m3StageSummary.performance_timing_margin_us + ' us; safety ' + $m3StageSummary.safety_timing_margin_us + ' us.',
-            '- Configured floors: ' + $m3StageSummary.configured_H_G_summary,
+            '- Configured floors: ' + $m3StageSummary.configured_hold_and_resume_cleanup_delay_summary,
             '- Pairing: ' + $m3StageSummary.pair_order,
             '- Sampling: ' + $m3StageSummary.sample_scope + $(if ($m3StageSummary.timed_performance_sample_seconds) { '; ' + $m3StageSummary.timed_performance_sample_seconds + ' seconds per performance session' } else { '' })
         )

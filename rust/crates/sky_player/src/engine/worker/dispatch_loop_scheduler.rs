@@ -319,7 +319,7 @@ fn up_only_timing_window(
     timing_window.down_not_before_qpc = summary.authored_target_qpc;
     timing_window.packet_not_before_qpc = summary.musical_up_not_before_qpc;
     timing_window.hold_floor_mask = summary.hold_floor_mask;
-    timing_window.release_floor_mask = 0;
+    timing_window.resume_barrier_mask = 0;
     Ok(timing_window)
 }
 
@@ -791,7 +791,7 @@ mod scheduler_tests {
     }
 
     #[test]
-    fn independent_up_deadline_keeps_hold_and_same_key_release_gap_floors() {
+    fn independent_up_deadline_keeps_hold_without_adding_an_extra_same_key_wait() {
         use sky_dispatch_core::executor::DispatchDecision;
 
         let independent_actions = [
@@ -851,36 +851,31 @@ mod scheduler_tests {
                 kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: vec![0x15].into(),
-                reason: "release-gap-first-down".into(),
+                reason: "repeat-first-down".into(),
             },
             KeyActionInput {
                 source_action_index: 1,
                 kind: ActionKind::Up,
                 scheduled_us: 20_000,
                 scan_codes: vec![0x15].into(),
-                reason: "release-gap-first-up".into(),
+                reason: "repeat-first-up".into(),
             },
             KeyActionInput {
                 source_action_index: 2,
                 kind: ActionKind::Down,
                 scheduled_us: 37_167,
                 scan_codes: vec![0x15].into(),
-                reason: "release-gap-repeat-down".into(),
+                reason: "repeat-second-down".into(),
             },
             KeyActionInput {
                 source_action_index: 3,
                 kind: ActionKind::Up,
                 scheduled_us: 60_000,
                 scan_codes: vec![0x15].into(),
-                reason: "release-gap-repeat-up".into(),
+                reason: "repeat-second-up".into(),
             },
         ];
         let repeat = ProductionDispatchTestHarness::create_harness(&repeat_actions);
-        let clock = repeat.resources.clock;
-        let release_gap_us = repeat
-            .dispatch_timing_config_for_test()
-            .expect("release-gap timing configuration")
-            .min_release_gap_us;
         let mut scheduler = repeat.resources.scheduler;
         scheduler
             .on_send_completed_at(0, 1, epoch)
@@ -903,18 +898,15 @@ mod scheduler_tests {
         let authored_repeat = epoch
             .checked_add_duration(clock.duration_from_us(37_167).unwrap())
             .unwrap();
-        let release_gap_deadline = late_up_completion
-            .checked_add_duration(
-                clock
-                    .duration_from_us(release_gap_us)
-                    .unwrap(),
-            )
-            .unwrap();
         assert!(matches!(
             scheduler
                 .evaluate_at(authored_repeat, epoch)
-                .expect("repeat waits for completion-based G"),
-            DispatchDecision::Wait { deadline_qpc } if deadline_qpc == release_gap_deadline
+                .expect("authored repeat is due after Up commit"),
+            DispatchDecision::Send {
+                up_mask: 0,
+                down_chord: Some(_),
+                timing_window,
+            } if timing_window.resume_barrier_mask == 0
         ));
     }
 

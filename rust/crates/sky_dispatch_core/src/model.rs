@@ -1,53 +1,23 @@
-//! Domain types for dispatch schedule, key intents, and key registry.
+//! Canonical authored Down generations and their paired Up provenance.
 
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use thiserror::Error;
-
-use crate::time::TimelineTicks;
+use std::sync::Arc;
 
 pub const MAX_KEYS: usize = 15;
 /// Combined capacity budget for retained schedule, coordinator and executor
 /// storage. This is a calculated allocation bound, not a process RSS limit.
 pub const MAX_RETAINED_DISPATCH_BYTES: usize = 512 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum RuntimeScheduleError {
-    #[error("invalid runtime batch index {index}")]
-    InvalidBatchIndex { index: usize },
-    #[error("invalid runtime packet index {index}")]
-    InvalidPacketIndex { index: usize },
-    #[error("invalid intent range for runtime batch {index}")]
-    InvalidIntentRange { index: usize },
-    #[error("invalid intent range for runtime packet {index}")]
-    InvalidPacketIntentRange { index: usize },
-    #[error("compiled key slot {slot} is not present in the key registry")]
-    InvalidKeySlot { slot: KeySlot },
-}
-
 pub type GenerationId = u64;
 pub type ReasonId = u16;
-pub type PacketId = u32;
 pub type KeySlot = u8;
-pub const NO_GENERATION_ID: GenerationId = GenerationId::MAX;
-/// CompactIntent reserves the all-ones 60-bit generation value as the
-/// unmatched-up sentinel.  This is still far beyond the configured action
-/// cap, but keeping the bound explicit prevents a silent alias at the packed
-/// representation boundary.
-pub const MAX_COMPACT_GENERATION_ID: GenerationId = (u64::MAX >> 4) - 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ActionKind {
     Down,
     Up,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PhysicalPacketKind {
-    UpOnly,
-    DownOnly,
-    Mixed,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,8 +39,8 @@ impl KeyRegistry {
     pub fn slot_for(&self, scan_code: u16) -> Option<KeySlot> {
         self.scan_codes
             .iter()
-            .position(|&c| c == scan_code)
-            .map(|p| p as KeySlot)
+            .position(|&code| code == scan_code)
+            .map(|position| position as KeySlot)
     }
 
     pub fn scan_code_for(&self, slot: KeySlot) -> Option<u16> {
@@ -90,72 +60,7 @@ impl KeyRegistry {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeKeyIntent {
-    /// Index into `RuntimeSchedule::batches`; authored source IDs remain
-    /// identity and telemetry metadata.
-    pub compiled_batch_index: usize,
-    pub source_action_index: u32,
-    pub generation_id: Option<GenerationId>,
-    pub kind: ActionKind,
-    pub scan_code: u16,
-    pub key_slot: KeySlot,
-    pub scheduled_us: u64,
-    pub reason_id: ReasonId,
-    pub packet_id: PacketId,
-}
-
-/// Compact immutable intent stored in the schedule arena.
-///
-/// The batch header owns the fields shared by every intent in a chord. The
-/// full `RuntimeKeyIntent` is materialized only for diagnostics and
-/// test-support callers. Production `DispatchExecutor` consumes the compact
-/// schedule representation directly, so a million-action schedule does not
-/// inline fifteen copies of those fields for every action.
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct CompactIntent(u64);
-
-impl CompactIntent {
-    pub fn new(generation_id: GenerationId, key_slot: KeySlot) -> Self {
-        debug_assert!(key_slot < 16, "compact key slot must fit in four bits");
-        let generation_bits = if generation_id == NO_GENERATION_ID {
-            u64::MAX >> 4
-        } else {
-            debug_assert!(generation_id <= MAX_COMPACT_GENERATION_ID);
-            generation_id
-        };
-        Self((generation_bits << 4) | u64::from(key_slot))
-    }
-
-    pub fn generation_id(self) -> GenerationId {
-        let generation = self.0 >> 4;
-        if generation == u64::MAX >> 4 {
-            NO_GENERATION_ID
-        } else {
-            generation
-        }
-    }
-
-    pub fn key_slot(self) -> KeySlot {
-        (self.0 & 0x0f) as KeySlot
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CompiledBatch {
-    pub source_action_index: u32,
-    pub kind: ActionKind,
-    pub scheduled_us: u64,
-    pub reason_id: ReasonId,
-    pub intent_start: u32,
-    pub intent_len: u8,
-    pub packet_id: PacketId,
-}
-
-/// A single musical Down intent within an immutable Down chord.
-///
-/// Pairs each Down generation with its exact authored Up counterpart.
+/// One Down generation paired with the exact authored Up that closes it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CompiledDownIntent {
     pub generation_id: GenerationId,
@@ -165,9 +70,10 @@ pub struct CompiledDownIntent {
     pub reason_id: ReasonId,
     pub paired_up_offset_us: u64,
     pub paired_up_source_action_index: u32,
+    pub paired_up_reason_id: ReasonId,
 }
 
-/// One immutable Down chord representing an atomic transport batch.
+/// One authored Down chord and the paired Up provenance for every key.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledDownChord {
     pub chord_index: usize,
@@ -178,45 +84,38 @@ pub struct CompiledDownChord {
     pub intents: SmallVec<[CompiledDownIntent; MAX_KEYS]>,
 }
 
-/// One physical dispatch boundary for every authored timestamp.
-///
-/// The intent arena ranges are canonicalized: all release intents are stored
-/// before all activation intents. `up_mask` excludes stale releases while the
-/// corresponding batch metadata remains available for diagnostics.
+/// Minimal provenance for an authored Up that did not close a Down generation.
+/// Such an Up is retained for diagnostics and never becomes physical work.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct CompiledPacket {
-    pub packet_id: PacketId,
-    pub scheduled_us: u64,
-    pub first_batch_index: u32,
-    pub batch_count: u16,
-    pub up_mask: u16,
-    pub down_mask: u16,
-    pub up_intent_start: u32,
-    pub up_intent_len: u8,
-    pub down_intent_start: u32,
-    pub down_intent_len: u8,
-    pub down_source_action_index: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeBatch {
+pub struct UnmatchedUpMetadata {
     pub source_action_index: u32,
-    pub kind: ActionKind,
     pub scheduled_us: u64,
     pub reason_id: ReasonId,
-    pub intents: SmallVec<[RuntimeKeyIntent; MAX_KEYS]>,
-    pub packet_id: PacketId,
+    pub key_slot: KeySlot,
+    pub scan_code: u16,
+}
+
+/// Capacity-based storage report for the canonical compiled schedule.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RuntimeScheduleMemoryMetrics {
+    pub down_chords_capacity: usize,
+    pub unmatched_ups_capacity: usize,
+    pub reason_table_capacity: usize,
+    pub reason_text_capacity_bytes: usize,
+    pub heap_payload_bytes: usize,
+    pub struct_bytes: usize,
+    pub compile_memory: CompileMemoryMetrics,
 }
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSchedule {
-    pub packets: Vec<CompiledPacket>,
-    pub batches: Vec<CompiledBatch>,
-    pub intents: Vec<CompactIntent>,
+    pub down_chords: Vec<CompiledDownChord>,
+    pub unmatched_ups: Vec<UnmatchedUpMetadata>,
     pub generation_count: u64,
+    pub authored_timestamp_group_count: usize,
+    pub authored_action_count: usize,
     pub key_registry: KeyRegistry,
     pub reason_table: Vec<String>,
-    pub down_chords: Vec<CompiledDownChord>,
     pub schedule_end_offset_us: u64,
     /// Compile-phase capacity accounting carried into startup admission.
     pub compile_memory: CompileMemoryMetrics,
@@ -234,22 +133,6 @@ pub struct CompileMemoryMetrics {
     pub phase_peak_capacity_bytes: usize,
 }
 
-/// Capacity-based storage report for the compiler-owned runtime schedule.
-/// Allocator metadata and external allocations such as source actions are not
-/// included.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RuntimeScheduleMemoryMetrics {
-    pub packets_capacity: usize,
-    pub batches_capacity: usize,
-    pub intents_capacity: usize,
-    pub down_chords_capacity: usize,
-    pub reason_table_capacity: usize,
-    pub reason_text_capacity_bytes: usize,
-    pub heap_payload_bytes: usize,
-    pub struct_bytes: usize,
-    pub compile_memory: CompileMemoryMetrics,
-}
-
 impl RuntimeSchedule {
     /// Calculate retained vector capacities without cancellation checkpoints.
     pub fn memory_metrics(&self) -> Result<RuntimeScheduleMemoryMetrics, String> {
@@ -262,26 +145,16 @@ impl RuntimeSchedule {
         &self,
         mut checkpoint: impl FnMut() -> Result<(), String>,
     ) -> Result<RuntimeScheduleMemoryMetrics, String> {
-        let packets = self
-            .packets
-            .capacity()
-            .checked_mul(std::mem::size_of::<CompiledPacket>())
-            .ok_or_else(|| "schedule packet capacity size overflow".to_string())?;
-        let batches = self
-            .batches
-            .capacity()
-            .checked_mul(std::mem::size_of::<CompiledBatch>())
-            .ok_or_else(|| "schedule batch capacity size overflow".to_string())?;
-        let intents = self
-            .intents
-            .capacity()
-            .checked_mul(std::mem::size_of::<CompactIntent>())
-            .ok_or_else(|| "schedule intent capacity size overflow".to_string())?;
         let down_chords = self
             .down_chords
             .capacity()
             .checked_mul(std::mem::size_of::<CompiledDownChord>())
             .ok_or_else(|| "schedule Down chord capacity size overflow".to_string())?;
+        let unmatched_ups = self
+            .unmatched_ups
+            .capacity()
+            .checked_mul(std::mem::size_of::<UnmatchedUpMetadata>())
+            .ok_or_else(|| "schedule unmatched Up capacity size overflow".to_string())?;
         let reason_headers = self
             .reason_table
             .capacity()
@@ -297,10 +170,8 @@ impl RuntimeSchedule {
                 .ok_or_else(|| "schedule reason text capacity size overflow".to_string())?;
         }
         let heap_payload_bytes = [
-            packets,
-            batches,
-            intents,
             down_chords,
+            unmatched_ups,
             reason_headers,
             reason_text_capacity_bytes,
         ]
@@ -311,10 +182,8 @@ impl RuntimeSchedule {
                 .ok_or_else(|| "schedule heap payload size overflow".to_string())
         })?;
         Ok(RuntimeScheduleMemoryMetrics {
-            packets_capacity: self.packets.capacity(),
-            batches_capacity: self.batches.capacity(),
-            intents_capacity: self.intents.capacity(),
             down_chords_capacity: self.down_chords.capacity(),
+            unmatched_ups_capacity: self.unmatched_ups.capacity(),
             reason_table_capacity: self.reason_table.capacity(),
             reason_text_capacity_bytes,
             heap_payload_bytes,
@@ -332,397 +201,15 @@ impl RuntimeSchedule {
     pub fn schedule_end_offset_us(&self) -> u64 {
         self.schedule_end_offset_us
     }
-
-    pub fn view_packet_ticks(
-        &self,
-        index: usize,
-        effective_ticks: TimelineTicks,
-    ) -> Result<PacketView<'_>, RuntimeScheduleError> {
-        let view = self.view_packet_ticks_unvalidated_registry(index, effective_ticks)?;
-        view.validate_registry()?;
-        Ok(view)
-    }
-
-    /// Borrow a packet after range validation but before key-registry
-    /// validation.  The authored coordinator's one-pass preparation uses this
-    /// seam so it can validate each compact intent and consume it exactly once
-    /// while building its frozen logical product.  Other callers should use
-    /// [`RuntimeSchedule::view_packet_ticks`].
-    pub fn view_packet_ticks_unvalidated_registry(
-        &self,
-        index: usize,
-        effective_ticks: TimelineTicks,
-    ) -> Result<PacketView<'_>, RuntimeScheduleError> {
-        let header = self
-            .packets
-            .get(index)
-            .ok_or(RuntimeScheduleError::InvalidPacketIndex { index })?;
-        let up_start = header.up_intent_start as usize;
-        let up_end = up_start
-            .checked_add(header.up_intent_len as usize)
-            .ok_or(RuntimeScheduleError::InvalidPacketIntentRange { index })?;
-        let down_start = header.down_intent_start as usize;
-        let down_end = down_start
-            .checked_add(header.down_intent_len as usize)
-            .ok_or(RuntimeScheduleError::InvalidPacketIntentRange { index })?;
-        let up_intents = self
-            .intents
-            .get(up_start..up_end)
-            .ok_or(RuntimeScheduleError::InvalidPacketIntentRange { index })?;
-        let down_intents = self
-            .intents
-            .get(down_start..down_end)
-            .ok_or(RuntimeScheduleError::InvalidPacketIntentRange { index })?;
-        Ok(PacketView {
-            packet_index: index,
-            header,
-            up_intents,
-            down_intents,
-            registry: &self.key_registry,
-            effective_ticks,
-        })
-    }
-
-    pub fn try_materialize_batch_authored(
-        &self,
-        index: usize,
-    ) -> Result<RuntimeBatch, RuntimeScheduleError> {
-        self.view_batch_ticks(index, TimelineTicks::ZERO)
-            .map(|view| view.materialize())
-    }
-
-    pub fn view_batch_ticks(
-        &self,
-        index: usize,
-        scheduled_ticks: TimelineTicks,
-    ) -> Result<BatchView<'_>, RuntimeScheduleError> {
-        let header = self
-            .batches
-            .get(index)
-            .ok_or(RuntimeScheduleError::InvalidBatchIndex { index })?;
-        let start = header.intent_start as usize;
-        let end = start
-            .checked_add(header.intent_len as usize)
-            .ok_or(RuntimeScheduleError::InvalidIntentRange { index })?;
-        let intents = self
-            .intents
-            .get(start..end)
-            .ok_or(RuntimeScheduleError::InvalidIntentRange { index })?;
-        for compact in intents {
-            if self
-                .key_registry
-                .scan_code_for(compact.key_slot())
-                .is_none()
-            {
-                return Err(RuntimeScheduleError::InvalidKeySlot {
-                    slot: compact.key_slot(),
-                });
-            }
-        }
-        Ok(BatchView {
-            batch_index: index,
-            header,
-            intents,
-            registry: &self.key_registry,
-            scheduled_ticks,
-            // This is authored metadata only. Effective scheduling stays in
-            // `scheduled_ticks`; telemetry converts that value at its boundary.
-            scheduled_us: header.scheduled_us,
-        })
-    }
-
-    #[cfg(test)]
-    pub fn materialize_batch(&self, index: usize, scheduled_offset_us: u64) -> RuntimeBatch {
-        let header = self
-            .batches
-            .get(index)
-            .expect("runtime batch index must be valid");
-        let scheduled_us = header.scheduled_us.saturating_add(scheduled_offset_us);
-        let start = header.intent_start as usize;
-        let end = start + header.intent_len as usize;
-        let intents = self.intents[start..end]
-            .iter()
-            .map(|compact| RuntimeKeyIntent {
-                compiled_batch_index: index,
-                source_action_index: header.source_action_index,
-                generation_id: (compact.generation_id() != NO_GENERATION_ID)
-                    .then_some(compact.generation_id()),
-                kind: header.kind,
-                scan_code: self
-                    .key_registry
-                    .scan_code_for(compact.key_slot())
-                    .expect("compiled key slot must belong to key registry"),
-                key_slot: compact.key_slot(),
-                scheduled_us,
-                reason_id: header.reason_id,
-                packet_id: header.packet_id,
-            })
-            .collect();
-        RuntimeBatch {
-            source_action_index: header.source_action_index,
-            kind: header.kind,
-            scheduled_us,
-            reason_id: header.reason_id,
-            intents,
-            packet_id: header.packet_id,
-        }
-    }
-
-    pub fn intent_slice(&self, batch: &CompiledBatch) -> &[CompactIntent] {
-        let start = batch.intent_start as usize;
-        let end = start + batch.intent_len as usize;
-        &self.intents[start..end]
-    }
-
-    /// Borrow a view into batch `index` without allocating.
-    ///
-    /// Lifetime is tied to `self`.  Use `BatchView::materialize` only
-    /// when telemetry requires the full `RuntimeBatch` representation.
-    #[cfg(test)]
-    pub fn view_batch(&self, index: usize, scheduled_offset_us: u64) -> BatchView<'_> {
-        let header = self
-            .batches
-            .get(index)
-            .expect("runtime batch index must be valid");
-        let start = header.intent_start as usize;
-        let end = start + header.intent_len as usize;
-        BatchView {
-            batch_index: index,
-            header,
-            intents: &self.intents[start..end],
-            registry: &self.key_registry,
-            scheduled_ticks: TimelineTicks::from_raw(
-                header.scheduled_us.saturating_add(scheduled_offset_us),
-            ),
-            scheduled_us: header.scheduled_us.saturating_add(scheduled_offset_us),
-        }
-    }
 }
 
-/// Borrowed, allocation-free view of one canonical physical packet.
-#[derive(Debug, Clone, Copy)]
-pub struct PacketView<'a> {
-    pub packet_index: usize,
-    pub header: &'a CompiledPacket,
-    pub up_intents: &'a [CompactIntent],
-    pub down_intents: &'a [CompactIntent],
-    pub registry: &'a KeyRegistry,
-    pub effective_ticks: TimelineTicks,
-}
-
-impl PacketView<'_> {
-    /// Validate every compact intent against the fixed key registry.
-    pub fn validate_registry(&self) -> Result<(), RuntimeScheduleError> {
-        for compact in self.up_intents.iter().chain(self.down_intents) {
-            if self.registry.scan_code_for(compact.key_slot()).is_none() {
-                return Err(RuntimeScheduleError::InvalidKeySlot {
-                    slot: compact.key_slot(),
-                });
-            }
-        }
-        Ok(())
-    }
-
-    #[inline]
-    pub fn packet_id(&self) -> PacketId {
-        self.header.packet_id
-    }
-
-    #[inline]
-    pub fn scheduled_us(&self) -> u64 {
-        self.header.scheduled_us
-    }
-
-    #[inline]
-    pub fn up_mask(&self) -> u16 {
-        self.header.up_mask
-    }
-
-    #[inline]
-    pub fn down_mask(&self) -> u16 {
-        self.header.down_mask
-    }
-
-    /// Build the activation portion of this packet into the fixed-size
-    /// worker buffer. Releases are emitted by the physical sender directly
-    /// from `up_mask` and must not be mixed into this legacy view.
-    pub fn down_scan_code_batch(&self) -> ScanCodeBatch {
-        let mut batch = ScanCodeBatch::new_empty();
-        let mut mask = self.header.down_mask;
-        while mask != 0 {
-            let slot = mask.trailing_zeros() as KeySlot;
-            mask &= mask - 1;
-            if let Some(scan_code) = self.registry.scan_code_for(slot) {
-                batch.push(scan_code);
-            }
-        }
-        batch
-    }
-}
-
-/// Borrowed zero-copy view of a compiled batch.
-///
-/// Lifetime is tied to the `RuntimeSchedule` that owns the arena.
-/// No heap allocation — header and intents are slices into the flat schedule.
-/// Call [`BatchView::materialize`] only when the owned `RuntimeBatch`
-/// representation is required (e.g. when full-rate telemetry is enabled).
-#[derive(Debug, Clone, Copy)]
-pub struct BatchView<'a> {
-    pub batch_index: usize,
-    pub header: &'a CompiledBatch,
-    /// Compact intents stored in the schedule arena (no scan codes inline).
-    pub intents: &'a [CompactIntent],
-    /// Key registry shared by the whole session (scan-code lookup).
-    pub registry: &'a KeyRegistry,
-    /// Effective scheduled time from the authored timeline.
-    pub scheduled_ticks: TimelineTicks,
-    /// Authored timestamp retained as telemetry metadata. It is not used for
-    /// production deadline calculations.
-    pub scheduled_us: u64,
-}
-
-impl<'a> BatchView<'a> {
-    /// Action kind of this batch.
-    #[inline]
-    pub fn kind(&self) -> ActionKind {
-        self.header.kind
-    }
-
-    /// Source action index from the authored schedule.
-    #[inline]
-    pub fn source_action_index(&self) -> u32 {
-        self.header.source_action_index
-    }
-
-    /// Reason identifier for telemetry labelling.
-    #[inline]
-    pub fn reason_id(&self) -> ReasonId {
-        self.header.reason_id
-    }
-
-    /// Packet identifier.
-    #[inline]
-    pub fn packet_id(&self) -> PacketId {
-        self.header.packet_id
-    }
-
-    /// Build a stack-only scan code buffer from this batch.
-    ///
-    /// `conflict_mask` is a bitmask of key slots to skip (already-active
-    /// slots identified by `check_down_conflicts_compact`).  Pass `0` to
-    /// include all slots.
-    pub fn scan_code_batch_excluding_mask(&self, conflict_mask: u16) -> ScanCodeBatch {
-        let mut batch = ScanCodeBatch::new_empty();
-        for compact in self.intents {
-            let slot = compact.key_slot();
-            if conflict_mask & (1u16 << slot) != 0 {
-                continue;
-            }
-            if let Some(sc) = self.registry.scan_code_for(slot) {
-                batch.push(sc);
-            }
-        }
-        batch
-    }
-
-    /// Build a scan code buffer for ALL intents (no conflict exclusion).
-    #[inline]
-    pub fn scan_code_batch_all(&self) -> ScanCodeBatch {
-        self.scan_code_batch_excluding_mask(0)
-    }
-
-    /// Fully materialize into an owned `RuntimeBatch`.
-    ///
-    /// This allocates a `SmallVec<[RuntimeKeyIntent; MAX_KEYS]>`.
-    /// Call only off the hot path (telemetry or diagnostic logging).
-    pub fn materialize(&self) -> RuntimeBatch {
-        let intents = self
-            .intents
-            .iter()
-            .map(|compact| RuntimeKeyIntent {
-                compiled_batch_index: self.batch_index,
-                source_action_index: self.header.source_action_index,
-                generation_id: (compact.generation_id() != NO_GENERATION_ID)
-                    .then_some(compact.generation_id()),
-                kind: self.header.kind,
-                scan_code: self
-                    .registry
-                    .scan_code_for(compact.key_slot())
-                    .expect("compiled key slot must belong to key registry"),
-                key_slot: compact.key_slot(),
-                scheduled_us: self.scheduled_us,
-                reason_id: self.header.reason_id,
-                packet_id: self.header.packet_id,
-            })
-            .collect();
-        RuntimeBatch {
-            source_action_index: self.header.source_action_index,
-            kind: self.header.kind,
-            scheduled_us: self.scheduled_us,
-            reason_id: self.header.reason_id,
-            intents,
-            packet_id: self.header.packet_id,
-        }
-    }
-}
-
-/// Stack-only scan code buffer for a single dispatch batch.
-///
-/// Avoids any heap allocation on the RT path.  The capacity matches
-/// `MAX_KEYS` (15 instrument slots).
-#[derive(Debug, Clone, Copy)]
-pub struct ScanCodeBatch {
-    values: [u16; MAX_KEYS],
-    len: u8,
-}
-
-impl ScanCodeBatch {
-    /// Create an empty buffer.
-    #[inline]
-    pub fn new_empty() -> Self {
-        Self {
-            values: [0u16; MAX_KEYS],
-            len: 0,
-        }
-    }
-
-    /// Append a scan code.  Panics (debug) if over capacity.
-    #[inline]
-    pub fn push(&mut self, code: u16) {
-        debug_assert!(
-            (self.len as usize) < MAX_KEYS,
-            "ScanCodeBatch overflow: len={} capacity={}",
-            self.len,
-            MAX_KEYS
-        );
-        self.values[self.len as usize] = code;
-        self.len += 1;
-    }
-
-    /// Slice view of the populated entries.
-    #[inline]
-    pub fn as_slice(&self) -> &[u16] {
-        &self.values[..self.len as usize]
-    }
-
-    #[inline]
-    pub fn len(&self) -> usize {
-        self.len as usize
-    }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-}
-
-use std::sync::Arc;
+use smallvec::SmallVec as InputSmallVec;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct KeyActionInput {
     pub source_action_index: u32,
     pub kind: ActionKind,
     pub scheduled_us: u64,
-    pub scan_codes: SmallVec<[u16; 4]>,
+    pub scan_codes: InputSmallVec<[u16; 4]>,
     pub reason: Arc<str>,
 }

@@ -178,7 +178,7 @@ mod tests {
             frame_base_hold_us: u64::MAX,
             timing_margin_us: 0,
             min_hold_us: u64::MAX,
-            min_release_gap_us: 0,
+            resume_cleanup_delay_us: 0,
             focus_restore_grace_us: 0,
         };
         let at_zero = Song {
@@ -265,7 +265,7 @@ mod tests {
             frame_base_hold_us: 2_000_000,
             timing_margin_us: 0,
             min_hold_us: 2_000_000,
-            min_release_gap_us: 0,
+            resume_cleanup_delay_us: 0,
             focus_restore_grace_us: 0,
         };
         let schedule = build_schedule_from_scaled_onsets(

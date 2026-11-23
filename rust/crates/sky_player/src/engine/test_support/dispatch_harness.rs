@@ -23,7 +23,7 @@ use sky_dispatch_core::executor::{
 };
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
-use sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility;
+use sky_dispatch_core::validation::validate_min_hold_feasibility;
 use sky_dispatch_win32::clock::{QpcClock, qpc_frequency_checked};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
@@ -39,7 +39,7 @@ use std::sync::{Arc, Mutex};
 pub const DISPATCH_FRAME_US: u64 = 16_667;
 pub const DISPATCH_MARGIN_US: u64 = 500;
 pub const DISPATCH_EFFECTIVE_HOLD_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
-pub const DISPATCH_RELEASE_GAP_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
+pub const DISPATCH_RESUME_CLEANUP_DELAY_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DispatchTimingConfigEvidence {
@@ -50,8 +50,8 @@ pub struct DispatchTimingConfigEvidence {
     pub timing_margin_ticks: u64,
     pub effective_hold_us: u64,
     pub effective_hold_ticks: u64,
-    pub min_release_gap_us: u64,
-    pub min_release_gap_ticks: u64,
+    pub resume_cleanup_delay_us: u64,
+    pub resume_cleanup_delay_ticks: u64,
     pub lease_enabled: bool,
     pub lease_timeout_us: u64,
     pub lease_timeout_ticks: u64,
@@ -187,23 +187,19 @@ impl ProductionDispatchTestHarness {
         config.timing.frame_base_hold_us = DISPATCH_FRAME_US;
         config.timing.timing_margin_us = DISPATCH_MARGIN_US;
         config.timing.min_hold_us = DISPATCH_EFFECTIVE_HOLD_US;
-        config.timing.min_release_gap_us = DISPATCH_RELEASE_GAP_US;
-        validate_min_hold_and_release_gap_feasibility(
-            &schedule,
-            config.timing.min_hold_us,
-            config.timing.min_release_gap_us,
-        )
-        .map_err(|error| format!("production scheduler admission failed: {error}"))?;
+        config.timing.resume_cleanup_delay_us = DISPATCH_RESUME_CLEANUP_DELAY_US;
+        validate_min_hold_feasibility(&schedule, config.timing.min_hold_us)
+            .map_err(|error| format!("production scheduler admission failed: {error}"))?;
         let min_hold_ticks = clock
             .duration_from_us(config.timing.min_hold_us)
             .map_err(|error| format!("minimum hold conversion failed: {error:?}"))?;
-        let min_release_gap_ticks = clock
-            .duration_from_us(config.timing.min_release_gap_us)
-            .map_err(|error| format!("minimum release gap conversion failed: {error:?}"))?;
+        let resume_cleanup_delay_ticks = clock
+            .duration_from_us(config.timing.resume_cleanup_delay_us)
+            .map_err(|error| format!("resume cleanup delay conversion failed: {error:?}"))?;
         let scheduler = DispatchExecutor::new(
             &schedule,
             DurationTicks::from_raw(min_hold_ticks.as_u64()),
-            DurationTicks::from_raw(min_release_gap_ticks.as_u64()),
+            DurationTicks::from_raw(resume_cleanup_delay_ticks.as_u64()),
             |us| {
                 clock
                     .timeline_from_us(us)
@@ -752,11 +748,11 @@ impl ProductionDispatchTestHarness {
             .clock
             .duration_from_us(timing.min_hold_us)
             .map_err(|error| format!("hold conversion: {error:?}"))?;
-        let min_release_gap_ticks = self
+        let resume_cleanup_delay_ticks = self
             .resources
             .clock
-            .duration_from_us(timing.min_release_gap_us)
-            .map_err(|error| format!("release gap conversion: {error:?}"))?;
+            .duration_from_us(timing.resume_cleanup_delay_us)
+            .map_err(|error| format!("resume cleanup delay conversion: {error:?}"))?;
         let lease_timeout_ticks = self
             .resources
             .clock
@@ -770,8 +766,8 @@ impl ProductionDispatchTestHarness {
             timing_margin_ticks: timing_margin_ticks.as_u64(),
             effective_hold_us: timing.min_hold_us,
             effective_hold_ticks: effective_hold_ticks.as_u64(),
-            min_release_gap_us: timing.min_release_gap_us,
-            min_release_gap_ticks: min_release_gap_ticks.as_u64(),
+            resume_cleanup_delay_us: timing.resume_cleanup_delay_us,
+            resume_cleanup_delay_ticks: resume_cleanup_delay_ticks.as_u64(),
             lease_enabled: self.config.wait.supervisor_lease_timeout_us > 0,
             lease_timeout_us: self.config.wait.supervisor_lease_timeout_us,
             lease_timeout_ticks: lease_timeout_ticks.as_u64(),

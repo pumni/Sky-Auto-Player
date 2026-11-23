@@ -42,7 +42,7 @@ pub struct UpSlotTrace {
     pub scan_code: u16,
     pub source_action_index: u32,
     pub authored_offset_ticks: u64,
-    pub release_floor_offset_ticks: u64,
+    pub up_not_before_offset_ticks: u64,
     pub floor_displacement_ticks: u64,
     pub pre_call_qpc_ticks: Option<u64>,
     pub completion_qpc_ticks: u64,
@@ -56,7 +56,7 @@ pub struct RtTraceRecord {
     pub up_slot_attribution_missing: bool,
     pub wait_sequence: Option<u64>,
     pub wait_spin_ticks: Option<u64>,
-    pub compiled_packet_index: u64,
+    pub authored_down_chord_index: u64,
     /// Authored and effective positions relative to the immutable playback
     /// epoch. These are schedule offsets, not sampled wall-clock timestamps.
     pub authored_offset_ticks: u64,
@@ -87,7 +87,7 @@ pub struct RtTraceRecord {
     pub authored_lateness_ticks: i64,
     pub physical_floor_displacement_ticks: u64,
     pub hold_floor_displacement_ticks: u64,
-    pub release_floor_displacement_ticks: u64,
+    pub down_eligibility_displacement_ticks: u64,
     pub other_floor_displacement_ticks: u64,
     pub residual_lateness_ticks: i64,
     pub hol_delay_lower_bound_ticks: u64,
@@ -115,9 +115,9 @@ pub struct RtTraceRecord {
     pub up_mask: u16,
     pub down_mask: u16,
     pub hold_floor_mask: u16,
-    pub release_floor_mask: u16,
+    pub resume_barrier_mask: u16,
     /// Availability and provenance distinguish missing QPC samples from valid zero.
-    pub compiled_packet_index_available: bool,
+    pub authored_down_chord_index_available: bool,
     pub wake_offset_available: bool,
     pub wake_qpc_available: bool,
     pub physical_eligibility_qpc_available: bool,
@@ -170,7 +170,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 25;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 26;
 pub const NATIVE_UP_SLOT_TRACE_CAPACITY: usize = 4_096;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
@@ -223,11 +223,11 @@ pub(crate) struct TraceTiming {
     pub(crate) physical_target_qpc_ticks: Option<u64>,
     pub(crate) physical_not_before_qpc_ticks: Option<u64>,
     pub(crate) hold_floor_qpc_ticks: Option<u64>,
-    pub(crate) release_floor_qpc_ticks: Option<u64>,
+    pub(crate) down_not_before_qpc_ticks: Option<u64>,
     pub(crate) previous_sendinput_completion_qpc_ticks: Option<u64>,
     pub(crate) previous_sender_completion_known: bool,
     pub(crate) hold_floor_mask: u16,
-    pub(crate) release_floor_mask: u16,
+    pub(crate) resume_barrier_mask: u16,
     pub(crate) final_policy_qpc_ticks: Option<u64>,
     pub(crate) pre_call_qpc_ticks: Option<u64>,
     pub(crate) sendinput_completion_qpc_ticks: Option<u64>,
@@ -258,7 +258,7 @@ pub(crate) struct TraceDelivery {
 pub(crate) struct TraceContext {
     pub(crate) event_index: u32,
     pub(crate) source_action_index: u32,
-    pub(crate) compiled_packet_index: Option<u64>,
+    pub(crate) authored_down_chord_index: Option<u64>,
     pub(crate) kind: u8,
     pub(crate) outcome: u8,
     pub(crate) polyphony: usize,
@@ -299,8 +299,8 @@ impl RtTraceRecord {
             timing.hold_floor_qpc_ticks,
             timing.physical_target_qpc_ticks,
         )?;
-        let release_floor_displacement_ticks = checked_displacement(
-            timing.release_floor_qpc_ticks,
+        let down_eligibility_displacement_ticks = checked_displacement(
+            timing.down_not_before_qpc_ticks,
             timing.physical_target_qpc_ticks,
         )?;
         let other_floor_displacement_ticks = match (
@@ -310,7 +310,7 @@ impl RtTraceRecord {
             (Some(not_before), Some(target)) => {
                 let known_floor = target
                     .max(timing.hold_floor_qpc_ticks.unwrap_or(target))
-                    .max(timing.release_floor_qpc_ticks.unwrap_or(target));
+                    .max(timing.down_not_before_qpc_ticks.unwrap_or(target));
                 Some(
                     not_before
                         .checked_sub(known_floor)
@@ -371,8 +371,8 @@ impl RtTraceRecord {
             wait_sequence: None,
             wait_spin_ticks: None,
             trace_record_index: 0,
-            compiled_packet_index: context.compiled_packet_index.unwrap_or_default(),
-            compiled_packet_index_available: context.compiled_packet_index.is_some(),
+            authored_down_chord_index: context.authored_down_chord_index.unwrap_or_default(),
+            authored_down_chord_index_available: context.authored_down_chord_index.is_some(),
             source_action_index: context.source_action_index,
             event_index: context.event_index,
             kind: context.kind,
@@ -421,7 +421,7 @@ impl RtTraceRecord {
             final_policy_qpc_ticks: timing.final_policy_qpc_ticks.unwrap_or_default(),
             final_policy_qpc_available: timing.final_policy_qpc_ticks.is_some(),
             hold_floor_mask: timing.hold_floor_mask,
-            release_floor_mask: timing.release_floor_mask,
+            resume_barrier_mask: timing.resume_barrier_mask,
             pre_call_qpc_ticks: timing.pre_call_qpc_ticks.unwrap_or_default(),
             pre_call_qpc_available: timing.pre_call_qpc_ticks.is_some(),
             sendinput_completion_qpc_ticks: timing
@@ -437,7 +437,8 @@ impl RtTraceRecord {
             physical_floor_displacement_ticks: physical_floor_displacement_ticks
                 .unwrap_or_default(),
             hold_floor_displacement_ticks: hold_floor_displacement_ticks.unwrap_or_default(),
-            release_floor_displacement_ticks: release_floor_displacement_ticks.unwrap_or_default(),
+            down_eligibility_displacement_ticks: down_eligibility_displacement_ticks
+                .unwrap_or_default(),
             other_floor_displacement_ticks: other_floor_displacement_ticks.unwrap_or_default(),
             residual_lateness_ticks: residual_lateness_ticks.unwrap_or_default(),
             hol_delay_lower_bound_ticks: hol_delay_lower_bound_ticks.unwrap_or_default(),

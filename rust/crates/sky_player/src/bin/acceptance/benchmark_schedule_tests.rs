@@ -47,23 +47,23 @@ fn timed_sample_plan_repeats_each_benchmark_workload_over_15_seconds() {
         .unwrap();
         let first = repeated
             .schedule
-            .packets
+            .down_chords
             .first()
             .expect("timed schedule has packets")
             .scheduled_us;
         let last = repeated
             .schedule
-            .packets
+            .down_chords
             .last()
             .expect("timed schedule has packets")
             .scheduled_us;
-        assert!(repeated.schedule.packets.len() > base.schedule.packets.len());
+        assert!(repeated.schedule.down_chords.len() > base.schedule.down_chords.len());
         assert!(last.saturating_sub(first) >= 15_000_000, "{scenario:?}");
         assert_eq!(
             repeated.expected_down_slots.len(),
             repeated
                 .schedule
-                .packets
+                .down_chords
                 .iter()
                 .map(|packet| packet.down_mask.count_ones() as usize)
                 .sum::<usize>()

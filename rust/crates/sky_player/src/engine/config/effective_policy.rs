@@ -161,7 +161,7 @@ mod tests {
             &schedule,
             qpc.frequency_hz(),
             timing.min_hold_us,
-            timing.min_release_gap_us,
+            timing.resume_cleanup_delay_us,
             schedule.compile_memory.caller_retained_capacity_bytes,
         )
         .expect("prepared empty schedule");

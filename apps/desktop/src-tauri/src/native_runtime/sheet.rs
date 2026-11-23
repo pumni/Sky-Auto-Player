@@ -41,6 +41,7 @@ pub(super) fn blocked_sheet_prepare(
         headline: "Sheet cannot be prepared".into(),
         reasons: vec![message.clone()],
         recommendations: Vec::new(),
+        short_up_gap_repeat_count: 0,
     };
     let error_code = match sheet_analysis.readiness {
         SheetReadinessDto::Unsupported => "unsupported_sheet",

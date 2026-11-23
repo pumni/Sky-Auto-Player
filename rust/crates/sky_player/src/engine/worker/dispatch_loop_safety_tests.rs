@@ -142,9 +142,12 @@ fn attempted_mixed_down_terminates_after_one_packet_and_verified_cleanup() {
     let cleanup_completion = QpcTicks::from_raw(cleanup_completion_qpc.load(Ordering::Acquire));
     let barrier = harness
         .resume_barrier_qpc_for_test()
-        .expect("cleanup establishes H/G resume barrier");
+        .expect("cleanup establishes its separate resume barrier");
     assert!(barrier >= cleanup_completion);
-    assert!(barrier > mixed_target, "C is still inside cleanup + G");
+    assert!(
+        barrier > mixed_target,
+        "C is still inside the cleanup barrier"
+    );
     assert_eq!(
         harness
             .evaluate_live_scheduler_for_test(QpcTicks::from_raw(barrier.as_u64() - 1), epoch,)
@@ -665,14 +668,14 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
     let resume_barrier = harness
         .resume_barrier_qpc_for_test()
         .expect("verified cleanup resume barrier");
-    let release_gap = clock
-        .duration_from_us(harness.config.timing.min_release_gap_us)
-        .expect("resume G conversion");
+    let resume_cleanup_delay = clock
+        .duration_from_us(harness.config.timing.resume_cleanup_delay_us)
+        .expect("resume cleanup delay conversion");
     assert_eq!(
         resume_barrier,
         cleanup_completed
-            .checked_add_duration(release_gap)
-            .expect("cleanup G barrier")
+            .checked_add_duration(resume_cleanup_delay)
+            .expect("cleanup resume barrier")
     );
 
     let current = super::super::load_target_stamp(&harness.target).expect("same restored owner");
@@ -717,7 +720,7 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
                 before_resume_barrier,
                 harness.resources.playback.epoch
             )
-            .expect("B just before cleanup G"),
+            .expect("B just before cleanup barrier"),
         DispatchDecision::Wait {
             deadline_qpc: resume_barrier
         }
@@ -725,7 +728,7 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
     assert!(matches!(
         harness
             .evaluate_live_scheduler_for_test(resume_barrier, harness.resources.playback.epoch)
-            .expect("B at cleanup G"),
+            .expect("B at cleanup barrier"),
         DispatchDecision::Send {
             up_mask: 0,
             down_chord: Some(chord),
@@ -1052,7 +1055,7 @@ fn attempted_musical_up_only_is_not_replayed_and_terminates_before_next_down() {
     );
     let barrier = harness
         .resume_barrier_qpc_for_test()
-        .expect("verified cleanup + G");
+        .expect("verified cleanup resume barrier");
     assert!(barrier > up_target);
     assert!(!cleanup_capture.lock().expect("cleanup capture").is_empty());
     assert!(QpcTicks::from_raw(cleanup_completion.load(Ordering::Acquire)) <= barrier);

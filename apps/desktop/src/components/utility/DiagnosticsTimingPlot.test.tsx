@@ -45,7 +45,7 @@ describe('DiagnosticsTimingPlot', () => {
       frame_base_hold_us: 16_667,
       timing_margin_us: 800,
       min_hold_us: 17_467,
-      min_release_gap_us: 17_467,
+      resume_cleanup_delay_us: 17_467,
       timing_margin_recommendation: {
         recommended_timing_margin_us: 800,
         qualified: false,
@@ -69,9 +69,6 @@ describe('DiagnosticsTimingPlot', () => {
       final_sender_window_expirations: 0,
       hold_floor_delay_boundaries: 0,
       max_hold_floor_delay_us: 0,
-      release_floor_delay_boundaries: 0,
-      release_floor_infeasible_boundaries: 0,
-      max_release_floor_delay_us: 0,
       final_gate_control_rejections: 0,
       final_gate_target_changes: 0,
       final_gate_focus_losses: 0,

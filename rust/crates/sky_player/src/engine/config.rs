@@ -263,7 +263,7 @@ pub struct StartupOrderingHook {
     cpu_baseline_trace: std::sync::Mutex<CpuBaselineOrderingTrace>,
     pub(crate) first_physical_send_started: AtomicU64,
     pub(crate) boot_delay_us: AtomicU64,
-    release_floor_control_enabled: AtomicBool,
+    resume_barrier_control_enabled: AtomicBool,
     completed_up_count: AtomicU64,
     released_up_count: AtomicU64,
     resume_cleanup_qpc_ticks: AtomicU64,
@@ -600,10 +600,10 @@ impl StartupOrderingHook {
     /// Enable the feature-gated release-barrier lifecycle fixture. The worker pauses after
     /// each successful Up until the acceptance controller requests pause and
     /// releases that exact completion boundary.
-    pub fn enable_release_floor_control(&self, initial_worker_delay_us: u64) {
+    pub fn enable_resume_barrier_control(&self, initial_worker_delay_us: u64) {
         self.boot_delay_us
             .store(initial_worker_delay_us, Ordering::SeqCst);
-        self.release_floor_control_enabled
+        self.resume_barrier_control_enabled
             .store(true, Ordering::Release);
     }
 
@@ -671,21 +671,21 @@ impl StartupOrderingHook {
     }
 
     pub(crate) fn record_resume_cleanup_qpc(&self, qpc_ticks: u64) {
-        if self.release_floor_control_enabled.load(Ordering::Acquire) {
+        if self.resume_barrier_control_enabled.load(Ordering::Acquire) {
             self.resume_cleanup_qpc_ticks
                 .store(qpc_ticks, Ordering::Release);
         }
     }
 
     pub(crate) fn record_pause_ack_qpc(&self, qpc_ticks: u64) {
-        if self.release_floor_control_enabled.load(Ordering::Acquire) {
+        if self.resume_barrier_control_enabled.load(Ordering::Acquire) {
             self.pause_ack_qpc_ticks.store(qpc_ticks, Ordering::Release);
             self.pause_ack_pending.store(false, Ordering::Release);
         }
     }
 
     pub(crate) fn pause_ack_pending(&self) -> bool {
-        self.release_floor_control_enabled.load(Ordering::Acquire)
+        self.resume_barrier_control_enabled.load(Ordering::Acquire)
             && self.pause_ack_pending.load(Ordering::Acquire)
     }
 
@@ -709,7 +709,7 @@ impl StartupOrderingHook {
     }
 
     pub(crate) fn wait_after_successful_up(&self) {
-        if !self.release_floor_control_enabled.load(Ordering::Acquire) {
+        if !self.resume_barrier_control_enabled.load(Ordering::Acquire) {
             return;
         }
         let count = self.completed_up_count.fetch_add(1, Ordering::AcqRel) + 1;
@@ -797,7 +797,7 @@ impl Default for WorkerConfig {
             timing: TimingOptions {
                 game_fps: 60,
                 min_hold_us: 10_000,
-                min_release_gap_us: 16_667,
+                resume_cleanup_delay_us: 16_667,
                 frame_us: 16_667,
                 frame_base_hold_us: 16_667,
                 timing_margin_us: 0,
@@ -840,7 +840,7 @@ impl Default for WorkerConfig {
 pub struct TimingOptions {
     pub game_fps: u16,
     pub min_hold_us: u64,
-    pub min_release_gap_us: u64,
+    pub resume_cleanup_delay_us: u64,
     pub frame_us: u64,
     pub frame_base_hold_us: u64,
     pub timing_margin_us: u64,

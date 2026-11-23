@@ -199,10 +199,10 @@ fn production_resume_barrier_fixture() -> (
     let timing = harness
         .dispatch_timing_config_for_test()
         .expect("production scheduler timing config");
-    assert_eq!(timing.min_release_gap_us, 17_167);
+    assert_eq!(timing.resume_cleanup_delay_us, 17_167);
     let gap = harness
-        .qpc_duration_from_us_for_test(timing.min_release_gap_us)
-        .expect("production scheduler G conversion");
+        .qpc_duration_from_us_for_test(timing.resume_cleanup_delay_us)
+        .expect("resume cleanup delay conversion");
     assert_eq!(barrier, completion.checked_add_duration(gap).unwrap());
     let accounting = harness.generation_accounting_for_test();
     assert_eq!(accounting.total, 2);
@@ -453,26 +453,29 @@ fn production_staged_worker_mixed_up_down_packet_no_alloc() {
 }
 
 #[test]
-fn lifecycle_resume_barrier_g_minus_one_waits_without_allocating_or_sending() {
+fn lifecycle_resume_barrier_delay_minus_one_waits_without_allocating_or_sending() {
     let _lock = TEST_LOCK.lock();
     use sky_dispatch_core::executor::DispatchDecision;
 
     let (harness, packets, epoch, barrier) = production_resume_barrier_fixture();
-    let g_minus_one = QpcTicks::from_raw(barrier.as_u64() - 1);
+    let delay_minus_one = QpcTicks::from_raw(barrier.as_u64() - 1);
 
     enable_counting();
     let decision = harness
-        .evaluate_live_scheduler_for_test(g_minus_one, epoch)
-        .expect("G-1 production scheduler query");
+        .evaluate_live_scheduler_for_test(delay_minus_one, epoch)
+        .expect("resume-delay-minus-one production scheduler query");
     let allocations = disable_counting();
 
-    assert_eq!(allocations, 0, "G-1 scheduler query allocated");
+    assert_eq!(
+        allocations, 0,
+        "resume-delay-minus-one scheduler query allocated"
+    );
     assert!(matches!(decision, DispatchDecision::Wait { deadline_qpc } if deadline_qpc == barrier));
     assert!(packets.lock().expect("packet capture").is_empty());
 }
 
 #[test]
-fn lifecycle_resume_barrier_exact_g_stages_and_sends_once_without_allocating() {
+fn lifecycle_resume_barrier_exact_delay_stages_and_sends_once_without_allocating() {
     let _lock = TEST_LOCK.lock();
     use sky_dispatch_core::executor::DispatchDecision;
 
@@ -480,7 +483,7 @@ fn lifecycle_resume_barrier_exact_g_stages_and_sends_once_without_allocating() {
     assert!(matches!(
         harness
             .evaluate_live_scheduler_for_test(QpcTicks::from_raw(barrier.as_u64() - 1), epoch)
-            .expect("G-1 scheduler evaluation"),
+            .expect("resume-delay-minus-one scheduler evaluation"),
         DispatchDecision::Wait { deadline_qpc } if deadline_qpc == barrier
     ));
 
@@ -488,17 +491,17 @@ fn lifecycle_resume_barrier_exact_g_stages_and_sends_once_without_allocating() {
         enable_counting();
         let decision = harness
             .evaluate_live_scheduler_for_test(barrier, epoch)
-            .expect("exact-G production scheduler evaluation");
+            .expect("exact resume-delay production scheduler evaluation");
         let send = match decision {
             DispatchDecision::Send {
                 up_mask,
                 down_chord,
                 timing_window,
             } => (up_mask, down_chord.map(Into::into), timing_window),
-            other => panic!("expected exact-G Send decision, got {other:?}"),
+            other => panic!("expected resume-barrier Send decision, got {other:?}"),
         };
         let allocations = disable_counting();
-        assert_eq!(allocations, 0, "exact-G scheduler query allocated");
+        assert_eq!(allocations, 0, "resume-delay scheduler query allocated");
         send
     };
     assert_eq!(up_mask, 0);
@@ -508,16 +511,16 @@ fn lifecycle_resume_barrier_exact_g_stages_and_sends_once_without_allocating() {
     enable_counting();
     let candidate = harness
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
-        .expect("stage exact-G production Down")
-        .expect("exact-G Down candidate");
+        .expect("stage resumed production Down")
+        .expect("resume-barrier Down candidate");
     let staging_allocations = disable_counting();
-    assert_eq!(staging_allocations, 0, "exact-G staging allocated");
+    assert_eq!(staging_allocations, 0, "resume-barrier staging allocated");
     assert_eq!(
         harness
             .staged_candidate_timing_window_for_test(&candidate)
             .packet_not_before_qpc,
         barrier,
-        "staging must preserve cleanup completion + G"
+        "staging must preserve the verified-cleanup resume barrier"
     );
 
     wait_until_qpc(barrier);
@@ -526,9 +529,9 @@ fn lifecycle_resume_barrier_exact_g_stages_and_sends_once_without_allocating() {
     let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
     let dispatch_allocations = disable_counting();
 
-    assert_eq!(dispatch_allocations, 0, "exact-G dispatch allocated");
+    assert_eq!(dispatch_allocations, 0, "resume-barrier dispatch allocated");
     assert!(matches!(outcome, StagedDispatchOutcome::Dispatched));
     let packets = packets.lock().expect("packet capture");
-    assert_eq!(packets.len(), 1, "exact G performs one mock send");
+    assert_eq!(packets.len(), 1, "resume barrier performs one mock send");
     assert_eq!(packets[0].0, PhysicalPacket::new(0, 1));
 }

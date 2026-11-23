@@ -1402,7 +1402,7 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     let barrier_qpc = resume_barrier_qpc.load(Ordering::Acquire);
     assert_ne!(
         barrier_qpc, 0,
-        "verified focus cleanup published its G barrier"
+        "verified focus cleanup published its resume barrier"
     );
     assert!(
         session.snapshot_lite().is_paused,
@@ -1432,7 +1432,7 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     assert_eq!(startup_hook.down_sender_attempt_count(), 2);
     assert!(
         startup_hook.last_down_sender_start_qpc_ticks() >= barrier_qpc,
-        "next Down must not precede the verified cleanup + G barrier"
+        "next Down must not precede the verified cleanup resume barrier"
     );
     assert_eq!(send_call_count.load(Ordering::Acquire), 3);
 
@@ -2051,8 +2051,17 @@ fn actual_b_worker_timestamp_hook_keeps_mixed_floor_held_down_targets_distinct()
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
         .expect("mixed floor-held timestamp schedule");
-    assert!(schedule.packets.iter().any(|packet| {
-        packet.scheduled_us == 45_000 && packet.up_mask != 0 && packet.down_mask != 0
+    assert!(
+        schedule
+            .down_chords
+            .iter()
+            .any(|chord| chord.scheduled_us == 45_000 && chord.down_mask == 0b01)
+    );
+    assert!(schedule.down_chords.iter().any(|chord| {
+        chord
+            .intents
+            .iter()
+            .any(|intent| intent.scan_code == 0x16 && intent.paired_up_offset_us == 45_000)
     }));
     let hook = Arc::new(StartupOrderingHook::default());
     let mut options = test_session_options(
@@ -2111,9 +2120,11 @@ fn actual_b_worker_timestamp_hook_records_up_only_sender_provenance() {
     ];
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
         .expect("Up-only timestamp schedule");
-    assert!(schedule.packets.iter().any(|packet| {
-        packet.up_mask != 0 && packet.down_mask == 0 && packet.scheduled_us == 35_000
-    }));
+    assert_eq!(schedule.down_chords.len(), 1);
+    assert_eq!(
+        schedule.down_chords[0].intents[0].paired_up_offset_us,
+        35_000
+    );
 
     let hook = Arc::new(StartupOrderingHook::default());
     let mut options = test_session_options(

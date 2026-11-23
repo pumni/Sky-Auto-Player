@@ -39,7 +39,7 @@ macro_rules! record_forensics_anomaly {
 /// Fixed-size sender evidence owned by the worker itself. It deliberately
 /// consumes the timestamps already returned by the trusted sender: it does
 /// not sample QPC, allocate, lock, format, or walk the schedule.
-pub(crate) const PRODUCTION_FORENSICS_VERSION: u32 = 4;
+pub(crate) const PRODUCTION_FORENSICS_VERSION: u32 = 5;
 #[cfg(test)]
 const PRODUCTION_ANOMALY_CAPACITY: usize = 32;
 
@@ -65,7 +65,6 @@ pub(crate) struct ProductionForensicsAnomaly {
 #[derive(Default)]
 pub(crate) struct ProductionHoldForensics {
     anchors: [ProductionHoldAnchor; MAX_KEYS],
-    last_up_completion_ticks: [Option<u64>; MAX_KEYS],
     #[cfg(test)]
     anomalies: [ProductionForensicsAnomaly; PRODUCTION_ANOMALY_CAPACITY],
     #[cfg(test)]
@@ -78,9 +77,6 @@ pub(crate) struct ProductionHoldForensics {
     pair_samples: u64,
     min_hold_start_after_down_completion_ticks: u64,
     hold_floor_violation_count: u64,
-    release_floor_samples: u64,
-    min_down_start_after_up_completion_ticks: u64,
-    release_floor_violation_count: u64,
     /// Corruption/forensics evidence only: production packet preparation is
     /// required to reject overlapping directions before realtime execution.
     same_key_overlap_forensics_count: u64,
@@ -89,24 +85,17 @@ pub(crate) struct ProductionHoldForensics {
     structural_anomaly_count: u64,
     timing_diagnostic_count: u64,
     effective_min_hold_ticks: u64,
-    min_release_gap_ticks: u64,
 }
 
 impl ProductionHoldForensics {
-    pub(crate) fn set_timing_policies(
-        &mut self,
-        effective_min_hold_ticks: DurationTicks,
-        min_release_gap_ticks: DurationTicks,
-    ) {
+    pub(crate) fn set_timing_policies(&mut self, effective_min_hold_ticks: DurationTicks) {
         self.effective_min_hold_ticks = effective_min_hold_ticks.as_u64();
-        self.min_release_gap_ticks = min_release_gap_ticks.as_u64();
     }
 
     pub(crate) fn observe_lifecycle(&mut self, lifecycle: ObserverLifecycle) {
         match lifecycle {
             ObserverLifecycle::ResetAll => {
                 self.anchors.fill(ProductionHoldAnchor::default());
-                self.last_up_completion_ticks.fill(None);
             }
         }
     }
@@ -186,7 +175,6 @@ impl ProductionHoldForensics {
             let slot = up_mask.trailing_zeros() as usize;
             up_mask &= up_mask - 1;
             self.anchors[slot].valid = false;
-            self.last_up_completion_ticks[slot] = Some(completion);
         }
         let mut down_mask = packet.down_mask;
         while down_mask != 0 {
@@ -236,7 +224,7 @@ impl ProductionHoldForensics {
         #[cfg(test)] source_action_index: u32,
         #[cfg(test)] target: u64,
         up_start: u64,
-        completion: u64,
+        _completion: u64,
     ) {
         while up_mask != 0 {
             let slot = up_mask.trailing_zeros() as usize;
@@ -256,7 +244,7 @@ impl ProductionHoldForensics {
                         target,
                         up_start,
                         anchor.completion_ticks,
-                        completion.abs_diff(anchor.completion_ticks),
+                        _completion.abs_diff(anchor.completion_ticks),
                     );
                 }
                 let hold_start = up_start.checked_sub(anchor.completion_ticks);
@@ -283,7 +271,6 @@ impl ProductionHoldForensics {
                         hold_start_ticks,
                     );
                 }
-                self.last_up_completion_ticks[slot] = Some(completion);
             } else {
                 self.unmatched_up_count = self.unmatched_up_count.saturating_add(1);
                 record_forensics_anomaly!(
@@ -293,13 +280,10 @@ impl ProductionHoldForensics {
                     source_action_index,
                     bit,
                     target,
-                    completion,
+                    _completion,
                     0,
                     0,
                 );
-                // Even without a paired Down sample, a successful Up is the
-                // physical release anchor for the next same-key Down.
-                self.last_up_completion_ticks[slot] = Some(completion);
             }
             self.anchors[slot].valid = false;
         }
@@ -310,7 +294,7 @@ impl ProductionHoldForensics {
         mut down_mask: u16,
         #[cfg(test)] source_action_index: u32,
         #[cfg(test)] target: u64,
-        pre_call: u64,
+        #[allow(unused_variables)] pre_call: u64,
         completion: u64,
     ) {
         while down_mask != 0 {
@@ -318,53 +302,6 @@ impl ProductionHoldForensics {
             #[cfg(test)]
             let bit = 1u16 << slot;
             down_mask &= down_mask - 1;
-            if let Some(previous_up_completion) = self.last_up_completion_ticks[slot] {
-                match pre_call.checked_sub(previous_up_completion) {
-                    None => {
-                        // A pre-call sample before the previous Up completion
-                        // is an ordering fault. Retain both timestamps.
-                        self.release_floor_samples = self.release_floor_samples.saturating_add(1);
-                        self.min_down_start_after_up_completion_ticks = 0;
-                        self.release_floor_violation_count =
-                            self.release_floor_violation_count.saturating_add(1);
-                        record_forensics_anomaly!(
-                            self,
-                            8,
-                            slot,
-                            source_action_index,
-                            bit,
-                            target,
-                            pre_call,
-                            previous_up_completion,
-                            previous_up_completion.abs_diff(pre_call),
-                        );
-                    }
-                    Some(gap) => {
-                        self.release_floor_samples = self.release_floor_samples.saturating_add(1);
-                        self.min_down_start_after_up_completion_ticks =
-                            if self.release_floor_samples == 1 {
-                                gap
-                            } else {
-                                self.min_down_start_after_up_completion_ticks.min(gap)
-                            };
-                        if gap < self.min_release_gap_ticks {
-                            self.release_floor_violation_count =
-                                self.release_floor_violation_count.saturating_add(1);
-                            record_forensics_anomaly!(
-                                self,
-                                7,
-                                slot,
-                                source_action_index,
-                                bit,
-                                target,
-                                pre_call,
-                                previous_up_completion,
-                                gap,
-                            );
-                        }
-                    }
-                }
-            }
             if self.anchors[slot].valid {
                 #[cfg(test)]
                 let previous_anchor = self.anchors[slot];
@@ -390,7 +327,7 @@ impl ProductionHoldForensics {
 
     fn record_anomaly_count(&mut self, kind: u8) {
         self.anomaly_count = self.anomaly_count.saturating_add(1);
-        if matches!(kind, 1..=6 | 8) {
+        if matches!(kind, 1..=6) {
             self.structural_anomaly_count = self.structural_anomaly_count.saturating_add(1);
         } else {
             self.timing_diagnostic_count = self.timing_diagnostic_count.saturating_add(1);
@@ -447,12 +384,7 @@ impl ProductionHoldForensics {
         metrics.production_min_hold_start_after_down_completion_ticks =
             self.min_hold_start_after_down_completion_ticks;
         metrics.production_hold_floor_violation_count = self.hold_floor_violation_count;
-        metrics.production_release_floor_samples = self.release_floor_samples;
-        metrics.production_min_down_start_after_up_completion_ticks =
-            self.min_down_start_after_up_completion_ticks;
-        metrics.production_release_floor_violation_count = self.release_floor_violation_count;
         metrics.production_hold_floor_ticks = self.effective_min_hold_ticks;
-        metrics.production_release_floor_ticks = self.min_release_gap_ticks;
         metrics.production_same_key_overlap_forensics_count = self.same_key_overlap_forensics_count;
         metrics.production_anchor_overwrite_count = self.anchor_overwrite_count;
         metrics.production_unmatched_up_count = self.unmatched_up_count;

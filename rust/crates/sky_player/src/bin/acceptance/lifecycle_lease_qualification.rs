@@ -30,9 +30,9 @@ impl Drop for AcceptanceHookCleanup {
 
 pub(super) fn hook_for_scenario(scenario: Scenario) -> Option<Arc<StartupOrderingHook>> {
     match scenario {
-        Scenario::PauseResumeReleaseFloor => {
+        Scenario::PauseResumeBarrier => {
             let hook = Arc::new(StartupOrderingHook::default());
-            hook.enable_release_floor_control(10_000);
+            hook.enable_resume_barrier_control(10_000);
             Some(hook)
         }
         Scenario::LeaseAgeWatchdogDelayed => {
@@ -54,33 +54,33 @@ pub(super) fn hook_for_scenario(scenario: Scenario) -> Option<Arc<StartupOrderin
     }
 }
 
-pub(super) fn run_release_floor_case(
+pub(super) fn run_resume_barrier_case(
     args: &RunArgs,
     session: &NativeDispatchSession,
     hook: &StartupOrderingHook,
 ) -> Result<Vec<Value>, i32> {
     if !wait_for_startup_armed(session) {
-        return Err(write_release_floor_failure(
+        return Err(write_resume_barrier_failure(
             args,
             session,
             hook,
-            ReleaseFloorFailure::initial(
+            ResumeBarrierFailure::initial(
                 "startup_armed",
-                "production session did not reach Armed publication before release-floor cycles",
+                "production session did not reach Armed publication before resume-barrier cycles",
             ),
         ));
     }
-    match run_release_floor_cycles(session, hook) {
+    match run_resume_barrier_cycles(session, hook) {
         Ok(cycles) => Ok(cycles),
-        Err(failure) => Err(write_release_floor_failure(args, session, hook, failure)),
+        Err(failure) => Err(write_resume_barrier_failure(args, session, hook, failure)),
     }
 }
 
-fn write_release_floor_failure(
+fn write_resume_barrier_failure(
     args: &RunArgs,
     session: &NativeDispatchSession,
     hook: &StartupOrderingHook,
-    failure: ReleaseFloorFailure,
+    failure: ResumeBarrierFailure,
 ) -> i32 {
     let quit_request_result = session
         .quit()
@@ -93,7 +93,7 @@ fn write_release_floor_failure(
         Err(error) => json!({"completed": false, "error": error}),
     };
     let snapshot = session.snapshot();
-    let ReleaseFloorFailure {
+    let ResumeBarrierFailure {
         reason,
         stage,
         verdict,
@@ -101,9 +101,9 @@ fn write_release_floor_failure(
         partial_cycle,
     } = failure;
     let details = json!({
-        "release_floor_cycles": completed_cycles,
-        "partial_release_floor_cycle": partial_cycle,
-        "release_floor_failure": {
+        "resume_barrier_cycles": completed_cycles,
+        "partial_resume_barrier_cycle": partial_cycle,
+        "resume_barrier_failure": {
             "stage": stage,
             "reason": reason,
             "quit_request_result": quit_request_result,
@@ -131,12 +131,12 @@ fn wait_for_up_count(
     }
 }
 
-struct PartialReleaseFloorCycle {
+struct PartialResumeBarrierCycle {
     fields: Map<String, Value>,
 }
 
-impl PartialReleaseFloorCycle {
-    fn new(cycle: u64, release_gap_us: u64, release_gap_ticks: u64) -> Self {
+impl PartialResumeBarrierCycle {
+    fn new(cycle: u64, resume_cleanup_delay_us: u64, resume_cleanup_delay_ticks: u64) -> Self {
         let mut fields = Map::new();
         fields.insert("cycle".into(), json!(cycle));
         fields.insert("stage".into(), json!("waiting_for_successful_up"));
@@ -165,9 +165,9 @@ impl PartialReleaseFloorCycle {
         ] {
             fields.insert(field.into(), Value::Null);
         }
-        fields.insert("min_release_gap_us".into(), json!(release_gap_us));
-        fields.insert("min_release_gap_ticks".into(), json!(release_gap_ticks));
-        fields.insert("floor_passed".into(), json!(false));
+        fields.insert("resume_cleanup_delay_us".into(), json!(resume_cleanup_delay_us));
+        fields.insert("resume_cleanup_delay_ticks".into(), json!(resume_cleanup_delay_ticks));
+        fields.insert("resume_barrier_passed".into(), json!(false));
         Self { fields }
     }
 
@@ -184,7 +184,7 @@ impl PartialReleaseFloorCycle {
     }
 }
 
-struct ReleaseFloorFailure {
+struct ResumeBarrierFailure {
     reason: String,
     stage: String,
     verdict: Verdict,
@@ -192,7 +192,7 @@ struct ReleaseFloorFailure {
     partial_cycle: Option<Value>,
 }
 
-fn resumed_staged_window_is_due_before_release_floor(
+fn resumed_staged_window_is_due_before_resume_barrier(
     baseline_sequence: u64,
     observed_sequence: u64,
     authored_target_qpc: u64,
@@ -204,10 +204,10 @@ fn resumed_staged_window_is_due_before_release_floor(
         && authored_target_qpc != 0
         && packet_not_before_qpc >= release_barrier_qpc
         && authored_target_qpc <= now_qpc
-        && release_floor_blocks_down(now_qpc, release_barrier_qpc)
+        && resume_barrier_blocks_down(now_qpc, release_barrier_qpc)
 }
 
-fn release_floor_blocks_down(now_qpc: u64, release_barrier_qpc: u64) -> bool {
+fn resume_barrier_blocks_down(now_qpc: u64, release_barrier_qpc: u64) -> bool {
     now_qpc < release_barrier_qpc
 }
 
@@ -215,7 +215,7 @@ fn down_sender_attempt_count_unchanged(current_attempts: u64, prior_attempts: u6
     current_attempts == prior_attempts
 }
 
-impl ReleaseFloorFailure {
+impl ResumeBarrierFailure {
     fn new(
         reason: impl Into<String>,
         stage: impl Into<String>,
@@ -224,7 +224,7 @@ impl ReleaseFloorFailure {
     ) -> Self {
         let reason = reason.into();
         let verdict = if reason.starts_with("CASE-NOT-EXERCISED:")
-            || reason.starts_with("release-floor oracle failed")
+            || reason.starts_with("resume-barrier oracle failed")
         {
             Verdict::Fail
         } else {
@@ -244,33 +244,33 @@ impl ReleaseFloorFailure {
     }
 }
 
-fn run_release_floor_cycles(
+fn run_resume_barrier_cycles(
     session: &NativeDispatchSession,
     hook: &StartupOrderingHook,
-) -> Result<Vec<Value>, ReleaseFloorFailure> {
+) -> Result<Vec<Value>, ResumeBarrierFailure> {
     let qpc = match QpcClock::initialize() {
         Ok(qpc) => qpc,
         Err(error) => {
-            return Err(ReleaseFloorFailure::initial(
+            return Err(ResumeBarrierFailure::initial(
                 "qpc_initialization",
                 &format!("QPC initialization failed: {error:?}"),
             ));
         }
     };
-    let release_gap_us = session.effective_min_release_gap_us();
-    let release_gap_ticks = match qpc.duration_from_us(release_gap_us) {
+    let resume_cleanup_delay_us = session.effective_resume_cleanup_delay_us();
+    let resume_cleanup_delay_ticks = match qpc.duration_from_us(resume_cleanup_delay_us) {
         Ok(ticks) => ticks.as_u64(),
         Err(error) => {
-            return Err(ReleaseFloorFailure::initial(
-                "release_gap_conversion",
-                &format!("effective release-gap conversion failed: {error:?}"),
+            return Err(ResumeBarrierFailure::initial(
+                "resume_cleanup_delay_conversion",
+                &format!("effective resume cleanup delay conversion failed: {error:?}"),
             ));
         }
     };
     let resume_delay_ticks = match qpc.duration_from_us(2_000) {
         Ok(ticks) => ticks.as_u64(),
         Err(error) => {
-            return Err(ReleaseFloorFailure::initial(
+            return Err(ResumeBarrierFailure::initial(
                 "resume_delay_conversion",
                 &format!("resume delay conversion failed: {error:?}"),
             ));
@@ -279,14 +279,14 @@ fn run_release_floor_cycles(
     let mut evidence = Vec::with_capacity(20);
 
     for cycle in 1..=20_u64 {
-        let mut partial = PartialReleaseFloorCycle::new(
+        let mut partial = PartialResumeBarrierCycle::new(
             cycle,
-            release_gap_us,
-            release_gap_ticks,
+            resume_cleanup_delay_us,
+            resume_cleanup_delay_ticks,
         );
         macro_rules! fail_cycle {
             ($stage:expr, $reason:expr) => {
-                return Err(ReleaseFloorFailure::new(
+                return Err(ResumeBarrierFailure::new(
                     $reason,
                     $stage,
                     &evidence,
@@ -303,7 +303,7 @@ fn run_release_floor_cycles(
         // Hold the worker after the next authored Down target is due. This
         // makes the precondition independent of machine scheduling: the
         // authored target is already in the past before cleanup establishes
-        // the new verified-completion + G release barrier.
+        // the separate verified-cleanup resume delay barrier.
         hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownAdmission, 1);
         hook.release_completed_up_through(cycle);
         if !hook.wait_for_startup_checkpoint(Duration::from_secs(5)) {
@@ -387,7 +387,7 @@ fn run_release_floor_cycles(
             ));
         }
         partial.set("post_cleanup_qpc_ticks", json!(cleanup_qpc));
-        let barrier_qpc = match cleanup_qpc.checked_add(release_gap_ticks) {
+        let barrier_qpc = match cleanup_qpc.checked_add(resume_cleanup_delay_ticks) {
             Some(barrier) => barrier,
             None => fail_cycle!(
                 "release_barrier_qpc",
@@ -439,9 +439,9 @@ fn run_release_floor_cycles(
             ),
         };
         partial.set("resume_request_qpc_ticks", json!(resume_request_qpc));
-        if !release_floor_blocks_down(resume_request_qpc, barrier_qpc) {
-            fail_cycle!("resume_request_floor_oracle", format!(
-                "CASE-NOT-EXERCISED: resume request reached/passed the cleanup release floor at cycle {cycle}"
+        if !resume_barrier_blocks_down(resume_request_qpc, barrier_qpc) {
+            fail_cycle!("resume_request_barrier_oracle", format!(
+                "CASE-NOT-EXERCISED: resume request reached/passed the cleanup resume barrier at cycle {cycle}"
             ));
         }
         partial.stage("waiting_for_resume_acknowledgment");
@@ -482,13 +482,13 @@ fn run_release_floor_cycles(
                     json!(window_not_before_qpc),
                 );
             }
-            if !release_floor_blocks_down(now_qpc, barrier_qpc) {
+            if !resume_barrier_blocks_down(now_qpc, barrier_qpc) {
                 fail_cycle!("resumed_due_before_barrier", format!(
-                    "CASE-NOT-EXERCISED: resumed authored target was not observed due before release floor at cycle {cycle} (authored={}, barrier={barrier_qpc}, now={now_qpc})",
+                    "CASE-NOT-EXERCISED: resumed authored target was not observed due before resume barrier at cycle {cycle} (authored={}, barrier={barrier_qpc}, now={now_qpc})",
                     if window_sequence > resume_window_baseline_sequence { window_target_qpc } else { 0 }
                 ));
             }
-            if resumed_staged_window_is_due_before_release_floor(
+            if resumed_staged_window_is_due_before_resume_barrier(
                 resume_window_baseline_sequence,
                 window_sequence,
                 window_target_qpc,
@@ -503,7 +503,7 @@ fn run_release_floor_cycles(
                 ) {
                     partial.set("down_sender_attempt_count", json!(hook.down_sender_attempt_count()));
                     fail_cycle!("sender_attempt_before_barrier", format!(
-                        "release-floor oracle failed at cycle {cycle}: a Down sender attempt occurred before the release barrier"
+                        "resume-barrier oracle failed at cycle {cycle}: a Down sender attempt occurred before the release barrier"
                     ));
                 }
                 partial.set("authored_due_admission_checkpoint_qpc_ticks", json!(now_qpc));
@@ -512,7 +512,7 @@ fn run_release_floor_cycles(
             if session.snapshot().is_finished || Instant::now() >= due_deadline {
                 partial.set("down_sender_attempt_count", json!(hook.down_sender_attempt_count()));
                 fail_cycle!("resumed_window_or_due_timeout", format!(
-                    "CASE-NOT-EXERCISED: resumed authored target did not become observable before the release floor in cycle {cycle}"
+                    "CASE-NOT-EXERCISED: resumed authored target did not become observable before the resume barrier in cycle {cycle}"
                 ));
             }
             thread::sleep(Duration::from_micros(100));
@@ -538,26 +538,26 @@ fn run_release_floor_cycles(
             json!(down_not_before_qpc),
         );
         if authored_target_qpc == 0 || authored_target_qpc >= barrier_qpc {
-            fail_cycle!("authored_target_floor_oracle", format!(
-                "CASE-NOT-EXERCISED: resumed authored Down target {authored_target_qpc} was not before release floor {barrier_qpc} at cycle {cycle} (cleanup QPC {cleanup_qpc})"
+            fail_cycle!("authored_target_resume_barrier_oracle", format!(
+                "CASE-NOT-EXERCISED: resumed authored Down target {authored_target_qpc} was not before resume barrier {barrier_qpc} at cycle {cycle} (cleanup QPC {cleanup_qpc})"
             ));
         }
         if authored_target_qpc > authored_due_checkpoint_qpc
             || authored_due_checkpoint_qpc >= barrier_qpc
         {
             fail_cycle!("authored_due_checkpoint_oracle", format!(
-                "CASE-NOT-EXERCISED: authored target was not proven due before the release floor at cycle {cycle} (authored={authored_target_qpc}, due checkpoint={authored_due_checkpoint_qpc}, barrier={barrier_qpc})"
+                "CASE-NOT-EXERCISED: authored target was not proven due before the resume barrier at cycle {cycle} (authored={authored_target_qpc}, due checkpoint={authored_due_checkpoint_qpc}, barrier={barrier_qpc})"
             ));
         }
         if down_not_before_qpc < barrier_qpc
             || down_sender_start_qpc < barrier_qpc
             || down_sender_attempt_count != cycle + 1
         {
-            fail_cycle!("physical_release_floor_oracle", format!(
-                "release-floor oracle failed at cycle {cycle}: authored={authored_target_qpc}, barrier={barrier_qpc}, not_before={down_not_before_qpc}, sender_start={down_sender_start_qpc}, down_attempts={down_sender_attempt_count}"
+            fail_cycle!("physical_resume_barrier_oracle", format!(
+                "resume-barrier oracle failed at cycle {cycle}: authored={authored_target_qpc}, barrier={barrier_qpc}, not_before={down_not_before_qpc}, sender_start={down_sender_start_qpc}, down_attempts={down_sender_attempt_count}"
             ));
         }
-        partial.set("floor_passed", json!(true));
+        partial.set("resume_barrier_passed", json!(true));
         partial.stage("completed");
         evidence.push(partial.into_value());
     }
@@ -569,14 +569,14 @@ fn run_release_floor_cycles(
 pub(super) fn begin_delayed_watchdog_case(
     session: &NativeDispatchSession,
     hook: &StartupOrderingHook,
-) -> Result<(super::release_gap_stress::IndependentHelperLivenessProbe, bool), String> {
+) -> Result<(super::generation_stress::IndependentHelperLivenessProbe, bool), String> {
     if !wait_for_startup_armed(session) {
         return Err("production session did not reach Armed publication before delayed-watchdog proof".to_string());
     }
     session
         .publish_supervisor_progress()
         .map_err(|error| format!("failed to seed delayed-watchdog lease progress: {error}"))?;
-    let helper = super::release_gap_stress::IndependentHelperLivenessProbe::start()
+    let helper = super::generation_stress::IndependentHelperLivenessProbe::start()
         .map_err(|error| format!("could not start independent helper liveness probe: {error}"))?;
     let deadline = Instant::now() + Duration::from_secs(1);
     while !hook.watchdog_waiting() && Instant::now() < deadline {
@@ -587,7 +587,7 @@ pub(super) fn begin_delayed_watchdog_case(
 
 pub(super) struct CaseDetails<'a> {
     pub(super) scenario: Scenario,
-    pub(super) release_floor_cycles: &'a [Value],
+    pub(super) resume_barrier_cycles: &'a [Value],
     pub(super) watchdog_was_held: bool,
     pub(super) hook: Option<&'a StartupOrderingHook>,
     pub(super) terminal_outcome: Option<&'a str>,
@@ -598,15 +598,15 @@ pub(super) struct CaseDetails<'a> {
 }
 
 pub(super) fn attach_case_details(object: &mut Map<String, Value>, details: CaseDetails<'_>) {
-    if details.scenario == Scenario::PauseResumeReleaseFloor {
+    if details.scenario == Scenario::PauseResumeBarrier {
         object.insert(
-            "resume_release_floor_cycles".to_string(),
+            "resume_barrier_cycles".to_string(),
             json!({
                 "requested_cycle_count": 20,
-                "completed_cycle_count": details.release_floor_cycles.len(),
+                "completed_cycle_count": details.resume_barrier_cycles.len(),
                 "initial_worker_delay_us": 10_000,
                 "worker_test_hook": "feature-gated successful-Up barrier",
-                "cycles": details.release_floor_cycles
+                "cycles": details.resume_barrier_cycles
             }),
         );
     }
@@ -641,20 +641,19 @@ pub(super) fn expected_delayed_watchdog_expiry(
         && final_gate_lease_expirations > 0
 }
 
-pub(super) fn release_floor_failure(
+pub(super) fn resume_barrier_failure(
     args: &RunArgs,
     cycle_count: usize,
     final_release_obligation_mask: u16,
-    release_floor_violation_count: u64,
     details: &Value,
 ) -> Option<i32> {
-    if cycle_count == 20 && final_release_obligation_mask == 0 && release_floor_violation_count == 0 {
+    if cycle_count == 20 && final_release_obligation_mask == 0 {
         return None;
     }
     Some(write_report(
         args,
         Verdict::Fail,
-        "pause/resume release-floor case did not complete twenty clean barrier cycles",
+        "pause/resume cleanup barrier case did not complete twenty clean cycles",
         details.clone(),
     ))
 }
@@ -711,11 +710,11 @@ pub(super) fn finish_delayed_watchdog_case(
 }
 
 #[cfg(test)]
-mod release_floor_tests {
+mod resume_barrier_tests {
     use super::{
-        PartialReleaseFloorCycle, ReleaseFloorFailure, Verdict,
-        down_sender_attempt_count_unchanged, release_floor_blocks_down,
-        resumed_staged_window_is_due_before_release_floor,
+        PartialResumeBarrierCycle, ResumeBarrierFailure, Verdict,
+        down_sender_attempt_count_unchanged, resume_barrier_blocks_down,
+        resumed_staged_window_is_due_before_resume_barrier,
     };
     use serde_json::json;
     use sky_dispatch_win32::clock::QpcClock;
@@ -724,26 +723,26 @@ mod release_floor_tests {
     #[test]
     fn release_barrier_oracle_uses_effective_gap_for_60_and_120_fps() {
         let qpc = QpcClock::from_frequency_hz(NonZeroU64::new(10_000_003).unwrap());
-        for (fps, expected_g_us) in [(60_u64, 17_167_u64), (120, 8_834)] {
+        for (fps, expected_resume_cleanup_us) in [(60_u64, 17_167_u64), (120, 8_834)] {
             let frame_us = 1_000_000_u64.div_ceil(fps);
-            let effective_g_us = frame_us + 500;
-            assert_eq!(effective_g_us, expected_g_us);
+            let effective_resume_cleanup_us = frame_us + 500;
+            assert_eq!(effective_resume_cleanup_us, expected_resume_cleanup_us);
 
-            let g_ticks = qpc
-                .duration_from_us(effective_g_us)
-                .expect("G conversion rounds upward at non-divisible QPC frequency")
+            let resume_delay_ticks = qpc
+                .duration_from_us(effective_resume_cleanup_us)
+                .expect("resume cleanup conversion rounds upward at non-divisible QPC frequency")
                 .as_u64();
             let cleanup_completion = 1_000_000_u64;
-            let barrier = cleanup_completion.checked_add(g_ticks).unwrap();
-            assert!(release_floor_blocks_down(barrier - 1, barrier), "{fps} FPS G-1");
-            assert!(!release_floor_blocks_down(barrier, barrier), "{fps} FPS exact G");
+            let barrier = cleanup_completion.checked_add(resume_delay_ticks).unwrap();
+            assert!(resume_barrier_blocks_down(barrier - 1, barrier), "{fps} FPS barrier-1");
+            assert!(!resume_barrier_blocks_down(barrier, barrier), "{fps} FPS exact barrier");
 
-            let mut cycle = PartialReleaseFloorCycle::new(1, effective_g_us, g_ticks);
+            let mut cycle = PartialResumeBarrierCycle::new(1, effective_resume_cleanup_us, resume_delay_ticks);
             cycle.set("post_cleanup_qpc_ticks", json!(cleanup_completion));
             cycle.set("release_barrier_qpc_ticks", json!(barrier));
             let report = cycle.into_value();
-            assert_eq!(report["min_release_gap_us"], expected_g_us);
-            assert_eq!(report["min_release_gap_ticks"], g_ticks);
+            assert_eq!(report["resume_cleanup_delay_us"], expected_resume_cleanup_us);
+            assert_eq!(report["resume_cleanup_delay_ticks"], resume_delay_ticks);
             assert_eq!(report["release_barrier_qpc_ticks"], barrier);
         }
     }
@@ -757,7 +756,7 @@ mod release_floor_tests {
         let sender_attempts_before = 4;
         let sender_attempts_at_observation = 4;
 
-        assert!(resumed_staged_window_is_due_before_release_floor(
+        assert!(resumed_staged_window_is_due_before_resume_barrier(
             7,
             8,
             authored_target,
@@ -775,7 +774,7 @@ mod release_floor_tests {
     #[test]
     fn not_exercised_failure_preserves_completed_and_partial_cycle_evidence() {
         let completed = vec![json!({"cycle": 1, "stage": "completed"})];
-        let mut partial = PartialReleaseFloorCycle::new(2, 100, 100);
+        let mut partial = PartialResumeBarrierCycle::new(2, 100, 100);
         partial.stage("waiting_for_resumed_authored_target_due_before_barrier");
         partial.set("post_cleanup_qpc_ticks", json!(50));
         partial.set("pause_acknowledgment_qpc_ticks", json!(60));
@@ -790,7 +789,7 @@ mod release_floor_tests {
         partial.set("latest_window_observation_qpc_ticks", json!(70));
         partial.set("down_sender_attempt_count", json!(2));
 
-        let failure = ReleaseFloorFailure::new(
+        let failure = ResumeBarrierFailure::new(
             "CASE-NOT-EXERCISED: synthetic authored window was not admitted",
             "resumed_due_before_barrier",
             &completed,
@@ -811,7 +810,7 @@ mod release_floor_tests {
         assert_eq!(partial["resumed_down_not_before_qpc_ticks"], 80);
         assert_eq!(partial["down_sender_attempt_count"], 2);
         assert_eq!(partial["down_sender_start_qpc_ticks"], serde_json::Value::Null);
-        assert_eq!(partial["floor_passed"], false);
+        assert_eq!(partial["resume_barrier_passed"], false);
     }
 }
 

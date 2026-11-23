@@ -11,6 +11,18 @@ fn fixture() -> Value {
     .expect("valid committed schedule contract fixture")
 }
 
+fn assert_json_field(actual: &Value, expected: &Value, field: &str, context: &Value) {
+    let actual_value = &actual[field];
+    let expected_value = &expected[field];
+    if let (Some(actual_number), Some(expected_number)) =
+        (actual_value.as_f64(), expected_value.as_f64())
+    {
+        assert_eq!(actual_number, expected_number, "{field}: {context}");
+    } else {
+        assert_eq!(actual_value, expected_value, "{field}: {context}");
+    }
+}
+
 #[test]
 fn parser_cases_preserve_the_checked_in_legacy_contract() {
     let raw = fixture();
@@ -67,19 +79,15 @@ fn schedule_and_risk_cases_match_recorded_contract_fields() {
             "note_count",
             "deduplicated_note_count",
             "duplicate_note_count",
-            "compressed_holds",
             "impossible_same_key_repeats",
-            "risky_same_key_repeats",
             "max_polyphony",
             "shortest_same_key_interval_us",
             "min_same_key_up_gap_us",
+            "short_up_gap_repeat_count",
             "recommended_hold_frames",
             "recommended_tempo_scale",
         ] {
-            assert_eq!(
-                actual[field], expected[field],
-                "schedule field {field}: {case}"
-            );
+            assert_json_field(&actual, expected, field, case);
         }
 
         let risk = analyze_schedule_with_context(
@@ -99,15 +107,13 @@ fn schedule_and_risk_cases_match_recorded_contract_fields() {
             "max_chord_size",
             "chords_count",
             "timing_stress_rate",
+            "short_up_gap_repeat_count",
             "min_any_note_gap_us",
             "min_same_key_gap_us",
             "suggested_hold_frames",
             "suggested_tempo_scale",
         ] {
-            assert_eq!(
-                actual_risk[field], expected_risk[field],
-                "risk field {field}: {case}"
-            );
+            assert_json_field(&actual_risk, expected_risk, field, case);
         }
     }
 }
@@ -148,8 +154,8 @@ fn timing_policy_cases_match_the_authored_timing_contract() {
             "{case}"
         );
         assert_eq!(
-            policy.min_release_gap_us,
-            case["min_release_gap_us"].as_u64().unwrap(),
+            policy.resume_cleanup_delay_us,
+            case["resume_cleanup_delay_us"].as_u64().unwrap(),
             "{case}"
         );
         assert_eq!(

@@ -98,7 +98,7 @@ pub struct StaleMetadataObservation {
 #[derive(Clone, Copy, Debug)]
 pub struct DownTraceObservation {
     pub event_index: u32,
-    pub compiled_packet_index: Option<u64>,
+    pub authored_down_chord_index: Option<u64>,
     pub trace_kind: u8,
     pub result_status: SendTransactionStatus,
     pub send_attempts: u8,
@@ -188,7 +188,7 @@ impl DownObservation {
                 down_not_before_qpc: authored_target_qpc,
                 packet_not_before_qpc: authored_target_qpc,
                 hold_floor_mask: 0,
-                release_floor_mask: 0,
+                resume_barrier_mask: 0,
             },
             final_policy_qpc: None,
             pre_call_qpc: Some(QpcTicks::ZERO),
@@ -203,7 +203,7 @@ impl DownObservation {
             skipped_mask: 0,
             trace: DownTraceObservation {
                 event_index: n as u32,
-                compiled_packet_index: Some(n),
+                authored_down_chord_index: Some(n),
                 trace_kind: 0,
                 result_status: SendTransactionStatus::Complete,
                 send_attempts: 1,
@@ -343,7 +343,7 @@ pub(super) fn record_down_recovery_metrics(
 #[derive(Clone, Copy, Debug)]
 pub struct UpTraceObservation {
     pub event_index: u32,
-    pub compiled_packet_index: Option<u64>,
+    pub authored_down_chord_index: Option<u64>,
     pub trace_kind: u8,
     pub retry_reason: PacketRetryReason,
     pub send_attempts: u8,
@@ -431,7 +431,7 @@ pub(crate) fn record_down_send_telemetry(
             TraceContext {
                 event_index: trace.event_index,
                 source_action_index: trace.event_index,
-                compiled_packet_index: trace.compiled_packet_index,
+                authored_down_chord_index: trace.authored_down_chord_index,
                 kind: trace.trace_kind,
                 outcome: trace_outcome_code(down_outcome),
                 polyphony: observation.requested_count(),
@@ -525,7 +525,7 @@ pub(super) fn record_release_telemetry(
             TraceContext {
                 event_index: trace.event_index,
                 source_action_index: trace.event_index,
-                compiled_packet_index: trace.compiled_packet_index,
+                authored_down_chord_index: trace.authored_down_chord_index,
                 kind: trace.trace_kind,
                 outcome: trace_outcome_code(release_outcome),
                 polyphony: scan_count,
@@ -554,11 +554,11 @@ pub(super) fn record_release_telemetry(
                 physical_target_qpc_ticks: Some(observation.physical_target_qpc.as_u64()),
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
-                release_floor_qpc_ticks: None,
+                down_not_before_qpc_ticks: None,
                 previous_sendinput_completion_qpc_ticks: None,
                 previous_sender_completion_known: false,
                 hold_floor_mask: 0,
-                release_floor_mask: 0,
+                resume_barrier_mask: 0,
                 final_policy_qpc_ticks: Some(observation.final_policy_qpc.as_u64()),
                 pre_call_qpc_ticks: Some(observation.pre_call_qpc.as_u64()),
                 sendinput_completion_qpc_ticks: Some(observation.sendinput_completion_qpc.as_u64()),

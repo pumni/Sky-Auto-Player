@@ -125,7 +125,7 @@ describe('mock bridge timing contracts', () => {
         frame_base_hold_us: number;
         timing_margin_us: number;
         target_hold_us: number;
-        release_gap_us: number;
+        resume_cleanup_delay_us: number;
       };
       telemetry: { schema_version: number };
     };
@@ -142,7 +142,7 @@ describe('mock bridge timing contracts', () => {
         frame_base_hold_us: 16_667,
         timing_margin_us: 500,
         target_hold_us: 17_167,
-        release_gap_us: 17_167,
+        resume_cleanup_delay_us: 17_167,
       },
     });
     expect(trace.telemetry.schema_version).toBe(19);

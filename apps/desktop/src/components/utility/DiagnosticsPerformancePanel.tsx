@@ -231,8 +231,8 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
             <Metric label="Configured Timing Margin" value={`${latest.timing_margin_us} µs`} />
             <Metric label="Target hold" value={`${(latest.min_hold_us / 1_000).toFixed(3)} ms`} />
             <Metric
-              label="Release gap"
-              value={`${(latest.min_release_gap_us / 1_000).toFixed(3)} ms`}
+              label="Resume cleanup delay"
+              value={`${(latest.resume_cleanup_delay_us / 1_000).toFixed(3)} ms`}
             />
             <Metric
               label="Recommended sender margin"
@@ -308,7 +308,7 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
               value={playerMetric(latest.final_gate_control_rejections)}
             />
           </MetricGroup>
-          <MetricGroup title="Physical floor delays">
+          <MetricGroup title="Hold floor delays">
             <Metric
               label="Hold-floor delayed boundaries"
               value={playerMetric(latest.hold_floor_delay_boundaries)}
@@ -316,18 +316,6 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
             <Metric
               label="Maximum hold-floor delay"
               value={dryRun ? 'Not measured' : measure(latest.max_hold_floor_delay_us, 'µs', 0)}
-            />
-            <Metric
-              label="Release-floor delayed boundaries"
-              value={playerMetric(latest.release_floor_delay_boundaries)}
-            />
-            <Metric
-              label="Release-floor infeasible boundaries"
-              value={playerMetric(latest.release_floor_infeasible_boundaries)}
-            />
-            <Metric
-              label="Maximum release-floor delay"
-              value={dryRun ? 'Not measured' : measure(latest.max_release_floor_delay_us, 'µs', 0)}
             />
           </MetricGroup>
           <MetricGroup title="Input transport">

@@ -2,7 +2,7 @@
 //!
 //! Manages exact musical generation ownership, independent release eligibility
 //! per slot, atomic Down-chord transport gating, Up-before-Down combining,
-//! and physical H/G timing floors.
+//! and the Down-completion H timing floor.
 
 use smallvec::SmallVec;
 use std::num::NonZeroU64;
@@ -41,8 +41,6 @@ pub struct MusicalSlot {
     pub authored_up_offset_ticks: TimelineTicks,
     /// Physical hold floor: successful Down completion QPC + H.
     pub release_not_before_qpc: QpcTicks,
-    /// Physical repress floor: previous Up completion QPC + G.
-    pub next_down_not_before_qpc: QpcTicks,
     /// Exact authored source action index of the paired Up.
     pub paired_up_source_action_index: u32,
 }
@@ -53,7 +51,6 @@ impl Default for MusicalSlot {
             active_generation: None,
             authored_up_offset_ticks: TimelineTicks::ZERO,
             release_not_before_qpc: QpcTicks::ZERO,
-            next_down_not_before_qpc: QpcTicks::ZERO,
             paired_up_source_action_index: 0,
         }
     }
@@ -166,6 +163,15 @@ struct DownArena {
 }
 
 #[derive(Clone, Copy)]
+struct DownArenaBuildPolicy {
+    checkpoint_first_chord: bool,
+    checkpoint_after_count: bool,
+    count_changed_error: &'static str,
+    check_actual_capacity: bool,
+    min_hold_ticks: DurationTicks,
+}
+
+#[derive(Clone, Copy)]
 enum DownArenaTimestampKind {
     Chord,
     PairedUp,
@@ -177,10 +183,7 @@ enum DownArenaTimestampKind {
 fn build_down_arena<C, F>(
     schedule: &RuntimeSchedule,
     mut checkpoint: C,
-    checkpoint_first_chord: bool,
-    checkpoint_after_count: bool,
-    count_changed_error: &'static str,
-    check_actual_capacity: bool,
+    policy: DownArenaBuildPolicy,
     mut timestamp_ticks: F,
 ) -> Result<DownArena, String>
 where
@@ -191,7 +194,7 @@ where
     let mut intent_count = 0usize;
     for (index, chord) in schedule.down_chords.iter().enumerate() {
         if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL)
-            && (checkpoint_first_chord || index != 0)
+            && (policy.checkpoint_first_chord || index != 0)
         {
             checkpoint()?;
         }
@@ -200,7 +203,7 @@ where
             .ok_or_else(|| "executor Down intent count overflow".to_string())?;
     }
     checked_executor_storage_bytes(chord_count, intent_count)?;
-    if checkpoint_after_count {
+    if policy.checkpoint_after_count {
         checkpoint()?;
     }
 
@@ -211,15 +214,19 @@ where
 
     for (index, chord) in schedule.down_chords.iter().enumerate() {
         if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL)
-            && (checkpoint_first_chord || index != 0)
+            && (policy.checkpoint_first_chord || index != 0)
         {
             checkpoint()?;
         }
         let scheduled_ticks = timestamp_ticks(chord.scheduled_us, DownArenaTimestampKind::Chord)?;
+        let earliest_up_ticks = scheduled_ticks
+            .checked_add_duration(policy.min_hold_ticks)
+            .map_err(|error| format!("prepared hold-floor conversion overflow: {error}"))?;
         let intent_start = intents.len();
         for intent in &chord.intents {
-            let paired_up_offset_ticks =
+            let authored_up_ticks =
                 timestamp_ticks(intent.paired_up_offset_us, DownArenaTimestampKind::PairedUp)?;
+            let paired_up_offset_ticks = authored_up_ticks.max(earliest_up_ticks);
             intents.push(DownIntentTicks {
                 generation_id: intent.generation_id,
                 key_slot: intent.key_slot,
@@ -254,9 +261,9 @@ where
     }
 
     if intents.len() != intent_count {
-        return Err(count_changed_error.to_string());
+        return Err(policy.count_changed_error.to_string());
     }
-    if check_actual_capacity {
+    if policy.check_actual_capacity {
         checked_executor_storage_bytes(chords.capacity(), intents.capacity())?;
     }
 
@@ -301,7 +308,7 @@ pub struct DispatchTimingWindow {
     pub down_not_before_qpc: QpcTicks,
     pub packet_not_before_qpc: QpcTicks,
     pub hold_floor_mask: u16,
-    pub release_floor_mask: u16,
+    pub resume_barrier_mask: u16,
 }
 
 /// Bounded 15-slot musical executor.
@@ -316,7 +323,7 @@ pub struct DispatchExecutor {
     slots: [MusicalSlot; MAX_KEYS],
     resume_barrier_qpc: Option<QpcTicks>,
     min_hold_ticks: DurationTicks,
-    min_release_gap_ticks: DurationTicks,
+    resume_cleanup_delay_ticks: DurationTicks,
     counters: GenerationCounters,
     total_generations: u64,
     activated_generations: u64,
@@ -377,11 +384,11 @@ pub struct PreparedDispatchSchedule {
     total_generations: u64,
     qpc_frequency_hz: NonZeroU64,
     min_hold_us: u64,
-    min_release_gap_us: u64,
     min_hold_ticks: DurationTicks,
-    min_release_gap_ticks: DurationTicks,
+    resume_cleanup_delay_us: u64,
+    resume_cleanup_delay_ticks: DurationTicks,
     total_us: u64,
-    packet_count: usize,
+    authored_timestamp_group_count: usize,
     has_down: bool,
     unmatched_up_metadata: Vec<PreparedUnmatchedUpMetadata>,
     memory_metrics: PreparedDispatchMemoryMetrics,
@@ -395,26 +402,26 @@ impl PreparedDispatchSchedule {
         schedule: &RuntimeSchedule,
         qpc_frequency_hz: NonZeroU64,
         min_hold_us: u64,
-        min_release_gap_us: u64,
+        resume_cleanup_delay_us: u64,
         caller_retained_capacity_bytes: usize,
     ) -> Result<Self, String> {
         Self::prepare_with_cancellation(
             schedule,
             qpc_frequency_hz,
             min_hold_us,
-            min_release_gap_us,
+            resume_cleanup_delay_us,
             caller_retained_capacity_bytes,
             || Ok(()),
         )
     }
 
     /// Cancellable form used by the desktop Prepare path and by raw-schedule
-    /// admission. Checkpoints are bounded by the number of authored packets.
+    /// admission. Checkpoints are bounded by authored groups/generations.
     pub fn prepare_with_cancellation(
         schedule: &RuntimeSchedule,
         qpc_frequency_hz: NonZeroU64,
         min_hold_us: u64,
-        min_release_gap_us: u64,
+        resume_cleanup_delay_us: u64,
         caller_retained_capacity_bytes: usize,
         mut checkpoint: impl FnMut() -> Result<(), String>,
     ) -> Result<Self, String> {
@@ -430,15 +437,13 @@ impl PreparedDispatchSchedule {
         let min_hold_ticks = qpc_to_ticks(min_hold_us)
             .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
             .ok_or_else(|| "prepared hold-floor conversion overflow".to_string())?;
-        let min_release_gap_ticks = qpc_to_ticks(min_release_gap_us)
+        let resume_cleanup_delay_ticks = qpc_to_ticks(resume_cleanup_delay_us)
             .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
-            .ok_or_else(|| "prepared release-gap conversion overflow".to_string())?;
-        crate::validation::validate_min_hold_and_release_gap_feasibility_ticks_with_checkpoint(
+            .ok_or_else(|| "prepared resume-cleanup delay conversion overflow".to_string())?;
+        crate::validation::validate_min_hold_feasibility_ticks_with_checkpoint(
             schedule,
             min_hold_us,
             min_hold_ticks,
-            min_release_gap_us,
-            min_release_gap_ticks,
             qpc_to_ticks,
             || checkpoint().map_err(|_| crate::validation::ScheduleTimingError::Cancelled),
         )
@@ -452,10 +457,13 @@ impl PreparedDispatchSchedule {
         } = build_down_arena(
             schedule,
             &mut checkpoint,
-            true,
-            false,
-            "executor Down intent count changed during preparation",
-            false,
+            DownArenaBuildPolicy {
+                checkpoint_first_chord: true,
+                checkpoint_after_count: false,
+                count_changed_error: "executor Down intent count changed during preparation",
+                check_actual_capacity: false,
+                min_hold_ticks,
+            },
             |microseconds, kind| {
                 qpc_to_ticks(microseconds).ok_or_else(|| match kind {
                     DownArenaTimestampKind::Chord => {
@@ -471,70 +479,38 @@ impl PreparedDispatchSchedule {
         )?;
         let intent_count = down_intents.len();
 
-        let mut unmatched_up_count = 0usize;
-        for (index, batch) in schedule.batches.iter().enumerate() {
+        let mut unmatched_up_metadata: Vec<PreparedUnmatchedUpMetadata> = Vec::new();
+        unmatched_up_metadata
+            .try_reserve(schedule.unmatched_ups.len())
+            .map_err(|error| format!("prepared unmatched-Up allocation failed: {error}"))?;
+        for (index, unmatched_up) in schedule.unmatched_ups.iter().enumerate() {
             if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
                 checkpoint()?;
             }
-            if batch.kind != crate::model::ActionKind::Up {
-                continue;
-            }
-            let start = usize::try_from(batch.intent_start)
-                .map_err(|_| "prepared unmatched-Up intent range overflow")?;
-            let end = start
-                .checked_add(usize::from(batch.intent_len))
-                .ok_or("prepared unmatched-Up intent range overflow")?;
-            let intents = schedule
-                .intents
-                .get(start..end)
-                .ok_or("prepared unmatched-Up intent range is invalid")?;
-            if intents
-                .iter()
-                .any(|intent| intent.generation_id() == crate::model::NO_GENERATION_ID)
+            let scheduled_ticks = qpc_to_ticks(unmatched_up.scheduled_us).ok_or_else(|| {
+                format!(
+                    "unmatched Up timestamp conversion failed at {}us",
+                    unmatched_up.scheduled_us
+                )
+            })?;
+            if let Some(last) = unmatched_up_metadata.last_mut()
+                && last.source_action_index == unmatched_up.source_action_index
+                && last.scheduled_ticks == scheduled_ticks
             {
-                unmatched_up_count = unmatched_up_count
+                last.suppressed_intent_count = last
+                    .suppressed_intent_count
                     .checked_add(1)
                     .ok_or_else(|| "prepared unmatched-Up count overflow".to_string())?;
-            }
-        }
-        let mut unmatched_up_metadata = Vec::new();
-        unmatched_up_metadata
-            .try_reserve_exact(unmatched_up_count)
-            .map_err(|error| format!("prepared unmatched-Up allocation failed: {error}"))?;
-        for (index, batch) in schedule.batches.iter().enumerate() {
-            if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
-                checkpoint()?;
-            }
-            if batch.kind != crate::model::ActionKind::Up {
-                continue;
-            }
-            let start = usize::try_from(batch.intent_start)
-                .map_err(|_| "prepared unmatched-Up intent range overflow")?;
-            let end = start
-                .checked_add(usize::from(batch.intent_len))
-                .ok_or("prepared unmatched-Up intent range overflow")?;
-            let intents = schedule
-                .intents
-                .get(start..end)
-                .ok_or("prepared unmatched-Up intent range is invalid")?;
-            let suppressed_intent_count = intents
-                .iter()
-                .filter(|intent| intent.generation_id() == crate::model::NO_GENERATION_ID)
-                .count();
-            if suppressed_intent_count != 0 {
+            } else {
                 unmatched_up_metadata.push(PreparedUnmatchedUpMetadata {
-                    source_action_index: batch.source_action_index,
-                    scheduled_ticks: qpc_to_ticks(batch.scheduled_us).ok_or_else(|| {
-                        format!(
-                            "unmatched Up timestamp conversion failed at {}us",
-                            batch.scheduled_us
-                        )
-                    })?,
-                    suppressed_intent_count,
+                    source_action_index: unmatched_up.source_action_index,
+                    scheduled_ticks,
+                    suppressed_intent_count: 1,
                 });
             }
         }
         checkpoint()?;
+        let unmatched_up_count = unmatched_up_metadata.len();
 
         let schedule_memory = schedule.memory_metrics_with_checkpoint(checkpoint)?;
         let schedule_bytes = schedule_memory
@@ -569,10 +545,7 @@ impl PreparedDispatchSchedule {
                 crate::model::MAX_RETAINED_DISPATCH_BYTES
             ));
         }
-        let total_us = schedule
-            .batches
-            .last()
-            .map_or(0, |batch| batch.scheduled_us);
+        let total_us = schedule.schedule_end_offset_us;
         let memory_metrics = PreparedDispatchMemoryMetrics {
             chord_count,
             chord_capacity: down_chords.capacity(),
@@ -593,11 +566,11 @@ impl PreparedDispatchSchedule {
             total_generations: schedule.generation_count,
             qpc_frequency_hz,
             min_hold_us,
-            min_release_gap_us,
             min_hold_ticks,
-            min_release_gap_ticks,
+            resume_cleanup_delay_us,
+            resume_cleanup_delay_ticks,
             total_us,
-            packet_count: schedule.packets.len(),
+            authored_timestamp_group_count: schedule.authored_timestamp_group_count,
             has_down: !schedule.down_chords.is_empty(),
             unmatched_up_metadata,
             memory_metrics,
@@ -608,11 +581,11 @@ impl PreparedDispatchSchedule {
         &self,
         qpc_frequency_hz: NonZeroU64,
         min_hold_us: u64,
-        min_release_gap_us: u64,
+        resume_cleanup_delay_us: u64,
     ) -> bool {
         self.qpc_frequency_hz == qpc_frequency_hz
             && self.min_hold_us == min_hold_us
-            && self.min_release_gap_us == min_release_gap_us
+            && self.resume_cleanup_delay_us == resume_cleanup_delay_us
     }
 
     pub fn qpc_frequency_hz(&self) -> NonZeroU64 {
@@ -623,8 +596,8 @@ impl PreparedDispatchSchedule {
         self.min_hold_us
     }
 
-    pub fn min_release_gap_us(&self) -> u64 {
-        self.min_release_gap_us
+    pub fn resume_cleanup_delay_us(&self) -> u64 {
+        self.resume_cleanup_delay_us
     }
 
     pub fn total_us(&self) -> u64 {
@@ -635,8 +608,8 @@ impl PreparedDispatchSchedule {
         self.total_generations
     }
 
-    pub fn packet_count(&self) -> usize {
-        self.packet_count
+    pub fn authored_timestamp_group_count(&self) -> usize {
+        self.authored_timestamp_group_count
     }
 
     pub fn has_down(&self) -> bool {
@@ -699,7 +672,7 @@ impl DispatchExecutor {
             key_registry,
             total_generations,
             min_hold_ticks,
-            min_release_gap_ticks,
+            resume_cleanup_delay_ticks,
             ..
         } = plan;
         Self {
@@ -712,7 +685,7 @@ impl DispatchExecutor {
             slots: [MusicalSlot::default(); MAX_KEYS],
             resume_barrier_qpc: None,
             min_hold_ticks,
-            min_release_gap_ticks,
+            resume_cleanup_delay_ticks,
             counters: GenerationCounters::default(),
             total_generations,
             activated_generations: 0,
@@ -723,7 +696,7 @@ impl DispatchExecutor {
     pub fn new<F, E>(
         schedule: &RuntimeSchedule,
         min_hold_ticks: DurationTicks,
-        min_release_gap_ticks: DurationTicks,
+        resume_cleanup_delay_ticks: DurationTicks,
         us_to_ticks: F,
     ) -> Result<Self, String>
     where
@@ -733,7 +706,7 @@ impl DispatchExecutor {
         Self::new_with_cancellation(
             schedule,
             min_hold_ticks,
-            min_release_gap_ticks,
+            resume_cleanup_delay_ticks,
             us_to_ticks,
             || Ok(()),
         )
@@ -743,7 +716,7 @@ impl DispatchExecutor {
     pub fn new_with_cancellation<F, E, C>(
         schedule: &RuntimeSchedule,
         min_hold_ticks: DurationTicks,
-        min_release_gap_ticks: DurationTicks,
+        resume_cleanup_delay_ticks: DurationTicks,
         mut us_to_ticks: F,
         mut checkpoint: C,
     ) -> Result<Self, String>
@@ -758,10 +731,13 @@ impl DispatchExecutor {
         } = build_down_arena(
             schedule,
             &mut checkpoint,
-            false,
-            true,
-            "executor Down intent count changed during compilation",
-            true,
+            DownArenaBuildPolicy {
+                checkpoint_first_chord: false,
+                checkpoint_after_count: true,
+                count_changed_error: "executor Down intent count changed during compilation",
+                check_actual_capacity: true,
+                min_hold_ticks,
+            },
             |microseconds, kind| {
                 us_to_ticks(microseconds).map_err(|error| match kind {
                     DownArenaTimestampKind::Chord => {
@@ -797,7 +773,7 @@ impl DispatchExecutor {
             slots: [MusicalSlot::default(); MAX_KEYS],
             resume_barrier_qpc: None,
             min_hold_ticks,
-            min_release_gap_ticks,
+            resume_cleanup_delay_ticks,
             counters: GenerationCounters::default(),
             total_generations: schedule.generation_count,
             activated_generations: 0,
@@ -1038,7 +1014,8 @@ impl DispatchExecutor {
 
     /// Evaluate the current state at an absolute QPC time and decide the next action.
     /// Authored targets are offsets from the current playback epoch; physical
-    /// H/G and resume floors remain absolute across pause-driven epoch changes.
+    /// H and the separately scoped verified-cleanup resume barrier remain
+    /// absolute across pause-driven epoch changes.
     pub fn evaluate_at(
         &self,
         now_qpc: QpcTicks,
@@ -1082,7 +1059,7 @@ impl DispatchExecutor {
         let mut chord_eligible = false;
         let mut chord_earliest_due_qpc = QpcTicks::ZERO;
         let mut chord_authored_target_qpc = None;
-        let mut down_release_floor_mask = 0u16;
+        let mut resume_barrier_mask = 0u16;
 
         if let Some(chord) = chord_opt {
             let authored_down_qpc = epoch_qpc
@@ -1097,7 +1074,7 @@ impl DispatchExecutor {
                 && resume_barrier > authored_down_qpc
             {
                 chord_earliest_due_qpc = chord_earliest_due_qpc.max(resume_barrier);
-                down_release_floor_mask |= chord.down_mask;
+                resume_barrier_mask |= chord.down_mask;
                 if now_qpc < resume_barrier {
                     chord_eligible = false;
                 }
@@ -1112,21 +1089,7 @@ impl DispatchExecutor {
                         DurationTicks::from_raw(slot.authored_up_offset_ticks.as_u64()),
                     )?;
                     let key_release_due = authored_up_qpc.max(slot.release_not_before_qpc);
-                    let key_next_down_min =
-                        key_release_due.checked_add_duration(self.min_release_gap_ticks)?;
-                    chord_earliest_due_qpc = chord_earliest_due_qpc.max(key_next_down_min);
-                    if key_next_down_min > authored_down_qpc {
-                        down_release_floor_mask |= 1 << k;
-                    }
-                } else {
-                    chord_earliest_due_qpc =
-                        chord_earliest_due_qpc.max(slot.next_down_not_before_qpc);
-                    if slot.next_down_not_before_qpc > authored_down_qpc {
-                        down_release_floor_mask |= 1 << k;
-                    }
-                    if now_qpc < slot.next_down_not_before_qpc {
-                        chord_eligible = false;
-                    }
+                    chord_earliest_due_qpc = chord_earliest_due_qpc.max(key_release_due);
                 }
             }
         }
@@ -1154,8 +1117,8 @@ impl DispatchExecutor {
                         down_not_before_qpc,
                         packet_not_before_qpc: musical_up_not_before_qpc.max(down_not_before_qpc),
                         hold_floor_mask: up_hold_floor_mask,
-                        release_floor_mask: if chord_eligible {
-                            down_release_floor_mask
+                        resume_barrier_mask: if chord_eligible {
+                            resume_barrier_mask
                         } else {
                             0
                         },
@@ -1224,15 +1187,6 @@ impl DispatchExecutor {
         if confirmed_up_mask & confirmed_down_mask != 0 {
             return Err("confirmed packet has overlapping Up and Down masks".to_string());
         }
-        let new_down_floor = if confirmed_up_mask != 0 {
-            Some(
-                completion_qpc
-                    .checked_add_duration(self.min_release_gap_ticks)
-                    .map_err(|error| format!("Up completion G floor overflow: {error}"))?,
-            )
-        } else {
-            None
-        };
         let new_up_floor = if confirmed_down_mask != 0 {
             Some(
                 completion_qpc
@@ -1307,7 +1261,6 @@ impl DispatchExecutor {
             let slot = &mut self.slots[slot_idx];
             slot.active_generation = None;
             slot.release_not_before_qpc = QpcTicks::ZERO;
-            slot.next_down_not_before_qpc = new_down_floor.unwrap_or(QpcTicks::ZERO);
         }
         if let Some(chord) = chord {
             let intent_start = chord.intent_start;
@@ -1324,7 +1277,6 @@ impl DispatchExecutor {
                 slot.authored_up_offset_ticks = intent.paired_up_offset_ticks;
                 slot.paired_up_source_action_index = intent.paired_up_source_action_index;
                 slot.release_not_before_qpc = new_up_floor.unwrap_or(QpcTicks::ZERO);
-                slot.next_down_not_before_qpc = QpcTicks::ZERO;
             }
         }
         self.counters.released = next_released;
@@ -1366,8 +1318,8 @@ impl DispatchExecutor {
     /// Apply verified resumable cleanup at timestamp `completion_ticks`.
     ///
     /// Clears active musical owners in all 15 slots without physical replay,
-    /// marks cancelled generations in accounting, and sets the session-wide
-    /// resume barrier to `completion_ticks + G`.
+    /// marks cancelled generations in accounting, and sets a separately scoped
+    /// resume-cleanup barrier after completion.
     pub fn on_verified_cleanup_at(&mut self, completion_qpc: QpcTicks) -> Result<u64, String> {
         let active_count = self
             .slots
@@ -1380,12 +1332,11 @@ impl DispatchExecutor {
             .checked_add(active_count)
             .ok_or("cancelled counter overflow")?;
         let barrier = completion_qpc
-            .checked_add_duration(self.min_release_gap_ticks)
+            .checked_add_duration(self.resume_cleanup_delay_ticks)
             .map_err(|error| format!("resume barrier overflow: {error}"))?;
         for slot in &mut self.slots {
             slot.active_generation = None;
             slot.release_not_before_qpc = QpcTicks::ZERO;
-            slot.next_down_not_before_qpc = QpcTicks::ZERO;
         }
         self.counters.cancelled = next_cancelled;
         self.resume_barrier_qpc = Some(
@@ -1425,7 +1376,7 @@ impl DispatchExecutor {
     /// Consume a Down-only onset after one internally consistent raw-zero
     /// transport result. No completion QPC or cleanup barrier is created:
     /// the packet was attempted once, while unrelated active slots and their
-    /// existing H/G floors remain live.
+    /// existing H eligibility remains live.
     pub fn consume_attempted_down_after_proven_raw_zero(
         &mut self,
         source_action_index: u32,
@@ -1487,7 +1438,6 @@ impl DispatchExecutor {
         for slot in &mut self.slots {
             slot.active_generation = None;
             slot.release_not_before_qpc = QpcTicks::ZERO;
-            slot.next_down_not_before_qpc = QpcTicks::ZERO;
         }
         Ok(cancelled_count)
     }

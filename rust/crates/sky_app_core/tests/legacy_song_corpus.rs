@@ -36,9 +36,9 @@ fn historical_source_fixture(relative: &str) -> Option<&'static [u8]> {
 }
 
 #[test]
-fn frozen_historical_songs_match_the_pinned_legacy_schedule_baseline() {
+fn historical_songs_match_the_pinned_current_schedule() {
     let expected: BTreeMap<String, BaselineFingerprint> = serde_json::from_slice(include_bytes!(
-        "../../../../tests/fixtures/song_planning/legacy_schedule_fingerprints.json"
+        "../../../../tests/fixtures/song_planning/historical_source_schedule_fingerprints.json"
     ))
     .expect("valid pinned legacy schedule fingerprints");
     assert_eq!(expected.len(), EXPECTED_HISTORICAL_SONG_COUNT);
@@ -81,7 +81,7 @@ fn frozen_historical_songs_match_the_pinned_legacy_schedule_baseline() {
         assert_eq!(
             sha256_hex(&serde_json::to_vec(&schedule).expect("serialize schedule")),
             baseline.schedule_sha256,
-            "legacy schedule changed: {relative}"
+            "pinned schedule changed: {relative}"
         );
     }
 }

@@ -287,7 +287,7 @@ fn settings_fingerprint_excludes_appearance_and_auto_play() {
             &policy,
         )
         .expect("plan fingerprint"),
-        "37c8cb8b8e70d3cab60fc794781cbeb794d6bf59b78e38ca1ccbeee0f4afc94d"
+        "9904ddecedc977ca659ef42d7745d8081acac5447b9fdb2c494668be3f18a595"
     );
 }
 
@@ -346,13 +346,13 @@ fn native_detail_matches_tempo_recommendation_contract_cases() {
             "tempo {tempo}"
         );
         assert_eq!(
-            actual["recommendation"]["recommended_hold_frames"],
-            case["recommendation"]["recommended_hold_frames"],
+            actual["recommendation"]["recommended_hold_frames"].as_f64(),
+            case["recommendation"]["recommended_hold_frames"].as_f64(),
             "tempo {tempo}"
         );
         assert_eq!(
-            actual["recommendation"]["recommended_tempo_scale"],
-            case["recommendation"]["recommended_tempo_scale"],
+            actual["recommendation"]["recommended_tempo_scale"].as_f64(),
+            case["recommendation"]["recommended_tempo_scale"].as_f64(),
             "tempo {tempo}"
         );
         runtime.shutdown();
@@ -790,14 +790,12 @@ fn native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_sourc
 }
 
 #[test]
-fn native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_pressure() {
+fn native_prepare_short_up_gap_confirmation_offers_only_proceed_without_recommendation() {
     fn input(
         song_id: &str,
         song: &super::Song,
         settings: &ApplicationSettings,
         config: PlaybackConfigDto,
-        severity: &str,
-        recommendation: bool,
     ) -> super::NativePreparedInput {
         let timing_policy = MaterializedTimingPolicy::from_user_margin(
             config.fps,
@@ -807,17 +805,12 @@ fn native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_
         .expect("fixture timing policy");
         let schedule = build_schedule_with_policy(song, config.tempo_scale, &timing_policy)
             .expect("fixture schedule");
-        let mut risk = super::analyze_schedule_with_context(
+        let risk = super::analyze_schedule_with_context(
             &schedule,
             Some(&song.notes),
             config.hold_frames,
             config.tempo_scale,
         );
-        risk.severity = severity.into();
-        if recommendation {
-            risk.suggested_hold_frames = Some(1.25);
-            risk.suggested_tempo_scale = Some(0.9);
-        }
         super::NativePreparedInput {
             song_id: song_id.into(),
             generation: 1,
@@ -845,8 +838,8 @@ fn native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_
     let service = NativePlaybackService::new(ActivityCoordinator::default());
     let settings = ApplicationSettings::default();
     let song = super::parse_song_json(
-        br#"{"name":"Variant advisory","songNotes":[{"time":0,"key":"Key0"}]}"#,
-        "variant-advisory",
+        br#"{"name":"Short Up gap","songNotes":[{"time":0,"key":"Key0"},{"time":18,"key":"Key0"}]}"#,
+        "short-up-gap",
     )
     .expect("fixture song");
     let base_config = PlaybackConfigDto {
@@ -857,55 +850,45 @@ fn native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_
         dry_run: false,
     };
 
-    let ready = service
-        .prepare(input(
-            "variant-advisory",
-            &song,
-            &settings,
-            base_config.clone(),
-            "low",
-            false,
-        ))
-        .expect("modeled pressure remains a ready plan");
-    assert_eq!(ready.admission, crate::commands::PlaybackAdmission::Ready);
-    let ready_variant = ready.variants.first().expect("Proceed variant");
-    let ready_advisory = ready_variant
-        .timing_advisory
-        .as_ref()
-        .expect("Proceed advisory");
-    assert_eq!(
-        ready_advisory.status,
-        crate::commands::TimingAdvisoryStatus::ModeledRisk
-    );
-    assert_eq!(
-        ready_advisory.plan_fingerprint,
-        ready_variant.plan_fingerprint
-    );
-    assert_eq!(ready_variant.config.hold_frames, base_config.hold_frames);
-    assert_eq!(
-        ready_variant.config.timing_margin_us,
-        base_config.timing_margin_us
-    );
-    assert_eq!(ready_variant.config.tempo_scale, base_config.tempo_scale);
-    assert_eq!(ready_variant.config.fps, base_config.fps);
-    assert_eq!(ready_variant.config.dry_run, base_config.dry_run);
-    assert!(!ready_advisory.receiver_acknowledged);
-
     let confirmation = service
-        .prepare(input(
-            "variant-advisory",
-            &song,
-            &settings,
-            base_config.clone(),
-            "medium",
-            true,
-        ))
-        .expect("confirmation variants");
+        .prepare(input("short-up-gap", &song, &settings, base_config.clone()))
+        .expect("short-gap confirmation");
     assert_eq!(
         confirmation.admission,
         crate::commands::PlaybackAdmission::ConfirmationRequired
     );
-    assert_eq!(confirmation.variants.len(), 3);
+    assert_eq!(confirmation.risk.level, "medium");
+    assert_eq!(confirmation.risk.short_up_gap_repeat_count, 1);
+    assert_eq!(confirmation.decisions.len(), 1);
+    assert_eq!(
+        confirmation.decisions[0].decision,
+        crate::commands::PlaybackDecision::Proceed
+    );
+    let recommendation = confirmation
+        .song
+        .recommendation
+        .as_ref()
+        .expect("risk summary remains available");
+    assert!(recommendation.recommended_hold_frames.is_none());
+    assert!(recommendation.recommended_tempo_scale.is_none());
+    assert_eq!(confirmation.variants.len(), 1);
+    let proceed = confirmation.variants.first().expect("Proceed variant");
+    assert_eq!(proceed.decision, crate::commands::PlaybackDecision::Proceed);
+    assert_eq!(proceed.config.hold_frames, base_config.hold_frames);
+    assert_eq!(
+        proceed.config.timing_margin_us,
+        base_config.timing_margin_us
+    );
+    assert_eq!(proceed.config.tempo_scale, base_config.tempo_scale);
+    assert_eq!(proceed.config.fps, base_config.fps);
+    assert_eq!(proceed.config.dry_run, base_config.dry_run);
+    let advisory = proceed.timing_advisory.as_ref().expect("Proceed advisory");
+    assert_eq!(
+        advisory.status,
+        crate::commands::TimingAdvisoryStatus::ShortUpGapRisk
+    );
+    assert_eq!(advisory.short_up_gap_repeat_count, 1);
+    assert_eq!(advisory.plan_fingerprint, proceed.plan_fingerprint);
     let prepared_id = confirmation
         .prepared_id
         .as_ref()
@@ -916,64 +899,32 @@ fn native_prepare_binds_advisories_to_variant_fingerprints_without_gating_model_
         .find(|(id, _)| id == prepared_id)
         .map(|(_, record)| record)
         .expect("retained prepared plan");
-    let mut fingerprints = std::collections::HashSet::new();
-    for variant_dto in &confirmation.variants {
-        let advisory = variant_dto
-            .timing_advisory
-            .as_ref()
-            .expect("variant advisory");
-        assert_eq!(advisory.plan_fingerprint, variant_dto.plan_fingerprint);
-        assert!(fingerprints.insert(variant_dto.plan_fingerprint.as_str()));
-        let native_variant = record
-            .variants
-            .get(&variant_dto.decision)
-            .expect("matching native variant");
-        assert_eq!(native_variant.fingerprint, variant_dto.plan_fingerprint);
-        assert_eq!(
-            native_variant.config.hold_frames,
-            variant_dto.config.hold_frames
-        );
-        assert_eq!(
-            native_variant.config.timing_margin_us,
-            variant_dto.config.timing_margin_us
-        );
-        assert_eq!(
-            native_variant.config.tempo_scale,
-            variant_dto.config.tempo_scale
-        );
-        assert_eq!(native_variant.config.fps, variant_dto.config.fps);
-        assert_eq!(native_variant.config.dry_run, variant_dto.config.dry_run);
-        assert_eq!(
-            native_variant.prepared_schedule.is_some(),
-            !variant_dto.config.dry_run,
-            "only physical variants retain an immutable dispatch plan"
-        );
-        assert!(!advisory.receiver_acknowledged);
-    }
-    let recommended = confirmation
+    assert_eq!(record.variants.len(), 1);
+    let native_proceed = record
         .variants
-        .iter()
-        .find(|variant| variant.decision == crate::commands::PlaybackDecision::UseRecommended)
-        .expect("recommended variant");
-    assert_eq!(recommended.config.hold_frames, 1.25);
-    assert_eq!(recommended.config.tempo_scale, 0.9);
-    let dry_run = confirmation
-        .variants
-        .iter()
-        .find(|variant| variant.decision == crate::commands::PlaybackDecision::DryRun)
-        .expect("Dry Run variant");
-    assert!(dry_run.config.dry_run);
-    assert!(
-        dry_run
-            .timing_advisory
-            .as_ref()
-            .expect("Dry Run advisory")
-            .dry_run_is_hypothetical
+        .get(&crate::commands::PlaybackDecision::Proceed)
+        .expect("matching native Proceed variant");
+    assert_eq!(native_proceed.fingerprint, proceed.plan_fingerprint);
+    assert_eq!(
+        native_proceed.config.hold_frames,
+        proceed.config.hold_frames
     );
+    assert_eq!(
+        native_proceed.config.timing_margin_us,
+        proceed.config.timing_margin_us
+    );
+    assert_eq!(
+        native_proceed.config.tempo_scale,
+        proceed.config.tempo_scale
+    );
+    assert_eq!(native_proceed.config.fps, proceed.config.fps);
+    assert_eq!(native_proceed.config.dry_run, proceed.config.dry_run);
+    assert!(native_proceed.prepared_schedule.is_some());
+    assert!(!advisory.dry_run_is_hypothetical);
 }
 
 #[test]
-fn settings_patch_cancels_inflight_prepare_without_waiting_for_whole_stream_analysis() {
+fn settings_patch_cancels_inflight_prepare_without_waiting_for_generation_timing_analysis() {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("clock")

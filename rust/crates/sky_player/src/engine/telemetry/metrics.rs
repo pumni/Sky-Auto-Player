@@ -148,12 +148,6 @@ pub struct WorkerMetricsLocal {
     pub last_hold_floor_delay_mask: u16,
     pub last_hold_floor_authored_target_qpc_ticks: u64,
     pub last_hold_floor_not_before_qpc_ticks: u64,
-    pub release_floor_delay_boundaries: u64,
-    pub(crate) max_release_floor_delay_ticks: u64,
-    pub max_release_floor_delay_us: u64,
-    pub last_release_floor_delay_mask: u16,
-    pub last_release_floor_authored_target_qpc_ticks: u64,
-    pub last_release_floor_not_before_qpc_ticks: u64,
     /// Worker-local fixed-size production forensics. Availability is false
     /// until a successful physical packet has supplied evidence.
     pub production_forensics_available: bool,
@@ -161,11 +155,7 @@ pub struct WorkerMetricsLocal {
     pub production_hold_pair_samples: u64,
     pub production_min_hold_start_after_down_completion_ticks: u64,
     pub production_hold_floor_violation_count: u64,
-    pub production_release_floor_samples: u64,
-    pub production_min_down_start_after_up_completion_ticks: u64,
-    pub production_release_floor_violation_count: u64,
     pub production_hold_floor_ticks: u64,
-    pub production_release_floor_ticks: u64,
     /// Corruption/forensics evidence for a packet that violated the
     /// disjoint Up/Down mask contract before realtime execution.
     pub production_same_key_overlap_forensics_count: u64,
@@ -808,11 +798,6 @@ fn project_metrics_for_snapshot(
     published.max_hold_floor_delay_us = qpc_clock
         .duration_to_us(DurationTicks::from_raw(
             published.max_hold_floor_delay_ticks,
-        ))
-        .unwrap_or_default();
-    published.max_release_floor_delay_us = qpc_clock
-        .duration_to_us(DurationTicks::from_raw(
-            published.max_release_floor_delay_ticks,
         ))
         .unwrap_or_default();
     published.wait_planned_gap_hot_lateness_max_us = qpc_clock

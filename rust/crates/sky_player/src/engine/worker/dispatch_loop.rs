@@ -1343,7 +1343,7 @@ pub(crate) fn dispatch_staged_candidate(
             skipped_mask: send_result.evidence.skipped_mask,
             trace: crate::engine::worker::dispatch::observation::DownTraceObservation {
                 event_index: candidate.source_action_index,
-                compiled_packet_index: candidate.down_chord.map(|c| c.chord_index as u64),
+                authored_down_chord_index: candidate.down_chord.map(|c| c.chord_index as u64),
                 trace_kind: candidate.trace_kind,
                 result_status: send_result.status,
                 send_attempts: send_result.evidence.attempts,
@@ -2552,7 +2552,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
 
 #[cfg(test)]
 mod tests {
-    #[path = "../../dispatch_loop_deadline_hg_projection_tests.rs"]
+    #[path = "../../dispatch_loop_deadline_generation_projection_tests.rs"]
     mod deadline_hg_projection;
     #[path = "../../dispatch_loop_deadline_late_due_tests.rs"]
     mod deadline_late_due;

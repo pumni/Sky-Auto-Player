@@ -43,7 +43,7 @@ describe('TimingMarginControl', () => {
     expect(changes).toEqual([900]);
     expect(screen.getByText('· rec. 1300 µs')).toBeInTheDocument();
     expect(screen.getByText('Source: Qualified calibration')).toBeInTheDocument();
-    expect(screen.getByText('Applies to Hold and Release Gap')).toBeInTheDocument();
+    expect(screen.getByText('Applies to Hold and Resume Cleanup Delay')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
   });
 
@@ -62,7 +62,7 @@ describe('TimingMarginControl', () => {
       screen.getByText('Recommended 1300 µs'),
     );
     expect(screen.queryByText(/Source:/)).not.toBeInTheDocument();
-    expect(screen.queryByText('Applies to Hold and Release Gap')).not.toBeInTheDocument();
+    expect(screen.queryByText('Applies to Hold and Resume Cleanup Delay')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
   });
 
