@@ -169,29 +169,47 @@ function Get-PlaybackCoreLifecycleMeasuredAuthoredPrefix {
     if ($groups.Count -eq 0) { throw 'paired acceptance report is missing its authored timestamp-group projection' }
     $firstTimestampUs = [long](Get-ReportOptionalProperty $groups[0] 'scheduled_us')
     $windowEndUs = $firstTimestampUs + ([long]$SampleSeconds * 1000000L)
-    $events = [System.Collections.Generic.List[object]]::new()
+    $fullEvents = [System.Collections.Generic.List[object]]::new()
+    $measuredEvents = [System.Collections.Generic.List[object]]::new()
+    $tailEvents = [System.Collections.Generic.List[object]]::new()
     foreach ($group in $groups) {
         $timestampUs = [long](Get-ReportOptionalProperty $group 'scheduled_us')
-        if ($timestampUs -lt $firstTimestampUs -or $timestampUs -ge $windowEndUs) { continue }
         $upMask = [long](Get-ReportOptionalProperty $group 'up_mask')
         $downMask = [long](Get-ReportOptionalProperty $group 'down_mask')
-        if ($upMask -ne 0) { $events.Add([ordered]@{ timestamp_us = $timestampUs; kind = 'up'; scan_mask = $upMask }) }
-        if ($downMask -ne 0) { $events.Add([ordered]@{ timestamp_us = $timestampUs; kind = 'down'; scan_mask = $downMask }) }
+        foreach ($event in @(
+            if ($upMask -ne 0) { [ordered]@{ timestamp_us = $timestampUs; kind = 'up'; scan_mask = $upMask } }
+            if ($downMask -ne 0) { [ordered]@{ timestamp_us = $timestampUs; kind = 'down'; scan_mask = $downMask } }
+        )) {
+            $fullEvents.Add($event)
+            if ($timestampUs -ge $firstTimestampUs -and $timestampUs -lt $windowEndUs) {
+                $measuredEvents.Add($event)
+            } elseif ($timestampUs -ge $windowEndUs) {
+                $tailEvents.Add($event)
+            }
+        }
     }
-    if ($events.Count -eq 0) { throw 'paired acceptance report has no authored events in the measured window' }
-    $canonical = ConvertTo-Json -InputObject $events.ToArray() -Depth 6 -Compress
+    if ($measuredEvents.Count -eq 0) { throw 'paired acceptance report has no authored events in the measured window' }
     $sha = [System.Security.Cryptography.SHA256]::Create()
     try {
-        $digest = [Convert]::ToHexString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($canonical))).ToLowerInvariant()
+        $fullCanonical = ConvertTo-Json -InputObject $fullEvents.ToArray() -Depth 6 -Compress
+        $measuredCanonical = ConvertTo-Json -InputObject $measuredEvents.ToArray() -Depth 6 -Compress
+        $tailCanonical = ConvertTo-Json -InputObject $tailEvents.ToArray() -Depth 6 -Compress
+        $fullDigest = [Convert]::ToHexString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($fullCanonical))).ToLowerInvariant()
+        $measuredDigest = [Convert]::ToHexString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($measuredCanonical))).ToLowerInvariant()
+        $tailDigest = [Convert]::ToHexString($sha.ComputeHash([System.Text.Encoding]::UTF8.GetBytes($tailCanonical))).ToLowerInvariant()
     } finally {
         $sha.Dispose()
     }
     [pscustomobject]@{
         start_us = $firstTimestampUs
         end_us = $windowEndUs
-        event_count = $events.Count
+        measured_event_count = $measuredEvents.Count
+        measured_sha256 = $measuredDigest
+        full_event_count = $fullEvents.Count
+        full_sha256 = $fullDigest
+        tail_event_count = $tailEvents.Count
+        tail_sha256 = $tailDigest
         tail_group_count = @($groups | Where-Object { [long](Get-ReportOptionalProperty $_ 'scheduled_us') -ge $windowEndUs }).Count
-        sha256 = $digest
     }
 }
 
@@ -204,16 +222,25 @@ function Assert-PlaybackCoreLifecyclePairedWorkloadParity {
     $control = Get-PlaybackCoreLifecycleMeasuredAuthoredPrefix -Report $ControlRow.report -SampleSeconds $SampleSeconds
     $candidate = Get-PlaybackCoreLifecycleMeasuredAuthoredPrefix -Report $CandidateRow.report -SampleSeconds $SampleSeconds
     if ($control.start_us -ne $candidate.start_us -or $control.end_us -ne $candidate.end_us -or
-        $control.event_count -ne $candidate.event_count -or $control.sha256 -ne $candidate.sha256) {
-        throw ('paired workload authored prefix mismatch for ' + $ControlRow.workload + '/' + $ControlRow.load +
-            ' pair ' + $ControlRow.pair_id + ': baseline sha256=' + $control.sha256 +
-            ' candidate sha256=' + $candidate.sha256)
+        $control.measured_event_count -ne $candidate.measured_event_count -or
+        $control.measured_sha256 -ne $candidate.measured_sha256 -or
+        $control.full_event_count -ne $candidate.full_event_count -or
+        $control.full_sha256 -ne $candidate.full_sha256 -or
+        $control.tail_event_count -ne $candidate.tail_event_count -or
+        $control.tail_group_count -ne $candidate.tail_group_count) {
+        throw ('paired workload authored stream mismatch for ' + $ControlRow.workload + '/' + $ControlRow.load +
+            ' pair ' + $ControlRow.pair_id + ': baseline full sha256=' + $control.full_sha256 +
+            ' candidate full sha256=' + $candidate.full_sha256)
     }
     foreach ($entry in @(@{ row = $ControlRow; prefix = $control }, @{ row = $CandidateRow; prefix = $candidate })) {
         $entry.row | Add-Member -NotePropertyName authored_workload_measured_window_start_us -NotePropertyValue $entry.prefix.start_us -Force
         $entry.row | Add-Member -NotePropertyName authored_workload_measured_window_end_us -NotePropertyValue $entry.prefix.end_us -Force
-        $entry.row | Add-Member -NotePropertyName authored_workload_measured_event_count -NotePropertyValue $entry.prefix.event_count -Force
-        $entry.row | Add-Member -NotePropertyName authored_workload_measured_prefix_sha256 -NotePropertyValue $entry.prefix.sha256 -Force
+        $entry.row | Add-Member -NotePropertyName authored_workload_measured_event_count -NotePropertyValue $entry.prefix.measured_event_count -Force
+        $entry.row | Add-Member -NotePropertyName authored_workload_measured_prefix_sha256 -NotePropertyValue $entry.prefix.measured_sha256 -Force
+        $entry.row | Add-Member -NotePropertyName authored_workload_full_event_count -NotePropertyValue $entry.prefix.full_event_count -Force
+        $entry.row | Add-Member -NotePropertyName authored_workload_full_stream_sha256 -NotePropertyValue $entry.prefix.full_sha256 -Force
+        $entry.row | Add-Member -NotePropertyName authored_workload_tail_event_count -NotePropertyValue $entry.prefix.tail_event_count -Force
+        $entry.row | Add-Member -NotePropertyName authored_workload_tail_sha256 -NotePropertyValue $entry.prefix.tail_sha256 -Force
         $entry.row | Add-Member -NotePropertyName authored_workload_tail_group_count -NotePropertyValue $entry.prefix.tail_group_count -Force
     }
     $true
@@ -472,11 +499,23 @@ function Get-PlaybackCoreLifecycleStageSummary {
         [ValidateSet(1, 2)] [int]$ProfileVersion = 1
     )
     $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
+    $expectedSafetyScenarios = @(
+        'focus-loss',
+        'owner-mismatch',
+        'owner-process-termination',
+        'pause-resume',
+        'suspend-resume',
+        'stop-cleanup',
+        'skip-cleanup',
+        'supervisor-lease-expiry'
+    )
+    if ($ProfileVersion -eq 2) { $expectedSafetyScenarios += 'short-up-gap-stress' }
+    $expectedSafetyContract = $expectedSafetyScenarios -join '|'
     if ($TimingMarginUs -ne 500 -or $Pairs -ne 6 -or $SampleSeconds -ne 15 -or
-        (@($SafetyScenarios) -join '|') -ne 'focus-loss|owner-mismatch|owner-process-termination|pause-resume|suspend-resume|stop-cleanup|skip-cleanup|supervisor-lease-expiry' -or
+        (@($SafetyScenarios) -join '|') -ne $expectedSafetyContract -or
         (@($PerformanceWorkloads) -join '|') -ne 'mixed-up-down|dense-alternating|canonical-max-chord|near-minimum-retrigger|long-idle' -or
         (@($LoadCells) -join '|') -ne 'Quiet|Contention') {
-        throw 'PlaybackCoreLifecycle Final plan must match its eight candidate safety cases and six alternating A/B pairs across the five Quiet/Contention workloads'
+        throw ($profile.Name + ' Final plan must match its candidate safety matrix and six alternating A/B pairs across the five Quiet/Contention workloads')
     }
     $pairedPerRole = $PerformanceWorkloads.Count * $LoadCells.Count * $Pairs
     $candidateSessions = $pairedPerRole + $SafetyScenarios.Count
@@ -493,7 +532,7 @@ function Get-PlaybackCoreLifecycleStageSummary {
         role_scope = 'Baseline/Candidate paired performance; Candidate-only safety'
         workloads = @('safety-smoke') + @($PerformanceWorkloads)
         scenarios = @($SafetyScenarios) + @($PerformanceWorkloads)
-        workload_summary = 'eight candidate safety cases plus five paired workloads in Quiet and Contention'
+        workload_summary = if ($ProfileVersion -eq 2) { 'nine candidate safety cases plus five paired workloads in Quiet and Contention' } else { 'eight candidate safety cases plus five paired workloads in Quiet and Contention' }
         load_cells = @($LoadCells)
         game_fps = 60
         game_fps_values = @(60)

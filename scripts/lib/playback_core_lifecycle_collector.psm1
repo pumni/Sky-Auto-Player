@@ -170,8 +170,14 @@ function New-PlaybackCoreLifecycleMeasurementReport {
                 (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_measured_prefix_sha256') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_measured_prefix_sha256') -or
                 (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_measured_event_count') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_measured_event_count') -or
                 (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_measured_window_start_us') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_measured_window_start_us') -or
-                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_measured_window_end_us') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_measured_window_end_us')) {
-                throw ('PlaybackCoreLifecycleV2 pair lacks identical authored timestamp/kind/scan-mask prefix coverage: ' + $pair.Name)
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_measured_window_end_us') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_measured_window_end_us') -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_full_stream_sha256') -notmatch '^[0-9a-f]{64}$' -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_full_stream_sha256') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_full_stream_sha256') -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_full_event_count') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_full_event_count') -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_tail_sha256') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_tail_sha256') -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_tail_event_count') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_tail_event_count') -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_tail_group_count') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_tail_group_count')) {
+                throw ('PlaybackCoreLifecycleV2 pair lacks identical full authored timestamp/kind/scan-mask sequence and measured-window evidence: ' + $pair.Name)
             }
         }
     }

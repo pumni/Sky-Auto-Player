@@ -130,17 +130,22 @@ must have identical Cargo.lock bytes and hash; the runner checks both manifests
 against the exact clean source trees and pushed candidate HEAD. Rust/Cargo,
 MSVC target, profile, features, observer, loads, pair order, and sample duration
 remain the same as v1.
+The historical v1 profile retains its original candidate lineage
+`refactor/playback-core-lifecycle`; v2 alone follows this PR branch.
 
-The v2 paired workload contract also checks the authored stream itself. The
-candidate harness restores the baseline's H+G Down cadence for
-**near-minimum-retrigger** and its H cycle padding in the paired workload
-generator. `short-up-gap-stress` stays candidate-only. For every paired run,
-the runner normalizes the baseline's `authored_packet_targets` and the
-candidate's `authored_timestamp_group_targets` into `(timestamp_us, kind,
-scan-mask)` events and requires equal hashes across the measured 15-second
-prefix. Any groups after that prefix are counted as tail padding outside the
-comparison window. A mismatch stops the paired run before those measurements
-can be reported as comparable.
+The v2 paired workload contract checks the entire authored stream. The
+candidate harness preserves the PR-base cadence for **dense-alternating** and
+**near-minimum-retrigger**, and uses the same baseline cycle-count formula for
+all five paired workloads. Frozen SHA-256 projections from the exact PR-base
+source cover all five streams, including every cycle and tail. In particular,
+`canonical-max-chord` keeps the baseline's 263 cycles; candidate-only trailing
+padding cannot add a 264th cycle. `short-up-gap-stress` is a ninth, candidate-
+only safety case. For every paired run, the runner normalizes baseline
+`authored_packet_targets` and candidate `authored_timestamp_group_targets` into
+`(timestamp_us, kind, scan-mask)` events, then requires matching full-stream
+and measured 15-second prefix hashes and counts. Tail event/group counts and
+hashes remain in each row for diagnosis. A prefix or tail mismatch stops the
+paired run before those measurements can be reported as comparable.
 
 Build exact v2 manifests from detached, clean source trees. Keep outputs outside
 the checkouts and rebuild the candidate manifest after every source or runner
@@ -155,8 +160,10 @@ case:
     pwsh -NoProfile -File scripts/test_qualify_dispatch_core_contracts.ps1
     pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -Stage Final -QualificationProfile PlaybackCoreLifecycleV2 -CandidateManifest <candidate-manifest> -ControlManifest <baseline-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 -PlanOnly -OutputRoot <evidence-root>
 
-`PlanOnly` verifies identity, same-lock and the v2 workload contract. It does
-not execute the sink or send input. The runnable native protocol and
+`PlanOnly` verifies identity, same-lock and the v2 profile matrix, including
+the candidate-only short-gap case. It does not execute the sink, build native
+event projections, or send input; full-stream equality is asserted on each
+paired run before its measurement is accepted. The runnable native protocol and
 **-OwnerApprovedReceiveOnlyRun** approval requirements above also apply to v2.
 
 After an authorized run, **lifecycle-metrics.json** records candidate source,

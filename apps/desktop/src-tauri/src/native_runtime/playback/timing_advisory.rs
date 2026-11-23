@@ -334,13 +334,13 @@ fn simulate_dispatch_schedule(
     }
     let epoch = sky_player::adapter_support::QpcTicks::ZERO;
     // Every generation can produce a Down and a paired Up. Each physical send
-    // can be preceded by one advancing Wait, and the final executor check can
-    // return Finished. Bound work by that event topology rather than a small
-    // fixed allowance that makes sparse schedules appear unavailable.
+    // can be preceded by one advancing Wait, followed by an optional schedule
+    // end Wait and the final Finished evaluation. Bound work by that event
+    // topology rather than a small fixed allowance that rejects sparse plans.
     let max_iterations = usize::try_from(schedule.generation_count)
         .ok()
         .and_then(|count| count.checked_mul(4))
-        .and_then(|count| count.checked_add(1))
+        .and_then(|count| count.checked_add(2))
         .ok_or_else(|| "executor simulation iteration bound overflow".to_string())?;
     let mut summary = DispatchSimulationSummary::default();
     let mut now = epoch;
@@ -660,15 +660,16 @@ mod tests {
     }
 
     #[test]
-    fn sparse_nine_note_schedule_finishes_the_bounded_executor_model() {
+    fn sparse_nine_note_schedule_with_unpaired_tail_finishes_the_bounded_executor_model() {
         let config = config(false);
         let policy = policy(&config);
-        let mut actions = Vec::with_capacity(18);
+        let mut actions = Vec::with_capacity(19);
         for note in 1..=9_u64 {
             let down_us = note * 100_000;
             actions.push((ActionKind::Down, down_us, 0x15));
             actions.push((ActionKind::Up, down_us + policy.min_hold_us, 0x15));
         }
+        actions.push((ActionKind::Up, 1_000_000, 0x16));
         let authored = schedule(&actions);
 
         let advisory = analyze_variant(
@@ -681,6 +682,7 @@ mod tests {
 
         assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
         assert_eq!(advisory.down_generation_count, Some(9));
+        assert_eq!(advisory.unmatched_up_count, Some(1));
         assert_eq!(advisory.modeled_send_count, 18);
         assert_ne!(
             advisory.dispatch_model_status,

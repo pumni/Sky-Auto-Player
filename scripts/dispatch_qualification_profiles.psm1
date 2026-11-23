@@ -65,6 +65,7 @@ function Get-PlaybackCoreLifecycleProfile {
         'skip-cleanup',
         'supervisor-lease-expiry'
     )
+    if ($Version -eq 2) { $safetyScenarios += 'short-up-gap-stress' }
     [pscustomobject]@{
         Version = $Version
         Name = if ($Version -eq 1) { 'PlaybackCoreLifecycle' } else { 'PlaybackCoreLifecycleV2' }
@@ -73,7 +74,7 @@ function Get-PlaybackCoreLifecycleProfile {
         BaselineRevision = if ($Version -eq 1) { '2544daa13eb23fdf03bd922e65b96fcffaba421c' } else { '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' }
         BaselineTree = if ($Version -eq 1) { '155882714df131ddc9b9985133a1f0611736b7cd' } else { '25a20291b9cf84b1283804f451b33e3c4605507c' }
         AuthoredPrefixParityContract = if ($Version -eq 2) { 'timestamp-kind-scan-mask-v1' } else { $null }
-        CandidateLineageBranch = 'refactor/playback-remove-release-gap'
+        CandidateLineageBranch = if ($Version -eq 1) { 'refactor/playback-core-lifecycle' } else { 'refactor/playback-remove-release-gap' }
         Target = 'x86_64-pc-windows-msvc'
         CargoProfile = 'dist'
         RequiredFeatures = @('real-input-acceptance')

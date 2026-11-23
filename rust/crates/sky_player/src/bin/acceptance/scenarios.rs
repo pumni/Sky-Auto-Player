@@ -147,7 +147,10 @@ pub(super) fn scenario_plan_for_settings(
             }
             Scenario::DenseAlternating => {
                 let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                let gap_us = frame_period_us(game_fps);
+                // Paired qualification retains the pinned baseline cadence.
+                // This spacing belongs only to the workload generator; it is
+                // not a playback or planner release-gap floor.
+                let gap_us = frame_period_us(game_fps).saturating_add(timing_margin_us);
                 let mut actions = Vec::with_capacity(32);
                 let mut down_slots = Vec::with_capacity(16);
                 let mut up_slots = Vec::with_capacity(16);
@@ -196,7 +199,9 @@ pub(super) fn scenario_plan_for_settings(
             }
             Scenario::NearMinimumRetrigger => {
                 let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                let gap_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
+                // Preserve the pinned baseline paired-workload geometry. The
+                // separate short-up-gap-stress scenario remains candidate-only.
+                let gap_us = frame_period_us(game_fps).saturating_add(timing_margin_us);
                 let mut actions = Vec::with_capacity(8);
                 let mut down_slots = Vec::with_capacity(4);
                 let mut up_slots = Vec::with_capacity(4);
@@ -477,19 +482,12 @@ pub(super) fn scenario_plan_for_settings(
             .last()
             .map(|action| action.scheduled_us)
             .ok_or_else(|| "timed sample scenario has no authored actions".to_string())?;
-        let last_down_us = actions
-            .iter()
-            .filter(|action| action.kind == ActionKind::Down)
-            .map(|action| action.scheduled_us)
-            .max()
-            .ok_or_else(|| "timed sample scenario has no authored Down".to_string())?;
-        let trailing_up_us = last_scheduled_us.saturating_sub(last_down_us);
         let cycle_gap_us = if scenario == Scenario::LongIdle {
             2_000_000
         } else if scenario == Scenario::HolInterleaved {
             31_000
         } else {
-            acceptance_min_hold_us_for_fps(timing_margin_us, game_fps)
+            frame_period_us(game_fps).saturating_add(timing_margin_us)
         };
         let cycle_duration_us = last_scheduled_us
             .checked_sub(first_scheduled_us)
@@ -498,8 +496,7 @@ pub(super) fn scenario_plan_for_settings(
             .ok_or_else(|| "timed sample cycle duration is invalid".to_string())?;
         let required_duration_us = u64::from(sample_seconds)
             .saturating_mul(1_000_000)
-            .saturating_add(cycle_gap_us)
-            .saturating_add(trailing_up_us);
+            .saturating_add(cycle_gap_us);
         let repetitions = required_duration_us
             .saturating_add(cycle_duration_us - 1)
             / cycle_duration_us;

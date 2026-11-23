@@ -1636,7 +1636,7 @@ $playbackCoreWorkerFinalizeSource = Get-Content -LiteralPath (Join-Path $PSScrip
 if (-not $playbackCoreProfileSource.Contains("Name = if (`$Version -eq 1) { 'PlaybackCoreLifecycle' } else { 'PlaybackCoreLifecycleV2' }") -or
     -not $playbackCoreProfileSource.Contains("BaselineRevision = if (`$Version -eq 1) { '2544daa13eb23fdf03bd922e65b96fcffaba421c' } else { '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' }") -or
     -not $playbackCoreProfileSource.Contains("BaselineTree = if (`$Version -eq 1) { '155882714df131ddc9b9985133a1f0611736b7cd' } else { '25a20291b9cf84b1283804f451b33e3c4605507c' }") -or
-    -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = 'refactor/playback-remove-release-gap'") -or
+    -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = if (`$Version -eq 1) { 'refactor/playback-core-lifecycle' } else { 'refactor/playback-remove-release-gap' }") -or
     -not $playbackCoreProfileSource.Contains("'near-minimum-retrigger'") -or
     -not $playbackCoreBuilderSource.Contains('Assert-PlaybackCoreLifecycleSourceCheckout') -or
     -not $playbackCoreBuilderSource.Contains("['qualification_plan'] = [ordered]@{") -or
@@ -1685,10 +1685,14 @@ $pclV1Profile = Get-PlaybackCoreLifecycleProfile
 $pclV2Profile = Get-PlaybackCoreLifecycleProfile -Version 2
 if ($pclV1Profile.Name -ne 'PlaybackCoreLifecycle' -or
     $pclV1Profile.BaselineRevision -ne '2544daa13eb23fdf03bd922e65b96fcffaba421c' -or
+    $pclV1Profile.CandidateLineageBranch -ne 'refactor/playback-core-lifecycle' -or
+    $pclV1Profile.SafetyScenarios -contains 'short-up-gap-stress' -or
     $pclV2Profile.Name -ne 'PlaybackCoreLifecycleV2' -or
     $pclV2Profile.WorkloadVersion -ne 'playback-core-lifecycle-v2' -or
     $pclV2Profile.BaselineRevision -ne '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' -or
     $pclV2Profile.BaselineTree -ne '25a20291b9cf84b1283804f451b33e3c4605507c' -or
+    $pclV2Profile.CandidateLineageBranch -ne 'refactor/playback-remove-release-gap' -or
+    $pclV2Profile.SafetyScenarios[-1] -ne 'short-up-gap-stress' -or
     $pclV2Profile.HarnessManifestSchemaVersion -ne 2 -or
     $pclV2Profile.AuthoredPrefixParityContract -ne 'timestamp-kind-scan-mask-v1') {
     throw 'PlaybackCoreLifecycleV2 changed the immutable v1 profile or failed to pin its strict PR-base identity and workload contract'
@@ -1709,13 +1713,21 @@ $pclCandidatePairRow = [pscustomobject]@{ report = $pclCandidateProjection; work
 [void](Assert-PlaybackCoreLifecyclePairedWorkloadParity -ControlRow $pclBaselinePairRow -CandidateRow $pclCandidatePairRow -SampleSeconds 1)
 if ($pclBaselinePairRow.authored_workload_measured_event_count -ne 2 -or
     $pclBaselinePairRow.authored_workload_tail_group_count -ne 1 -or
-    $pclBaselinePairRow.authored_workload_measured_prefix_sha256 -ne $pclCandidatePairRow.authored_workload_measured_prefix_sha256) {
-    throw 'PlaybackCoreLifecycleV2 did not compare the measured event prefix while isolating tail padding'
+    $pclBaselinePairRow.authored_workload_full_event_count -ne 3 -or
+    $pclBaselinePairRow.authored_workload_tail_event_count -ne 1 -or
+    $pclBaselinePairRow.authored_workload_measured_prefix_sha256 -ne $pclCandidatePairRow.authored_workload_measured_prefix_sha256 -or
+    $pclBaselinePairRow.authored_workload_full_stream_sha256 -ne $pclCandidatePairRow.authored_workload_full_stream_sha256) {
+    throw 'PlaybackCoreLifecycleV2 did not compare the full authored stream and retain its measured-prefix/tail evidence'
 }
 $pclCandidateProjection.details.authored_timestamp_group_targets[1].scheduled_us = 67168
 $pclMismatchRejected = $false
 try { [void](Assert-PlaybackCoreLifecyclePairedWorkloadParity -ControlRow $pclBaselinePairRow -CandidateRow $pclCandidatePairRow -SampleSeconds 1) } catch { $pclMismatchRejected = $true }
 if (-not $pclMismatchRejected) { throw 'PlaybackCoreLifecycleV2 accepted a mismatched authored timestamp/kind/scan-mask prefix' }
+$pclCandidateProjection.details.authored_timestamp_group_targets[1].scheduled_us = 67167
+$pclCandidateProjection.details.authored_timestamp_group_targets[2].scheduled_us = 1050001
+$pclTailMismatchRejected = $false
+try { [void](Assert-PlaybackCoreLifecyclePairedWorkloadParity -ControlRow $pclBaselinePairRow -CandidateRow $pclCandidatePairRow -SampleSeconds 1) } catch { $pclTailMismatchRejected = $true }
+if (-not $pclTailMismatchRejected) { throw 'PlaybackCoreLifecycleV2 accepted different authored tail padding after a matching measured prefix' }
 
 Import-Module (Join-Path $PSScriptRoot 'lib/playback_core_lifecycle_collector.psm1') -Force
 $pclValidSafetyIdentity = Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'stop-cleanup' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0
@@ -1727,6 +1739,12 @@ if ($pclValidSafetyIdentity.configured_H_us -ne 17167 -or $pclValidSafetyIdentit
 $pclInvalidCaseRejected = $false
 try { [void](Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'timing-margin-sweep' -Workload 'boundary-60fps-margin-0' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0) } catch { $pclInvalidCaseRejected = $true }
 if (-not $pclInvalidCaseRejected) { throw 'PlaybackCoreLifecycle accepted a case outside its exact profile matrix' }
+$pclV1ShortGapRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'short-up-gap-stress' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0) } catch { $pclV1ShortGapRejected = $true }
+if (-not $pclV1ShortGapRejected -or
+    (Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'short-up-gap-stress' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0 -ProfileVersion 2).scenario -ne 'short-up-gap-stress') {
+    throw 'PlaybackCoreLifecycleV2 did not isolate short-up-gap-stress to its candidate-only safety contract'
+}
 $pclRevision = '1111111111111111111111111111111111111111'
 $pclTree = '2222222222222222222222222222222222222222'
 $pclManifestHash = 'a' * 64
@@ -1830,6 +1848,11 @@ foreach ($pclV2Row in $pclV2Rows) {
         $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_event_count -NotePropertyValue 42 -Force
         $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_window_start_us -NotePropertyValue 50000 -Force
         $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_window_end_us -NotePropertyValue 15050000 -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_full_stream_sha256 -NotePropertyValue ('f' * 64) -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_full_event_count -NotePropertyValue 100 -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_tail_sha256 -NotePropertyValue ('a' * 64) -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_tail_event_count -NotePropertyValue 58 -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_tail_group_count -NotePropertyValue 27 -Force
     }
 }
 $pclSingleCellRows = @($pclRows | Where-Object { $_.cell_id -eq 'mixed-up-down/Quiet' -or $_.sequence_index -eq 0 })
@@ -1882,15 +1905,20 @@ if ($pclV2Report.qualification_profile -ne 'PlaybackCoreLifecycleV2' -or
     throw 'PlaybackCoreLifecycleV2 collector did not retain profile identity and authored-stream parity evidence'
 }
 $pclSafetyScenarios = @('focus-loss', 'owner-mismatch', 'owner-process-termination', 'pause-resume', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry')
+$pclV2SafetyScenarios = $pclSafetyScenarios + @('short-up-gap-stress')
 $pclPerformanceWorkloads = @('mixed-up-down', 'dense-alternating', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
 $pclV1StageSummary = Get-PlaybackCoreLifecycleStageSummary -Stage Final -TimingMarginUs 500 -Pairs 6 -SampleSeconds 15 `
     -SafetyScenarios $pclSafetyScenarios -PerformanceWorkloads $pclPerformanceWorkloads -LoadCells @('Quiet', 'Contention')
 $pclV2StageSummary = Get-PlaybackCoreLifecycleStageSummary -Stage Final -TimingMarginUs 500 -Pairs 6 -SampleSeconds 15 `
-    -SafetyScenarios $pclSafetyScenarios -PerformanceWorkloads $pclPerformanceWorkloads -LoadCells @('Quiet', 'Contention') -ProfileVersion 2
+    -SafetyScenarios $pclV2SafetyScenarios -PerformanceWorkloads $pclPerformanceWorkloads -LoadCells @('Quiet', 'Contention') -ProfileVersion 2
 if ($pclV1StageSummary.Contains('authored_prefix_parity_contract') -or
+    $pclV1StageSummary.candidate_session_count -ne 68 -or
     $pclV2StageSummary.authored_prefix_parity_contract -ne 'timestamp-kind-scan-mask-v1' -or
-    $pclV2StageSummary.authored_prefix_measured_window_seconds -ne 15) {
-    throw 'PlaybackCoreLifecycleV2 changed the v1 report contract or omitted its measured authored-prefix window'
+    $pclV2StageSummary.authored_prefix_measured_window_seconds -ne 15 -or
+    $pclV2StageSummary.candidate_session_count -ne 69 -or
+    $pclV2StageSummary.planned_session_count -ne 129 -or
+    $pclV2StageSummary.scenarios -notcontains 'short-up-gap-stress') {
+    throw 'PlaybackCoreLifecycleV2 changed the v1 report contract or omitted its candidate-only short-gap session and full paired-session plan'
 }
 foreach ($controlRow in @($pclRows | Where-Object { $_.role -eq 'control' })) {
     if ($null -ne $controlRow.lifecycle_measurement) {
