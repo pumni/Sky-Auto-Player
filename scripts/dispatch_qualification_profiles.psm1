@@ -47,6 +47,7 @@ function Get-DispatchSessionRedesignM3Profile {
 }
 
 function Get-PlaybackCoreLifecycleProfile {
+    param([ValidateSet(1, 2)] [int]$Version = 1)
     $performanceWorkloads = @(
         'mixed-up-down',
         'dense-alternating',
@@ -65,11 +66,13 @@ function Get-PlaybackCoreLifecycleProfile {
         'supervisor-lease-expiry'
     )
     [pscustomobject]@{
-        Name = 'PlaybackCoreLifecycle'
-        WorkloadVersion = 'playback-core-lifecycle-v1'
-        HarnessManifestSchemaVersion = 1
-        BaselineRevision = '2544daa13eb23fdf03bd922e65b96fcffaba421c'
-        BaselineTree = '155882714df131ddc9b9985133a1f0611736b7cd'
+        Version = $Version
+        Name = if ($Version -eq 1) { 'PlaybackCoreLifecycle' } else { 'PlaybackCoreLifecycleV2' }
+        WorkloadVersion = if ($Version -eq 1) { 'playback-core-lifecycle-v1' } else { 'playback-core-lifecycle-v2' }
+        HarnessManifestSchemaVersion = $Version
+        BaselineRevision = if ($Version -eq 1) { '2544daa13eb23fdf03bd922e65b96fcffaba421c' } else { '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' }
+        BaselineTree = if ($Version -eq 1) { '155882714df131ddc9b9985133a1f0611736b7cd' } else { '25a20291b9cf84b1283804f451b33e3c4605507c' }
+        AuthoredPrefixParityContract = if ($Version -eq 2) { 'timestamp-kind-scan-mask-v1' } else { $null }
         CandidateLineageBranch = 'refactor/playback-remove-release-gap'
         Target = 'x86_64-pc-windows-msvc'
         CargoProfile = 'dist'
@@ -121,6 +124,12 @@ function Get-PlaybackCoreLifecycleProfile {
             'docs/playback-verification.md'
         )
     }
+}
+
+function Get-PlaybackCoreLifecycleProfileForName {
+    param([Parameter(Mandatory)] [ValidateSet('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')] [string]$Name)
+    $version = if ($Name -eq 'PlaybackCoreLifecycleV2') { 2 } else { 1 }
+    Get-PlaybackCoreLifecycleProfile -Version $version
 }
 
 function Get-DispatchCleanupM3Profile {
@@ -317,8 +326,8 @@ function Assert-DispatchSessionRedesignM3SourceCheckout {
 }
 
 function Get-PlaybackCoreLifecycleRunnerIdentity {
-    param([Parameter(Mandatory)] [string]$RunnerRoot)
-    $profile = Get-PlaybackCoreLifecycleProfile
+    param([Parameter(Mandatory)] [string]$RunnerRoot, [ValidateSet(1, 2)] [int]$ProfileVersion = 1)
+    $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
     $identity = Get-DispatchM3GitCheckoutIdentity $RunnerRoot
     if (-not $identity.clean -or $identity.checkout.top_level -ne $identity.root -or
         $identity.branch -ne $profile.CandidateLineageBranch) {
@@ -352,11 +361,12 @@ function Assert-PlaybackCoreLifecycleSourceCheckout {
     param(
         [Parameter(Mandatory)] [string]$SourceRoot,
         [Parameter(Mandatory)] [ValidateSet('Baseline', 'Candidate')] [string]$SourceRole,
-        [Parameter(Mandatory)] [string]$RunnerRoot
+        [Parameter(Mandatory)] [string]$RunnerRoot,
+        [ValidateSet(1, 2)] [int]$ProfileVersion = 1
     )
-    $profile = Get-PlaybackCoreLifecycleProfile
+    $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
     $identity = Get-DispatchM3GitCheckoutIdentity $SourceRoot
-    $runnerIdentity = Get-PlaybackCoreLifecycleRunnerIdentity -RunnerRoot $RunnerRoot
+    $runnerIdentity = Get-PlaybackCoreLifecycleRunnerIdentity -RunnerRoot $RunnerRoot -ProfileVersion $ProfileVersion
     $expectedRevision = if ($SourceRole -eq 'Baseline') { $profile.BaselineRevision } else { $runnerIdentity.revision }
     $expectedTree = if ($SourceRole -eq 'Baseline') { $profile.BaselineTree } else { $runnerIdentity.tree }
     $expectedBranch = if ($SourceRole -eq 'Baseline') { '' } else { $profile.CandidateLineageBranch }
@@ -373,4 +383,4 @@ function Assert-PlaybackCoreLifecycleSourceCheckout {
     $identity
 }
 
-Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout
+Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-PlaybackCoreLifecycleProfileForName, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout

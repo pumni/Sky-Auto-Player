@@ -333,10 +333,14 @@ fn simulate_dispatch_schedule(
         return Err("the prepared generation schedule and executor exceed the offline advisory memory budget".into());
     }
     let epoch = sky_player::adapter_support::QpcTicks::ZERO;
+    // Every generation can produce a Down and a paired Up. Each physical send
+    // can be preceded by one advancing Wait, and the final executor check can
+    // return Finished. Bound work by that event topology rather than a small
+    // fixed allowance that makes sparse schedules appear unavailable.
     let max_iterations = usize::try_from(schedule.generation_count)
         .ok()
-        .and_then(|count| count.checked_mul(2))
-        .and_then(|count| count.checked_add(16))
+        .and_then(|count| count.checked_mul(4))
+        .and_then(|count| count.checked_add(1))
         .ok_or_else(|| "executor simulation iteration bound overflow".to_string())?;
     let mut summary = DispatchSimulationSummary::default();
     let mut now = epoch;
@@ -653,6 +657,35 @@ mod tests {
         );
         assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
         assert_eq!(advisory.short_up_gap_repeat_count, 0);
+    }
+
+    #[test]
+    fn sparse_nine_note_schedule_finishes_the_bounded_executor_model() {
+        let config = config(false);
+        let policy = policy(&config);
+        let mut actions = Vec::with_capacity(18);
+        for note in 1..=9_u64 {
+            let down_us = note * 100_000;
+            actions.push((ActionKind::Down, down_us, 0x15));
+            actions.push((ActionKind::Up, down_us + policy.min_hold_us, 0x15));
+        }
+        let authored = schedule(&actions);
+
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "sparse-nine-note-plan",
+            &AtomicBool::new(false),
+        );
+
+        assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
+        assert_eq!(advisory.down_generation_count, Some(9));
+        assert_eq!(advisory.modeled_send_count, 18);
+        assert_ne!(
+            advisory.dispatch_model_status,
+            DispatchModelStatus::Unavailable
+        );
     }
 
     #[test]

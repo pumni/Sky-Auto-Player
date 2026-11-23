@@ -196,6 +196,7 @@ pub(super) fn scenario_plan_for_settings(
             }
             Scenario::NearMinimumRetrigger => {
                 let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
+                let gap_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
                 let mut actions = Vec::with_capacity(8);
                 let mut down_slots = Vec::with_capacity(4);
                 let mut up_slots = Vec::with_capacity(4);
@@ -210,7 +211,7 @@ pub(super) fn scenario_plan_for_settings(
                     ));
                     down_slots.push(0);
                     up_slots.push(0);
-                    timestamp_us += hold_us;
+                    timestamp_us += hold_us + gap_us;
                 }
                 (actions, None, down_slots, up_slots, false)
             }
@@ -488,7 +489,7 @@ pub(super) fn scenario_plan_for_settings(
         } else if scenario == Scenario::HolInterleaved {
             31_000
         } else {
-            frame_period_us(game_fps)
+            acceptance_min_hold_us_for_fps(timing_margin_us, game_fps)
         };
         let cycle_duration_us = last_scheduled_us
             .checked_sub(first_scheduled_us)

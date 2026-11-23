@@ -53,11 +53,13 @@ the website package:
     bun run test:unit
     Pop-Location
 
-## PlaybackCoreLifecycle qualification profile
+## PlaybackCoreLifecycle qualification profiles
 
 The checked-in **PlaybackCoreLifecycle** profile in
 [scripts/dispatch_qualification_profiles.psm1](../scripts/dispatch_qualification_profiles.psm1)
-is the sole current profile for this lifecycle refactor.
+is the immutable v1 historical record. It is retained with its original
+baseline and workload identity; its lockfile differs from the candidate and
+its old paired measurements must not be described as a source-only delta.
 
 - Baseline source:
   **2544daa13eb23fdf03bd922e65b96fcffaba421c**, tree
@@ -73,7 +75,7 @@ is the sole current profile for this lifecycle refactor.
   Keep build outputs, manifests, and qualification evidence outside the
   checkout.
 
-The profile preserves six alternating AB/BA pairs, each with 15-second samples,
+The v1 profile preserves six alternating AB/BA pairs, each with 15-second samples,
 under Quiet and Contention. Workloads are **mixed-up-down**,
 **dense-alternating**, **canonical-max-chord**, **near-minimum-retrigger**, and
 **long-idle**. Performance statistics are p50, p95, p99, and max. Record
@@ -118,6 +120,44 @@ misidentified receiver, including any target marked as a game. Do not run this
 command as part of routine source verification.
 
     pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -Stage Final -QualificationProfile PlaybackCoreLifecycle -CandidateManifest <candidate-manifest> -ControlManifest <baseline-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 -OwnerApprovedReceiveOnlyRun -OutputRoot <evidence-root>
+
+### PlaybackCoreLifecycleV2: strict same-lock qualification
+
+Use **PlaybackCoreLifecycleV2** for current A/B qualification. It preserves v1
+and pins the baseline to the clean PR-base commit **1d00c3b71fbf1f94003865bad6c4eba6d8dcd902**,
+tree **25a20291b9cf84b1283804f451b33e3c4605507c**. Candidate and baseline
+must have identical Cargo.lock bytes and hash; the runner checks both manifests
+against the exact clean source trees and pushed candidate HEAD. Rust/Cargo,
+MSVC target, profile, features, observer, loads, pair order, and sample duration
+remain the same as v1.
+
+The v2 paired workload contract also checks the authored stream itself. The
+candidate harness restores the baseline's H+G Down cadence for
+**near-minimum-retrigger** and its H cycle padding in the paired workload
+generator. `short-up-gap-stress` stays candidate-only. For every paired run,
+the runner normalizes the baseline's `authored_packet_targets` and the
+candidate's `authored_timestamp_group_targets` into `(timestamp_us, kind,
+scan-mask)` events and requires equal hashes across the measured 15-second
+prefix. Any groups after that prefix are counted as tail padding outside the
+comparison window. A mismatch stops the paired run before those measurements
+can be reported as comparable.
+
+Build exact v2 manifests from detached, clean source trees. Keep outputs outside
+the checkouts and rebuild the candidate manifest after every source or runner
+change:
+
+    pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 -QualificationProfile PlaybackCoreLifecycleV2 -SourceRole Baseline -SourceRoot <baseline-worktree-at-1d00c3b> -OutputRoot <baseline-output>
+    pwsh -NoProfile -File scripts/build_dispatch_core_harness.ps1 -QualificationProfile PlaybackCoreLifecycleV2 -SourceRole Candidate -SourceRoot <candidate-worktree-at-pushed-head> -OutputRoot <candidate-output>
+
+Check the profile contracts and validate the plan without starting a native
+case:
+
+    pwsh -NoProfile -File scripts/test_qualify_dispatch_core_contracts.ps1
+    pwsh -NoProfile -File scripts/qualify_dispatch_core.ps1 -Stage Final -QualificationProfile PlaybackCoreLifecycleV2 -CandidateManifest <candidate-manifest> -ControlManifest <baseline-manifest> -Pairs 6 -SampleSeconds 15 -TimingMarginUs 500 -PlanOnly -OutputRoot <evidence-root>
+
+`PlanOnly` verifies identity, same-lock and the v2 workload contract. It does
+not execute the sink or send input. The runnable native protocol and
+**-OwnerApprovedReceiveOnlyRun** approval requirements above also apply to v2.
 
 After an authorized run, **lifecycle-metrics.json** records candidate source,
 tree, manifest and binary hashes with machine/boot and receiver identity.

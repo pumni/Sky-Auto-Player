@@ -338,7 +338,8 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
         [string]$RepositoryRoot
     )
 
-    $profile = Get-PlaybackCoreLifecycleProfile
+    $profileName = [string](Get-ManifestProperty $Manifest 'qualification_profile')
+    $profile = Get-PlaybackCoreLifecycleProfileForName -Name $profileName
     $sourceRevision = [string](Get-ManifestProperty $Manifest 'source_revision')
     $sourceTree = [string](Get-ManifestProperty $Manifest 'source_tree_sha')
     $candidateRevision = [string](Get-ManifestProperty $Manifest 'candidate_source_revision')
@@ -674,7 +675,7 @@ function Assert-ImmutableHarnessManifestIntegrity {
             }
         }
     }
-    if ((Get-ManifestProperty $Manifest 'qualification_profile') -eq 'PlaybackCoreLifecycle') {
+    if ((Get-ManifestProperty $Manifest 'qualification_profile') -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')) {
         Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $Manifest -ExpectedRole ([string](Get-ManifestProperty $Manifest 'source_role')) | Out-Null
         $manifestOutputRoot = [System.IO.Path]::GetFullPath([string](Get-ManifestProperty $Manifest 'output_root'))
         if (-not [string]::Equals($manifestOutputRoot, [System.IO.Path]::GetDirectoryName($manifestFullPath), [System.StringComparison]::OrdinalIgnoreCase)) {

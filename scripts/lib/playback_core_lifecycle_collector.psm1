@@ -96,10 +96,11 @@ function New-PlaybackCoreLifecycleMeasurementReport {
         [Parameter(Mandatory)] [ValidatePattern('^[0-9a-f]{64}$')] [string]$CandidateManifestSha256,
         [Parameter(Mandatory)] [ValidatePattern('^[0-9a-f]{64}$')] [string]$CandidateBinarySha256,
         [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string]$RunnerMachineName,
-        [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string]$RunnerOsBootTimeUtc
+        [Parameter(Mandatory)] [ValidateNotNullOrEmpty()] [string]$RunnerOsBootTimeUtc,
+        [ValidateSet(1, 2)] [int]$ProfileVersion = 1
     )
 
-    $profile = Get-PlaybackCoreLifecycleProfile
+    $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
     if ($profile.PairOrder -ne 'AB/BA alternating' -or $profile.PairCount -ne 6) {
         throw 'PlaybackCoreLifecycle Start coverage expects the frozen six-pair alternating AB/BA order'
     }
@@ -119,7 +120,7 @@ function New-PlaybackCoreLifecycleMeasurementReport {
     }
 
     if ($RunRows.Count -eq 0) {
-        return [ordered]@{
+        $emptyReport = [ordered]@{
             schema_version = 2
             status = 'INCOMPLETE'
             source_identity = [ordered]@{ revision = $CandidateRevision; tree = $CandidateTree; manifest_sha256 = $CandidateManifestSha256; binary_sha256 = $CandidateBinarySha256 }
@@ -148,11 +149,32 @@ function New-PlaybackCoreLifecycleMeasurementReport {
             raw_up_syscall_count = [ordered]@{ status = 'INCOMPLETE'; sample_count = 0; p50 = $null; p95 = $null; p99 = $null; max = $null; samples = @() }
             incompleteness = @('no qualification rows were supplied')
         }
+        if ($ProfileVersion -eq 2) {
+            $emptyReport['qualification_profile'] = $profile.Name
+            $emptyReport['workload_version'] = $profile.WorkloadVersion
+            $emptyReport['authored_prefix_parity_contract'] = $profile.AuthoredPrefixParityContract
+        }
+        return $emptyReport
     }
 
     $orderedRows = @($RunRows | Sort-Object { [int](Get-PclCollectorProperty $_ 'sequence_index') })
     $candidateRows = @($orderedRows | Where-Object { (Get-PclCollectorProperty $_ 'role') -eq 'candidate' })
     $controlRows = @($orderedRows | Where-Object { (Get-PclCollectorProperty $_ 'role') -eq 'control' })
+    if ($ProfileVersion -eq 2) {
+        foreach ($pair in @($orderedRows | Where-Object { [int](Get-PclCollectorProperty $_ 'sample_seconds') -eq 15 } | Group-Object { [string](Get-PclCollectorProperty $_ 'pair_id') })) {
+            $pairRows = @($pair.Group)
+            $baselinePrefix = @($pairRows | Where-Object { (Get-PclCollectorProperty $_ 'role') -eq 'control' })
+            $candidatePrefix = @($pairRows | Where-Object { (Get-PclCollectorProperty $_ 'role') -eq 'candidate' })
+            if ($pairRows.Count -ne 2 -or $baselinePrefix.Count -ne 1 -or $candidatePrefix.Count -ne 1 -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_measured_prefix_sha256') -notmatch '^[0-9a-f]{64}$' -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_measured_prefix_sha256') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_measured_prefix_sha256') -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_measured_event_count') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_measured_event_count') -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_measured_window_start_us') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_measured_window_start_us') -or
+                (Get-PclCollectorProperty $baselinePrefix[0] 'authored_workload_measured_window_end_us') -ne (Get-PclCollectorProperty $candidatePrefix[0] 'authored_workload_measured_window_end_us')) {
+                throw ('PlaybackCoreLifecycleV2 pair lacks identical authored timestamp/kind/scan-mask prefix coverage: ' + $pair.Name)
+            }
+        }
+    }
     $allTargets = @{}
     $seenRunIds = @{}
     foreach ($row in $orderedRows) {
@@ -466,7 +488,7 @@ function New-PlaybackCoreLifecycleMeasurementReport {
     $joinedSummary = Get-PclNearestRankSummary $joinedValues
     $rawUpSummary = Get-PclNearestRankSummary $rawUpValues
     $launchDiagnosticSummary = Get-PclNearestRankSummary $launchDiagnosticValues
-    [ordered]@{
+    $measurementReport = [ordered]@{
         schema_version = 2
         status = if ($incompleteness.Count -eq 0) { 'COMPLETE' } else { 'INCOMPLETE' }
         source_identity = [ordered]@{ revision = $CandidateRevision; tree = $CandidateTree; manifest_sha256 = $CandidateManifestSha256; binary_sha256 = $CandidateBinarySha256 }
@@ -515,6 +537,12 @@ function New-PlaybackCoreLifecycleMeasurementReport {
         raw_up_syscall_count = [ordered]@{ status = if ($rawUpSamples.Count -gt 0 -and -not $rawUpMetricIncomplete) { 'COMPLETE' } else { 'INCOMPLETE' }; measurement = 'sum of worker TerminalSendAttemptEvidence.raw_calls for candidate stop-cleanup runs; ReleaseAllOutcome.attempts is not used'; statistics = $rawUpSummary; samples = $rawUpSamples.ToArray() }
         incompleteness = $incompleteness.ToArray()
     }
+    if ($ProfileVersion -eq 2) {
+        $measurementReport['qualification_profile'] = $profile.Name
+        $measurementReport['workload_version'] = $profile.WorkloadVersion
+        $measurementReport['authored_prefix_parity_contract'] = $profile.AuthoredPrefixParityContract
+    }
+    $measurementReport
 }
 
 Export-ModuleMember -Function New-PlaybackCoreLifecycleMeasurementReport

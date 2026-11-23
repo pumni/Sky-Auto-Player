@@ -72,6 +72,37 @@ fn timed_sample_plan_repeats_each_benchmark_workload_over_15_seconds() {
 }
 
 #[test]
+fn paired_near_minimum_workload_keeps_h_plus_gap_geometry_and_sample_cadence() {
+    let hold_us = super::super::scenarios::acceptance_min_hold_us_for_fps(500, 60);
+    let base = scenario_plan(Scenario::NearMinimumRetrigger, 500).unwrap();
+    let repeated = super::super::scenarios::scenario_plan_with_sample_seconds(
+        Scenario::NearMinimumRetrigger,
+        500,
+        Some(15),
+    )
+    .unwrap();
+    let base_downs = &base.schedule.down_chords;
+    let repeated_downs = &repeated.schedule.down_chords;
+
+    assert_eq!(base_downs.len(), 4);
+    assert_eq!(repeated_downs.len() % base_downs.len(), 0);
+    assert_eq!(base_downs[1].scheduled_us - base_downs[0].scheduled_us, hold_us * 2);
+    let first_cycle_span = base_downs
+        .last()
+        .expect("the base workload has a final generation")
+        .intents
+        .last()
+        .expect("the final generation has a paired Up")
+        .paired_up_offset_us
+        + hold_us
+        - base_downs[0].scheduled_us;
+    assert_eq!(
+        repeated_downs[base_downs.len()].scheduled_us - repeated_downs[0].scheduled_us,
+        first_cycle_span
+    );
+}
+
+#[test]
 fn timing_observer_is_opt_in_for_qualification_runs_only() {
     let mut args = base_arguments("canonical-single");
     args.push("--timing-observer-for-qualification".to_string());

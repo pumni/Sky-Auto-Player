@@ -90,6 +90,69 @@ describe('PlaybackAdmission recovery actions', () => {
     expect(screen.queryByRole('group', { name: 'Playback confirmation' })).toBeNull();
   });
 
+  it('keeps an independent timing recommendation available for its separate risk reason', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 0);
+    if (!row) throw new Error('mock Library is empty');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    const prepared = store.getState().playback.prepared;
+    if (!prepared) throw new Error('expected a prepared playback');
+
+    const proceedVariant = prepared.variants.find((variant) => variant.decision === 'proceed');
+    if (!proceedVariant) throw new Error('expected a Proceed plan variant');
+    const timingAdvisory = proceedVariant.timing_advisory;
+    if (!timingAdvisory) throw new Error('expected a Proceed timing advisory');
+    const independentRiskVariant = {
+      ...proceedVariant,
+      timing_advisory: {
+        ...timingAdvisory,
+        status: 'no_short_up_gap_risk' as const,
+        explanation:
+          'No feasible same-key repeat has an authored Up-to-Down gap shorter than one frame.',
+        short_up_gap_repeat_count: 0,
+      },
+    };
+    store.setState((state) => ({
+      ...state,
+      playback: {
+        ...state.playback,
+        prepared: {
+          ...prepared,
+          risk: {
+            ...prepared.risk,
+            reasons: ['Dense transitions may need a slower tempo.'],
+            recommendations: ['Try 0.9× tempo.'],
+            short_up_gap_repeat_count: 0,
+          },
+          decisions: [
+            { decision: 'proceed', label: 'Proceed with current settings' },
+            { decision: 'use_recommended', label: 'Use recommended settings' },
+          ],
+          variants: [
+            independentRiskVariant,
+            {
+              ...independentRiskVariant,
+              decision: 'use_recommended',
+              plan_fingerprint: 'mock-recommended',
+            },
+          ],
+        },
+      },
+    }));
+
+    render(<PlaybackAdmission useStore={store} />);
+    expect(screen.getByText('Dense transitions may need a slower tempo.')).toBeVisible();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Use recommended settings' })).toHaveFocus(),
+    );
+    expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toBeEnabled();
+    expect(
+      screen.queryByRole('button', { name: 'Test playback (no input)' }),
+    ).not.toBeInTheDocument();
+  });
+
   it('keeps ready-plan timing data without flashing an advisory before Play', async () => {
     const store = createDesktopStore(
       createMockBridge({ readyPlanAdvisoryStatus: 'no_short_up_gap_risk' }),

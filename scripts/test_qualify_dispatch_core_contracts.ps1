@@ -465,7 +465,7 @@ try { Assert-FrameSnapshotManifestIdentity -Manifest $wrongFramePinnedHash -Expe
 if (-not $wrongFrameHashRejected) { throw 'FrameSnapshot accepted a baseline source tree hash other than the pinned tree' }
 
 $frameBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
-$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle'\)"
+$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2'\)"
 if ($frameBuilderSource -notmatch $m3ProfileSet -or
     $acceptanceSource -notmatch $m3ProfileSet) {
     throw 'FrameSnapshot profile is missing from an immutable build or case-runner boundary'
@@ -1633,8 +1633,9 @@ $playbackCoreBaselineNativeSource = (& git -C $playbackCoreRepoRoot show '2544da
 if ($LASTEXITCODE -ne 0) { throw 'could not read the frozen PlaybackCoreLifecycle baseline native acceptance source' }
 $playbackCoreWorkerBootSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\boot.rs') -Raw
 $playbackCoreWorkerFinalizeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\cleanup\finalize.rs') -Raw
-if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -or
-    -not $playbackCoreProfileSource.Contains("BaselineRevision = '2544daa13eb23fdf03bd922e65b96fcffaba421c'") -or
+if (-not $playbackCoreProfileSource.Contains("Name = if (`$Version -eq 1) { 'PlaybackCoreLifecycle' } else { 'PlaybackCoreLifecycleV2' }") -or
+    -not $playbackCoreProfileSource.Contains("BaselineRevision = if (`$Version -eq 1) { '2544daa13eb23fdf03bd922e65b96fcffaba421c' } else { '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' }") -or
+    -not $playbackCoreProfileSource.Contains("BaselineTree = if (`$Version -eq 1) { '155882714df131ddc9b9985133a1f0611736b7cd' } else { '25a20291b9cf84b1283804f451b33e3c4605507c' }") -or
     -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = 'refactor/playback-remove-release-gap'") -or
     -not $playbackCoreProfileSource.Contains("'near-minimum-retrigger'") -or
     -not $playbackCoreBuilderSource.Contains('Assert-PlaybackCoreLifecycleSourceCheckout') -or
@@ -1652,6 +1653,8 @@ if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -
     -not $playbackCoreRunnerSource.Contains('repository owner explicitly approves this Windows machine, target receiver, and physical input scope') -or
     -not $playbackCoreProfileSource.Contains("target_class = 'project-owned-non-game-receive-only'") -or
     -not $playbackCoreRunnerSource.Contains('New-PlaybackCoreLifecycleMeasurementReport') -or
+    -not $playbackCoreRunnerSource.Contains('PlaybackCoreLifecycleV2') -or
+    -not $playbackCoreRunnerSource.Contains('Assert-PlaybackCoreLifecyclePairedWorkloadParity') -or
     -not $playbackCoreRunnerSource.Contains("'lifecycle-metrics.json'") -or
     -not $playbackCoreProfileSource.Contains("'scripts/lib/playback_core_lifecycle_collector.psm1'") -or
     -not $playbackCoreCollectorSource.Contains('project-owned-non-game-receive-only') -or
@@ -1677,6 +1680,42 @@ if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -
     -not $playbackCoreCaseRunnerSource.Contains('requires -OwnerApprovedReceiveOnlyRun')) {
     throw 'PlaybackCoreLifecycle exact-source provenance, worker event boundaries, actual raw-call evidence, or no-send dry-run boundary is incomplete'
 }
+
+$pclV1Profile = Get-PlaybackCoreLifecycleProfile
+$pclV2Profile = Get-PlaybackCoreLifecycleProfile -Version 2
+if ($pclV1Profile.Name -ne 'PlaybackCoreLifecycle' -or
+    $pclV1Profile.BaselineRevision -ne '2544daa13eb23fdf03bd922e65b96fcffaba421c' -or
+    $pclV2Profile.Name -ne 'PlaybackCoreLifecycleV2' -or
+    $pclV2Profile.WorkloadVersion -ne 'playback-core-lifecycle-v2' -or
+    $pclV2Profile.BaselineRevision -ne '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' -or
+    $pclV2Profile.BaselineTree -ne '25a20291b9cf84b1283804f451b33e3c4605507c' -or
+    $pclV2Profile.HarnessManifestSchemaVersion -ne 2 -or
+    $pclV2Profile.AuthoredPrefixParityContract -ne 'timestamp-kind-scan-mask-v1') {
+    throw 'PlaybackCoreLifecycleV2 changed the immutable v1 profile or failed to pin its strict PR-base identity and workload contract'
+}
+
+$pclBaselineProjection = [pscustomobject]@{ details = [pscustomobject]@{ authored_packet_targets = @(
+    [pscustomobject]@{ scheduled_us = 50000; up_mask = 0; down_mask = 1 },
+    [pscustomobject]@{ scheduled_us = 67167; up_mask = 1; down_mask = 0 },
+    [pscustomobject]@{ scheduled_us = 1050000; up_mask = 0; down_mask = 1 }
+) } }
+$pclCandidateProjection = [pscustomobject]@{ details = [pscustomobject]@{ authored_timestamp_group_targets = @(
+    [pscustomobject]@{ scheduled_us = 50000; up_mask = 0; down_mask = 1 },
+    [pscustomobject]@{ scheduled_us = 67167; up_mask = 1; down_mask = 0 },
+    [pscustomobject]@{ scheduled_us = 1050000; up_mask = 0; down_mask = 1 }
+) } }
+$pclBaselinePairRow = [pscustomobject]@{ report = $pclBaselineProjection; workload = 'near-minimum-retrigger'; load = 'Quiet'; pair_id = 'near-minimum-retrigger/Quiet/01' }
+$pclCandidatePairRow = [pscustomobject]@{ report = $pclCandidateProjection; workload = 'near-minimum-retrigger'; load = 'Quiet'; pair_id = 'near-minimum-retrigger/Quiet/01' }
+[void](Assert-PlaybackCoreLifecyclePairedWorkloadParity -ControlRow $pclBaselinePairRow -CandidateRow $pclCandidatePairRow -SampleSeconds 1)
+if ($pclBaselinePairRow.authored_workload_measured_event_count -ne 2 -or
+    $pclBaselinePairRow.authored_workload_tail_group_count -ne 1 -or
+    $pclBaselinePairRow.authored_workload_measured_prefix_sha256 -ne $pclCandidatePairRow.authored_workload_measured_prefix_sha256) {
+    throw 'PlaybackCoreLifecycleV2 did not compare the measured event prefix while isolating tail padding'
+}
+$pclCandidateProjection.details.authored_timestamp_group_targets[1].scheduled_us = 67168
+$pclMismatchRejected = $false
+try { [void](Assert-PlaybackCoreLifecyclePairedWorkloadParity -ControlRow $pclBaselinePairRow -CandidateRow $pclCandidatePairRow -SampleSeconds 1) } catch { $pclMismatchRejected = $true }
+if (-not $pclMismatchRejected) { throw 'PlaybackCoreLifecycleV2 accepted a mismatched authored timestamp/kind/scan-mask prefix' }
 
 Import-Module (Join-Path $PSScriptRoot 'lib/playback_core_lifecycle_collector.psm1') -Force
 $pclValidSafetyIdentity = Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'stop-cleanup' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0
@@ -1780,6 +1819,19 @@ foreach ($workload in $pclProfile.PerformanceWorkloads) {
     }
 }
 $pclRows = $pclRowsList.ToArray()
+$pclV2Rows = @(Copy-PclTestRows $pclRows)
+foreach ($pclV2Row in $pclV2Rows) {
+    if ($pclV2Row.role -eq 'control') {
+        $pclV2Row.source_revision = $pclV2Profile.BaselineRevision
+        $pclV2Row.source_tree_sha = $pclV2Profile.BaselineTree
+    }
+    if ($pclV2Row.sample_seconds -eq 15) {
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_prefix_sha256 -NotePropertyValue ('e' * 64) -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_event_count -NotePropertyValue 42 -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_window_start_us -NotePropertyValue 50000 -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_window_end_us -NotePropertyValue 15050000 -Force
+    }
+}
 $pclSingleCellRows = @($pclRows | Where-Object { $_.cell_id -eq 'mixed-up-down/Quiet' -or $_.sequence_index -eq 0 })
 $pclSingleCellRoleOrder = @($pclSingleCellRows | Where-Object { $_.sample_seconds -eq 15 } | ForEach-Object { $_.role }) -join ','
 if ($pclSingleCellRoleOrder -ne 'control,candidate,candidate,control,control,candidate,candidate,control,control,candidate,candidate,control') {
@@ -1818,8 +1870,27 @@ if ($pclReport.status -ne 'INCOMPLETE' -or
     $pclReport.worker_joined_to_runner_pre_next_process_launch_us.status -ne 'DIAGNOSTIC_ONLY' -or
     $pclReport.worker_joined_to_runner_pre_next_process_launch_us.statistics.sample_count -ne 60 -or
     $pclReport.raw_up_syscall_count.statistics.p50 -ne 2 -or
-    $pclReport.source_identity.manifest_sha256 -ne $pclManifestHash) {
+    $pclReport.source_identity.manifest_sha256 -ne $pclManifestHash -or
+    $pclReport.Contains('qualification_profile') -or
+    $pclReport.Contains('authored_prefix_parity_contract')) {
     throw 'PlaybackCoreLifecycle full six-pair role-order fixture did not preserve incomplete baseline coverage and real candidate Armed evidence'
+}
+$pclV2Report = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclV2Rows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc -ProfileVersion 2
+if ($pclV2Report.qualification_profile -ne 'PlaybackCoreLifecycleV2' -or
+    $pclV2Report.workload_version -ne 'playback-core-lifecycle-v2' -or
+    $pclV2Report.authored_prefix_parity_contract -ne 'timestamp-kind-scan-mask-v1') {
+    throw 'PlaybackCoreLifecycleV2 collector did not retain profile identity and authored-stream parity evidence'
+}
+$pclSafetyScenarios = @('focus-loss', 'owner-mismatch', 'owner-process-termination', 'pause-resume', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry')
+$pclPerformanceWorkloads = @('mixed-up-down', 'dense-alternating', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
+$pclV1StageSummary = Get-PlaybackCoreLifecycleStageSummary -Stage Final -TimingMarginUs 500 -Pairs 6 -SampleSeconds 15 `
+    -SafetyScenarios $pclSafetyScenarios -PerformanceWorkloads $pclPerformanceWorkloads -LoadCells @('Quiet', 'Contention')
+$pclV2StageSummary = Get-PlaybackCoreLifecycleStageSummary -Stage Final -TimingMarginUs 500 -Pairs 6 -SampleSeconds 15 `
+    -SafetyScenarios $pclSafetyScenarios -PerformanceWorkloads $pclPerformanceWorkloads -LoadCells @('Quiet', 'Contention') -ProfileVersion 2
+if ($pclV1StageSummary.Contains('authored_prefix_parity_contract') -or
+    $pclV2StageSummary.authored_prefix_parity_contract -ne 'timestamp-kind-scan-mask-v1' -or
+    $pclV2StageSummary.authored_prefix_measured_window_seconds -ne 15) {
+    throw 'PlaybackCoreLifecycleV2 changed the v1 report contract or omitted its measured authored-prefix window'
 }
 foreach ($controlRow in @($pclRows | Where-Object { $_.role -eq 'control' })) {
     if ($null -ne $controlRow.lifecycle_measurement) {

@@ -13,3 +13,4 @@ Cargo.toml text eol=lf
 docs/evidence/issue-661-m2/dispatch-lifecycle-report.json text eol=crlf
 # Historical byte-identical song fixtures must not gain CRLF on Windows checkouts.
 tests/fixtures/song_planning/historical_sources/*.json text eol=lf
+tests/fixtures/song_planning/legacy_schedule_fingerprints.json text eol=lf
