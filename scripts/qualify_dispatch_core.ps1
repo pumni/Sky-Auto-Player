@@ -33,6 +33,7 @@ $root = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
 $isSessionRedesignProfile = $QualificationProfile -eq 'DispatchSessionRedesignM3'
 $isPlaybackCoreLifecycle = $QualificationProfile -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')
+$qualificationReportSchemaVersion = Get-QualificationReportSchemaVersion -Profile $QualificationProfile
 $usesSessionQualificationContracts = $isDispatchCleanupM3 -or $isSessionRedesignProfile
 $dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
 $sessionRedesignProfile = if ($isSessionRedesignProfile) { Get-DispatchSessionRedesignM3Profile } else { $null }
@@ -388,6 +389,7 @@ function Get-TelemetryDownChordIdentity {
     $identity = switch ($SchemaVersion) {
         25 { [pscustomobject]@{ kind = 'compiled_packet_index_v25'; available_field = 'compiled_packet_index_available'; value_field = 'compiled_packet_index' } }
         26 { [pscustomobject]@{ kind = 'authored_down_chord_index_v26'; available_field = 'authored_down_chord_index_available'; value_field = 'authored_down_chord_index' } }
+        27 { [pscustomobject]@{ kind = 'authored_down_chord_index_v27'; available_field = 'authored_down_chord_index_available'; value_field = 'authored_down_chord_index' } }
         default { [pscustomobject]@{ kind = 'unsupported_schema_v' + $SchemaVersion; available_field = $null; value_field = $null } }
     }
     $available = $false
@@ -430,7 +432,7 @@ function Get-TimingMetrics {
         }
     }
     $widthValues = @{}
-    $resumeCleanupDelayValues = [ordered]@{
+    $authoredDownGapValues = [ordered]@{
         hot = [System.Collections.Generic.List[double]]::new()
         cold = [System.Collections.Generic.List[double]]::new()
     }
@@ -526,7 +528,7 @@ function Get-TimingMetrics {
                     if ($gapTicks -lt 0) { $counts.negative_order++ }
                     else {
                         $gapUs = ($gapTicks * 1000000.0) / $frequency
-                        if ($gapUs -lt 20000.0) { $resumeCleanupDelayValues.hot.Add($gapUs) } else { $resumeCleanupDelayValues.cold.Add($gapUs) }
+                        if ($gapUs -lt 20000.0) { $authoredDownGapValues.hot.Add($gapUs) } else { $authoredDownGapValues.cold.Add($gapUs) }
                     }
                 }
                 $lastDownAuthored = [double]$record.authored_offset_ticks
@@ -669,8 +671,8 @@ function Get-TimingMetrics {
         down_chord_widths = $widthMetrics
         authored_gap_hot_cold_us = [ordered]@{
             hot_threshold_us = 20000
-            hot = Get-Percentiles $resumeCleanupDelayValues.hot.ToArray()
-            cold = Get-Percentiles $resumeCleanupDelayValues.cold.ToArray()
+            hot = Get-Percentiles $authoredDownGapValues.hot.ToArray()
+            cold = Get-Percentiles $authoredDownGapValues.cold.ToArray()
         }
         counts = $counts
         event_chord_identities = $identityRecords.ToArray()
@@ -678,6 +680,7 @@ function Get-TimingMetrics {
         telemetry_dropped = [long]$telemetry.dropped
         observer_queue_dropped = [long]$telemetry.observer_queue_dropped
         telemetry_truncated = [bool]$telemetry.truncated
+        telemetry_schema_version = [int]$telemetry.schema_version
         qpc_frequency_hz = [long]$frequency
         cpu = [ordered]@{
             worker_cpu_time_us = Get-OptionalProperty $details 'worker_cpu_time_us'
@@ -690,6 +693,52 @@ function Get-TimingMetrics {
             spin_dropped_samples = Get-OptionalProperty $details 'spin_observation_dropped_samples'
             spin_missing_samples = Get-OptionalProperty $details 'spin_observation_missing_samples'
         }
+    }
+}
+
+function Get-PlaybackCoreLifecycleTimedRowDisposition {
+    param(
+        [string]$Profile,
+        [int]$SampleSeconds,
+        [string]$Status,
+        [string]$Reason,
+        $Metrics
+    )
+    $identityRecords = if ($null -ne $Metrics) { @($Metrics.event_chord_identities) } else { @() }
+    $identityRecordCount = @($identityRecords).Count
+    $downChordCount = if ($null -ne $Metrics) { [long]$Metrics.counts.down_chord_syscalls } else { 0L }
+    $missingIdentityCount = if ($null -ne $Metrics) { [long]$Metrics.counts.missing_down_chord_identity } else { 0L }
+    $attributedIdentityCount = @($identityRecords | Where-Object { [bool]$_.down_chord_identity_available }).Count
+    $identityComplete = $false
+    if ($null -ne $Metrics -and $downChordCount -gt 0 -and
+        $identityRecordCount -eq $downChordCount -and
+        $attributedIdentityCount -eq $downChordCount -and
+        $missingIdentityCount -eq 0) {
+        $identityComplete = $true
+    }
+    $attributionStatus = if ($identityComplete) { 'COMPLETE' } else { 'INCOMPLETE' }
+    $attributionReason = if ($identityComplete) {
+        $null
+    } else {
+        'Down chord identity attribution has ' + $attributedIdentityCount + '/' + $downChordCount +
+            ' available identities and ' + $missingIdentityCount + ' missing identity records'
+    }
+    $rowStatus = $Status
+    $rowReason = $Reason
+    if ($Profile -eq 'PlaybackCoreLifecycleV2' -and $SampleSeconds -gt 0 -and
+        $Status -eq 'PASS' -and -not $identityComplete) {
+        $rowStatus = 'INCOMPLETE'
+        $rowReason = $Reason + '; attribution-dependent timed results are ineligible: ' + $attributionReason
+    }
+    [pscustomobject]@{
+        status = $rowStatus
+        reason = $rowReason
+        attribution_status = $attributionStatus
+        attribution_reason = $attributionReason
+        attributed_down_chord_count = $attributedIdentityCount
+        down_chord_identity_record_count = $identityRecordCount
+        missing_down_chord_identity_count = $missingIdentityCount
+        down_chord_count = $downChordCount
     }
 }
 
@@ -757,6 +806,10 @@ function Invoke-NativeCase {
     $status = if ($null -ne $report) { [string]$report.status } elseif ($caseExit -eq 2) { 'RUNNER_FAILURE' } else { 'MISSING_REPORT' }
     $reason = if ($null -ne $report) { [string]$report.reason } elseif ($text) { $text } else { 'native runner produced no report or failure text' }
     $metrics = if ($null -ne $report) { Get-TimingMetrics $report } else { $null }
+    $timedRowDisposition = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile $QualificationProfile `
+        -SampleSeconds $Sample -Status $status -Reason $reason -Metrics $metrics
+    $status = $timedRowDisposition.status
+    $reason = $timedRowDisposition.reason
     $details = if ($null -ne $report) { Get-OptionalProperty $report 'details' } else { $null }
     $invocationPath = if ($caseDirectory) { Join-Path $caseDirectory 'invocation.json' } else { $null }
     $invocation = if ($invocationPath -and (Test-Path -LiteralPath $invocationPath -PathType Leaf)) { Get-Content -LiteralPath $invocationPath -Raw | ConvertFrom-Json } else { $null }
@@ -893,6 +946,11 @@ function Invoke-NativeCase {
         telemetry_negative_order = if ($null -ne $metrics) { $metrics.counts.negative_order } else { $null }
         telemetry_dropped = if ($null -ne $metrics) { $metrics.telemetry_dropped } else { $null }
         observer_queue_dropped = if ($null -ne $metrics) { $metrics.observer_queue_dropped } else { $null }
+        telemetry_schema_version = if ($null -ne $metrics) { $metrics.telemetry_schema_version } else { $null }
+        telemetry_down_chord_identity_attribution_status = $timedRowDisposition.attribution_status
+        telemetry_down_chord_identity_attribution_reason = $timedRowDisposition.attribution_reason
+        telemetry_attributed_down_chord_count = $timedRowDisposition.attributed_down_chord_count
+        telemetry_missing_down_chord_identity_count = $timedRowDisposition.missing_down_chord_identity_count
         timing_metrics_json = if ($null -ne $metrics) { ConvertTo-Json -InputObject $metrics -Depth 12 -Compress } else { $null }
         timing_metrics = $metrics
         lifecycle_measurement = Get-OptionalProperty $details 'lifecycle_measurement'
@@ -1479,7 +1537,7 @@ try {
         $sessionPlan['sample_scope'] = $reportProjection.StageSummary.sample_scope
     }
     $summary = [ordered]@{
-        schema_version = 1
+        schema_version = $qualificationReportSchemaVersion
         run_id = $runId
         stage = $Stage
         comparison = $comparisonDescription
@@ -1703,7 +1761,7 @@ try {
         '- Paired order: AB/BA alternating; six pairs per workload/load cell; 15 seconds per timed session.',
         '- Contention: two hidden PowerShell CPU workers at BelowNormal priority. Sink: identity-verified ReceiveOnly.',
         '- Percentiles use nearest-rank ceiling. No p99.9 is inferred.',
-        '- Reported: per-chord authored lateness, hold-floor displacement, residual lateness, waiter-to-pre-call, per-syscall sender envelope, per-key hold timing and musical Up-to-next-Down gap, verified-cleanup-to-resume delay, Down/Up/Mixed, chord width and authored hot/cold gap groups.',
+        '- Reported: per-chord authored lateness, hold-floor displacement, residual lateness, waiter-to-pre-call, per-syscall sender envelope, per-key hold timing and musical Up-to-next-Down gap, verified-cleanup and Resume boundary evidence, Down/Up/Mixed, chord width and authored hot/cold gap groups.',
         '- Timer target uses the arm QPC sample plus the relative timeout passed to the timer API; timer return is paired with the arm generation. Missing and negative-order samples remain counted.',
         '- Tail screen: candidate p95 worse than max(5 us, 10% control) or p99 worse than max(20 us, 10% control) in >=4/6 pairs in a cell prompts leader review; outliers are retained.',
         '- Native RT allocation is not instrumented in the sink runner; see focused no-allocation test result in the accompanying command record.',
@@ -1743,7 +1801,7 @@ try {
     $metadata = [ordered]@{ runner_sha256 = $scriptHash; case_runner_sha256 = $caseRunnerHash; builder_sha256 = $builderHash; manifest_validator_sha256 = $validatorHash; report_projection_sha256 = $reportProjectionHash; orchestration_module_sha256 = $orchestrationModuleHash; lifecycle_collector_sha256 = if ($isPlaybackCoreLifecycle) { Get-Sha256 $playbackLifecycleCollectorModule } else { $null }; source_revision = $head; source_tree_sha = $tree; source_tree_clean = $true; candidate_manifest_sha256 = $candidate.manifest_sha256; control_manifest_sha256 = if ($control) { $control.manifest_sha256 } else { $null }; comparison = $comparisonDescription }
     $metadata | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'provenance.json') -Encoding UTF8
     [ordered]@{
-        schema_version = 1
+        schema_version = $qualificationReportSchemaVersion
         run_id = $runId
         stage = $Stage
         comparison = $comparisonDescription
@@ -1775,7 +1833,8 @@ try {
     $runnerFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $_ `
         -RunId $runId -Stage $Stage -SourceRevision $head -SourceTreeSha $tree `
         -AttemptedSessionCount $runRows.Count -EvidenceRoot $evidenceRoot `
-        -ExistingFailures $failureRows.ToArray() -FallbackScriptPath $PSCommandPath
+        -ExistingFailures $failureRows.ToArray() -FallbackScriptPath $PSCommandPath `
+        -SummarySchemaVersion $qualificationReportSchemaVersion
     $failureRows.Clear()
     foreach ($failure in $runnerFailureArtifacts.FailureRows) { $failureRows.Add($failure) }
     Write-QualificationRunnerFailureArtifacts -Artifacts $runnerFailureArtifacts `
@@ -1788,7 +1847,7 @@ try {
     if (Test-Path -LiteralPath $evidenceRoot) {
         if (-not (Test-Path -LiteralPath (Join-Path $evidenceRoot 'summary.json'))) {
             $summary = if ($null -ne $runnerFailureArtifacts) { $runnerFailureArtifacts.Summary } else {
-                [ordered]@{ schema_version = 1; run_id = $runId; stage = $Stage; source_revision = $head; source_tree_sha = $tree; run_count = $runRows.Count; failures = $failureRows.ToArray(); disposition = 'runner failed before completing protocol' }
+                [ordered]@{ schema_version = $qualificationReportSchemaVersion; run_id = $runId; stage = $Stage; source_revision = $head; source_tree_sha = $tree; run_count = $runRows.Count; failures = $failureRows.ToArray(); disposition = 'runner failed before completing protocol' }
             }
             $summary | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'summary.json') -Encoding UTF8
             $failureRows | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $evidenceRoot 'failures.json') -Encoding UTF8

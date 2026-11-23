@@ -42,10 +42,20 @@ function Get-QualificationReportRowLabel {
     'C0'
 }
 
+function Get-QualificationReportSchemaVersion {
+    param(
+        [Parameter(Mandatory)]
+        [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')]
+        [string]$Profile
+    )
+    if ($Profile -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')) { return 2 }
+    1
+}
+
 function Get-DispatchCleanupM3TimingFloors {
     param(
         [Parameter(Mandatory)]
-        [ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'short-up-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
+        [ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'short-up-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-active-cleanup', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
         [string]$Scenario,
         [Parameter(Mandatory)]
         [ValidateSet(60, 120)]
@@ -499,7 +509,7 @@ function Get-PlaybackCoreLifecycleStageSummary {
         'skip-cleanup',
         'supervisor-lease-expiry'
     )
-    if ($ProfileVersion -eq 2) { $expectedSafetyScenarios += 'short-up-gap-stress' }
+    if ($ProfileVersion -eq 2) { $expectedSafetyScenarios += @('short-up-gap-stress', 'pause-resume-active-cleanup') }
     $expectedSafetyContract = $expectedSafetyScenarios -join '|'
     if ($TimingMarginUs -ne 500 -or $Pairs -ne 6 -or $SampleSeconds -ne 15 -or
         (@($SafetyScenarios) -join '|') -ne $expectedSafetyContract -or
@@ -522,7 +532,7 @@ function Get-PlaybackCoreLifecycleStageSummary {
         role_scope = 'Baseline/Candidate paired performance; Candidate-only safety'
         workloads = @('safety-smoke') + @($PerformanceWorkloads)
         scenarios = @($SafetyScenarios) + @($PerformanceWorkloads)
-        workload_summary = if ($ProfileVersion -eq 2) { 'nine candidate safety cases plus five paired workloads in Quiet and Contention' } else { 'eight candidate safety cases plus five paired workloads in Quiet and Contention' }
+        workload_summary = if ($ProfileVersion -eq 2) { 'ten candidate safety cases plus five paired workloads in Quiet and Contention' } else { 'eight candidate safety cases plus five paired workloads in Quiet and Contention' }
         load_cells = @($LoadCells)
         game_fps = 60
         game_fps_values = @(60)
@@ -776,4 +786,4 @@ function New-QualificationReportProjection {
     }
 }
 
-Export-ModuleMember -Function Get-QualificationReportRowLabel, Get-DispatchCleanupM3TimingFloors, Assert-DispatchCleanupM3RunConfigTiming, Get-DispatchCleanupM3StageSummary, Get-DispatchSessionRedesignM3TimingFloors, Assert-DispatchSessionRedesignM3SessionIdentity, Get-PlaybackCoreLifecycleStageSummary, Assert-PlaybackCoreLifecycleSessionIdentity, Get-PlaybackCoreLifecycleMeasuredAuthoredPrefix, Assert-PlaybackCoreLifecyclePairedWorkloadParity, Get-DispatchSessionRedesignM3StageSummary, New-QualificationReportProjection
+Export-ModuleMember -Function Get-QualificationReportRowLabel, Get-QualificationReportSchemaVersion, Get-DispatchCleanupM3TimingFloors, Assert-DispatchCleanupM3RunConfigTiming, Get-DispatchCleanupM3StageSummary, Get-DispatchSessionRedesignM3TimingFloors, Assert-DispatchSessionRedesignM3SessionIdentity, Get-PlaybackCoreLifecycleStageSummary, Assert-PlaybackCoreLifecycleSessionIdentity, Get-PlaybackCoreLifecycleMeasuredAuthoredPrefix, Assert-PlaybackCoreLifecyclePairedWorkloadParity, Get-DispatchSessionRedesignM3StageSummary, New-QualificationReportProjection

@@ -205,6 +205,7 @@ fn canonical_and_noncanonical_expectations_are_physical() {
         "owner-query-failure",
         "owner-process-termination",
         "pause-resume",
+        "pause-resume-active-cleanup",
         "suspend-resume",
         "stop-cleanup",
         "skip-cleanup",
@@ -226,6 +227,19 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
     assert_eq!(pause.expected_authored_up_slots, vec![0, 1]);
     assert!(pause.expected_safety_up_slots.is_empty());
     assert!(pause.allow_unpaired_cleanup_ups);
+
+    let pause_active = scenario_plan(
+        Scenario::PauseResumeActiveCleanup,
+        ACCEPTANCE_TIMING_MARGIN_US,
+    )
+    .unwrap();
+    assert_eq!(pause_active.expected_down_slots, vec![0, 0]);
+    assert_eq!(pause_active.expected_up_slots, vec![0, 0]);
+    assert_eq!(pause_active.expected_authored_up_slots, vec![0]);
+    assert_eq!(pause_active.expected_safety_up_slots, vec![0]);
+    assert!(pause_active.allow_unpaired_cleanup_ups);
+    assert_eq!(pause_active.schedule.down_chords[0].scheduled_us, 50_000);
+    assert_eq!(pause_active.schedule.down_chords[1].scheduled_us, 600_000);
 
     let suspend = scenario_plan(Scenario::SuspendResume, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
     assert_eq!(suspend.expected_down_slots, vec![0, 1]);

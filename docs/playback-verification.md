@@ -139,8 +139,11 @@ candidate harness preserves the PR-base cadence for **dense-alternating** and
 all five paired workloads. Frozen SHA-256 projections from the exact PR-base
 source cover all five streams, including every cycle and tail. In particular,
 `canonical-max-chord` keeps the baseline's 263 cycles; candidate-only trailing
-padding cannot add a 264th cycle. `short-up-gap-stress` is a ninth, candidate-
-only safety case. For every paired run, the runner normalizes baseline
+padding cannot add a 264th cycle. `short-up-gap-stress` and
+`pause-resume-active-cleanup` are ninth and tenth, candidate-only safety cases.
+The latter pauses with a key active, requires verified cleanup before Resume,
+and checks cleanup Up precedes the next same-key Down without an added pause.
+For every paired run, the runner normalizes baseline
 `authored_packet_targets` and candidate `authored_timestamp_group_targets` into
 `(timestamp_us, kind, scan-mask)` events, then requires matching full-stream
 and measured 15-second prefix hashes and counts. Tail event/group counts and
@@ -228,16 +231,17 @@ backfilled with fields that its source did not emit.
 
 This comparison records Stage 1 evidence from the pinned pre-Stage 2 candidate.
 Its second Prepare argument described a cleanup delay at that revision. Stage
-2 removes that argument and the current contract has no cleanup-time floor.
+2 removes that argument; the current contract requires verified cleanup and
+admission checks without a cleanup-time floor.
 
 The PR #679 memory fixture measures 10,000 one-key Down generations with the
 same authored actions, QPC frequency (1 MHz), H (8,000 µs), and second Prepare
 policy argument (16,667 µs) on the pinned pre-refactor baseline
 `1d00c3b71fbf1f94003865bad6c4eba6d8dcd902` and the candidate. The baseline
-interprets that argument as the release-gap minimum; the candidate uses it for
-the separate resume cleanup delay. Each Down is 30,000 µs after the previous
-Down and its Up is 10,000 µs later, leaving a 20,000 µs Up-to-next-Down gap so
-the legacy baseline can Prepare this workload.
+interprets that argument as the release-gap minimum; the pinned Stage 1
+candidate uses it for its separate resume cleanup delay. Each Down is 30,000
+µs after the previous Down and its Up is 10,000 µs later, leaving a 20,000 µs
+Up-to-next-Down gap so the legacy baseline can Prepare this workload.
 The comparison reports calculated collection capacities for the compile phase
 and for the schedule plus prepared plan while both coexist:
 

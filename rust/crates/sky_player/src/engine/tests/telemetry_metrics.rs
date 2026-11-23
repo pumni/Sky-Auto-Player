@@ -580,6 +580,203 @@ fn progress_snapshot_freezes_for_manual_pause_and_resumes_afterward() {
 }
 
 #[test]
+fn manual_pause_verifies_active_cleanup_before_immediate_same_key_resume() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 50_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "active-pause-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 1_000_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "active-pause-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 1_100_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "active-pause-resumed-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 1_200_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "active-pause-resumed-up".into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid active-pause schedule");
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let capture = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (release_entered_tx, release_entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.send_input_capture = Some(Arc::clone(&capture));
+    fault_script.first_release_send_entered = Some(Arc::new(release_entered_tx));
+    fault_script.release_first_release_send = Some(Arc::new(std::sync::Mutex::new(release_rx)));
+    let session = NativeDispatchSession::new(test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    ))
+    .expect("mock worker session admission");
+
+    start_with_test_wall_clock_slack(&session);
+    let down_deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let snapshot = session.snapshot_lite();
+        if snapshot.is_running && send_calls.load(Ordering::SeqCst) == 1 {
+            assert_eq!(send_calls.load(Ordering::SeqCst), 1);
+            break;
+        }
+        assert!(
+            Instant::now() < down_deadline,
+            "first key did not become active: {snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+
+    let pause_generation = session
+        .pause_with_timing_token()
+        .expect("active-key pause request");
+    release_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("pause cleanup entered its first Up send");
+    assert_eq!(send_calls.load(Ordering::SeqCst), 2);
+    assert!(
+        session
+            .pause_timing_result(pause_generation)
+            .expect("pending pause timing")
+            .is_none(),
+        "pause must not acknowledge before the in-flight cleanup Up completes"
+    );
+    let during_cleanup = session.snapshot_lite();
+    assert!(!during_cleanup.is_paused);
+    assert_eq!(
+        capture
+            .lock()
+            .expect("capture while cleanup is in flight")
+            .len(),
+        2,
+        "Down and the in-flight cleanup Up are captured before pause acknowledgment"
+    );
+
+    release_tx.send(()).expect("release the cleanup Up barrier");
+    let pause_deadline = Instant::now() + Duration::from_secs(2);
+    let paused_snapshot = loop {
+        let snapshot = session.snapshot();
+        let timing = session
+            .pause_timing_result(pause_generation)
+            .expect("pause timing result");
+        if snapshot.is_paused && timing.is_some() {
+            break snapshot;
+        }
+        assert!(
+            Instant::now() < pause_deadline,
+            "verified pause did not commit: {snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(paused_snapshot.active_count, 0);
+    assert_eq!(paused_snapshot.possibly_active_count, 0);
+    assert_eq!(paused_snapshot.final_release_obligation_mask, 0);
+    assert_eq!(paused_snapshot.failed_release_count, 0);
+    assert_eq!(paused_snapshot.terminal_error, None);
+
+    let paused_capture = capture.lock().expect("verified pause capture");
+    assert!(matches!(
+        paused_capture.as_slice(),
+        [
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 1
+                },
+                status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
+                ..
+            },
+            MockSendInputCapture::SingleEmitter {
+                scan_codes,
+                key_up: true
+            }
+        ] if scan_codes == &[0x15]
+    ));
+    drop(paused_capture);
+
+    std::thread::sleep(Duration::from_millis(40));
+    assert!(session.snapshot_lite().is_paused);
+    assert_eq!(
+        send_calls.load(Ordering::SeqCst),
+        2,
+        "no authored send may cross the pause barrier"
+    );
+
+    // Resume as soon as verified cleanup is acknowledged. The next same-key
+    // Down cannot be sent until this command opens playback admission.
+    session
+        .resume()
+        .expect("immediate Resume after verified cleanup");
+    let resumed_down_deadline = Instant::now() + Duration::from_secs(3);
+    while send_calls.load(Ordering::SeqCst) < 3 {
+        assert!(
+            Instant::now() < resumed_down_deadline,
+            "same-key authored Down did not resume: {:?}",
+            session.snapshot()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let final_snapshot = session.snapshot();
+    assert_eq!(final_snapshot.status, EnginePollStatus::Finished.as_str());
+    assert_eq!(final_snapshot.active_count, 0);
+    assert_eq!(final_snapshot.possibly_active_count, 0);
+    assert_eq!(final_snapshot.failed_release_count, 0);
+    assert_eq!(final_snapshot.terminal_error, None);
+    assert_eq!(send_calls.load(Ordering::SeqCst), 4);
+
+    let captures = capture.lock().expect("final mock SendInput capture");
+    assert!(matches!(
+        captures.as_slice(),
+        [
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 1
+                },
+                ..
+            },
+            MockSendInputCapture::SingleEmitter { key_up: true, .. },
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 1
+                },
+                ..
+            },
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 1,
+                    down_mask: 0
+                },
+                ..
+            }
+        ]
+    ));
+}
+
+#[test]
 fn preroll_manual_pause_retains_countdown_and_resumes_without_error() {
     let actions = [
         KeyActionInput {

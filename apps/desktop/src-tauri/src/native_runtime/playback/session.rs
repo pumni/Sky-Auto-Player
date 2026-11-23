@@ -2607,7 +2607,7 @@ pub(in crate::native_runtime) fn sender_trace_export_json(
         })
         .count();
     serde_json::to_string(&serde_json::json!({
-        "export_schema_version": 5,
+        "export_schema_version": 6,
         "raw_packet_trace_status": "not_captured",
         "session_id": active.session_id,
         "song_id": active.song_id,

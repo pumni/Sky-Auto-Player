@@ -69,6 +69,7 @@ $requiredFunctions = @(
     'Get-DeadlineCrossingToPreCallSample',
     'Get-TelemetryDownChordIdentity',
     'Get-TimingMetrics',
+    'Get-PlaybackCoreLifecycleTimedRowDisposition',
     'Invoke-NativeCaseFailStopSequence',
     'Assert-SchedulerManifestIdentity',
     'Assert-SchedulerObserverPairMode',
@@ -84,10 +85,17 @@ foreach ($name in $requiredFunctions) {
 }
 $identityFixture25 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_25.json') -Raw | ConvertFrom-Json
 $identityFixture26 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_26.json') -Raw | ConvertFrom-Json
+$identityFixture27 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_27.json') -Raw | ConvertFrom-Json
+$identityFixture28 = $identityFixture27 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$identityFixture28.schema_version = 28
 $identityMetrics25 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture25 } })
 $identityMetrics26 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture26 } })
+$identityMetrics27 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture27 } })
+$identityMetrics28 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture28 } })
 $identityRecord25 = @($identityMetrics25.event_chord_identities)[0]
 $identityRecord26 = @($identityMetrics26.event_chord_identities)[0]
+$identityRecord27 = @($identityMetrics27.event_chord_identities)[0]
+$identityRecord28 = @($identityMetrics28.event_chord_identities)[0]
 if ($identityRecord25.down_chord_index -ne 17 -or
     $identityRecord25.down_chord_identity_kind -ne 'compiled_packet_index_v25' -or
     $identityRecord25.down_chord_identity_schema_version -ne 25 -or
@@ -96,9 +104,34 @@ if ($identityRecord25.down_chord_index -ne 17 -or
     $identityRecord26.down_chord_identity_kind -ne 'authored_down_chord_index_v26' -or
     $identityRecord26.down_chord_identity_schema_version -ne 26 -or
     -not $identityRecord26.down_chord_identity_available -or
+    $identityRecord27.down_chord_index -ne 31 -or
+    $identityRecord27.down_chord_identity_kind -ne 'authored_down_chord_index_v27' -or
+    $identityRecord27.down_chord_identity_schema_version -ne 27 -or
+    -not $identityRecord27.down_chord_identity_available -or
     $identityMetrics25.counts.missing_down_chord_identity -ne 0 -or
-    $identityMetrics26.counts.missing_down_chord_identity -ne 0) {
-    throw 'qualification reader did not preserve versioned v25/v26 Down chord identity'
+    $identityMetrics26.counts.missing_down_chord_identity -ne 0 -or
+    $identityMetrics27.counts.missing_down_chord_identity -ne 0 -or
+    $identityRecord28.down_chord_identity_available -or
+    $identityRecord28.down_chord_identity_kind -ne 'unsupported_schema_v28' -or
+    $identityMetrics28.counts.missing_down_chord_identity -ne 1) {
+    throw 'qualification reader did not preserve v25/v26/v27 Down chord identity or fail closed on a future schema'
+}
+$identityDisposition27 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics27
+$identityDisposition28 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics28
+$identityMetrics27Json = ConvertTo-Json -InputObject $identityMetrics27 -Depth 12 -Compress
+if ($identityDisposition27.status -ne 'PASS' -or
+    $identityDisposition27.attribution_status -ne 'COMPLETE' -or
+    $identityDisposition27.attributed_down_chord_count -ne 1 -or
+    $identityDisposition28.status -ne 'INCOMPLETE' -or
+    $identityDisposition28.attribution_status -ne 'INCOMPLETE' -or
+    $identityDisposition28.reason -notmatch 'attribution-dependent timed results are ineligible' -or
+    $identityMetrics27Json -match 'resume_cleanup_delay') {
+    throw ('PlaybackCoreLifecycleV2 timed row did not require complete Down chord attribution or reintroduced a retired delay diagnostic: v27=' +
+        (ConvertTo-Json -InputObject $identityDisposition27 -Compress) + '; v28=' +
+        (ConvertTo-Json -InputObject $identityDisposition28 -Compress) + '; retired_delay=' +
+        [string]($identityMetrics27Json -match 'resume_cleanup_delay'))
 }
 $caseRunnerPath = Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'
 $caseRunnerTokens = $null
@@ -503,6 +536,12 @@ if ($qualifierSource -notmatch "ValidateSet\('Canary', 'Smoke', 'Compare', 'Fina
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Force
+if ((Get-QualificationReportSchemaVersion -Profile 'PlaybackCoreLifecycle') -ne 2 -or
+    (Get-QualificationReportSchemaVersion -Profile 'PlaybackCoreLifecycleV2') -ne 2 -or
+    (Get-QualificationReportSchemaVersion -Profile 'DispatchCore') -ne 1 -or
+    -not $qualifierSource.Contains('$qualificationReportSchemaVersion = Get-QualificationReportSchemaVersion -Profile $QualificationProfile')) {
+    throw 'PlaybackCoreLifecycle report schema v2 boundary changed or leaked into historical profiles'
+}
 if (-not (Get-Command Get-DispatchCleanupM3Profile -ErrorAction SilentlyContinue)) {
     throw 'DispatchCleanupM3 profile helper must remain available after manifest module initialization'
 }
@@ -1576,6 +1615,13 @@ try {
         -RunId 'offline-zero-attempts' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
         -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount $zeroAttemptCalls.Count `
         -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath
+    $zeroFailureArtifactsV2 = New-QualificationRunnerFailureArtifacts -ErrorRecord $zeroAttemptError `
+        -RunId 'offline-zero-attempts-v2' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
+        -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount 0 `
+        -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath -SummarySchemaVersion 2
+    if ($zeroFailureArtifacts.Summary.schema_version -ne 1 -or $zeroFailureArtifactsV2.Summary.schema_version -ne 2) {
+        throw 'runner failure summaries did not preserve the selected current report schema version'
+    }
     Write-QualificationRunnerFailureArtifacts -Artifacts $zeroFailureArtifacts -EvidenceRoot $offlineFailureRoot `
         -CommandRows ([System.Collections.Generic.List[string]]::new())
     $zeroSummary = Get-Content -LiteralPath (Join-Path $offlineFailureRoot 'summary.json') -Raw | ConvertFrom-Json
@@ -1647,6 +1693,7 @@ if (-not $playbackCoreProfileSource.Contains("Name = if (`$Version -eq 1) { 'Pla
     $playbackCoreManifestSource.Contains("Get-ManifestProperty `$targetIdentity 'application'") -or
     -not $playbackCoreManifestSource.Contains("`$targetGameTarget -isnot [bool]") -or
     -not $playbackCoreRunnerSource.Contains('[switch]$PlanOnly') -or
+    -not $playbackCoreRunnerSource.Contains('schema_version = $qualificationReportSchemaVersion') -or
     -not $playbackCoreRunnerSource.Contains('native_attempts=0 target_capture=NOT_RUN') -or
     -not $playbackCoreRunnerSource.Contains('[switch]$OwnerApprovedReceiveOnlyRun') -or
     -not $playbackCoreRunnerSource.Contains('repository owner explicitly approves this Windows machine, target receiver, and physical input scope') -or
@@ -1691,7 +1738,8 @@ if ($pclV1Profile.Name -ne 'PlaybackCoreLifecycle' -or
     $pclV2Profile.BaselineRevision -ne '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' -or
     $pclV2Profile.BaselineTree -ne '25a20291b9cf84b1283804f451b33e3c4605507c' -or
     $pclV2Profile.CandidateLineageBranch -ne 'refactor/playback-remove-release-gap' -or
-    $pclV2Profile.SafetyScenarios[-1] -ne 'short-up-gap-stress' -or
+    $pclV2Profile.SafetyScenarios[-2] -ne 'short-up-gap-stress' -or
+    $pclV2Profile.SafetyScenarios[-1] -ne 'pause-resume-active-cleanup' -or
     $pclV2Profile.HarnessManifestSchemaVersion -ne 2 -or
     $pclV2Profile.AuthoredPrefixParityContract -ne 'timestamp-kind-scan-mask-v1') {
     throw 'PlaybackCoreLifecycleV2 changed the immutable v1 profile or failed to pin its strict PR-base identity and workload contract'
@@ -1743,6 +1791,12 @@ try { [void](Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'short-up-gap
 if (-not $pclV1ShortGapRejected -or
     (Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'short-up-gap-stress' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0 -ProfileVersion 2).scenario -ne 'short-up-gap-stress') {
     throw 'PlaybackCoreLifecycleV2 did not isolate short-up-gap-stress to its candidate-only safety contract'
+}
+$pclV1ActivePauseRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'pause-resume-active-cleanup' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0) } catch { $pclV1ActivePauseRejected = $true }
+if (-not $pclV1ActivePauseRejected -or
+    (Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'pause-resume-active-cleanup' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0 -ProfileVersion 2).scenario -ne 'pause-resume-active-cleanup') {
+    throw 'PlaybackCoreLifecycleV2 did not isolate active-key pause cleanup to its candidate-only safety contract'
 }
 $pclRevision = '1111111111111111111111111111111111111111'
 $pclTree = '2222222222222222222222222222222222222222'
@@ -1939,7 +1993,7 @@ if ($pclV2Report.qualification_profile -ne 'PlaybackCoreLifecycleV2' -or
     throw 'PlaybackCoreLifecycleV2 did not measure all 60 candidate-to-candidate and candidate-to-baseline successor Armed transitions'
 }
 $pclSafetyScenarios = @('focus-loss', 'owner-mismatch', 'owner-process-termination', 'pause-resume', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry')
-$pclV2SafetyScenarios = $pclSafetyScenarios + @('short-up-gap-stress')
+$pclV2SafetyScenarios = $pclSafetyScenarios + @('short-up-gap-stress', 'pause-resume-active-cleanup')
 $pclPerformanceWorkloads = @('mixed-up-down', 'dense-alternating', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
 $pclV1StageSummary = Get-PlaybackCoreLifecycleStageSummary -Stage Final -TimingMarginUs 500 -Pairs 6 -SampleSeconds 15 `
     -SafetyScenarios $pclSafetyScenarios -PerformanceWorkloads $pclPerformanceWorkloads -LoadCells @('Quiet', 'Contention')
@@ -1949,10 +2003,11 @@ if ($pclV1StageSummary.Contains('authored_prefix_parity_contract') -or
     $pclV1StageSummary.candidate_session_count -ne 68 -or
     $pclV2StageSummary.authored_prefix_parity_contract -ne 'timestamp-kind-scan-mask-v1' -or
     $pclV2StageSummary.authored_prefix_measured_window_seconds -ne 15 -or
-    $pclV2StageSummary.candidate_session_count -ne 69 -or
-    $pclV2StageSummary.planned_session_count -ne 129 -or
-    $pclV2StageSummary.scenarios -notcontains 'short-up-gap-stress') {
-    throw 'PlaybackCoreLifecycleV2 changed the v1 report contract or omitted its candidate-only short-gap session and full paired-session plan'
+    $pclV2StageSummary.candidate_session_count -ne 70 -or
+    $pclV2StageSummary.planned_session_count -ne 130 -or
+    $pclV2StageSummary.scenarios -notcontains 'short-up-gap-stress' -or
+    $pclV2StageSummary.scenarios -notcontains 'pause-resume-active-cleanup') {
+    throw 'PlaybackCoreLifecycleV2 changed the v1 report contract or omitted its candidate-only safety cases and full paired-session plan'
 }
 foreach ($controlRow in @($pclRows | Where-Object { $_.role -eq 'control' })) {
     if ($null -ne $controlRow.lifecycle_measurement) {

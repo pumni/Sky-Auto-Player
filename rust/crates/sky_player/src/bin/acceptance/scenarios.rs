@@ -350,6 +350,18 @@ pub(super) fn scenario_plan_for_settings(
                 vec![0, 1],
                 true,
             ),
+            Scenario::PauseResumeActiveCleanup => (
+                vec![
+                    action(0, ActionKind::Down, 50_000, &[0]),
+                    action(1, ActionKind::Up, 500_000, &[0]),
+                    action(2, ActionKind::Down, 600_000, &[0]),
+                    action(3, ActionKind::Up, 670_000, &[0]),
+                ],
+                None,
+                vec![0, 0],
+                vec![0, 0],
+                true,
+            ),
             Scenario::SuspendResume => (
                 vec![
                     action(0, ActionKind::Down, 50_000, &[0]),
@@ -507,6 +519,7 @@ pub(super) fn scenario_plan_for_settings(
         | Scenario::SkipCleanup
         | Scenario::SuspendResume
         | Scenario::ModifierHeldAfterOwned => vec![0],
+        Scenario::PauseResumeActiveCleanup => vec![0],
         Scenario::AmbiguousPacket => vec![0, 1],
         _ => Vec::new(),
     };

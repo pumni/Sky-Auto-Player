@@ -1,0 +1,25 @@
+{
+  "schema_version": 27,
+  "qpc_frequency_hz": 1000000,
+  "accepted": 1,
+  "dropped": 0,
+  "observer_queue_dropped": 0,
+  "truncated": false,
+  "records": [
+    {
+      "kind": 0,
+      "down_mask": 1,
+      "up_mask": 0,
+      "send_attempts": 1,
+      "send_status": 0,
+      "flags": 1,
+      "sent_count": 1,
+      "requested_count": 1,
+      "authored_down_chord_index": 31,
+      "authored_down_chord_index_available": true,
+      "event_index": 2,
+      "source_action_index": 40,
+      "authored_offset_ticks": 100
+    }
+  ]
+}

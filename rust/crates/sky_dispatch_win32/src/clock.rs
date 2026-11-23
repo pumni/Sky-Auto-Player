@@ -121,8 +121,8 @@ impl QpcClock {
 
     /// Convert 100-nanosecond intervals to QPC duration ticks with ceiling rounding.
     ///
-    /// Ceiling rounding guarantees that physical timing policies (such as
-    /// minimum hold or the verified-cleanup resume delay) are never undercut.
+    /// Ceiling rounding guarantees that physical timing policies such as the
+    /// minimum hold are never undercut.
     pub fn duration_from_100ns(
         self,
         intervals_100ns: u64,

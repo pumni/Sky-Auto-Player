@@ -224,7 +224,7 @@ fn sender_trace_export_includes_session_identity_and_frozen_policy() {
     let export = sender_trace_export_json(&active, &telemetry).expect("sender trace JSON");
     let document: Value = serde_json::from_str(&export).expect("valid sender trace JSON");
 
-    assert_eq!(document["export_schema_version"], 5);
+    assert_eq!(document["export_schema_version"], 6);
     assert_eq!(document["raw_packet_trace_status"], "not_captured");
     assert_eq!(document["session_id"], "a".repeat(32));
     assert_eq!(document["song_id"], "c".repeat(32));
@@ -234,6 +234,16 @@ fn sender_trace_export_includes_session_identity_and_frozen_policy() {
     assert_eq!(document["timing_policy"]["frame_base_hold_us"], 16_667);
     assert_eq!(document["timing_policy"]["timing_margin_us"], 800);
     assert_eq!(document["timing_policy"]["target_hold_us"], 17_467);
+    assert!(
+        document["timing_policy"]
+            .get("resume_cleanup_delay_us")
+            .is_none()
+    );
+    assert!(
+        document["timing_policy"]
+            .get("resume_cleanup_delay_ticks")
+            .is_none()
+    );
     assert_eq!(
         document["analytics"]["aggregate_scope"],
         "packet_trace_records"

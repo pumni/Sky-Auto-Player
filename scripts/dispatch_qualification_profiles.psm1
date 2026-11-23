@@ -65,7 +65,7 @@ function Get-PlaybackCoreLifecycleProfile {
         'skip-cleanup',
         'supervisor-lease-expiry'
     )
-    if ($Version -eq 2) { $safetyScenarios += 'short-up-gap-stress' }
+    if ($Version -eq 2) { $safetyScenarios += @('short-up-gap-stress', 'pause-resume-active-cleanup') }
     [pscustomobject]@{
         Version = $Version
         Name = if ($Version -eq 1) { 'PlaybackCoreLifecycle' } else { 'PlaybackCoreLifecycleV2' }

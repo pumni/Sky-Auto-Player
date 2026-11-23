@@ -524,6 +524,11 @@ fn run_windows(args: RunArgs) -> i32 {
     let mut owner_process_terminated_at_first_down_checkpoint = false;
     let mut system_suspend_terminal_observed = false;
     let mut stop_requested_qpc_ticks = None;
+    let mut pause_requested_qpc_ticks = None;
+    let mut pause_cleanup_verified_qpc_ticks = None;
+    let mut resume_requested_qpc_ticks = None;
+    let mut resume_call_completed_qpc_ticks = None;
+    let mut pause_cleanup_verified = false;
     let (mut pause_observed, mut resume_requested, mut target_changed, mut stop_requested, mut skip_requested, mut first_physical_commit_observed) = (false, false, false, false, false, false);
     if args.scenario == Scenario::OwnerProcessTermination {
         let hook = acceptance_hook
@@ -635,6 +640,71 @@ fn run_windows(args: RunArgs) -> i32 {
         false
     } else if args.scenario == Scenario::PauseResume {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
+    } else if args.scenario == Scenario::PauseResumeActiveCleanup {
+        if !wait_for_startup_armed(&session) {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!("production session did not reach Armed publication before active-key pause proof", json!({}));
+        }
+        let first_down = expected_physical_keys(plan.profile.as_ref(), &[0]);
+        if let Some(code) = finish_preterminal(
+            &args,
+            &session,
+            wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_down, &[]),
+        ) {
+            return code;
+        }
+        first_physical_commit_observed = true;
+        pause_requested_qpc_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
+            .ok()
+            .map(|ticks| ticks.as_u64());
+        if let Err(error) = session.pause() {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!(&error, json!({}));
+        }
+        pause_observed = wait_for_focus_pause(&session);
+        if !pause_observed {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!("pause did not commit after the first Down while its key was active", snapshot_json(&session.snapshot()));
+        }
+        let paused_snapshot = session.snapshot();
+        pause_cleanup_verified = paused_snapshot.is_paused
+            && paused_snapshot.active_count == 0
+            && paused_snapshot.possibly_active_count == 0
+            && paused_snapshot.final_release_obligation_mask == 0
+            && paused_snapshot.failed_release_count == 0
+            && paused_snapshot.terminal_error.is_none();
+        if !pause_cleanup_verified {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            return write_report(
+                &args,
+                Verdict::Fail,
+                "active-key pause acknowledged without clean, verified release state",
+                snapshot_json(&session.snapshot()),
+            );
+        }
+        pause_cleanup_verified_qpc_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
+            .ok()
+            .map(|ticks| ticks.as_u64());
+        // Resume immediately after the worker has acknowledged verified
+        // cleanup. The final event-sequence assertion proves cleanup Up
+        // precedes the next same-key authored Down.
+        resume_requested_qpc_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
+            .ok()
+            .map(|ticks| ticks.as_u64());
+        if let Err(error) = session.resume() {
+            let _ = session.quit();
+            let _ = session.join(Duration::from_secs(5));
+            inconclusive!(&error, json!({}));
+        }
+        resume_call_completed_qpc_ticks = sky_dispatch_win32::clock::qpc_now_ticks_checked()
+            .ok()
+            .map(|ticks| ticks.as_u64());
+        resume_requested = true;
+        false
     } else if args.scenario == Scenario::TargetHwndChange {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before target-change proof", json!({})); } session.invalidate_target_for_test(); target_changed = true; false
     } else if args.scenario == Scenario::SupervisorLeaseExpiry {
@@ -828,7 +898,7 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("authored_timestamp_group_count".to_string(), json!(authored_timestamp_group_count));
         object.insert("down_generation_count".to_string(), json!(down_generation_count));
         object.insert("physical_packet_attempt_count".to_string(), json!(snapshot.precision_packet_attempts));
-        object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
+        object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "pause_cleanup_verified": pause_cleanup_verified, "pause_requested_qpc_ticks": pause_requested_qpc_ticks, "pause_cleanup_verified_qpc_ticks": pause_cleanup_verified_qpc_ticks, "resume_requested_qpc_ticks": resume_requested_qpc_ticks, "resume_call_completed_qpc_ticks": resume_call_completed_qpc_ticks, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         object.insert("expected_authored_up_slots".to_string(), json!(plan.expected_authored_up_slots)); object.insert("expected_safety_up_slots".to_string(), json!(plan.expected_safety_up_slots)); object.insert("ambiguous_packet_outcome_injection_requested".to_string(), json!(args.scenario == Scenario::AmbiguousPacket)); object.insert("preflight_user_held_injection_requested".to_string(), json!(args.scenario == Scenario::PreflightUserHeld));
         if args.scenario == Scenario::SuspendResume {
             object.insert("system_suspend_fixture".to_string(), json!({"injection_method": "NativeDispatchSession::notify_system_power(true)", "physical_os_suspend_performed": false, "resume_notified": false, "physical_session_terminal": system_suspend_terminal_observed}));
@@ -888,6 +958,41 @@ fn run_windows(args: RunArgs) -> i32 {
     if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
     if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
+    if args.scenario == Scenario::PauseResumeActiveCleanup
+        && (!first_physical_commit_observed
+            || !pause_observed
+            || !pause_cleanup_verified
+            || !resume_requested
+            || !matches!(
+                (
+                    pause_requested_qpc_ticks,
+                    pause_cleanup_verified_qpc_ticks,
+                    resume_requested_qpc_ticks,
+                    resume_call_completed_qpc_ticks,
+                ),
+                (Some(pause), Some(cleanup), Some(resume), Some(completed))
+                    if pause <= cleanup && cleanup <= resume && resume <= completed
+            ))
+    {
+        return write_report(
+            &args,
+            Verdict::Fail,
+            "active-key pause/resume evidence is missing its verified-cleanup boundary",
+            details,
+        );
+    }
+    if args.scenario == Scenario::PauseResumeActiveCleanup {
+        let key = expected_physical_keys(plan.profile.as_ref(), &[0])[0];
+        let expected = [
+            ("key_press", key),
+            ("key_release", key),
+            ("key_press", key),
+            ("key_release", key),
+        ];
+        if let Err(error) = reconcile_event_sequence(&sink_events, &expected) {
+            return write_report(&args, Verdict::Fail, &error, details);
+        }
+    }
     if args.scenario == Scenario::SuspendResume {
         let power = session.system_power_snapshot();
         if !first_physical_commit_observed
