@@ -86,16 +86,23 @@ foreach ($name in $requiredFunctions) {
 $identityFixture25 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_25.json') -Raw | ConvertFrom-Json
 $identityFixture26 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_26.json') -Raw | ConvertFrom-Json
 $identityFixture27 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_27.json') -Raw | ConvertFrom-Json
-$identityFixture28 = $identityFixture27 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
-$identityFixture28.schema_version = 28
+$identityFixture28 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_28.json') -Raw | ConvertFrom-Json
+$identityFixture28Missing = $identityFixture28 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$identityFixture28Missing.records[0].authored_down_chord_index_available = $false
+$identityFixture29 = $identityFixture28 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$identityFixture29.schema_version = 29
 $identityMetrics25 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture25 } })
 $identityMetrics26 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture26 } })
 $identityMetrics27 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture27 } })
 $identityMetrics28 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture28 } })
+$identityMetrics28Missing = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture28Missing } })
+$identityMetrics29 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture29 } })
 $identityRecord25 = @($identityMetrics25.event_chord_identities)[0]
 $identityRecord26 = @($identityMetrics26.event_chord_identities)[0]
 $identityRecord27 = @($identityMetrics27.event_chord_identities)[0]
 $identityRecord28 = @($identityMetrics28.event_chord_identities)[0]
+$identityRecord28Missing = @($identityMetrics28Missing.event_chord_identities)[0]
+$identityRecord29 = @($identityMetrics29.event_chord_identities)[0]
 if ($identityRecord25.down_chord_index -ne 17 -or
     $identityRecord25.down_chord_identity_kind -ne 'compiled_packet_index_v25' -or
     $identityRecord25.down_chord_identity_schema_version -ne 25 -or
@@ -108,29 +115,64 @@ if ($identityRecord25.down_chord_index -ne 17 -or
     $identityRecord27.down_chord_identity_kind -ne 'authored_down_chord_index_v27' -or
     $identityRecord27.down_chord_identity_schema_version -ne 27 -or
     -not $identityRecord27.down_chord_identity_available -or
+    $identityRecord28.down_chord_index -ne 37 -or
+    $identityRecord28.down_chord_identity_kind -ne 'authored_down_chord_index_v28' -or
+    $identityRecord28.down_chord_identity_schema_version -ne 28 -or
+    -not $identityRecord28.down_chord_identity_available -or
     $identityMetrics25.counts.missing_down_chord_identity -ne 0 -or
     $identityMetrics26.counts.missing_down_chord_identity -ne 0 -or
     $identityMetrics27.counts.missing_down_chord_identity -ne 0 -or
-    $identityRecord28.down_chord_identity_available -or
-    $identityRecord28.down_chord_identity_kind -ne 'unsupported_schema_v28' -or
-    $identityMetrics28.counts.missing_down_chord_identity -ne 1) {
-    throw 'qualification reader did not preserve v25/v26/v27 Down chord identity or fail closed on a future schema'
+    $identityMetrics28.counts.missing_down_chord_identity -ne 0 -or
+    $identityRecord28Missing.down_chord_identity_available -or
+    $null -ne $identityRecord28Missing.down_chord_index -or
+    $identityRecord28Missing.down_chord_identity_kind -ne 'authored_down_chord_index_v28' -or
+    $identityMetrics28Missing.counts.missing_down_chord_identity -ne 1 -or
+    $identityRecord29.down_chord_identity_available -or
+    $identityRecord29.down_chord_identity_kind -ne 'unsupported_schema_v29' -or
+    $identityRecord29.down_chord_identity_schema_version -ne 29 -or
+    $identityMetrics29.counts.missing_down_chord_identity -ne 1) {
+    throw 'qualification reader did not preserve v25/v26/v27/v28 Down chord identity or fail closed for missing and future identities'
 }
 $identityDisposition27 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
     -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics27
-$identityDisposition28 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
+$identityDisposition28V2 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
     -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics28
+$identityDisposition28V3 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV3' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics28
+$identityDisposition28MissingV2 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics28Missing
+$identityDisposition28MissingV3 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV3' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics28Missing
+$identityDisposition29V2 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics29
+$identityDisposition29V3 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV3' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics29
 $identityMetrics27Json = ConvertTo-Json -InputObject $identityMetrics27 -Depth 12 -Compress
 if ($identityDisposition27.status -ne 'PASS' -or
     $identityDisposition27.attribution_status -ne 'COMPLETE' -or
     $identityDisposition27.attributed_down_chord_count -ne 1 -or
-    $identityDisposition28.status -ne 'INCOMPLETE' -or
-    $identityDisposition28.attribution_status -ne 'INCOMPLETE' -or
-    $identityDisposition28.reason -notmatch 'attribution-dependent timed results are ineligible' -or
+    $identityDisposition28V2.status -ne 'PASS' -or
+    $identityDisposition28V2.attribution_status -ne 'COMPLETE' -or
+    $identityDisposition28V2.attributed_down_chord_count -ne 1 -or
+    $identityDisposition28V3.status -ne 'PASS' -or
+    $identityDisposition28V3.attribution_status -ne 'COMPLETE' -or
+    $identityDisposition28V3.attributed_down_chord_count -ne 1 -or
+    $identityDisposition28MissingV2.status -ne 'INCOMPLETE' -or
+    $identityDisposition28MissingV2.attribution_status -ne 'INCOMPLETE' -or
+    $identityDisposition28MissingV3.status -ne 'INCOMPLETE' -or
+    $identityDisposition28MissingV3.attribution_status -ne 'INCOMPLETE' -or
+    $identityDisposition29V2.status -ne 'INCOMPLETE' -or
+    $identityDisposition29V2.attribution_status -ne 'INCOMPLETE' -or
+    $identityDisposition29V3.status -ne 'INCOMPLETE' -or
+    $identityDisposition29V3.attribution_status -ne 'INCOMPLETE' -or
+    $identityDisposition28MissingV3.reason -notmatch 'attribution-dependent timed results are ineligible' -or
     $identityMetrics27Json -match 'resume_cleanup_delay') {
-    throw ('PlaybackCoreLifecycleV2 timed row did not require complete Down chord attribution or reintroduced a retired delay diagnostic: v27=' +
-        (ConvertTo-Json -InputObject $identityDisposition27 -Compress) + '; v28=' +
-        (ConvertTo-Json -InputObject $identityDisposition28 -Compress) + '; retired_delay=' +
+    throw ('PlaybackCoreLifecycle V2/V3 timed rows did not accept complete schema-28 identity, reject missing/future identity, or preserve the retired delay diagnostic: v27=' +
+        (ConvertTo-Json -InputObject $identityDisposition27 -Compress) + '; v28-v2=' +
+        (ConvertTo-Json -InputObject $identityDisposition28V2 -Compress) + '; v28-v3=' +
+        (ConvertTo-Json -InputObject $identityDisposition28V3 -Compress) + '; v28-missing-v3=' +
+        (ConvertTo-Json -InputObject $identityDisposition28MissingV3 -Compress) + '; v29-v3=' +
+        (ConvertTo-Json -InputObject $identityDisposition29V3 -Compress) + '; retired_delay=' +
         [string]($identityMetrics27Json -match 'resume_cleanup_delay'))
 }
 $caseRunnerPath = Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'

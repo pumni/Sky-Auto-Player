@@ -390,6 +390,7 @@ function Get-TelemetryDownChordIdentity {
         25 { [pscustomobject]@{ kind = 'compiled_packet_index_v25'; available_field = 'compiled_packet_index_available'; value_field = 'compiled_packet_index' } }
         26 { [pscustomobject]@{ kind = 'authored_down_chord_index_v26'; available_field = 'authored_down_chord_index_available'; value_field = 'authored_down_chord_index' } }
         27 { [pscustomobject]@{ kind = 'authored_down_chord_index_v27'; available_field = 'authored_down_chord_index_available'; value_field = 'authored_down_chord_index' } }
+        28 { [pscustomobject]@{ kind = 'authored_down_chord_index_v28'; available_field = 'authored_down_chord_index_available'; value_field = 'authored_down_chord_index' } }
         default { [pscustomobject]@{ kind = 'unsupported_schema_v' + $SchemaVersion; available_field = $null; value_field = $null } }
     }
     $available = $false

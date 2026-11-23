@@ -427,13 +427,18 @@ fn native_telemetry_schema_28_serialized_key_sets_are_pinned() {
         "../../../tests/fixtures/native-telemetry-schema-28-keys.json"
     ))
     .expect("schema-28 key fixture");
-    let record = record_with_index(7, TRACE_KIND_UP, 1, 1);
+    let record = record_with_down_chord_index(7, TRACE_KIND_DOWN, 1, 1, Some(37));
     let mut output = super::NativeTelemetryOutput::new(TelemetryMode::Off, 0);
     output.records.push_back(record);
     output.summary.observe(&record);
 
     let value = serde_json::to_value(output).expect("serialize current telemetry output");
     assert_eq!(value["schema_version"], 28);
+    assert_eq!(value["records"][0]["authored_down_chord_index"], 37);
+    assert_eq!(
+        value["records"][0]["authored_down_chord_index_available"],
+        true
+    );
     for (value, expected_key) in [
         (&value, "NativeTelemetryOutput"),
         (&value["summary"], "NativeTelemetrySummary"),
