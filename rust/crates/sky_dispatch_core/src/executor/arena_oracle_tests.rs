@@ -288,11 +288,58 @@ fn empty_and_fresh_legacy_executors_keep_zeroed_arena_state() {
 }
 
 #[test]
-fn prepared_retained_capacity_budget_keeps_exact_accept_and_reject_boundary() {
-    let schedule = fixture();
+fn prepared_retained_capacity_budget_uses_actual_plan_capacities_and_exact_boundary() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 20,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "paired Down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 21,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "paired Up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 22,
+                kind: ActionKind::Up,
+                scheduled_us: 3_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "unmatched Up".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("paired generation and unmatched Up schedule");
     let frequency = NonZeroU64::new(FREQUENCY_HZ).expect("odd QPC frequency");
     let baseline =
         PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 0).expect("baseline plan");
+    let plan_memory = baseline.memory_metrics();
+    assert_eq!(plan_memory.unmatched_up_count, 1);
+    assert!(plan_memory.unmatched_up_capacity >= plan_memory.unmatched_up_count);
+    let expected_plan_capacity = plan_memory
+        .chord_capacity
+        .checked_mul(std::mem::size_of::<DownChordHeaderTicks>())
+        .and_then(|bytes| {
+            plan_memory
+                .intent_capacity
+                .checked_mul(std::mem::size_of::<DownIntentTicks>())
+                .and_then(|intents| bytes.checked_add(intents))
+        })
+        .and_then(|bytes| {
+            plan_memory
+                .unmatched_up_capacity
+                .checked_mul(std::mem::size_of::<PreparedUnmatchedUpMetadata>())
+                .and_then(|unmatched| bytes.checked_add(unmatched))
+        })
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<PreparedDispatchSchedule>()))
+        .expect("prepared plan capacity from actual allocations");
+    assert_eq!(plan_memory.plan_capacity_bytes, expected_plan_capacity);
     let schedule_memory = schedule
         .memory_metrics()
         .expect("schedule capacity metrics");
@@ -303,6 +350,11 @@ fn prepared_retained_capacity_budget_keeps_exact_accept_and_reject_boundary() {
     let combined_capacity = schedule_bytes
         .checked_add(baseline.memory_metrics().plan_capacity_bytes)
         .expect("overlapping capacity bytes");
+    let expected_peak = schedule
+        .compile_memory
+        .phase_peak_capacity_bytes
+        .max(combined_capacity);
+    assert_eq!(plan_memory.overlapping_peak_capacity_bytes, expected_peak);
     let exact_fit_caller = crate::model::MAX_RETAINED_DISPATCH_BYTES - combined_capacity;
     let exact_fit = PreparedDispatchSchedule::prepare(&schedule, frequency, 101, exact_fit_caller)
         .expect("plan exactly at retained startup budget");

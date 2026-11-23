@@ -160,9 +160,6 @@ pub(crate) fn drain_stale_metadata_observation(
                 sendinput_completion_qpc_ticks: None,
                 post_send_qpc_ticks: None,
                 observation_qpc_ticks: None,
-                pre_call_ticks: None,
-                sendinput_completion_ticks: None,
-                completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
                 completion_error_ticks: 0,
@@ -219,7 +216,9 @@ pub(crate) fn drain_up_send_outcome(
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-off duration conversion failure: {error:?}"))
         })?;
-    let completion_residual_us = qpc_clock
+    // Preserve the QPC ordering and range guard formerly needed to emit the
+    // legacy completion-residual field.
+    qpc_clock
         .duration_to_us(
             observation
                 .sendinput_completion_qpc
@@ -313,7 +312,6 @@ pub(crate) fn drain_up_send_outcome(
         observation,
         qpc_clock,
         core_post_send_us,
-        completion_residual_us,
         observation.dispatch_ready_qpc.is_some(),
     )?;
     if let Some(wake_to_send_us) = wake_to_send_start_us {

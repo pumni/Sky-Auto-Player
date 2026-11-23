@@ -125,7 +125,11 @@ Worker metrics keep QPC tick counters as their source values and retain the
 existing 50 ms live-publication cadence. A snapshot reader copies the dispatch
 and observer source slots as one readout, then derives public microsecond
 fields after releasing the slots. This keeps unit conversion out of the
-dispatch publisher while preserving the public snapshot and telemetry schema.
+dispatch publisher while keeping the public snapshot projection and telemetry
+schema coordinated. Native telemetry schema 28 omits unconsumed compatibility
+aliases for timeline-relative send timestamps, completion residual, dispatch
+start error, and adaptive lead; consumers use sampled absolute QPC fields and
+authored lateness. Historical schema 25–27 key fixtures remain pinned.
 Observer sample expectations, pending work, missing samples, and queue drops
 remain explicit in the snapshot.
 

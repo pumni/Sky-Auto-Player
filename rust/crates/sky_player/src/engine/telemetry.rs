@@ -20,11 +20,9 @@ use sky_dispatch_win32::input::SendTransactionStatus;
 #[serde(rename_all = "snake_case")]
 pub enum TimestampProvenance {
     Measured = 0,
-    DerivedFromPreCall = 1,
     #[default]
     Unavailable = 2,
     DerivedFromWakeQpc = 3,
-    DerivedFromSendInputCompletion = 4,
     ConfiguredTarget = 5,
     DerivedFromTimerArm = 6,
 }
@@ -78,12 +76,6 @@ pub struct RtTraceRecord {
     pub sendinput_completion_qpc_ticks: u64,
     pub post_send_qpc_ticks: u64,
     pub observation_qpc_ticks: u64,
-    /// Deprecated timeline-offset compatibility key converted from the
-    /// sampled pre-call QPC and immutable epoch.
-    pub send_started_ticks: u64,
-    /// Deprecated timeline-offset compatibility key converted from the
-    /// sampled SendInput completion QPC and immutable epoch.
-    pub send_completed_ticks: u64,
     pub authored_lateness_ticks: i64,
     pub physical_floor_displacement_ticks: u64,
     pub hold_floor_displacement_ticks: u64,
@@ -93,11 +85,7 @@ pub struct RtTraceRecord {
     pub hol_delay_lower_bound_ticks: u64,
     pub unattributed_lateness_ticks: u64,
     pub sendinput_envelope_ticks: u64,
-    /// Deprecated compatibility completion residual in microseconds.
-    pub dispatch_cost_us: u64,
     pub core_post_send_duration_us: u64,
-    /// Legacy start-error alias; `authored_lateness_ticks` is authoritative.
-    pub dispatch_start_error_ticks: i64,
     pub completion_error_ticks: i64,
     pub authored_completion_error_ticks: i64,
     /// Zero-based sequence in the exported session trace. This is not a
@@ -108,9 +96,6 @@ pub struct RtTraceRecord {
     /// reviewable by trace consumers.
     pub source_action_index: u32,
     pub event_index: u32,
-    /// Historical compatibility field. Adaptive lead is no longer part of
-    /// runtime evidence and this publication adapter always emits zero.
-    pub applied_lead_ticks: u32,
     pub win32_error: u32,
     pub up_mask: u16,
     pub down_mask: u16,
@@ -155,8 +140,6 @@ pub struct RtTraceRecord {
     pub sendinput_completion_qpc_provenance: TimestampProvenance,
     pub post_send_qpc_provenance: TimestampProvenance,
     pub observation_qpc_provenance: TimestampProvenance,
-    pub send_started_ticks_provenance: TimestampProvenance,
-    pub send_completed_ticks_provenance: TimestampProvenance,
     pub post_send_metrics_available: bool,
     pub kind: u8,
     pub outcome: u8,
@@ -169,7 +152,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 27;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 28;
 pub const NATIVE_UP_SLOT_TRACE_CAPACITY: usize = 4_096;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
@@ -231,13 +214,6 @@ pub(crate) struct TraceTiming {
     pub(crate) sendinput_completion_qpc_ticks: Option<u64>,
     pub(crate) post_send_qpc_ticks: Option<u64>,
     pub(crate) observation_qpc_ticks: Option<u64>,
-    /// Compatibility output `send_started_ticks` is sourced from this
-    /// prepared-sender pre-call boundary.
-    pub(crate) pre_call_ticks: Option<TimelineTicks>,
-    /// Compatibility output `send_completed_ticks` is the SendInput return
-    /// boundary.
-    pub(crate) sendinput_completion_ticks: Option<TimelineTicks>,
-    pub(crate) completion_residual_us: u64,
     pub(crate) core_post_send_duration_us: u64,
     pub(crate) post_send_metrics_available: bool,
     pub(crate) completion_error_ticks: i64,
@@ -360,10 +336,6 @@ impl RtTraceRecord {
         let authored_lateness_ticks =
             checked_signed_delta(timing.pre_call_qpc_ticks, timing.physical_target_qpc_ticks)?;
         let wake_offset_ticks = timing.wake_qpc_ticks.and(timing.wake_ticks);
-        let send_started_ticks = timing.pre_call_qpc_ticks.and(timing.pre_call_ticks);
-        let send_completed_ticks = timing
-            .sendinput_completion_qpc_ticks
-            .and(timing.sendinput_completion_ticks);
         Ok(Self {
             up_slot_attribution_missing: false,
             wait_sequence: None,
@@ -487,25 +459,10 @@ impl RtTraceRecord {
             ),
             post_send_qpc_provenance: provenance(timing.post_send_qpc_ticks.is_some()),
             observation_qpc_provenance: provenance(timing.observation_qpc_ticks.is_some()),
-            send_started_ticks_provenance: if send_started_ticks.is_some() {
-                TimestampProvenance::DerivedFromPreCall
-            } else {
-                TimestampProvenance::Unavailable
-            },
-            send_completed_ticks_provenance: if send_completed_ticks.is_some() {
-                TimestampProvenance::DerivedFromSendInputCompletion
-            } else {
-                TimestampProvenance::Unavailable
-            },
-            send_started_ticks: send_started_ticks.map_or(0, TimelineTicks::as_u64),
-            send_completed_ticks: send_completed_ticks.map_or(0, TimelineTicks::as_u64),
-            dispatch_cost_us: timing.completion_residual_us,
             core_post_send_duration_us: timing.core_post_send_duration_us,
             post_send_metrics_available: timing.post_send_metrics_available,
-            dispatch_start_error_ticks: authored_lateness_ticks.unwrap_or_default(),
             completion_error_ticks: timing.completion_error_ticks,
             authored_completion_error_ticks: timing.authored_completion_error_ticks,
-            applied_lead_ticks: 0,
             win32_error: context.win32_error,
             requested_count,
             sent_count,
@@ -572,8 +529,6 @@ pub struct NativeTelemetrySummary {
     pub requested_key_count: u64,
     pub sent_key_count: u64,
     pub skipped_key_count: u64,
-    pub max_dispatch_start_error_ticks: i64,
-    pub max_dispatch_start_error_abs_ticks: u64,
     pub max_lateness_us: i64,
     pub max_send_duration_us: u64,
     pub lateness_histogram_50us: [u64; 16],
@@ -637,8 +592,8 @@ impl Default for TimingSemantics {
             sender_start_boundary: "pre_call_qpc_before_sendinput",
             sender_completion_boundary: "sendinput_completion_qpc",
             timestamp_provenance: concat!(
-                "measured|derived_from_wake_qpc|derived_from_pre_call|",
-                "derived_from_send_input_completion|configured_target|derived_from_timer_arm|unavailable",
+                "measured|derived_from_wake_qpc|configured_target|",
+                "derived_from_timer_arm|unavailable",
             ),
             final_policy_boundary: "sampled_when_present_else_unavailable",
             observer_boundary: "post_send_capture_and_observer_drain_are_distinct",
@@ -672,17 +627,7 @@ impl NativeTelemetrySummary {
             .skipped_key_count
             .saturating_add(u64::from(record.skipped_count));
         if record.authored_lateness_available {
-            let first_lateness_sample = self.authored_lateness_samples == 0;
             self.authored_lateness_samples = self.authored_lateness_samples.saturating_add(1);
-            self.max_dispatch_start_error_ticks = if first_lateness_sample {
-                record.dispatch_start_error_ticks
-            } else {
-                self.max_dispatch_start_error_ticks
-                    .max(record.dispatch_start_error_ticks)
-            };
-            self.max_dispatch_start_error_abs_ticks = self
-                .max_dispatch_start_error_abs_ticks
-                .max(record.dispatch_start_error_ticks.unsigned_abs());
             self.max_authored_lateness_ticks = if self.authored_lateness_samples == 1 {
                 record.authored_lateness_ticks
             } else {

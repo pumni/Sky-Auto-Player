@@ -600,6 +600,49 @@ mod tests {
     }
 
     #[test]
+    fn bundle_keeps_calibration_executable_and_excludes_mutable_cache() {
+        let valid = valid_config();
+        let resources = valid["bundle"]["resources"]
+            .as_object()
+            .expect("bundle resource map");
+        assert_eq!(
+            resources
+                .get("resources/native_calibration.exe")
+                .and_then(Value::as_str),
+            Some("native_calibration.exe")
+        );
+        assert!(
+            !resources
+                .keys()
+                .any(|path| path.contains("input_latency.json")),
+            "mutable calibration cache must remain in app data, outside the installer"
+        );
+
+        let mut missing_calibration = valid_config();
+        missing_calibration["bundle"]["resources"]
+            .as_object_mut()
+            .expect("bundle resource map")
+            .remove("resources/native_calibration.exe");
+        assert!(
+            validate_config_value(&missing_calibration, "4.0.0-alpha.1").is_err(),
+            "calibration worker stays packaged until parity evidence supports retirement"
+        );
+
+        let mut bundled_cache = valid_config();
+        bundled_cache["bundle"]["resources"]
+            .as_object_mut()
+            .expect("bundle resource map")
+            .insert(
+                "input_latency.json".into(),
+                json!("cache/input_latency.json"),
+            );
+        assert!(
+            validate_config_value(&bundled_cache, "4.0.0-alpha.1").is_err(),
+            "user calibration cache must not become immutable installer payload"
+        );
+    }
+
+    #[test]
     fn config_contract_requires_the_exact_bundle_publisher() {
         assert!(validate_config_value(&valid_config(), "4.0.0-alpha.1").is_ok());
 

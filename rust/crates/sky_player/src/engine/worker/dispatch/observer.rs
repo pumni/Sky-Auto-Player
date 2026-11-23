@@ -1,6 +1,5 @@
 use super::super::super::{
-    DurationTicks, QpcClock, SharedMetrics, TelemetryCollector, TimelineTicks,
-    try_publish_observer_metrics,
+    DurationTicks, QpcClock, SharedMetrics, TelemetryCollector, try_publish_observer_metrics,
 };
 use super::super::health::build_dispatch_budget;
 use super::super::wait::WaitObservation;
@@ -40,7 +39,6 @@ pub(super) fn qpc_span_us(
 
 struct DownPreCallEvidence {
     duration_us: Option<u64>,
-    effective_ticks: Option<TimelineTicks>,
     policy_to_pre_call_us: Option<u64>,
     wake_to_pre_call_us: Option<u64>,
 }
@@ -63,7 +61,9 @@ fn down_pre_call_evidence(
             })
         })
         .transpose()?;
-    let effective_ticks = observation
+    // Keep the epoch-relative ordering check even though that compatibility
+    // projection is no longer exported in trace records.
+    let _pre_call_offset = observation
         .pre_call_qpc
         .map(|pre_call| down_effective_ticks(observation, pre_call))
         .transpose()?;
@@ -86,7 +86,6 @@ fn down_pre_call_evidence(
         .transpose()?;
     Ok(DownPreCallEvidence {
         duration_us,
-        effective_ticks,
         policy_to_pre_call_us,
         wake_to_pre_call_us,
     })
@@ -365,7 +364,9 @@ pub(crate) fn drain_down_send_outcome(
         down_observer_evidence(observation);
     let pre_call_evidence = down_pre_call_evidence(observation, qpc_clock)?;
     let pre_call_to_completion_us = pre_call_evidence.duration_us;
-    let completion_residual_us = qpc_clock
+    // Preserve the QPC ordering and range guard formerly needed to emit the
+    // legacy completion-residual field.
+    qpc_clock
         .duration_to_us(
             observation
                 .sendinput_completion_qpc
@@ -381,7 +382,6 @@ pub(crate) fn drain_down_send_outcome(
                 "note-on completion-residual conversion failure: {error:?}"
             ))
         })?;
-    let pre_call_effective_ticks = pre_call_evidence.effective_ticks;
     let completed_effective_ticks =
         down_effective_ticks(observation, observation.sendinput_completion_qpc)?;
     let wake_ticks = observation
@@ -497,12 +497,9 @@ pub(crate) fn drain_down_send_outcome(
         observation,
         telemetry,
         core_post_send_us,
-        completion_residual_us,
         observation.dispatch_ready_qpc.is_some(),
         completion_error_ticks,
         authored_completion_error_ticks,
-        pre_call_effective_ticks,
-        Some(completed_effective_ticks),
         wake_ticks,
         now_qpc_ticks,
         recovered_partial_up,
