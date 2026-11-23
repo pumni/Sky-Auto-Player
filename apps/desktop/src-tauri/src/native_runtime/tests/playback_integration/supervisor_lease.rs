@@ -38,7 +38,6 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
-        resume_cleanup_delay_us: 17_467,
         frame_us: 16_667,
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,
@@ -52,7 +51,6 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
         &schedule,
         qpc.frequency_hz(),
         timing.min_hold_us,
-        timing.resume_cleanup_delay_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
@@ -95,7 +93,6 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook: None,
-                restore_race_hook: None,
                 focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
@@ -657,7 +654,6 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
-        resume_cleanup_delay_us: 17_467,
         frame_us: 16_667,
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,
@@ -671,7 +667,6 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
         &schedule,
         qpc.frequency_hz(),
         timing.min_hold_us,
-        timing.resume_cleanup_delay_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
@@ -714,7 +709,6 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook: None,
-                restore_race_hook: None,
                 focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
@@ -858,7 +852,6 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
-        resume_cleanup_delay_us: 17_467,
         frame_us: 16_667,
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,
@@ -872,7 +865,6 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
         &schedule,
         qpc.frequency_hz(),
         timing.min_hold_us,
-        timing.resume_cleanup_delay_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
@@ -915,7 +907,6 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook: None,
-                restore_race_hook: None,
                 focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,

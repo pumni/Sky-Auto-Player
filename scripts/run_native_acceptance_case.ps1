@@ -2,7 +2,7 @@ param(
     [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2')]
     [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
-[ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'short-up-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-barrier', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
+[ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'short-up-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
     [string]$Scenario,
     [ValidateSet('canonical-single', 'safety-smoke', 'dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle', 'boundary-60fps-margin-0', 'boundary-120fps-margin-500')]
     [string]$Workload,
@@ -216,7 +216,7 @@ function Assert-DispatchCleanupM3SessionIdentity {
         'mixed-up-down', 'ambiguous-packet', 'preflight-user-held',
         'modifier-held-final-boundary', 'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change',
         'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume',
-        'pause-resume-barrier', 'suspend-resume', 'stop-cleanup', 'skip-cleanup',
+        'suspend-resume', 'stop-cleanup', 'skip-cleanup',
         'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile'
     )
     if ($Workload -in $performanceWorkloads) {
@@ -634,7 +634,6 @@ try {
         hol_stall_us = $HolStallUs
         hol_cycles = $HolCycles
         expected_hold_us = if ($usesSessionQualificationContracts) { [long]$sessionTimingFloors.expected_hold_us } else { [long][Math]::Ceiling(1000000.0 / $GameFps) * 2 + $TimingMarginUs }
-        expected_resume_cleanup_delay_us = if ($usesSessionQualificationContracts) { [long]$sessionTimingFloors.expected_resume_cleanup_delay_us } else { [long][Math]::Ceiling(1000000.0 / $GameFps) + $TimingMarginUs }
         profile = 'production'
         cargo_profile = if ($harnessManifest) { $harnessManifest.cargo_profile } else { 'legacy-checkout-release' }
         cargo_features = if ($harnessManifest) { @($harnessManifest.cargo_features) } else { @() }
@@ -696,7 +695,6 @@ try {
         $runConfig['session_seed'] = $null
         $runConfig['seed_mode'] = 'none; deterministic workload definitions do not accept a PRNG seed'
         $runConfig['configured_H_us'] = [long]$sessionTimingFloors.configured_H_us
-        $runConfig['resume_cleanup_delay_us'] = [long]$sessionTimingFloors.resume_cleanup_delay_us
     }
     $runConfig['machine_name'] = [Environment]::MachineName
     $runConfig['os_boot_time_utc'] = $operatingSystem.LastBootUpTime.ToUniversalTime().ToString('O')
@@ -899,7 +897,6 @@ try {
         session_seed = $null
         seed_mode = if ($usesSessionQualificationContracts) { 'none; deterministic workload definitions do not accept a PRNG seed' } else { $null }
         configured_H_us = if ($usesSessionQualificationContracts) { [long]$sessionTimingFloors.configured_H_us } else { $null }
-        resume_cleanup_delay_us = if ($usesSessionQualificationContracts) { [long]$sessionTimingFloors.resume_cleanup_delay_us } else { $null }
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_source_role = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'source_role' } else { $null }

@@ -313,7 +313,6 @@ pub struct DispatchTimingWindow {
     pub down_not_before_qpc: QpcTicks,
     pub packet_not_before_qpc: QpcTicks,
     pub hold_floor_mask: u16,
-    pub resume_barrier_mask: u16,
 }
 
 /// Bounded 15-slot musical executor.
@@ -326,9 +325,8 @@ pub struct DispatchExecutor {
     key_registry: KeyRegistry,
     chord_cursor: usize,
     slots: [MusicalSlot; MAX_KEYS],
-    resume_barrier_qpc: Option<QpcTicks>,
     min_hold_ticks: DurationTicks,
-    resume_cleanup_delay_ticks: DurationTicks,
+    verified_cleanup_seen: bool,
     counters: GenerationCounters,
     total_generations: u64,
     activated_generations: u64,
@@ -390,8 +388,6 @@ pub struct PreparedDispatchSchedule {
     qpc_frequency_hz: NonZeroU64,
     min_hold_us: u64,
     min_hold_ticks: DurationTicks,
-    resume_cleanup_delay_us: u64,
-    resume_cleanup_delay_ticks: DurationTicks,
     total_us: u64,
     authored_timestamp_group_count: usize,
     has_down: bool,
@@ -407,14 +403,12 @@ impl PreparedDispatchSchedule {
         schedule: &RuntimeSchedule,
         qpc_frequency_hz: NonZeroU64,
         min_hold_us: u64,
-        resume_cleanup_delay_us: u64,
         caller_retained_capacity_bytes: usize,
     ) -> Result<Self, String> {
         Self::prepare_with_cancellation(
             schedule,
             qpc_frequency_hz,
             min_hold_us,
-            resume_cleanup_delay_us,
             caller_retained_capacity_bytes,
             || Ok(()),
         )
@@ -426,7 +420,6 @@ impl PreparedDispatchSchedule {
         schedule: &RuntimeSchedule,
         qpc_frequency_hz: NonZeroU64,
         min_hold_us: u64,
-        resume_cleanup_delay_us: u64,
         caller_retained_capacity_bytes: usize,
         mut checkpoint: impl FnMut() -> Result<(), String>,
     ) -> Result<Self, String> {
@@ -442,9 +435,6 @@ impl PreparedDispatchSchedule {
         let min_hold_ticks = qpc_to_ticks(min_hold_us)
             .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
             .ok_or_else(|| "prepared hold-floor conversion overflow".to_string())?;
-        let resume_cleanup_delay_ticks = qpc_to_ticks(resume_cleanup_delay_us)
-            .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
-            .ok_or_else(|| "prepared resume-cleanup delay conversion overflow".to_string())?;
         crate::validation::validate_min_hold_feasibility_ticks_with_checkpoint(
             schedule,
             min_hold_us,
@@ -572,8 +562,6 @@ impl PreparedDispatchSchedule {
             qpc_frequency_hz,
             min_hold_us,
             min_hold_ticks,
-            resume_cleanup_delay_us,
-            resume_cleanup_delay_ticks,
             total_us,
             authored_timestamp_group_count: schedule.authored_timestamp_group_count,
             has_down: !schedule.down_chords.is_empty(),
@@ -582,15 +570,8 @@ impl PreparedDispatchSchedule {
         })
     }
 
-    pub fn is_compatible(
-        &self,
-        qpc_frequency_hz: NonZeroU64,
-        min_hold_us: u64,
-        resume_cleanup_delay_us: u64,
-    ) -> bool {
-        self.qpc_frequency_hz == qpc_frequency_hz
-            && self.min_hold_us == min_hold_us
-            && self.resume_cleanup_delay_us == resume_cleanup_delay_us
+    pub fn is_compatible(&self, qpc_frequency_hz: NonZeroU64, min_hold_us: u64) -> bool {
+        self.qpc_frequency_hz == qpc_frequency_hz && self.min_hold_us == min_hold_us
     }
 
     pub fn qpc_frequency_hz(&self) -> NonZeroU64 {
@@ -599,10 +580,6 @@ impl PreparedDispatchSchedule {
 
     pub fn min_hold_us(&self) -> u64 {
         self.min_hold_us
-    }
-
-    pub fn resume_cleanup_delay_us(&self) -> u64 {
-        self.resume_cleanup_delay_us
     }
 
     pub fn total_us(&self) -> u64 {
@@ -694,7 +671,6 @@ impl DispatchExecutor {
             key_registry,
             total_generations,
             min_hold_ticks,
-            resume_cleanup_delay_ticks,
             ..
         } = plan;
         Self {
@@ -705,9 +681,8 @@ impl DispatchExecutor {
             key_registry,
             chord_cursor: 0,
             slots: [MusicalSlot::default(); MAX_KEYS],
-            resume_barrier_qpc: None,
             min_hold_ticks,
-            resume_cleanup_delay_ticks,
+            verified_cleanup_seen: false,
             counters: GenerationCounters::default(),
             total_generations,
             activated_generations: 0,
@@ -718,27 +693,19 @@ impl DispatchExecutor {
     pub fn new<F, E>(
         schedule: &RuntimeSchedule,
         min_hold_ticks: DurationTicks,
-        resume_cleanup_delay_ticks: DurationTicks,
         us_to_ticks: F,
     ) -> Result<Self, String>
     where
         F: FnMut(u64) -> Result<TimelineTicks, E>,
         E: std::fmt::Display,
     {
-        Self::new_with_cancellation(
-            schedule,
-            min_hold_ticks,
-            resume_cleanup_delay_ticks,
-            us_to_ticks,
-            || Ok(()),
-        )
+        Self::new_with_cancellation(schedule, min_hold_ticks, us_to_ticks, || Ok(()))
     }
 
     /// Construct a new 15-slot executor with bounded memory admission and periodic cancellation checkpoints.
     pub fn new_with_cancellation<F, E, C>(
         schedule: &RuntimeSchedule,
         min_hold_ticks: DurationTicks,
-        resume_cleanup_delay_ticks: DurationTicks,
         mut us_to_ticks: F,
         mut checkpoint: C,
     ) -> Result<Self, String>
@@ -793,9 +760,8 @@ impl DispatchExecutor {
             key_registry: schedule.key_registry.clone(),
             chord_cursor: 0,
             slots: [MusicalSlot::default(); MAX_KEYS],
-            resume_barrier_qpc: None,
             min_hold_ticks,
-            resume_cleanup_delay_ticks,
+            verified_cleanup_seen: false,
             counters: GenerationCounters::default(),
             total_generations: schedule.generation_count,
             activated_generations: 0,
@@ -1034,20 +1000,9 @@ impl DispatchExecutor {
         }
     }
 
-    #[inline]
-    pub fn resume_barrier_qpc(&self) -> Option<QpcTicks> {
-        self.resume_barrier_qpc
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn resume_barrier_ticks(&self) -> TimelineTicks {
-        TimelineTicks::from_raw(self.resume_barrier_qpc.unwrap_or(QpcTicks::ZERO).as_u64())
-    }
-
     /// Evaluate the current state at an absolute QPC time and decide the next action.
-    /// Authored targets are offsets from the current playback epoch; physical
-    /// H and the separately scoped verified-cleanup resume barrier remain
-    /// absolute across pause-driven epoch changes.
+    /// Authored targets are offsets from the current playback epoch; physical H
+    /// remains absolute across pause-driven epoch changes.
     pub fn evaluate_at(
         &self,
         now_qpc: QpcTicks,
@@ -1096,7 +1051,6 @@ impl DispatchExecutor {
         let mut chord_eligible = false;
         let mut chord_earliest_due_qpc = QpcTicks::ZERO;
         let mut chord_authored_target_qpc = None;
-        let mut resume_barrier_mask = 0u16;
 
         if let Some(chord) = chord_opt {
             let authored_down_qpc = epoch_qpc
@@ -1107,16 +1061,6 @@ impl DispatchExecutor {
             if now_qpc < authored_down_qpc {
                 chord_eligible = false;
             }
-            if let Some(resume_barrier) = self.resume_barrier_qpc
-                && resume_barrier > authored_down_qpc
-            {
-                chord_earliest_due_qpc = chord_earliest_due_qpc.max(resume_barrier);
-                resume_barrier_mask |= chord.down_mask;
-                if now_qpc < resume_barrier {
-                    chord_eligible = false;
-                }
-            }
-
             for intent in chord.intents {
                 let k = intent.key_slot as usize;
                 let slot = &self.slots[k];
@@ -1159,11 +1103,6 @@ impl DispatchExecutor {
                         down_not_before_qpc,
                         packet_not_before_qpc: musical_up_not_before_qpc.max(down_not_before_qpc),
                         hold_floor_mask: up_hold_floor_mask,
-                        resume_barrier_mask: if chord_eligible {
-                            resume_barrier_mask
-                        } else {
-                            0
-                        },
                     },
                 })
             }
@@ -1358,12 +1297,12 @@ impl DispatchExecutor {
         Ok(())
     }
 
-    /// Apply verified resumable cleanup at timestamp `completion_ticks`.
+    /// Apply verified resumable cleanup.
     ///
     /// Clears active musical owners in all 15 slots without physical replay,
-    /// marks cancelled generations in accounting, and sets a separately scoped
-    /// resume-cleanup barrier after completion.
-    pub fn on_verified_cleanup_at(&mut self, completion_qpc: QpcTicks) -> Result<u64, String> {
+    /// marks cancelled generations in accounting, and records that subsequent
+    /// worker transitions may proceed once their other gates are satisfied.
+    pub fn on_verified_cleanup(&mut self) -> Result<u64, String> {
         let active_count = self
             .slots
             .iter()
@@ -1374,26 +1313,19 @@ impl DispatchExecutor {
             .cancelled
             .checked_add(active_count)
             .ok_or("cancelled counter overflow")?;
-        let barrier = completion_qpc
-            .checked_add_duration(self.resume_cleanup_delay_ticks)
-            .map_err(|error| format!("resume barrier overflow: {error}"))?;
         for slot in &mut self.slots {
             slot.active_generation = None;
             slot.release_not_before_qpc = QpcTicks::ZERO;
         }
         self.counters.cancelled = next_cancelled;
-        self.resume_barrier_qpc = Some(
-            self.resume_barrier_qpc
-                .map_or(barrier, |current| current.max(barrier)),
-        );
+        self.verified_cleanup_seen = true;
         Ok(active_count)
     }
 
     /// Consume the current authored Down chord after an attempted packet was
     /// reconciled by verified safety cleanup. The attempted onset is cancelled
-    /// exactly once; the completion timestamp belongs to cleanup and is already
-    /// represented by the resume barrier installed by `on_verified_cleanup_at`.
-    /// No sender completion is inferred for the attempted musical packet.
+    /// exactly once after verified cleanup. No sender completion is inferred
+    /// for the attempted musical packet.
     pub fn consume_attempted_down_after_verified_cleanup(
         &mut self,
         source_action_index: u32,
@@ -1404,10 +1336,8 @@ impl DispatchExecutor {
                 "attempted Down cannot be consumed before active slots are cleaned up".into(),
             );
         }
-        if self.resume_barrier_qpc.is_none() {
-            return Err(
-                "attempted Down cannot be consumed without a verified cleanup barrier".into(),
-            );
+        if !self.verified_cleanup_seen {
+            return Err("attempted Down cannot be consumed without verified cleanup".into());
         }
         self.checked_attempted_down_cursor_transition(
             source_action_index,
@@ -1526,11 +1456,6 @@ impl DispatchExecutor {
             ));
         }
         Ok(())
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn on_verified_cleanup(&mut self, completion_ticks: TimelineTicks) -> Result<u64, String> {
-        self.on_verified_cleanup_at(QpcTicks::from_raw(completion_ticks.as_u64()))
     }
 
     /// True when all chords have been dispatched, all slots are empty, and

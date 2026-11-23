@@ -161,7 +161,6 @@ mod tests {
             &schedule,
             qpc.frequency_hz(),
             timing.min_hold_us,
-            timing.resume_cleanup_delay_us,
             schedule.compile_memory.caller_retained_capacity_bytes,
         )
         .expect("prepared empty schedule");
@@ -194,7 +193,6 @@ mod tests {
             startup_ordering_hook: None,
             startup_calibration_placement: StartupCalibrationPlacement::BeforeSchedulingGuards,
             timing_observer_for_qualification: qualification_observer,
-            restore_race_hook: None,
             focus_pause_hook: None,
             timer_lifecycle_context: None,
             prepared_packet_ambiguity_mask: None,

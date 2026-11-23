@@ -45,7 +45,6 @@ describe('DiagnosticsTimingPlot', () => {
       frame_base_hold_us: 16_667,
       timing_margin_us: 800,
       min_hold_us: 17_467,
-      resume_cleanup_delay_us: 17_467,
       timing_margin_recommendation: {
         recommended_timing_margin_us: 800,
         qualified: false,

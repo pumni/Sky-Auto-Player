@@ -224,7 +224,11 @@ to measure all 60; it must fail-stop as incomplete if any required sample is
 missing or invalid. Keep these profile results separate because v1 cannot be
 backfilled with fields that its source did not emit.
 
-## Representative Prepare capacity comparison
+## Pinned Stage 1 Prepare capacity comparison
+
+This comparison records Stage 1 evidence from the pinned pre-Stage 2 candidate.
+Its second Prepare argument described a cleanup delay at that revision. Stage
+2 removes that argument and the current contract has no cleanup-time floor.
 
 The PR #679 memory fixture measures 10,000 one-key Down generations with the
 same authored actions, QPC frequency (1 MHz), H (8,000 µs), and second Prepare
@@ -275,6 +279,28 @@ Then run the same `SKY_MEMORY_CHORD_COUNT=10000` cargo test command with
 `rust/crates/sky_dispatch_core/src/executor/memory_tests.rs` in that disposable
 worktree after measurement. This edits test source only; keep the separately
 built pinned-baseline qualification harness and manifest untouched.
+
+## Current offline lifecycle evidence
+
+The current `dispatch_lifecycle` evidence format is schema v4. The Rust example
+[`dispatch_lifecycle_evidence.rs`](../rust/crates/sky_player/examples/dispatch_lifecycle_evidence.rs)
+uses the live scheduler with deterministic mock senders and records zero native
+SendInput calls. It checks that an Up transport commit permits the next
+same-key Down at its authored target, then checks that Pause completes verified
+cleanup, sends nothing while paused, and permits a fresh authored-due Down after
+the Resume control commits. Its timing object records FPS, frame interval, hold
+frames, Timing Margin, H, and QPC frequency; it has no cleanup-delay or
+resume-barrier fields.
+
+The evidence contract accepts v4 as current. Schema v2 and v3 readers remain
+available for their pinned historical reports and retain their original
+release-gap and cleanup-delay rules. The current telemetry key fixture is schema
+27; schema 26 remains pinned as history. Check both evidence contracts with:
+
+    pwsh -NoProfile -File scripts/test_evidence_contracts.ps1
+
+These mock and contract checks do not run native input. Native ReceiveOnly and
+gameplay evidence remain subject to the authorization and runbook above.
 
 Raw Up syscall count sums
 `TerminalSendAttemptEvidence.raw_calls` for the worker terminal cleanup. It

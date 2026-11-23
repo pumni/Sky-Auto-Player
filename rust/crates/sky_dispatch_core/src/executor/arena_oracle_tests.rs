@@ -127,12 +127,11 @@ fn intent_oracle(schedule: &RuntimeSchedule, intents: &[DownIntentTicks]) -> Vec
 fn canonical_generation_arena_arrays_and_qpc_rounding_match_the_reference() {
     let schedule = fixture();
     let frequency = NonZeroU64::new(FREQUENCY_HZ).expect("odd QPC frequency");
-    let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 77, 0)
+    let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 0)
         .expect("prepared oracle schedule");
     let legacy = DispatchExecutor::new(
         &schedule,
         DurationTicks::from_raw(qpc_ceil(101).as_u64()),
-        DurationTicks::from_raw(qpc_ceil(77).as_u64()),
         |us| Ok::<_, std::convert::Infallible>(qpc_ceil(us)),
     )
     .expect("legacy oracle schedule");
@@ -243,7 +242,7 @@ fn canonical_generation_arena_arrays_and_qpc_rounding_match_the_reference() {
             + std::mem::size_of::<PreparedDispatchSchedule>()
     );
     if usize::BITS == 64 {
-        assert_eq!(memory.plan_capacity_bytes, 600);
+        assert_eq!(memory.plan_capacity_bytes, 584);
         assert_eq!(memory.overlapping_peak_capacity_bytes, 3_410);
     }
     assert_eq!(legacy.memory_metrics().chord_count, 3);
@@ -254,7 +253,7 @@ fn canonical_generation_arena_arrays_and_qpc_rounding_match_the_reference() {
 fn empty_and_fresh_legacy_executors_keep_zeroed_arena_state() {
     let empty = compile_runtime_intents(&[], &[0x15]).expect("empty schedule");
     let frequency = NonZeroU64::new(FREQUENCY_HZ).expect("odd QPC frequency");
-    let prepared = PreparedDispatchSchedule::prepare(&empty, frequency, 101, 77, 0)
+    let prepared = PreparedDispatchSchedule::prepare(&empty, frequency, 101, 0)
         .expect("empty prepared schedule");
     assert!(prepared.down_chords.is_empty());
     assert!(prepared.down_intents.is_empty());
@@ -265,14 +264,12 @@ fn empty_and_fresh_legacy_executors_keep_zeroed_arena_state() {
     let legacy_first = DispatchExecutor::new(
         &empty,
         DurationTicks::from_raw(qpc_ceil(101).as_u64()),
-        DurationTicks::from_raw(qpc_ceil(77).as_u64()),
         |us| Ok::<_, std::convert::Infallible>(qpc_ceil(us)),
     )
     .expect("first empty legacy executor");
     let legacy_second = DispatchExecutor::new(
         &empty,
         DurationTicks::from_raw(qpc_ceil(101).as_u64()),
-        DurationTicks::from_raw(qpc_ceil(77).as_u64()),
         |us| Ok::<_, std::convert::Infallible>(qpc_ceil(us)),
     )
     .expect("fresh empty legacy executor");
@@ -295,7 +292,7 @@ fn prepared_retained_capacity_budget_keeps_exact_accept_and_reject_boundary() {
     let schedule = fixture();
     let frequency = NonZeroU64::new(FREQUENCY_HZ).expect("odd QPC frequency");
     let baseline =
-        PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 77, 0).expect("baseline plan");
+        PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 0).expect("baseline plan");
     let schedule_memory = schedule
         .memory_metrics()
         .expect("schedule capacity metrics");
@@ -307,16 +304,15 @@ fn prepared_retained_capacity_budget_keeps_exact_accept_and_reject_boundary() {
         .checked_add(baseline.memory_metrics().plan_capacity_bytes)
         .expect("overlapping capacity bytes");
     let exact_fit_caller = crate::model::MAX_RETAINED_DISPATCH_BYTES - combined_capacity;
-    let exact_fit =
-        PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 77, exact_fit_caller)
-            .expect("plan exactly at retained startup budget");
+    let exact_fit = PreparedDispatchSchedule::prepare(&schedule, frequency, 101, exact_fit_caller)
+        .expect("plan exactly at retained startup budget");
     assert_eq!(
         exact_fit.memory_metrics().overlapping_peak_capacity_bytes,
         crate::model::MAX_RETAINED_DISPATCH_BYTES
     );
 
     let over_budget =
-        PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 77, exact_fit_caller + 1)
+        PreparedDispatchSchedule::prepare(&schedule, frequency, 101, exact_fit_caller + 1)
             .expect_err("one byte over retained startup budget must fail");
     assert_eq!(
         over_budget,
@@ -346,26 +342,21 @@ fn prepared_schedule_validates_unmatched_up_timestamps() {
         &unmatched_up,
         NonZeroU64::new(FREQUENCY_HZ).expect("frequency"),
         101,
-        77,
         0,
     )
     .expect_err("prepared unmatched-Up range must be checked");
     assert!(prepared_error.contains("supported timestamp range"));
 
     let schedule = fixture();
-    let legacy_error = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::from_raw(1),
-        DurationTicks::from_raw(1),
-        |microseconds| {
+    let legacy_error =
+        DispatchExecutor::new(&schedule, DurationTicks::from_raw(1), |microseconds| {
             if microseconds == 1_001 {
                 Err("oracle conversion failure")
             } else {
                 Ok(TimelineTicks::from_raw(microseconds))
             }
-        },
-    )
-    .expect_err("legacy conversion error must retain caller text");
+        })
+        .expect_err("legacy conversion error must retain caller text");
     assert_eq!(
         legacy_error,
         "scheduled timestamp conversion failed for chord at 1001us: oracle conversion failure"
@@ -377,24 +368,19 @@ fn prepared_schedule_validates_unmatched_up_timestamps() {
         &near_overflow,
         NonZeroU64::new(FREQUENCY_HZ).expect("frequency"),
         101,
-        77,
         0,
     )
     .expect_err("prepared end conversion should detect overflow");
     assert!(prepared_overflow.contains("supported timestamp range"));
-    let legacy_overflow = DispatchExecutor::new(
-        &near_overflow,
-        DurationTicks::from_raw(1),
-        DurationTicks::from_raw(1),
-        |microseconds| {
+    let legacy_overflow =
+        DispatchExecutor::new(&near_overflow, DurationTicks::from_raw(1), |microseconds| {
             if microseconds == u64::MAX {
                 Err("near-overflow conversion")
             } else {
                 Ok(TimelineTicks::from_raw(microseconds))
             }
-        },
-    )
-    .expect_err("legacy end conversion should preserve adapter failure");
+        })
+        .expect_err("legacy end conversion should preserve adapter failure");
     assert_eq!(
         legacy_overflow,
         format!(
@@ -413,7 +399,6 @@ fn prepared_builder_keeps_its_first_chord_checkpoint_boundary() {
     let result = PreparedDispatchSchedule::prepare_with_cancellation(
         &schedule,
         NonZeroU64::new(1_000_000).expect("QPC frequency"),
-        0,
         0,
         0,
         || {
@@ -438,7 +423,7 @@ fn prepared_retained_capacity_matrix_matches_reviewed_head() {
     let frequency = NonZeroU64::new(1_000_000).expect("QPC frequency");
     for chord_count in [0usize, 1, 100, 5_000] {
         let schedule = one_key_repeat_schedule(chord_count);
-        let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 0, 0, 0)
+        let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 0, 0)
             .expect("prepared capacity schedule");
         let memory = prepared.memory_metrics();
         assert_eq!(memory.chord_count, chord_count);

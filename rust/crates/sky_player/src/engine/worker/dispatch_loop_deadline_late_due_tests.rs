@@ -138,7 +138,6 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
             timing_window,
         } if chord.source_action_index == 6682
             && timing_window.packet_not_before_qpc == b2_authored
-            && timing_window.resume_barrier_mask == 0
     ));
     let b2 = super::super::stage_scheduler_send_candidate(
         projected_b2,
@@ -158,7 +157,6 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     );
     assert_eq!(b2.timing_window.authored_target_qpc, b2_authored);
     assert_eq!(b2.timing_window.packet_not_before_qpc, b2_authored);
-    assert_eq!(b2.timing_window.resume_barrier_mask, 0);
     assert_eq!(
         harness.pre_wait_candidate_admission_for_test(&b2),
         StagedDispatchOutcome::Dispatched

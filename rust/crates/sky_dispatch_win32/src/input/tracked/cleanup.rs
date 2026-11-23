@@ -343,7 +343,7 @@ impl TrackedKeyState {
                 if emitted.evidence.timing_error.is_some() {
                     // A resumable drain whose QPC evidence fails may still
                     // perform bounded safety cleanup on a later iteration;
-                    // its caller will reject the resume barrier and terminate.
+                    // its caller will withhold Resume admission and terminate.
                     terminal_qpc_fallback = true;
                     if share_worker_terminal_budget {
                         self.terminal_raw_up_invocations =

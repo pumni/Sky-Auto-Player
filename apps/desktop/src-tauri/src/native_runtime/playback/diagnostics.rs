@@ -179,7 +179,6 @@ pub(in crate::native_runtime) fn publish_diagnostics_snapshot_inner_with_cancel(
             frame_base_hold_us: active.timing_policy.frame_base_hold_us,
             timing_margin_us: active.timing_policy.timing_margin_us,
             min_hold_us: active.timing_policy.min_hold_us,
-            resume_cleanup_delay_us: active.timing_policy.resume_cleanup_delay_us,
             timing_margin_recommendation: active.timing_margin_recommendation.clone(),
             pre_call_lt_250us: sample.pre_call_lt_250us,
             pre_call_250_500us: sample.pre_call_250_500us,

@@ -350,26 +350,6 @@ pub(super) fn scenario_plan_for_settings(
                 vec![0, 1],
                 true,
             ),
-            Scenario::PauseResumeBarrier => {
-                let mut actions = Vec::with_capacity(42);
-                let mut down = 50_000;
-                for pair in 0..21_u32 {
-                    let up = down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                    actions.push(action(2 * pair, ActionKind::Down, down, &[0]));
-                    actions.push(action(2 * pair + 1, ActionKind::Up, up, &[0]));
-                    // Exercise resume cleanup against a Down authored at the
-                    // same timestamp as its paired Up. The separate verified
-                    // cleanup barrier controls physical re-entry.
-                    down = up;
-                }
-                (
-                    actions,
-                    None,
-                    vec![0; 21],
-                    vec![0; 21],
-                    false,
-                )
-            }
             Scenario::SuspendResume => (
                 vec![
                     action(0, ActionKind::Down, 50_000, &[0]),
@@ -552,11 +532,6 @@ pub(super) fn acceptance_min_hold_us(timing_margin_us: u64) -> u64 {
     acceptance_min_hold_us_for_fps(timing_margin_us, 60)
 }
 
-#[cfg(test)]
-pub(super) fn acceptance_resume_cleanup_delay_us(timing_margin_us: u64) -> u64 {
-    acceptance_resume_cleanup_delay_us_for_fps(timing_margin_us, 60)
-}
-
 pub(super) fn acceptance_min_hold_us_for_fps(timing_margin_us: u64, game_fps: u16) -> u64 {
     ACCEPTANCE_HOLD_FRAMES * frame_period_us(game_fps) + timing_margin_us
 }
@@ -564,10 +539,6 @@ pub(super) fn acceptance_min_hold_us_for_fps(timing_margin_us: u64, game_fps: u1
 pub(super) fn scenario_min_hold_us_for_fps(scenario: Scenario, timing_margin_us: u64, game_fps: u16) -> u64 {
     let frames = if scenario == Scenario::HolInterleaved { 2 } else { ACCEPTANCE_HOLD_FRAMES };
     frames * frame_period_us(game_fps) + timing_margin_us
-}
-
-pub(super) fn acceptance_resume_cleanup_delay_us_for_fps(timing_margin_us: u64, game_fps: u16) -> u64 {
-    frame_period_us(game_fps) + timing_margin_us
 }
 
 const fn frame_period_us(game_fps: u16) -> u64 {
@@ -606,7 +577,6 @@ pub(super) fn production_options_for_fps(
     let timing = TimingOptions {
         game_fps,
         min_hold_us: scenario_min_hold_us_for_fps(scenario, timing_margin_us, game_fps),
-        resume_cleanup_delay_us: acceptance_resume_cleanup_delay_us_for_fps(timing_margin_us, game_fps),
         frame_us,
         frame_base_hold_us: if scenario == Scenario::HolInterleaved {
             2 * frame_us
@@ -627,7 +597,6 @@ pub(super) fn production_options_for_fps(
         &schedule,
         qpc_frequency_hz,
         timing.min_hold_us,
-        timing.resume_cleanup_delay_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .map_err(|error| format!("native acceptance schedule Prepare failed: {error}"))?;
@@ -670,7 +639,6 @@ pub(super) fn production_options_for_fps(
         #[cfg(feature = "test-support")]
         startup_ordering_hook: None,
         #[cfg(feature = "test-support")]
-        restore_race_hook: None,
         #[cfg(feature = "test-support")]
         focus_pause_hook: None,
         #[cfg(feature = "test-support")]

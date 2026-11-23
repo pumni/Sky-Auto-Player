@@ -204,7 +204,6 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
   const frameUs = Math.ceil(1_000_000 / defaults.fps);
   const frameBaseHoldUs = Math.ceil(defaults.hold_frames * frameUs);
   const minHoldUs = frameBaseHoldUs + defaults.timing_margin_us;
-  const resumeCleanupDelayUs = frameUs + defaults.timing_margin_us;
 
   const holdOptions = bootstrap.option_sets.hold_frames.map((value) => ({
     value: String(value),
@@ -289,10 +288,6 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
           <div>
             <dt>Target hold</dt>
             <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
-          </div>
-          <div>
-            <dt>Resume cleanup delay</dt>
-            <dd>{(resumeCleanupDelayUs / 1_000).toFixed(3)} ms</dd>
           </div>
         </dl>
       </details>

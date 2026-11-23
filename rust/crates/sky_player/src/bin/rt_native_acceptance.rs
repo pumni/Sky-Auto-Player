@@ -36,7 +36,7 @@ pub(super) use entrypoint::main;
 use generation_stress::{attach_sink_window_provenance, generation_stress_scenario_plan, healthy_generation_qualification, production_visibility_qualification};
 use scenarios::{action, expected_physical_keys, scenario_plan_for_settings};
 #[cfg(test)]
-use scenarios::{acceptance_min_hold_us, acceptance_resume_cleanup_delay_us, scenario_plan};
+use scenarios::{acceptance_min_hold_us, scenario_plan};
 use arguments::{CalibrationPlacement, ParsedCommand, RunArgs, Scenario, parse_args};
 #[cfg(test)]
 pub(crate) use arguments::AdmissionVariantChoice;
@@ -520,7 +520,6 @@ fn run_windows(args: RunArgs) -> i32 {
     }
     let mut final_probe = targets.probe.clone();
     let mut independent_helper_probe: Option<generation_stress::IndependentHelperLivenessProbe> = None;
-    let mut resume_barrier_cycles = Vec::<Value>::new();
     let mut watchdog_was_held = false;
     let mut owner_process_terminated_at_first_down_checkpoint = false;
     let mut system_suspend_terminal_observed = false;
@@ -636,18 +635,6 @@ fn run_windows(args: RunArgs) -> i32 {
         false
     } else if args.scenario == Scenario::PauseResume {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before pause/resume proof", json!({})); }; let first_pair = expected_physical_keys(plan.profile.as_ref(), &[0]); if let Some(code) = finish_preterminal(&args, &session, wait_for_sink_events(&args.sink_events, sink_cursor, &fresh_sink, &first_pair, &first_pair)) { return code; } first_physical_commit_observed = true; if let Err(error) = session.pause() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; pause_observed = wait_for_focus_pause(&session); if !pause_observed { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("pause request did not commit after the first physical note pair", json!({})); }; thread::sleep(Duration::from_millis(50)); if let Err(error) = session.resume() { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!(&error, json!({})); }; resume_requested = true; false
-    } else if args.scenario == Scenario::PauseResumeBarrier {
-        let hook = acceptance_hook.as_deref().expect("resume-barrier acceptance hook");
-        match lifecycle_lease_qualification::run_resume_barrier_case(&args, &session, hook) {
-            Ok(cycles) => {
-                resume_barrier_cycles = cycles;
-                first_physical_commit_observed = true;
-                pause_observed = true;
-                resume_requested = true;
-            }
-            Err(exit_code) => return exit_code,
-        }
-        false
     } else if args.scenario == Scenario::TargetHwndChange {
         if !wait_for_startup_armed(&session) { let _ = session.quit(); let _ = session.join(Duration::from_secs(5)); inconclusive!("production session did not reach Armed publication before target-change proof", json!({})); } session.invalidate_target_for_test(); target_changed = true; false
     } else if args.scenario == Scenario::SupervisorLeaseExpiry {
@@ -816,7 +803,6 @@ fn run_windows(args: RunArgs) -> i32 {
             object,
             lifecycle_lease_qualification::CaseDetails {
                 scenario: args.scenario,
-                resume_barrier_cycles: &resume_barrier_cycles,
                 watchdog_was_held,
                 hook: acceptance_hook.as_deref(),
                 terminal_outcome: snapshot.outcome.as_deref(),
@@ -902,16 +888,6 @@ fn run_windows(args: RunArgs) -> i32 {
     if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
     if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
-    if args.scenario == Scenario::PauseResumeBarrier
-        && let Some(code) = lifecycle_lease_qualification::resume_barrier_failure(
-            &args,
-            resume_barrier_cycles.len(),
-            snapshot.final_release_obligation_mask,
-            &details,
-        )
-    {
-        return code;
-    }
     if args.scenario == Scenario::SuspendResume {
         let power = session.system_power_snapshot();
         if !first_physical_commit_observed

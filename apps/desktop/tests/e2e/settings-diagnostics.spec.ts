@@ -42,10 +42,7 @@ test('Playback Profile works through the narrow popover with focus restore', asy
   await expect(popover.getByLabel('Tempo')).toBeVisible();
   await expect(popover.getByLabel('FPS')).toBeVisible();
   await popover.getByText('Calculated timing').click();
-  await expect(popover.locator('.profile-timing-summary dt')).toHaveText([
-    'Target hold',
-    'Resume cleanup delay',
-  ]);
+  await expect(popover.locator('.profile-timing-summary dt')).toHaveText(['Target hold']);
   await expect(popover.locator('.timing-margin-control')).toContainText('Timing Margin');
   await expect(popover.locator('.timing-margin-control')).toContainText('Recommended 500 µs');
   await expect(popover.getByRole('button', { name: /Use recommended/ })).toHaveCount(0);

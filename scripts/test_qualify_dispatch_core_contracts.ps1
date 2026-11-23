@@ -350,7 +350,7 @@ $finalScenarioNames = @(
     'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'short-up-gap-stress',
     'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary',
     'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change', 'owner-mismatch',
-    'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-barrier',
+    'owner-query-failure', 'owner-process-termination', 'pause-resume',
     'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
     'lease-age-watchdog-delayed', 'noncanonical-profile'
 )
@@ -362,12 +362,12 @@ $finalModel = @(
     [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-120fps-margin-500'; load = 'Quiet'; margin = 500; fps = 120 }
 )
 $safetyModel = @($finalModel | Where-Object { $_.scenario -ne 'timing-margin-sweep' })
-if ($finalModel.Count -ne 46 -or @($safetyModel | Where-Object load -eq 'Quiet').Count -ne 22 -or
-    @($safetyModel | Where-Object load -eq 'Contention').Count -ne 22 -or
-    @($safetyModel | Group-Object load | Where-Object { $_.Count -ne 22 -or @($_.Group.scenario | Select-Object -Unique).Count -ne 22 }).Count -ne 0 -or
-    $finalModel[44].workload -ne 'boundary-60fps-margin-0' -or $finalModel[44].margin -ne 0 -or $finalModel[44].fps -ne 60 -or
-    $finalModel[45].workload -ne 'boundary-120fps-margin-500' -or $finalModel[45].margin -ne 500 -or $finalModel[45].fps -ne 120) {
-    throw 'Final model must contain 22 unique scenarios per load and the two fixed boundaries'
+if ($finalModel.Count -ne 44 -or @($safetyModel | Where-Object load -eq 'Quiet').Count -ne 21 -or
+    @($safetyModel | Where-Object load -eq 'Contention').Count -ne 21 -or
+    @($safetyModel | Group-Object load | Where-Object { $_.Count -ne 21 -or @($_.Group.scenario | Select-Object -Unique).Count -ne 21 }).Count -ne 0 -or
+    $finalModel[42].workload -ne 'boundary-60fps-margin-0' -or $finalModel[42].margin -ne 0 -or $finalModel[42].fps -ne 60 -or
+    $finalModel[43].workload -ne 'boundary-120fps-margin-500' -or $finalModel[43].margin -ne 500 -or $finalModel[43].fps -ne 120) {
+    throw 'Final model must contain 21 unique scenarios per load and the two fixed boundaries'
 }
 $scenarioBlock = [regex]::Match($runnerSource, '(?s)\$scenarios\s*=\s*@\((.*?)\n\s*\)')
 $runnerScenarioNames = if ($scenarioBlock.Success) {
@@ -375,7 +375,7 @@ $runnerScenarioNames = if ($scenarioBlock.Success) {
 } else { @() }
 if ($runnerScenarioNames.Count -ne $finalScenarioNames.Count -or
     (@(Compare-Object -ReferenceObject $finalScenarioNames -DifferenceObject $runnerScenarioNames -SyncWindow 0)).Count -ne 0) {
-    throw 'Final safety scenarios differ from the approved 22-scenario inventory'
+    throw 'Final safety scenarios differ from the current 21-scenario inventory'
 }
 $acceptanceSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
 foreach ($requiredSchedulerLabel in @('Scheduler-Baseline', 'Scheduler-Candidate')) {
@@ -1204,12 +1204,12 @@ $m3Floors60Margin0 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-sing
 $m3Floors60Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-single' -GameFps 60 -TimingMarginUs 500
 $m3Floors120Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-single' -GameFps 120 -TimingMarginUs 500
 $m3HolFloors60Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'hol-interleaved' -GameFps 60 -TimingMarginUs 500
-if ($m3Floors60Margin0.configured_H_us -ne 16667 -or $m3Floors60Margin0.resume_cleanup_delay_us -ne 16667 -or
-    $m3Floors60Margin500.configured_H_us -ne 17167 -or $m3Floors60Margin500.resume_cleanup_delay_us -ne 17167 -or
-    $m3Floors120Margin500.configured_H_us -ne 8834 -or $m3Floors120Margin500.resume_cleanup_delay_us -ne 8834 -or
-    $m3HolFloors60Margin500.configured_H_us -ne 33834 -or $m3HolFloors60Margin500.resume_cleanup_delay_us -ne 17167 -or
+if ($m3Floors60Margin0.configured_H_us -ne 16667 -or
+    $m3Floors60Margin500.configured_H_us -ne 17167 -or
+    $m3Floors120Margin500.configured_H_us -ne 8834 -or
+    $m3HolFloors60Margin500.configured_H_us -ne 33834 -or
     $m3HolFloors60Margin500.hold_frames -ne 2) {
-    throw 'DispatchCleanupM3 frame, hold, or resume-cleanup-delay arithmetic does not match native scenario configuration'
+    throw 'DispatchCleanupM3 frame and hold arithmetic does not match native scenario configuration'
 }
 
 $m3ReportCandidate = [pscustomobject]@{
@@ -1226,7 +1226,7 @@ $m3SafetyScenarioNames = @(
     'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'short-up-gap-stress',
     'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary',
     'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change', 'owner-mismatch',
-    'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-barrier',
+    'owner-query-failure', 'owner-process-termination', 'pause-resume',
     'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
     'lease-age-watchdog-delayed', 'noncanonical-profile'
 )
@@ -1248,7 +1248,7 @@ if ($m3CanaryProjection.StageSummary.planned_session_count -ne 1 -or
     $m3CanaryProjection.StageSummary.candidate_session_count -ne 1 -or
     $m3CanaryProjection.StageSummary.control_session_count -ne 0 -or
     $m3CanaryProjection.StageSummary.configured_H_us -ne 17167 -or
-    $m3CanaryProjection.StageSummary.resume_cleanup_delay_us -ne 17167 -or
+    $m3CanaryProjection.StageSummary.configured_H_summary -ne 'H=17167 us' -or
     $m3CanaryProjection.SummaryParameters.pairs -ne $null -or
     $m3CanaryProjection.SummaryParameters.sample_seconds -ne $null -or
     $m3CanaryProjection.ManifestParameters.pairs -ne $null -or
@@ -1260,17 +1260,17 @@ if ($m3CanaryProjection.StageSummary.planned_session_count -ne 1 -or
     -not (($m3CanaryProjection.MarkdownStageLines -join "`n").Contains('candidate-only safety stage')) -or
     -not (($m3CanaryProjection.MarkdownStageLines -join "`n").Contains('no timed performance samples')) -or
     (($m3CanaryProjection.MarkdownStageLines -join "`n") -match 'AB/BA|six pairs|15 seconds per performance session')) {
-    throw 'DispatchCleanupM3 Canary projection implies a comparison/sample or reports incorrect hold/resume-delay/session identity'
+    throw 'DispatchCleanupM3 Canary projection implies a comparison/sample or reports incorrect hold/session identity'
 }
-if ($m3SmokeProjection.StageSummary.planned_session_count -ne 22 -or
+if ($m3SmokeProjection.StageSummary.planned_session_count -ne 21 -or
     $m3SmokeProjection.StageSummary.stage_kind -ne 'safety-only; candidate-only' -or
-    $m3SmokeProjection.StageSummary.candidate_session_count -ne 22 -or
+    $m3SmokeProjection.StageSummary.candidate_session_count -ne 21 -or
     $m3SmokeProjection.StageSummary.control_session_count -ne 0 -or
-    $m3SmokeProjection.StageSummary.workload_summary -ne '22 candidate-only safety scenarios' -or
+    $m3SmokeProjection.StageSummary.workload_summary -ne '21 candidate-only safety scenarios' -or
     -not $m3SmokeProjection.MarkdownStageLines[0].Contains('safety-only') -or
     $m3SmokeProjection.StageSummary.timed_performance_samples -or
     $m3SmokeProjection.StageSummary.configured_H_us -ne 17167 -or
-    $m3SmokeProjection.StageSummary.resume_cleanup_delay_us -ne 17167) {
+    $m3SmokeProjection.StageSummary.configured_H_summary -ne 'H=17167 us') {
     throw 'DispatchCleanupM3 Smoke projection does not describe its candidate-only safety cases'
 }
 if ($m3CompareProjection.StageSummary.planned_session_count -ne 72 -or
@@ -1280,7 +1280,7 @@ if ($m3CompareProjection.StageSummary.planned_session_count -ne 72 -or
     $m3CompareProjection.StageSummary.game_fps -ne 60 -or
     $m3CompareProjection.StageSummary.timing_margin_us -ne 0 -or
     $m3CompareProjection.StageSummary.configured_H_us -ne 16667 -or
-    $m3CompareProjection.StageSummary.resume_cleanup_delay_us -ne 16667 -or
+    $m3CompareProjection.StageSummary.configured_H_summary -ne 'H=16667 us' -or
     $m3CompareProjection.StageSummary.pairs -ne 6 -or
     -not $m3CompareProjection.StageSummary.pair_order.Contains('AB/BA') -or
     -not $m3CompareProjection.ManifestParameters.pair_order.Contains('AB/BA') -or
@@ -1288,17 +1288,16 @@ if ($m3CompareProjection.StageSummary.planned_session_count -ne 72 -or
     $m3CompareProjection.SummaryParameters.safety_timing_margin_us -ne 500) {
     throw 'DispatchCleanupM3 Compare projection lost its paired performance protocol or per-session timing settings'
 }
-if ($m3FinalProjection.StageSummary.planned_session_count -ne 166 -or
+if ($m3FinalProjection.StageSummary.planned_session_count -ne 164 -or
     $m3FinalProjection.StageSummary.stage_kind -ne 'paired performance plus candidate-only safety and boundaries' -or
-    $m3FinalProjection.StageSummary.candidate_session_count -ne 106 -or
+    $m3FinalProjection.StageSummary.candidate_session_count -ne 104 -or
     $m3FinalProjection.StageSummary.control_session_count -ne 60 -or
     $null -ne $m3FinalProjection.StageSummary.game_fps -or
     $null -ne $m3FinalProjection.StageSummary.timing_margin_us -or
     $null -ne $m3FinalProjection.StageSummary.configured_H_us -or
-    $null -ne $m3FinalProjection.StageSummary.resume_cleanup_delay_us -or
-    $m3FinalProjection.StageSummary.configured_hold_and_resume_cleanup_delay_mode -ne 'varies_by_session' -or
-    -not $m3FinalProjection.StageSummary.configured_hold_and_resume_cleanup_delay_summary.Contains('varies by session') -or
-    -not $m3FinalProjection.ManifestParameters.configured_hold_and_resume_cleanup_delay_summary.Contains('varies by session') -or
+    $m3FinalProjection.StageSummary.configured_H_mode -ne 'varies_by_session' -or
+    -not $m3FinalProjection.StageSummary.configured_H_summary.Contains('H varies by session') -or
+    -not $m3FinalProjection.ManifestParameters.configured_H_summary.Contains('H varies by session') -or
     -not $m3FinalProjection.StageSummary.timing_margin_summary.Contains('0 us performance; 500 us safety') -or
     $m3FinalProjection.StageSummary.timed_performance_sample_seconds -ne 15) {
     throw 'DispatchCleanupM3 Final projection fabricated aggregate timing values for a mixed stage'
@@ -1306,8 +1305,8 @@ if ($m3FinalProjection.StageSummary.planned_session_count -ne 166 -or
 
 $m3RunConfig = [pscustomobject]@{
     qualification_profile = 'DispatchCleanupM3'; scenario = 'canonical-single'; workload = 'canonical-single'
-    game_fps = 60; timing_margin_us = 500; expected_hold_us = 17167; expected_resume_cleanup_delay_us = 17167
-    configured_H_us = 17167; resume_cleanup_delay_us = 17167
+    game_fps = 60; timing_margin_us = 500; expected_hold_us = 17167
+    configured_H_us = 17167
 }
 $verifiedCanaryFloors = Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario 'canonical-single' `
     -RunConfig $m3RunConfig -ExpectedWorkload 'canonical-single' -ExpectedGameFps 60 -ExpectedTimingMarginUs 500
@@ -1317,7 +1316,7 @@ $m3CanaryRow = [pscustomobject]@{
     planned_session_count = $m3CanaryProjection.StageSummary.planned_session_count
     attempted_session_count = 1; role = 'candidate'; scenario = $m3RunConfig.scenario
     game_fps = $m3RunConfig.game_fps; timing_margin_us = $m3RunConfig.timing_margin_us
-    configured_H_us = $m3RunConfig.configured_H_us; resume_cleanup_delay_us = $m3RunConfig.resume_cleanup_delay_us
+    configured_H_us = $m3RunConfig.configured_H_us
 }
 $m3ReportRoot = Join-Path $env:TEMP ('m3-report-contract-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $m3ReportRoot | Out-Null
@@ -1332,15 +1331,15 @@ try {
     $csvCanary = Import-Csv -LiteralPath (Join-Path $m3ReportRoot 'sessions.csv') | Select-Object -First 1
     $jsonCanary = Get-Content -LiteralPath (Join-Path $m3ReportRoot 'summary.json') -Raw | ConvertFrom-Json
     if ([long]$m3RunConfig.expected_hold_us -ne [long]$jsonCanary.session_plan.configured_H_us -or
-        [long]$m3RunConfig.expected_resume_cleanup_delay_us -ne [long]$jsonCanary.session_plan.resume_cleanup_delay_us -or
         [long]$csvCanary.configured_H_us -ne [long]$jsonCanary.session_plan.configured_H_us -or
-        [long]$csvCanary.resume_cleanup_delay_us -ne [long]$jsonCanary.session_plan.resume_cleanup_delay_us -or
         $csvCanary.stage -ne $jsonCanary.stage -or
         $csvCanary.qualification_profile -ne $jsonCanary.qualification_profile -or
         $csvCanary.planned_session_count -ne $jsonCanary.session_plan.planned_session_count -or
         $csvCanary.role -ne 'candidate' -or $csvCanary.game_fps -ne $jsonCanary.session_plan.game_fps -or
         $csvCanary.timing_margin_us -ne $jsonCanary.session_plan.timing_margin_us -or
-        $verifiedCanaryFloors.configured_H_us -ne 17167 -or $verifiedCanaryFloors.resume_cleanup_delay_us -ne 17167) {
+        $verifiedCanaryFloors.configured_H_us -ne 17167 -or
+        $jsonCanary.session_plan.PSObject.Properties.Name -contains 'resume_cleanup_delay_us' -or
+        $csvCanary.PSObject.Properties.Name -contains 'resume_cleanup_delay_us') {
         throw 'DispatchCleanupM3 Canary run-config, CSV, and JSON timing/stage identity disagree'
     }
 } finally {
@@ -1360,12 +1359,12 @@ try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario hol-interleaved 
     -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $wrongScenarioRejected = $true }
 if (-not $wrongScenarioRejected) { throw 'DispatchCleanupM3 accepted incorrect scenario attribution for hold/resume-delay reporting' }
 $m3NegativeContractCount++
-$badM3ResumeDelayRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json
-$badM3ResumeDelayRunConfig.resume_cleanup_delay_us = $badM3ResumeDelayRunConfig.resume_cleanup_delay_us + 1
-$badM3ResumeDelayRejected = $false
-try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario canonical-single -RunConfig $badM3ResumeDelayRunConfig `
-    -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $badM3ResumeDelayRejected = $true }
-if (-not $badM3ResumeDelayRejected) { throw 'DispatchCleanupM3 accepted a resume cleanup delay different from frame interval plus margin' }
+$badM3RetiredFieldRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+$badM3RetiredFieldRunConfig | Add-Member -NotePropertyName resume_cleanup_delay_us -NotePropertyValue 17167
+$badM3RetiredFieldRejected = $false
+try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario canonical-single -RunConfig $badM3RetiredFieldRunConfig `
+    -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $badM3RetiredFieldRejected = $true }
+if (-not $badM3RetiredFieldRejected) { throw 'DispatchCleanupM3 accepted a retired resume cleanup timing field' }
 $m3NegativeContractCount++
 
 $sessionRedesignProfile = Get-DispatchSessionRedesignM3Profile
@@ -1410,9 +1409,9 @@ foreach ($safetyCase in $sessionRedesignProfile.SafetyCases) {
 }
 $floors60 = Get-DispatchSessionRedesignM3TimingFloors -Scenario canonical-single -GameFps 60 -TimingMarginUs 500
 $floors120 = Get-DispatchSessionRedesignM3TimingFloors -Scenario near-minimum-retrigger -GameFps 120 -TimingMarginUs 500
-if ($floors60.frame_us -ne 16667 -or $floors60.configured_H_us -ne 17167 -or $floors60.resume_cleanup_delay_us -ne 17167 -or
-    $floors120.frame_us -ne 8334 -or $floors120.configured_H_us -ne 8834 -or $floors120.resume_cleanup_delay_us -ne 8834) {
-    throw 'DispatchSessionRedesignM3 hold/resume-cleanup values differ from ceiling frame interval plus the fixed 500 us margin'
+if ($floors60.frame_us -ne 16667 -or $floors60.configured_H_us -ne 17167 -or
+    $floors120.frame_us -ne 8334 -or $floors120.configured_H_us -ne 8834) {
+    throw 'DispatchSessionRedesignM3 hold values differ from ceiling frame interval plus the fixed 500 us margin'
 }
 Assert-QualificationTimingMargin -RequestedStage Final -Profile DispatchSessionRedesignM3 -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
 $sessionRedesignValidCases = @(
@@ -1457,7 +1456,7 @@ if ($sessionRedesignProjection.StageSummary.planned_session_count -ne 32 -or
     $sessionRedesignProjection.StageSummary.safety_timing_margin_us -ne 500 -or
     $sessionRedesignProjection.StageSummary.performance_timing_margin_us -ne 500 -or
     $sessionRedesignProjection.StageSummary.game_fps_summary -ne 'varies by session (60, 120 FPS)' -or
-    $sessionRedesignProjection.StageSummary.configured_hold_and_resume_cleanup_delay_summary -ne '60 FPS H=17,167 us; resume cleanup delay=17,167 us. 120 FPS H=8,834 us; resume cleanup delay=8,834 us' -or
+    $sessionRedesignProjection.StageSummary.configured_H_summary -ne '60 FPS H=17,167 us; 120 FPS H=8,834 us' -or
     -not $sessionRedesignProjection.StageSummary.timed_performance_samples -or
     $sessionRedesignProjection.StageSummary.timed_performance_sample_seconds -ne 15) {
     throw 'DispatchSessionRedesignM3 report projection lost its session count, timing, workload, FPS, or sample provenance'
@@ -1732,7 +1731,7 @@ if (-not $pclTailMismatchRejected) { throw 'PlaybackCoreLifecycleV2 accepted dif
 Import-Module (Join-Path $PSScriptRoot 'lib/playback_core_lifecycle_collector.psm1') -Force
 $pclValidSafetyIdentity = Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'stop-cleanup' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0
 $pclValidPerformanceIdentity = Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'mixed-up-down' -Workload 'mixed-up-down' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 15
-if ($pclValidSafetyIdentity.configured_H_us -ne 17167 -or $pclValidSafetyIdentity.resume_cleanup_delay_us -ne 17167 -or
+if ($pclValidSafetyIdentity.configured_H_us -ne 17167 -or
     $pclValidPerformanceIdentity.workload -ne 'mixed-up-down') {
     throw 'PlaybackCoreLifecycle case identity did not preserve its 60 FPS/500 us workload configuration'
 }

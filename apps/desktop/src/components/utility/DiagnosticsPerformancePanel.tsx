@@ -231,10 +231,6 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
             <Metric label="Configured Timing Margin" value={`${latest.timing_margin_us} µs`} />
             <Metric label="Target hold" value={`${(latest.min_hold_us / 1_000).toFixed(3)} ms`} />
             <Metric
-              label="Resume cleanup delay"
-              value={`${(latest.resume_cleanup_delay_us / 1_000).toFixed(3)} ms`}
-            />
-            <Metric
               label="Recommended sender margin"
               value={
                 latest.timing_margin_recommendation.recommended_timing_margin_us === null

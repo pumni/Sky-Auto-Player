@@ -155,7 +155,6 @@ pub(crate) fn drain_stale_metadata_observation(
                 previous_sendinput_completion_qpc_ticks: None,
                 previous_sender_completion_known: false,
                 hold_floor_mask: 0,
-                resume_barrier_mask: 0,
                 final_policy_qpc_ticks: None,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,

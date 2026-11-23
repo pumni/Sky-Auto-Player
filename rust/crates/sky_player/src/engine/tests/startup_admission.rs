@@ -1294,8 +1294,6 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     let captures = Arc::new(std::sync::Mutex::new(Vec::new()));
     let startup_hook = Arc::new(StartupOrderingHook::default());
     startup_hook.arm_startup_checkpoint(StartupCheckpoint::FirstDownCommitted, 1);
-    let resume_barrier_qpc = Arc::new(AtomicU64::new(0));
-    let resume_barrier_capture = Arc::clone(&resume_barrier_qpc);
     let mut fault_script = FaultInjectionScript::none();
     fault_script.force_inconclusive_probe = Some(Arc::clone(&force_inconclusive_probe));
     fault_script.send_call_count = Some(Arc::clone(&send_call_count));
@@ -1312,9 +1310,6 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     options.focus.require_focus = true;
     options.focus.focus_restore_grace_us = 120_000;
     options.startup_ordering_hook = Some(Arc::clone(&startup_hook));
-    options.restore_race_hook = Some(Arc::new(move |_, _, barrier| {
-        resume_barrier_capture.store(barrier.map_or(0, |ticks| ticks.as_u64()), Ordering::Release);
-    }));
     let _foreground_override_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_override_reset = ForegroundOverrideReset;
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
@@ -1389,7 +1384,7 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     assert_eq!(send_call_count.load(Ordering::Acquire), 1);
 
     let restore_deadline = Instant::now() + Duration::from_secs(2);
-    while resume_barrier_qpc.load(Ordering::Acquire) == 0
+    while send_call_count.load(Ordering::Acquire) < 2
         && !snapshot.is_finished
         && Instant::now() < restore_deadline
     {
@@ -1399,14 +1394,9 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
         std::thread::sleep(Duration::from_millis(1));
         snapshot = session.snapshot_lite();
     }
-    let barrier_qpc = resume_barrier_qpc.load(Ordering::Acquire);
-    assert_ne!(
-        barrier_qpc, 0,
-        "verified focus cleanup published its resume barrier"
-    );
     assert!(
         session.snapshot_lite().is_paused,
-        "manual pause still holds playback"
+        "manual pause still holds playback after verified focus cleanup"
     );
     assert_eq!(send_call_count.load(Ordering::SeqCst), 2);
     assert_eq!(
@@ -1416,7 +1406,7 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
             .as_slice()
             .len(),
         2,
-        "the worker captured Down A and the verified focus cleanup Up"
+        "the worker captured Down A and the verified focus cleanup Up before resume"
     );
 
     session
@@ -1430,10 +1420,7 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
         std::thread::sleep(Duration::from_millis(1));
     }
     assert_eq!(startup_hook.down_sender_attempt_count(), 2);
-    assert!(
-        startup_hook.last_down_sender_start_qpc_ticks() >= barrier_qpc,
-        "next Down must not precede the verified cleanup resume barrier"
-    );
+    assert!(startup_hook.last_down_sender_start_qpc_ticks() > 0);
     assert_eq!(send_call_count.load(Ordering::Acquire), 3);
 
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(456));
@@ -1801,7 +1788,6 @@ fn prepared_schedule_passes_session_admission_and_worker_arm_without_remateriali
         &schedule,
         qpc.frequency_hz(),
         500,
-        17_167,
         0,
     )
     .expect("Prepare materializes the physical schedule");
@@ -1847,7 +1833,6 @@ fn prepared_schedule_cancellation_completes_before_session_construction() {
         &schedule,
         qpc.frequency_hz(),
         500,
-        17_167,
         schedule.compile_memory.caller_retained_capacity_bytes,
         || {
             checkpoints += 1;

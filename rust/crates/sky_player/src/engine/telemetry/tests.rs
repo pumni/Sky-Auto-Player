@@ -63,7 +63,6 @@ fn record_with_down_chord_index(
             hold_floor_qpc_ticks: None,
             down_not_before_qpc_ticks: None,
             hold_floor_mask: 0,
-            resume_barrier_mask: 0,
             observation_qpc_ticks: None,
             pre_call_ticks: Some(TimelineTicks::from_raw(1)),
             sendinput_completion_ticks: Some(TimelineTicks::from_raw(2)),
@@ -164,7 +163,7 @@ fn serialized_timestamp_provenance_distinguishes_measured_derived_and_unavailabl
     assert_eq!(value["final_policy_qpc_provenance"], "unavailable");
     assert_eq!(value["final_policy_qpc_available"], false);
     assert_eq!(value["final_policy_qpc_ticks"], 0);
-    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 26);
+    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 27);
 }
 
 #[test]
@@ -469,18 +468,18 @@ fn telemetry_sets_truncated_only_when_capacity_is_exceeded() {
 }
 
 #[test]
-fn native_telemetry_schema_26_serialized_key_sets_are_pinned() {
+fn native_telemetry_schema_27_serialized_key_sets_are_pinned() {
     let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/native-telemetry-schema-26-keys.json"
+        "../../../tests/fixtures/native-telemetry-schema-27-keys.json"
     ))
-    .expect("schema-26 key fixture");
+    .expect("schema-27 key fixture");
     let record = record_with_index(7, TRACE_KIND_UP, 1, 1);
     let mut output = super::NativeTelemetryOutput::new(TelemetryMode::Off, 0);
     output.records.push_back(record);
     output.summary.observe(&record);
 
     let value = serde_json::to_value(output).expect("serialize current telemetry output");
-    assert_eq!(value["schema_version"], 26);
+    assert_eq!(value["schema_version"], 27);
     for (value, expected_key) in [
         (&value, "NativeTelemetryOutput"),
         (&value["summary"], "NativeTelemetrySummary"),
@@ -514,7 +513,7 @@ fn native_telemetry_schema_26_serialized_key_sets_are_pinned() {
 }
 
 #[test]
-fn schema_26_missing_completion_keeps_attempt_and_error_without_timing_envelope() {
+fn schema_27_missing_completion_keeps_attempt_and_error_without_timing_envelope() {
     let record = RtTraceRecord::dispatched(
         TraceContext {
             event_index: 41,
@@ -555,7 +554,7 @@ fn schema_26_missing_completion_keeps_attempt_and_error_without_timing_envelope(
 
     let value = serde_json::to_value(output).expect("serialize attempted anomaly evidence");
     let trace = &value["records"][0];
-    assert_eq!(value["schema_version"], 26);
+    assert_eq!(value["schema_version"], 27);
     assert_eq!(trace["source_action_index"], 41);
     assert_eq!(trace["authored_down_chord_index"], 9);
     assert_eq!(trace["up_mask"], 1);

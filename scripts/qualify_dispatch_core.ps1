@@ -772,9 +772,8 @@ function Invoke-NativeCase {
             -RunConfig $runConfig -ExpectedWorkload $Workload -ExpectedGameFps $Fps `
             -ExpectedTimingMarginUs $Margin
         if ($null -eq $invocation -or
-            [long]$invocation.configured_H_us -ne $verifiedFloors.configured_H_us -or
-            [long]$invocation.resume_cleanup_delay_us -ne $verifiedFloors.resume_cleanup_delay_us) {
-            throw 'DispatchCleanupM3 invocation H and resume cleanup delay differ from its verified run-config'
+            [long]$invocation.configured_H_us -ne $verifiedFloors.configured_H_us) {
+            throw 'DispatchCleanupM3 invocation H differs from its verified run-config'
         }
     } elseif ($isSessionRedesignProfile -and $caseDirectory) {
         $runConfigPath = Join-Path $caseDirectory 'run-config.json'
@@ -786,12 +785,9 @@ function Invoke-NativeCase {
             -TimingMarginUs $Margin -GameFps $Fps -SampleSeconds $Sample
         if ($null -eq $invocation -or
             [long]$runConfig.expected_hold_us -ne $verifiedFloors.expected_hold_us -or
-            [long]$runConfig.expected_resume_cleanup_delay_us -ne $verifiedFloors.expected_resume_cleanup_delay_us -or
             [long]$runConfig.configured_H_us -ne $verifiedFloors.configured_H_us -or
-            [long]$runConfig.resume_cleanup_delay_us -ne $verifiedFloors.resume_cleanup_delay_us -or
-            [long]$invocation.configured_H_us -ne $verifiedFloors.configured_H_us -or
-            [long]$invocation.resume_cleanup_delay_us -ne $verifiedFloors.resume_cleanup_delay_us) {
-            throw 'DispatchSessionRedesignM3 invocation H and resume cleanup delay differ from its verified run-config'
+            [long]$invocation.configured_H_us -ne $verifiedFloors.configured_H_us) {
+            throw 'DispatchSessionRedesignM3 invocation H differs from its verified run-config'
         }
     }
     $row = [pscustomobject]@{
@@ -832,7 +828,6 @@ function Invoke-NativeCase {
         session_seed = Get-OptionalProperty $invocation 'session_seed'
         seed_mode = Get-OptionalProperty $invocation 'seed_mode'
         configured_H_us = Get-OptionalProperty $invocation 'configured_H_us'
-        resume_cleanup_delay_us = Get-OptionalProperty $invocation 'resume_cleanup_delay_us'
         scenario = $Scenario
         load = $Load
         game_fps = $Fps
@@ -1277,7 +1272,7 @@ try {
         'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'short-up-gap-stress',
         'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary',
         'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change', 'owner-mismatch',
-        'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-barrier',
+        'owner-query-failure', 'owner-process-termination', 'pause-resume',
         'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
         'lease-age-watchdog-delayed', 'noncanonical-profile'
     )
@@ -1462,13 +1457,12 @@ try {
         session_seed = $null
         seed_mode = 'none; deterministic workload definitions do not accept a PRNG seed'
         configured_H_us = if ($usesSessionQualificationContracts) { $reportProjection.StageSummary.configured_H_us } elseif ($Stage -in @('Canary', 'Smoke')) { [long][Math]::Ceiling(1000000.0 / 60) * 2 + $TimingMarginUs } elseif ($Stage -eq 'Compare') { [long][Math]::Ceiling(1000000.0 / 60) * 2 } else { $null }
-        resume_cleanup_delay_us = if ($usesSessionQualificationContracts) { $reportProjection.StageSummary.resume_cleanup_delay_us } elseif ($Stage -in @('Canary', 'Smoke')) { [long][Math]::Ceiling(1000000.0 / 60) + $TimingMarginUs } elseif ($Stage -eq 'Compare') { [long][Math]::Ceiling(1000000.0 / 60) } else { $null }
     }
     if ($usesSessionQualificationContracts) {
         $sessionPlan['qualification_profile'] = $QualificationProfile
         $sessionPlan['stage_kind'] = $reportProjection.StageSummary.stage_kind
-        $sessionPlan['configured_hold_and_resume_cleanup_delay_mode'] = $reportProjection.StageSummary.configured_hold_and_resume_cleanup_delay_mode
-        $sessionPlan['configured_hold_and_resume_cleanup_delay_summary'] = $reportProjection.StageSummary.configured_hold_and_resume_cleanup_delay_summary
+        $sessionPlan['configured_H_mode'] = $reportProjection.StageSummary.configured_H_mode
+        $sessionPlan['configured_H_summary'] = $reportProjection.StageSummary.configured_H_summary
         $sessionPlan['game_fps'] = $reportProjection.StageSummary.game_fps
         $sessionPlan['game_fps_summary'] = $reportProjection.StageSummary.game_fps_summary
         $sessionPlan['timing_margin_us'] = $reportProjection.StageSummary.timing_margin_us
@@ -1533,7 +1527,7 @@ try {
             sender_envelope = 'SendInput completion QPC minus sender pre-call QPC, per syscall'
             timer_arm_target = 'only records with derived_from_timer_arm provenance are compared; target is QPC arm sample plus the relative microsecond timeout passed to SetWaitableTimer'
             timer_arm_to_return = 'timer return QPC minus matching arm QPC; timer wake residual is return QPC minus requested timer target QPC'
-            realized_hold_and_transition_timing = 'per-key successful Down completion to authored Up pre-call (H); musical Up completion to next Down pre-call is measured without a fixed floor; verified cleanup completion to resume barrier uses the separate resume cleanup delay'
+            realized_hold_and_transition_timing = 'per-key successful Down completion to authored Up pre-call (H); musical Up completion to next Down pre-call is measured without a fixed floor; Resume requires verified cleanup and control-plane admission without an elapsed-time floor'
             per_key_authored_up = 'Up sidecar records are retained and counted, but this summary does not consume their per-slot authored offsets or floors; per-key authored Up p95/p99 are unsupported'
             packet_aggregates = 'p95/p99 for authored lateness, floor displacement, residual, waiter handoff, and sender envelope are packet trace record or per-syscall aggregates'
             hot_cold = 'authored Down-chord schedule gap; hot < 20000 us, cold >= 20000 us'
@@ -1581,7 +1575,6 @@ try {
         'session_seed',
         'seed_mode',
         'configured_H_us',
-        'resume_cleanup_delay_us',
         'scenario',
         'load',
         'game_fps',

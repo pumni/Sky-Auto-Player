@@ -248,19 +248,6 @@ pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<
         ));
     }
 
-    let expected_resume_cleanup_delay_us = timing
-        .frame_us
-        .checked_add(timing.timing_margin_us)
-        .ok_or_else(|| {
-            "native timing contract overflow: frame_us + timing_margin_us".to_string()
-        })?;
-    if timing.resume_cleanup_delay_us != expected_resume_cleanup_delay_us {
-        return Err(format!(
-            "native timing contract mismatch: resume_cleanup_delay_us is {}, expected frame_us + timing_margin_us = {expected_resume_cleanup_delay_us}",
-            timing.resume_cleanup_delay_us
-        ));
-    }
-
     Ok(())
 }
 
@@ -270,7 +257,6 @@ pub struct NativeDispatchSession {
     observer_enabled: bool,
     focus_required: bool,
     generation_count: u64,
-    effective_resume_cleanup_delay_us: u64,
     shared: Arc<SessionShared>,
     supervisor_lease_timeout_us: u64,
     supervisor_lease_timeout_ticks: AtomicU64,
@@ -354,14 +340,12 @@ impl NativeDispatchSession {
         // after the worker has started.
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
-        let resume_cleanup_delay_us = options.timing.resume_cleanup_delay_us;
-        if !options.schedule.is_compatible(
-            qpc_clock.frequency_hz(),
-            options.timing.min_hold_us,
-            resume_cleanup_delay_us,
-        ) {
+        if !options
+            .schedule
+            .is_compatible(qpc_clock.frequency_hz(), options.timing.min_hold_us)
+        {
             return Err(
-                "prepared dispatch plan no longer matches the QPC domain or resume cleanup barrier policy"
+                "prepared dispatch plan no longer matches the QPC domain or hold policy"
                     .to_string(),
             );
         }
@@ -479,7 +463,6 @@ impl NativeDispatchSession {
             focus_required: admitted_options.options.focus.require_focus,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
-            effective_resume_cleanup_delay_us: resume_cleanup_delay_us,
             shared,
             supervisor_lease_timeout_us,
             supervisor_lease_timeout_ticks: AtomicU64::new(0),
@@ -487,11 +470,6 @@ impl NativeDispatchSession {
             thread_handle: Mutex::new(None),
             watchdog_handle: Mutex::new(None),
         })
-    }
-
-    /// Effective post-cleanup resume delay admitted for this session.
-    pub fn effective_resume_cleanup_delay_us(&self) -> u64 {
-        self.effective_resume_cleanup_delay_us
     }
 
     /// Read the per-session worker evidence used by the native qualification

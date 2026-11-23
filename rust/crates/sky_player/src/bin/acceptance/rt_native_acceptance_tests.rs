@@ -7,7 +7,7 @@ use super::{
     SHORT_UP_GAP_STRESS_CYCLES,
     PreTerminalResult, READY_SCHEMA_VERSION, RECEIVE_ONLY_ROLE, ReadyRecord, SCRIPT_MARKER,
     SINK_KIND, SINK_TITLE, TARGET_CLASS_RECEIVE_ONLY, TARGET_CLASS_PROBE, Scenario, Verdict, acceptance_min_hold_us,
-    acceptance_resume_cleanup_delay_us, cleanup_evidence_clean, drain_event_window_with,
+    cleanup_evidence_clean, drain_event_window_with,
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
     healthy_generation_qualification, production_visibility_qualification,
     expected_mixed_up_down_event_sequence, reconcile_event_sequence, reconcile_events, scenario_plan,
@@ -648,9 +648,7 @@ fn authorization_and_timing_contracts_remain_bounded() {
     };
     assert_eq!(args.timing_margin_us, ACCEPTANCE_TIMING_MARGIN_US);
     assert_eq!(acceptance_min_hold_us(800), 17_467);
-    assert_eq!(acceptance_resume_cleanup_delay_us(800), 17_467);
     assert_eq!(acceptance_min_hold_us(0), 16_667);
-    assert_eq!(acceptance_resume_cleanup_delay_us(0), 16_667);
     assert!(focus_evidence_clean(true, 1, 0, true, true));
     assert!(focus_evidence_clean(true, 0, 0, true, true));
 }
@@ -863,7 +861,6 @@ fn stress_qualification_requires_enough_hold_samples() {
 #[test]
 fn acceptance_options_freeze_the_materialized_physical_timing_policy() {
     let authored_hold = acceptance_min_hold_us(ACCEPTANCE_TIMING_MARGIN_US);
-    let authored_gap = acceptance_resume_cleanup_delay_us(ACCEPTANCE_TIMING_MARGIN_US);
     let plan = scenario_plan(Scenario::CanonicalSingle, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
     let options = production_options(
         plan.schedule,
@@ -874,7 +871,6 @@ fn acceptance_options_freeze_the_materialized_physical_timing_policy() {
     )
     .expect("prepared acceptance schedule");
     assert_eq!(options.timing.min_hold_us, authored_hold);
-    assert_eq!(options.timing.resume_cleanup_delay_us, authored_gap);
     assert_eq!(options.timing.frame_us, ACCEPTANCE_FRAME_US);
     assert_eq!(options.timing.frame_base_hold_us, ACCEPTANCE_FRAME_US);
     assert_eq!(options.timing.timing_margin_us, ACCEPTANCE_TIMING_MARGIN_US);

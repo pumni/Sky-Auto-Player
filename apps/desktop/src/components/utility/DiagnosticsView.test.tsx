@@ -28,7 +28,6 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     frame_base_hold_us: 16_667,
     timing_margin_us: 800,
     min_hold_us: 17_467,
-    resume_cleanup_delay_us: 17_467,
     timing_margin_recommendation: {
       recommended_timing_margin_us: 800,
       qualified: false,
@@ -247,7 +246,6 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Pre-call 500–750 μs')).toBeInTheDocument();
     expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('800 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('17.467 ms');
-    expect(screen.getByText('Resume cleanup delay').parentElement).toHaveTextContent('17.467 ms');
     expect(screen.queryByText('Missed Down keys')).toBeNull();
     expect(screen.queryByText('Unobserved backlog boundaries')).toBeNull();
     expect(screen.getByText('Focus gate rejections')).toBeInTheDocument();
@@ -295,7 +293,6 @@ describe('DiagnosticsView', () => {
             session_id: sessionId,
             timing_margin_us: 0,
             min_hold_us: 16_667,
-            resume_cleanup_delay_us: 16_667,
             timing_margin_recommendation: {
               recommended_timing_margin_us: 800,
               qualified: false,
@@ -311,7 +308,6 @@ describe('DiagnosticsView', () => {
 
     expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('0 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('16.667 ms');
-    expect(screen.getByText('Resume cleanup delay').parentElement).toHaveTextContent('16.667 ms');
     expect(screen.getByText('Recommended sender margin').parentElement).toHaveTextContent('800 µs');
     expect(screen.getByText('Recommendation source').parentElement).toHaveTextContent(
       'Default fallback (no valid calibration cache)',

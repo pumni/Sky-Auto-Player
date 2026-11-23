@@ -143,13 +143,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
-pub type RestoreRaceHook = Arc<
-    dyn Fn(&AtomicBool, &super::shared::SessionTarget, Option<sky_dispatch_win32::clock::QpcTicks>)
-        + Send
-        + Sync,
->;
-
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) type FocusPauseHook = Arc<dyn Fn() + Send + Sync>;
 
 #[cfg(any(test, feature = "test-support"))]
@@ -236,8 +229,6 @@ pub struct NativeSessionOptions {
     #[cfg(any(test, feature = "test-support"))]
     pub timing_observer_for_qualification: bool,
     #[cfg(any(test, feature = "test-support"))]
-    pub restore_race_hook: Option<RestoreRaceHook>,
-    #[cfg(any(test, feature = "test-support"))]
     pub focus_pause_hook: Option<FocusPauseHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub timer_lifecycle_context:
@@ -263,12 +254,6 @@ pub struct StartupOrderingHook {
     cpu_baseline_trace: std::sync::Mutex<CpuBaselineOrderingTrace>,
     pub(crate) first_physical_send_started: AtomicU64,
     pub(crate) boot_delay_us: AtomicU64,
-    resume_barrier_control_enabled: AtomicBool,
-    completed_up_count: AtomicU64,
-    released_up_count: AtomicU64,
-    resume_cleanup_qpc_ticks: AtomicU64,
-    pause_ack_qpc_ticks: AtomicU64,
-    pause_ack_pending: AtomicBool,
     down_authored_target_qpc_ticks: AtomicU64,
     down_not_before_qpc_ticks: AtomicU64,
     down_window_sequence: AtomicU64,
@@ -597,37 +582,6 @@ impl StartupOrderingHook {
         self.boot_delay_us.store(delay_us, Ordering::SeqCst);
     }
 
-    /// Enable the feature-gated release-barrier lifecycle fixture. The worker pauses after
-    /// each successful Up until the acceptance controller requests pause and
-    /// releases that exact completion boundary.
-    pub fn enable_resume_barrier_control(&self, initial_worker_delay_us: u64) {
-        self.boot_delay_us
-            .store(initial_worker_delay_us, Ordering::SeqCst);
-        self.resume_barrier_control_enabled
-            .store(true, Ordering::Release);
-    }
-
-    pub fn completed_up_count(&self) -> u64 {
-        self.completed_up_count.load(Ordering::Acquire)
-    }
-
-    pub fn release_completed_up_through(&self, count: u64) {
-        self.released_up_count.store(count, Ordering::Release);
-    }
-
-    pub fn resume_cleanup_qpc_ticks(&self) -> u64 {
-        self.resume_cleanup_qpc_ticks.load(Ordering::Acquire)
-    }
-
-    pub fn clear_pause_ack_qpc(&self) {
-        self.pause_ack_qpc_ticks.store(0, Ordering::Release);
-        self.pause_ack_pending.store(true, Ordering::Release);
-    }
-
-    pub fn pause_ack_qpc_ticks(&self) -> u64 {
-        self.pause_ack_qpc_ticks.load(Ordering::Acquire)
-    }
-
     pub fn last_down_sender_start_qpc_ticks(&self) -> u64 {
         self.down_sender_start_qpc_ticks.load(Ordering::Acquire)
     }
@@ -670,25 +624,6 @@ impl StartupOrderingHook {
         self.watchdog_hold.store(false, Ordering::Release);
     }
 
-    pub(crate) fn record_resume_cleanup_qpc(&self, qpc_ticks: u64) {
-        if self.resume_barrier_control_enabled.load(Ordering::Acquire) {
-            self.resume_cleanup_qpc_ticks
-                .store(qpc_ticks, Ordering::Release);
-        }
-    }
-
-    pub(crate) fn record_pause_ack_qpc(&self, qpc_ticks: u64) {
-        if self.resume_barrier_control_enabled.load(Ordering::Acquire) {
-            self.pause_ack_qpc_ticks.store(qpc_ticks, Ordering::Release);
-            self.pause_ack_pending.store(false, Ordering::Release);
-        }
-    }
-
-    pub(crate) fn pause_ack_pending(&self) -> bool {
-        self.resume_barrier_control_enabled.load(Ordering::Acquire)
-            && self.pause_ack_pending.load(Ordering::Acquire)
-    }
-
     pub(crate) fn record_down_sender_attempt(
         &self,
         started_qpc_ticks: Option<u64>,
@@ -706,16 +641,6 @@ impl StartupOrderingHook {
             .store(packet_not_before_qpc_ticks, Ordering::Release);
         self.down_sender_wake_qpc_ticks
             .store(wake_qpc_ticks.unwrap_or(0), Ordering::Release);
-    }
-
-    pub(crate) fn wait_after_successful_up(&self) {
-        if !self.resume_barrier_control_enabled.load(Ordering::Acquire) {
-            return;
-        }
-        let count = self.completed_up_count.fetch_add(1, Ordering::AcqRel) + 1;
-        while self.released_up_count.load(Ordering::Acquire) < count {
-            std::thread::sleep(std::time::Duration::from_micros(50));
-        }
     }
 
     pub(crate) fn hold_watchdog_before_check(&self) {
@@ -797,7 +722,6 @@ impl Default for WorkerConfig {
             timing: TimingOptions {
                 game_fps: 60,
                 min_hold_us: 10_000,
-                resume_cleanup_delay_us: 16_667,
                 frame_us: 16_667,
                 frame_base_hold_us: 16_667,
                 timing_margin_us: 0,
@@ -840,7 +764,6 @@ impl Default for WorkerConfig {
 pub struct TimingOptions {
     pub game_fps: u16,
     pub min_hold_us: u64,
-    pub resume_cleanup_delay_us: u64,
     pub frame_us: u64,
     pub frame_base_hold_us: u64,
     pub timing_margin_us: u64,

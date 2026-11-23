@@ -269,15 +269,11 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         return admission_failure(&mut backend, metrics, error);
     }
     let prepared_schedule = schedule;
-    if !prepared_schedule.is_compatible(
-        qpc_clock.frequency_hz(),
-        config.timing.min_hold_us,
-        config.timing.resume_cleanup_delay_us,
-    ) {
+    if !prepared_schedule.is_compatible(qpc_clock.frequency_hz(), config.timing.min_hold_us) {
         return admission_failure(
             &mut backend,
             metrics,
-            "prepared dispatch plan no longer matches the worker QPC domain or resume cleanup barrier policy"
+            "prepared dispatch plan no longer matches the worker QPC domain or hold policy"
                 .to_string(),
         );
     }

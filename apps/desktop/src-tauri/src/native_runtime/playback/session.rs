@@ -515,7 +515,6 @@ impl NativePlaybackService {
                     compiled,
                     qpc_frequency_hz.expect("physical Prepare requires QPC admission"),
                     timing_policy.min_hold_us,
-                    timing_policy.resume_cleanup_delay_us,
                     compiled.compile_memory.caller_retained_capacity_bytes,
                     || {
                         if cancelled.load(Ordering::Acquire) {
@@ -683,7 +682,6 @@ impl NativePlaybackService {
                             &recommended_compiled,
                             qpc_frequency_hz.expect("physical recommendation requires QPC admission"),
                             recommended_policy.min_hold_us,
-                            recommended_policy.resume_cleanup_delay_us,
                             caller_retained_capacity_bytes,
                             || {
                                 if cancelled.load(Ordering::Acquire) {
@@ -1693,7 +1691,6 @@ impl NativePlaybackService {
                     timing: TimingOptions {
                         game_fps: config.fps,
                         min_hold_us: policy.min_hold_us,
-                        resume_cleanup_delay_us: policy.resume_cleanup_delay_us,
                         frame_us: policy.frame_us,
                         frame_base_hold_us: policy.frame_base_hold_us,
                         timing_margin_us: policy.timing_margin_us,
@@ -1730,8 +1727,6 @@ impl NativePlaybackService {
                     instrument_key_profile: None,
                     #[cfg(feature = "tauri-test")]
                     startup_ordering_hook: None,
-                    #[cfg(feature = "tauri-test")]
-                    restore_race_hook: None,
                     #[cfg(feature = "tauri-test")]
                     focus_pause_hook: None,
                     #[cfg(feature = "tauri-test")]
@@ -2625,7 +2620,6 @@ pub(in crate::native_runtime) fn sender_trace_export_json(
             "frame_base_hold_us": active.timing_policy.frame_base_hold_us,
             "timing_margin_us": active.timing_policy.timing_margin_us,
             "target_hold_us": active.timing_policy.min_hold_us,
-            "resume_cleanup_delay_us": active.timing_policy.resume_cleanup_delay_us,
         },
         "analytics": {
             "aggregate_scope": "packet_trace_records",
@@ -2795,7 +2789,6 @@ pub(in crate::native_runtime) fn plan_fingerprint(
             "frame_base_hold_us": policy.frame_base_hold_us,
             "timing_margin_us": policy.timing_margin_us,
             "min_hold_us": policy.min_hold_us,
-            "resume_cleanup_delay_us": policy.resume_cleanup_delay_us,
         },
         "actions": actions,
     });
@@ -3432,7 +3425,6 @@ mod preparation_cancellation_tests {
         let baseline_executor = sky_player::adapter_support::DispatchExecutor::new(
             &baseline_compiled,
             sky_player::adapter_support::DurationTicks::ZERO,
-            sky_player::adapter_support::DurationTicks::ZERO,
             |microseconds| {
                 Ok::<_, std::convert::Infallible>(
                     sky_player::adapter_support::TimelineTicks::from_raw(microseconds),
@@ -3477,7 +3469,6 @@ mod preparation_cancellation_tests {
         let prepared = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
             &compiled,
             qpc_frequency,
-            0,
             0,
             compile_memory.caller_retained_capacity_bytes,
         )
@@ -3657,7 +3648,6 @@ mod preparation_cancellation_tests {
                 timing: TimingOptions {
                     game_fps: config.fps,
                     min_hold_us: policy.min_hold_us,
-                    resume_cleanup_delay_us: policy.resume_cleanup_delay_us,
                     frame_us: policy.frame_us,
                     frame_base_hold_us: policy.frame_base_hold_us,
                     timing_margin_us: policy.timing_margin_us,
@@ -3687,7 +3677,6 @@ mod preparation_cancellation_tests {
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook: Some(Arc::clone(&hook)),
-                restore_race_hook: None,
                 focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
@@ -4092,9 +4081,6 @@ mod preparation_cancellation_tests {
         let baseline_min_hold = baseline_clock
             .duration_from_us(prepared_input.timing_policy.min_hold_us)
             .expect("baseline H conversion");
-        let baseline_resume_cleanup_delay = baseline_clock
-            .duration_from_us(prepared_input.timing_policy.resume_cleanup_delay_us)
-            .expect("baseline resume cleanup conversion");
         sky_player::adapter_support::validate_min_hold_feasibility_ticks(
             &baseline_compiled,
             prepared_input.timing_policy.min_hold_us,
@@ -4105,7 +4091,6 @@ mod preparation_cancellation_tests {
         let baseline_executor = sky_player::adapter_support::DispatchExecutor::new(
             &baseline_compiled,
             baseline_min_hold,
-            baseline_resume_cleanup_delay,
             |microseconds| {
                 baseline_clock
                     .timeline_from_us(microseconds)

@@ -102,7 +102,6 @@ export function SettingsCategoryContent({
   const frameUs = Math.ceil(1_000_000 / defaults.fps);
   const frameBaseHoldUs = Math.ceil(defaults.hold_frames * frameUs);
   const minHoldUs = frameBaseHoldUs + defaults.timing_margin_us;
-  const resumeCleanupDelayUs = frameUs + defaults.timing_margin_us;
   const checkingUpdates = update.checkRequestPending || update.state === 'checking';
 
   return (
@@ -200,10 +199,6 @@ export function SettingsCategoryContent({
                 <div>
                   <dt>Target hold</dt>
                   <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
-                </div>
-                <div>
-                  <dt>Resume cleanup delay</dt>
-                  <dd>{(resumeCleanupDelayUs / 1_000).toFixed(3)} ms</dd>
                 </div>
               </dl>
             </div>

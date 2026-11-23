@@ -79,7 +79,7 @@ pub fn simulate_schedule(
         .map_err(|error| crate::compile::CompileError::Simulation(error.to_string()))?;
 
     let min_hold = DurationTicks::from_raw(min_hold_us);
-    let mut executor = DispatchExecutor::new(&schedule, min_hold, min_hold, |microseconds| {
+    let mut executor = DispatchExecutor::new(&schedule, min_hold, |microseconds| {
         Ok::<_, std::convert::Infallible>(TimelineTicks::from_raw(microseconds))
     })
     .map_err(crate::compile::CompileError::Simulation)?;

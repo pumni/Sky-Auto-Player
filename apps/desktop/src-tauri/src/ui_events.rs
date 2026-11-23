@@ -207,7 +207,6 @@ pub struct DiagnosticsSnapshotDto {
     pub frame_base_hold_us: u64,
     pub timing_margin_us: u64,
     pub min_hold_us: u64,
-    pub resume_cleanup_delay_us: u64,
     pub timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub pre_call_lt_250us: u64,
     pub pre_call_250_500us: u64,

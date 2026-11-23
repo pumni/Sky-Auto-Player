@@ -14,7 +14,6 @@ use std::time::Duration;
 const FRAME_US: u64 = 16_667;
 const MARGIN_US: u64 = 500;
 const HOLD_US: u64 = FRAME_US + MARGIN_US;
-const RESUME_CLEANUP_DELAY_US: u64 = FRAME_US + MARGIN_US;
 
 fn accounting(harness: &ProductionDispatchTestHarness, phase: &str) -> Value {
     let value = harness.generation_accounting_for_test();
@@ -69,7 +68,7 @@ fn cleanup_capture_records(capture: &CleanupCapture) -> Result<Vec<(Vec<u16>, bo
         .map_err(|_| "mock cleanup capture poisoned".to_string())
 }
 
-fn cleanup_capture_evidence(records: &[(Vec<u16>, bool)], completion_qpc_ticks: u64) -> Value {
+fn cleanup_capture_evidence(records: &[(Vec<u16>, bool)]) -> Value {
     let up_attempts = records.iter().filter(|(_, key_up)| *key_up).count();
     let down_attempts = records.len() - up_attempts;
     let up_events = records
@@ -97,7 +96,6 @@ fn cleanup_capture_evidence(records: &[(Vec<u16>, bool)], completion_qpc_ticks: 
         "down_attempts": down_attempts,
         "up_events": up_events,
         "down_events": down_events,
-        "completion_qpc_ticks": completion_qpc_ticks,
         "packets": packets,
     })
 }
@@ -237,66 +235,55 @@ fn run_no_pause_control(clock: QpcClock, frequency_hz: u64) -> Result<Value, Str
 }
 
 fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String> {
+    use sky_dispatch_core::clock::PauseReason;
+
     let mut harness =
         ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(frequency_hz, false)?;
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
-    let (cleanup_packets, cleanup_completion) =
-        harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
+    let cleanup_packets = harness.configure_mock_cleanup_emitter_for_test();
     harness.attach_executor_for_test()?;
-    let epoch = new_epoch(clock, &mut harness)?;
+    let initial_epoch = new_epoch(clock, &mut harness)?;
     let mut stages = vec![accounting(&harness, "before_first_down")];
-    let first = dispatch_next(&mut harness, clock, epoch)?
-        .ok_or("scheduler finished before pause control Down")?;
+    let first = dispatch_next(&mut harness, clock, initial_epoch)?
+        .ok_or("scheduler finished before Pause control Down")?;
     if (first.up_mask, first.down_mask) != (0, 1) {
-        return Err("pause control did not begin with the live scheduler Down".into());
+        return Err("Pause control did not begin with the live scheduler Down".into());
     }
     stages.push(accounting(&harness, "after_initial_down"));
 
     harness.set_pause_requested_for_test(true);
-    harness.apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
-        || {
-            Ok(QpcTicks::from_raw(
-                cleanup_completion.load(std::sync::atomic::Ordering::Acquire),
-            ))
-        },
-    )?;
-    let cleanup_qpc =
-        QpcTicks::from_raw(cleanup_completion.load(std::sync::atomic::Ordering::Acquire));
+    let pause_at = clock
+        .now()
+        .map_err(|error| format!("QPC read before Pause commit: {error:?}"))?;
+    harness
+        .commit_pause_for_test(PauseReason::Manual, pause_at)
+        .map_err(|error| format!("Pause control commit failed: {error}"))?;
+    harness.apply_scheduler_resumable_lifecycle_transition_for_test()?;
     let pause_cleanup_records = cleanup_capture_records(&cleanup_packets)?;
-    let barrier = harness
-        .resume_barrier_qpc_for_test()
-        .ok_or("verified cleanup did not establish a resume barrier")?;
-    let timing = harness.dispatch_timing_config_for_test()?;
-    let resume_delay_ticks = harness
-        .qpc_duration_from_us_for_test(timing.resume_cleanup_delay_us)?
-        .as_u64();
-    if timing.resume_cleanup_delay_us != RESUME_CLEANUP_DELAY_US
-        || barrier.as_u64()
-            != cleanup_qpc
-                .as_u64()
-                .checked_add(resume_delay_ticks)
-                .ok_or("barrier overflow")?
+    if pause_cleanup_records.is_empty()
         || harness.release_obligation_mask_for_test() != 0
+        || !harness.is_paused_for_test()
     {
-        return Err(
-            "pause cleanup did not establish the separate verified-cleanup resume barrier".into(),
-        );
+        return Err("Pause did not finish verified cleanup while remaining paused".into());
+    }
+    let attempts_while_paused = packet_capture_evidence(&packets)?.len().saturating_sub(1);
+    if attempts_while_paused != 0 {
+        return Err("a musical packet was sent before Resume committed".into());
     }
     stages.push(accounting(&harness, "after_pause_cleanup"));
 
-    let delay_minus_one = QpcTicks::from_raw(barrier.as_u64() - 1);
-    let delay_minus_one_decision =
-        harness.evaluate_live_scheduler_for_test(delay_minus_one, epoch)?;
-    let delay_minus_one_waits = matches!(
-        delay_minus_one_decision,
-        DispatchDecision::Wait { deadline_qpc } if deadline_qpc == barrier
-    );
-    if !delay_minus_one_waits {
-        return Err("live scheduler did not wait until the resume cleanup barrier".into());
-    }
+    let resume_commit_qpc = clock
+        .now()
+        .map_err(|error| format!("QPC read at Resume commit: {error:?}"))?;
     harness.set_pause_requested_for_test(false);
+    let resumed_epoch = harness
+        .commit_resume_for_test(PauseReason::Manual, resume_commit_qpc)
+        .map_err(|error| format!("Resume control commit failed: {error}"))?;
+    if harness.is_paused_for_test() {
+        return Err("Resume control did not close the manual pause".into());
+    }
     let (up_mask, down_chord, timing_window) =
-        match harness.evaluate_live_scheduler_for_test(barrier, epoch)? {
+        match harness.evaluate_live_scheduler_for_test(resume_commit_qpc, resumed_epoch)? {
             DispatchDecision::Send {
                 up_mask,
                 down_chord,
@@ -304,44 +291,40 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
             } => (up_mask, down_chord.map(Into::into), timing_window),
             decision => {
                 return Err(format!(
-                    "live scheduler did not allow dispatch at the resume barrier: {decision:?}"
+                    "scheduler did not admit its authored Down after Resume: {decision:?}"
                 ));
             }
         };
-    if up_mask != 0 || timing_window.packet_not_before_qpc != barrier {
-        return Err("resume-barrier scheduler decision did not preserve the barrier window".into());
+    if up_mask != 0 || timing_window.packet_not_before_qpc > resume_commit_qpc {
+        return Err(
+            "fresh Resume admission added a physical deadline after the authored target was due"
+                .into(),
+        );
     }
     let candidate = harness
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)?
-        .ok_or("resumed Down did not stage at the barrier")?;
+        .ok_or("resumed Down did not stage after committed Resume")?;
     let staged_window = harness.staged_candidate_timing_window_for_test(&candidate);
-    if staged_window.packet_not_before_qpc != barrier {
-        return Err("production staging changed the verified-cleanup resume barrier".into());
+    if staged_window.authored_target_qpc > resume_commit_qpc
+        || staged_window.packet_not_before_qpc > resume_commit_qpc
+    {
+        return Err("staging changed the fresh authored Resume admission window".into());
     }
-    wait_until(clock, barrier)?;
     let sender_start = clock
         .now()
         .map_err(|error| format!("QPC read before resumed mock send: {error:?}"))?;
     harness.set_mock_sender_start_qpc_for_test(sender_start);
-    if !matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Dispatched
-    ) {
-        return Err("resumed production packet did not dispatch at the barrier".into());
-    }
-    if sender_start < barrier {
-        return Err("resumed mock sender started before the verified-cleanup barrier".into());
+    if sender_start < resume_commit_qpc
+        || !matches!(
+            harness.dispatch_staged_candidate_for_test(candidate, false),
+            StagedDispatchOutcome::Dispatched
+        )
+    {
+        return Err("resumed production packet did not dispatch after Resume committed".into());
     }
     stages.push(accounting(&harness, "after_resumed_down"));
 
-    harness.apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
-        || {
-            Ok(QpcTicks::from_raw(
-                cleanup_completion.load(std::sync::atomic::Ordering::Acquire),
-            ))
-        },
-    )?;
-    let final_cleanup_qpc = cleanup_completion.load(std::sync::atomic::Ordering::Acquire);
+    harness.apply_scheduler_resumable_lifecycle_transition_for_test()?;
     stages.push(accounting(&harness, "after_final_cleanup"));
     let packet_evidence = packet_capture_evidence(&packets)?;
     let attempts = packet_evidence.len();
@@ -355,24 +338,20 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
     let resumed_sender_start = resumed_packet["started_qpc_ticks"]
         .as_u64()
         .ok_or("resumed Down capture has no start QPC")?;
-    let resumed_down_completion = resumed_packet["completed_qpc_ticks"]
-        .as_u64()
-        .ok_or("resumed Down capture has no completion QPC")?;
-    if resumed_sender_start != sender_start.as_u64()
-        || initial_down_completion > cleanup_qpc.as_u64()
-        || final_cleanup_qpc < resumed_down_completion
+    if initial_down_completion > pause_at.as_u64()
+        || resumed_sender_start != sender_start.as_u64()
+        || resumed_sender_start < resume_commit_qpc.as_u64()
     {
-        return Err("captured Down/cleanup/resume QPC chronology is inconsistent".into());
+        return Err(
+            "captured send chronology does not follow Pause cleanup and Resume commit".into(),
+        );
     }
     let all_cleanup_records = cleanup_capture_records(&cleanup_packets)?;
-    if all_cleanup_records.len() < pause_cleanup_records.len() {
-        return Err("cleanup capture lost records after pause cleanup".into());
+    if all_cleanup_records.len() <= pause_cleanup_records.len() {
+        return Err("final cleanup capture is missing after the resumed Down".into());
     }
     let final_cleanup_records = &all_cleanup_records[pause_cleanup_records.len()..];
     let cleanup_attempts = all_cleanup_records.len();
-    if pause_cleanup_records.is_empty() || final_cleanup_records.is_empty() {
-        return Err("pause/resume lifecycle did not capture both cleanup Up operations".into());
-    }
     let final_obligation = harness.release_obligation_mask_for_test();
     if attempts != 2 || final_obligation != 0 {
         return Err("pause/resume sender count or final release obligation failed".into());
@@ -386,20 +365,20 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
         "total_mock_send_attempts": attempts + cleanup_attempts,
         "packets": packet_evidence,
         "cleanup_captures": {
-            "pause": cleanup_capture_evidence(&pause_cleanup_records, cleanup_qpc.as_u64()),
-            "final": cleanup_capture_evidence(final_cleanup_records, final_cleanup_qpc),
+            "pause": cleanup_capture_evidence(&pause_cleanup_records),
+            "final": cleanup_capture_evidence(final_cleanup_records),
             "total_attempts": cleanup_attempts,
         },
         "generation_accounting_owner": "live_scheduler",
         "accounting_stages": stages,
-        "cleanup_completion_qpc_ticks": cleanup_qpc.as_u64(),
-        "resume_cleanup_delay_us": timing.resume_cleanup_delay_us,
-        "resume_cleanup_delay_ticks": resume_delay_ticks,
-        "resume_barrier_qpc_ticks": barrier.as_u64(),
+        "verified_cleanup_before_resume": true,
+        "send_attempts_while_paused": attempts_while_paused,
+        "resume_control_committed": true,
+        "resume_commit_qpc_ticks": resume_commit_qpc.as_u64(),
+        "resumed_epoch_qpc_ticks": resumed_epoch.as_u64(),
+        "resumed_authored_target_qpc_ticks": staged_window.authored_target_qpc.as_u64(),
         "candidate_packet_not_before_qpc_ticks": staged_window.packet_not_before_qpc.as_u64(),
         "resumed_sender_start_qpc_ticks": resumed_sender_start,
-        "resume_delay_minus_one_decision": "wait",
-        "exact_resume_delay_decision": "send",
         "final_release_obligation_mask": final_obligation,
         "passed": true,
     }))
@@ -436,7 +415,7 @@ fn run() -> Result<Value, String> {
     let normal = run_no_pause_control(clock, frequency_hz)?;
     let paused = run_pause_resume(clock, frequency_hz)?;
     let report = json!({
-        "schema_version": 3,
+        "schema_version": 4,
         "report_kind": "dispatch_lifecycle",
         "result": "PASS",
         "provenance": {
@@ -452,10 +431,7 @@ fn run() -> Result<Value, String> {
             "hold_frames": 1,
             "timing_margin_us": MARGIN_US,
             "min_hold_us": HOLD_US,
-            "resume_cleanup_delay_us": RESUME_CLEANUP_DELAY_US,
             "qpc_frequency_hz": frequency_hz,
-            "resume_cleanup_delay_ticks": clock.duration_from_us(RESUME_CLEANUP_DELAY_US)
-                .map_err(|error| format!("resume cleanup delay conversion: {error:?}"))?.as_u64(),
         },
         "live_scheduler": {
             "generation_accounting_owner": "live_scheduler",

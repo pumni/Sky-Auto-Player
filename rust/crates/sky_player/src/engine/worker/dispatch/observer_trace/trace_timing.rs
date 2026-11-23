@@ -103,7 +103,6 @@ pub(in crate::engine::worker::dispatch) fn down_send_trace_timing(
             .map(|ticks| ticks.as_u64()),
         previous_sender_completion_known: observation.previous_sender_completion_known,
         hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
-        resume_barrier_mask: observation.physical_timing_window.resume_barrier_mask,
         final_policy_qpc_ticks: observation.final_policy_qpc.map(|ticks| ticks.as_u64()),
         pre_call_qpc_ticks: observation.pre_call_qpc.map(|ticks| ticks.as_u64()),
         sendinput_completion_qpc_ticks: Some(observation.sendinput_completion_qpc.as_u64()),

@@ -482,7 +482,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         frame_base_hold_us: frameBaseHoldUs,
         timing_margin_us: config.timing_margin_us,
         min_hold_us: frameBaseHoldUs + config.timing_margin_us,
-        resume_cleanup_delay_us: frameUs + config.timing_margin_us,
         timing_margin_recommendation: settings.timing_margin_recommendation,
         pre_call_lt_250us: 0,
         pre_call_250_500us: 0,
@@ -1566,7 +1565,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           frame_base_hold_us: 16_667,
           timing_margin_us: 500,
           target_hold_us: 17_167,
-          resume_cleanup_delay_us: 17_167,
         },
         telemetry: {
           schema_version: 19,

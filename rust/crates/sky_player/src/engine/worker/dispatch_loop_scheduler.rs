@@ -319,7 +319,6 @@ fn up_only_timing_window(
     timing_window.down_not_before_qpc = summary.authored_target_qpc;
     timing_window.packet_not_before_qpc = summary.musical_up_not_before_qpc;
     timing_window.hold_floor_mask = summary.hold_floor_mask;
-    timing_window.resume_barrier_mask = 0;
     Ok(timing_window)
 }
 
@@ -905,8 +904,8 @@ mod scheduler_tests {
             DispatchDecision::Send {
                 up_mask: 0,
                 down_chord: Some(_),
-                timing_window,
-            } if timing_window.resume_barrier_mask == 0
+                timing_window: _,
+            }
         ));
     }
 

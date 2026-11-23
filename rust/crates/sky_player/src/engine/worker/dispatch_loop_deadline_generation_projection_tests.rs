@@ -156,7 +156,6 @@ fn scheduler_h_floor_and_authored_repeat_trace_uses_single_sender_commits() {
             down_chord: Some(chord),
             timing_window,
         } if chord.source_action_index == 6672
-            && timing_window.resume_barrier_mask == 0
             && timing_window.down_not_before_qpc <= down_b_eval_qpc
     ));
     assert_eq!(down_b_projection_evaluations, 1);
@@ -171,7 +170,6 @@ fn scheduler_h_floor_and_authored_repeat_trace_uses_single_sender_commits() {
     )
     .expect("stage Down B")
     .expect("Down B has a projected candidate");
-    assert_eq!(down_b.timing_window.resume_barrier_mask, 0);
     assert!(down_b.timing_window.packet_not_before_qpc <= down_b_eval_qpc);
     let repeat_not_before = down_b.timing_window.packet_not_before_qpc.as_u64();
     harness.set_mock_sender_start_qpc_for_test(down_b_eval_qpc);

@@ -94,19 +94,20 @@ Authored Down order is retained, and each slot's eligible Up is considered
 independently.
 
 Let T be the ceiling of 1,000,000 divided by configured FPS, in microseconds.
-The sender timing policies are:
+The sender timing policy is:
 
 - H = ceiling(hold_frames × T) + timing margin.
-- `resume_cleanup_delay` = T + timing margin. This configured delay applies
-  only after verified safety cleanup before playback resumes.
 
 An Up is eligible no earlier than both its authored Up time and successful
 Down completion plus H. After a successful Up commits, the next same-key Down
 can be sent at its authored time after a fresh scheduler evaluation; there is
-no additional musical release delay. After verified safety cleanup, a resumed
-Down waits until cleanup completion plus `resume_cleanup_delay`. Completion is
-measured at the sender boundary using QPC; these policies do not promise which
-game frame samples a key.
+no additional musical release delay. Resume waits for verified cleanup, a
+reconciled release journal, current generation and foreground ownership, a
+valid owner lease, and the committed Resume control. The next send uses a fresh
+QPC admission sample and the playback epoch updated at Resume; cleanup does
+not add an elapsed-time floor. H and sender completion are measured at the
+sender boundary using QPC; these policies do not promise which game frame
+samples a key.
 
 A musical onset is attempted at most once. The worker commits a musical action
 only from valid transport and QPC completion evidence. A packet with a

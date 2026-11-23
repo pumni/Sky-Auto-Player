@@ -234,7 +234,6 @@ fn sender_trace_export_includes_session_identity_and_frozen_policy() {
     assert_eq!(document["timing_policy"]["frame_base_hold_us"], 16_667);
     assert_eq!(document["timing_policy"]["timing_margin_us"], 800);
     assert_eq!(document["timing_policy"]["target_hold_us"], 17_467);
-    assert_eq!(document["timing_policy"]["resume_cleanup_delay_us"], 17_467);
     assert_eq!(
         document["analytics"]["aggregate_scope"],
         "packet_trace_records"
@@ -595,7 +594,6 @@ fn diagnostics_dry_run_publishes_unavailable_snapshot() {
     assert_eq!(payload.frame_base_hold_us, 16_667);
     assert_eq!(payload.timing_margin_us, 800);
     assert_eq!(payload.min_hold_us, 17_467);
-    assert_eq!(payload.resume_cleanup_delay_us, 17_467);
     assert_eq!(
         payload
             .timing_margin_recommendation

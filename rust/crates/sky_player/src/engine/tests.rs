@@ -33,7 +33,6 @@ fn native_session_rejects_prepared_plan_from_another_qpc_domain() {
         &schedule,
         std::num::NonZeroU64::new(1).expect("nonzero fixture QPC frequency"),
         500,
-        17_167,
         0,
     )
     .expect("fixture plan is valid in its prepared domain");

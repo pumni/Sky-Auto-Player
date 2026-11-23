@@ -115,7 +115,6 @@ pub struct RtTraceRecord {
     pub up_mask: u16,
     pub down_mask: u16,
     pub hold_floor_mask: u16,
-    pub resume_barrier_mask: u16,
     /// Availability and provenance distinguish missing QPC samples from valid zero.
     pub authored_down_chord_index_available: bool,
     pub wake_offset_available: bool,
@@ -170,7 +169,7 @@ pub struct RtTraceRecord {
     pub send_attempts: u8,
 }
 
-pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 26;
+pub const NATIVE_TELEMETRY_SCHEMA_VERSION: u32 = 27;
 pub const NATIVE_UP_SLOT_TRACE_CAPACITY: usize = 4_096;
 
 pub(crate) const TRACE_KIND_DOWN: u8 = 0;
@@ -227,7 +226,6 @@ pub(crate) struct TraceTiming {
     pub(crate) previous_sendinput_completion_qpc_ticks: Option<u64>,
     pub(crate) previous_sender_completion_known: bool,
     pub(crate) hold_floor_mask: u16,
-    pub(crate) resume_barrier_mask: u16,
     pub(crate) final_policy_qpc_ticks: Option<u64>,
     pub(crate) pre_call_qpc_ticks: Option<u64>,
     pub(crate) sendinput_completion_qpc_ticks: Option<u64>,
@@ -421,7 +419,6 @@ impl RtTraceRecord {
             final_policy_qpc_ticks: timing.final_policy_qpc_ticks.unwrap_or_default(),
             final_policy_qpc_available: timing.final_policy_qpc_ticks.is_some(),
             hold_floor_mask: timing.hold_floor_mask,
-            resume_barrier_mask: timing.resume_barrier_mask,
             pre_call_qpc_ticks: timing.pre_call_qpc_ticks.unwrap_or_default(),
             pre_call_qpc_available: timing.pre_call_qpc_ticks.is_some(),
             sendinput_completion_qpc_ticks: timing

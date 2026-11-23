@@ -154,11 +154,6 @@ fn timing_policy_cases_match_the_authored_timing_contract() {
             "{case}"
         );
         assert_eq!(
-            policy.resume_cleanup_delay_us,
-            case["resume_cleanup_delay_us"].as_u64().unwrap(),
-            "{case}"
-        );
-        assert_eq!(
             policy.focus_restore_grace_us,
             case["focus_restore_grace_us"].as_u64().unwrap(),
             "{case}"

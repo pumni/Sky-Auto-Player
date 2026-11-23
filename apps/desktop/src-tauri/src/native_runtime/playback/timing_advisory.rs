@@ -299,7 +299,6 @@ fn simulate_dispatch_schedule(
     let mut executor = sky_player::adapter_support::DispatchExecutor::new_with_cancellation(
         schedule,
         sky_player::adapter_support::DurationTicks::from_raw(hold_ticks),
-        sky_player::adapter_support::DurationTicks::ZERO,
         |us| {
             us_to_ticks_ceil(us, MODEL_QPC_FREQUENCY_HZ)
                 .map(sky_player::adapter_support::TimelineTicks::from_raw)
@@ -390,17 +389,8 @@ fn simulate_dispatch_schedule(
                     h_constraint = h_constraint.max(floor);
                     h_displacement = h_displacement.max(floor.saturating_sub(authored_up));
                 }
-                let resume_constraint = if down_mask != 0 {
-                    executor
-                        .resume_barrier_qpc()
-                        .map_or(0, |barrier| barrier.as_u64())
-                } else {
-                    0
-                };
-                let floor_ready = authored_target.max(h_constraint).max(resume_constraint);
-                let constraint_ready = h_constraint
-                    .max(resume_constraint)
-                    .max(previous_worker_free.unwrap_or(0));
+                let floor_ready = authored_target.max(h_constraint);
+                let constraint_ready = h_constraint.max(previous_worker_free.unwrap_or(0));
                 let ready = now.as_u64().max(floor_ready);
                 let slack = i128::from(authored_target) - i128::from(constraint_ready);
                 let lateness = ready

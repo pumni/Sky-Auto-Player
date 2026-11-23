@@ -186,27 +186,15 @@ fn suspend_live_input_for_dispatch(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     scheduler: &mut sky_dispatch_core::executor::DispatchExecutor,
     cleanup_target: super::cleanup::CleanupTarget<'_>,
-    #[cfg(any(test, feature = "test-support"))] runtime: &super::WorkerRuntime,
-    post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
-    suspend_live_input_for_dispatch_with_control(
-        backend,
-        scheduler,
-        cleanup_target,
-        #[cfg(any(test, feature = "test-support"))]
-        runtime,
-        || false,
-        post_cleanup_qpc,
-    )
+    suspend_live_input_for_dispatch_with_control(backend, scheduler, cleanup_target, || false)
 }
 
 fn suspend_live_input_for_dispatch_with_control(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     scheduler: &mut sky_dispatch_core::executor::DispatchExecutor,
     cleanup_target: super::cleanup::CleanupTarget<'_>,
-    #[cfg(any(test, feature = "test-support"))] runtime: &super::WorkerRuntime,
     terminal_requested: impl Fn() -> bool,
-    post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
     let session_release_owner = backend.session_release_owner_proof().cloned();
     let mut drain_control = || {
@@ -224,21 +212,8 @@ fn suspend_live_input_for_dispatch_with_control(
             terminal_requested(),
         )
     };
-    super::cleanup::suspend_scheduler_input(
-        backend,
-        scheduler,
-        cleanup_target,
-        &mut drain_control,
-        || {
-            let cleanup_qpc = post_cleanup_qpc()?;
-            #[cfg(any(test, feature = "test-support"))]
-            if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
-                hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
-            }
-            Ok(cleanup_qpc)
-        },
-    )
-    .map(|_| ())
+    super::cleanup::suspend_scheduler_input(backend, scheduler, cleanup_target, &mut drain_control)
+        .map(|_| ())
 }
 
 pub(crate) fn validate_resume_prerequisites(
@@ -319,12 +294,10 @@ pub(crate) fn validate_resume_prerequisites(
 pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
     backend: &mut sky_dispatch_win32::input::TrackedKeyState,
     scheduler: &mut sky_dispatch_core::executor::DispatchExecutor,
-    runtime: &mut super::WorkerRuntime,
     target: &SessionTarget,
     expected_target: Option<TargetStamp>,
     require_owner_identity: bool,
     target_hwnd: isize,
-    post_cleanup_qpc: impl FnOnce() -> Result<sky_dispatch_win32::clock::QpcTicks, String>,
 ) -> Result<(), String> {
     super::cleanup::suspend_scheduler_input(
         backend,
@@ -338,13 +311,6 @@ pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
             )
         },
         || Ok(sky_dispatch_win32::input::CleanupDrainDecision::default()),
-        || {
-            let cleanup_qpc = post_cleanup_qpc()?;
-            if let Some(hook) = runtime.startup_ordering_hook.as_ref() {
-                hook.record_resume_cleanup_qpc(cleanup_qpc.as_u64());
-            }
-            Ok(cleanup_qpc)
-        },
     )
     .map(|_| ())
 }
@@ -1103,10 +1069,7 @@ pub(crate) fn dispatch_staged_candidate(
                         Some(expected_target),
                         config.focus.require_focus,
                     ),
-                    #[cfg(any(test, feature = "test-support"))]
-                    runtime,
                     || true,
-                    || qpc_clock.now().map_err(|error| format!("{error:?}")),
                 );
                 runtime.terminal_error = Some(format!(
                     "proven-zero Down could not consume its attempted scheduler identity ({error}); tracked cleanup was requested: {anomaly_record}"
@@ -1125,10 +1088,7 @@ pub(crate) fn dispatch_staged_candidate(
                         Some(expected_target),
                         config.focus.require_focus,
                     ),
-                    #[cfg(any(test, feature = "test-support"))]
-                    runtime,
                     || true,
-                    || qpc_clock.now().map_err(|error| format!("{error:?}")),
                 );
                 runtime.terminal_error = Some(format!(
                     "proven-zero Down journal did not match its raw packet ({error}); tracked cleanup was requested: {anomaly_record}"
@@ -1144,10 +1104,7 @@ pub(crate) fn dispatch_staged_candidate(
                         Some(expected_target),
                         config.focus.require_focus,
                     ),
-                    #[cfg(any(test, feature = "test-support"))]
-                    runtime,
                     || true,
-                    || qpc_clock.now().map_err(|error| format!("{error:?}")),
                 )
             {
                 runtime.verified_target = None;
@@ -1170,10 +1127,7 @@ pub(crate) fn dispatch_staged_candidate(
                     Some(expected_target),
                     config.focus.require_focus,
                 ),
-                #[cfg(any(test, feature = "test-support"))]
-                runtime,
                 || true,
-                || qpc_clock.now().map_err(|error| format!("{error:?}")),
             )
         {
             runtime.verified_target = None;
@@ -1217,14 +1171,6 @@ pub(crate) fn dispatch_staged_candidate(
         ));
         return DispatchAttemptOutcome::Exit;
     };
-
-    #[cfg(any(test, feature = "test-support"))]
-    if physical_packet.up_mask != 0
-        && physical_packet.down_mask == 0
-        && let Some(hook) = runtime.startup_ordering_hook.as_ref()
-    {
-        hook.wait_after_successful_up();
-    }
 
     #[cfg(any(test, feature = "test-support"))]
     if physical_packet.down_mask != 0
@@ -1613,10 +1559,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                     Some(preflight_target),
                                     config.focus.require_focus,
                                 ),
-                                #[cfg(any(test, feature = "test-support"))]
-                                &core.runtime,
                                 cleanup_terminal_requested,
-                                || qpc_clock.now().map_err(|error| format!("{error:?}")),
                             )
                         {
                             core.runtime.verified_target = None;
@@ -1648,10 +1591,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                 Some(preflight_target),
                                 config.focus.require_focus,
                             ),
-                            #[cfg(any(test, feature = "test-support"))]
-                            &core.runtime,
                             cleanup_terminal_requested,
-                            || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {
                             core.runtime.verified_target = None;
                             core.runtime.terminal_error =
@@ -1661,14 +1601,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         core.runtime.manual_pause_suspension_pending = false;
                         core.runtime.production_forensics.observe_lifecycle(
                             super::dispatch::observation::ObserverLifecycle::ResetAll,
-                        );
-                    }
-                    #[cfg(any(test, feature = "test-support"))]
-                    if let Some(hook) = core.runtime.restore_race_hook.as_ref() {
-                        hook(
-                            focus_active,
-                            target,
-                            resources.scheduler.resume_barrier_qpc(),
                         );
                     }
                     let Some(post_restore_target) = load_target_stamp(target) else {
@@ -1744,10 +1676,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                 Some(post_restore_target),
                                 config.focus.require_focus,
                             ),
-                            #[cfg(any(test, feature = "test-support"))]
-                            &core.runtime,
                             cleanup_terminal_requested,
-                            || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         )
                     {
                         core.runtime.verified_target = None;
@@ -1814,10 +1743,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             load_target_stamp(target),
                             config.focus.require_focus,
                         ),
-                        #[cfg(any(test, feature = "test-support"))]
-                        &core.runtime,
                         cleanup_terminal_requested,
-                        || qpc_clock.now().map_err(|error| format!("{error:?}")),
                     ) {
                         core.runtime.terminal_error =
                             Some(format!("manual pause suspension failed: {error}"));
@@ -1864,10 +1790,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                 load_target_stamp(target),
                                 config.focus.require_focus,
                             ),
-                            #[cfg(any(test, feature = "test-support"))]
-                            &core.runtime,
                             cleanup_terminal_requested,
-                            || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         ) {
                             core.runtime.terminal_error =
                                 Some(format!("manual resume deferred suspension failed: {error}"));
@@ -1947,10 +1870,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                 Some(preflight_target),
                                 config.focus.require_focus,
                             ),
-                            #[cfg(any(test, feature = "test-support"))]
-                            &core.runtime,
                             cleanup_terminal_requested,
-                            || qpc_clock.now().map_err(|error| format!("{error:?}")),
                         )
                     {
                         core.runtime.verified_target = None;
@@ -2007,14 +1927,8 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             }
 
             #[cfg(any(test, feature = "test-support"))]
-            let pause_ack_pending = core
-                .runtime
-                .startup_ordering_hook
-                .as_ref()
-                .is_some_and(|hook| hook.pause_ack_pending());
-            #[cfg(any(test, feature = "test-support"))]
             if resources.playback.has_pause_reason(PauseReason::Manual)
-                && (command_timing.needs_acknowledgment() || pause_ack_pending)
+                && command_timing.needs_acknowledgment()
             {
                 let acknowledged_ticks = match qpc_clock.now() {
                     Ok(ticks) => ticks,
@@ -2026,9 +1940,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 };
                 if command_timing.needs_acknowledgment() {
                     command_timing.acknowledge_pause(acknowledged_ticks);
-                }
-                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
-                    hook.record_pause_ack_qpc(acknowledged_ticks.as_u64());
                 }
             }
 

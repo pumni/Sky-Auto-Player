@@ -811,7 +811,6 @@
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "min_hold_us": 10918,
-      "resume_cleanup_delay_us": 8834,
       "focus_restore_grace_us": 100000
     },
     {
@@ -822,7 +821,6 @@
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "min_hold_us": 11718,
-      "resume_cleanup_delay_us": 9634,
       "focus_restore_grace_us": 100000
     },
     {
@@ -833,7 +831,6 @@
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "min_hold_us": 11218,
-      "resume_cleanup_delay_us": 9134,
       "focus_restore_grace_us": 100000
     },
     {
@@ -844,7 +841,6 @@
       "frame_us": 8334,
       "frame_base_hold_us": 10418,
       "min_hold_us": 11218,
-      "resume_cleanup_delay_us": 9134,
       "focus_restore_grace_us": 100000
     }
   ],

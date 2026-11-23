@@ -47,26 +47,21 @@ fn prepared_plan_starts_fresh_and_matches_raw_executor_decisions() {
     ];
     let schedule = compile_actions(&actions, &allowed);
     let frequency = std::num::NonZeroU64::new(1_000_000).expect("QPC frequency");
-    let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 1_000, 1_000, 0)
+    let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 1_000, 0)
         .expect("physical schedule is admissible");
-    assert!(prepared.is_compatible(frequency, 1_000, 1_000));
+    assert!(prepared.is_compatible(frequency, 1_000));
     assert!(!prepared.is_compatible(
         std::num::NonZeroU64::new(2_000_000).expect("alternate QPC frequency"),
-        1_000,
         1_000
     ));
-    assert!(!prepared.is_compatible(frequency, 1_001, 1_000));
+    assert!(!prepared.is_compatible(frequency, 1_001));
 
     let chord_storage = prepared.down_chords.as_ptr();
     let intent_storage = prepared.down_intents.as_ptr();
     let mut prepared_executor = DispatchExecutor::from_prepared_schedule(prepared);
-    let mut raw_executor = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::from_raw(1_000),
-        DurationTicks::from_raw(1_000),
-        test_ticks,
-    )
-    .expect("raw schedule executor");
+    let mut raw_executor =
+        DispatchExecutor::new(&schedule, DurationTicks::from_raw(1_000), test_ticks)
+            .expect("raw schedule executor");
     assert_eq!(prepared_executor.active_mask(), 0);
     assert_eq!(prepared_executor.down_chords.as_ptr(), chord_storage);
     assert_eq!(prepared_executor.down_intents.as_ptr(), intent_storage);
@@ -258,16 +253,10 @@ fn prepared_plan_rounds_qpc_offsets_up_and_checkpoints_validation() {
     let schedule = compile_actions(&actions, &allowed);
     let frequency = std::num::NonZeroU64::new(FREQUENCY_HZ).expect("QPC frequency");
     let min_hold_ticks = ceil_qpc_ticks(10);
-    let resume_cleanup_delay_ticks = ceil_qpc_ticks(7);
-    let plan = PreparedDispatchSchedule::prepare(&schedule, frequency, 10, 7, 0)
+    let plan = PreparedDispatchSchedule::prepare(&schedule, frequency, 10, 0)
         .expect("QPC timestamp and floor conversions round up");
     assert_eq!(plan.min_hold_ticks.as_u64(), min_hold_ticks);
-    assert_eq!(
-        plan.resume_cleanup_delay_ticks.as_u64(),
-        resume_cleanup_delay_ticks
-    );
     assert_eq!(plan.min_hold_ticks.as_u64(), 36);
-    assert_eq!(plan.resume_cleanup_delay_ticks.as_u64(), 26);
     assert_eq!(
         plan.down_intents[0]
             .paired_up_not_before_offset_ticks
@@ -282,7 +271,6 @@ fn prepared_plan_rounds_qpc_offsets_up_and_checkpoints_validation() {
     let mut raw_executor = DispatchExecutor::new(
         &schedule,
         DurationTicks::from_raw(min_hold_ticks),
-        DurationTicks::from_raw(resume_cleanup_delay_ticks),
         |microseconds| {
             Ok::<_, std::convert::Infallible>(TimelineTicks::from_raw(ceil_qpc_ticks(microseconds)))
         },
@@ -300,7 +288,6 @@ fn prepared_plan_rounds_qpc_offsets_up_and_checkpoints_validation() {
                 down_not_before_qpc: crate::time::QpcTicks::ZERO,
                 packet_not_before_qpc: crate::time::QpcTicks::ZERO,
                 hold_floor_mask: 0,
-                resume_barrier_mask: 0,
             },
         }
     );
@@ -315,7 +302,6 @@ fn prepared_plan_rounds_qpc_offsets_up_and_checkpoints_validation() {
                 down_not_before_qpc: crate::time::QpcTicks::from_raw(179),
                 packet_not_before_qpc: crate::time::QpcTicks::from_raw(179),
                 hold_floor_mask: 0,
-                resume_barrier_mask: 0,
             },
         }
     );
@@ -330,13 +316,12 @@ fn prepared_plan_rounds_qpc_offsets_up_and_checkpoints_validation() {
                 down_not_before_qpc: crate::time::QpcTicks::from_raw(183),
                 packet_not_before_qpc: crate::time::QpcTicks::from_raw(183),
                 hold_floor_mask: 0,
-                resume_barrier_mask: 0,
             },
         }
     );
     assert!(matches!(
         evaluate_pair(&mut prepared_executor, &mut raw_executor, 205, Some(230)),
-        ObservedDecision::Send { down_mask: 0b0001, timing_window: DispatchTimingWindow { down_not_before_qpc, packet_not_before_qpc, resume_barrier_mask: 0, .. }, .. }
+        ObservedDecision::Send { down_mask: 0b0001, timing_window: DispatchTimingWindow { down_not_before_qpc, packet_not_before_qpc, .. }, .. }
             if down_not_before_qpc.as_u64() == 205 && packet_not_before_qpc.as_u64() == 205
     ));
     assert_eq!(
@@ -410,7 +395,6 @@ fn prepared_plan_rounds_qpc_offsets_up_and_checkpoints_validation() {
         std::num::NonZeroU64::new(1_000_000).expect("QPC frequency"),
         0,
         0,
-        0,
         || {
             checkpoints += 1;
             if checkpoints == 3 {
@@ -450,7 +434,6 @@ fn paired_up_qpc_normalization_adds_rounded_down_and_hold_ticks() {
         &schedule,
         NonZeroU64::new(3_579_545).expect("QPC frequency"),
         17_167,
-        17_467,
         0,
     )
     .expect("authored H boundary is normalized into QPC ticks");
@@ -504,7 +487,7 @@ fn prepared_plan_retains_unmatched_up_metadata_without_a_down_stream() {
         &[0x15],
     );
     let frequency = std::num::NonZeroU64::new(1_000_000).expect("QPC frequency");
-    let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 0, 0, 0)
+    let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 0, 0)
         .expect("unmatched Up is admitted as diagnostics metadata");
     assert!(!prepared.has_down());
     assert_eq!(prepared.authored_timestamp_group_count(), 1);
@@ -558,9 +541,7 @@ fn fixture_1_independent_hold_floor_does_not_block_b_down() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(25_000); // H = 25 ms floor
-    let resume_cleanup_delay_ticks = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, resume_cleanup_delay_ticks, test_ticks).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, test_ticks).unwrap();
 
     // 1. At 0 ms: Down A is ready
     let step0 = executor.evaluate(TimelineTicks::from_raw(0));
@@ -675,9 +656,7 @@ fn fixture_2_same_key_down_waits_only_for_up_commit_and_authored_due_time() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(5_000); // H = 5 ms
-    let resume_cleanup_delay_ticks = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, resume_cleanup_delay_ticks, test_ticks).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, test_ticks).unwrap();
 
     // Down 1
     assert!(matches!(
@@ -767,9 +746,7 @@ fn fixture_3_same_key_chord_reuses_slot_after_up_commit_without_gap_floor() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(5_000); // H = 5 ms
-    let resume_cleanup_delay_ticks = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, resume_cleanup_delay_ticks, test_ticks).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, test_ticks).unwrap();
 
     // 0 ms: Down {A, C} (chord 0 has A, chord 1 has C? Wait, A and C are at same timestamp 0 so compiler combined them into chord {A, C})
     let step0 = executor.evaluate(TimelineTicks::from_raw(0));
@@ -867,9 +844,7 @@ fn fixture_5_mixed_up_down_combined_when_coincident_split_when_divergent() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000); // H = 10 ms
-    let resume_cleanup_delay_ticks = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, resume_cleanup_delay_ticks, test_ticks).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, test_ticks).unwrap();
 
     // 0 ms: Down A
     executor
@@ -931,9 +906,7 @@ fn fixture_hol_stalled_down_does_not_block_independent_slot() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000); // H = 10 ms
-    let resume_cleanup_delay_ticks = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, resume_cleanup_delay_ticks, test_ticks).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, test_ticks).unwrap();
 
     // 10 ms: Key A is dispatched
     let step10 = executor.evaluate(TimelineTicks::from_raw(10_000));
@@ -1025,9 +998,7 @@ fn fixture_6_down_delayed_past_authored_up_creates_valid_release() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000); // H = 10 ms
-    let resume_cleanup_delay_ticks = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, resume_cleanup_delay_ticks, test_ticks).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, test_ticks).unwrap();
 
     // Down completes late at 35 ms (past authored Up of 20 ms)
     executor
@@ -1084,9 +1055,7 @@ fn fixture_7_15_slots_distinct_deadlines_no_starvation() {
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(5_000);
-    let resume_cleanup_delay_ticks = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, resume_cleanup_delay_ticks, test_ticks).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, test_ticks).unwrap();
 
     // Down chord of 15 keys completed at 10 ms
     executor
@@ -1119,7 +1088,7 @@ fn fixture_7_15_slots_distinct_deadlines_no_starvation() {
 }
 
 #[test]
-fn fixture_verified_cleanup_cancels_active_slots_without_replay_and_sets_resume_barrier() {
+fn fixture_verified_cleanup_cancels_active_slots_without_replay_or_added_delay() {
     let allowed = vec![0x15, 0x16];
     let actions = vec![
         KeyActionInput {
@@ -1155,9 +1124,7 @@ fn fixture_verified_cleanup_cancels_active_slots_without_replay_and_sets_resume_
 
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000);
-    let resume_cleanup_delay_ticks = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, resume_cleanup_delay_ticks, test_ticks).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, test_ticks).unwrap();
 
     // Down first chord at 10 ms
     executor
@@ -1165,47 +1132,33 @@ fn fixture_verified_cleanup_cancels_active_slots_without_replay_and_sets_resume_
         .unwrap();
     assert_eq!(executor.active_mask(), 0x03);
 
-    // During sustain (e.g. at 20 ms), focus is lost and verified cleanup occurs at Q = 25 ms
-    let cancelled = executor
-        .on_verified_cleanup(TimelineTicks::from_raw(25_000))
-        .unwrap();
+    // During sustain, focus is lost and verified cleanup cancels the active generation.
+    let cancelled = executor.on_verified_cleanup().unwrap();
     assert_eq!(cancelled, 2);
     assert_eq!(executor.active_mask(), 0);
     assert_eq!(executor.accounting().cancelled, 2);
-    assert_eq!(
-        executor.resume_barrier_ticks(),
-        TimelineTicks::from_raw(41_000)
-    );
-
     // At 30 ms (the original authored Up time), no physical Up is replayed.
-    // The scheduler holds the next Down until the verified-cleanup resume barrier at 41 ms.
+    // The next Down remains on its authored 35 ms target.
     let step30 = executor.evaluate(TimelineTicks::from_raw(30_000));
     assert_eq!(
         step30,
         DispatchAction::Wait {
-            deadline_ticks: TimelineTicks::from_raw(41_000)
+            deadline_ticks: TimelineTicks::from_raw(35_000)
         },
-        "No stale Up replay; resume barrier is the next physical deadline"
+        "No stale Up replay or added wait; the next authored Down is the next physical deadline"
     );
 
     // The authored second Down at 35 ms remains held until the exact barrier.
     let step35 = executor.evaluate(TimelineTicks::from_raw(35_000));
-    assert_eq!(
-        step35,
-        DispatchAction::Wait {
-            deadline_ticks: TimelineTicks::from_raw(41_000)
-        }
-    );
-    let step41 = executor.evaluate(TimelineTicks::from_raw(41_000));
     assert!(
         matches!(
-            step41,
+            step35,
             DispatchAction::Send {
                 up_mask: 0,
                 down_chord: Some(chord)
             } if chord.down_mask == 0x01
         ),
-        "Second Down dispatched at the resume barrier"
+        "Second Down dispatched at its authored target"
     );
 }
 
@@ -1230,8 +1183,7 @@ fn fixture_forced_conversion_failure_fails_construction() {
     ];
     let sched = compile_actions(&actions, &allowed);
     let min_hold = DurationTicks::from_raw(10_000);
-    let resume_cleanup_delay_ticks = DurationTicks::from_raw(16_000);
-    let err = DispatchExecutor::new(&sched, min_hold, resume_cleanup_delay_ticks, |us| {
+    let err = DispatchExecutor::new(&sched, min_hold, |us| {
         if us == 10_000 {
             Err("simulated QPC clock overflow")
         } else {
@@ -1266,9 +1218,7 @@ fn fixture_end_state_waits_for_schedule_end_offset_even_with_zero_active_keys() 
     sched.schedule_end_offset_us = 60_000;
 
     let min_hold = DurationTicks::from_raw(10_000);
-    let resume_cleanup_delay_ticks = DurationTicks::from_raw(16_000);
-    let mut executor =
-        DispatchExecutor::new(&sched, min_hold, resume_cleanup_delay_ticks, test_ticks).unwrap();
+    let mut executor = DispatchExecutor::new(&sched, min_hold, test_ticks).unwrap();
 
     // 10 ms: Down
     let step = executor.evaluate(TimelineTicks::from_raw(10_000));
