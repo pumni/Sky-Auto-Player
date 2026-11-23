@@ -250,9 +250,14 @@ function New-PlaybackCoreLifecycleMeasurementReport {
     $candidateQpcSource = $null
     $candidateQpcFrequency = $null
     $candidateQpcInvalidRunIds = @{}
-    foreach ($row in $candidateRows) {
-        if ([int](Get-PclCollectorProperty $row 'sample_seconds') -ne 15 -and
-            (Get-PclCollectorProperty $row 'scenario') -ne 'stop-cleanup') { continue }
+    $candidateQpcRows = @($candidateRows | Where-Object {
+        [int](Get-PclCollectorProperty $_ 'sample_seconds') -eq 15 -or
+        (Get-PclCollectorProperty $_ 'scenario') -eq 'stop-cleanup'
+    })
+    $candidateQpcRows = @($candidateQpcRows | Sort-Object {
+        if ([int](Get-PclCollectorProperty $_ 'sample_seconds') -eq 15) { 0 } else { 1 }
+    })
+    foreach ($row in $candidateQpcRows) {
         $runId = [string](Get-PclCollectorProperty $row 'run_id')
         $measurement = Get-PclCollectorProperty $row 'lifecycle_measurement'
         $clockSource = [string](Get-PclCollectorProperty $measurement 'qpc_clock_source')
@@ -355,6 +360,12 @@ function New-PlaybackCoreLifecycleMeasurementReport {
     foreach ($row in @($candidateRows | Where-Object { (Get-PclCollectorProperty $_ 'scenario') -eq 'stop-cleanup' })) {
         $runId = [string](Get-PclCollectorProperty $row 'run_id')
         $measurement = Get-PclCollectorProperty $row 'lifecycle_measurement'
+        $rowRevision = [string](Get-PclCollectorProperty $row 'source_revision')
+        $rowTree = [string](Get-PclCollectorProperty $row 'source_tree_sha')
+        $rowManifest = [string](Get-PclCollectorProperty $row 'manifest_sha256')
+        $rowBinary = [string](Get-PclCollectorProperty $row 'harness_sha256')
+        $rowMachine = [string](Get-PclCollectorProperty $row 'machine_name')
+        $rowBootTime = [string](Get-PclCollectorProperty $row 'os_boot_time_utc')
         $frequency = ConvertTo-PclInt64OrNull (Get-PclCollectorProperty $measurement 'qpc_frequency_hz')
         $stop = ConvertTo-PclInt64OrNull (Get-PclCollectorProperty $measurement 'stop_requested_qpc_ticks')
         $joined = ConvertTo-PclInt64OrNull (Get-PclCollectorProperty $measurement 'worker_joined_qpc_ticks')
@@ -364,31 +375,56 @@ function New-PlaybackCoreLifecycleMeasurementReport {
         $sessionIdentity = Get-PclCollectorProperty $measurement 'native_session_identity'
         $clockSource = Get-PclCollectorProperty $measurement 'qpc_clock_source'
         $rawSource = Get-PclCollectorProperty $measurement 'raw_up_syscall_count_source'
-        if ($null -ne $frequency -and $frequency -gt 0 -and
-            $clockSource -eq 'Windows QueryPerformanceCounter' -and
-            $rawSource -eq 'sum of worker TerminalSendAttemptEvidence.raw_calls' -and
-            $null -ne $rawSyscalls -and $rawSyscalls -ge 0 -and
-            (Get-PclCollectorProperty $sessionIdentity 'run_id') -eq $runId) {
-            $rawUpSamples.Add([pscustomobject]@{ run_id = $runId; source_revision = Get-PclCollectorProperty $row 'source_revision'; source_tree_sha = Get-PclCollectorProperty $row 'source_tree_sha'; manifest_sha256 = Get-PclCollectorProperty $row 'manifest_sha256'; binary_sha256 = Get-PclCollectorProperty $row 'harness_sha256'; value = $rawSyscalls; evidence_source = $rawSource })
+        $sessionRunId = [string](Get-PclCollectorProperty $sessionIdentity 'run_id')
+        $sessionScenario = [string](Get-PclCollectorProperty $sessionIdentity 'scenario')
+        $commonEvidenceIssues = [System.Collections.Generic.List[string]]::new()
+        if ($rowRevision -ne $CandidateRevision -or $rowTree -ne $CandidateTree -or
+            $rowManifest -ne $CandidateManifestSha256 -or $rowBinary -ne $CandidateBinarySha256 -or
+            ($candidateIdentityInvalidRunIds.ContainsKey($runId) -and
+                $candidateIdentityInvalidRunIds[$runId] -match 'source/manifest/binary')) {
+            $commonEvidenceIssues.Add('candidate source/tree/manifest/binary provenance is invalid')
+        }
+        if ($rowMachine -ne $RunnerMachineName -or $rowBootTime -ne $RunnerOsBootTimeUtc -or
+            ($ProfileVersion -eq 2 -and $candidateIdentityInvalidRunIds.ContainsKey($runId) -and
+                $candidateIdentityInvalidRunIds[$runId] -match 'machine/boot')) {
+            $commonEvidenceIssues.Add('machine/boot provenance is invalid')
+        }
+        if ((Get-PclCollectorProperty $measurement 'schema_version') -ne 2 -or
+            $null -eq $frequency -or $frequency -le 0 -or
+            $clockSource -ne 'Windows QueryPerformanceCounter' -or
+            ($ProfileVersion -eq 2 -and $candidateQpcInvalidRunIds.ContainsKey($runId))) {
+            $commonEvidenceIssues.Add('schema-v2 QPC source/frequency evidence is invalid')
+        }
+        if ($sessionRunId -ne $runId -or $sessionScenario -ne 'stop-cleanup') {
+            $commonEvidenceIssues.Add('native session run ID/scenario does not match the stop-cleanup row')
+        }
+        if ($commonEvidenceIssues.Count -gt 0) {
+            $commonReason = $commonEvidenceIssues -join '; '
+            $stopMetricIncomplete = $true
+            $rawUpMetricIncomplete = $true
+            $incompleteness.Add('stop-cleanup common provenance/schema/QPC/session gate failed: ' + $runId + ' (' + $commonReason + ')')
+            continue
+        }
+
+        if ($rawSource -eq 'sum of worker TerminalSendAttemptEvidence.raw_calls' -and
+            $null -ne $rawSyscalls -and $rawSyscalls -ge 0) {
+            $rawUpSamples.Add([pscustomobject]@{ run_id = $runId; source_revision = $rowRevision; source_tree_sha = $rowTree; manifest_sha256 = $rowManifest; binary_sha256 = $rowBinary; value = $rawSyscalls; evidence_source = $rawSource })
         } else {
             $rawUpMetricIncomplete = $true
-            $incompleteness.Add('stop-cleanup run lacks identity-bound QPC or actual raw Up syscall evidence: ' + $runId)
+            $incompleteness.Add('stop-cleanup run lacks actual raw Up syscall evidence: ' + $runId)
         }
 
         if ([string](Get-PclCollectorProperty $row 'status') -ne 'PASS' -or
             (ConvertTo-PclInt64OrNull (Get-PclCollectorProperty $row 'case_exit_code')) -ne 0 -or
             -not [bool]$proof -or
-            (Get-PclCollectorProperty $sessionIdentity 'scenario') -ne 'stop-cleanup' -or
-            $null -eq $frequency -or $frequency -le 0 -or
-            $clockSource -ne 'Windows QueryPerformanceCounter' -or
             $null -eq $stop -or $null -eq $joined -or $null -eq $verified -or
             $stop -le 0 -or $verified -lt $stop -or $joined -lt $verified) {
             $stopMetricIncomplete = $true
-            $incompleteness.Add('stop-cleanup lacks identity-bound worker release, joined, clean journal, or ReceiveOnly proof: ' + $runId)
+            $incompleteness.Add('stop-cleanup lacks passing row status, worker release, joined, clean journal, or ReceiveOnly proof: ' + $runId)
             continue
         }
         $duration = 1000000.0 * ([double]$verified - [double]$stop) / [double]$frequency
-        $stopSamples.Add([pscustomobject]@{ run_id = $runId; source_revision = $CandidateRevision; source_tree_sha = $CandidateTree; manifest_sha256 = $CandidateManifestSha256; binary_sha256 = $CandidateBinarySha256; qpc_frequency_hz = $frequency; stop_requested_qpc_ticks = $stop; worker_release_verified_qpc_ticks = $verified; worker_joined_qpc_ticks = $joined; stop_to_worker_release_verified_us = $duration; raw_up_syscall_count = $rawSyscalls; post_join_report_and_receiveonly_validation_completed_qpc_ticks = Get-PclCollectorProperty $measurement 'post_join_report_and_receiveonly_validation_completed_qpc_ticks' })
+        $stopSamples.Add([pscustomobject]@{ run_id = $runId; source_revision = $rowRevision; source_tree_sha = $rowTree; manifest_sha256 = $rowManifest; binary_sha256 = $rowBinary; qpc_frequency_hz = $frequency; stop_requested_qpc_ticks = $stop; worker_release_verified_qpc_ticks = $verified; worker_joined_qpc_ticks = $joined; stop_to_worker_release_verified_us = $duration; raw_up_syscall_count = $rawSyscalls; post_join_report_and_receiveonly_validation_completed_qpc_ticks = Get-PclCollectorProperty $measurement 'post_join_report_and_receiveonly_validation_completed_qpc_ticks' })
     }
     if ($stopSamples.Count -eq 0) { $stopMetricIncomplete = $true; $incompleteness.Add('no verified stop-to-release sample was collected from candidate stop-cleanup rows') }
 

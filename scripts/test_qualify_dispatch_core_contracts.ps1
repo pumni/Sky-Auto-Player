@@ -1921,6 +1921,10 @@ if ($pclV2Report.qualification_profile -ne 'PlaybackCoreLifecycleV2' -or
     $pclV2Report.authored_prefix_parity_contract -ne 'timestamp-kind-scan-mask-v1' -or
     $pclV2Report.status -ne 'COMPLETE' -or
     $pclV2Report.worker_joined_to_next_start_us.status -ne 'COMPLETE' -or
+    $pclV2Report.stop_to_verified_release_us.status -ne 'COMPLETE' -or
+    $pclV2Report.raw_up_syscall_count.status -ne 'COMPLETE' -or
+    $pclV2Report.stop_to_verified_release_us.samples.Count -ne 1 -or
+    $pclV2Report.raw_up_syscall_count.samples.Count -ne 1 -or
     $pclV2Report.worker_joined_to_next_start_us.statistics.sample_count -ne 60 -or
     $pclV2Report.worker_joined_to_next_start_us.coverage.planned_transition_count -ne 60 -or
     $pclV2Report.worker_joined_to_next_start_us.coverage.eligible_transition_count -ne 60 -or
@@ -1970,6 +1974,33 @@ function Assert-PclV2TransitionIncomplete {
         [string]::IsNullOrWhiteSpace(($Report.incompleteness -join '; '))) {
         throw ('PlaybackCoreLifecycleV2 ' + $Case + ' did not make both the transition metric and total report INCOMPLETE with a reason')
     }
+}
+function Assert-PclV2StopEvidenceIncomplete {
+    param([Parameter(Mandatory)] $Report, [Parameter(Mandatory)] [string]$Case)
+    if ($Report.status -ne 'INCOMPLETE' -or
+        $Report.stop_to_verified_release_us.status -ne 'INCOMPLETE' -or
+        $Report.raw_up_syscall_count.status -ne 'INCOMPLETE' -or
+        $Report.stop_to_verified_release_us.samples.Count -ne 0 -or
+        $Report.raw_up_syscall_count.samples.Count -ne 0 -or
+        -not (($Report.incompleteness -join '; ') -match 'pcl-candidate-stop')) {
+        throw ('PlaybackCoreLifecycleV2 ' + $Case + ' did not exclude the stop row from both child metrics and mark the report INCOMPLETE with its run ID: report=' + $Report.status + ' stop=' + $Report.stop_to_verified_release_us.status + '/' + $Report.stop_to_verified_release_us.samples.Count + ' raw=' + $Report.raw_up_syscall_count.status + '/' + $Report.raw_up_syscall_count.samples.Count + ' reasons=' + ($Report.incompleteness -join '; '))
+    }
+}
+
+foreach ($stopMutation in @('binary', 'machine', 'boot', 'qpc-frequency', 'schema', 'native-run-id', 'native-scenario')) {
+    $pclV2StopRows = @(Copy-PclTestRows $pclV2Rows)
+    $pclV2StopRow = @($pclV2StopRows | Where-Object { $_.run_id -eq 'pcl-candidate-stop' })[0]
+    switch ($stopMutation) {
+        'binary' { $pclV2StopRow.harness_sha256 = 'e' * 64 }
+        'machine' { $pclV2StopRow.machine_name = 'different-machine' }
+        'boot' { $pclV2StopRow.os_boot_time_utc = '2026-11-18T00:00:00.0000000Z' }
+        'qpc-frequency' { $pclV2StopRow.lifecycle_measurement.qpc_frequency_hz = 9999999 }
+        'schema' { $pclV2StopRow.lifecycle_measurement.schema_version = 1 }
+        'native-run-id' { $pclV2StopRow.lifecycle_measurement.native_session_identity.run_id = 'unrelated-run' }
+        'native-scenario' { $pclV2StopRow.lifecycle_measurement.native_session_identity.scenario = 'other-scenario' }
+    }
+    $pclV2StopReport = New-PclV2TestReport -Rows $pclV2StopRows
+    Assert-PclV2StopEvidenceIncomplete -Report $pclV2StopReport -Case ('stop-cleanup ' + $stopMutation)
 }
 
 $pclV2MissingBaselineArmedRows = @(Copy-PclTestRows $pclV2Rows)
@@ -2215,5 +2246,5 @@ if ($pclIncompleteReport.status -ne 'INCOMPLETE' -or $pclIncompleteReport.stop_t
 }
 
 Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 schema-v2 provenance inventory, mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
-Write-Output ('PASS: PlaybackCoreLifecycle v1 frozen-baseline semantics remain planned=60 eligible=30 measured=30 unavailable=30 incomplete=30; v2 positive coverage=60/60 COMPLETE (30 candidate→candidate, 30 candidate→baseline); missing/malformed Armed, Join, QPC, source/tree/manifest/binary, machine/boot, chronology, and invalid-successor fixtures set both metric and report INCOMPLETE; Stop→release and raw syscall evidence contracts pass')
+Write-Output ('PASS: PlaybackCoreLifecycle v1 frozen-baseline semantics remain planned=60 eligible=30 measured=30 unavailable=30 incomplete=30; v2 positive coverage=60/60 COMPLETE (30 candidate→candidate, 30 candidate→baseline); missing/malformed Armed, Join, QPC, source/tree/manifest/binary, machine/boot, chronology, and invalid-successor fixtures set both metric and report INCOMPLETE; v2 stop provenance fixtures exclude binary/machine/boot/QPC/schema/native-session identity failures from both Stop and raw-Up metrics; Stop→release and raw syscall evidence contracts pass')
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

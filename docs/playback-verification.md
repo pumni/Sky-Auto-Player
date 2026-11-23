@@ -253,6 +253,29 @@ focused measurement command on the candidate is:
     $env:SKY_MEMORY_CHORD_COUNT = '10000'
     cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core executor_memory_scaling_100_1000_10000_and_budget_proof -- --nocapture
 
+To reproduce the baseline arm, use a separate clean worktree at
+`1d00c3b71fbf1f94003865bad6c4eba6d8dcd902`. Its checked-in memory fixture has
+20,000 µs Down cadence, so temporarily change that test's cadence multiplier to
+`30_000` and add the same prepared-plan probe used by the candidate immediately
+after its `dispatch_memory` output:
+
+    drop(executor);
+    let prepared = PreparedDispatchSchedule::prepare(
+        &sched,
+        std::num::NonZeroU64::new(1_000_000).expect("QPC frequency"),
+        8_000,
+        16_667,
+        compile_memory.caller_retained_capacity_bytes,
+    ).expect("prepared dispatch plan");
+    let memory = prepared.memory_metrics();
+    eprintln!("prepared_dispatch_memory chords={chord_count} compiler_phase_peak_capacity_bytes={} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={}", compile_memory.phase_peak_capacity_bytes, memory.plan_capacity_bytes, memory.overlapping_peak_capacity_bytes);
+
+Then run the same `SKY_MEMORY_CHORD_COUNT=10000` cargo test command with
+`--manifest-path (Join-Path $baseline 'rust/Cargo.toml')`. Restore only
+`rust/crates/sky_dispatch_core/src/executor/memory_tests.rs` in that disposable
+worktree after measurement. This edits test source only; keep the separately
+built pinned-baseline qualification harness and manifest untouched.
+
 Raw Up syscall count sums
 `TerminalSendAttemptEvidence.raw_calls` for the worker terminal cleanup. It
 does not use `ReleaseAllOutcome.attempts`, which counts admitted cleanup
