@@ -1854,6 +1854,7 @@ try {
     & git -C $playbackCoreRepoRoot worktree add --detach $pclV3BaselineRoot $pclV3Profile.BaselineRevision | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'could not create the pinned V3 baseline worktree for manifest contract tests' }
     Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
     $pclV3RunnerIdentity = Get-DispatchM3GitCheckoutIdentity $playbackCoreRepoRoot
     $pclV3BaselineIdentity = Get-DispatchM3GitCheckoutIdentity $pclV3BaselineRoot
     $pclV3RustcVersion = (& rustc -Vv) -join [Environment]::NewLine
