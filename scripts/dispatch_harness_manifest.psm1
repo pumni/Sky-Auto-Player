@@ -446,10 +446,22 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
             '; runner-branch=' + $runnerBranch + '/' + $profile.CandidateLineageBranch +
             '; cargo=' + (Get-ManifestProperty $Manifest 'cargo_profile') + '/' + $profile.CargoProfile +
             '; features=' + (@((Get-ManifestProperty $Manifest 'cargo_features')) -join ',') + '/' + (@($profile.RequiredFeatures) -join ',') +
+            '; qpc=' + (Get-ManifestProperty $Manifest 'qpc_read_counting') +
             '; observer=' + (Get-ManifestProperty $Manifest 'receiveonly_observer_mode') + '/' + $profile.ObserverMode +
+            '; observer-version=' + (Get-ManifestProperty $Manifest 'receiveonly_observer_version') + '/' + $profile.ObserverVersion +
+            '; observer-schema=' + (Get-ManifestProperty $Manifest 'receiveonly_observer_schema_version') + '/' + $profile.ObserverSchemaVersion +
+            '; observer-event-schema=' + (Get-ManifestProperty $Manifest 'receiveonly_observer_event_schema_version') + '/' + $profile.ObserverEventSchemaVersion +
+            '; guard=' + (Get-ManifestProperty $Manifest 'guard_mode') +
+            '; margins=' + (Get-ManifestProperty $Manifest 'performance_timing_margin_us') + '/' + $profile.PerformanceTimingMarginUs + ',' + (Get-ManifestProperty $Manifest 'safety_timing_margin_us') + '/' + $profile.SafetyTimingMarginUs +
             '; target=' + (Get-ManifestProperty $Manifest 'target') + '/' + $profile.Target +
+            '; target-status=' + (Get-ManifestProperty $Manifest 'target_identity_status') +
+            '; target-id=' + (Get-ManifestProperty $targetIdentity 'target_class') + '/' + (Get-ManifestProperty $targetIdentity 'target_name') + '/' + (Get-ManifestProperty $targetIdentity 'game_target') + '/' + (Get-ManifestProperty $targetIdentity 'capture_status') +
             '; rustc=' + ([string](Get-ManifestProperty $Manifest 'rustc_version') -replace '[\r\n]+', '|') +
             '; cargo-version=' + (Get-ManifestProperty $Manifest 'cargo_version') +
+            '; exit-codes=' + (Get-ManifestProperty $Manifest 'cargo_clean_exit_code') + '/' + (Get-ManifestProperty $Manifest 'cargo_build_exit_code') +
+            '; binary=' + (Get-ManifestProperty $Manifest 'binary_name') + '/' + (Get-ManifestProperty $Manifest 'binary_sha256') +
+            '; paths=' + $sourceRoot + '/' + $runnerRoot + '/' + $outputRoot + '/' + $cargoTargetDir + '/' + $cargoLockPath +
+            '; plan=' + (Get-ManifestProperty $qualificationPlan 'pair_order') + '/' + (Get-ManifestProperty $qualificationPlan 'pair_count') + '/' + (Get-ManifestProperty $qualificationPlan 'sample_seconds') +
             '; lock=' + $cargoLockSha256 + '; provenance=' + $scriptProvenance.Count + '/' + $expectedRunnerPaths.Count)
     }
 
