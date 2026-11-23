@@ -438,6 +438,18 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
             '; branch=' + (Get-ManifestProperty $Manifest 'source_branch') + '/' + $expectedBranch +
             '; runner=' + $runnerRevision + '/' + $candidateRevision + '; runner-tree=' + $runnerTree + '/' + $candidateTree +
             '; clean=' + (Get-ManifestProperty $Manifest 'source_tree_clean') + '/' + (Get-ManifestProperty $Manifest 'runner_source_clean') +
+            '; profile=' + (Get-ManifestProperty $Manifest 'qualification_profile') + '/' + $profile.Name +
+            '; workload=' + (Get-ManifestProperty $Manifest 'workload_version') + '/' + $profile.WorkloadVersion +
+            '; role=' + (Get-ManifestProperty $Manifest 'source_role') + '/' + $ExpectedRole +
+            '; lineage=' + (Get-ManifestProperty $Manifest 'candidate_lineage_branch') + '/' + $profile.CandidateLineageBranch +
+            '; lineage-tip=' + $lineageTip + '/' + $candidateRevision +
+            '; runner-branch=' + $runnerBranch + '/' + $profile.CandidateLineageBranch +
+            '; cargo=' + (Get-ManifestProperty $Manifest 'cargo_profile') + '/' + $profile.CargoProfile +
+            '; features=' + (@((Get-ManifestProperty $Manifest 'cargo_features')) -join ',') + '/' + (@($profile.RequiredFeatures) -join ',') +
+            '; observer=' + (Get-ManifestProperty $Manifest 'receiveonly_observer_mode') + '/' + $profile.ObserverMode +
+            '; target=' + (Get-ManifestProperty $Manifest 'target') + '/' + $profile.Target +
+            '; rustc=' + ([string](Get-ManifestProperty $Manifest 'rustc_version') -replace '[\r\n]+', '|') +
+            '; cargo-version=' + (Get-ManifestProperty $Manifest 'cargo_version') +
             '; lock=' + $cargoLockSha256 + '; provenance=' + $scriptProvenance.Count + '/' + $expectedRunnerPaths.Count)
     }
 
