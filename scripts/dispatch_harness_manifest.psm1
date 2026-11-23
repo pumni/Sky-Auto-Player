@@ -515,6 +515,9 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
         throw 'PlaybackCoreLifecycle candidate source must be the exact runner checkout'
     }
     $expectedCargoLockPath = [System.IO.Path]::GetFullPath((Join-Path $sourceRoot 'rust\Cargo.lock'))
+    if ($profile.Version -eq 3) {
+        Assert-PlaybackCoreLifecycleV3LockfileBytes -RepositoryRoot $sourceRoot -SourceRole $ExpectedRole | Out-Null
+    }
     if (-not [string]::Equals([System.IO.Path]::GetFullPath($cargoLockPath), $expectedCargoLockPath, [System.StringComparison]::OrdinalIgnoreCase) -or
         -not (Test-Path -LiteralPath $cargoLockPath -PathType Leaf) -or
         (Get-FileSha256 $cargoLockPath) -ne $cargoLockSha256) {

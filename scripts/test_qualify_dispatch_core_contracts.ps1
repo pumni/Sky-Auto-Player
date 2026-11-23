@@ -1714,6 +1714,20 @@ $playbackCoreCollectorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot
 $playbackCoreCaseRunnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
 $playbackCoreNativeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\bin\rt_native_acceptance.rs') -Raw
 $playbackCoreRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$v3PlanOnlyGateIndex = $playbackCoreRunnerSource.IndexOf("if (`$PlanOnly -and `$QualificationProfile -eq 'PlaybackCoreLifecycleV3') {", [System.StringComparison]::Ordinal)
+$v3PlanOnlyMarginIndex = if ($v3PlanOnlyGateIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('Assert-QualificationTimingMargin', $v3PlanOnlyGateIndex, [System.StringComparison]::Ordinal) } else { -1 }
+$v3PlanOnlyBranchIndex = if ($v3PlanOnlyGateIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('if ($PlanOnly) {', $v3PlanOnlyGateIndex, [System.StringComparison]::Ordinal) } else { -1 }
+$v3PlanOnlyReturnIndex = if ($v3PlanOnlyBranchIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('return', $v3PlanOnlyBranchIndex, [System.StringComparison]::Ordinal) } else { -1 }
+if ($v3PlanOnlyGateIndex -lt 0 -or $v3PlanOnlyMarginIndex -lt $v3PlanOnlyGateIndex -or
+    $v3PlanOnlyReturnIndex -lt 0 -or $v3PlanOnlyMarginIndex -gt $v3PlanOnlyReturnIndex) {
+    throw 'PlaybackCoreLifecycleV3 PlanOnly must enforce the Final timing margin before it can return'
+}
+$pclV3ZeroMarginRejected = $false
+try { Assert-QualificationTimingMargin -RequestedStage Final -Profile PlaybackCoreLifecycleV3 -MarginUs 0 -PairCount 6 -SampleDurationSeconds 15 | Out-Null } catch { $pclV3ZeroMarginRejected = $true }
+if (-not $pclV3ZeroMarginRejected -or
+    -not (Assert-QualificationTimingMargin -RequestedStage Final -Profile PlaybackCoreLifecycleV3 -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15)) {
+    throw 'PlaybackCoreLifecycleV3 PlanOnly timing margin gate must reject 0 us and accept 500 us'
+}
 $playbackCoreBaselineNativeSource = (& git -C $playbackCoreRepoRoot show '2544daa13eb23fdf03bd922e65b96fcffaba421c:rust/crates/sky_player/src/bin/rt_native_acceptance.rs') -join [Environment]::NewLine
 if ($LASTEXITCODE -ne 0) { throw 'could not read the frozen PlaybackCoreLifecycle baseline native acceptance source' }
 $playbackCoreWorkerBootSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\boot.rs') -Raw
@@ -1724,6 +1738,7 @@ if (-not $playbackCoreProfileSource.Contains("Name = switch (`$Version)") -or
     -not $playbackCoreProfileSource.Contains("'PlaybackCoreLifecycleV3'") -or
     -not $playbackCoreProfileSource.Contains("LineageAnchorRevision = if (`$Version -eq 3)") -or
     -not $playbackCoreProfileSource.Contains('Assert-PlaybackCoreLifecycleV3BaselineSuccessor') -or
+    -not $playbackCoreProfileSource.Contains('Assert-PlaybackCoreLifecycleV3LockfileBytes') -or
     -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = if (`$Version -eq 1) { 'refactor/playback-core-lifecycle' } else { 'refactor/playback-remove-release-gap' }") -or
     -not $playbackCoreProfileSource.Contains("'near-minimum-retrigger'") -or
     -not $playbackCoreBuilderSource.Contains('Assert-PlaybackCoreLifecycleSourceCheckout') -or
@@ -1851,12 +1866,37 @@ $pclV3TempRoot = Join-Path $env:TEMP ('pcl-v3-manifest-contract-' + [guid]::NewG
 $pclV3BaselineRoot = Join-Path $pclV3TempRoot 'baseline-worktree'
 New-Item -ItemType Directory -Path $pclV3TempRoot | Out-Null
 try {
-    & git -C $playbackCoreRepoRoot worktree add --detach $pclV3BaselineRoot $pclV3Profile.BaselineRevision | Out-Null
+    & git -c core.autocrlf=false -c core.eol=lf -C $playbackCoreRepoRoot worktree add --detach $pclV3BaselineRoot $pclV3Profile.BaselineRevision | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'could not create the pinned V3 baseline worktree for manifest contract tests' }
     Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
     Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
     $pclV3RunnerIdentity = Get-DispatchM3GitCheckoutIdentity $playbackCoreRepoRoot
     $pclV3BaselineIdentity = Get-DispatchM3GitCheckoutIdentity $pclV3BaselineRoot
+    $pclV3BaselineLockPath = Join-Path $pclV3BaselineRoot 'rust\Cargo.lock'
+    $pclV3OriginalBaselineLockBytes = [System.IO.File]::ReadAllBytes($pclV3BaselineLockPath)
+    $pclV3BaselineLockText = [System.Text.Encoding]::UTF8.GetString($pclV3OriginalBaselineLockBytes)
+    if ($pclV3BaselineLockText.Contains("`r")) { throw 'PlaybackCoreLifecycleV3 baseline contract worktree did not start with LF Cargo.lock bytes' }
+    try {
+        $pclV3CrlfLockBytes = [System.Text.Encoding]::UTF8.GetBytes($pclV3BaselineLockText.Replace("`n", "`r`n"))
+        [System.IO.File]::WriteAllBytes($pclV3BaselineLockPath, $pclV3CrlfLockBytes)
+        $pclV3CrlfLockRejected = $false
+        $pclV3CrlfLockError = ''
+        try { Assert-PlaybackCoreLifecycleV3LockfileBytes -RepositoryRoot $pclV3BaselineRoot -SourceRole Baseline | Out-Null } catch {
+            $pclV3CrlfLockRejected = $true
+            $pclV3CrlfLockError = $_.Exception.Message
+        }
+        if (-not $pclV3CrlfLockRejected -or
+            -not $pclV3CrlfLockError.Contains('CR bytes') -or
+            -not $pclV3CrlfLockError.Contains('checkout-index --force -- rust/Cargo.lock') -or
+            -not $pclV3CrlfLockError.Contains($pclV3Profile.BaselineSuccessorLockSha256)) {
+            throw 'PlaybackCoreLifecycleV3 did not clearly reject a CRLF lockfile checkout with LF repair instructions'
+        }
+    } finally {
+        [System.IO.File]::WriteAllBytes($pclV3BaselineLockPath, $pclV3OriginalBaselineLockBytes)
+    }
+    if ((Assert-PlaybackCoreLifecycleV3LockfileBytes -RepositoryRoot $pclV3BaselineRoot -SourceRole Baseline) -ne $pclV3Profile.BaselineSuccessorLockSha256) {
+        throw 'PlaybackCoreLifecycleV3 baseline lockfile byte preflight changed its pinned LF hash'
+    }
     $pclV3RustcVersion = (& rustc -Vv) -join [Environment]::NewLine
     if ($LASTEXITCODE -ne 0) { throw 'could not identify rustc for V3 manifest contract fixtures' }
     $pclV3CargoVersion = (& cargo -V).Trim()

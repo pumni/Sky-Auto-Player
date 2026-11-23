@@ -197,12 +197,48 @@ match the successor's Cargo.lock bytes. The runner rejects a successor with a
 different parent/tree/patch, dirty source, mismatched lock hash, or candidate
 that is not the exact pushed PR branch tip.
 
+On Windows, create both V3 worktrees with LF checkout settings. From a clean
+clone that has fetched the candidate branch, set the repository checkout
+policy before adding either worktree:
+
+```powershell
+git -C <clone> config core.autocrlf false
+git -C <clone> config core.eol lf
+git -c core.autocrlf=false -c core.eol=lf -C <clone> worktree add --track -b refactor/playback-remove-release-gap <candidate-worktree> origin/refactor/playback-remove-release-gap
+git -c core.autocrlf=false -c core.eol=lf -C <clone> worktree add --detach <baseline-worktree> 4bc4a8409d3250da012be6e92f6681e721c17f3a
+```
+
+Before building either manifest, verify the lockfile's byte hash in both
+worktrees:
+
+```powershell
+$expectedLockSha256 = 'baaf6e57419a1f28d9a880d655a48863676fe2fe0ddcd9a1467153912af13b68'
+foreach ($worktree in @('<candidate-worktree>', '<baseline-worktree>')) {
+    $autocrlf = (git -C $worktree config --get core.autocrlf).Trim()
+    $eol = (git -C $worktree config --get core.eol).Trim()
+    if ($autocrlf -ne 'false' -or $eol -ne 'lf') { throw "Worktree ${worktree} must use core.autocrlf=false and core.eol=lf" }
+    $actualLockSha256 = (Get-FileHash -LiteralPath (Join-Path $worktree 'rust/Cargo.lock') -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualLockSha256 -ne $expectedLockSha256) { throw "Unexpected Cargo.lock bytes in ${worktree}: $actualLockSha256" }
+}
+```
+
+If a worktree was checked out with CRLF, restore only its working-tree copy
+from the index under LF settings, then repeat the hash check:
+
+```powershell
+git -c core.autocrlf=false -c core.eol=lf -C <worktree> checkout-index --force -- rust/Cargo.lock
+```
+
+This does not change the pinned lock blob or source SHA/tree. The V3 builder
+and manifest reader also reject CR bytes and any lock hash other than the
+pinned LF-byte hash before accepting the checkout.
+
 V3 keeps the V2 workload matrix, including 120 paired sessions and 10
 candidate-only safety sessions (130 planned total), with the same target,
 toolchain, `dist` profile, `real-input-acceptance` feature, authored-stream
 parity contract, 500 us margins, observer, pair order, and 60 fps workload.
 Native qualification remains subject to the same owner-approved ReceiveOnly
-machine and input-scope requirements. A V3 `PlanOnly` run plans 130 sessions+and records zero native attempts; it is not native gameplay evidence.
+machine and input-scope requirements. A V3 `PlanOnly` run plans 130 sessions and records zero native attempts; it is not native gameplay evidence.
 
 After an authorized run, **lifecycle-metrics.json** records candidate source,
 tree, manifest and binary hashes with machine/boot and receiver identity.

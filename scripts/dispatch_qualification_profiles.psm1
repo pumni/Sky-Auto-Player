@@ -410,10 +410,37 @@ function Assert-PlaybackCoreLifecycleV3CandidateLineage {
     $true
 }
 
+function Assert-PlaybackCoreLifecycleV3LockfileBytes {
+    param(
+        [Parameter(Mandatory)] [string]$RepositoryRoot,
+        [Parameter(Mandatory)] [ValidateSet('Baseline', 'Candidate')] [string]$SourceRole
+    )
+    $profile = Get-PlaybackCoreLifecycleProfile -Version 3
+    $root = Get-DispatchM3PathIdentity $RepositoryRoot
+    $lockPath = Join-Path $root 'rust\Cargo.lock'
+    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+        throw ('PlaybackCoreLifecycleV3 ' + $SourceRole + ' checkout is missing rust/Cargo.lock')
+    }
+
+    $bytes = [System.IO.File]::ReadAllBytes($lockPath)
+    if ([Array]::IndexOf($bytes, [byte]13) -ge 0) {
+        throw ('PlaybackCoreLifecycleV3 ' + $SourceRole + ' rust/Cargo.lock contains CR bytes; create both Windows worktrees with core.autocrlf=false and core.eol=lf. To restore only this working-tree file, run: git -c core.autocrlf=false -c core.eol=lf -C "' + $root + '" checkout-index --force -- rust/Cargo.lock; then verify SHA-256 ' + $profile.BaselineSuccessorLockSha256)
+    }
+
+    $actualHash = (Get-FileHash -LiteralPath $lockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $profile.BaselineSuccessorLockSha256) {
+        throw ('PlaybackCoreLifecycleV3 ' + $SourceRole + ' rust/Cargo.lock SHA-256 must match the pinned LF bytes; expected ' + $profile.BaselineSuccessorLockSha256 + ', got ' + $actualHash)
+    }
+    $actualHash
+}
+
 function Get-PlaybackCoreLifecycleRunnerIdentity {
     param([Parameter(Mandatory)] [string]$RunnerRoot, [ValidateSet(1, 2, 3)] [int]$ProfileVersion = 1)
     $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
-    if ($ProfileVersion -eq 3) { $baselineSuccessor = Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $RunnerRoot }
+    if ($ProfileVersion -eq 3) {
+        Assert-PlaybackCoreLifecycleV3LockfileBytes -RepositoryRoot $RunnerRoot -SourceRole Candidate | Out-Null
+        $baselineSuccessor = Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $RunnerRoot
+    }
     $identity = Get-DispatchM3GitCheckoutIdentity $RunnerRoot
     if (-not $identity.clean -or $identity.checkout.top_level -ne $identity.root -or
         $identity.branch -ne $profile.CandidateLineageBranch) {
@@ -468,6 +495,9 @@ function Assert-PlaybackCoreLifecycleSourceCheckout {
         [ValidateSet(1, 2, 3)] [int]$ProfileVersion = 1
     )
     $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
+    if ($ProfileVersion -eq 3) {
+        Assert-PlaybackCoreLifecycleV3LockfileBytes -RepositoryRoot $SourceRoot -SourceRole $SourceRole | Out-Null
+    }
     $identity = Get-DispatchM3GitCheckoutIdentity $SourceRoot
     $runnerIdentity = Get-PlaybackCoreLifecycleRunnerIdentity -RunnerRoot $RunnerRoot -ProfileVersion $ProfileVersion
     $expectedRevision = if ($SourceRole -eq 'Baseline') { $profile.BaselineRevision } else { $runnerIdentity.revision }
@@ -486,4 +516,4 @@ function Assert-PlaybackCoreLifecycleSourceCheckout {
     $identity
 }
 
-Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-PlaybackCoreLifecycleProfileForName, Assert-PlaybackCoreLifecycleV3BaselineSuccessor, Assert-PlaybackCoreLifecycleV3CandidateLineage, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout
+Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-PlaybackCoreLifecycleProfileForName, Assert-PlaybackCoreLifecycleV3BaselineSuccessor, Assert-PlaybackCoreLifecycleV3CandidateLineage, Assert-PlaybackCoreLifecycleV3LockfileBytes, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout

@@ -1212,6 +1212,9 @@ try {
         if ($Stage -ne 'Final' -or -not $ControlManifest) {
             throw 'PlaybackCoreLifecycle -PlanOnly requires -Stage Final with candidate and baseline manifests'
         }
+        if ($PlanOnly -and $QualificationProfile -eq 'PlaybackCoreLifecycleV3') {
+            Assert-QualificationTimingMargin -RequestedStage $Stage -Profile $QualificationProfile -MarginUs $TimingMarginUs -PairCount $Pairs -SampleDurationSeconds $SampleSeconds | Out-Null
+        }
         Assert-AbsolutePath $CandidateManifest 'candidate manifest'
         Assert-AbsolutePath $ControlManifest 'baseline manifest'
         Assert-AbsolutePath $OutputRoot 'output root'
