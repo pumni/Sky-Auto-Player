@@ -2196,7 +2196,8 @@ mod tests {
             std::env::temp_dir().join(format!("sky-calibration-{}-{}", std::process::id(), 1));
         fs::create_dir_all(root.parent().expect("temp parent")).expect("temp parent");
         let path = root.with_extension("json");
-        fs::write(&path, valid_calibration_cache(677).to_string()).expect("cache");
+        let original = valid_calibration_cache(677).to_string().into_bytes();
+        fs::write(&path, &original).expect("cache");
         assert_eq!(
             load_calibration_resolution(&path),
             CalibrationResolution {
@@ -2205,6 +2206,7 @@ mod tests {
                 source: CALIBRATION_MARGIN_SOURCE_DEVICE.into()
             }
         );
+        assert_eq!(fs::read(&path).expect("cache remains unchanged"), original);
         let _ = fs::remove_file(path);
     }
 
@@ -2214,16 +2216,90 @@ mod tests {
             "sky-invalid-calibration-{}.json",
             std::process::id()
         ));
-        fs::write(&path, b"{not-json").expect("cache");
+        let invalid_bytes = b"{not-json";
+        fs::write(&path, invalid_bytes).expect("cache");
+        let invalid = load_calibration_resolution(&path);
+        assert_eq!(invalid.transport_reserve_us, DEFAULT_TRANSPORT_MARGIN_US);
+        assert!(!invalid.qualified);
+        assert_eq!(invalid.source, CALIBRATION_MARGIN_SOURCE_INVALID);
         assert_eq!(
-            load_calibration_resolution(&path).source,
-            CALIBRATION_MARGIN_SOURCE_INVALID
+            fs::read(&path).expect("invalid cache remains unchanged"),
+            invalid_bytes
         );
-        fs::write(&path, valid_calibration_cache(2_500).to_string()).expect("cache");
+
+        let out_of_envelope_bytes = valid_calibration_cache(2_500).to_string().into_bytes();
+        fs::write(&path, &out_of_envelope_bytes).expect("cache");
+        let out_of_envelope = load_calibration_resolution(&path);
         assert_eq!(
-            load_calibration_resolution(&path).source,
+            out_of_envelope.transport_reserve_us,
+            DEFAULT_TRANSPORT_MARGIN_US
+        );
+        assert!(!out_of_envelope.qualified);
+        assert_eq!(
+            out_of_envelope.source,
             CALIBRATION_MARGIN_SOURCE_OUT_OF_ENVELOPE
         );
+        assert_eq!(
+            fs::read(&path).expect("out-of-envelope cache remains unchanged"),
+            out_of_envelope_bytes
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn stale_calibration_schema_falls_back_without_rewriting_existing_cache() {
+        let suffix = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!("sky-stale-calibration-{suffix}.json"));
+        let stale_fields = [
+            ("version", Value::from(CALIBRATION_CACHE_VERSION - 1)),
+            (
+                "evidence_kind",
+                Value::String("legacy_receipt_timing".into()),
+            ),
+            (
+                "artifact_schema_version",
+                Value::from(CALIBRATION_ARTIFACT_SCHEMA_VERSION - 1),
+            ),
+            (
+                "native_calibration_version",
+                Value::from(CALIBRATION_NATIVE_VERSION - 1),
+            ),
+            (
+                "measurement_protocol_version",
+                Value::from(CALIBRATION_MEASUREMENT_PROTOCOL_VERSION - 1),
+            ),
+            (
+                "source_formula_version",
+                Value::from(CALIBRATION_SOURCE_FORMULA_VERSION - 1),
+            ),
+        ];
+
+        for (field, stale_value) in stale_fields {
+            let mut cache = valid_calibration_cache(677);
+            cache[field] = stale_value;
+            let original = format!("  {}\n", cache).into_bytes();
+            fs::write(&path, &original).expect("stale cache");
+
+            let resolution = load_calibration_resolution(&path);
+            assert_eq!(
+                resolution.transport_reserve_us, DEFAULT_TRANSPORT_MARGIN_US,
+                "stale {field} must use the safe fallback"
+            );
+            assert!(!resolution.qualified, "stale {field} is unqualified");
+            assert_eq!(
+                resolution.source, CALIBRATION_MARGIN_SOURCE_INCOMPATIBLE,
+                "stale {field} is incompatible"
+            );
+            assert_eq!(
+                fs::read(&path).expect("stale cache remains unchanged"),
+                original,
+                "reading stale {field} must preserve its exact bytes"
+            );
+        }
+
         let _ = fs::remove_file(path);
     }
 
@@ -2247,7 +2323,8 @@ mod tests {
             "processor_architecture".into(),
             Value::String(format!("{processor}-mismatch")),
         );
-        fs::write(&path, cache.to_string()).expect("cache");
+        let original = cache.to_string().into_bytes();
+        fs::write(&path, &original).expect("cache");
 
         assert_eq!(
             load_calibration_resolution(&path),
@@ -2256,6 +2333,10 @@ mod tests {
                 qualified: false,
                 source: CALIBRATION_MARGIN_SOURCE_INCOMPATIBLE.into(),
             }
+        );
+        assert_eq!(
+            fs::read(&path).expect("mismatched cache remains unchanged"),
+            original
         );
         let _ = fs::remove_file(path);
     }

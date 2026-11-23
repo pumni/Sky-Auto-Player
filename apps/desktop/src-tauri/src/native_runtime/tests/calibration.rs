@@ -440,6 +440,11 @@ fn calibration_recommendation_never_changes_the_persisted_user_margin() {
     let root = std::env::temp_dir().join(format!("sky-calibration-advisory-{suffix}"));
     fs::create_dir_all(root.join("songs")).expect("songs root");
     fs::write(
+        root.join("songs/manual-margin.json"),
+        r#"{"name":"Manual margin","songNotes":[{"time":0,"key":"Key0"}]}"#,
+    )
+    .expect("test song");
+    fs::write(
         root.join("config.json"),
         r#"{"schema_version":4,"default_timing_margin_us":1200}"#,
     )
@@ -454,6 +459,20 @@ fn calibration_recommendation_never_changes_the_persisted_user_margin() {
     raw["pair_buckets"]["1"]["hot"]["sendinput_shrink_us"]["max"] = Value::from(677_i64);
     publish_calibration_cache(runtime.paths().cache_root(), &raw).expect("cache");
 
+    let cache_path = runtime.paths().calibration_cache_path();
+    let cache_bytes = fs::read(&cache_path).expect("calibration cache bytes");
+    let bootstrap = runtime
+        .dispatch("app.bootstrap", Value::Object(Default::default()))
+        .expect("bootstrap");
+    assert_eq!(
+        bootstrap["settings"]["playback_defaults"]["timing_margin_us"],
+        1_200
+    );
+    assert_eq!(
+        bootstrap["settings"]["timing_margin_recommendation"]["recommended_timing_margin_us"],
+        900
+    );
+
     let settings = runtime
         .dispatch("settings.get", Value::Object(Default::default()))
         .expect("settings");
@@ -467,6 +486,39 @@ fn calibration_recommendation_never_changes_the_persisted_user_margin() {
         serde_json::from_slice(&fs::read(root.join("config.json")).expect("read settings"))
             .expect("JSON settings");
     assert_eq!(persisted["default_timing_margin_us"], 1_200);
+
+    let generation = catalog_generation(&runtime);
+    let search = runtime
+        .dispatch(
+            "catalog.search",
+            serde_json::json!({"query":"Manual margin","offset":0,"limit":10,"generation":generation}),
+        )
+        .expect("search test song");
+    let song_id = search["items"][0]["song_id"]
+        .as_str()
+        .expect("test song ID");
+    let prepared = runtime
+        .dispatch(
+            "playback.prepare",
+            serde_json::json!({
+                "songId": song_id,
+                "generation": generation,
+                "config": {
+                    "hold_frames": 1.0,
+                    "timing_margin_us": 1_200,
+                    "tempo_scale": 1.0,
+                    "fps": 60,
+                    "dry_run": true
+                }
+            }),
+        )
+        .expect("prepare with explicit user margin");
+    assert_eq!(prepared["config"]["timing_margin_us"], 1_200);
+    assert_eq!(
+        fs::read(&cache_path).expect("cache after bootstrap and Prepare"),
+        cache_bytes,
+        "reading the recommendation must not rewrite calibration evidence"
+    );
     runtime.shutdown();
     let _ = fs::remove_dir_all(root);
 }
