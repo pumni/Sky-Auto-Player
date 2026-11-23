@@ -183,29 +183,75 @@ QPC sampled before launching the child process is retained only as
 complete the playback Start metric. Missing successor Armed evidence, clock
 mismatch, or identity mismatch leaves the required metric **INCOMPLETE**.
 
-The pinned baseline's native acceptance source at
-[2544daa13eb23fdf03bd922e65b96fcffaba421c](https://github.com/pumni/Sky-Auto-Player/blob/2544daa13eb23fdf03bd922e65b96fcffaba421c/rust/crates/sky_player/src/bin/rt_native_acceptance.rs)
-does not emit `lifecycle_measurement` or worker Armed QPC evidence. Control
-fixtures must preserve that schema; candidate-only lifecycle fields on a
-baseline row are invalid evidence. In each six-pair cell, the actual AB/BA role
-order produces three adjacent candidate→candidate transitions and three
-candidate→baseline transitions:
+Immediate-successor coverage is versioned with the qualification profile. Keep
+the v1 semantics for its historical baseline at
+[2544daa13eb23fdf03bd922e65b96fcffaba421c](https://github.com/pumni/Sky-Auto-Player/blob/2544daa13eb23fdf03bd922e65b96fcffaba421c/rust/crates/sky_player/src/bin/rt_native_acceptance.rs):
+that source emits no `lifecycle_measurement` or worker Armed QPC evidence. Its
+control rows must preserve that schema; candidate-only lifecycle fields on a
+v1 baseline row are invalid evidence. V1 measures candidate→candidate and keeps
+candidate→baseline unavailable, so its required metric remains incomplete.
 
-| Transition | Planned across 10 workload/load cells | Eligible | Available from worker QPC |
+V2 pins baseline source
+[1d00c3b71fbf1f94003865bad6c4eba6d8dcd902](https://github.com/pumni/Sky-Auto-Player/blob/1d00c3b71fbf1f94003865bad6c4eba6d8dcd902/rust/crates/sky_player/src/bin/rt_native_acceptance.rs),
+which emits schema-2 worker Armed QPC evidence. V2 requires all 60 adjacent
+candidate worker-join→successor Armed intervals: 30 candidate→candidate and
+30 candidate→baseline. For each interval, validate frozen AB/BA adjacency,
+source/tree/manifest/binary identities, row status and exit code, native run
+ID/scenario, the collector's machine/boot identity, Windows QPC source and
+matching frequency, and successor Armed QPC ≥ candidate worker-join QPC.
+Missing or invalid evidence makes both the Start metric and overall report
+`INCOMPLETE` with a reason. Do not overlay the baseline binary or fabricate
+lifecycle evidence.
+
+In each six-pair cell, the actual AB/BA role order produces three adjacent
+candidate→candidate transitions and three candidate→baseline transitions:
+
+| Profile | Transition | Planned across 10 workload/load cells | Eligible | Available from worker QPC |
+| --- | --- | ---: | ---: | ---: |
+| V1 | Candidate → candidate | 30 | 30 | 30 when identity and QPC evidence validate |
+| V1 | Candidate → baseline | 30 | 0 | 0; pinned v1 baseline has no Armed field |
+| V2 | Candidate → candidate | 30 | 30 | 30 when identity and QPC evidence validate |
+| V2 | Candidate → baseline | 30 | 30 | 30 when baseline identity and Armed QPC evidence validate |
+
+Under V1, a Final run therefore measures at most 30 of 60 planned
+immediate-successor transitions. It reports the other 30 as unavailable with
+the pinned-baseline schema reason, and the mandatory
+`worker_joined_to_next_start_us` metric stays **INCOMPLETE**. The partial
+candidate→candidate statistics remain visible but do not make that required
+metric complete. The child-process launch diagnostic does not replace missing
+playback Start evidence. V2 uses the pinned baseline's existing Armed evidence
+to measure all 60; it must fail-stop as incomplete if any required sample is
+missing or invalid. Keep these profile results separate because v1 cannot be
+backfilled with fields that its source did not emit.
+
+## Representative Prepare capacity comparison
+
+The PR #679 memory fixture measures 10,000 one-key Down generations with the
+same authored actions, QPC frequency (1 MHz), H (8,000 µs), and second Prepare
+policy argument (16,667 µs) on the pinned pre-refactor baseline
+`1d00c3b71fbf1f94003865bad6c4eba6d8dcd902` and the candidate. The baseline
+interprets that argument as the release-gap minimum; the candidate uses it for
+the separate resume cleanup delay. Each Down is 30,000 µs after the previous
+Down and its Up is 10,000 µs later, leaving a 20,000 µs Up-to-next-Down gap so
+the legacy baseline can Prepare this workload.
+The comparison reports calculated collection capacities for the compile phase
+and for the schedule plus prepared plan while both coexist:
+
+| Source | Compiler phase peak | Prepared plan capacity | Prepare overlap peak bound |
 | --- | ---: | ---: | ---: |
-| Candidate → candidate | 30 | 30 | 30 when identity and QPC evidence validate |
-| Candidate → baseline | 30 | 0 | 0; the pinned baseline has no Armed field |
+| Pinned baseline `1d00c3b` | 8,160,774 bytes | 880,264 bytes | 8,160,774 bytes |
+| PR #679 candidate | 6,720,718 bytes | 960,264 bytes | 6,720,718 bytes |
 
-The Final run therefore measures at most 30 of 60 planned immediate-successor
-transitions. It reports the other 30 as unavailable with the pinned-baseline
-schema reason, and the mandatory `worker_joined_to_next_start_us` metric stays
-**INCOMPLETE**. The partial candidate→candidate statistics remain visible but
-do not make that required metric complete. The child-process launch diagnostic
-does not replace missing playback Start evidence. A Leader/owner protocol
-decision is required to accept candidate→candidate-only coverage, or to approve
-a separate protocol that can observe baseline Start while preserving the
-baseline's immutable source identity. Do not overlay the baseline binary or
-fabricate lifecycle evidence for it.
+The modeled Prepare peak falls by 1,440,056 bytes (17.6%) for this fixture;
+the candidate plan itself is 80,000 bytes larger. These values use Rust
+collection capacities and the code's compile/Prepare lifetime model, with zero
+additional caller-retained capacity in the fixture. They do not measure
+allocator metadata, fragmentation, worker/application allocations, or process
+RSS, and should not be described as the whole application's memory peak. The
+focused measurement command on the candidate is:
+
+    $env:SKY_MEMORY_CHORD_COUNT = '10000'
+    cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core executor_memory_scaling_100_1000_10000_and_budget_proof -- --nocapture
 
 Raw Up syscall count sums
 `TerminalSendAttemptEvidence.raw_calls` for the worker terminal cleanup. It

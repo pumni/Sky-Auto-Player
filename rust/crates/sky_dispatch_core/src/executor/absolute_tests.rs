@@ -328,7 +328,8 @@ fn absolute_scheduler_checked_overflow_does_not_mutate_slot_or_cursor() {
 }
 
 #[test]
-fn attempted_down_is_consumed_only_after_verified_cleanup_and_next_onset_waits_for_g() {
+fn attempted_down_is_consumed_only_after_verified_cleanup_and_next_onset_waits_for_resume_cleanup_delay()
+ {
     let allowed = [0x15, 0x16];
     let actions = [
         KeyActionInput {

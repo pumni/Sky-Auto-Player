@@ -222,7 +222,9 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
         }
         let mut actions = Vec::with_capacity(chord_count * 2);
         for i in 0..chord_count {
-            let t = (i as u64 + 1) * 20_000;
+            // Keep a 20 ms authored Up-to-next-Down gap so the pinned legacy
+            // release-gap policy can Prepare the same workload.
+            let t = (i as u64 + 1) * 30_000;
             actions.push(KeyActionInput {
                 source_action_index: (i * 2) as u32,
                 kind: ActionKind::Down,
@@ -272,6 +274,31 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
             executor_memory.struct_bytes,
             executor_memory.total_bytes,
             compile_memory.phase_peak_capacity_bytes,
+        );
+
+        drop(executor);
+        let prepared = PreparedDispatchSchedule::prepare(
+            &sched,
+            std::num::NonZeroU64::new(1_000_000).expect("QPC frequency"),
+            8_000,
+            16_667,
+            compile_memory.caller_retained_capacity_bytes,
+        )
+        .expect("prepared dispatch plan for the representative capacity workload");
+        let prepared_memory = prepared.memory_metrics();
+        let prepared_startup_peak_capacity_bound = compile_memory
+            .phase_peak_capacity_bytes
+            .max(prepared_memory.overlapping_peak_capacity_bytes);
+        assert!(
+            prepared_memory.overlapping_peak_capacity_bytes
+                <= crate::model::MAX_RETAINED_DISPATCH_BYTES
+        );
+        assert!(prepared_startup_peak_capacity_bound <= crate::model::MAX_RETAINED_DISPATCH_BYTES);
+        eprintln!(
+            "prepared_dispatch_memory workload=one_key chords={chord_count} memory_basis=calculated_size_and_capacity complete_application_process_peak=not_measured compiler_phase_peak_capacity_bytes={} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={} prepared_startup_peak_capacity_bound_bytes={prepared_startup_peak_capacity_bound} policy_min_hold_us=8000 resume_cleanup_delay_us=16667 qpc_frequency_hz=1000000 complete_worker_and_process_overhead_not_measured",
+            compile_memory.phase_peak_capacity_bytes,
+            prepared_memory.plan_capacity_bytes,
+            prepared_memory.overlapping_peak_capacity_bytes,
         );
         assert!(
             live_scheduler_owned_bytes <= crate::model::MAX_RETAINED_DISPATCH_BYTES,

@@ -114,7 +114,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_snapshot_policy_uses_the_same_margin_extended_g_at_60_and_120_fps() {
+    fn frame_snapshot_policy_keeps_resume_cleanup_delay_equal_to_hold_at_60_and_120_fps() {
         let cases = [(60, 16_667, 17_167, 34_334), (120, 8_334, 8_834, 17_668)];
         for (fps, frame_us, floor_us, cycle_us) in cases {
             let policy =

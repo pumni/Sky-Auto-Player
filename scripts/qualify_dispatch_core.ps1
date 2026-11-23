@@ -1403,6 +1403,8 @@ try {
             -CandidateTree $candidate.source_tree_sha `
             -CandidateManifestSha256 $candidate.manifest_sha256 `
             -CandidateBinarySha256 $candidate.binary_sha256 `
+            -ControlManifestSha256 $(if ($control) { $control.manifest_sha256 } else { $null }) `
+            -ControlBinarySha256 $(if ($control) { $control.binary_sha256 } else { $null }) `
             -RunnerMachineName $runnerMachineName `
             -RunnerOsBootTimeUtc $runnerOsBootTimeUtc `
             -ProfileVersion $playbackCoreProfile.Version

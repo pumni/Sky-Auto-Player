@@ -1842,6 +1842,15 @@ foreach ($pclV2Row in $pclV2Rows) {
     if ($pclV2Row.role -eq 'control') {
         $pclV2Row.source_revision = $pclV2Profile.BaselineRevision
         $pclV2Row.source_tree_sha = $pclV2Profile.BaselineTree
+        if ($pclV2Row.sample_seconds -eq 15) {
+            $armedTicks = 1000 + ([int]$pclV2Row.sequence_index * 100)
+            $pclV2Row.lifecycle_measurement = [pscustomobject]@{
+                schema_version = 2; qpc_clock_source = 'Windows QueryPerformanceCounter'; qpc_frequency_hz = 10000000
+                native_session_identity = [pscustomobject]@{ run_id = $pclV2Row.run_id; scenario = $pclV2Row.scenario }
+                playback_admission_event = 'system_power_ready_to_armed_publication'
+                playback_armed_qpc_ticks = $armedTicks; worker_joined_qpc_ticks = $armedTicks + 40
+            }
+        }
     }
     if ($pclV2Row.sample_seconds -eq 15) {
         $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_prefix_sha256 -NotePropertyValue ('e' * 64) -Force
@@ -1854,6 +1863,14 @@ foreach ($pclV2Row in $pclV2Rows) {
         $pclV2Row | Add-Member -NotePropertyName authored_workload_tail_event_count -NotePropertyValue 58 -Force
         $pclV2Row | Add-Member -NotePropertyName authored_workload_tail_group_count -NotePropertyValue 27 -Force
     }
+}
+function New-PclV2TestReport {
+    param([Parameter(Mandatory)] [object[]]$Rows)
+    New-PlaybackCoreLifecycleMeasurementReport -RunRows $Rows `
+        -CandidateRevision $pclRevision -CandidateTree $pclTree `
+        -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash `
+        -ControlManifestSha256 $pclBaselineManifestHash -ControlBinarySha256 $pclBaselineBinaryHash `
+        -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc -ProfileVersion 2
 }
 $pclSingleCellRows = @($pclRows | Where-Object { $_.cell_id -eq 'mixed-up-down/Quiet' -or $_.sequence_index -eq 0 })
 $pclSingleCellRoleOrder = @($pclSingleCellRows | Where-Object { $_.sample_seconds -eq 15 } | ForEach-Object { $_.role }) -join ','
@@ -1898,11 +1915,25 @@ if ($pclReport.status -ne 'INCOMPLETE' -or
     $pclReport.Contains('authored_prefix_parity_contract')) {
     throw 'PlaybackCoreLifecycle full six-pair role-order fixture did not preserve incomplete baseline coverage and real candidate Armed evidence'
 }
-$pclV2Report = New-PlaybackCoreLifecycleMeasurementReport -RunRows $pclV2Rows -CandidateRevision $pclRevision -CandidateTree $pclTree -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc -ProfileVersion 2
+$pclV2Report = New-PclV2TestReport -Rows $pclV2Rows
 if ($pclV2Report.qualification_profile -ne 'PlaybackCoreLifecycleV2' -or
     $pclV2Report.workload_version -ne 'playback-core-lifecycle-v2' -or
-    $pclV2Report.authored_prefix_parity_contract -ne 'timestamp-kind-scan-mask-v1') {
-    throw 'PlaybackCoreLifecycleV2 collector did not retain profile identity and authored-stream parity evidence'
+    $pclV2Report.authored_prefix_parity_contract -ne 'timestamp-kind-scan-mask-v1' -or
+    $pclV2Report.status -ne 'COMPLETE' -or
+    $pclV2Report.worker_joined_to_next_start_us.status -ne 'COMPLETE' -or
+    $pclV2Report.worker_joined_to_next_start_us.statistics.sample_count -ne 60 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.planned_transition_count -ne 60 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.eligible_transition_count -ne 60 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.measured_transition_count -ne 60 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.unavailable_transition_count -ne 0 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 0 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.missing_planned_transition_count -ne 0 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.incomplete_transition_count -ne 0 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.by_transition[0].eligible_count -ne 30 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.by_transition[0].measured_count -ne 30 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.by_transition[1].eligible_count -ne 30 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.by_transition[1].measured_count -ne 30) {
+    throw 'PlaybackCoreLifecycleV2 did not measure all 60 candidate-to-candidate and candidate-to-baseline successor Armed transitions'
 }
 $pclSafetyScenarios = @('focus-loss', 'owner-mismatch', 'owner-process-termination', 'pause-resume', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry')
 $pclV2SafetyScenarios = $pclSafetyScenarios + @('short-up-gap-stress')
@@ -1925,6 +1956,91 @@ foreach ($controlRow in @($pclRows | Where-Object { $_.role -eq 'control' })) {
         throw 'realistic frozen-baseline fixture invented candidate lifecycle evidence on a control row'
     }
 }
+
+$pclV2BaselineSuccessor = @($pclV2Rows | Where-Object {
+    $_.role -eq 'control' -and $_.sample_seconds -eq 15 -and $_.pair_order -eq 'BA'
+})[0]
+$pclV2BaselinePredecessor = @($pclV2Rows | Where-Object {
+    $_.role -eq 'candidate' -and $_.sample_seconds -eq 15 -and $_.pair_id -eq $pclV2BaselineSuccessor.pair_id
+})[0]
+function Assert-PclV2TransitionIncomplete {
+    param([Parameter(Mandatory)] $Report, [Parameter(Mandatory)] [string]$Case)
+    if ($Report.status -ne 'INCOMPLETE' -or
+        $Report.worker_joined_to_next_start_us.status -ne 'INCOMPLETE' -or
+        [string]::IsNullOrWhiteSpace(($Report.incompleteness -join '; '))) {
+        throw ('PlaybackCoreLifecycleV2 ' + $Case + ' did not make both the transition metric and total report INCOMPLETE with a reason')
+    }
+}
+
+$pclV2MissingBaselineArmedRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2MissingBaselineArmed = @($pclV2MissingBaselineArmedRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+[void]$pclV2MissingBaselineArmed.lifecycle_measurement.PSObject.Properties.Remove('playback_armed_qpc_ticks')
+$pclV2MissingBaselineArmedReport = New-PclV2TestReport -Rows $pclV2MissingBaselineArmedRows
+Assert-PclV2TransitionIncomplete -Report $pclV2MissingBaselineArmedReport -Case 'missing baseline Armed QPC'
+if ($pclV2MissingBaselineArmedReport.worker_joined_to_next_start_us.statistics.sample_count -ne 59 -or
+    $pclV2MissingBaselineArmedReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 1 -or
+    $pclV2MissingBaselineArmedReport.worker_joined_to_next_start_us.coverage.incomplete_transition_count -ne 1) {
+    throw 'PlaybackCoreLifecycleV2 missing baseline Armed fixture did not invalidate exactly one required sample'
+}
+
+$pclV2BaselineClockRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2BaselineClock = @($pclV2BaselineClockRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+$pclV2BaselineClock.lifecycle_measurement.qpc_frequency_hz = 9999999
+$pclV2BaselineClockReport = New-PclV2TestReport -Rows $pclV2BaselineClockRows
+Assert-PclV2TransitionIncomplete -Report $pclV2BaselineClockReport -Case 'baseline QPC frequency mismatch'
+
+$pclV2MalformedQpcRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2MalformedQpc = @($pclV2MalformedQpcRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+$pclV2MalformedQpc.lifecycle_measurement.qpc_frequency_hz = 'not-a-frequency'
+$pclV2MalformedQpcReport = New-PclV2TestReport -Rows $pclV2MalformedQpcRows
+Assert-PclV2TransitionIncomplete -Report $pclV2MalformedQpcReport -Case 'malformed baseline QPC frequency'
+
+$pclV2ClockSourceRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2ClockSource = @($pclV2ClockSourceRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+$pclV2ClockSource.lifecycle_measurement.qpc_clock_source = 'different-clock'
+$pclV2ClockSourceReport = New-PclV2TestReport -Rows $pclV2ClockSourceRows
+Assert-PclV2TransitionIncomplete -Report $pclV2ClockSourceReport -Case 'baseline QPC clock source mismatch'
+
+$pclV2MalformedJoinRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2MalformedJoin = @($pclV2MalformedJoinRows | Where-Object { $_.run_id -eq $pclV2BaselinePredecessor.run_id })[0]
+$pclV2MalformedJoin.lifecycle_measurement.worker_joined_qpc_ticks = 'not-a-timestamp'
+$pclV2MalformedJoinReport = New-PclV2TestReport -Rows $pclV2MalformedJoinRows
+Assert-PclV2TransitionIncomplete -Report $pclV2MalformedJoinReport -Case 'malformed candidate worker-join QPC'
+
+foreach ($rowIdentityMutation in @('machine_name', 'os_boot_time_utc')) {
+    $pclV2WrongRunnerRows = @(Copy-PclTestRows $pclV2Rows)
+    $pclV2WrongRunnerRow = @($pclV2WrongRunnerRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+    if ($rowIdentityMutation -eq 'machine_name') { $pclV2WrongRunnerRow.machine_name = 'different-machine' }
+    else { $pclV2WrongRunnerRow.os_boot_time_utc = '2026-11-18T00:00:00.0000000Z' }
+    $pclV2WrongRunnerReport = New-PclV2TestReport -Rows $pclV2WrongRunnerRows
+    Assert-PclV2TransitionIncomplete -Report $pclV2WrongRunnerReport -Case ('baseline ' + $rowIdentityMutation + ' mismatch')
+}
+
+foreach ($identityMutation in @('source_revision', 'source_tree_sha', 'manifest_sha256', 'harness_sha256')) {
+    $pclV2BadIdentityRows = @(Copy-PclTestRows $pclV2Rows)
+    $pclV2BadIdentity = @($pclV2BadIdentityRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+    if ($identityMutation -eq 'source_revision') { $pclV2BadIdentity.source_revision = 'f' * 40 }
+    elseif ($identityMutation -eq 'source_tree_sha') { $pclV2BadIdentity.source_tree_sha = 'e' * 40 }
+    elseif ($identityMutation -eq 'manifest_sha256') { $pclV2BadIdentity.manifest_sha256 = 'e' * 64 }
+    else { $pclV2BadIdentity.harness_sha256 = 'e' * 64 }
+    $pclV2BadIdentityReport = New-PclV2TestReport -Rows $pclV2BadIdentityRows
+    Assert-PclV2TransitionIncomplete -Report $pclV2BadIdentityReport -Case ('baseline ' + $identityMutation + ' mismatch')
+}
+
+$pclV2BaselineChronologyRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2BaselineChronology = @($pclV2BaselineChronologyRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+$pclV2BaselineChronology.lifecycle_measurement.playback_armed_qpc_ticks = $pclV2BaselinePredecessor.lifecycle_measurement.worker_joined_qpc_ticks - 1
+$pclV2BaselineChronologyReport = New-PclV2TestReport -Rows $pclV2BaselineChronologyRows
+Assert-PclV2TransitionIncomplete -Report $pclV2BaselineChronologyReport -Case 'Armed-before-Join chronology'
+
+$pclV2InvalidSuccessorRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2CandidateSuccessor = @($pclV2InvalidSuccessorRows | Where-Object {
+    $_.role -eq 'candidate' -and $_.sample_seconds -eq 15 -and $_.pair_order -eq 'BA'
+})[0]
+$pclV2CandidateSuccessor.status = 'FAIL'
+$pclV2CandidateSuccessor.case_exit_code = 1
+$pclV2InvalidSuccessorReport = New-PclV2TestReport -Rows $pclV2InvalidSuccessorRows
+Assert-PclV2TransitionIncomplete -Report $pclV2InvalidSuccessorReport -Case 'failed candidate successor'
 
 foreach ($drainCompletionTicks in @(211, 10000, 900000000)) {
     $pclDelayedDrainRows = @(Copy-PclTestRows $pclRows)
@@ -2099,5 +2215,5 @@ if ($pclIncompleteReport.status -ne 'INCOMPLETE' -or $pclIncompleteReport.stop_t
 }
 
 Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 schema-v2 provenance inventory, mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
-Write-Output ('PASS: PlaybackCoreLifecycle frozen-baseline schema and six-pair AB/BA contracts; per cell 3 candidate→candidate measurable / 3 candidate→baseline unavailable; full plan planned=60 eligible=30 measured=30 unavailable=30 incomplete=30; Stop→release and raw syscall evidence contracts pass')
+Write-Output ('PASS: PlaybackCoreLifecycle v1 frozen-baseline semantics remain planned=60 eligible=30 measured=30 unavailable=30 incomplete=30; v2 positive coverage=60/60 COMPLETE (30 candidate→candidate, 30 candidate→baseline); missing/malformed Armed, Join, QPC, source/tree/manifest/binary, machine/boot, chronology, and invalid-successor fixtures set both metric and report INCOMPLETE; Stop→release and raw syscall evidence contracts pass')
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'
