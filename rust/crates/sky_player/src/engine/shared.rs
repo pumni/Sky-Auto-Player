@@ -158,8 +158,6 @@ pub(super) struct SessionCommands {
     pub(super) command_timing: CommandTimingState,
 }
 
-#[allow(dead_code)]
-pub(crate) const SUPERVISOR_EXPIRY_REASON_NONE: u8 = 0;
 pub(crate) const SUPERVISOR_EXPIRY_REASON_LEASE_EXPIRED: u8 = 1;
 pub(crate) const SUPERVISOR_EXPIRY_REASON_UNWIND_OR_EXIT: u8 = 2;
 

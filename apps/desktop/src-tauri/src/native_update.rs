@@ -218,15 +218,6 @@ impl<R: Runtime> UpdateService<R> {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn reset(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            let revision = state.revision;
-            *state = NativeUpdateState::default();
-            state.revision = revision;
-        }
-    }
-
     pub(crate) fn reset_and_publish_idle(
         &self,
         channel: UpdateChannel,

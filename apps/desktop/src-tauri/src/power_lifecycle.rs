@@ -1,9 +1,9 @@
 use sky_dispatch_win32::clock::QpcClock;
 use sky_player::engine::SystemPowerEndpoint;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 #[cfg(not(test))]
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
 
 pub(crate) type SuspendResumeCallback =
