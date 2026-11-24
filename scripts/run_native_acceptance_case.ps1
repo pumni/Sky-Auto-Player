@@ -19,6 +19,7 @@ param(
     [string]$HarnessManifestPath,
     [string]$OutputRoot,
     [switch]$OwnerApprovedReceiveOnlyRun,
+    [switch]$PreflightOnly,
     [ValidateRange(15, 15)]
     [int]$SampleSeconds,
     [ValidateSet(60, 120)]
@@ -41,10 +42,23 @@ Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Fo
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
 $isSessionRedesignProfile = $QualificationProfile -eq 'DispatchSessionRedesignM3'
 $isPlaybackCoreLifecycle = $QualificationProfile -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')
+if ($PreflightOnly -and -not $isPlaybackCoreLifecycle) {
+    throw '-PreflightOnly is restricted to PlaybackCoreLifecycle profiles'
+}
+if ($PreflightOnly -and $OwnerApprovedReceiveOnlyRun) {
+    throw '-PreflightOnly cannot be combined with -OwnerApprovedReceiveOnlyRun'
+}
 $usesSessionQualificationContracts = $isDispatchCleanupM3 -or $isSessionRedesignProfile -or $isPlaybackCoreLifecycle
 $dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
 $sessionRedesignProfile = if ($isSessionRedesignProfile) { Get-DispatchSessionRedesignM3Profile } else { $null }
 $playbackCoreProfile = if ($isPlaybackCoreLifecycle) { Get-PlaybackCoreLifecycleProfileForName -Name $QualificationProfile } else { $null }
+$expectedHarnessManifestSchemaVersion = if ($isPlaybackCoreLifecycle) {
+    $playbackCoreProfile.HarnessManifestSchemaVersion
+} elseif ($isSessionRedesignProfile) {
+    $sessionRedesignProfile.HarnessManifestSchemaVersion
+} else {
+    1
+}
 $sessionTimingFloors = if ($isDispatchCleanupM3) {
     Get-DispatchCleanupM3TimingFloors -Scenario $Scenario -GameFps $GameFps -TimingMarginUs $TimingMarginUs
 } elseif ($isSessionRedesignProfile) {
@@ -82,7 +96,6 @@ $evidenceRoot = if ($OutputRoot) {
     Join-Path $root '.benchmarks\physical-native-cases'
 }
 $runDir = Join-Path $evidenceRoot $runId
-New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 $readyPath = Join-Path $runDir 'sink-ready.json'
 $eventsPath = Join-Path $runDir 'sink-events.jsonl'
 $sinkObserverSummaryPath = Join-Path $runDir 'sink-observer-summary.json'
@@ -370,10 +383,10 @@ function Assert-PathOutsideRepository {
 }
 
 try {
-    if ($isPlaybackCoreLifecycle -and -not $OwnerApprovedReceiveOnlyRun) {
+    if ($isPlaybackCoreLifecycle -and -not $OwnerApprovedReceiveOnlyRun -and -not $PreflightOnly) {
         throw 'PlaybackCoreLifecycle native case requires -OwnerApprovedReceiveOnlyRun after explicit owner approval of this Windows machine and project-owned receiver'
     }
-    if (-not [Environment]::UserInteractive) {
+    if (-not $PreflightOnly -and -not [Environment]::UserInteractive) {
         throw 'Windows is not interactive; refusing physical acceptance'
     }
     if ([bool]$HarnessPath -ne [bool]$HarnessManifestPath) {
@@ -529,6 +542,12 @@ try {
         if ($harnessManifest.guard_mode -eq 'adaptive') {
             throw 'adaptive guard mode is retired (#646); only frozen manifests are accepted for qualification'
         }
+        if ($harnessManifest.schema_version -ne $expectedHarnessManifestSchemaVersion) {
+            throw ($QualificationProfile + ' case runner requires harness manifest schema ' + $expectedHarnessManifestSchemaVersion + ', got ' + $harnessManifest.schema_version)
+        }
+        if ($harnessManifest.qualification_profile -ne $QualificationProfile) {
+            throw ($QualificationProfile + ' case runner cannot consume a ' + $harnessManifest.qualification_profile + ' harness manifest')
+        }
         $expectedSourceBranch = if (($qualifiedProfile -and $harnessManifest.source_role -eq 'Baseline') -or ($usesSessionQualificationContracts -and -not $isPlaybackCoreLifecycle)) { '' } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.CandidateLineageBranch } else { 'perf/dispatch-core-20261109' }
         $expectedWorkloadVersion = if ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.WorkloadVersion } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
         $sourceIdentityAllowed = if ($isDispatchCleanupM3) {
@@ -538,8 +557,7 @@ try {
         } else {
             $HistoricalSourceAllowed -or $sourceRevisionMatches
         }
-        if ($harnessManifest.schema_version -ne 1 -or
-            -not $sourceIdentityAllowed -or
+        if (-not $sourceIdentityAllowed -or
             $harnessManifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
             $harnessManifest.source_tree_sha -notmatch '^[0-9a-f]{40}$' -or
             $harnessManifest.source_branch -ne $expectedSourceBranch -or
@@ -576,6 +594,18 @@ try {
                 -ProfileVersion $playbackCoreProfile.Version | Out-Null
         }
     }
+    if ($PreflightOnly) {
+        if (Test-Path -LiteralPath $evidenceRoot) {
+            throw '-PreflightOnly requires a nonexistent output root so it cannot create or alter case evidence'
+        }
+        Write-Output ('CASE_PREFLIGHT_ONLY PASS profile=' + $QualificationProfile + ' role=' + $harnessManifest.source_role +
+            ' schema=' + $harnessManifest.schema_version + ' scenario=' + $Scenario + ' workload=' + $Workload +
+            ' manifest_sha256=' + $harnessManifestHash + ' binary_sha256=' + $harnessManifest.binary_sha256 +
+            ' receiver_started=false harness_started=false output_created=false')
+        $resultCode = 0
+        return
+    }
+    New-Item -ItemType Directory -Force -Path $runDir | Out-Null
     $sessionId = (Get-Process -Id $PID).SessionId
     $sinkArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'ReceiveOnly', '-RunId', $runId, '-ReadyFile', $readyPath, '-EventLog', $eventsPath, '-ActivateRequestFile', $focusRestoreRequestPath)
     if ($receiveOnlyObserverVersion) {
@@ -987,20 +1017,26 @@ try {
         $resultCode = 0
     }
 } catch {
-    $failure = [ordered]@{
-        run_id = $runId
-        scenario = $Scenario
-        timing_margin_us = $TimingMarginUs
-        game_fps = $GameFps
-        sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
-        hol_stall_us = $HolStallUs
-        hol_cycles = $HolCycles
-        source_revision = if ($head) { $head } else { $null }
-        error = $_.Exception.Message
+    if ($PreflightOnly) {
+        Write-Output ('CASE_PREFLIGHT_ONLY REJECTED profile=' + $QualificationProfile + ' scenario=' + $Scenario +
+            ' workload=' + $Workload + ' error=' + $_.Exception.Message)
+    } else {
+        New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+        $failure = [ordered]@{
+            run_id = $runId
+            scenario = $Scenario
+            timing_margin_us = $TimingMarginUs
+            game_fps = $GameFps
+            sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
+            hol_stall_us = $HolStallUs
+            hol_cycles = $HolCycles
+            source_revision = if ($head) { $head } else { $null }
+            error = $_.Exception.Message
+        }
+        $failure | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runDir 'runner-failure.json') -Encoding UTF8
+        Write-Output ('RUNNER FAILURE: ' + $_.Exception.Message)
+        Write-Output ('EVIDENCE ' + $runDir)
     }
-    $failure | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runDir 'runner-failure.json') -Encoding UTF8
-    Write-Output ('RUNNER FAILURE: ' + $_.Exception.Message)
-    Write-Output ('EVIDENCE ' + $runDir)
     $resultCode = 2
 } finally {
     foreach ($process in $contentionProcesses) {
@@ -1027,6 +1063,8 @@ try {
         }
     }
 }
+
+if ($PreflightOnly) { exit $resultCode }
 
 $checksumLines = @(Get-ChildItem -LiteralPath $runDir -File | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object {
     $hash = Get-Sha256 $_.FullName

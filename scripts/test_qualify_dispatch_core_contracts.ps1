@@ -1756,6 +1756,22 @@ $playbackCoreCollectorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot
 $playbackCoreCaseRunnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
 $playbackCoreNativeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\bin\rt_native_acceptance.rs') -Raw
 $playbackCoreRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$caseRunnerPreflightIndex = $playbackCoreCaseRunnerSource.IndexOf("Write-Output ('CASE_PREFLIGHT_ONLY PASS", [System.StringComparison]::Ordinal)
+$caseRunnerSinkStartIndex = $playbackCoreCaseRunnerSource.IndexOf('$sinkProcess = Start-Process', [System.StringComparison]::Ordinal)
+$caseRunnerHarnessStartIndex = $playbackCoreCaseRunnerSource.IndexOf('@(& $harness @harnessArgs', [System.StringComparison]::Ordinal)
+$caseRunnerOutputCreateIndex = $playbackCoreCaseRunnerSource.IndexOf('New-Item -ItemType Directory -Force -Path $runDir', [System.StringComparison]::Ordinal)
+if (-not $playbackCoreCaseRunnerSource.Contains('[switch]$PreflightOnly') -or
+    -not $playbackCoreCaseRunnerSource.Contains('$expectedHarnessManifestSchemaVersion = if ($isPlaybackCoreLifecycle)') -or
+    -not $playbackCoreCaseRunnerSource.Contains('$playbackCoreProfile.HarnessManifestSchemaVersion') -or
+    -not $playbackCoreCaseRunnerSource.Contains('$sessionRedesignProfile.HarnessManifestSchemaVersion') -or
+    $playbackCoreCaseRunnerSource.Contains('$harnessManifest.schema_version -ne 1') -or
+    -not $playbackCoreCaseRunnerSource.Contains('$harnessManifest.qualification_profile -ne $QualificationProfile') -or
+    -not $playbackCoreCaseRunnerSource.Contains('if ($PreflightOnly -and $OwnerApprovedReceiveOnlyRun)') -or
+    -not $playbackCoreCaseRunnerSource.Contains('if ($isPlaybackCoreLifecycle -and -not $OwnerApprovedReceiveOnlyRun -and -not $PreflightOnly)') -or
+    $caseRunnerPreflightIndex -lt 0 -or $caseRunnerSinkStartIndex -lt $caseRunnerPreflightIndex -or
+    $caseRunnerHarnessStartIndex -lt $caseRunnerPreflightIndex -or $caseRunnerOutputCreateIndex -lt $caseRunnerPreflightIndex) {
+    throw 'case-runner must use requested-profile manifest schemas and provide a no-write pre-receiver boundary that preserves the production owner gate'
+}
 $v3PreflightIndex = $playbackCoreRunnerSource.IndexOf('Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $root', [System.StringComparison]::Ordinal)
 $v3FinalStageGateIndex = $playbackCoreRunnerSource.IndexOf("if (`$Stage -in @('Compare', 'Final') -and -not `$ControlManifest)", [System.StringComparison]::Ordinal)
 $v3SharedMarginIndex = if ($v3FinalStageGateIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('Assert-QualificationTimingMargin', $v3FinalStageGateIndex, [System.StringComparison]::Ordinal) } else { -1 }
@@ -2124,6 +2140,123 @@ try {
     $pclV3ValidCandidate = New-PclV3ManifestFixture -Role Candidate
     Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3ValidBaseline -ExpectedRole Baseline -RepositoryRoot $playbackCoreRepoRoot | Out-Null
     Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3ValidCandidate -ExpectedRole Candidate -RepositoryRoot $playbackCoreRepoRoot | Out-Null
+
+    function Write-PclV3CaseArtifactManifest {
+        param([Parameter(Mandatory)] [string]$ArtifactRoot, [Parameter(Mandatory)] $Manifest)
+        $manifestPath = Join-Path $ArtifactRoot 'manifest.json'
+        $manifestJson = $Manifest | ConvertTo-Json -Depth 20
+        [System.IO.File]::WriteAllText($manifestPath, $manifestJson + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+        $artifactNames = @('manifest.json', 'rt-native-acceptance.exe', 'build_dispatch_core_harness.ps1', 'build.log', 'clean.log') +
+            @($Manifest.runner_script_provenance | ForEach-Object { [string]$_.evidence_path })
+        $checksumLines = foreach ($name in $artifactNames) {
+            $path = Join-Path $ArtifactRoot ($name.Replace('/', '\'))
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            $hash + '  ' + $name.Replace('\', '/')
+        }
+        [System.IO.File]::WriteAllText((Join-Path $ArtifactRoot 'SHA256SUMS.txt'), ($checksumLines -join [Environment]::NewLine) + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+        [pscustomobject]@{ Root = $ArtifactRoot; ManifestPath = $manifestPath; Manifest = $Manifest }
+    }
+    function New-PclV3CaseArtifact {
+        param([Parameter(Mandatory)] $Template, [Parameter(Mandatory)] [string]$Name)
+        $artifactRoot = Join-Path $pclV3TempRoot ($Name + '-case-artifact')
+        New-Item -ItemType Directory -Path $artifactRoot | Out-Null
+        $binaryPath = Join-Path $artifactRoot 'rt-native-acceptance.exe'
+        [System.IO.File]::WriteAllBytes($binaryPath, [System.Text.Encoding]::ASCII.GetBytes('no-send-only harness fixture'))
+        Copy-Item -LiteralPath $pclV3BuilderPath -Destination (Join-Path $artifactRoot 'build_dispatch_core_harness.ps1')
+        [System.IO.File]::WriteAllText((Join-Path $artifactRoot 'build.log'), 'fixture build log' + [Environment]::NewLine)
+        [System.IO.File]::WriteAllText((Join-Path $artifactRoot 'clean.log'), 'fixture clean log' + [Environment]::NewLine)
+        $manifest = $Template | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $manifest.output_root = $artifactRoot
+        $manifest.cargo_target_dir = Join-Path $artifactRoot 'cargo-target'
+        $manifest.binary_name = 'rt-native-acceptance.exe'
+        $manifest | Add-Member -NotePropertyName binary_path -NotePropertyValue $binaryPath -Force
+        $manifest.binary_sha256 = (Get-FileHash -LiteralPath $binaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        foreach ($entry in $manifest.runner_script_provenance) {
+            $sourcePath = Join-Path $playbackCoreRepoRoot ([string]$entry.source_path).Replace('/', '\')
+            $evidencePath = Join-Path $artifactRoot ([string]$entry.evidence_path).Replace('/', '\')
+            $evidenceDirectory = Split-Path -Parent $evidencePath
+            New-Item -ItemType Directory -Force -Path $evidenceDirectory | Out-Null
+            Copy-Item -LiteralPath $sourcePath -Destination $evidencePath
+        }
+        Write-PclV3CaseArtifactManifest -ArtifactRoot $artifactRoot -Manifest $manifest
+    }
+    function Copy-PclV3CaseArtifactMutation {
+        param([Parameter(Mandatory)] $Artifact, [Parameter(Mandatory)] [string]$Name, [Parameter(Mandatory)] [scriptblock]$Mutation)
+        $artifactRoot = Join-Path $pclV3TempRoot ($Name + '-mutated-artifact')
+        New-Item -ItemType Directory -Path $artifactRoot | Out-Null
+        Get-ChildItem -LiteralPath $Artifact.Root -Force | Copy-Item -Destination $artifactRoot -Recurse -Force
+        $manifest = Get-Content -LiteralPath (Join-Path $artifactRoot 'manifest.json') -Raw | ConvertFrom-Json
+        $manifest.output_root = $artifactRoot
+        $manifest.cargo_target_dir = Join-Path $artifactRoot 'cargo-target'
+        $manifest.binary_path = Join-Path $artifactRoot 'rt-native-acceptance.exe'
+        & $Mutation $manifest
+        Write-PclV3CaseArtifactManifest -ArtifactRoot $artifactRoot -Manifest $manifest
+    }
+    function Invoke-PclV3CaseEntryPreflight {
+        param(
+            [Parameter(Mandatory)] $Artifact,
+            [Parameter(Mandatory)] [string]$Name,
+            [Parameter(Mandatory)] [string]$Scenario,
+            [Parameter(Mandatory)] [string]$Workload,
+            [int]$SampleSeconds = 0,
+            [bool]$Historical = $false,
+            [bool]$OwnerApproved = $false
+        )
+        $caseOutputRoot = Join-Path $pclV3TempRoot ($Name + '-case-output')
+        if (Test-Path -LiteralPath $caseOutputRoot) { throw ('case preflight output root unexpectedly exists: ' + $caseOutputRoot) }
+        $arguments = @(
+            '-NoProfile', '-File', (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'),
+            '-QualificationProfile', 'PlaybackCoreLifecycleV3',
+            '-Scenario', $Scenario, '-Workload', $Workload,
+            '-TimingMarginUs', '500', '-CalibrationPlacement', 'Baseline',
+            '-TimingObserverForQualification',
+            '-HarnessPath', $Artifact.Manifest.binary_path,
+            '-HarnessManifestPath', $Artifact.ManifestPath,
+            '-OutputRoot', $caseOutputRoot, '-GameFps', '60', '-PreflightOnly'
+        )
+        if ($SampleSeconds -gt 0) { $arguments += @('-SampleSeconds', [string]$SampleSeconds) }
+        if ($Historical) { $arguments += '-HistoricalSourceAllowed' }
+        if ($OwnerApproved) { $arguments += '-OwnerApprovedReceiveOnlyRun' }
+        $output = @(& (Get-Command pwsh.exe).Source @arguments 2>&1 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        $exitCode = $LASTEXITCODE
+        [pscustomobject]@{ ExitCode = $exitCode; Output = $output; OutputRoot = $caseOutputRoot }
+    }
+    $pclV3BaselineCaseArtifact = New-PclV3CaseArtifact -Template $pclV3ValidBaseline -Name 'baseline'
+    $pclV3CandidateCaseArtifact = New-PclV3CaseArtifact -Template $pclV3ValidCandidate -Name 'candidate'
+    foreach ($case in @(
+            [pscustomobject]@{ name = 'baseline-performance'; artifact = $pclV3BaselineCaseArtifact; role = 'Baseline'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; sample = 15; historical = $true },
+            [pscustomobject]@{ name = 'candidate-performance'; artifact = $pclV3CandidateCaseArtifact; role = 'Candidate'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; sample = 15; historical = $false },
+            [pscustomobject]@{ name = 'candidate-safety'; artifact = $pclV3CandidateCaseArtifact; role = 'Candidate'; scenario = 'owner-process-termination'; workload = 'safety-smoke'; sample = 0; historical = $false }
+        )) {
+        $result = Invoke-PclV3CaseEntryPreflight -Artifact $case.artifact -Name $case.name -Scenario $case.scenario `
+            -Workload $case.workload -SampleSeconds $case.sample -Historical $case.historical
+        if ($result.ExitCode -ne 0 -or $result.Output -notmatch ('CASE_PREFLIGHT_ONLY PASS profile=PlaybackCoreLifecycleV3 role=' + $case.role + ' schema=3') -or
+            $result.Output -notmatch 'receiver_started=false harness_started=false output_created=false' -or
+            (Test-Path -LiteralPath $result.OutputRoot)) {
+            throw ('PlaybackCoreLifecycleV3 direct case-runner no-send preflight failed for ' + $case.name + ': ' + $result.Output)
+        }
+    }
+    foreach ($mutation in @(
+            [pscustomobject]@{ name = 'wrong-schema'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.schema_version = 2 } },
+            [pscustomobject]@{ name = 'wrong-profile'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.qualification_profile = 'PlaybackCoreLifecycleV2'; $m.schema_version = 2 } },
+            [pscustomobject]@{ name = 'wrong-binary-hash'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.binary_sha256 = '0' * 64 } },
+            [pscustomobject]@{ name = 'wrong-role'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.source_role = 'Baseline' } }
+        )) {
+        $mutatedArtifact = Copy-PclV3CaseArtifactMutation -Artifact $mutation.artifact -Name $mutation.name -Mutation $mutation.apply
+        $result = Invoke-PclV3CaseEntryPreflight -Artifact $mutatedArtifact -Name ($mutation.name + '-reject') `
+            -Scenario 'mixed-up-down' -Workload 'mixed-up-down' -SampleSeconds 15
+        if ($result.ExitCode -eq 0 -or $result.Output -notmatch 'CASE_PREFLIGHT_ONLY REJECTED' -or
+            (Test-Path -LiteralPath $result.OutputRoot)) {
+            throw ('PlaybackCoreLifecycleV3 case-runner preflight did not reject ' + $mutation.name + ' without creating output: ' + $result.Output)
+        }
+    }
+    $ownerSwitchRejected = Invoke-PclV3CaseEntryPreflight -Artifact $pclV3BaselineCaseArtifact -Name 'owner-switch-reject' `
+        -Scenario 'mixed-up-down' -Workload 'mixed-up-down' -SampleSeconds 15 -Historical $true -OwnerApproved $true
+    if ($ownerSwitchRejected.ExitCode -eq 0 -or
+        $ownerSwitchRejected.Output -notmatch '-PreflightOnly cannot be combined with -OwnerApprovedReceiveOnlyRun' -or
+        (Test-Path -LiteralPath $ownerSwitchRejected.OutputRoot)) {
+        throw 'PlaybackCoreLifecycleV3 no-send preflight accepted owner approval or created output'
+    }
 
     foreach ($mutation in @(
             [pscustomobject]@{ name = 'baseline SHA'; role = 'Baseline'; apply = { param($m) $m.source_revision = '0' * 40 } },
