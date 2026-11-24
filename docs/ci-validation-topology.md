@@ -164,13 +164,10 @@ advisory impact hint, not a replacement for the canonical merge gate or a
 behavioral risk assessment.
 
 `cargo xtask check <group> --json-summary` emits an `[xtask-summary]` JSON record
-with observed leaf and group outcomes, failures, not-run steps, explicit supply-chain/browser
-skips and catalog reuse. Group success does not imply unexecuted children ran;
+with monotonic `duration_ms`, observed leaf and group outcomes, bounded failure reasons, not-run steps, explicit supply-chain/browser
+skips and catalog reuse. The summary reports start and finish source identity (`head`, `status`, and `dirty` flag); dirty inputs are explicitly identified as unqualified rather than asserting clean HEAD evidence. Group success does not imply unexecuted children ran;
 ordinary failures still emit the summary while preserving non-zero exit semantics.
 Preserve the raw command log, exit code, and source identity separately. This summary is not merge authorization.
-
-`cargo xtask preflight` provides an on-demand, read-only inspection of the local toolchain
-and environment capabilities (OS, Rust, Bun, Node, Git, IPv4 loopback socket) without installing anything implicitly.
 
 ## Local command roots
 

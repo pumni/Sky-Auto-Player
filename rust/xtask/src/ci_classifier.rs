@@ -907,11 +907,17 @@ fn classify_git_range(root: &Path, mode: DiffMode, base: &str, head: &str) -> Cl
 fn classify_working_tree(root: &Path, base: Option<&str>) -> Result<Classification> {
     let mut paths = Vec::new();
     if let Some(base_ref) = base {
+        if base_ref.starts_with('-') || base_ref.trim().is_empty() {
+            return Ok(Classification::full(format!(
+                "invalid option-looking or empty base ref: {base_ref} (fail-closed)"
+            )));
+        }
         let valid = git_output(
             root,
             &[
                 "rev-parse",
                 "--verify",
+                "--end-of-options",
                 format!("{base_ref}^{{commit}}").as_str(),
             ],
         )?;
@@ -920,7 +926,11 @@ fn classify_working_tree(root: &Path, base: Option<&str>) -> Result<Classificati
                 "invalid or missing base ref: {base_ref} (fail-closed)"
             )));
         }
-        let mb = git_output(root, &["merge-base", base_ref, "HEAD"])?;
+        let base_commit = String::from_utf8_lossy(&valid.stdout).trim().to_owned();
+        if base_commit.is_empty() {
+            return Ok(Classification::full("empty base commit SHA (fail-closed)"));
+        }
+        let mb = git_output(root, &["merge-base", "--", base_commit.as_str(), "HEAD"])?;
         if !mb.status.success() {
             return Ok(Classification::full(format!(
                 "could not resolve merge-base for {base_ref} and HEAD (fail-closed)"
@@ -930,15 +940,26 @@ fn classify_working_tree(root: &Path, base: Option<&str>) -> Result<Classificati
         if merge_base.is_empty() {
             return Ok(Classification::full("empty merge-base (fail-closed)"));
         }
+        let range = format!("{merge_base}..HEAD");
         for args in [
             &[
                 "diff",
                 "--name-only",
                 "--no-renames",
                 "-z",
-                merge_base.as_str(),
+                range.as_str(),
                 "--",
             ][..],
+            &[
+                "diff",
+                "--cached",
+                "--name-only",
+                "--no-renames",
+                "-z",
+                "HEAD",
+                "--",
+            ][..],
+            &["diff", "--name-only", "--no-renames", "-z", "--"][..],
             &["ls-files", "--others", "--exclude-standard", "-z"][..],
         ] {
             let output = git_output(root, args)?;
@@ -981,10 +1002,21 @@ fn parse_arguments(args: &[String]) -> Result<Classification> {
             match args[index].as_str() {
                 "--working-tree" => {}
                 "--base" | "--base-sha" => {
+                    if base.is_some() {
+                        return Err("duplicate --base option specified".into());
+                    }
                     index += 1;
-                    base = Some(args.get(index).ok_or("missing value for --base")?.clone());
+                    let val = args.get(index).ok_or("missing value for --base")?;
+                    if val.starts_with("--") {
+                        return Err(format!("invalid value for --base: {val}").into());
+                    }
+                    base = Some(val.clone());
                 }
-                opt => return Err(format!("unknown option for --working-tree: {opt}").into()),
+                opt => {
+                    return Err(
+                        format!("option {opt} cannot be combined with --working-tree").into(),
+                    );
+                }
             }
             index += 1;
         }
@@ -1303,6 +1335,18 @@ mod tests {
         let with_base = classify_working_tree(&root, Some("v-base")).unwrap();
         assert!(with_base.lane("desktop_required"));
 
+        // Actual git mv rename
+        git(
+            &root,
+            &[
+                "mv",
+                "apps/desktop/src/App.tsx",
+                "apps/desktop/src/RenamedApp.tsx",
+            ],
+        );
+        let renamed = classify_working_tree(&root, Some("v-base")).unwrap();
+        assert!(renamed.lane("desktop_required"));
+
         // Invalid base fails closed to full lanes
         let invalid_base = classify_working_tree(&root, Some("invalid-ref-sky-9999")).unwrap();
         assert_lanes(&invalid_base, &LANES);
@@ -1312,7 +1356,69 @@ mod tests {
                 .contains("invalid or missing base ref")
         );
 
+        // Option-looking base fails closed
+        let option_base = classify_working_tree(&root, Some("--option-injection")).unwrap();
+        assert_lanes(&option_base, &LANES);
+        assert!(
+            option_base
+                .classification_reason
+                .contains("invalid option-looking")
+        );
+
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn working_tree_detects_staged_unstaged_cancellation() {
+        let root = temp_dir("working-tree-cancellation");
+        git(&root, &["init"]);
+        git(&root, &["config", "user.name", "Test"]);
+        git(&root, &["config", "user.email", "test@example.invalid"]);
+        fs::create_dir_all(root.join("apps/desktop/src")).unwrap();
+        let target = root.join("apps/desktop/src/App.tsx");
+        fs::write(&target, "committed-v1").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "initial"]);
+
+        // Step 1: stage an edit
+        fs::write(&target, "staged-modification").unwrap();
+        git(&root, &["add", "apps/desktop/src/App.tsx"]);
+
+        // Step 2: in unstaged working tree, revert content back to "committed-v1"
+        fs::write(&target, "committed-v1").unwrap();
+
+        // Net diff against HEAD in working tree would be empty if not taking union,
+        // but union of index/HEAD and worktree/index must still detect the change!
+        let classification = classify_working_tree(&root, None).unwrap();
+        assert!(
+            classification.lane("desktop_required"),
+            "staged change must be detected even if working tree unstaged copy was cancelled"
+        );
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn parse_arguments_rejects_duplicate_or_ambiguous_working_tree_flags() {
+        assert!(
+            parse_arguments(&[
+                "--working-tree".into(),
+                "--base".into(),
+                "main".into(),
+                "--base".into(),
+                "other".into()
+            ])
+            .is_err()
+        );
+        assert!(
+            parse_arguments(&[
+                "--working-tree".into(),
+                "--base".into(),
+                "--diff-mode".into()
+            ])
+            .is_err()
+        );
+        assert!(parse_arguments(&["--working-tree".into(), "--full".into()]).is_err());
     }
 
     #[test]

@@ -13,7 +13,6 @@ mod workflow;
 
 use crate::{Result, audits, branding, builtin_catalog, process, repo, supply_chain, tauri_bundle};
 use serde::Serialize;
-use std::net::TcpListener;
 use std::path::Path;
 
 pub(crate) use bindings::{bindings, bindings_generate};
@@ -186,6 +185,7 @@ impl CheckSession {
     }
 }
 
+#[cfg(test)]
 fn run_once_per_check_session(
     completed: &mut bool,
     check: impl FnOnce() -> Result<()>,
@@ -199,20 +199,24 @@ fn run_once_per_check_session(
 }
 
 fn verify_builtin_catalog(root: &Path, session: &mut CheckSession) -> Result<()> {
-    let ran = run_once_per_check_session(&mut session.builtin_catalog_verified, || {
-        builtin_catalog::run(root, "verify", &[])
-    })?;
-    if ran {
-        session.record_leaf("builtin-catalog", "passed", None);
-    } else {
+    if session.builtin_catalog_verified {
         session.record_leaf(
             "builtin-catalog",
             "reused",
-            Some("verified earlier in check session".to_owned()),
+            Some("reused-prior-step".to_owned()),
         );
         println!("Built-in catalog verification: PASS (reused in this check session)");
+        return Ok(());
     }
-    Ok(())
+    match record_step(session, "builtin-catalog", || {
+        builtin_catalog::run(root, "verify", &[])
+    }) {
+        Ok(()) => {
+            session.builtin_catalog_verified = true;
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn check_desktop_native(root: &Path) -> Result<()> {
@@ -266,13 +270,66 @@ fn check_desktop_native(root: &Path) -> Result<()> {
     bindings::bindings_with_env(&native_env)
 }
 
+#[derive(Debug, Clone)]
+struct SourceIdentityInfo {
+    head: String,
+    identity: String,
+    dirty: bool,
+}
+
+fn inspect_source_identity(root: &Path) -> SourceIdentityInfo {
+    let head = repo::git_head(root, false).unwrap_or_else(|_| "unavailable".to_owned());
+    let status_output = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(root)
+        .output();
+    let is_dirty = match status_output {
+        Ok(out) => !out.stdout.is_empty(),
+        Err(_) => true,
+    };
+    if is_dirty {
+        SourceIdentityInfo {
+            head,
+            identity: "unqualified-dirty-working-tree".to_owned(),
+            dirty: true,
+        }
+    } else {
+        SourceIdentityInfo {
+            head: head.clone(),
+            identity: head,
+            dirty: false,
+        }
+    }
+}
+
 pub fn run(group: &str, skip_supply_chain: bool, json_summary: bool) -> Result<()> {
+    let root = repo::root();
+    let start_source = inspect_source_identity(&root);
+    let start_instant = std::time::Instant::now();
+
     let mut session = CheckSession::default();
     let result = run_with_session(group, skip_supply_chain, &mut session);
+
+    let elapsed_ms = start_instant.elapsed().as_millis() as u64;
+    let end_source = inspect_source_identity(&root);
+
+    let (source_status, source_identity, is_dirty) =
+        if start_source.dirty || end_source.dirty || start_source.head != end_source.head {
+            let status = if !start_source.dirty && end_source.dirty {
+                "modified-during-run"
+            } else {
+                "dirty"
+            };
+            (
+                status.to_owned(),
+                "unqualified-dirty-working-tree".to_owned(),
+                true,
+            )
+        } else {
+            ("clean".to_owned(), start_source.identity, false)
+        };
+
     if json_summary {
-        let root = repo::root();
-        let source_identity =
-            repo::git_head(&root, false).unwrap_or_else(|_| "unavailable".to_owned());
         let all_checks = session.all_leaf_checks();
         println!(
             "[xtask-summary] {}",
@@ -280,7 +337,13 @@ pub fn run(group: &str, skip_supply_chain: bool, json_summary: bool) -> Result<(
                 "schema_version": 1,
                 "group": group,
                 "status": if result.is_ok() { "passed" } else { "failed" },
+                "duration_ms": elapsed_ms,
                 "source_identity": source_identity,
+                "source": {
+                    "head": start_source.head,
+                    "status": source_status,
+                    "dirty": is_dirty
+                },
                 "groups": session.groups,
                 "checks": all_checks,
                 "unlisted_checks": "not-run or outside requested group",
@@ -308,7 +371,11 @@ fn record_step(
             if let Some(ptr) = contract_pointer(name) {
                 eprintln!("  contract pointer: {ptr}");
             }
-            session.record_leaf(name, "failed", Some(error_msg));
+            let reason_code = match contract_pointer(name) {
+                Some(ptr) => format!("check-failed: {ptr}"),
+                None => "check-failed".to_owned(),
+            };
+            session.record_leaf(name, "failed", Some(reason_code));
             Err(error)
         }
     }
@@ -373,6 +440,9 @@ fn run_with_session(
             let root = repo::root();
             let res = record_step(session, "desktop-native", || check_desktop_native(&root));
             session.finish_group(res.is_ok());
+            if res.is_ok() {
+                println!("[xtask] check desktop-native: PASS");
+            }
             res
         }
         "all" => {
@@ -393,7 +463,11 @@ fn run_with_session(
                 return Err(e);
             }
 
-            run_with_session("desktop", skip_supply_chain, session)
+            let desktop_res = run_with_session("desktop", skip_supply_chain, session);
+            if desktop_res.is_ok() {
+                println!("[xtask] check all: PASS");
+            }
+            desktop_res
         }
         other => Err(format!("unknown check group: {other}").into()),
     }
@@ -539,49 +613,6 @@ fn run_rust_group(session: &mut CheckSession) -> Result<()> {
     Ok(())
 }
 
-pub fn run_preflight() -> Result<()> {
-    println!("[xtask-preflight] inspecting local development environment read-only...");
-    println!(
-        "[xtask-preflight] OS / Arch: {} / {}",
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    );
-
-    let root = repo::root();
-    let rustc = process::capture_text("rustc", &["--version"], &root, &[])
-        .unwrap_or_else(|_| "unavailable".to_owned());
-    let cargo = process::capture_text("cargo", &["--version"], &root, &[])
-        .unwrap_or_else(|_| "unavailable".to_owned());
-    let bun = process::capture_text("bun", &["--version"], &root, &[])
-        .unwrap_or_else(|_| "unavailable".to_owned());
-    let node = process::capture_text("node", &["--version"], &root, &[])
-        .unwrap_or_else(|_| "unavailable".to_owned());
-    let git = process::capture_text("git", &["--version"], &root, &[])
-        .unwrap_or_else(|_| "unavailable".to_owned());
-
-    println!("[xtask-preflight] rustc: {rustc}");
-    println!("[xtask-preflight] cargo: {cargo}");
-    println!("[xtask-preflight] bun:   {bun}");
-    println!("[xtask-preflight] node:  {node}");
-    println!("[xtask-preflight] git:   {git}");
-
-    match TcpListener::bind("127.0.0.1:0") {
-        Ok(listener) => {
-            let port = listener
-                .local_addr()
-                .map(|addr| addr.port())
-                .unwrap_or_default();
-            println!("[xtask-preflight] IPv4 loopback socket: OK (bound port {port})");
-        }
-        Err(err) => {
-            return Err(format!("IPv4 loopback socket bind failed: {err}").into());
-        }
-    }
-
-    println!("[xtask-preflight] status: READY (no implicit installations performed)");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -668,7 +699,7 @@ mod tests {
 
         assert_eq!(group.checks[1].name, "step-b");
         assert_eq!(group.checks[1].status, "failed");
-        assert_eq!(group.checks[1].reason.as_deref(), Some("injected error"));
+        assert_eq!(group.checks[1].reason.as_deref(), Some("check-failed"));
 
         assert_eq!(group.checks[2].name, "step-c");
         assert_eq!(group.checks[2].status, "not-run");
@@ -678,22 +709,53 @@ mod tests {
     fn check_session_summary_schema_free_of_secrets_and_absolute_paths() {
         let mut session = CheckSession::default();
         session.start_group("group-static", STATIC_LEAF_CHECKS);
-        session.record_leaf("app-boundaries", "passed", None);
+
+        // Inject failure containing absolute path and secret credentials
+        let sensitive_err = "failed at C:\\Users\\Administrator\\secret_token\\private.key with password=SuperSecret123!";
+        let _ = record_step(&mut session, "app-boundaries", || Err(sensitive_err.into()));
         session.record_leaf(
             "supply-chain",
             "skipped",
-            Some("skipped via test".to_owned()),
+            Some("supply-chain-skipped".to_owned()),
         );
-        session.finish_group(true);
+        session.finish_group(false);
 
         let json = serde_json::to_string(&session.groups).unwrap();
-        assert!(!json.contains("D:\\"));
+        assert!(!json.contains("Administrator"));
+        assert!(!json.contains("secret_token"));
+        assert!(!json.contains("SuperSecret123"));
         assert!(!json.contains("C:\\"));
-        assert!(!json.contains("secret"));
+        assert!(!json.contains("D:\\"));
         assert!(json.contains("group-static"));
         assert!(json.contains("app-boundaries"));
+        assert!(json.contains("check-failed: docs/architecture.md"));
         assert!(json.contains("supply-chain"));
-        assert!(json.contains("skipped"));
+        assert!(json.contains("supply-chain-skipped"));
+    }
+
+    #[test]
+    fn verify_builtin_catalog_failure_is_recorded_as_failed() {
+        let mut session = CheckSession::default();
+        session.start_group("group-rust", RUST_LEAF_CHECKS);
+
+        // Simulate catalog verify failure
+        let res = record_step(&mut session, "builtin-catalog", || {
+            Err("corrupted catalog manifest".into())
+        });
+        assert!(res.is_err());
+        session.finish_group(false);
+
+        let group = &session.groups[0];
+        let catalog_check = group
+            .checks
+            .iter()
+            .find(|c| c.name == "builtin-catalog")
+            .unwrap();
+        assert_eq!(catalog_check.status, "failed");
+        assert_eq!(
+            catalog_check.reason.as_deref(),
+            Some("check-failed: docs/architecture.md")
+        );
     }
 
     #[test]
@@ -711,10 +773,5 @@ mod tests {
             contract_pointer("desktop-e2e"),
             Some("docs/desktop-tooling.md")
         );
-    }
-
-    #[test]
-    fn run_preflight_succeeds_in_current_environment() {
-        assert!(run_preflight().is_ok());
     }
 }
