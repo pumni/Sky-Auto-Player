@@ -1574,7 +1574,6 @@ pub(super) fn format_label_for_path(path: &Path) -> String {
         .to_ascii_uppercase()
 }
 
-#[allow(dead_code)]
 fn catalog_source_marker(
     source: sky_native_adapters::CatalogCompositionSource,
     suffix: &str,

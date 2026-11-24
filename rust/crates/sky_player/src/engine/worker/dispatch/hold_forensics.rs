@@ -160,6 +160,7 @@ impl ProductionHoldForensics {
                 _source_action_index,
                 #[cfg(test)]
                 target,
+                #[cfg(test)]
                 pre_call,
                 completion,
             );
@@ -294,7 +295,7 @@ impl ProductionHoldForensics {
         mut down_mask: u16,
         #[cfg(test)] source_action_index: u32,
         #[cfg(test)] target: u64,
-        #[allow(unused_variables)] pre_call: u64,
+        #[cfg(test)] pre_call: u64,
         completion: u64,
     ) {
         while down_mask != 0 {

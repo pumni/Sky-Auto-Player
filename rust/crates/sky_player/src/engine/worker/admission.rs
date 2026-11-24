@@ -844,7 +844,7 @@ pub(crate) fn verify_final_packet_admission(
 }
 
 #[cfg(test)]
-#[allow(dead_code, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_final_down_admission(
     target: &SessionTarget,
     expected: TargetStamp,

@@ -30,8 +30,7 @@ const MAX_RELEASE_NOTES: usize = 16 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 #[cfg(not(feature = "tauri-update-fixture"))]
 const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json";
-#[cfg(not(feature = "tauri-update-fixture"))]
-#[allow(dead_code)]
+#[cfg(all(test, not(feature = "tauri-update-fixture")))]
 const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json";
 #[cfg(not(feature = "tauri-update-fixture"))]
 const OFFICIAL_METADATA_HOST: &str = "raw.githubusercontent.com";

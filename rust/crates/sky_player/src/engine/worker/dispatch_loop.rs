@@ -3,7 +3,6 @@ use super::super::{
     DurationTicks, TimelineTicks, publish_lifecycle_metrics, try_publish_metrics_with_update,
 };
 #[cfg(test)]
-#[allow(unused_imports)]
 pub(crate) use super::admission::verify_final_down_admission;
 use super::admission::{
     FinalControlAdmission, MusicalPacketKind, final_control_precheck, verify_final_packet_admission,

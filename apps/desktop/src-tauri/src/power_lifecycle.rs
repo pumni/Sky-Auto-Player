@@ -2,7 +2,9 @@ use sky_dispatch_win32::clock::QpcClock;
 use sky_player::engine::SystemPowerEndpoint;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+#[cfg(not(test))]
+use std::sync::Mutex;
+use std::sync::{Arc, OnceLock, Weak};
 
 pub(crate) type SuspendResumeCallback =
     unsafe extern "system" fn(*const c_void, u32, *const c_void) -> u32;
@@ -173,10 +175,10 @@ struct CallbackContext {
 // one Arc per playback session. The callback only touches atomics and QPC.
 static POWER_ENDPOINT: OnceLock<Result<Arc<SystemPowerEndpoint>, String>> = OnceLock::new();
 static CALLBACK_CONTEXT: OnceLock<Arc<CallbackContext>> = OnceLock::new();
-#[allow(dead_code)]
+#[cfg(not(test))]
 static PROCESS_REGISTRATION: OnceLock<Mutex<Option<ProcessRegistration>>> = OnceLock::new();
 
-#[allow(dead_code)]
+#[cfg(not(test))]
 struct ProcessRegistration {
     _platform: Arc<dyn PowerPlatform>,
     _handle: isize,
@@ -203,7 +205,7 @@ fn callback_context() -> Result<Arc<CallbackContext>, u32> {
         .clone())
 }
 
-#[allow(dead_code)]
+#[cfg(not(test))]
 fn ensure_process_registration(
     platform: Arc<dyn PowerPlatform>,
     diagnostics: &Arc<PowerLifecycleDiagnostics>,
@@ -244,7 +246,7 @@ pub(crate) struct SuspendResumeRegistration {
 }
 
 impl SuspendResumeRegistration {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn register(
         platform: Arc<dyn PowerPlatform>,
         _player: Weak<sky_player::engine::NativeDispatchSession>,
