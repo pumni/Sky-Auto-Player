@@ -10,6 +10,21 @@ use super::{CleanupAttemptAdmission, TrackedKeyState, release_retry_sleep};
 use crate::input::ReleaseOwnerProof;
 use smallvec::SmallVec;
 
+fn verify_cleanup_probe_authority(
+    drain_control: &mut Option<
+        &mut dyn FnMut() -> Result<super::super::outcome::CleanupDrainDecision, String>,
+    >,
+) -> Result<(), String> {
+    let Some(control) = drain_control.as_mut() else {
+        return Ok(());
+    };
+    let decision = control()?;
+    if !decision.origin_foreground {
+        return Err("tracked cleanup origin is not foreground for physical probe".into());
+    }
+    Ok(())
+}
+
 impl TrackedKeyState {
     /// Terminal finalization may issue one bounded Up transport when QPC is
     /// unavailable, but it is restricted to this session's tracked mask.
@@ -378,23 +393,42 @@ impl TrackedKeyState {
             }
 
             if needs_probe != 0 {
-                let physical_state =
-                    self.resolve_release_probe(target_hwnd, needs_probe, needs_probe);
-                let reconciled =
-                    reconcile_logical_release_observation(needs_probe, needs_probe, physical_state);
-                match reconciled {
-                    ReconciledRelease::VerifiedAllUp => {
-                        self.needs_probe_mask &= !needs_probe;
-                        needs_probe = 0;
-                        final_probe_verdict = TerminalProbeVerdict::AllUp;
-                    }
-                    ReconciledRelease::Held(held_mask)
-                        if held_mask != 0 && held_mask & !needs_probe == 0 =>
-                    {
-                        final_probe_verdict = TerminalProbeVerdict::Held(held_mask);
-                    }
-                    ReconciledRelease::Held(_) | ReconciledRelease::Inconclusive(_) => {
+                match verify_cleanup_probe_authority(&mut drain_control) {
+                    Err(reason) => {
+                        withheld_reason = Some(reason);
                         final_probe_verdict = TerminalProbeVerdict::Inconclusive(needs_probe);
+                    }
+                    Ok(()) => {
+                        let physical_state =
+                            self.resolve_release_probe(target_hwnd, needs_probe, needs_probe);
+                        let reconciled = reconcile_logical_release_observation(
+                            needs_probe,
+                            needs_probe,
+                            physical_state,
+                        );
+                        match verify_cleanup_probe_authority(&mut drain_control) {
+                            Err(reason) => {
+                                withheld_reason = Some(reason);
+                                final_probe_verdict =
+                                    TerminalProbeVerdict::Inconclusive(needs_probe);
+                            }
+                            Ok(()) => match reconciled {
+                                ReconciledRelease::VerifiedAllUp => {
+                                    self.needs_probe_mask &= !needs_probe;
+                                    needs_probe = 0;
+                                    final_probe_verdict = TerminalProbeVerdict::AllUp;
+                                }
+                                ReconciledRelease::Held(held_mask)
+                                    if held_mask != 0 && held_mask & !needs_probe == 0 =>
+                                {
+                                    final_probe_verdict = TerminalProbeVerdict::Held(held_mask);
+                                }
+                                ReconciledRelease::Held(_) | ReconciledRelease::Inconclusive(_) => {
+                                    final_probe_verdict =
+                                        TerminalProbeVerdict::Inconclusive(needs_probe);
+                                }
+                            },
+                        }
                     }
                 }
             }

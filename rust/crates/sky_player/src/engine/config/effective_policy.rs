@@ -25,6 +25,7 @@ impl EffectiveRuntimePolicy {
         let (telemetry_mode, telemetry_capacity) = if observer_enabled {
             (telemetry.mode, telemetry.capacity)
         } else {
+            // Production sessions without an observer have no packet ring.
             (TelemetryMode::Off, 0)
         };
 

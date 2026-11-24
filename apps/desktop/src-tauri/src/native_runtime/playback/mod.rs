@@ -37,7 +37,9 @@ pub(super) use retirement::{
     terminal_release_evidence_after_startup,
 };
 #[cfg(all(test, feature = "tauri-test"))]
-pub(super) use retirement::{recovery_test_probe_calls, set_recovery_test_probe_result};
+pub(super) use retirement::{
+    recovery_test_probe_calls, set_recovery_test_probe_hook, set_recovery_test_probe_result,
+};
 pub(super) use session::{
     cleanup_failed_event_delivery, is_failure_status, opaque_native_id, playback_event_state,
     settings_fingerprint, terminal_success_outcome, validate_playback_start_request,

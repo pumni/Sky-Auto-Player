@@ -174,10 +174,17 @@ only to **needs_up**; **needs_probe** can be probed but never causes another Up.
 A Held or Inconclusive probe keeps the residual unresolved. No cleanup path
 releases keys outside the session journal.
 
+Before and after each physical release probe, cleanup revalidates the retained
+origin process/window proof and, where required, the exact foreground HWND/PID.
+Only a probe bracketed by current authority may clear `needs_probe`; authority
+drift leaves that residual quarantined. Probe-only cleanup never emits another
+Up.
+
 After worker join, one recovery attempt can make at most one raw Up call, then
 probe the retained origin. Recovery uses the original HWND/PID/process
-incarnation and never runs concurrently with the session worker. A Held or
-Inconclusive result preserves the residual.
+incarnation, freshly rechecks that authority around the probe, and never runs
+concurrently with the session worker. A Held, Inconclusive, or authority-drift
+result preserves the residual.
 
 ## Retirement, quarantine, and publication
 

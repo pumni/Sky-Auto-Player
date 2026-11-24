@@ -67,6 +67,7 @@ use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 
 pub(crate) const MAX_NATIVE_EVENTS: usize = 128;
+#[cfg(test)]
 const SENDER_TRACE_CAPTURE_CAPACITY: usize = 4_096;
 const MAX_PREPARED_PLANS: usize = 64;
 const MAX_DECISION_COUNT: usize = 8;

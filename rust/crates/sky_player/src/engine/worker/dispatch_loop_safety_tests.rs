@@ -722,6 +722,63 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
 }
 
 #[test]
+fn cleanup_probe_rechecks_owner_before_accepting_all_up() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+            sky_dispatch_win32::focus::set_window_live_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
+    let actions = [
+        test_action(6668, ActionKind::Down, 0, 0x15),
+        test_action(6669, ActionKind::Up, 500_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    harness.configure_focus_owner_for_test(1, 101);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.resources.backend.active_mask = 1;
+
+    let probe_calls = Arc::new(AtomicUsize::new(0));
+    let probe_calls_for_probe = Arc::clone(&probe_calls);
+    harness.resources.backend.set_probe(move |_, _| {
+        match probe_calls_for_probe.fetch_add(1, Ordering::AcqRel) {
+            0 => InstrumentPhysicalState::Inconclusive,
+            1 => {
+                // Model owner drift after the retry's pre-probe check but
+                // before AllUp can be accepted.
+                sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(202)));
+                InstrumentPhysicalState::AllUp
+            }
+            _ => InstrumentPhysicalState::AllUp,
+        }
+    });
+    let origin = super::super::load_target_stamp(&harness.target).expect("retained origin");
+
+    let error = super::super::suspend_live_input_for_dispatch(
+        &mut harness.resources.backend,
+        &mut harness.resources.scheduler,
+        super::super::super::cleanup::CleanupTarget::for_session(
+            &harness.target,
+            Some(origin),
+            true,
+        ),
+    )
+    .expect_err("owner drift during the probe cannot clear cleanup debt");
+
+    assert!(error.contains("owner identity drifted"), "{error}");
+    assert_eq!(probe_calls.load(Ordering::Acquire), 2);
+    assert_eq!(cleanup.lock().expect("cleanup send capture").len(), 1);
+    assert_eq!(harness.resources.backend.needs_up_mask(), 0);
+    assert_eq!(harness.resources.backend.needs_probe_mask, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+}
+
+#[test]
 fn focus_recovery_cleanup_rejects_invalidated_session_target() {
     struct ForegroundReset;
     impl Drop for ForegroundReset {

@@ -16,6 +16,9 @@ static RECOVERY_TEST_PROBE_RESULT: Mutex<
 static RECOVERY_TEST_PROBE_CALLS: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+#[cfg(feature = "tauri-test")]
+static RECOVERY_TEST_PROBE_HOOK: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
 #[cfg(test)]
 pub(in crate::native_runtime) fn reset_recovery_test_raw_sends() {
     RECOVERY_TEST_RAW_SENDS.store(0, Ordering::Release);
@@ -46,6 +49,15 @@ pub(in crate::native_runtime) fn set_recovery_test_probe_result(
 #[cfg(all(test, feature = "tauri-test"))]
 pub(in crate::native_runtime) fn recovery_test_probe_calls() -> u64 {
     RECOVERY_TEST_PROBE_CALLS.load(Ordering::Acquire)
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+pub(in crate::native_runtime) fn set_recovery_test_probe_hook(
+    hook: Option<Arc<dyn Fn() + Send + Sync>>,
+) {
+    *RECOVERY_TEST_PROBE_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
 }
 
 #[derive(Default)]
@@ -925,6 +937,13 @@ pub(in crate::native_runtime) fn recover_quarantined_release_once(
             .unwrap_or(sky_dispatch_win32::input::InstrumentPhysicalState::Inconclusive);
         tracked.set_probe(move |_, _| {
             RECOVERY_TEST_PROBE_CALLS.fetch_add(1, Ordering::AcqRel);
+            let hook = RECOVERY_TEST_PROBE_HOOK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone();
+            if let Some(hook) = hook {
+                hook();
+            }
             probe_result.clone()
         });
     }
@@ -956,8 +975,10 @@ pub(in crate::native_runtime) fn recover_quarantined_release_once(
                 Ok(())
             },
             || {
-                if authority.continuity()
+                if authority.verify_final_process_identity(target_hwnd, owner_pid)
                     != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
+                    || authority.continuity()
+                        != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
                 {
                     return Err("original process/window identity is no longer continuous".into());
                 }
@@ -1104,14 +1125,9 @@ fn retire_active_slot(
 }
 
 pub(in crate::native_runtime) fn terminal_presentation_completion(
-    active_slot: Arc<Mutex<Option<Arc<NativeActivePlayback>>>>,
-    last_terminal: Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
     active: Arc<NativeActivePlayback>,
-    retirement: TerminalRetirement,
-    terminal_state: PlaybackSessionState,
     #[cfg(all(test, feature = "tauri-test"))] retired_hook: Option<PlaybackRetiredTestHook>,
 ) -> PlaybackPresentationCompletion {
-    let _ = (active_slot, last_terminal, retirement, terminal_state);
     Box::new(move |presentation_result| {
         if presentation_result.is_err() {
             active.event_delivery_failure.store(true, Ordering::Release);

@@ -28,7 +28,9 @@ use super::{
     playback_health_from_snapshot, publish_playback_snapshot,
 };
 #[cfg(feature = "tauri-test")]
-use super::{recovery_test_probe_calls, set_recovery_test_probe_result};
+use super::{
+    recovery_test_probe_calls, set_recovery_test_probe_hook, set_recovery_test_probe_result,
+};
 use crate::app_state::ActivityCoordinator;
 use crate::commands::{PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest};
 

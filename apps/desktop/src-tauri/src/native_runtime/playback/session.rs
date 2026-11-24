@@ -1217,11 +1217,7 @@ impl NativePlaybackService {
                             retirement.clone(),
                         );
                         let completed = terminal_presentation_completion(
-                            self.active.clone(),
-                            self.last_terminal.clone(),
                             Arc::clone(&failed_active),
-                            retirement.clone(),
-                            PlaybackSessionState::Failed,
                             #[cfg(all(test, feature = "tauri-test"))]
                             self.monitor_retired_test_hook.clone(),
                         );
@@ -1256,11 +1252,7 @@ impl NativePlaybackService {
                     retirement.clone(),
                 );
                 let completed = terminal_presentation_completion(
-                    self.active.clone(),
-                    self.last_terminal.clone(),
                     Arc::clone(&failed_active),
-                    retirement.clone(),
-                    PlaybackSessionState::Failed,
                     #[cfg(all(test, feature = "tauri-test"))]
                     self.monitor_retired_test_hook.clone(),
                 );
@@ -1398,11 +1390,7 @@ impl NativePlaybackService {
                     retirement.clone(),
                 );
                 let completed = terminal_presentation_completion(
-                    self.active.clone(),
-                    self.last_terminal.clone(),
                     active.clone(),
-                    retirement.clone(),
-                    PlaybackSessionState::Failed,
                     #[cfg(all(test, feature = "tauri-test"))]
                     self.monitor_retired_test_hook.clone(),
                 );
@@ -1440,11 +1428,7 @@ impl NativePlaybackService {
                 retirement.clone(),
             );
             let completed = terminal_presentation_completion(
-                self.active.clone(),
-                self.last_terminal.clone(),
                 active.clone(),
-                retirement.clone(),
-                PlaybackSessionState::Failed,
                 #[cfg(all(test, feature = "tauri-test"))]
                 self.monitor_retired_test_hook.clone(),
             );
@@ -1513,11 +1497,7 @@ impl NativePlaybackService {
                 retirement.clone(),
             );
             let completed = terminal_presentation_completion(
-                self.active.clone(),
-                self.last_terminal.clone(),
                 active.clone(),
-                retirement.clone(),
-                PlaybackSessionState::Failed,
                 #[cfg(all(test, feature = "tauri-test"))]
                 self.monitor_retired_test_hook.clone(),
             );
@@ -1710,10 +1690,8 @@ impl NativePlaybackService {
                         test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
                     },
                     telemetry: TelemetryOptions {
-                        mode: TelemetryMode::Ring,
-                        // Keep fixed-width schema 19 records inside the bounded
-                        // sender-trace capture budget before export.
-                        capacity: SENDER_TRACE_CAPTURE_CAPACITY,
+                        mode: TelemetryMode::Off,
+                        capacity: 0,
                     },
                     priority: PriorityOptions {
                         mode: PriorityMode::Auto,
@@ -1779,11 +1757,7 @@ impl NativePlaybackService {
                     retirement.clone(),
                 );
                 let completed = terminal_presentation_completion(
-                    self.active.clone(),
-                    self.last_terminal.clone(),
                     active.clone(),
-                    retirement.clone(),
-                    PlaybackSessionState::Failed,
                     #[cfg(all(test, feature = "tauri-test"))]
                     self.monitor_retired_test_hook.clone(),
                 );
@@ -2126,11 +2100,7 @@ impl NativePlaybackService {
             active.stop_requested.store(true, Ordering::Release);
         }
         let completed = terminal_presentation_completion(
-            self.active.clone(),
-            self.last_terminal.clone(),
             active.clone(),
-            committed_retirement.clone(),
-            terminal_state,
             #[cfg(all(test, feature = "tauri-test"))]
             self.monitor_retired_test_hook.clone(),
         );

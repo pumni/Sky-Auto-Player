@@ -1497,6 +1497,95 @@ fn recovery_from_focus_free_session_still_checks_origin_and_never_replays_probe_
 
 #[cfg(feature = "tauri-test")]
 #[test]
+fn probe_only_recovery_rechecks_origin_after_all_up_probe() {
+    struct RecoveryProbeReset;
+    impl Drop for RecoveryProbeReset {
+        fn drop(&mut self) {
+            set_recovery_test_probe_hook(None);
+            set_recovery_test_probe_result(None);
+            sky_dispatch_win32::focus::set_foreground_owner_match_sequence_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _send_lock = recovery_test_send_lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _probe_reset = RecoveryProbeReset;
+    set_recovery_test_probe_result(Some(
+        sky_dispatch_win32::input::InstrumentPhysicalState::AllUp,
+    ));
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("probe-owner-drift-recovery", true, 0, 0x0001);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x1199)));
+    set_recovery_test_probe_hook(Some(Arc::new(|| {
+        sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x2222)));
+    })));
+    reset_recovery_test_raw_sends();
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("owner drift during AllUp probe must keep the residual quarantined");
+
+    assert!(error.contains("needs_probe=0x0001"), "{error}");
+    assert_eq!(recovery_test_raw_sends(), 0);
+    assert_eq!(recovery_test_probe_calls(), 1);
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("probe-only owner drift preserves quarantine");
+    assert_eq!(residual.needs_up_mask, 0);
+    assert_eq!(residual.needs_probe_mask, 0x0001);
+    assert_eq!(residual.outstanding_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
+fn probe_only_recovery_withholds_probe_after_foreground_drift() {
+    struct RecoveryProbeReset;
+    impl Drop for RecoveryProbeReset {
+        fn drop(&mut self) {
+            set_recovery_test_probe_result(None);
+            sky_dispatch_win32::focus::set_foreground_owner_match_sequence_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
+    let _send_lock = recovery_test_send_lock();
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _probe_reset = RecoveryProbeReset;
+    set_recovery_test_probe_result(Some(
+        sky_dispatch_win32::input::InstrumentPhysicalState::AllUp,
+    ));
+    let (service, active, _authority) =
+        quarantined_recovery_fixture("probe-before-drift-recovery", true, 0, 0x0001);
+    sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
+    sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x1199)));
+    sky_dispatch_win32::focus::set_foreground_owner_match_sequence_for_test(Some(&[true, false]));
+    reset_recovery_test_raw_sends();
+
+    let error = recover_quarantined_release_once(&active, &service.last_terminal)
+        .expect_err("foreground drift before a probe must preserve probe-only debt");
+
+    assert!(error.contains("needs_probe=0x0001"), "{error}");
+    assert_eq!(recovery_test_raw_sends(), 0);
+    assert_eq!(recovery_test_probe_calls(), 0);
+    let residual = service
+        .activity
+        .claim_quarantined_release_residual(&active.session_id)
+        .expect("pre-probe foreground drift preserves quarantine");
+    assert_eq!(residual.needs_up_mask, 0);
+    assert_eq!(residual.needs_probe_mask, 0x0001);
+    assert_eq!(residual.outstanding_mask, 0x0001);
+    service
+        .activity
+        .abandon_quarantined_recovery(&active.session_id);
+}
+
+#[cfg(feature = "tauri-test")]
+#[test]
 fn recovery_process_death_keeps_original_residual_and_never_sends() {
     let _send_lock = recovery_test_send_lock();
     let (service, active, authority) =

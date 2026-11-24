@@ -192,17 +192,9 @@ pub fn compile_runtime_intents_with_memory_metrics(
     let mut unmatched_up_capacity = 0usize;
     let mut reason_input_bytes = 0usize;
     let mut scan_code_input_bytes = 0usize;
-    let mut group_count = 0usize;
-    let mut previous_group_time = None;
     for (index, action) in actions.iter().enumerate() {
         if index.is_multiple_of(256) && cancelled() {
             return Err(CompileError::Cancelled);
-        }
-        if previous_group_time != Some(action.scheduled_us) {
-            group_count = group_count
-                .checked_add(1)
-                .ok_or(CompileError::TooManyActions)?;
-            previous_group_time = Some(action.scheduled_us);
         }
         down_action_count = down_action_count
             .checked_add(usize::from(action.kind == ActionKind::Down))
@@ -256,7 +248,6 @@ pub fn compile_runtime_intents_with_memory_metrics(
             unmatched_up_capacity,
             std::mem::size_of::<UnmatchedUpMetadata>(),
         )?,
-        checked_capacity_bytes(group_count, std::mem::size_of::<u64>())?,
         checked_capacity_bytes(max_reason_entries, std::mem::size_of::<String>())?,
         reason_table_growth_buffer_bound,
         reason_map_growth_bound,
