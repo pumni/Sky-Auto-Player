@@ -15,13 +15,18 @@ const cliArgs = process.argv.slice(2);
 const reuseExistingBuild = Boolean(process.env.CI) || cliArgs.includes(reuseFlag);
 const forwardedArgs = cliArgs.filter((arg) => arg !== reuseFlag);
 
-// Restore default fresh local build: local runs always build fresh unless an explicit
-// prebuilt reuse is requested or running under CI where dist was produced by a prior job step.
-if (!reuseExistingBuild || !existsSync(distIndex)) {
+if (reuseExistingBuild) {
+  if (!existsSync(distIndex)) {
+    throw new Error(
+      `[website e2e] Expected existing prebuilt static distribution at ${distIndex}. Run "bun run build" first.`,
+    );
+  }
+  console.log(
+    '[website e2e] reusing prebuilt static distribution (explicit artifact reuse; not proof of current source)...',
+  );
+} else {
   console.log('[website e2e] building fresh static distribution...');
   await build({ root: websiteRoot });
-} else {
-  console.log('[website e2e] reusing prebuilt static distribution...');
 }
 
 let previewServer;

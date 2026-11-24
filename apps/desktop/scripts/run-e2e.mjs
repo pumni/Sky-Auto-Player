@@ -1,7 +1,7 @@
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { createServer } from 'vite';
-import { loopbackUrl, runPlaywright } from './e2e-session.mjs';
+import { loopbackUrl, runPlaywright } from '../../../scripts/process-session.mjs';
 
 const desktopRoot = fileURLToPath(new URL('..', import.meta.url));
 const playwrightCli = fileURLToPath(

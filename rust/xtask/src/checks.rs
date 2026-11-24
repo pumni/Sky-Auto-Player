@@ -49,8 +49,13 @@ pub(crate) const STATIC_LEAF_CHECKS: &[&str] = &[
     "legacy-updater-retirement",
 ];
 
-pub(crate) const RUST_LEAF_CHECKS: &[&str] =
-    &["builtin-catalog", "rust-fmt", "rust-clippy", "rust-tests"];
+pub(crate) const RUST_LEAF_CHECKS: &[&str] = &[
+    "builtin-catalog",
+    "binding-prep",
+    "rust-fmt",
+    "rust-clippy",
+    "rust-tests",
+];
 
 pub(crate) const DESKTOP_LEAF_CHECKS: &[&str] = &[
     "desktop-install",
@@ -73,6 +78,7 @@ fn contract_pointer(check_name: &str) -> Option<&'static str> {
         "tauri-config" => Some("apps/desktop/src-tauri/tauri.conf.json"),
         "tauri-build-freshness" => Some("docs/v4-tauri-packaging.md"),
         "builtin-catalog" => Some("docs/architecture.md"),
+        "binding-prep" => Some("rust/xtask/src/checks/bindings.rs"),
         "trust-material" => Some("docs/v4-release-authority.md"),
         "bun-pin" => Some(".bun-version"),
         "rust-toolchain" => Some("rust-toolchain.toml"),
@@ -139,11 +145,10 @@ impl CheckSession {
                 entry.status = status.to_owned();
                 entry.reason = reason;
             } else {
-                group.checks.push(CheckEntry {
-                    name: name.to_owned(),
-                    status: status.to_owned(),
-                    reason,
-                });
+                panic!(
+                    "Unexpected unlisted check leaf '{name}' for group '{}'",
+                    group.name
+                );
             }
         }
     }
@@ -172,16 +177,6 @@ impl CheckSession {
                 })
                 .collect(),
         });
-    }
-
-    pub fn all_leaf_checks(&self) -> Vec<CheckEntry> {
-        let mut checks = Vec::new();
-        for g in &self.groups {
-            for c in &g.checks {
-                checks.push(c.clone());
-            }
-        }
-        checks
     }
 }
 
@@ -270,67 +265,90 @@ fn check_desktop_native(root: &Path) -> Result<()> {
     bindings::bindings_with_env(&native_env)
 }
 
-#[derive(Debug, Clone)]
-struct SourceIdentityInfo {
-    head: String,
-    identity: String,
-    dirty: bool,
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct GitObservation {
+    head: Option<String>,
+    tree: Option<String>,
+    status: String, // "clean", "dirty", or "unknown"
 }
 
-fn inspect_source_identity(root: &Path) -> SourceIdentityInfo {
-    let head = repo::git_head(root, false).unwrap_or_else(|_| "unavailable".to_owned());
-    let status_output = std::process::Command::new("git")
+fn observe_git_state(root: &Path) -> GitObservation {
+    let head = match std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(root)
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            if s.is_empty() { None } else { Some(s) }
+        }
+        _ => None,
+    };
+
+    let tree = match std::process::Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD^{tree}"])
+        .current_dir(root)
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            let s = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+            if s.is_empty() { None } else { Some(s) }
+        }
+        _ => None,
+    };
+
+    let status = match std::process::Command::new("git")
         .args(["status", "--porcelain"])
         .current_dir(root)
-        .output();
-    let is_dirty = match status_output {
-        Ok(out) => !out.stdout.is_empty(),
-        Err(_) => true,
+        .output()
+    {
+        Ok(out) if out.status.success() => {
+            if out.stdout.is_empty() {
+                "clean".to_owned()
+            } else {
+                "dirty".to_owned()
+            }
+        }
+        _ => "unknown".to_owned(),
     };
-    if is_dirty {
-        SourceIdentityInfo {
-            head,
-            identity: "unqualified-dirty-working-tree".to_owned(),
-            dirty: true,
-        }
-    } else {
-        SourceIdentityInfo {
-            head: head.clone(),
-            identity: head,
-            dirty: false,
-        }
-    }
+
+    GitObservation { head, tree, status }
 }
 
 pub fn run(group: &str, skip_supply_chain: bool, json_summary: bool) -> Result<()> {
     let root = repo::root();
-    let start_source = inspect_source_identity(&root);
+    let start_obs = if json_summary {
+        Some(observe_git_state(&root))
+    } else {
+        None
+    };
     let start_instant = std::time::Instant::now();
 
     let mut session = CheckSession::default();
     let result = run_with_session(group, skip_supply_chain, &mut session);
 
     let elapsed_ms = start_instant.elapsed().as_millis() as u64;
-    let end_source = inspect_source_identity(&root);
-
-    let (source_status, source_identity, is_dirty) =
-        if start_source.dirty || end_source.dirty || start_source.head != end_source.head {
-            let status = if !start_source.dirty && end_source.dirty {
-                "modified-during-run"
-            } else {
-                "dirty"
-            };
-            (
-                status.to_owned(),
-                "unqualified-dirty-working-tree".to_owned(),
-                true,
-            )
-        } else {
-            ("clean".to_owned(), start_source.identity, false)
-        };
 
     if json_summary {
-        let all_checks = session.all_leaf_checks();
+        let start = start_obs.unwrap();
+        let end = observe_git_state(&root);
+
+        let (overall_status, source_identity) = match (start.status.as_str(), end.status.as_str()) {
+            ("clean", "clean") if start.head == end.head && start.tree == end.tree => {
+                let head_str = start
+                    .head
+                    .clone()
+                    .unwrap_or_else(|| "unqualified-unknown-source".to_owned());
+                ("clean", head_str)
+            }
+            ("clean", "dirty") => (
+                "modified-during-run",
+                "unqualified-dirty-working-tree".to_owned(),
+            ),
+            ("dirty", _) | (_, "dirty") => ("dirty", "unqualified-dirty-working-tree".to_owned()),
+            _ => ("unknown", "unqualified-unknown-source".to_owned()),
+        };
+
         println!(
             "[xtask-summary] {}",
             serde_json::json!({
@@ -340,12 +358,19 @@ pub fn run(group: &str, skip_supply_chain: bool, json_summary: bool) -> Result<(
                 "duration_ms": elapsed_ms,
                 "source_identity": source_identity,
                 "source": {
-                    "head": start_source.head,
-                    "status": source_status,
-                    "dirty": is_dirty
+                    "start": {
+                        "head": start.head,
+                        "tree": start.tree,
+                        "status": start.status
+                    },
+                    "end": {
+                        "head": end.head,
+                        "tree": end.tree,
+                        "status": end.status
+                    },
+                    "overall_status": overall_status
                 },
                 "groups": session.groups,
-                "checks": all_checks,
                 "unlisted_checks": "not-run or outside requested group",
                 "merge_readiness": "not assessed"
             })
@@ -546,15 +571,19 @@ fn run_rust_group(session: &mut CheckSession) -> Result<()> {
     let root = repo::root();
     verify_builtin_catalog(&root, session)?;
 
-    let export_dir = bindings::prepare_binding_export_dir(&root)?;
-    let export_dir = export_dir
-        .to_str()
-        .ok_or("binding export directory is not valid UTF-8")?
-        .to_owned();
+    let mut export_dir_str = String::new();
+    record_step(session, "binding-prep", || {
+        let export_dir = bindings::prepare_binding_export_dir(&root)?;
+        export_dir_str = export_dir
+            .to_str()
+            .ok_or("binding export directory is not valid UTF-8")?
+            .to_owned();
+        Ok(())
+    })?;
     let test_env = [
         ("CARGO_TARGET_DIR", "rust/target/check-all-rust-tests"),
         ("RUST_TEST_THREADS", "1"),
-        ("TS_RS_EXPORT_DIR", export_dir.as_str()),
+        ("TS_RS_EXPORT_DIR", export_dir_str.as_str()),
     ];
 
     record_step(session, "rust-fmt", || {
@@ -759,6 +788,56 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "Unexpected unlisted check leaf 'unknown-check'")]
+    fn record_leaf_rejects_unlisted_check_leaf() {
+        let mut session = CheckSession::default();
+        session.start_group("group-test", &["step-a"]);
+        session.record_leaf("unknown-check", "passed", None);
+    }
+
+    #[test]
+    fn observe_git_state_distinguishes_clean_and_dirty() {
+        let temp = temp_dir_fixture("git-observation-test");
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(&temp)
+            .output();
+        let _ = std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&temp)
+            .output();
+        let _ = std::process::Command::new("git")
+            .args(["config", "user.email", "test@example.invalid"])
+            .current_dir(&temp)
+            .output();
+
+        let initial_file = temp.join("init.txt");
+        std::fs::write(&initial_file, "initial").unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(&temp)
+            .output();
+        let _ = std::process::Command::new("git")
+            .args(["commit", "-m", "initial commit"])
+            .current_dir(&temp)
+            .output();
+
+        let clean_obs = observe_git_state(&temp);
+        assert_eq!(clean_obs.status, "clean");
+        assert!(clean_obs.head.is_some());
+        assert!(clean_obs.tree.is_some());
+
+        // Create dirty working tree change
+        let dirty_file = temp.join("dirty.txt");
+        std::fs::write(&dirty_file, "uncommitted").unwrap();
+
+        let dirty_obs = observe_git_state(&temp);
+        assert_eq!(dirty_obs.status, "dirty");
+
+        std::fs::remove_dir_all(temp).unwrap();
+    }
+
+    #[test]
     fn contract_pointers_defined_for_critical_checks() {
         assert_eq!(
             contract_pointer("app-boundaries"),
@@ -773,5 +852,16 @@ mod tests {
             contract_pointer("desktop-e2e"),
             Some("docs/desktop-tooling.md")
         );
+        assert_eq!(
+            contract_pointer("binding-prep"),
+            Some("rust/xtask/src/checks/bindings.rs")
+        );
+    }
+
+    fn temp_dir_fixture(prefix: &str) -> std::path::PathBuf {
+        let path = std::env::temp_dir().join(format!("sky-{prefix}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(&path).unwrap();
+        path
     }
 }

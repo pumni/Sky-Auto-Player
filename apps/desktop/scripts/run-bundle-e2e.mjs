@@ -1,10 +1,9 @@
 import { statSync } from 'node:fs';
-import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { preview } from 'vite';
-import { loopbackUrl, runPlaywright } from './e2e-session.mjs';
+import { loopbackUrl, runOwnedCommand, runPlaywright } from '../../../scripts/process-session.mjs';
 
 const desktopRoot = fileURLToPath(new URL('..', import.meta.url));
 const viteCli = fileURLToPath(new URL('../node_modules/vite/bin/vite.js', import.meta.url));
@@ -18,13 +17,6 @@ const cliArgs = process.argv.slice(2);
 const reuseExistingBuild = cliArgs.includes(reuseFlag);
 const forwardedArgs = cliArgs.filter((arg) => arg !== reuseFlag);
 let previewServer;
-
-function waitForExit(child) {
-  return new Promise((resolve, reject) => {
-    child.once('error', reject);
-    child.once('exit', (code, signal) => resolve({ code, signal }));
-  });
-}
 
 function assertSuccess(label, result) {
   if (result.signal || result.code !== 0) {
@@ -52,12 +44,15 @@ try {
   if (reuseExistingBuild) {
     assertExistingBuild();
   } else {
-    const build = spawn(process.execPath, [viteCli, 'build', '--config', 'vite.config.ts'], {
-      cwd: desktopRoot,
-      stdio: 'inherit',
-      windowsHide: true,
-    });
-    assertSuccess('Production Vite build', await waitForExit(build));
+    const buildResult = await runOwnedCommand(
+      process.execPath,
+      [viteCli, 'build', '--config', 'vite.config.ts'],
+      {
+        cwd: desktopRoot,
+        stdio: 'inherit',
+      },
+    );
+    assertSuccess('Production Vite build', buildResult);
   }
 
   previewServer = await preview({

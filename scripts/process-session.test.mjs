@@ -3,32 +3,24 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import process from 'node:process';
 import test from 'node:test';
-import { loopbackUrl, runPlaywright, terminateProcess } from './process-session.mjs';
-
-function isPidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForCondition(check, timeoutMs = 4000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (await check()) return true;
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  return false;
-}
+import {
+  isPidAlive,
+  loopbackUrl,
+  runOwnedCommand,
+  runPlaywright,
+  spawnOwnedProcess,
+  waitForPidExit,
+} from './process-session.mjs';
 
 test('loopbackUrl extracts port and rejects invalid addresses', async () => {
   const server = createServer();
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const url = loopbackUrl(server);
-  assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/);
-  server.close();
+  try {
+    const url = loopbackUrl(server);
+    assert.match(url, /^http:\/\/127\.0\.0\.1:\d+$/);
+  } finally {
+    server.close();
+  }
 
   assert.throws(() => loopbackUrl(null), /Expected an owned IPv4 loopback listener/);
   assert.throws(
@@ -41,79 +33,115 @@ test('loopbackUrl extracts port and rejects invalid addresses', async () => {
   );
 });
 
-test('terminateProcess safely ignores null, undefined, and exited children', () => {
-  assert.doesNotThrow(() => terminateProcess(null));
-  assert.doesNotThrow(() => terminateProcess(undefined));
-  assert.doesNotThrow(() => terminateProcess({ killed: true }));
-  assert.doesNotThrow(() => terminateProcess({ exitCode: 0 }));
-});
-
-test('terminateProcess terminates real child and grandchild tree without affecting sentinel', async () => {
+test('terminate terminates real child and grandchild tree without affecting sentinel', async () => {
   // Spawn an unrelated sentinel process that must survive
   const sentinel = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
     stdio: 'ignore',
   });
-  assert.ok(sentinel.pid && isPidAlive(sentinel.pid), 'Sentinel process must be alive');
 
-  // Spawn a parent process which in turn spawns a long-lived grandchild process and prints grandchild PID
-  const childScript = `
-    const { spawn } = require('node:child_process');
-    const grand = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
-    console.log('GRANDCHILD_PID:' + grand.pid);
+  let session;
+  let grandchildPid;
+
+  try {
+    assert.ok(sentinel.pid && isPidAlive(sentinel.pid), 'Sentinel process must be alive');
+
+    // Child script spawns a long-lived grandchild process and outputs grandchild PID
+    const childScript = `
+      const { spawn } = require('node:child_process');
+      const grand = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'inherit' });
+      console.log('GRANDCHILD_PID:' + grand.pid);
+      setInterval(() => {}, 1000);
+    `;
+
+    session = spawnOwnedProcess(process.execPath, ['-e', childScript], {
+      stdio: ['ignore', 'pipe', 'inherit'],
+    });
+
+    grandchildPid = await new Promise((resolve, reject) => {
+      let output = '';
+      const timeout = setTimeout(() => reject(new Error('Grandchild startup timeout')), 5000);
+      session.child.stdout.on('data', (chunk) => {
+        output += chunk.toString();
+        const match = output.match(/GRANDCHILD_PID:(\d+)/);
+        if (match) {
+          clearTimeout(timeout);
+          resolve(Number.parseInt(match[1], 10));
+        }
+      });
+      session.child.once('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
+
+    assert.ok(session.pid && isPidAlive(session.pid), 'Child process must be alive');
+    assert.ok(grandchildPid && isPidAlive(grandchildPid), 'Grandchild process must be alive');
+
+    // Terminate the owned session
+    await session.terminate({ graceTimeoutMs: 1500 });
+
+    const childDead = await waitForPidExit(session.pid, 2000);
+    const grandDead = await waitForPidExit(grandchildPid, 2000);
+
+    assert.ok(childDead, 'Child process must be dead after terminate()');
+    assert.ok(grandDead, 'Grandchild process must be dead after terminate()');
+
+    // Verify sentinel was untouched
+    assert.ok(isPidAlive(sentinel.pid), 'Unrelated sentinel process must remain alive');
+  } finally {
+    if (sentinel.pid && isPidAlive(sentinel.pid)) {
+      try {
+        if (process.platform === 'win32') {
+          process.kill(sentinel.pid, 'SIGKILL');
+        } else {
+          process.kill(sentinel.pid, 'SIGKILL');
+        }
+      } catch {}
+    }
+    if (session && session.pid && isPidAlive(session.pid)) {
+      await session.terminate().catch(() => {});
+    }
+    if (grandchildPid && isPidAlive(grandchildPid)) {
+      try { process.kill(grandchildPid, 'SIGKILL'); } catch {}
+    }
+  }
+});
+
+test('terminate escalates to SIGKILL if child ignores SIGTERM', async () => {
+  // Script ignores SIGTERM
+  const stubbornScript = `
+    process.on('SIGTERM', () => {});
     setInterval(() => {}, 1000);
   `;
 
-  const child = spawn(process.execPath, ['-e', childScript], {
-    stdio: ['ignore', 'pipe', 'inherit'],
+  const session = spawnOwnedProcess(process.execPath, ['-e', stubbornScript], {
+    stdio: 'ignore',
   });
 
-  const grandchildPid = await new Promise((resolve, reject) => {
-    let output = '';
-    const timeout = setTimeout(() => reject(new Error('Grandchild startup timeout')), 5000);
-    child.stdout.on('data', (chunk) => {
-      output += chunk.toString();
-      const match = output.match(/GRANDCHILD_PID:(\d+)/);
-      if (match) {
-        clearTimeout(timeout);
-        resolve(Number.parseInt(match[1], 10));
-      }
-    });
-    child.once('error', (err) => {
-      clearTimeout(timeout);
-      reject(err);
-    });
-  });
+  try {
+    assert.ok(session.pid && isPidAlive(session.pid), 'Stubborn child must be alive');
 
-  assert.ok(child.pid && isPidAlive(child.pid), 'Child process must be alive');
-  assert.ok(grandchildPid && isPidAlive(grandchildPid), 'Grandchild process must be alive');
+    // Terminate with very short grace period to force escalation
+    await session.terminate({ graceTimeoutMs: 100, killTimeoutMs: 1500 });
 
-  // Now terminate the parent child process
-  terminateProcess(child);
-
-  // Verify BOTH child and grandchild are terminated
-  const childExited = await waitForCondition(() => !isPidAlive(child.pid));
-  const grandExited = await waitForCondition(() => !isPidAlive(grandchildPid));
-
-  assert.ok(childExited, 'Child process must be terminated');
-  assert.ok(grandExited, 'Grandchild process must be terminated by tree termination');
-
-  // Verify the unrelated sentinel process is STILL ALIVE
-  assert.ok(isPidAlive(sentinel.pid), 'Unrelated sentinel process must remain unaffected');
-
-  // Clean up sentinel
-  terminateProcess(sentinel);
-  await waitForCondition(() => !isPidAlive(sentinel.pid));
+    const dead = await waitForPidExit(session.pid, 2000);
+    assert.ok(dead, 'Stubborn child must be terminated after escalation');
+  } finally {
+    if (session.pid && isPidAlive(session.pid)) {
+      try { process.kill(session.pid, 'SIGKILL'); } catch {}
+    }
+  }
 });
 
-test('runPlaywright preserves exit codes and cleans up signal listeners', async () => {
+test('runOwnedCommand preserves exit codes and cleans up signal listeners', async () => {
   const initialListeners = process.listenerCount('SIGINT');
 
-  const exitCode = await runPlaywright(
+  const { code } = await runOwnedCommand(
     process.execPath,
     ['-e', 'process.exit(42)'],
     { stdio: 'ignore' },
   );
-  assert.equal(exitCode, 42);
+  assert.equal(code, 42);
   assert.equal(process.listenerCount('SIGINT'), initialListeners);
 });
 

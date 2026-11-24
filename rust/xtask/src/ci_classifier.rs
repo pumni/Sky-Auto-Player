@@ -995,7 +995,14 @@ fn classify_working_tree(root: &Path, base: Option<&str>) -> Result<Classificati
 }
 
 fn parse_arguments(args: &[String]) -> Result<Classification> {
-    if args.iter().any(|arg| arg == "--working-tree") {
+    let working_tree_count = args.iter().filter(|arg| *arg == "--working-tree").count();
+    if working_tree_count > 1 {
+        return Err("duplicate --working-tree option specified".into());
+    }
+    if working_tree_count == 1 {
+        if args.iter().any(|arg| arg == "--github-output") {
+            return Err("--github-output cannot be combined with --working-tree".into());
+        }
         let mut base = None;
         let mut index = 0;
         while index < args.len() {
@@ -1183,6 +1190,19 @@ pub(crate) fn append_github_output(path: &Path, classification: &Classification)
 }
 
 pub(crate) fn run(args: &[String]) -> Result<()> {
+    let is_working_tree = args.iter().any(|arg| arg == "--working-tree");
+    if is_working_tree {
+        // Local working tree preview: purely read-only, never write to --github-output.
+        let classification = match parse_arguments(args) {
+            Ok(classification) => classification,
+            Err(error) => {
+                Classification::full(format!("classifier failure (fail-closed): {error}"))
+            }
+        };
+        println!("{}", classification.render());
+        return Ok(());
+    }
+
     let (classification, github_output) = match parse_arguments(args) {
         Ok(classification) => (
             classification,
@@ -1400,6 +1420,7 @@ mod tests {
 
     #[test]
     fn parse_arguments_rejects_duplicate_or_ambiguous_working_tree_flags() {
+        assert!(parse_arguments(&["--working-tree".into(), "--working-tree".into()]).is_err());
         assert!(
             parse_arguments(&[
                 "--working-tree".into(),
@@ -1419,6 +1440,46 @@ mod tests {
             .is_err()
         );
         assert!(parse_arguments(&["--working-tree".into(), "--full".into()]).is_err());
+        assert!(
+            parse_arguments(&[
+                "--working-tree".into(),
+                "--github-output".into(),
+                "sentinel.txt".into()
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn run_working_tree_never_touches_github_output_even_on_failure() {
+        let temp = temp_dir("working-tree-output-safety");
+        let sentinel_path = temp.join("sentinel-output.txt");
+        let initial_bytes = b"IMMUTABLE_SENTINEL_CONTENT_XYZ";
+        fs::write(&sentinel_path, initial_bytes).unwrap();
+
+        let nonexistent_path = temp.join("nonexistent-output.txt");
+
+        // Call run with --working-tree and --github-output targeting sentinel
+        let res1 = run(&[
+            "--working-tree".into(),
+            "--github-output".into(),
+            sentinel_path.to_str().unwrap().into(),
+        ]);
+        assert!(res1.is_ok());
+        // Verify sentinel was NOT modified
+        assert_eq!(fs::read(&sentinel_path).unwrap(), initial_bytes);
+
+        // Call run with --working-tree and nonexistent output
+        let res2 = run(&[
+            "--working-tree".into(),
+            "--github-output".into(),
+            nonexistent_path.to_str().unwrap().into(),
+        ]);
+        assert!(res2.is_ok());
+        // Verify nonexistent file was NOT created
+        assert!(!nonexistent_path.exists());
+
+        fs::remove_dir_all(temp).unwrap();
     }
 
     #[test]

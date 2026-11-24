@@ -13,99 +13,179 @@ export function loopbackUrl(server) {
   return `http://127.0.0.1:${address.port}`;
 }
 
+export function isPidAlive(pid) {
+  if (!pid || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function waitForPidExit(pid, timeoutMs = 2000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!isPidAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return !isPidAlive(pid);
+}
+
 /**
- * Safely terminates a child process and its owned descendant tree without
- * affecting unrelated development or system processes.
- *
- * On Windows: Uses taskkill targeting the exact owned PID tree (/T /F).
- * On POSIX: Targets the owned process group or falls back to SIGTERM -> SIGKILL.
+ * Explicit session owning a child process and its process tree or group.
  */
-export function terminateProcess(child, options = {}) {
-  if (!child || child.killed || child.exitCode !== null) return;
-  const pid = child.pid;
-  if (!pid) return;
+export class OwnedProcessSession {
+  constructor(child, isGroupLeader) {
+    this.child = child;
+    this.pid = child.pid;
+    this.isGroupLeader = isGroupLeader;
+    this.exited = false;
+    this.exitCode = null;
+    this.exitSignal = null;
 
-  if (process.platform === 'win32') {
-    const result = spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], {
-      stdio: 'ignore',
-      windowsHide: true,
+    child.once('exit', (code, signal) => {
+      this.exited = true;
+      this.exitCode = code;
+      this.exitSignal = signal;
     });
-    // If taskkill encountered an error or unexpected failure (other than process already exited),
-    // fall back to direct child kill.
-    if (result.error || (result.status !== 0 && result.status !== 128 && result.status !== 255)) {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // Child already exited.
-      }
-    }
-  } else {
-    // POSIX process group or direct child termination
-    try {
-      // Attempt process group kill first if child was spawned in its own group
-      process.kill(-pid, 'SIGTERM');
-    } catch {
-      try {
-        child.kill('SIGTERM');
-      } catch {
-        // Child already exited.
-      }
+  }
+
+  /**
+   * Bounded, awaited teardown of the owned process tree.
+   * On POSIX: sends SIGTERM to the owned process group (-pid), awaits exit, and escalates to SIGKILL.
+   * On Windows: invokes taskkill targeting the owned PID tree (/T /F), awaits exit, and verifies cleanup.
+   */
+  async terminate(options = {}) {
+    if (this.exited || !this.pid || !isPidAlive(this.pid)) {
+      this.exited = true;
+      return;
     }
 
-    const timeoutMs = options.graceTimeoutMs ?? 2000;
-    if (timeoutMs > 0) {
-      const timer = setTimeout(() => {
+    const graceTimeoutMs = options.graceTimeoutMs ?? 1500;
+    const killTimeoutMs = options.killTimeoutMs ?? 1000;
+
+    if (process.platform === 'win32') {
+      const result = spawnSync('taskkill', ['/pid', String(this.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+
+      const exited = await waitForPidExit(this.pid, graceTimeoutMs);
+      if (!exited) {
         try {
-          process.kill(-pid, 'SIGKILL');
+          this.child.kill('SIGKILL');
         } catch {
+          // child already dead
+        }
+        const killed = await waitForPidExit(this.pid, killTimeoutMs);
+        if (!killed) {
+          throw new Error(
+            `Failed to cleanly terminate owned process tree for PID ${this.pid} (taskkill exit=${result.status})`,
+          );
+        }
+      }
+      this.exited = true;
+    } else {
+      const target = this.isGroupLeader ? -this.pid : this.pid;
+
+      try {
+        process.kill(target, 'SIGTERM');
+      } catch (err) {
+        if (err.code !== 'ESRCH') {
           try {
-            child.kill('SIGKILL');
-          } catch {
-            // Already dead.
+            this.child.kill('SIGTERM');
+          } catch {}
+        }
+      }
+
+      const exitedGracefully = await waitForPidExit(this.pid, graceTimeoutMs);
+      if (!exitedGracefully) {
+        try {
+          process.kill(target, 'SIGKILL');
+        } catch (err) {
+          if (err.code !== 'ESRCH') {
+            try {
+              this.child.kill('SIGKILL');
+            } catch {}
           }
         }
-      }, timeoutMs);
-      if (typeof timer.unref === 'function') timer.unref();
+        const killed = await waitForPidExit(this.pid, killTimeoutMs);
+        if (!killed) {
+          throw new Error(
+            `Failed to cleanly terminate owned POSIX process group ${target} within deadline`,
+          );
+        }
+      }
+      this.exited = true;
     }
   }
 }
 
 /**
- * Spawns a child process (such as a Playwright test runner) with signal trapping.
- * Ensures the child and any spawned descendants are cleanly torn down on interrupt.
+ * Spawns an explicitly owned child process.
+ * On POSIX platforms, sets detached: true so child becomes the leader of its own process group.
  */
-export function runPlaywright(executable, args, options = {}) {
-  const child = spawn(executable, args, options);
+export function spawnOwnedProcess(executable, args, options = {}) {
+  const isPosix = process.platform !== 'win32';
+  const spawnOptions = {
+    ...options,
+    detached: isPosix ? true : Boolean(options.detached),
+    windowsHide: true,
+  };
+
+  const child = spawn(executable, args, spawnOptions);
+  return new OwnedProcessSession(child, isPosix);
+}
+
+/**
+ * Runs an owned command to completion with signal trapping and bounded cleanup.
+ */
+export function runOwnedCommand(executable, args, options = {}) {
+  const session = spawnOwnedProcess(executable, args, options);
+  const child = session.child;
 
   return new Promise((resolve, reject) => {
-    let cleanedUp = false;
-    const stop = () => terminateProcess(child);
+    let finished = false;
 
-    const onSigInt = () => {
-      stop();
+    const stop = async () => {
+      if (finished) return;
+      try {
+        await session.terminate();
+      } catch (err) {
+        console.error('[process-session] Error during signal termination:', err);
+      }
     };
-    const onSigTerm = () => {
-      stop();
-    };
+
+    const onSigInt = () => { stop(); };
+    const onSigTerm = () => { stop(); };
 
     process.once('SIGINT', onSigInt);
     process.once('SIGTERM', onSigTerm);
 
-    function cleanup() {
-      if (cleanedUp) return;
-      cleanedUp = true;
+    function cleanupListeners() {
       process.removeListener('SIGINT', onSigInt);
       process.removeListener('SIGTERM', onSigTerm);
     }
 
-    child.once('error', (error) => {
-      cleanup();
-      reject(error);
+    child.once('error', (err) => {
+      finished = true;
+      cleanupListeners();
+      reject(err);
     });
 
     child.once('exit', (code, signal) => {
-      cleanup();
-      resolve(signal ? 1 : (code ?? 1));
+      finished = true;
+      cleanupListeners();
+      resolve({ code: code ?? 1, signal });
     });
   });
+}
+
+/**
+ * Convenience wrapper for Playwright test runners preserving exit codes.
+ */
+export async function runPlaywright(executable, args, options = {}) {
+  const { code, signal } = await runOwnedCommand(executable, args, options);
+  return signal ? 1 : (code ?? 1);
 }
