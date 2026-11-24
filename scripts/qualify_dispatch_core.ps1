@@ -1214,7 +1214,7 @@ try {
             throw 'PlaybackCoreLifecycle -PlanOnly requires -Stage Final with candidate and baseline manifests'
         }
     }
-    if ($PlanOnly) { throw '-PlanOnly is available only with PlaybackCoreLifecycle' }
+    if ($PlanOnly -and -not $isPlaybackCoreLifecycle) { throw '-PlanOnly is available only with PlaybackCoreLifecycle' }
     if ($isSessionRedesignProfile -and $Stage -ne 'Final') {
         throw 'DispatchSessionRedesignM3 permits only its single fail-stop Final plan; standalone Canary, Smoke, and Compare are not authorized'
     }

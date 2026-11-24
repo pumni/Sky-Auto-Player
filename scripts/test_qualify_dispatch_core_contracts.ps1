@@ -1764,7 +1764,8 @@ $v3PlanOnlyReturnIndex = if ($v3PlanOnlyBranchIndex -ge 0) { $playbackCoreRunner
 $v3NativePathIndex = if ($v3PlanOnlyReturnIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('Invoke-NativeCase -Scenario', $v3PlanOnlyReturnIndex, [System.StringComparison]::Ordinal) } else { -1 }
 if ($v3PreflightIndex -lt 0 -or $v3SharedMarginIndex -lt $v3FinalStageGateIndex -or
     $v3PlanOnlyBranchIndex -lt $v3SharedMarginIndex -or $v3PlanOnlyReturnIndex -lt $v3PlanOnlyBranchIndex -or
-    $v3PreflightIndex -gt $v3PlanOnlyBranchIndex -or $v3NativePathIndex -lt $v3PlanOnlyReturnIndex) {
+    $v3PreflightIndex -gt $v3PlanOnlyBranchIndex -or $v3NativePathIndex -lt $v3PlanOnlyReturnIndex -or
+    -not $playbackCoreRunnerSource.Contains('if ($PlanOnly -and -not $isPlaybackCoreLifecycle) {')) {
     throw 'PlaybackCoreLifecycle PlanOnly and native execution must share final parameter, manifest, and pair-lineage preflight before either no-send return or native case entry'
 }
 $pclV3ZeroMarginRejected = $false
