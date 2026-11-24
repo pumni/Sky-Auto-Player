@@ -82,4 +82,57 @@ proptest! {
             .collect();
         prop_assert_eq!(actual, allowed);
     }
+
+    /// Packet timeline ticks and packet indices are strictly monotonic and contiguous,
+    /// and every Down intent occupies a valid and registered key slot.
+    #[test]
+    fn packet_timeline_ticks_and_ordering_are_monotonic(
+        mut scan_codes in prop::collection::vec(2_u16..=16, 1..=8),
+        step_us in 1_000_u64..=10_000,
+    ) {
+        scan_codes.sort_unstable();
+        scan_codes.dedup();
+        let chord = scan_codes.clone();
+
+        let actions = vec![
+            action(1, ActionKind::Down, 0, chord.clone()),
+            action(2, ActionKind::Up, step_us, chord.clone()),
+            action(3, ActionKind::Down, step_us * 2, chord.clone()),
+            action(4, ActionKind::Up, step_us * 3, chord),
+        ];
+
+        let schedule = compile_runtime_intents(&actions, &scan_codes)
+            .expect("sequential chords must compile");
+        let count = schedule.packets.len();
+        prop_assert!(count >= 2);
+
+        let mut prev_ticks = TimelineTicks::ZERO;
+        for i in 0..count {
+            let packet = schedule
+                .view_packet_ticks(i, TimelineTicks::ZERO)
+                .expect("all packet indices 0..count must be valid");
+            prop_assert!(packet.effective_ticks >= prev_ticks);
+            prev_ticks = packet.effective_ticks;
+
+            for intent in packet.down_intents {
+                let slot = intent.key_slot();
+                prop_assert!(packet.registry.scan_code_for(slot).is_some());
+            }
+        }
+    }
+
+    /// Actions with scan codes outside the registered allowlist fail closed.
+    #[test]
+    fn unregistered_scan_code_actions_are_rejected(
+        allowed_code in 2_u16..=10,
+        unregistered_code in 11_u16..=20,
+    ) {
+        let actions = vec![
+            action(1, ActionKind::Down, 0, vec![unregistered_code]),
+            action(2, ActionKind::Up, 1_000, vec![unregistered_code]),
+        ];
+        let err = compile_runtime_intents(&actions, &[allowed_code]);
+        let rejected = matches!(err, Err(CompileError::ScanCodeNotAllowed { .. }));
+        prop_assert!(rejected);
+    }
 }

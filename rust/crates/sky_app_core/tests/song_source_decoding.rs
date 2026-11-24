@@ -443,3 +443,37 @@ fn decoder_enforces_source_track_note_and_column_limits() {
         Err(SongDecodeError::ResourceLimit { .. })
     ));
 }
+
+#[test]
+fn boundary_and_malformed_song_inputs_fail_closed_without_panic() {
+    let malformed_inputs: Vec<&[u8]> = vec![
+        b"",
+        b"{",
+        b"{\"type\":",
+        b"{\"type\": 12345}",
+        b"null",
+        b"[]",
+        b"[1, 2, 3]",
+        b"true",
+        b"\"some string\"",
+        &[0x80, 0x81, 0xff, 0xfe, 0x00],
+        b"{\"type\": \"composed\", \"version\": 4, \"bpm\": -120}",
+        b"{\"type\": \"composed\", \"version\": 4, \"bpm\": 0}",
+    ];
+
+    for input in malformed_inputs {
+        let result = decode_song_json(input, "malformed-probe");
+        assert!(
+            result.is_err(),
+            "input {:?} was expected to fail decoding",
+            String::from_utf8_lossy(input)
+        );
+
+        let detect_result = detect_song_format(input);
+        assert!(
+            detect_result.is_err(),
+            "input {:?} was expected to fail format detection",
+            String::from_utf8_lossy(input)
+        );
+    }
+}
