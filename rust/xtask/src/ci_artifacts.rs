@@ -143,35 +143,6 @@ pub(crate) fn sha256_file(path: &Path) -> Result<String> {
     Ok(crate::repo::hex_digest(digest.finalize()))
 }
 
-pub(crate) fn pe_machine(path: &Path, description: &str) -> Result<u16> {
-    require_regular_file(path, description)?;
-    let mut file = File::open(path)?;
-    let size = file.metadata()?.len();
-    if size < 0x40 {
-        return Err(format!("{description} is not a complete PE file").into());
-    }
-    let mut dos = [0_u8; 2];
-    file.read_exact(&mut dos)?;
-    if &dos != b"MZ" {
-        return Err(format!("{description} is missing the DOS header").into());
-    }
-    use std::io::{Seek, SeekFrom};
-    file.seek(SeekFrom::Start(0x3c))?;
-    let mut offset_bytes = [0_u8; 4];
-    file.read_exact(&mut offset_bytes)?;
-    let offset = i32::from_le_bytes(offset_bytes);
-    if offset < 0x40 || offset as u64 > size.saturating_sub(6) {
-        return Err(format!("{description} has an invalid PE header offset").into());
-    }
-    file.seek(SeekFrom::Start(offset as u64))?;
-    let mut header = [0_u8; 6];
-    file.read_exact(&mut header)?;
-    if &header[..4] != b"PE\0\0" {
-        return Err(format!("{description} is missing the PE signature").into());
-    }
-    Ok(u16::from_le_bytes([header[4], header[5]]))
-}
-
 pub(crate) fn validate_public_key(path: &Path) -> Result<String> {
     let metadata = require_regular_file(path, "candidate public key")?;
     if metadata.len() == 0 || metadata.len() > 4096 {
@@ -323,32 +294,6 @@ mod tests {
         path
     }
 
-    fn valid_pe(machine: u16) -> Vec<u8> {
-        let mut bytes = vec![0_u8; 0x86];
-        bytes[0..2].copy_from_slice(b"MZ");
-        bytes[0x3c..0x40].copy_from_slice(&0x80_i32.to_le_bytes());
-        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
-        bytes[0x84..0x86].copy_from_slice(&machine.to_le_bytes());
-        bytes
-    }
-
-    #[test]
-    fn pe_reader_accepts_x64_and_rejects_corruption_and_wrong_machine() {
-        let root = temp_dir("sky-xtask-pe-test");
-        let path = root.join("native_calibration.exe");
-        fs::write(&path, valid_pe(0x8664)).unwrap();
-        assert_eq!(pe_machine(&path, "test PE").unwrap(), 0x8664);
-        fs::write(&path, valid_pe(0x014c)).unwrap();
-        assert_eq!(pe_machine(&path, "test PE").unwrap(), 0x014c);
-        let mut corrupt = valid_pe(0x8664);
-        corrupt[0x80] = b'X';
-        fs::write(&path, corrupt).unwrap();
-        assert!(pe_machine(&path, "test PE").is_err());
-        fs::write(&path, b"not a PE").unwrap();
-        assert!(pe_machine(&path, "test PE").is_err());
-        fs::remove_dir_all(root).unwrap();
-    }
-
     #[test]
     fn direct_inventory_rejects_directories_and_symlinks() {
         let root = temp_dir("sky-xtask-inventory-test");
@@ -385,7 +330,7 @@ mod tests {
     #[test]
     fn replacement_restores_the_original_when_staging_rename_fails() {
         let root = temp_dir("sky-xtask-replace-test");
-        let destination = root.join("native_calibration.exe");
+        let destination = root.join("fixture.exe");
         fs::write(&destination, b"original").unwrap();
         let missing_stage = root.join("missing-stage.exe");
         assert!(replace_file_with_rollback(&missing_stage, &destination).is_err());

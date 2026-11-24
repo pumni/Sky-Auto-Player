@@ -604,13 +604,6 @@ fn diagnostics_dry_run_publishes_unavailable_snapshot() {
     assert_eq!(payload.frame_base_hold_us, 16_667);
     assert_eq!(payload.timing_margin_us, 800);
     assert_eq!(payload.min_hold_us, 17_467);
-    assert_eq!(
-        payload
-            .timing_margin_recommendation
-            .recommended_timing_margin_us,
-        Some(800)
-    );
-    assert!(!payload.timing_margin_recommendation.qualified);
     assert_eq!(payload.pre_call_lt_250us, 0);
     assert_eq!(payload.pre_call_250_500us, 0);
     assert_eq!(payload.pre_call_500_750us, 0);

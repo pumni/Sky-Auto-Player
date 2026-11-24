@@ -85,10 +85,16 @@ fn metadata_recovery_rust_contract(recovery: &str) -> std::result::Result<(), St
     Ok(())
 }
 
-fn nsis_installed_catalog_contract(harness: &str) -> std::result::Result<(), String> {
+fn nsis_installed_catalog_contract(
+    harness: &str,
+    installer_hook: &str,
+) -> std::result::Result<(), String> {
     let harness = source(harness);
     for marker in [
         "fn assert_user_songs_empty",
+        "verify_retired_calibration_upgrade",
+        "RETIRED_CACHE_SENTINEL",
+        "cache/input_latency.json",
         "SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
         "fn launch_smoke",
         "--selftest-update-active-playback",
@@ -114,7 +120,7 @@ fn nsis_installed_catalog_contract(harness: &str) -> std::result::Result<(), Str
         .map(|(_, body)| body)
         .ok_or("Rust NSIS owner is missing its package qualification function")?;
     let qualification = qualification
-        .split_once("\n#[cfg(windows)]\nfn verify_calibration_artifact(")
+        .split_once("\nfn verify_retired_calibration_upgrade(")
         .map(|(body, _)| body)
         .ok_or("Rust NSIS package qualification body is not bounded")?;
     let install = qualification
@@ -123,6 +129,9 @@ fn nsis_installed_catalog_contract(harness: &str) -> std::result::Result<(), Str
     let catalog = qualification
         .find("crate::builtin_catalog::run(")
         .ok_or("Rust NSIS package qualification does not verify the installed built-in catalog")?;
+    let retirement = qualification
+        .find("verify_retired_calibration_upgrade(&install_root, &app_data)?")
+        .ok_or("Rust NSIS package qualification must verify retired executable removal and cache preservation")?;
     let songs_guard = qualification
         .find("assert_user_songs_empty(&app_data.join(\"songs\"))")
         .ok_or("Rust NSIS fresh-install qualification does not assert empty user songs")?;
@@ -143,7 +152,8 @@ fn nsis_installed_catalog_contract(harness: &str) -> std::result::Result<(), Str
     {
         return Err("NSIS qualification must not manually delete the install root to claim uninstall success".into());
     }
-    if install >= catalog
+    if install >= retirement
+        || retirement >= catalog
         || catalog >= launch
         || songs_guard >= launch
         || launch >= uninstall
@@ -155,6 +165,26 @@ fn nsis_installed_catalog_contract(harness: &str) -> std::result::Result<(), Str
             "installed catalog and empty user-song checks must follow install and precede app launch"
                 .into(),
         );
+    }
+    let hook = source(installer_hook);
+    let preinstall = hook
+        .split_once("!macro NSIS_HOOK_PREINSTALL")
+        .and_then(|(_, body)| body.split_once("!macroend"))
+        .map(|(body, _)| body)
+        .ok_or("NSIS preinstall migration hook is missing")?;
+    if !preinstall.contains("Delete \"$INSTDIR\\native_calibration.exe\"")
+        || !preinstall.contains(
+            "IfFileExists \"$INSTDIR\\native_calibration.exe\" sap_retired_calibration_present 0",
+        )
+        || !preinstall.contains(
+            "IfFileExists \"$INSTDIR\\native_calibration.exe\" sap_retired_calibration_failed 0",
+        )
+        || !preinstall.contains("Abort \"The retired calibration payload could not be removed")
+        || preinstall.contains("$APPDATA")
+        || preinstall.contains("input_latency.json")
+        || preinstall.contains("SKY_APP_DATA_ROOT")
+    {
+        return Err("NSIS migration must fail closed when removing the retired executable and must not touch app-data/cache".into());
     }
     let working_directory = harness
         .split_once("fn uninstaller_working_directory(")
@@ -393,15 +423,15 @@ fn rust_release_state_machine_contract(
     }
     let unsigned_artifact = workflow_step_blocks(unsigned)
         .into_iter()
-        .find(|(name, _)| {
-            name == "Upload immutable unsigned installer, calibration executable, and typed manifest"
-        })
+        .find(|(name, _)| name == "Upload immutable unsigned installer and typed manifest")
         .map(|(_, block)| block)
         .ok_or("unsigned Windows build must upload its typed cross-runner handoff")?;
     if !unsigned_artifact.contains("unsigned-handoff/manifest.json")
         || !unsigned_artifact.contains("unsigned-handoff/*.exe")
     {
-        return Err("unsigned run artifact must transfer the manifest, installer, and calibration executable".into());
+        return Err(
+            "unsigned run artifact must transfer the typed manifest and exact installer".into(),
+        );
     }
     let qualification = rust
         .split_once("fn qualify_candidate(")
@@ -409,12 +439,12 @@ fn rust_release_state_machine_contract(
         .map(|(body, _)| body)
         .ok_or("Rust release authority is missing candidate qualification")?;
     let qualification_compact = qualification.split_whitespace().collect::<String>();
-    if !qualification_compact.contains("incoming.join(&handoff.calibration_binary)")
-        || qualification_compact
-            .contains("root.join(\"apps/desktop/src-tauri/resources/native_calibration.exe\")")
+    if qualification_compact.contains("calibration_binary")
+        || qualification_compact.contains("native_calibration.exe")
     {
         return Err(
-            "candidate creation must use the validated cross-runner calibration bytes".into(),
+            "release candidate contract must not depend on the retired calibration executable"
+                .into(),
         );
     }
     let signer = job("sign_qualify")?;
@@ -931,12 +961,8 @@ fn rust_release_state_machine_contract(
         "run_attempt",
         "installer_sha256",
         "producer_job",
-        "calibration_binary",
-        "calibration_binary_size",
-        "calibration_binary_sha256",
-        "calibration_binary_architecture",
-        "MAX_CALIBRATION_BYTES",
-        "ci_artifacts::pe_machine",
+        "schema_version: 3",
+        "unsigned handoff must contain exactly a manifest and installer",
     ] {
         if !handoff.contains(marker) {
             return Err(format!("Rust unsigned handoff is missing bound `{marker}`"));
@@ -1069,8 +1095,11 @@ fn validate_signing_child_environment(
 
 pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
     let read = |path: &str| -> Result<String> { Ok(fs::read_to_string(root.join(path))?) };
-    nsis_installed_catalog_contract(&read("rust/xtask/src/nsis_harness.rs")?)
-        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    nsis_installed_catalog_contract(
+        &read("rust/xtask/src/nsis_harness.rs")?,
+        &read("apps/desktop/src-tauri/nsis-hooks.nsh")?,
+    )
+    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     updater_fixture_contract(&read("rust/xtask/src/updater_fixture.rs")?)
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     let recovery_workflow = read(".github/workflows/v4-metadata-recovery.yml")?;

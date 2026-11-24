@@ -1,12 +1,10 @@
 import { Minus, Plus } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import type { PlaybackOptionSets, TimingMarginRecommendation } from '../../bridge/DesktopBridge';
-import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
+import type { PlaybackOptionSets } from '../../bridge/DesktopBridge';
 
 interface TimingMarginControlProps {
   value: number;
   options: PlaybackOptionSets;
-  recommendation: TimingMarginRecommendation;
   density: 'compact' | 'full';
   onChange: (value: number) => Promise<number | null>;
 }
@@ -24,19 +22,12 @@ interface MutationState {
 export function TimingMarginControl({
   value,
   options,
-  recommendation,
   density,
   onChange,
 }: TimingMarginControlProps) {
   const min = options.timing_margin_min_us;
   const max = options.timing_margin_max_us;
   const step = options.timing_margin_step_us;
-  const recommendedMargin = recommendation.recommended_timing_margin_us;
-  const recommendationWithinRange =
-    recommendedMargin !== null &&
-    recommendedMargin >= min &&
-    recommendedMargin <= max &&
-    recommendedMargin % step === 0;
 
   const [mutationState, setMutationState] = useState<MutationState>({
     pending: [],
@@ -128,15 +119,6 @@ export function TimingMarginControl({
     >
       <div className="timing-margin-heading">
         <span className="timing-margin-label">Timing Margin</span>
-        <span className="timing-margin-recommendation">
-          {recommendedMargin === null
-            ? density === 'compact'
-              ? 'No recommendation'
-              : ' · no recommendation'
-            : density === 'compact'
-              ? `Recommended ${recommendedMargin} µs${recommendationWithinRange ? '' : ' · out of range'}`
-              : ` · rec. ${recommendedMargin} µs${recommendationWithinRange ? '' : ' · out of range'}`}
-        </span>
       </div>
       <div className="timing-margin-stepper">
         <button
@@ -161,9 +143,6 @@ export function TimingMarginControl({
       </div>
       {density === 'full' && (
         <>
-          <span className="settings-note timing-margin-source">
-            Source: {timingMarginRecommendationSourceLabel(recommendation.source)}
-          </span>
           <span className="settings-note">Applies to the minimum key hold</span>
         </>
       )}

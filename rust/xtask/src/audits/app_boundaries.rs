@@ -323,83 +323,6 @@ fn normalize(path: &Path) -> PathBuf {
     normalized
 }
 
-fn resolve_command_relative_path(base: &Path, relative: &str) -> PathBuf {
-    let host_independent = PathBuf::from(relative.replace('\\', "/"));
-    normalize(&base.join(host_independent))
-}
-
-fn validate_calibration_resource_mapping(
-    config_root: &Path,
-    source: &str,
-    destination: &str,
-) -> std::result::Result<(), String> {
-    let host_independent = source.replace('\\', "/");
-    let relative = Path::new(&host_independent);
-    if relative.is_absolute()
-        || relative
-            .components()
-            .any(|component| !matches!(component, Component::Normal(_)))
-    {
-        return Err("Tauri calibration resource source path must be a safe relative path".into());
-    }
-
-    let expected = normalize(&config_root.join("resources/native_calibration.exe"));
-    let resolved = resolve_command_relative_path(config_root, source);
-    if resolved != expected || !resolved.starts_with(config_root) {
-        return Err(
-            "Tauri calibration resource source must resolve inside the Tauri configuration root"
-                .into(),
-        );
-    }
-    if destination != "native_calibration.exe" {
-        return Err(
-            "Tauri calibration resource must stage into the packaged application root".into(),
-        );
-    }
-
-    validate_optional_calibration_resource(config_root)
-}
-
-fn validate_optional_calibration_resource(config_root: &Path) -> std::result::Result<(), String> {
-    let resource_dir = config_root.join("resources");
-    match fs::symlink_metadata(&resource_dir) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => {
-            return Err(format!(
-                "could not inspect optional Tauri resource directory: {error}"
-            ));
-        }
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            return Err("Tauri resource directory must be a real directory, not a symlink".into());
-        }
-        Ok(_) => {}
-    }
-
-    if canonical(resource_dir.clone(), "calibration resource directory")?
-        != normalize(&resource_dir)
-    {
-        return Err("Tauri resource directory resolves outside its configured source path".into());
-    }
-
-    let calibration = resource_dir.join("native_calibration.exe");
-    match fs::symlink_metadata(&calibration) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!(
-            "could not inspect optional Tauri calibration resource: {error}"
-        )),
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
-            Err("Tauri calibration resource must be a regular file, not a symlink".into())
-        }
-        Ok(_)
-            if canonical(calibration.clone(), "calibration resource")?
-                != normalize(&calibration) =>
-        {
-            Err("Tauri calibration resource resolves outside its configured source path".into())
-        }
-        Ok(_) => Ok(()),
-    }
-}
-
 fn validate_script_desktop_root(
     script_path: &str,
     source: &str,
@@ -458,17 +381,8 @@ fn validate_relative_packaging_paths(root: &Path, source: &str) -> std::result::
         .get("build")
         .and_then(Value::as_object)
         .ok_or_else(|| "Tauri config is missing its build object".to_owned())?;
-    if build.get("beforeBuildCommand").and_then(Value::as_str)
-        != Some("bun run build && cd ..\\.. && cargo xtask calibration build")
-    {
-        return Err(
-            "Tauri beforeBuildCommand must return from apps/desktop to the repository root".into(),
-        );
-    }
-    if resolve_command_relative_path(&desktop_root, r"..\..") != repo_root {
-        return Err(
-            "Tauri beforeBuildCommand relative root does not resolve to the repository".into(),
-        );
+    if build.get("beforeBuildCommand").and_then(Value::as_str) != Some("bun run build") {
+        return Err("Tauri beforeBuildCommand must build only the desktop frontend".into());
     }
     if build.get("frontendDist").and_then(Value::as_str) != Some("../dist")
         || normalize(&config_root.join("../dist")) != normalize(&desktop_root.join("dist"))
@@ -503,15 +417,13 @@ fn validate_relative_packaging_paths(root: &Path, source: &str) -> std::result::
             ));
         }
     }
-    let calibration_destination = resources
-        .get("resources/native_calibration.exe")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "Tauri calibration resource mapping is missing or invalid".to_owned())?;
-    validate_calibration_resource_mapping(
-        &config_root,
-        "resources/native_calibration.exe",
-        calibration_destination,
-    )?;
+    if resources.len() != 2
+        || resources
+            .keys()
+            .any(|path| path.contains("native_calibration") || path.contains("input_latency.json"))
+    {
+        return Err("Tauri resources must exclude retired calibration payload and cache".into());
+    }
 
     let windows = config
         .get("bundle")
@@ -734,24 +646,13 @@ mod tests {
 
     #[test]
     fn relocated_tauri_paths_resolve_from_their_documented_windows_working_directories() {
-        let desktop_root = Path::new("repository/apps/desktop");
-        let repository_root = Path::new("repository");
-        assert_eq!(
-            resolve_command_relative_path(desktop_root, r"..\.."),
-            repository_root
-        );
-        assert_eq!(
-            resolve_command_relative_path(desktop_root, "../.."),
-            repository_root
-        );
-
         let root = crate::repo::root();
         let config_path = root.join("apps/desktop/src-tauri/tauri.conf.json");
         let source = fs::read_to_string(&config_path).unwrap();
         assert!(validate_relative_packaging_paths(&root, &source).is_ok());
 
-        let stale_build_cwd = source.replace("cd ..\\\\..", "cd ..");
-        assert!(validate_relative_packaging_paths(&root, &stale_build_cwd).is_err());
+        let nested_build = source.replace("bun run build", "bun run build && cargo tauri build");
+        assert!(validate_relative_packaging_paths(&root, &nested_build).is_err());
         let stale_signer = source.replace("../../../scripts", "../../scripts");
         assert!(validate_relative_packaging_paths(&root, &stale_signer).is_err());
         let stale_song_root = source.replace("../../../songs/*", "../../songs/*");
@@ -814,59 +715,15 @@ mod tests {
     }
 
     #[test]
-    fn calibration_resource_mapping_rejects_wrong_destination_and_escaping_source() {
+    fn retired_calibration_resource_mapping_is_rejected() {
         let (root, _) = packaging_path_fixture();
-        let config_root = fs::canonicalize(root.join("apps/desktop/src-tauri")).unwrap();
-        assert!(
-            validate_calibration_resource_mapping(
-                &config_root,
-                "resources/native_calibration.exe",
-                "app/resources/native_calibration.exe"
-            )
-            .is_err()
-        );
-        assert!(
-            validate_calibration_resource_mapping(
-                &config_root,
-                "../../../outside/native_calibration.exe",
-                "native_calibration.exe"
-            )
-            .is_err()
-        );
-        fs::remove_dir_all(root).unwrap();
-    }
-
-    #[cfg(unix)]
-    fn create_resource_directory_link(link: &Path, target: &Path) {
-        std::os::unix::fs::symlink(target, link).unwrap();
-    }
-
-    #[cfg(windows)]
-    fn create_resource_directory_link(link: &Path, target: &Path) {
-        let status = std::process::Command::new("cmd.exe")
-            .args(["/C", "mklink", "/J"])
-            .arg(link)
-            .arg(target)
-            .status()
-            .expect("create Windows directory junction fixture");
-        assert!(status.success(), "Windows junction fixture creation failed");
-    }
-
-    #[test]
-    fn calibration_resource_mapping_rejects_a_symlink_or_junction_escape() {
-        let (root, _) = packaging_path_fixture();
-        let config_root = fs::canonicalize(root.join("apps/desktop/src-tauri")).unwrap();
-        let outside = root.join("outside");
-        fs::create_dir(&outside).unwrap();
-        create_resource_directory_link(&config_root.join("resources"), &outside);
-        assert!(
-            validate_calibration_resource_mapping(
-                &config_root,
-                "resources/native_calibration.exe",
-                "native_calibration.exe"
-            )
-            .is_err()
-        );
+        let source = fs::read_to_string(crate::repo::root().join("apps/desktop/src-tauri/tauri.conf.json"))
+            .unwrap()
+            .replace(
+                "\"../../../builtin-songs/manifest.json\": \"builtin-songs/manifest.json\"",
+                "\"../../../builtin-songs/manifest.json\": \"builtin-songs/manifest.json\",\n      \"resources/native_calibration.exe\": \"native_calibration.exe\"",
+            );
+        assert!(validate_relative_packaging_paths(&root, &source).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

@@ -18,8 +18,6 @@ export function formatUpdateError(
   switch (code) {
     case 'playback_active':
       return 'Updates cannot be installed while music playback is active. Stop playback and try again.';
-    case 'calibration_active':
-      return 'Updates cannot be installed while timing calibration is running. Complete or cancel calibration and try again.';
     case 'update_busy':
       return 'An update installation is already in progress.';
     case 'closing':

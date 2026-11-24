@@ -163,10 +163,10 @@ trade those checks for shared state.
 - Run website Bun commands from `apps/website/` with its own frozen lockfile.
   `bun run check`, `lint`, `format:check`, `build`, `verify:dist`,
   `verify:seo`, and `test:functional` are the standalone site gates.
-- The packaging hook is configured for the `apps/desktop/` working directory:
-  after `bun run build`, `cd ..\\..` returns to the repository root for
-  `cargo xtask calibration build`. CI and local package qualification use that
-  same relocated path.
+- The Tauri packaging hook is configured for the `apps/desktop/` working
+  directory and runs `bun run build`. Calibration is no longer a packaged
+  executable or package-time build step; native wake diagnostics remain part of
+  the production runtime.
 
 ## Safe classifier extension procedure
 
@@ -185,18 +185,17 @@ for representative multi-path and unknown-path inputs.
 ## Rust-owned CI, artifact, and calibration tools
 
 Rust owns deterministic CI classification, candidate and bridge schemas,
-artifact inventory and digest checks, PE inspection, native calibration, and
-the isolated NSIS/updater fixture lifecycle. PowerShell remains for Windows
+artifact inventory and digest checks, PE inspection, and the isolated
+NSIS/updater fixture lifecycle. PowerShell remains for Windows
 tool installation, Authenticode provider/tool invocation, release transaction
 orchestration, Defender evidence capture, and the exact Defender artifact scan.
 
 | Rust owner | Current contract | Active caller or adapter |
 | --- | --- | --- |
 | `rust/xtask/src/ci_classifier.rs` and unit tests | Classifies event base/head SHAs and manual full dispatch; unknown or invalid changes fail closed to full validation. | The `changes` job calls `cargo xtask ci classify`. |
-| `ci_candidate.rs` and shared `ci_artifacts.rs` | Candidate schema v2 preserves its exact four-file inventory. | Candidate producer, packaged CI, and updater fixture call `cargo xtask ci candidate create/validate`. |
+| `ci_candidate.rs` and shared `ci_artifacts.rs` | Candidate schema v3 binds only the installer, updater signature, and public key; the exact four-file inventory remains locked. | Candidate producer, packaged CI, and updater fixture call `cargo xtask ci candidate create/validate`. |
 | `ci_bridge.rs` and `ci_artifacts.rs` | Bridge schema v1 preserves its exact two-file inventory and detached source worktree. | `cargo xtask ci bridge build-fixture` builds and validates the bridge; updater consumers call Rust validation. |
-| `calibration.rs` build | Builds the locked x86_64 MSVC `dist` binary and stages it with rollback. | Tauri `beforeBuildCommand` and Windows CI call `cargo xtask calibration build`. |
-| `calibration.rs` installed verification | Checks size, SHA-256, x64 PE machine, and bounded `--help`; evidence schema v1 is preserved. | Packaged CI and production release orchestration call `cargo xtask calibration verify-installed`. |
+| `startup_calibration.rs` evidence projection | Canonicalizes startup wake-calibration evidence bytes and writes the SHA-256 sidecar. This is production playback qualification support, not the retired user calibration feature. | Startup qualification evidence scripts call `cargo xtask startup-calibration project-evidence`. |
 | `ci.rs` and `updater_fixture.rs` | Verify exact-commit source identity and prepare detached fixture sources without rewriting the canonical Cargo manifest, lockfile, Tauri config, or catalog. | Updater fixture callers use the Rust-owned source preparation and validation. |
 
 `sky_windows_security::registry` and the `xtask` NSIS/updater owners enforce the
@@ -251,7 +250,7 @@ current audits. Rust fixture tests cover accepted and rejected assembly
 shapes, and the audit has also been run against actual Windows x64 `dist`
 assembly output.
 
-`cargo xtask calibration project-evidence` owns startup calibration JSON
+`cargo xtask startup-calibration project-evidence` owns startup wake-calibration JSON
 projection bytes and SHA-256 sidecars. It normalizes CRLF and CR to LF, writes
 UTF-8 without a BOM, and emits exactly one trailing LF. The startup export
 PowerShell entrypoint still validates the 120-run manifests and assembles the

@@ -4,26 +4,25 @@ import type { NativeBuildDto } from "./NativeBuildDto";
 import type { PlaybackDefaultsDto } from "./PlaybackDefaultsDto";
 import type { PlaybackOptionSetsDto } from "./PlaybackOptionSetsDto";
 import type { SettingsDto } from "./SettingsDto";
-import type { TimingMarginRecommendationDto } from "./TimingMarginRecommendationDto";
 import type { UpdatePreferencesDto } from "./UpdatePreferencesDto";
 
 /**
  * Bootstrap payload. `gui_smoke` is a native-authoritative packaged GUI-smoke
  * mode indicator, not a security capability or an unforgeable renderer token.
  */
-export type BootstrapDto = { app_version: string, protocol_version: number, native_build: NativeBuildDto, 
+export type BootstrapDto = { app_version: string, protocol_version: number, native_build: NativeBuildDto,
 /**
  * Authoritative coherent settings snapshot for initial frontend state.
  */
-settings: SettingsDto, 
+settings: SettingsDto,
 /**
  * Flattened fields remain additive compatibility aliases for protocol v1 clients.
  */
-playback_defaults: PlaybackDefaultsDto, timing_margin_recommendation: TimingMarginRecommendationDto, option_sets: PlaybackOptionSetsDto, 
+playback_defaults: PlaybackDefaultsDto, option_sets: PlaybackOptionSetsDto,
 /**
  * Canonical flattened palette field for protocol-v1 clients.
  */
-palette: string, 
+palette: string,
 /**
  * Legacy/deprecated protocol-v1 compatibility alias for `palette`.
  */

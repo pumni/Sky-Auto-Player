@@ -14,8 +14,6 @@ import type {
   PlaybackPrepare,
   PlaybackStart,
   PlaybackSessionCommand,
-  CalibrationCancel,
-  CalibrationStart,
   DiagnosticsSetEnabled,
   UiEvent,
   Unsubscribe,
@@ -79,8 +77,6 @@ export function createTauriBridge(): DesktopBridge {
     setDiagnosticsEnabled: (request: DiagnosticsSetEnabled) =>
       call(COMMANDS.setDiagnosticsEnabled, request),
     exportSenderTrace: () => call(COMMANDS.exportSenderTrace),
-    startCalibration: (request: CalibrationStart) => call(COMMANDS.startCalibration, request),
-    cancelCalibration: (request: CalibrationCancel) => call(COMMANDS.cancelCalibration, request),
     subscribeUiEvents: async (listener): Promise<Unsubscribe> => {
       const channel = new Channel<UiChannelEvent>();
       channel.onmessage = (event) => listener(normalizeEvent(event));

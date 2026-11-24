@@ -124,11 +124,6 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
             },
             timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
                 .expect("runtime fixture timing policy"),
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             plan_fingerprint: "d".repeat(64),
             physical: false,
             activity_lease: Mutex::new(None),
@@ -740,11 +735,6 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
             },
             timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
                 .expect("runtime fixture timing policy"),
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             plan_fingerprint: "2".repeat(64),
             physical: false,
             activity_lease: Mutex::new(None),
@@ -939,11 +929,6 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
             },
             timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
                 .expect("runtime fixture timing policy"),
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             plan_fingerprint: "6".repeat(64),
             physical: false,
             activity_lease: Mutex::new(None),
@@ -1031,11 +1016,6 @@ fn native_monitor_activation_failure_does_not_arm_guard() {
             },
             timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
                 .expect("runtime fixture timing policy"),
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             plan_fingerprint: "0".repeat(64),
             physical: false,
             activity_lease: Mutex::new(None),

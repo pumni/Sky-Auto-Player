@@ -216,7 +216,6 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "cargo xtask ci candidate create",
         "--bundle-dir",
         "--public-key",
-        "--calibration-binary",
         "--output-root",
         "--source-sha",
         "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
@@ -291,7 +290,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "installer_sha256",
         "updater_signature_sha256",
         "updater_public_key_sha256",
-        "INSTALLED_CALIBRATION_EVIDENCE.json",
+        "INSTALLED_AUTHENTICODE_EVIDENCE.json",
         "actions/upload-artifact@",
     ] {
         if !packaged.contains(marker) {
@@ -362,10 +361,11 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
 
     let nsis_harness = include_str!("../nsis_harness.rs");
     for marker in [
-        "verify_calibration_artifact(",
-        "INSTALLED_CALIBRATION_EVIDENCE.json",
+        "verify_retired_calibration_upgrade(",
+        "RETIRED_CACHE_SENTINEL",
+        "cache/input_latency.json",
+        "native_calibration.exe",
         "INSTALLED_AUTHENTICODE_EVIDENCE.json",
-        "candidate.manifest.calibration_binary_sha256",
         "installed Tauri tree contains no project PE files",
         "--selftest-update-active-playback",
         "assert_uninstall_registration_absent()",
@@ -729,9 +729,6 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
     for marker in [
         "schema_version",
         "source_sha",
-        "calibration_binary_size",
-        "calibration_binary_sha256",
-        "calibration_binary_architecture",
         "installer_sha256",
         "updater_signature_sha256",
         "updater_public_key_sha256",
@@ -741,9 +738,9 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
         "validate_public_key",
         "validate_safe_filename",
         "candidate artifact must contain exactly four files",
-        "create_and_validate_preserve_candidate_v2_schema_and_exact_inventory",
+        "create_and_validate_preserve_candidate_v3_schema_and_exact_inventory",
         "rejects_tampered_installer_signature_public_key_and_source_identity",
-        "rejects_wrong_machine_malformed_pe_traversal_and_unexpected_inventory",
+        "rejects_traversal_and_unexpected_inventory",
         "rejects_unknown_candidate_manifest_fields",
         "public_key_and_safe_filename_rules_reject_private_material_and_paths",
     ] {
@@ -784,7 +781,6 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
         "validate_safe_filename",
         "is_reparse_point",
         "direct_files",
-        "pe_machine",
         "replace_file_with_rollback",
         "replacement_restores_the_original_when_staging_rename_fails",
         "staging_directory_is_removed_after_an_error",
@@ -796,29 +792,18 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
-    let calibration = fs::read_to_string(root.join("rust/xtask/src/calibration.rs"))?;
+    let startup_calibration =
+        fs::read_to_string(root.join("rust/xtask/src/startup_calibration.rs"))?;
     for marker in [
-        "x86_64-pc-windows-msvc",
-        "--profile",
-        "dist",
-        "replace_file_with_rollback",
-        "ProcessTree::attach",
-        "owner.terminate()",
-        "cleanup_timed_out_process",
-        "wait_reader_until",
-        "installed_calibration_timeout_kills_descendants_and_bounds_pipe_readers",
-        "installed_calibration_early_exit_kills_descendant_holding_output_pipes",
-        "calibration_process_tree_probe",
-        "calibration_process_tree_helper",
-        "separate 5-second startup deadline",
-        "installed calibration --help exceeded the 5-second smoke bound",
-        "installed_verification_fails_closed_for_missing_binary_invalid_size_digest_and_pe",
-        "successful_evidence_keeps_the_installed_calibration_schema",
-        "installed_calibration_cli_rejects_unknown_and_duplicate_options",
+        "startup calibration project-evidence",
+        "canonical_projection_bytes",
+        "SHA256 {digest}",
+        "startup_projection_normalizes_line_endings_and_hashes_exact_utf8_bytes",
+        "startup_projection_rejects_empty_input_and_paths_without_file_names",
     ] {
-        if !calibration.contains(marker) {
+        if !startup_calibration.contains(marker) {
             return Err(format!(
-                "Rust native calibration integration is missing its fail-closed marker: {marker}"
+                "Rust startup calibration evidence projection is missing its contract marker: {marker}"
             )
             .into());
         }
@@ -868,9 +853,6 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
         "scripts/test_ci_validate_candidate.ps1",
         "scripts/ci_validate_bridge.ps1",
         "scripts/test_ci_validate_bridge.ps1",
-        "scripts/build_native_calibration.ps1",
-        "scripts/verify_installed_calibration.ps1",
-        "scripts/test_installed_calibration.ps1",
     ] {
         if root.join(script).exists() {
             return Err(
@@ -1284,22 +1266,17 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
     let first_repository_check_position = validate
         .find("name: Repository verification — Rust")
         .ok_or("Windows validation is missing its first repository verification step")?;
-    let calibration_resource_position = validate
-        .find("name: Stage calibration resource for Tauri validation")
-        .ok_or("Windows validation must stage the calibration resource before Tauri checks")?;
     if rust_cache_position >= dependency_check_position
-        || dependency_check_position >= calibration_resource_position
-        || calibration_resource_position >= first_repository_check_position
+        || dependency_check_position >= first_repository_check_position
     {
-        return Err(
-            "Windows validation must cache dependencies, stage the calibration resource, then run repository checks".into(),
-        );
+        return Err("Windows validation must cache dependencies before repository checks".into());
     }
-    if validate.matches("cargo xtask calibration build").count() != 1
-        || !validate.contains("run: cargo xtask calibration build")
+    if validate.contains("cargo xtask calibration build")
+        || validate.contains("native_calibration.exe")
+        || validate.contains("Stage calibration resource")
     {
         return Err(
-            "Windows validation must stage the locked calibration resource exactly once".into(),
+            "Windows validation must not build or stage the retired calibration executable".into(),
         );
     }
     if validate.contains(

@@ -467,10 +467,6 @@ impl<R: Runtime> UpdateService<R> {
                     ActivityReservationError::PhysicalReleaseUnverified => {
                         (UpdateErrorCode::PlaybackActive, UpdateRetryAction::None)
                     }
-                    ActivityReservationError::CalibrationAlreadyActive => (
-                        UpdateErrorCode::CalibrationActive,
-                        UpdateRetryAction::Install,
-                    ),
                     ActivityReservationError::UpdateAlreadyActive => {
                         (UpdateErrorCode::UpdateBusy, UpdateRetryAction::Install)
                     }
@@ -985,9 +981,6 @@ fn update_activity_error(error: ActivityReservationError) -> String {
         }
         ActivityReservationError::PhysicalReleaseUnverified => {
             "playback_release_unverified: update installation is blocked because the previous physical key release could not be verified; restart the application to restore physical input".into()
-        }
-        ActivityReservationError::CalibrationAlreadyActive => {
-            "calibration_active: update installation cannot run during calibration".into()
         }
         ActivityReservationError::UpdateAlreadyActive => {
             "update_busy: another update installation is already active".into()

@@ -382,7 +382,6 @@ impl NativePlaybackService {
             schedule,
             risk,
             timing_policy,
-            timing_margin_recommendation,
             settings_fingerprint,
             publication_fingerprint,
             source_path,
@@ -571,7 +570,6 @@ impl NativePlaybackService {
             prepared_schedule: prepared_dispatch_schedule,
             fingerprint: fingerprint.clone(),
             timing_policy: timing_policy.clone(),
-            timing_margin_recommendation: timing_margin_recommendation.clone(),
         };
         let mut decisions = Vec::new();
         let mut variants = HashMap::from([(PlaybackDecision::Proceed, base_variant)]);
@@ -715,7 +713,6 @@ impl NativePlaybackService {
                                 prepared_schedule: recommended_dispatch,
                                 fingerprint: recommended_fingerprint.clone(),
                                 timing_policy: recommended_policy,
-                                timing_margin_recommendation: timing_margin_recommendation.clone(),
                             },
                         );
                         variant_dtos.push(PlaybackPlanVariantDto {
@@ -771,7 +768,6 @@ impl NativePlaybackService {
                         prepared_schedule: None,
                         fingerprint: dry_run_fingerprint.clone(),
                         timing_policy: timing_policy.clone(),
-                        timing_margin_recommendation: timing_margin_recommendation.clone(),
                     },
                     PlaybackPlanVariantDto {
                         decision: PlaybackDecision::DryRun,
@@ -1145,7 +1141,6 @@ impl NativePlaybackService {
                     total_us: variant.schedule_duration_us,
                     config: variant.config.clone(),
                     timing_policy: variant.timing_policy.clone(),
-                    timing_margin_recommendation: variant.timing_margin_recommendation.clone(),
                     plan_fingerprint: variant.fingerprint.clone(),
                     physical: true,
                     activity_lease: Mutex::new(activity_lease),
@@ -1293,7 +1288,6 @@ impl NativePlaybackService {
             total_us: variant.schedule_duration_us,
             config: variant.config.clone(),
             timing_policy: variant.timing_policy.clone(),
-            timing_margin_recommendation: variant.timing_margin_recommendation.clone(),
             plan_fingerprint: variant.fingerprint.clone(),
             physical: player.is_some(),
             activity_lease: Mutex::new(activity_lease),
@@ -3296,7 +3290,6 @@ fn prepared_plan_capacity_bytes(id: &String, record: &NativePreparedPlan) -> Res
         variant_payloads = checked_capacity_sum([
             variant_payloads,
             variant.fingerprint.capacity(),
-            variant.timing_margin_recommendation.source.capacity(),
             variant
                 .prepared_schedule
                 .as_ref()
@@ -3350,7 +3343,7 @@ mod preparation_cancellation_tests {
     #[cfg(feature = "tauri-test")]
     use super::{compile_dispatch_schedule_with_checkpoint, schedule_metadata_heap_capacity_bytes};
     use crate::app_state::ActivityCoordinator;
-    use crate::commands::{PlaybackConfigDto, TimingMarginRecommendationDto};
+    use crate::commands::PlaybackConfigDto;
     use crate::native_runtime::NativeEventHub;
     use sky_app_core::song::parse_song_json;
     use sky_app_core::timing::MaterializedTimingPolicy;
@@ -3550,11 +3543,6 @@ mod preparation_cancellation_tests {
             schedule,
             risk,
             timing_policy,
-            timing_margin_recommendation: TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             settings_fingerprint: settings_fingerprint.into(),
             publication_fingerprint: settings_fingerprint.into(),
             source_path: PathBuf::new(),

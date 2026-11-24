@@ -14,16 +14,6 @@ fn debug_install_root_is_repository_root_not_cwd() {
 }
 
 #[test]
-fn production_composition_has_no_environment_only_safe_bypass() {
-    assert_eq!(TestSeams::default(), TestSeams::Disabled);
-    assert_ne!(TestSeams::Disabled, TestSeams::SafePackage);
-    // The only selector is an explicit composition value.  There is no
-    // environment-to-seam conversion in either production constructor.
-    assert!(!matches!(TestSeams::Disabled, TestSeams::SafePackage));
-    assert!(matches!(TestSeams::SafePackage, TestSeams::SafePackage));
-}
-
-#[test]
 fn native_bootstrap_uses_explicit_install_root_and_returns_plain_dto() {
     let suffix = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -324,8 +314,6 @@ fn v4_runtime_operates_with_read_only_install_root_and_separate_app_data() {
     let app_data_root = temp.join("app_data");
 
     fs::create_dir_all(&install_root).expect("create install payload");
-    let dummy_exe = install_root.join(sky_native_adapters::CALIBRATION_EXE);
-    fs::write(&dummy_exe, b"immutable-binary-data").expect("write dummy exe");
     let dummy_resource = install_root.join("resources.pak");
     fs::write(&dummy_resource, b"immutable-resource-data").expect("write dummy resource");
 
@@ -341,6 +329,9 @@ fn v4_runtime_operates_with_read_only_install_root_and_separate_app_data() {
     paths
         .ensure_mutable_directories()
         .expect("ensure mutable dirs");
+    let retired_cache = paths.cache_root().join("input_latency.json");
+    let retired_cache_bytes = b"legacy calibration cache sentinel\n";
+    fs::write(&retired_cache, retired_cache_bytes).expect("write retired cache sentinel");
 
     // Place a song sheet in the user songs directory
     let song_file = paths.user_music_root().join("test_song.json");
@@ -350,11 +341,10 @@ fn v4_runtime_operates_with_read_only_install_root_and_separate_app_data() {
         )
         .expect("write test song");
 
-    let runtime = NativeDesktopRuntime::from_paths_with_activity_and_seams(
+    let runtime = NativeDesktopRuntime::from_paths_with_activity(
         paths.clone(),
         sky_native_adapters::AppResources::from_resource_dir(&install_root),
         ActivityCoordinator::default(),
-        TestSeams::SafePackage,
     )
     .expect("start runtime with read-only install root");
 
@@ -379,17 +369,11 @@ fn v4_runtime_operates_with_read_only_install_root_and_separate_app_data() {
     assert!(count >= 1, "catalog must contain at least 1 song");
     assert!(!install_root.join("songs").exists());
 
-    // 3. Calibration writes cache to app_data/cache, not install root
-    runtime
-        .dispatch("calibration.start", serde_json::json!({"mode":"quick"}))
-        .expect("start calibration");
-
-    let deadline = Instant::now() + Duration::from_secs(3);
-    while runtime.calibration.is_calibration_active_for_test() && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(!runtime.calibration.is_calibration_active_for_test());
-    assert!(paths.calibration_cache_path().exists());
+    // 3. Retired user cache bytes remain untouched by runtime startup.
+    assert_eq!(
+        fs::read(&retired_cache).expect("retired cache preserved"),
+        retired_cache_bytes
+    );
     assert!(!install_root.join(".cache").exists());
     assert!(!install_root.join("cache").exists());
 

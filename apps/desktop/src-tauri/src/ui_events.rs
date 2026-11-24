@@ -134,7 +134,6 @@ pub enum UpdateErrorCode {
     UpdateServiceUnavailable,
     ChannelUnavailable,
     PlaybackActive,
-    CalibrationActive,
     UpdateBusy,
     Closing,
     StaleUpdate,
@@ -207,7 +206,6 @@ pub struct DiagnosticsSnapshotDto {
     pub frame_base_hold_us: u64,
     pub timing_margin_us: u64,
     pub min_hold_us: u64,
-    pub timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub pre_call_lt_250us: u64,
     pub pre_call_250_500us: u64,
     pub pre_call_500_750us: u64,
@@ -250,63 +248,6 @@ pub struct DiagnosticsSnapshotDto {
     pub system_suspend_notifications: u64,
     pub system_resume_notifications: u64,
     pub duplicate_system_power_notifications: u64,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
-#[ts(export)]
-#[serde(rename_all = "snake_case")]
-pub enum CalibrationMode {
-    Quick,
-    Full,
-    Diagnostic,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
-#[ts(export)]
-#[serde(rename_all = "snake_case")]
-pub enum CalibrationState {
-    Idle,
-    Starting,
-    Running,
-    Cancelling,
-    Succeeded,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
-#[ts(export)]
-#[serde(rename_all = "snake_case")]
-pub enum CalibrationOutcome {
-    Succeeded,
-    Failed,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
-#[ts(export)]
-#[serde(deny_unknown_fields)]
-pub struct CalibrationProgressPayload {
-    pub operation_id: String,
-    pub state: CalibrationState,
-    pub phase: String,
-    pub completed: u64,
-    pub total: u64,
-    pub message: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize, TS, PartialEq, Eq)]
-#[ts(export)]
-#[serde(deny_unknown_fields)]
-pub struct CalibrationFinishedPayload {
-    pub operation_id: String,
-    pub outcome: CalibrationOutcome,
-    pub status: String,
-    pub recommended_timing_margin_us: Option<u64>,
-    pub recommendation_qualified: bool,
-    pub sample_count: u64,
-    pub source: String,
-    pub message: String,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, TS, PartialEq, Eq)]
@@ -448,16 +389,6 @@ pub enum UiEvent {
         v: u64,
         payload: Box<DiagnosticsSnapshotDto>,
     },
-    #[serde(rename = "calibration.progress")]
-    CalibrationProgress {
-        v: u64,
-        payload: CalibrationProgressPayload,
-    },
-    #[serde(rename = "calibration.finished")]
-    CalibrationFinished {
-        v: u64,
-        payload: CalibrationFinishedPayload,
-    },
     #[serde(rename = "update.changed")]
     UpdateChanged {
         v: u64,
@@ -580,40 +511,6 @@ impl UiEvent {
         Ok(())
     }
 
-    pub(crate) fn validate_calibration_progress(
-        payload: &CalibrationProgressPayload,
-    ) -> Result<(), String> {
-        validate_operation_id(&payload.operation_id)?;
-        validate_text("phase", &payload.phase)?;
-        validate_text("message", &payload.message)?;
-        if payload.total == 0 || payload.total > 10_000 || payload.completed > payload.total {
-            return Err("calibration progress is outside bounds".into());
-        }
-        Ok(())
-    }
-
-    pub(crate) fn validate_calibration_finished(
-        payload: &CalibrationFinishedPayload,
-    ) -> Result<(), String> {
-        validate_operation_id(&payload.operation_id)?;
-        validate_text("status", &payload.status)?;
-        validate_text("source", &payload.source)?;
-        validate_text("message", &payload.message)?;
-        if payload.sample_count > 5_000 {
-            return Err("calibration sample count exceeds bounds".into());
-        }
-        if payload
-            .recommended_timing_margin_us
-            .is_some_and(|value| value > sky_app_core::settings::MAX_TIMING_MARGIN_US)
-        {
-            return Err("calibration recommendation is outside bounds".into());
-        }
-        if payload.recommendation_qualified && payload.recommended_timing_margin_us.is_none() {
-            return Err("qualified calibration is missing its recommendation".into());
-        }
-        Ok(())
-    }
-
     pub(crate) fn validate_update_changed(payload: &UpdateSnapshotPayload) -> Result<(), String> {
         if payload.revision == 0 {
             return Err("event update revision must be positive".into());
@@ -662,10 +559,6 @@ fn validate_song_id(value: &str) -> Result<(), String> {
         return Err("event song_id is not an opaque ID".into());
     }
     Ok(())
-}
-
-fn validate_operation_id(value: &str) -> Result<(), String> {
-    validate_session_id(value).map_err(|_| "calibration operation_id is not an opaque ID".into())
 }
 
 fn is_lower_hex(byte: u8) -> bool {

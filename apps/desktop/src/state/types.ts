@@ -1,8 +1,5 @@
 import type {
   Bootstrap,
-  CalibrationFinished,
-  CalibrationModeId,
-  CalibrationStart,
   DesktopBridge,
   DiagnosticsSnapshot,
   LibraryPlaylistSummary,
@@ -75,15 +72,6 @@ export interface ShuffleTraversal {
   step: number;
   position: number;
 }
-
-export type CalibrationUiState =
-  | 'idle'
-  | 'starting'
-  | 'running'
-  | 'cancelling'
-  | 'succeeded'
-  | 'failed'
-  | 'cancelled';
 
 export type UtilityView = 'details' | 'diagnostics';
 
@@ -161,17 +149,6 @@ export interface DesktopStore {
     enabled: boolean;
     samples: DiagnosticsSnapshot[];
     events: DiagnosticsEventLine[];
-    error: string | null;
-  };
-  calibration: {
-    open: boolean;
-    operationId: string | null;
-    state: CalibrationUiState;
-    phase: string;
-    completed: number;
-    total: number;
-    message: string;
-    result: CalibrationFinished | null;
     error: string | null;
   };
   update: {
@@ -254,9 +231,6 @@ export interface DesktopStore {
   closeUtility: () => void;
   toggleUtility: () => void;
   setUtilityView: (view: UtilityView) => void;
-  startCalibration: (mode?: CalibrationModeId) => Promise<void>;
-  cancelCalibration: () => Promise<void>;
-  setCalibrationOpen: (open: boolean) => void;
 }
 
 export const MAX_DIAGNOSTIC_SAMPLES = 600;
@@ -279,4 +253,4 @@ export interface PlaybackIssuePresentation {
   message: string;
 }
 
-export type { CalibrationStart, DesktopBridge, PlaybackDecisionAcceptance, SearchRequest };
+export type { DesktopBridge, PlaybackDecisionAcceptance, SearchRequest };

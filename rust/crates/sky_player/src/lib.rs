@@ -6,7 +6,7 @@
 
 /// Narrow, typed native surface for delivery adapters.
 ///
-/// Keep the small set of compilation, timing, calibration, and schedule types
+/// Keep the small set of compilation, timing, and schedule types
 /// needed by the desktop adapter behind one typed facade.
 pub mod adapter_support {
     pub use sky_dispatch_core::compile::{CompileError, MAX_ACTIONS, MAX_REASON_BYTES};
@@ -21,10 +21,6 @@ pub mod adapter_support {
     pub use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     pub use sky_dispatch_core::validation::{
         ScheduleTimingError, validate_min_hold_feasibility_ticks,
-    };
-    pub use sky_dispatch_win32::calibration::{
-        CALIBRATION_SCHEMA_VERSION, CalibrationConfig, CalibrationError, HostFingerprint,
-        run_calibration_json,
     };
     pub use sky_dispatch_win32::clock::QpcError;
     pub use sky_dispatch_win32::clock::QpcTicks;
@@ -79,10 +75,6 @@ pub mod adapter_support {
             schedule,
             effective_min_hold_us,
         )
-    }
-
-    pub fn build_host_fingerprint() -> Result<HostFingerprint, CalibrationError> {
-        sky_dispatch_win32::calibration::build_host_fingerprint()
     }
 
     pub fn qpc_frequency_hz() -> Result<u64, QpcError> {

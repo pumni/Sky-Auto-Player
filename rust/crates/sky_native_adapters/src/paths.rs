@@ -17,17 +17,11 @@ use std::path::{Component, Path, PathBuf};
 /// The permanent canonical v4 application identifier used by the package contract.
 pub const V4_APP_IDENTIFIER: &str = "io.github.pumni.skyautoplayer";
 
-/// Name of the native calibration worker binary in the install payload.
-pub const CALIBRATION_EXE: &str = "native_calibration.exe";
-
 /// Default file name for application settings.
 pub const CONFIG_FILE: &str = "config.json";
 
 /// Default file name for the library manifest.
 pub const LIBRARY_MANIFEST_FILE: &str = "library-manifest.json";
-
-/// Default file name for the device calibration cache.
-pub const CALIBRATION_CACHE_FILE: &str = "input_latency.json";
 
 /// Default file name for the private persistent catalog index.
 pub const CATALOG_CACHE_FILE: &str = "catalog-index.json";
@@ -168,21 +162,9 @@ impl AppPaths {
         self.data_root.join(LIBRARY_MANIFEST_FILE)
     }
 
-    /// Full path to the calibration cache file (`input_latency.json`).
-    ///
-    /// Always resolves deterministically to `cache_root/input_latency.json`.
-    pub fn calibration_cache_path(&self) -> PathBuf {
-        self.cache_root.join(CALIBRATION_CACHE_FILE)
-    }
-
     /// Full path to the private persistent catalog index.
     pub fn catalog_cache_path(&self) -> PathBuf {
         self.cache_root.join(CATALOG_CACHE_FILE)
-    }
-
-    /// Full path to the installer-owned calibration executable.
-    pub fn calibration_binary_path(&self) -> PathBuf {
-        self.install_root.join(CALIBRATION_EXE)
     }
 
     /// Resolve a songs directory from user settings.
@@ -521,15 +503,6 @@ mod tests {
             paths.library_manifest_path(),
             app_data.join("library-manifest.json")
         );
-        assert_eq!(
-            paths.calibration_cache_path(),
-            app_data.join("cache").join("input_latency.json")
-        );
-        assert_eq!(
-            paths.calibration_binary_path(),
-            install_root.join("native_calibration.exe")
-        );
-
         assert!(paths.assert_clean_boundary().is_ok());
     }
 

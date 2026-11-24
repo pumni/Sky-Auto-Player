@@ -72,29 +72,24 @@ static` rejects version/config drift, v3 key reuse, private-key material, and
 secret output. Test authority is compiled only by the explicit
 `tauri-update-fixture` feature and exists for packaged qualification.
 
-## Packaged calibration executable
+## Retired dedicated calibration feature
 
-The Tauri beforeBuildCommand runs `cargo xtask calibration build` after the
-frontend build. The Rust command builds `sky_dispatch_win32`'s
-`native_calibration` binary with the locked workspace, the
-`x86_64-pc-windows-msvc` target, and the `dist` profile. It discovers Cargo's
-active target directory, validates the output as an x86_64 PE executable, and
-stages the exact bytes at `apps/desktop/src-tauri/resources/native_calibration.exe`
-with rollback if replacement fails. Tauri bundles that resource at the install
-root, where `AppPaths::calibration_binary_path()` looks for it. Tauri runs this
-hook before starting its application Cargo build; the Rust builder owns its
-separate, completed Cargo build and does not run from `build.rs` or the signing
-hook.
+The user-facing calibration worker, Raw Input observer, cache reader for
+`input_latency.json`, recommendation DTO/UI, and `native_calibration.exe` have
+been retired by product decision. New Tauri packages contain no calibration
+executable or mutable calibration cache. Candidate schema v3 binds the
+installer, updater signature, and public key; release handoff schema v3 binds
+the exact installer and source/workflow identity.
 
-`cargo xtask ci candidate` records the staged executable's filename, size,
-SHA-256, and architecture in the existing candidate schema. Packaged CI installs that exact candidate under
-the hermetic current-user NSIS fixture and independently verifies the
-installed file against those values, checks its x86_64 PE machine type, and
-runs only native_calibration.exe --help with a five-second bound. The
-installed evidence is retained as `INSTALLED_CALIBRATION_EVIDENCE.json`.
-Rust-native tests cover missing files, wrong PE machine, corrupt digest, and
-restore-on-error behavior. Neither check runs calibration or sends gameplay
-input.
+The NSIS preinstall hook removes an existing `native_calibration.exe` only
+under `$INSTDIR` and aborts if deletion fails. Its upgrade contract seeds
+legacy executable bytes in the disposable install root and sentinel bytes in
+app-data, then checks that the executable is absent and cache bytes are
+unchanged. User cache/settings are not migrated or deleted. This retirement
+does not claim native playback parity or performance improvement. Manual timing
+margin remains user-controlled with the 500 µs default; production sender
+diagnostics remain available. Startup wake calibration for the production
+playback path remains separate.
 
 ## Local Windows package qualification
 

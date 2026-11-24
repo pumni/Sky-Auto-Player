@@ -1,5 +1,5 @@
-import type { CalibrationStart, DesktopBridge } from '../bridge/DesktopBridge';
-import type { CalibrationUiState, DesktopStore, UtilityView } from './types';
+import type { DesktopBridge } from '../bridge/DesktopBridge';
+import type { DesktopStore, UtilityView } from './types';
 import { updateWorkbenchPreferences } from './workbenchPreferences';
 
 type DesktopStoreSetter = (partial: Partial<DesktopStore>) => void;
@@ -18,9 +18,6 @@ export type DiagnosticsSliceActions = Pick<
   | 'closeUtility'
   | 'toggleUtility'
   | 'setUtilityView'
-  | 'startCalibration'
-  | 'cancelCalibration'
-  | 'setCalibrationOpen'
 >;
 
 export function createDiagnosticsSlice(context: DiagnosticsSliceContext): DiagnosticsSliceActions {
@@ -95,93 +92,6 @@ export function createDiagnosticsSlice(context: DiagnosticsSliceContext): Diagno
       } else if (view === 'details' && get().diagnostics.enabled) {
         void get().setDiagnosticsEnabled(false);
       }
-    },
-
-    async startCalibration(mode = 'quick') {
-      if (['starting', 'running', 'cancelling'].includes(get().calibration.state)) return;
-      set({
-        calibration: {
-          ...get().calibration,
-          open: true,
-          operationId: null,
-          state: 'starting',
-          phase: mode,
-          completed: 0,
-          total: 0,
-          message: 'Starting calibration…',
-          result: null,
-          error: null,
-        },
-      });
-      try {
-        const ack = await bridge.startCalibration({
-          mode,
-          className: null,
-          polyphony: null,
-          samples: null,
-          timeoutSeconds: null,
-        } satisfies CalibrationStart);
-        const current = get().calibration;
-        if (current.operationId && current.operationId !== ack.operation_id) return;
-        if (['succeeded', 'failed', 'cancelled'].includes(current.state)) return;
-        set({
-          calibration: {
-            ...current,
-            operationId: ack.operation_id,
-            state: ack.state as CalibrationUiState,
-            error: null,
-          },
-        });
-      } catch (error) {
-        set({
-          calibration: {
-            ...get().calibration,
-            state: 'failed',
-            error: error instanceof Error ? error.message : String(error),
-          },
-        });
-      }
-    },
-
-    async cancelCalibration() {
-      const operationId = get().calibration.operationId;
-      if (!operationId || ['succeeded', 'failed', 'cancelled'].includes(get().calibration.state)) {
-        return;
-      }
-      set({ calibration: { ...get().calibration, state: 'cancelling' } });
-      try {
-        const ack = await bridge.cancelCalibration({ operationId });
-        const current = get().calibration;
-        if (
-          ack.operation_id !== operationId ||
-          current.operationId !== operationId ||
-          ['succeeded', 'failed', 'cancelled'].includes(current.state)
-        ) {
-          return;
-        }
-        set({ calibration: { ...current, state: ack.state as CalibrationUiState } });
-      } catch (error) {
-        const current = get().calibration;
-        if (
-          current.operationId !== operationId ||
-          ['succeeded', 'failed', 'cancelled'].includes(current.state)
-        ) {
-          return;
-        }
-        set({
-          calibration: {
-            ...current,
-            state: 'failed',
-            error: error instanceof Error ? error.message : String(error),
-          },
-        });
-      }
-    },
-
-    setCalibrationOpen(open) {
-      const current = get().calibration;
-      if (!open && ['starting', 'running', 'cancelling'].includes(current.state)) return;
-      set({ calibration: { ...current, open } });
     },
   };
 }

@@ -6,7 +6,6 @@ import {
   Palette,
   RefreshCw,
   SlidersHorizontal,
-  Wrench,
   X,
   type LucideIcon,
 } from 'lucide-react';
@@ -22,7 +21,6 @@ const CATEGORY_ICONS: Record<SettingsCategory, LucideIcon> = {
   appearance: Palette,
   diagnostics: Activity,
   updates: RefreshCw,
-  advanced: Wrench,
   donate: Heart,
   about: Info,
 };

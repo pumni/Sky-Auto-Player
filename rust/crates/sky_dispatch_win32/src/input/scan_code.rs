@@ -40,6 +40,7 @@ pub(crate) fn key_mask(scan_code: u16) -> Option<u16> {
     (mask != 0).then_some(mask)
 }
 
+#[cfg(test)]
 #[inline]
 pub(crate) fn valid_instrument_scan_code(scan_code: u16) -> bool {
     key_mask(scan_code).is_some()

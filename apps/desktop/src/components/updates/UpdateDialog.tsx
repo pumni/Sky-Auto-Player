@@ -22,7 +22,6 @@ function getErrorHeading(
   }
   if (
     errorCode === 'playback_active' ||
-    errorCode === 'calibration_active' ||
     errorCode === 'update_busy' ||
     errorCode === 'closing' ||
     errorCode === 'stale_update' ||

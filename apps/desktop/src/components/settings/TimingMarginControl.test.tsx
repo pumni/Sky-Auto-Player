@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { PlaybackOptionSets, TimingMarginRecommendation } from '../../bridge/DesktopBridge';
+import type { PlaybackOptionSets } from '../../bridge/DesktopBridge';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
 import { TimingMarginControl } from './TimingMarginControl';
@@ -14,22 +14,15 @@ const options: PlaybackOptionSets = {
   timing_margin_step_us: 100,
 };
 
-const recommendation: TimingMarginRecommendation = {
-  recommended_timing_margin_us: 1_300,
-  qualified: true,
-  source: 'qualified_calibration',
-};
-
 describe('TimingMarginControl', () => {
   afterEach(() => cleanup());
 
-  it('shows recommendation as text and steps by the backend increment', () => {
+  it('shows the manual value and steps by the backend increment', () => {
     const changes: number[] = [];
     render(
       <TimingMarginControl
         value={800}
         options={options}
-        recommendation={recommendation}
         density="full"
         onChange={async (value) => {
           changes.push(value);
@@ -41,40 +34,28 @@ describe('TimingMarginControl', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
 
     expect(changes).toEqual([900]);
-    expect(screen.getByText('· rec. 1300 µs')).toBeInTheDocument();
-    expect(screen.getByText('Source: Qualified calibration')).toBeInTheDocument();
+    expect(screen.getByText('900 µs')).toBeInTheDocument();
     expect(screen.getByText('Applies to the minimum key hold')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
   });
 
-  it('keeps the compact variant informational and omits source details', () => {
+  it('keeps the compact variant focused on the manual value', () => {
     render(
       <TimingMarginControl
         value={800}
         options={options}
-        recommendation={recommendation}
         density="compact"
         onChange={async (value) => value}
       />,
     );
 
-    expect(screen.getByRole('group', { name: 'Timing Margin' })).toContainElement(
-      screen.getByText('Recommended 1300 µs'),
-    );
+    expect(screen.getByText('800 µs')).toBeInTheDocument();
     expect(screen.queryByText(/Source:/)).not.toBeInTheDocument();
     expect(screen.queryByText('Applies to the minimum key hold')).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
   });
 
   it('disables steps at the configured endpoints', () => {
     const { rerender } = render(
-      <TimingMarginControl
-        value={0}
-        options={options}
-        recommendation={recommendation}
-        density="full"
-        onChange={async () => 0}
-      />,
+      <TimingMarginControl value={0} options={options} density="full" onChange={async () => 0} />,
     );
 
     expect(screen.getByRole('button', { name: 'Decrease Timing Margin' })).toBeDisabled();
@@ -84,7 +65,6 @@ describe('TimingMarginControl', () => {
       <TimingMarginControl
         value={3_000}
         options={options}
-        recommendation={recommendation}
         density="full"
         onChange={async () => 3_000}
       />,
@@ -101,7 +81,6 @@ describe('TimingMarginControl', () => {
       <TimingMarginControl
         value={800}
         options={options}
-        recommendation={recommendation}
         density="compact"
         onChange={(value) => {
           changes.push(value);
@@ -130,7 +109,6 @@ describe('TimingMarginControl', () => {
       <TimingMarginControl
         value={800}
         options={options}
-        recommendation={recommendation}
         density="full"
         onChange={async () => {
           throw new Error('settings IPC failed');
@@ -143,35 +121,12 @@ describe('TimingMarginControl', () => {
     await waitFor(() => expect(screen.getByText('800 µs')).toBeInTheDocument());
   });
 
-  it('shows an over-range recommendation as information and never writes it', () => {
-    const changes: number[] = [];
-    render(
-      <TimingMarginControl
-        value={800}
-        options={options}
-        recommendation={{ ...recommendation, recommended_timing_margin_us: 5_300 }}
-        density="compact"
-        onChange={async (value) => {
-          changes.push(value);
-          return value;
-        }}
-      />,
-    );
-
-    expect(screen.getByText('Recommended 5300 µs · out of range')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
-    expect(changes).toEqual([900]);
-    expect(changes).not.toContain(5_300);
-  });
-
   it('does not resurrect old optimistic override when authoritative prop changes away and back', async () => {
     let confirmWrite: ((value: number) => void) | null = null;
     const { rerender } = render(
       <TimingMarginControl
         value={800}
         options={options}
-        recommendation={recommendation}
         density="compact"
         onChange={() =>
           new Promise((resolve) => {
@@ -195,7 +150,6 @@ describe('TimingMarginControl', () => {
       <TimingMarginControl
         value={900}
         options={options}
-        recommendation={recommendation}
         density="compact"
         onChange={async (v) => v}
       />,
@@ -207,7 +161,6 @@ describe('TimingMarginControl', () => {
       <TimingMarginControl
         value={800}
         options={options}
-        recommendation={recommendation}
         density="compact"
         onChange={async (v) => v}
       />,
@@ -223,7 +176,6 @@ describe('TimingMarginControl', () => {
       <TimingMarginControl
         value={800}
         options={options}
-        recommendation={recommendation}
         density="compact"
         onChange={() =>
           new Promise((resolve) => {
@@ -248,7 +200,6 @@ describe('TimingMarginControl', () => {
       <TimingMarginControl
         value={800}
         options={options}
-        recommendation={recommendation}
         density="compact"
         onChange={() =>
           new Promise((resolve) => {
@@ -274,7 +225,6 @@ describe('TimingMarginControl', () => {
       <TimingMarginControl
         value={800}
         options={options}
-        recommendation={recommendation}
         density="compact"
         onChange={() =>
           new Promise((_, reject) => {
@@ -303,7 +253,6 @@ describe('TimingMarginControl', () => {
       <TimingMarginControl
         value={800}
         options={options}
-        recommendation={recommendation}
         density="compact"
         onChange={() => {
           callCount++;
@@ -350,7 +299,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -389,7 +337,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -427,7 +374,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -464,7 +410,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -501,7 +446,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -534,7 +478,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -571,7 +514,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -608,7 +550,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -640,7 +581,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -672,7 +612,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCountA++;
@@ -702,7 +641,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCountB++;
@@ -733,7 +671,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -752,7 +689,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={900}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={async (v) => v}
         />,
@@ -766,7 +702,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -785,7 +720,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={900}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={async (v) => v}
         />,
@@ -795,7 +729,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={async (v) => v}
         />,
@@ -810,7 +743,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -825,7 +757,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={1200}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -847,7 +778,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -862,7 +792,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={1200}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -886,7 +815,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -905,7 +833,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={1200}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -934,7 +861,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -953,7 +879,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={1300}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={async (v) => v}
         />,
@@ -970,7 +895,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -1001,7 +925,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={1100}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -1031,7 +954,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -1059,7 +981,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={1100}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -1083,7 +1004,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -1099,7 +1019,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={1100}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -1122,7 +1041,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -1138,7 +1056,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={1000}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -1153,7 +1070,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() =>
             new Promise((res) => {
@@ -1178,7 +1094,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={800}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={() => {
             callCount++;
@@ -1203,7 +1118,6 @@ describe('TimingMarginControl', () => {
         <TimingMarginControl
           value={1500}
           options={options}
-          recommendation={recommendation}
           density="compact"
           onChange={async (v) => v}
         />,
@@ -1228,7 +1142,6 @@ describe('TimingMarginControl', () => {
           <TimingMarginControl
             value={timingMargin}
             options={options}
-            recommendation={recommendation}
             density="compact"
             onChange={(val) =>
               patchSettings({ playbackDefaults: { timingMarginUs: val } }).then(

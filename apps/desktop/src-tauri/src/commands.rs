@@ -1,7 +1,5 @@
 use crate::app_state::AppState;
-use crate::ui_events::{
-    CalibrationMode, CalibrationState, CatalogReadiness, UiEvent, UpdateChannel,
-};
+use crate::ui_events::{CatalogReadiness, UiEvent, UpdateChannel};
 pub use crate::ui_events::{UpdateCheckAckDto, UpdateCheckRequest, UpdateInstallAckDto};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -430,14 +428,6 @@ pub struct PlaybackOptionSetsDto {
     pub timing_margin_step_us: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
-#[ts(export)]
-pub struct TimingMarginRecommendationDto {
-    pub recommended_timing_margin_us: Option<u64>,
-    pub qualified: bool,
-    pub source: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct UpdatePreferencesDto {
@@ -461,7 +451,6 @@ pub struct BootstrapDto {
     pub settings: SettingsDto,
     /// Flattened fields remain additive compatibility aliases for protocol v1 clients.
     pub playback_defaults: PlaybackDefaultsDto,
-    pub timing_margin_recommendation: TimingMarginRecommendationDto,
     pub option_sets: PlaybackOptionSetsDto,
     /// Canonical flattened palette field for protocol-v1 clients.
     pub palette: String,
@@ -682,7 +671,6 @@ pub struct SettingsDto {
     pub ui_background_mode: String,
     pub playback_defaults: PlaybackDefaultsDto,
     pub auto_play: bool,
-    pub timing_margin_recommendation: TimingMarginRecommendationDto,
     pub telemetry_enabled: bool,
     pub verbose_hud: bool,
     pub update_preferences: UpdatePreferencesDto,
@@ -784,43 +772,6 @@ pub struct DiagnosticsSetEnabledRequest {
 #[serde(deny_unknown_fields)]
 pub struct DiagnosticsEnabledDto {
     pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub struct CalibrationStartRequest {
-    pub mode: CalibrationMode,
-    pub class_name: Option<String>,
-    pub polyphony: Option<u8>,
-    pub samples: Option<u32>,
-    pub timeout_seconds: Option<f64>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-#[serde(deny_unknown_fields)]
-pub struct CalibrationStartAckDto {
-    pub operation_id: String,
-    pub state: CalibrationState,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub struct CalibrationCancelRequest {
-    pub operation_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export)]
-#[serde(deny_unknown_fields)]
-pub struct CalibrationCancelAckDto {
-    pub operation_id: String,
-    pub state: CalibrationState,
-    pub accepted: bool,
 }
 
 async fn blocking_request<P, R>(
@@ -1106,22 +1057,6 @@ pub async fn set_diagnostics_enabled(
 }
 
 #[tauri::command]
-pub async fn start_calibration(
-    state: State<'_, AppState>,
-    params: CalibrationStartRequest,
-) -> Result<CalibrationStartAckDto, String> {
-    blocking_request(state, "calibration.start", params).await
-}
-
-#[tauri::command]
-pub async fn cancel_calibration(
-    state: State<'_, AppState>,
-    params: CalibrationCancelRequest,
-) -> Result<CalibrationCancelAckDto, String> {
-    blocking_request(state, "calibration.cancel", params).await
-}
-
-#[tauri::command]
 pub async fn prepare_playback(
     state: State<'_, AppState>,
     params: PlaybackPrepareRequest,
@@ -1373,11 +1308,6 @@ mod tests {
                 dry_run: false,
             },
             auto_play: true,
-            timing_margin_recommendation: super::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: None,
-                qualified: false,
-                source: "test".into(),
-            },
             telemetry_enabled: false,
             verbose_hud: false,
             update_preferences: super::UpdatePreferencesDto {

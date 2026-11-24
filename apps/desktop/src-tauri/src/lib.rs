@@ -25,7 +25,6 @@ pub fn startup_process_entry() {
 }
 
 use lifecycle::close_window;
-use native_runtime::TestSeams;
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -243,11 +242,7 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
     if gui_smoke {
         record_gui_smoke_phase("command_ownership.check.pass");
     }
-    let app_state = if gui_smoke || update_smoke {
-        app_state::AppState::with_test_seams(TestSeams::SafePackage)
-    } else {
-        app_state::AppState::default()
-    };
+    let app_state = app_state::AppState::default();
     app_state.set_gui_smoke_exit(gui_smoke);
     let smoke_state = app_state.clone();
     let setup_state = smoke_state.clone();
@@ -453,8 +448,6 @@ fn run_inner(gui_smoke: bool, update_smoke: bool) -> i32 {
             commands::patch_update_preferences,
             commands::begin_update_handoff,
             commands::set_diagnostics_enabled,
-            commands::start_calibration,
-            commands::cancel_calibration,
             commands::prepare_playback,
             commands::start_playback,
             commands::get_playback_status,
@@ -520,11 +513,10 @@ pub fn selftest_packaged_shell() -> i32 {
     };
     let resources = sky_native_adapters::AppResources::from_resource_dir(paths.install_root());
     let selftest_paths = paths.clone();
-    let runtime = match native_runtime::NativeDesktopRuntime::from_paths_with_activity_and_seams(
+    let runtime = match native_runtime::NativeDesktopRuntime::from_paths_with_activity(
         paths,
         resources,
         app_state::ActivityCoordinator::default(),
-        TestSeams::SafePackage,
     ) {
         Ok(runtime) => runtime,
         Err(error) => {
@@ -711,20 +703,6 @@ pub fn selftest_packaged_shell() -> i32 {
                     .map_err(|error| format!("playback.start response: {error}"))?;
             }
         }
-        let calibration: commands::CalibrationStartAckDto = serde_json::from_value(
-            runtime.dispatch("calibration.start", serde_json::json!({"mode": "quick"}))?,
-        )
-        .map_err(|error| format!("calibration.start response: {error}"))?;
-        let state = runtime.wait_for_calibration_terminal(std::time::Duration::from_secs(5))?;
-        if !matches!(
-            state,
-            ui_events::CalibrationState::Succeeded | ui_events::CalibrationState::Cancelled
-        ) {
-            return Err(format!("safe calibration ended in {state:?}"));
-        }
-        if calibration.operation_id.is_empty() {
-            return Err("calibration.start omitted operation_id".into());
-        }
         Ok(())
     })();
     runtime.shutdown();
@@ -747,7 +725,7 @@ pub fn selftest_packaged_shell() -> i32 {
 }
 
 /// Emit only compile-time native build metadata for release qualification.
-/// This path has no application composition, I/O, playback, calibration, or
+/// This path has no application composition, I/O, playback, or
 /// update side effects.
 pub fn selftest_build_info() -> i32 {
     let dto = native_runtime::native_build_dto();

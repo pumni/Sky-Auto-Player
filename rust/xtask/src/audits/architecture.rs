@@ -25,18 +25,10 @@ const ADAPTER_DEPENDENCY_KINDS: &[&str] =
 const NATIVE_RUNTIME_MODULE_ADVISORY_THRESHOLDS: &[(&str, usize)] = &[
     ("apps/desktop/src-tauri/src/native_runtime.rs", 2_000),
     (
-        "apps/desktop/src-tauri/src/native_runtime/calibration.rs",
-        1_550,
-    ),
-    (
         "apps/desktop/src-tauri/src/native_runtime/catalog.rs",
         1_650,
     ),
     ("apps/desktop/src-tauri/src/native_runtime/tests.rs", 900),
-    (
-        "apps/desktop/src-tauri/src/native_runtime/tests/calibration.rs",
-        650,
-    ),
     (
         "apps/desktop/src-tauri/src/native_runtime/tests/catalog.rs",
         1_100,
@@ -52,7 +44,6 @@ const ENGINE_TEST_ROOT_PATH: &str = "rust/crates/sky_player/src/engine/tests.rs"
 const ENGINE_TEST_MODULE_ADVISORY_THRESHOLD: usize = 2_200;
 const XTASK_MODULE_ADVISORY_THRESHOLDS: &[(&str, usize)] = &[
     ("rust/xtask/src/assembly_audit.rs", 1_300),
-    ("rust/xtask/src/calibration.rs", 1_250),
     ("rust/xtask/src/checks.rs", 1_600),
     ("rust/xtask/src/checks/bindings.rs", 700),
     ("rust/xtask/src/checks/bun_pin.rs", 600),

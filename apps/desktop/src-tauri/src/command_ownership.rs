@@ -18,7 +18,7 @@ pub(crate) fn owner_for(method: &str) -> Option<CommandOwner> {
 
 pub(crate) fn matrix_is_complete() -> bool {
     crate::ipc_contract::is_complete()
-        && crate::ipc_contract::COMMANDS.len() == 32
+        && crate::ipc_contract::COMMANDS.len() == 30
         && crate::ipc_contract::COMMANDS
             .iter()
             .all(|command| owner_for(command.method) == Some(CommandOwner::Native))
@@ -32,7 +32,7 @@ mod tests {
 
     #[test]
     fn every_current_desktop_method_has_exactly_one_native_owner() {
-        assert_eq!(crate::ipc_contract::COMMANDS.len(), 32);
+        assert_eq!(crate::ipc_contract::COMMANDS.len(), 30);
         for command in crate::ipc_contract::COMMANDS {
             assert_eq!(owner_for(command.method), Some(CommandOwner::Native));
             assert!(

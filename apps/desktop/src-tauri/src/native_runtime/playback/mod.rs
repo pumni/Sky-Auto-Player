@@ -163,7 +163,6 @@ pub(super) struct NativePlaybackVariant {
     pub(super) prepared_schedule: Option<sky_player::adapter_support::PreparedDispatchSchedule>,
     pub(super) fingerprint: String,
     pub(super) timing_policy: MaterializedTimingPolicy,
-    pub(super) timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
 }
 
 pub(super) struct NativePreparedInput {
@@ -175,7 +174,6 @@ pub(super) struct NativePreparedInput {
     pub(super) schedule: ScheduleMetadata,
     pub(super) risk: RiskReport,
     pub(super) timing_policy: MaterializedTimingPolicy,
-    pub(super) timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub(super) settings_fingerprint: String,
     pub(super) publication_fingerprint: String,
     pub(super) source_path: PathBuf,
@@ -267,7 +265,6 @@ pub(super) struct NativeActivePlayback {
     pub(super) total_us: u64,
     pub(super) config: PlaybackConfigDto,
     pub(super) timing_policy: MaterializedTimingPolicy,
-    pub(super) timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub(super) plan_fingerprint: String,
     pub(super) physical: bool,
     pub(super) activity_lease: Mutex<Option<PhysicalActivityLease>>,

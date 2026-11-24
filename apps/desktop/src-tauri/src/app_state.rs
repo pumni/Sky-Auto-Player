@@ -1,4 +1,4 @@
-use crate::native_runtime::{NativeDesktopRuntime, NativeEventHub, TestSeams};
+use crate::native_runtime::{NativeDesktopRuntime, NativeEventHub};
 use crate::native_update::UpdateService;
 use crate::ui_events::UiEvent;
 #[cfg(any(test, feature = "tauri-test"))]
@@ -9,8 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::ipc::Channel;
 
-/// Single non-realtime admission authority for operations that can own the
-/// physical input/calibration boundary.
+/// Single non-realtime admission authority for physical playback, recovery,
+/// update installation, and shutdown.
 #[derive(Clone)]
 pub(crate) struct ActivityCoordinator {
     state: Arc<Mutex<ActivityState>>,
@@ -31,7 +31,6 @@ struct ActivityState {
     quarantined_session_id: Option<String>,
     recovery_owner_session_id: Option<String>,
     quarantined_release_residual: Option<TerminalReleaseResidual>,
-    calibration_active: bool,
     update_installing: bool,
     closing: bool,
 }
@@ -39,7 +38,6 @@ struct ActivityState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ActivityReservationError {
     Closing,
-    CalibrationAlreadyActive,
     PhysicalPlaybackActive,
     PhysicalReleaseUnverified,
     UpdateAlreadyActive,
@@ -49,7 +47,6 @@ impl std::fmt::Display for ActivityReservationError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let message = match self {
             Self::Closing => "desktop application is closing",
-            Self::CalibrationAlreadyActive => "a calibration operation is already active",
             Self::PhysicalPlaybackActive => "physical playback is active",
             Self::PhysicalReleaseUnverified => {
                 "a previous physical playback release could not be verified; restart the application before using physical input"
@@ -96,9 +93,6 @@ impl ActivityCoordinator {
         if state.physical_release_quarantined {
             return Err(ActivityReservationError::PhysicalReleaseUnverified);
         }
-        if state.calibration_active {
-            return Err(ActivityReservationError::CalibrationAlreadyActive);
-        }
         if state.update_installing {
             return Err(ActivityReservationError::UpdateAlreadyActive);
         }
@@ -109,34 +103,6 @@ impl ActivityCoordinator {
         Ok(PhysicalActivityLease {
             coordinator: self.clone(),
             session_id,
-        })
-    }
-
-    pub(crate) fn reserve_calibration(
-        &self,
-    ) -> Result<CalibrationReservation, ActivityReservationError> {
-        let mut state = self
-            .state
-            .lock()
-            .map_err(|_| ActivityReservationError::Closing)?;
-        if state.closing {
-            return Err(ActivityReservationError::Closing);
-        }
-        if state.physical_release_quarantined {
-            return Err(ActivityReservationError::PhysicalReleaseUnverified);
-        }
-        if state.calibration_active {
-            return Err(ActivityReservationError::CalibrationAlreadyActive);
-        }
-        if state.physical_playback.is_some() {
-            return Err(ActivityReservationError::PhysicalPlaybackActive);
-        }
-        if state.update_installing {
-            return Err(ActivityReservationError::UpdateAlreadyActive);
-        }
-        state.calibration_active = true;
-        Ok(CalibrationReservation {
-            coordinator: self.clone(),
         })
     }
 
@@ -153,9 +119,6 @@ impl ActivityCoordinator {
         }
         if state.physical_playback.is_some() {
             return Err(ActivityReservationError::PhysicalPlaybackActive);
-        }
-        if state.calibration_active {
-            return Err(ActivityReservationError::CalibrationAlreadyActive);
         }
         if state.update_installing {
             return Err(ActivityReservationError::UpdateAlreadyActive);
@@ -310,12 +273,6 @@ impl ActivityCoordinator {
         self.state.lock().map(|state| state.closing).unwrap_or(true)
     }
 
-    pub(crate) fn release_calibration(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            state.calibration_active = false;
-        }
-    }
-
     fn release_update(&self) {
         if let Ok(mut state) = self.state.lock() {
             state.update_installing = false;
@@ -327,18 +284,6 @@ impl ActivityCoordinator {
             state.closing = true;
         }
     }
-
-    #[cfg(test)]
-    pub(crate) fn is_calibration_active(&self) -> bool {
-        self.state
-            .lock()
-            .map(|state| state.calibration_active)
-            .unwrap_or(true)
-    }
-}
-
-pub(crate) struct CalibrationReservation {
-    coordinator: ActivityCoordinator,
 }
 
 pub(crate) struct UpdateInstallLease {
@@ -348,12 +293,6 @@ pub(crate) struct UpdateInstallLease {
 impl Drop for UpdateInstallLease {
     fn drop(&mut self) {
         self.coordinator.release_update();
-    }
-}
-
-impl Drop for CalibrationReservation {
-    fn drop(&mut self) {
-        self.coordinator.release_calibration();
     }
 }
 
@@ -369,7 +308,6 @@ struct AppStateInner {
     settings_writes: Mutex<()>,
     coherence: Mutex<()>,
     activity: ActivityCoordinator,
-    test_seams: Mutex<TestSeams>,
     resources: Mutex<Option<AppResources>>,
     #[cfg(any(test, feature = "tauri-test"))]
     paths_override: Mutex<Option<AppPaths>>,
@@ -388,7 +326,6 @@ impl Default for AppState {
                 settings_writes: Mutex::new(()),
                 coherence: Mutex::new(()),
                 activity: ActivityCoordinator::default(),
-                test_seams: Mutex::new(TestSeams::Disabled),
                 resources: Mutex::new(None),
                 #[cfg(any(test, feature = "tauri-test"))]
                 paths_override: Mutex::new(None),
@@ -410,11 +347,6 @@ impl AppState {
         if let Some(runtime) = &*native {
             return Ok(Arc::clone(runtime));
         }
-        let test_seams = *self
-            .inner
-            .test_seams
-            .lock()
-            .map_err(|_| "native test-seam state poisoned".to_string())?;
         #[cfg(any(test, feature = "tauri-test"))]
         let paths = self
             .inner
@@ -437,11 +369,10 @@ impl AppState {
             .unwrap_or_else(|| AppResources::from_resource_dir(paths.install_root()));
         crate::startup_telemetry::record("native.create.start");
         let runtime = Arc::new(
-            NativeDesktopRuntime::from_paths_with_activity_and_seams_and_update_service_with_events(
+            NativeDesktopRuntime::from_paths_with_activity_and_update_service_with_events(
                 paths,
                 resources,
                 self.activity(),
-                test_seams,
                 self.update_service()
                     .map_err(|_| "native update service state poisoned".to_string())?,
                 self.event_hub(),
@@ -554,16 +485,6 @@ impl AppState {
         self.inner.gui_smoke_exit.store(enabled, Ordering::Release);
     }
 
-    pub(crate) fn with_test_seams(test_seams: TestSeams) -> Self {
-        let state = Self::default();
-        *state
-            .inner
-            .test_seams
-            .lock()
-            .expect("test-seam state poisoned") = test_seams;
-        state
-    }
-
     #[cfg(test)]
     pub(crate) fn with_test_paths(paths: AppPaths) -> Self {
         let state = Self::default();
@@ -598,7 +519,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{ActivityCoordinator, ActivityReservationError, AppState, TestSeams};
+    use super::{ActivityCoordinator, ActivityReservationError, AppState};
     use sky_native_adapters::AppPaths;
     use sky_player::engine::TerminalReleaseResidual;
     use std::sync::{Arc, Barrier, Mutex, mpsc};
@@ -618,9 +539,6 @@ mod tests {
     fn gui_smoke_authorization_is_explicit_and_not_implied_by_safe_package() {
         let ordinary = AppState::default();
         assert!(!ordinary.should_exit_after_close());
-
-        let safe_package = AppState::with_test_seams(TestSeams::SafePackage);
-        assert!(!safe_package.should_exit_after_close());
 
         ordinary.set_gui_smoke_exit(true);
         assert!(ordinary.should_exit_after_close());
@@ -688,26 +606,25 @@ mod tests {
     }
 
     #[test]
-    fn physical_playback_and_calibration_are_one_atomic_exclusion_gate() {
+    fn physical_playback_and_update_are_one_atomic_exclusion_gate() {
         let state = AppState::default();
         let activity = state.activity();
         let playback = activity
             .reserve_playback("session")
             .expect("playback lease");
         assert!(matches!(
-            activity.reserve_calibration(),
+            activity.reserve_update(),
             Err(ActivityReservationError::PhysicalPlaybackActive)
         ));
         drop(playback);
-        let _calibration = activity.reserve_calibration().expect("calibration slot");
+        let _update = activity.reserve_update().expect("update slot");
         assert!(matches!(
             activity.reserve_playback("other"),
-            Err(ActivityReservationError::CalibrationAlreadyActive)
+            Err(ActivityReservationError::UpdateAlreadyActive)
         ));
-        activity.release_calibration();
+        drop(_update);
         let playback = activity.reserve_playback("other").expect("released slot");
         drop(playback);
-        assert!(!activity.is_calibration_active());
     }
 
     #[test]
@@ -736,10 +653,6 @@ mod tests {
             activity.reserve_playback("successor"),
             Err(ActivityReservationError::PhysicalReleaseUnverified)
         ));
-        assert_eq!(
-            activity.reserve_calibration().map(|_| ()),
-            Err(ActivityReservationError::PhysicalReleaseUnverified)
-        );
         assert_eq!(
             activity.reserve_update().map(|_| ()),
             Err(ActivityReservationError::PhysicalReleaseUnverified)
@@ -812,25 +725,25 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_playback_and_calibration_reservation_has_one_winner() {
+    fn concurrent_playback_and_update_reservation_has_one_winner() {
         for _ in 0..64 {
             let coordinator = ActivityCoordinator::default();
             let barrier = Arc::new(Barrier::new(2));
             let playback_gate = coordinator.clone();
-            let calibration_gate = coordinator.clone();
+            let update_gate = coordinator.clone();
             let playback_barrier = Arc::clone(&barrier);
-            let calibration_barrier = Arc::clone(&barrier);
+            let update_barrier = Arc::clone(&barrier);
             let playback = thread::spawn(move || {
                 playback_barrier.wait();
                 playback_gate.reserve_playback("native-session")
             });
-            let calibration = thread::spawn(move || {
-                calibration_barrier.wait();
-                calibration_gate.reserve_calibration()
+            let update = thread::spawn(move || {
+                update_barrier.wait();
+                update_gate.reserve_update()
             });
             let playback_result = playback.join().expect("playback thread");
-            let calibration_result = calibration.join().expect("calibration thread");
-            assert_ne!(playback_result.is_ok(), calibration_result.is_ok());
+            let update_result = update.join().expect("update thread");
+            assert_ne!(playback_result.is_ok(), update_result.is_ok());
         }
     }
 

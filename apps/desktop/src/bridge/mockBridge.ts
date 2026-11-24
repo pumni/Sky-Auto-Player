@@ -3,11 +3,6 @@ import type {
   Bootstrap,
   PlaybackConfig,
   PreparedPlayback,
-  CalibrationCancel,
-  CalibrationCancelAck,
-  CalibrationStart,
-  CalibrationStartAck,
-  CalibrationStateId,
   DesktopBridge,
   DetailRequest,
   SearchRequest,
@@ -266,11 +261,6 @@ function initialSettings(): Settings {
       dry_run: false,
     },
     auto_play: true,
-    timing_margin_recommendation: {
-      recommended_timing_margin_us: 500,
-      qualified: false,
-      source: 'default_fallback',
-    },
     telemetry_enabled: true,
     verbose_hud: false,
     update_preferences: {
@@ -397,7 +387,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   let diagnosticsEnabled = false;
   let diagnosticsSeq = 0;
   let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
-  let calibration: { operationId: string; state: CalibrationStateId } | null = null;
   const likedSongIds = new Set<string>();
   const playlistMembership = new Map<string, Set<string>>();
   const localRows = new Map<string, SearchResult['items'][number]>([
@@ -406,7 +395,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   ]);
   let playlists: LibraryPlaylistSummary[] = [];
   let playlistSequence = 0;
-  let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(event: UiEvent) => void>();
   const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
   let updateRevision = updateSnapshot?.revision ?? 0;
@@ -482,7 +470,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         frame_base_hold_us: frameBaseHoldUs,
         timing_margin_us: config.timing_margin_us,
         min_hold_us: frameBaseHoldUs + config.timing_margin_us,
-        timing_margin_recommendation: settings.timing_margin_recommendation,
         pre_call_lt_250us: 0,
         pre_call_250_500us: 0,
         pre_call_500_750us: 1,
@@ -528,34 +515,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         system_suspend_notifications: 0,
         system_resume_notifications: 0,
         duplicate_system_power_notifications: 0,
-      },
-    });
-  };
-  const emitCalibrationFinished = (operationId: string, outcome: 'succeeded' | 'cancelled') => {
-    const recommendedTimingMarginUs =
-      outcome === 'succeeded' ? Math.ceil((300 + 100) / 100) * 100 : null;
-    if (outcome === 'succeeded') {
-      settings = {
-        ...settings,
-        timing_margin_recommendation: {
-          recommended_timing_margin_us: recommendedTimingMarginUs!,
-          qualified: true,
-          source: 'qualified_calibration',
-        },
-      };
-    }
-    emit({
-      v: 1,
-      name: 'calibration.finished',
-      payload: {
-        operation_id: operationId,
-        outcome,
-        status: outcome === 'succeeded' ? 'ready' : 'cancelled',
-        recommended_timing_margin_us: recommendedTimingMarginUs,
-        recommendation_qualified: outcome === 'succeeded',
-        sample_count: outcome === 'succeeded' ? 24 : 0,
-        source: outcome === 'succeeded' ? 'qualified_calibration' : 'unavailable',
-        message: outcome === 'succeeded' ? 'Calibration completed.' : 'Calibration cancelled.',
       },
     });
   };
@@ -690,7 +649,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         native_build: MOCK_NATIVE,
         settings: { ...settings },
         playback_defaults: settings.playback_defaults,
-        timing_margin_recommendation: settings.timing_margin_recommendation,
         option_sets: {
           hold_frames: [1, 1.25, 1.5],
           tempo_scales: [0.75, 0.9, 1, 1.1],
@@ -1578,47 +1536,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         },
       });
     },
-    async startCalibration(request: CalibrationStart): Promise<CalibrationStartAck> {
-      if (activeSession) throw new Error('calibration conflicts with active playback');
-      if (calibration && ['starting', 'running', 'cancelling'].includes(calibration.state)) {
-        throw new Error('calibration is already running');
-      }
-      const operationId = `c${Date.now().toString(16).padStart(31, '0')}`.slice(-32);
-      calibration = { operationId, state: 'running' };
-      emit({
-        v: 1,
-        name: 'calibration.progress',
-        payload: {
-          operation_id: operationId,
-          state: 'running',
-          phase: request.mode,
-          completed: 0,
-          total: 3,
-          message: 'Calibration is running.',
-        },
-      });
-      calibrationTimer = setTimeout(() => {
-        if (!calibration || calibration.operationId !== operationId) return;
-        calibration = { operationId, state: 'succeeded' };
-        emitCalibrationFinished(operationId, 'succeeded');
-      }, 30);
-      return { operation_id: operationId, state: 'running' };
-    },
-    async cancelCalibration(request: CalibrationCancel): Promise<CalibrationCancelAck> {
-      if (!calibration || calibration.operationId !== request.operationId) {
-        throw new Error('calibration operation is stale');
-      }
-      if (calibration.state === 'succeeded' || calibration.state === 'cancelled') {
-        return { operation_id: request.operationId, state: calibration.state, accepted: false };
-      }
-      if (calibrationTimer !== null) {
-        clearTimeout(calibrationTimer);
-        calibrationTimer = null;
-      }
-      calibration = { operationId: request.operationId, state: 'cancelled' };
-      emitCalibrationFinished(request.operationId, 'cancelled');
-      return { operation_id: request.operationId, state: 'cancelled', accepted: true };
-    },
     async subscribeUiEvents(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -1626,9 +1543,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     async shutdown(_failed = false) {
       if (diagnosticsTimer !== null) clearInterval(diagnosticsTimer);
       stopPlaybackTimer();
-      if (calibrationTimer !== null) clearTimeout(calibrationTimer);
       diagnosticsTimer = null;
-      calibrationTimer = null;
       activeSession = null;
       listeners.clear();
     },

@@ -1282,10 +1282,6 @@ fn retirement_commit_failure_publishes_failed_status_and_retains_quarantine() {
         Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
     ));
     assert!(matches!(
-        activity.reserve_calibration(),
-        Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
-    ));
-    assert!(matches!(
         activity.reserve_update(),
         Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
     ));
@@ -1647,10 +1643,6 @@ fn joined_worker_with_unverified_release_quarantines_future_physical_activity() 
         Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
     ));
     assert_eq!(
-        activity.reserve_calibration().map(|_| ()),
-        Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
-    );
-    assert_eq!(
         activity.reserve_update().map(|_| ()),
         Err(crate::app_state::ActivityReservationError::PhysicalReleaseUnverified)
     );
@@ -1736,10 +1728,6 @@ fn join_timeout_keeps_session_exclusive_until_delayed_terminal_cleanup() {
     assert!(!active.done.load(Ordering::Acquire));
     assert!(matches!(
         activity.reserve_playback("session-b"),
-        Err(crate::app_state::ActivityReservationError::PhysicalPlaybackActive)
-    ));
-    assert!(matches!(
-        activity.reserve_calibration(),
         Err(crate::app_state::ActivityReservationError::PhysicalPlaybackActive)
     ));
     assert!(matches!(

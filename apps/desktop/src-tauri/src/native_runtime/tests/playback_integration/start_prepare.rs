@@ -820,11 +820,6 @@ fn native_prepare_short_up_gap_confirmation_offers_proceed_and_dry_run_without_r
             schedule,
             risk,
             timing_policy,
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
             publication_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
             source_path: std::path::PathBuf::new(),

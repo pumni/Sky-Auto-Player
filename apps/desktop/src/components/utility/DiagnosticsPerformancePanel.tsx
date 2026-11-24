@@ -1,6 +1,5 @@
 import { TabPanel } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
-import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
 import { backendStatusLabel, measure, playbackStatusLabel } from './diagnosticsPresentation';
 import {
   DiagnosticsEmptyState,
@@ -230,20 +229,6 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
             />
             <Metric label="Configured Timing Margin" value={`${latest.timing_margin_us} µs`} />
             <Metric label="Target hold" value={`${(latest.min_hold_us / 1_000).toFixed(3)} ms`} />
-            <Metric
-              label="Recommended sender margin"
-              value={
-                latest.timing_margin_recommendation.recommended_timing_margin_us === null
-                  ? 'Unavailable'
-                  : `${latest.timing_margin_recommendation.recommended_timing_margin_us} µs`
-              }
-            />
-            <Metric
-              label="Recommendation source"
-              value={timingMarginRecommendationSourceLabel(
-                latest.timing_margin_recommendation.source,
-              )}
-            />
           </MetricGroup>
           <MetricGroup title="Late events">
             <Metric label="Completion > 2 ms" value={senderSampleMetric(latest.late_2ms)} />

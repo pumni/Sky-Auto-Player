@@ -11,6 +11,7 @@ use std::path::PathBuf;
 
 const OWNER_SENTINEL: &str = ".sky-auto-player-wave-c-owner";
 const OWNER_SENTINEL_CONTENT: &[u8] = b"Sky Auto Player disposable installer harness v1\n";
+const RETIRED_CACHE_SENTINEL: &[u8] = b"legacy-cache-bytes-must-remain-untouched\n";
 #[cfg(windows)]
 const PRIVATE_ENVIRONMENT_NAMES: &[&str] = &[
     "TAURI_SIGNING_PRIVATE_KEY",
@@ -160,7 +161,6 @@ pub(crate) fn run(repository_root: &Path, args: &[String]) -> Result<()> {
     let operation = qualify_package(
         repository_root,
         &installer,
-        &candidate,
         &evidence_root,
         authenticode_mode,
         &mut scope,
@@ -298,7 +298,6 @@ fn is_hosted_disposable_runner(actions: Option<&str>, environment: Option<&str>)
 fn qualify_package(
     repository_root: &Path,
     installer: &Path,
-    candidate: &crate::ci_candidate::CandidateContract,
     evidence_root: &Path,
     authenticode_mode: &str,
     scope: &mut WindowsSmokeScope,
@@ -308,6 +307,14 @@ fn qualify_package(
     let app = install_root.join("sky_desktop_shell.exe");
     let uninstaller = install_root.join("uninstall.exe");
     std::fs::create_dir_all(&app_data)?;
+    std::fs::create_dir_all(&install_root)?;
+    std::fs::write(
+        install_root.join("native_calibration.exe"),
+        b"retired-payload",
+    )?;
+    let retired_cache = app_data.join("cache/input_latency.json");
+    std::fs::create_dir_all(retired_cache.parent().expect("cache has a parent"))?;
+    std::fs::write(&retired_cache, RETIRED_CACHE_SENTINEL)?;
     run_installer(
         installer,
         &install_root,
@@ -316,13 +323,7 @@ fn qualify_package(
     )?;
     require_regular_file(&app, "installed desktop executable")?;
     require_regular_file(&uninstaller, "installed NSIS uninstaller")?;
-
-    verify_calibration_artifact(
-        repository_root,
-        &install_root,
-        candidate,
-        Some(&evidence_root.join("INSTALLED_CALIBRATION_EVIDENCE.json")),
-    )?;
+    verify_retired_calibration_upgrade(&install_root, &app_data)?;
     crate::builtin_catalog::run(
         repository_root,
         "verify-installed",
@@ -387,27 +388,17 @@ fn qualify_package(
     Ok(())
 }
 
-#[cfg(windows)]
-fn verify_calibration_artifact(
-    repository_root: &Path,
-    install_root: &Path,
-    candidate: &crate::ci_candidate::CandidateContract,
-    evidence: Option<&Path>,
-) -> Result<()> {
-    let mut args = vec![
-        "verify-installed".to_owned(),
-        "--install-root".to_owned(),
-        install_root.to_string_lossy().into_owned(),
-        "--expected-size".to_owned(),
-        candidate.manifest.calibration_binary_size.to_string(),
-        "--expected-sha256".to_owned(),
-        candidate.manifest.calibration_binary_sha256.clone(),
-    ];
-    if let Some(evidence) = evidence {
-        args.push("--evidence".to_owned());
-        args.push(evidence.to_string_lossy().into_owned());
+fn verify_retired_calibration_upgrade(install_root: &Path, app_data: &Path) -> Result<()> {
+    if install_root.join("native_calibration.exe").exists() {
+        return Err("upgraded install still contains retired native_calibration.exe".into());
     }
-    crate::calibration::run(repository_root, &args)
+    let cache = app_data.join("cache/input_latency.json");
+    let bytes = std::fs::read(&cache)
+        .map_err(|error| format!("legacy app-data cache was removed or unreadable: {error}"))?;
+    if bytes != RETIRED_CACHE_SENTINEL {
+        return Err("installer changed legacy app-data cache bytes".into());
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1348,69 +1339,41 @@ mod tests {
         (base, runner_temp, workspace)
     }
 
-    #[cfg(windows)]
     #[test]
-    fn installed_calibration_uses_candidate_bytes_without_producer_staging() {
-        let (base, runner_temp, workspace) = synthetic_roots();
-        let repository = workspace.join("consumer-checkout");
-        let install = runner_temp.join("consumer-install");
-        std::fs::create_dir(&repository).expect("create synthetic consumer checkout");
-        std::fs::create_dir(&install).expect("create synthetic install root");
-        let staged_resources = repository.join("apps/desktop/src-tauri/resources");
-        assert!(!staged_resources.exists());
+    fn retired_calibration_upgrade_removes_only_install_payload_and_preserves_cache() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock")
+            .as_nanos();
+        let base = std::env::temp_dir().join(format!(
+            "sky-retired-calibration-upgrade-{}-{nonce:x}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&base).expect("create synthetic upgrade root");
+        let install = base.join("install");
+        let app_data = base.join("app-data");
+        std::fs::create_dir_all(&install).expect("create synthetic install root");
+        std::fs::create_dir_all(app_data.join("cache")).expect("create synthetic app-data cache");
+        std::fs::write(
+            install.join("native_calibration.exe"),
+            b"old installer-owned payload",
+        )
+        .expect("write old install payload");
+        std::fs::write(
+            app_data.join("cache/input_latency.json"),
+            RETIRED_CACHE_SENTINEL,
+        )
+        .expect("write user cache sentinel");
+        std::fs::remove_file(install.join("native_calibration.exe"))
+            .expect("simulate NSIS PREINSTALL cleanup inside install root");
+        verify_retired_calibration_upgrade(&install, &app_data)
+            .expect("retired payload is absent and app-data cache is unchanged");
+        assert!(!install.join("native_calibration.exe").exists());
 
-        let expected_bytes = synthetic_x64_pe();
-        let expected_path = runner_temp.join("expected-native-calibration.exe");
-        std::fs::write(&expected_path, &expected_bytes).expect("write expected fixture bytes");
-        let expected_sha256 =
-            crate::ci_artifacts::sha256_file(&expected_path).expect("hash expected fixture bytes");
-        let candidate = crate::ci_candidate::CandidateContract {
-            manifest: crate::ci_candidate::CandidateManifest {
-                schema_version: 2,
-                source_sha: "a".repeat(40),
-                version: "4.2.0".to_owned(),
-                calibration_binary: "native_calibration.exe".to_owned(),
-                calibration_binary_size: expected_bytes.len() as u64,
-                calibration_binary_sha256: expected_sha256,
-                calibration_binary_architecture: "x86_64".to_owned(),
-                installer: "installer.exe".to_owned(),
-                installer_sha256: String::new(),
-                updater_signature: "installer.exe.sig".to_owned(),
-                updater_signature_sha256: String::new(),
-                updater_public_key: "updater-public-key.pub".to_owned(),
-                updater_public_key_sha256: String::new(),
-            },
-            installer_sha256: String::new(),
-            signature_sha256: String::new(),
-            public_key_sha256: String::new(),
-        };
-
-        let missing = verify_calibration_artifact(&repository, &install, &candidate, None)
-            .expect_err("missing installed calibration must fail closed")
-            .to_string();
-        assert!(missing.contains("installed native_calibration.exe is missing"));
-
-        let mut wrong_bytes = expected_bytes;
-        wrong_bytes[0x20] ^= 1;
-        std::fs::write(install.join("native_calibration.exe"), wrong_bytes)
-            .expect("write wrong installed fixture bytes");
-        let mismatch = verify_calibration_artifact(&repository, &install, &candidate, None)
-            .expect_err("installed calibration must match the frozen candidate digest")
-            .to_string();
-        assert!(mismatch.contains("installed calibration SHA-256 mismatch"));
-        assert!(!staged_resources.exists());
-
+        std::fs::remove_file(app_data.join("cache/input_latency.json"))
+            .expect("mutate app-data cache fixture");
+        assert!(verify_retired_calibration_upgrade(&install, &app_data).is_err());
         std::fs::remove_dir_all(base).expect("remove synthetic consumer fixture");
-    }
-
-    #[cfg(windows)]
-    fn synthetic_x64_pe() -> Vec<u8> {
-        let mut bytes = vec![0_u8; 0x86];
-        bytes[0..2].copy_from_slice(b"MZ");
-        bytes[0x3c..0x40].copy_from_slice(&0x80_i32.to_le_bytes());
-        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
-        bytes[0x84..0x86].copy_from_slice(&0x8664_u16.to_le_bytes());
-        bytes
     }
 
     #[cfg(windows)]

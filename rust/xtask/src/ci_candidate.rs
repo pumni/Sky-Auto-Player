@@ -2,8 +2,8 @@
 
 use crate::Result;
 use crate::ci_artifacts::{
-    StagingDirectory, direct_files, pe_machine, require_directory, require_regular_file,
-    sha256_file, validate_commit_sha, validate_digest, validate_public_key, validate_safe_filename,
+    StagingDirectory, direct_files, require_directory, require_regular_file, sha256_file,
+    validate_commit_sha, validate_digest, validate_public_key, validate_safe_filename,
     validate_semver, write_new_file,
 };
 use serde::{Deserialize, Serialize};
@@ -19,10 +19,6 @@ pub(crate) struct CandidateManifest {
     pub(crate) schema_version: u32,
     pub(crate) source_sha: String,
     pub(crate) version: String,
-    pub(crate) calibration_binary: String,
-    pub(crate) calibration_binary_size: u64,
-    pub(crate) calibration_binary_sha256: String,
-    pub(crate) calibration_binary_architecture: String,
     pub(crate) installer: String,
     pub(crate) installer_sha256: String,
     pub(crate) updater_signature: String,
@@ -87,7 +83,7 @@ pub(crate) fn read_candidate(
         .into());
     }
     let manifest = read_manifest(&metadata_path)?;
-    if manifest.schema_version != 2 {
+    if manifest.schema_version != 3 {
         return Err(format!(
             "unsupported candidate contract schema: {}",
             manifest.schema_version
@@ -103,22 +99,6 @@ pub(crate) fn read_candidate(
     if manifest.version != expected_version {
         return Err("candidate version does not match the checked-out source version".into());
     }
-    if manifest.calibration_binary != "native_calibration.exe" {
-        return Err(
-            "candidate calibration binary filename is not the locked executable name".into(),
-        );
-    }
-    if manifest.calibration_binary_size == 0 {
-        return Err("candidate calibration binary size must be positive".into());
-    }
-    let calibration_sha = validate_digest(
-        &manifest.calibration_binary_sha256,
-        "candidate calibration binary SHA-256",
-    )?;
-    if manifest.calibration_binary_architecture != "x86_64" {
-        return Err("candidate calibration binary architecture is not x86_64".into());
-    }
-
     validate_safe_filename(&manifest.installer, "installer")?;
     validate_safe_filename(&manifest.updater_signature, "updater_signature")?;
     validate_safe_filename(&manifest.updater_public_key, "updater_public_key")?;
@@ -188,7 +168,6 @@ pub(crate) fn read_candidate(
     Ok(CandidateContract {
         manifest: CandidateManifest {
             source_sha: observed_source,
-            calibration_binary_sha256: calibration_sha,
             installer_sha256: installer_digest,
             updater_signature_sha256: signature_digest,
             updater_public_key_sha256: public_key_digest,
@@ -200,30 +179,15 @@ pub(crate) fn read_candidate(
     })
 }
 
-fn calibration_details(path: &Path) -> Result<(u64, String)> {
-    let metadata = require_regular_file(path, "calibration binary")?;
-    if path.file_name().and_then(|name| name.to_str()) != Some("native_calibration.exe")
-        || metadata.len() == 0
-    {
-        return Err("calibration binary must be a non-empty native_calibration.exe".into());
-    }
-    if pe_machine(path, "calibration binary")? != 0x8664 {
-        return Err("calibration binary must be an x86_64 PE executable".into());
-    }
-    Ok((metadata.len(), sha256_file(path)?))
-}
-
 fn create_candidate(
     bundle_dir: &Path,
     public_key_path: &Path,
-    calibration_path: &Path,
     output_root: &Path,
     source_sha: &str,
     repository_root: &Path,
 ) -> Result<CandidateContract> {
     let source_sha = validate_commit_sha(source_sha, "source SHA")?;
     let version = project_version(repository_root)?;
-    let (calibration_size, calibration_sha) = calibration_details(calibration_path)?;
     require_directory(bundle_dir, "candidate bundle is missing")?;
     let bundle_dir = fs::canonicalize(bundle_dir)
         .map_err(|error| format!("candidate bundle is missing: {error}"))?;
@@ -260,13 +224,9 @@ fn create_candidate(
     fs::copy(&signature_path, staging.path().join(&signature))?;
     fs::copy(&public_key_path, staging.path().join(PUBLIC_KEY_FILE))?;
     let manifest = CandidateManifest {
-        schema_version: 2,
+        schema_version: 3,
         source_sha: source_sha.clone(),
         version: version.clone(),
-        calibration_binary: "native_calibration.exe".to_owned(),
-        calibration_binary_size: calibration_size,
-        calibration_binary_sha256: calibration_sha,
-        calibration_binary_architecture: "x86_64".to_owned(),
         installer,
         installer_sha256: sha256_file(&staged_installer)?,
         updater_signature: signature,
@@ -339,7 +299,6 @@ pub(crate) fn run(repository_root: &Path, args: &[String]) -> Result<()> {
         "create" => &[
             "bundle-dir",
             "public-key",
-            "calibration-binary",
             "output-root",
             "source-sha",
             "repository-root",
@@ -356,7 +315,6 @@ pub(crate) fn run(repository_root: &Path, args: &[String]) -> Result<()> {
         "create" => create_candidate(
             Path::new(required(&options, "bundle-dir")?),
             Path::new(required(&options, "public-key")?),
-            Path::new(required(&options, "calibration-binary")?),
             Path::new(required(&options, "output-root")?),
             required(&options, "source-sha")?,
             &root,
@@ -386,16 +344,7 @@ mod tests {
         path
     }
 
-    fn valid_pe() -> Vec<u8> {
-        let mut bytes = vec![0_u8; 0x86];
-        bytes[0..2].copy_from_slice(b"MZ");
-        bytes[0x3c..0x40].copy_from_slice(&0x80_i32.to_le_bytes());
-        bytes[0x80..0x84].copy_from_slice(b"PE\0\0");
-        bytes[0x84..0x86].copy_from_slice(&0x8664_u16.to_le_bytes());
-        bytes
-    }
-
-    fn setup(root: &Path) -> (PathBuf, PathBuf, PathBuf, PathBuf) {
+    fn setup(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
         let bundle = root.join("bundle");
         fs::create_dir(&bundle).unwrap();
         let version = project_version(&crate::repo::root()).unwrap();
@@ -408,28 +357,19 @@ mod tests {
         .unwrap();
         let public_key = root.join("updater.pub");
         fs::write(&public_key, "dGVzdC1wdWJsaWMta2V5\n").unwrap();
-        let calibration = root.join("native_calibration.exe");
-        fs::write(&calibration, valid_pe()).unwrap();
-        (bundle, public_key, calibration, root.join("candidate"))
+        (bundle, public_key, root.join("candidate"))
     }
 
     fn create(root: &Path, source: &str) -> Result<CandidateContract> {
-        let (bundle, public_key, calibration, output) = setup(root);
-        create_candidate(
-            &bundle,
-            &public_key,
-            &calibration,
-            &output,
-            source,
-            &crate::repo::root(),
-        )
+        let (bundle, public_key, output) = setup(root);
+        create_candidate(&bundle, &public_key, &output, source, &crate::repo::root())
     }
 
     #[test]
-    fn create_and_validate_preserve_candidate_v2_schema_and_exact_inventory() {
+    fn create_and_validate_preserve_candidate_v3_schema_and_exact_inventory() {
         let root = temp_dir("sky-xtask-candidate-positive");
         let contract = create(&root, "1234567890abcdef1234567890abcdef12345678").unwrap();
-        assert_eq!(contract.manifest.schema_version, 2);
+        assert_eq!(contract.manifest.schema_version, 3);
         assert_eq!(
             contract.manifest.source_sha,
             "1234567890abcdef1234567890abcdef12345678"
@@ -437,7 +377,7 @@ mod tests {
         let output = root.join("candidate");
         let manifest_text = fs::read_to_string(output.join("candidate.json")).unwrap();
         let fields = serde_json::from_str::<serde_json::Value>(&manifest_text).unwrap();
-        assert_eq!(fields.as_object().unwrap().len(), 13);
+        assert_eq!(fields.as_object().unwrap().len(), 9);
         assert_eq!(fs::read_dir(&output).unwrap().count(), 4);
         let reread = read_candidate(
             &output,
@@ -519,35 +459,12 @@ mod tests {
     }
 
     #[test]
-    fn rejects_wrong_machine_malformed_pe_traversal_and_unexpected_inventory() {
+    fn rejects_traversal_and_unexpected_inventory() {
         let root = temp_dir("sky-xtask-candidate-negative");
-        let (_bundle, _public_key, calibration, output) = setup(&root);
-        let wrong_machine = {
-            let mut bytes = valid_pe();
-            bytes[0x84..0x86].copy_from_slice(&0x014c_u16.to_le_bytes());
-            bytes
-        };
-        fs::write(&calibration, wrong_machine).unwrap();
-        assert!(
-            create_candidate(
-                &root.join("bundle"),
-                &root.join("updater.pub"),
-                &calibration,
-                &output,
-                "1234567890abcdef1234567890abcdef12345678",
-                &crate::repo::root(),
-            )
-            .unwrap_err()
-            .to_string()
-            .contains("x86_64 PE")
-        );
-        assert!(!output.exists());
-
-        fs::write(&calibration, valid_pe()).unwrap();
+        let (_bundle, _public_key, output) = setup(&root);
         create_candidate(
             &root.join("bundle"),
             &root.join("updater.pub"),
-            &calibration,
             &output,
             "1234567890abcdef1234567890abcdef12345678",
             &crate::repo::root(),
@@ -592,7 +509,7 @@ mod tests {
         let manifest_path = candidate.join("candidate.json");
         let mut manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
-        manifest["future_field"] = serde_json::Value::String("not in schema v2".to_owned());
+        manifest["future_field"] = serde_json::Value::String("not in schema v3".to_owned());
         fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
         let error = read_candidate(
             &candidate,
@@ -607,13 +524,12 @@ mod tests {
     #[test]
     fn candidate_creation_rolls_back_output_on_error_and_rejects_extra_files() {
         let root = temp_dir("sky-xtask-candidate-rollback");
-        let (bundle, public_key, calibration, output) = setup(&root);
+        let (bundle, public_key, output) = setup(&root);
         fs::write(bundle.join("extra.txt"), b"unexpected").unwrap();
         assert!(
             create_candidate(
                 &bundle,
                 &public_key,
-                &calibration,
                 &output,
                 "1234567890abcdef1234567890abcdef12345678",
                 &crate::repo::root(),

@@ -26,7 +26,7 @@ Desktop source and tests import these published exports:
 | --- | --- |
 | Buttons | `AppTitleBar`, `LibraryAddMenu`, `LibraryNavigator`, `PlaylistNavItem`, `PlayerTools`, `TrackActionsMenu`, `PlaylistAddSongsMenu`, `TrackBrowser` |
 | Menus and popovers | `PlaylistNavItem`, `PlayerTools`, `TrackActionsMenu`, `PlaylistAddSongsMenu` |
-| Dialogs and modals | `CalibrationDialog`, `LibraryConfirmDialog`, `PlaylistCreateDialog`, `PlaylistRenameDialog`, `SettingsPanel`, `UpdateDialog`, `PlayerTools` |
+| Dialogs and modals | `LibraryConfirmDialog`, `PlaylistCreateDialog`, `PlaylistRenameDialog`, `SettingsPanel`, `UpdateDialog`, `PlayerTools` |
 | Tabs and panels | `UtilityPane`, `UtilityHeader`, `DiagnosticsView`, `DiagnosticsEventsPanel`, `DiagnosticsPerformancePanel`, `DiagnosticsTimingPlot`, plus `DiagnosticsEventsPanel.test` |
 | Tooltips | `LibraryNavigator` |
 

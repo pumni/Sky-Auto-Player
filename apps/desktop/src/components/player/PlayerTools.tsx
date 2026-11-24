@@ -130,7 +130,6 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                 <ProfileFields
                   defaults={defaults}
                   bootstrap={bootstrap}
-                  recommendation={settings?.timing_margin_recommendation}
                   patchSettings={patchSettings}
                 />
               </div>
@@ -189,16 +188,15 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
 interface ProfileFieldsProps {
   defaults: NonNullable<DesktopStore['settings']>['playback_defaults'] | undefined;
   bootstrap: DesktopStore['bootstrap'];
-  recommendation: NonNullable<DesktopStore['settings']>['timing_margin_recommendation'] | undefined;
   patchSettings: DesktopStore['patchSettings'];
 }
 
-function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: ProfileFieldsProps) {
+function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProps) {
   const holdId = useId();
   const tempoId = useId();
   const fpsId = useId();
 
-  if (!defaults || !bootstrap || !recommendation) {
+  if (!defaults || !bootstrap) {
     return <span className="muted">Profile unavailable</span>;
   }
   const frameUs = Math.ceil(1_000_000 / defaults.fps);
@@ -271,7 +269,6 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
       <TimingMarginControl
         value={defaults.timing_margin_us}
         options={bootstrap.option_sets}
-        recommendation={recommendation}
         density="compact"
         onChange={(value) =>
           patchSettings({ playbackDefaults: { timingMarginUs: value } }).then(

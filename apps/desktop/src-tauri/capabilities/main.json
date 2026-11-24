@@ -41,8 +41,6 @@
     "allow-resume-playback",
     "allow-skip-playback",
     "allow-set-diagnostics-enabled",
-    "allow-start-calibration",
-    "allow-cancel-calibration",
     "allow-library-list-playlists",
     "allow-library-create-playlist",
     "allow-library-rename-playlist",

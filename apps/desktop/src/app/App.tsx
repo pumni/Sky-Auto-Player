@@ -21,13 +21,6 @@ const SettingsPanel = lazy(() =>
     default: component,
   })),
 );
-const CalibrationDialog = lazy(() =>
-  import('../components/calibration/CalibrationDialog').then(
-    ({ CalibrationDialog: component }) => ({
-      default: component,
-    }),
-  ),
-);
 const UpdateDialog = lazy(() =>
   import('../components/updates/UpdateDialog').then(({ UpdateDialog: component }) => ({
     default: component,
@@ -60,7 +53,6 @@ export function App({ bridge }: AppProps) {
   const bootstrapState = useStore((store) => store.bootstrapState);
   const settings = useStore((store) => store.settings);
   const settingsOpen = useStore((store) => store.settingsOpen);
-  const calibrationOpen = useStore((store) => store.calibration.open);
   const updateDialogOpen = useStore((store) => store.update.dialogOpen);
   const windowControls = useMemo(() => createWindowControls(), []);
   const [settingsMounted, setSettingsMounted] = useState(false);
@@ -130,9 +122,6 @@ export function App({ bridge }: AppProps) {
                 useStore={useStore}
                 settingsTriggerRef={settingsTriggerRef}
               />
-            )}
-            {calibrationOpen && (
-              <CalibrationDialog useStore={useStore} settingsTriggerRef={settingsTriggerRef} />
             )}
             {updateDialogOpen && <UpdateDialog useStore={useStore} />}
           </Suspense>
