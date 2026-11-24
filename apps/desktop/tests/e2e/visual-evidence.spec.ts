@@ -456,6 +456,12 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   measurements['playlist-640x448'] = await readWorkspaceGeometry(page);
   if (shouldCapture('playlist')) await capture(page, 'candidate-playlist-add-menu-640x448.png');
 
+  const addSongsTrigger = page.getByRole('button', { name: 'Add songs' });
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu', { name: 'Add songs' })).toBeHidden();
+  await addSongsTrigger.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('menuitem', { name: 'Browse Built-in Songs…' })).toBeFocused();
   await page.keyboard.press('ArrowDown');
   await expect(page.getByRole('menuitem', { name: 'Import files…' })).toBeFocused();
   if (shouldCapture('menu-keyboard'))
