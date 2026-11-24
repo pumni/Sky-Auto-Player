@@ -481,10 +481,14 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
             $successorLockSha -ne $profile.BaselineSuccessorLockSha256) {
             throw 'PlaybackCoreLifecycleV3 manifest lineage anchor or baseline-successor provenance is invalid'
         }
-        & git -C $runnerRoot merge-base --is-ancestor $profile.LineageAnchorRevision $runnerRevision
-        if ($LASTEXITCODE -ne 0) { throw 'PlaybackCoreLifecycleV3 candidate is not descended from the immutable V2 lineage anchor' }
-        & git -C $runnerRoot merge-base --is-ancestor $profile.BaselineSuccessorRevision $runnerRevision
-        if ($LASTEXITCODE -eq 0) { throw 'PlaybackCoreLifecycleV3 baseline successor must remain a sibling of the candidate lineage' }
+        if (-not (Test-DispatchGitAncestor -RepositoryRoot $runnerRoot `
+                -AncestorRevision $profile.LineageAnchorRevision -DescendantRevision $runnerRevision)) {
+            throw 'PlaybackCoreLifecycleV3 candidate is not descended from the immutable V2 lineage anchor'
+        }
+        if (Test-DispatchGitAncestor -RepositoryRoot $runnerRoot `
+                -AncestorRevision $profile.BaselineSuccessorRevision -DescendantRevision $runnerRevision) {
+            throw 'PlaybackCoreLifecycleV3 baseline successor must remain a sibling of the candidate lineage'
+        }
         if ($ExpectedRole -eq 'Baseline' -and $cargoLockSha256 -ne $profile.BaselineSuccessorLockSha256) {
             throw 'PlaybackCoreLifecycleV3 baseline manifest lock hash differs from the pinned successor lock'
         }

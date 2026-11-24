@@ -392,6 +392,19 @@ function Assert-PlaybackCoreLifecycleV3BaselineSuccessor {
     }
 }
 
+function Test-DispatchGitAncestor {
+    param(
+        [Parameter(Mandatory)] [string]$RepositoryRoot,
+        [Parameter(Mandatory)] [string]$AncestorRevision,
+        [Parameter(Mandatory)] [string]$DescendantRevision
+    )
+    $gitOutput = @(& git -C $RepositoryRoot merge-base --is-ancestor $AncestorRevision $DescendantRevision 2>&1)
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) { return $true }
+    if ($exitCode -eq 1) { return $false }
+    throw ('git merge-base --is-ancestor failed with exit ' + $exitCode + ': ' + ($gitOutput -join ' '))
+}
+
 function Assert-PlaybackCoreLifecycleV3CandidateLineage {
     param(
         [Parameter(Mandatory)] [string]$RepositoryRoot,
@@ -403,10 +416,42 @@ function Assert-PlaybackCoreLifecycleV3CandidateLineage {
         $CandidateRevision -ne $RemoteTipRevision) {
         throw 'PlaybackCoreLifecycleV3 candidate must match the exact remote PR branch tip'
     }
-    & git -C $RepositoryRoot merge-base --is-ancestor $profile.LineageAnchorRevision $CandidateRevision
-    if ($LASTEXITCODE -ne 0) { throw 'PlaybackCoreLifecycleV3 candidate is not descended from the immutable V2 lineage anchor' }
-    & git -C $RepositoryRoot merge-base --is-ancestor $profile.BaselineSuccessorRevision $CandidateRevision
-    if ($LASTEXITCODE -eq 0) { throw 'PlaybackCoreLifecycleV3 baseline successor must remain a sibling of the candidate lineage' }
+    if (-not (Test-DispatchGitAncestor -RepositoryRoot $RepositoryRoot -AncestorRevision $profile.LineageAnchorRevision -DescendantRevision $CandidateRevision)) {
+        throw 'PlaybackCoreLifecycleV3 candidate is not descended from the immutable V2 lineage anchor'
+    }
+    if (Test-DispatchGitAncestor -RepositoryRoot $RepositoryRoot -AncestorRevision $profile.BaselineSuccessorRevision -DescendantRevision $CandidateRevision) {
+        throw 'PlaybackCoreLifecycleV3 baseline successor must remain a sibling of the candidate lineage'
+    }
+    $true
+}
+
+function Assert-PlaybackCoreLifecyclePairLineage {
+    param(
+        [Parameter(Mandatory)] [string]$RepositoryRoot,
+        [Parameter(Mandatory)] [ValidateSet(1, 2, 3)] [int]$ProfileVersion,
+        [Parameter(Mandatory)] [string]$CandidateRevision,
+        [Parameter(Mandatory)] [string]$RemoteTipRevision,
+        [Parameter(Mandatory)] [string]$ControlRevision,
+        [Parameter(Mandatory)] [string]$ControlTree,
+        [string]$ControlLockSha256
+    )
+    $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
+    if ($CandidateRevision -notmatch '^[0-9a-f]{40}$' -or $CandidateRevision -ne $RemoteTipRevision) {
+        throw ('PlaybackCoreLifecycle ' + $profile.Name + ' candidate must match the exact remote PR branch tip')
+    }
+    if ($ControlRevision -ne $profile.BaselineRevision -or $ControlTree -ne $profile.BaselineTree) {
+        throw ('PlaybackCoreLifecycle ' + $profile.Name + ' control must use its exact pinned baseline revision and tree')
+    }
+
+    if ($ProfileVersion -eq 3) {
+        Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $RepositoryRoot `
+            -Revision $ControlRevision -ExpectedTree $ControlTree -ExpectedLockSha256 $ControlLockSha256 | Out-Null
+        Assert-PlaybackCoreLifecycleV3CandidateLineage -RepositoryRoot $RepositoryRoot `
+            -CandidateRevision $CandidateRevision -RemoteTipRevision $RemoteTipRevision | Out-Null
+    } elseif (-not (Test-DispatchGitAncestor -RepositoryRoot $RepositoryRoot `
+            -AncestorRevision $ControlRevision -DescendantRevision $CandidateRevision)) {
+        throw ('PlaybackCoreLifecycle ' + $profile.Name + ' control source revision is not an ancestor of the candidate checkout')
+    }
     $true
 }
 
@@ -516,4 +561,4 @@ function Assert-PlaybackCoreLifecycleSourceCheckout {
     $identity
 }
 
-Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-PlaybackCoreLifecycleProfileForName, Assert-PlaybackCoreLifecycleV3BaselineSuccessor, Assert-PlaybackCoreLifecycleV3CandidateLineage, Assert-PlaybackCoreLifecycleV3LockfileBytes, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout
+Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-PlaybackCoreLifecycleProfileForName, Test-DispatchGitAncestor, Assert-PlaybackCoreLifecycleV3BaselineSuccessor, Assert-PlaybackCoreLifecycleV3CandidateLineage, Assert-PlaybackCoreLifecyclePairLineage, Assert-PlaybackCoreLifecycleV3LockfileBytes, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout

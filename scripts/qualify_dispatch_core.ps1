@@ -1213,58 +1213,6 @@ try {
         if ($Stage -ne 'Final' -or -not $ControlManifest) {
             throw 'PlaybackCoreLifecycle -PlanOnly requires -Stage Final with candidate and baseline manifests'
         }
-        if ($PlanOnly -and $QualificationProfile -eq 'PlaybackCoreLifecycleV3') {
-            Assert-QualificationTimingMargin -RequestedStage $Stage -Profile $QualificationProfile -MarginUs $TimingMarginUs -PairCount $Pairs -SampleDurationSeconds $SampleSeconds | Out-Null
-        }
-        Assert-AbsolutePath $CandidateManifest 'candidate manifest'
-        Assert-AbsolutePath $ControlManifest 'baseline manifest'
-        Assert-AbsolutePath $OutputRoot 'output root'
-        Assert-OutsideRepository $evidenceRoot 'output root'
-        $source = Get-CurrentSourceIdentity
-        $rustcVersion = (& rustc -Vv) -join [Environment]::NewLine
-        if ($LASTEXITCODE -ne 0) { throw 'could not identify active rustc version' }
-        $candidate = Read-And-VerifyManifest $candidateManifestPath 'candidate'
-        $control = Read-And-VerifyManifest $controlManifestPath 'control'
-        if ($candidate.source_role -ne 'Candidate' -or $candidate.source_revision -ne $head -or
-            $candidate.source_tree_sha -ne $tree -or
-            $control.source_role -ne 'Baseline' -or
-            $control.source_revision -ne $playbackCoreProfile.BaselineRevision -or
-            $control.source_tree_sha -ne $playbackCoreProfile.BaselineTree) {
-            throw 'PlaybackCoreLifecycle plan requires the exact clean pushed candidate and pinned baseline manifests'
-        }
-        if ($candidate.rustc_version -ne $rustcVersion.Trim() -or
-            $control.rustc_version -ne $candidate.rustc_version -or
-            $candidate.cargo_profile -ne $playbackCoreProfile.CargoProfile -or
-            $control.cargo_profile -ne $candidate.cargo_profile -or
-            (@($candidate.cargo_features) -join ',') -ne (@($playbackCoreProfile.RequiredFeatures) -join ',') -or
-            (@($control.cargo_features) -join ',') -ne (@($candidate.cargo_features) -join ',') -or
-            $candidate.target -ne $playbackCoreProfile.Target -or $control.target -ne $candidate.target -or
-            $candidate.workload_version -ne $playbackCoreProfile.WorkloadVersion -or
-            $control.workload_version -ne $candidate.workload_version -or
-            $candidate.cargo_lock_sha256 -ne $control.cargo_lock_sha256) {
-            throw 'PlaybackCoreLifecycle candidate and baseline manifests do not share the required compiler, target, profile, feature, lockfile, and workload identity'
-        }
-        Write-Output ('PLAN_ONLY profile=' + $QualificationProfile + ' native_attempts=0 target_capture=NOT_RUN')
-        Write-Output ('BASELINE sha=' + $control.source_revision + ' tree=' + $control.source_tree_sha + ' binary_sha256=' + $control.binary_sha256)
-        Write-Output ('CANDIDATE sha=' + $candidate.source_revision + ' tree=' + $candidate.source_tree_sha + ' binary_sha256=' + $candidate.binary_sha256)
-        Write-Output ('TOOLCHAIN rust=' + $candidate.rustc_version + ' cargo=' + $candidate.cargo_version + ' target=' + $candidate.target + ' profile=' + $candidate.cargo_profile + ' features=' + (@($candidate.cargo_features) -join ',' ) + ' cargo_lock_sha256=' + $candidate.cargo_lock_sha256)
-        Write-Output ('TARGET_IDENTITY class=' + $playbackCoreProfile.TargetIdentity.target_class + ' name="' + $playbackCoreProfile.TargetIdentity.target_name + '" game_target=false capture_status=NOT_RUN requirement="owner-approved exact project-owned ReceiveOnly HWND, PID, process start FILETIME, and event-log ID at run time"')
-        Write-Output ('PAIRING loads=' + ($playbackCoreProfile.LoadCells -join ',') + ' workloads=' + ($playbackCoreProfile.PerformanceWorkloads -join ',') + ' pairs=' + $playbackCoreProfile.PairCount + ' order=' + $playbackCoreProfile.PairOrder + ' sample_seconds=' + $playbackCoreProfile.SampleSeconds)
-        if ($playbackCoreProfile.AuthoredPrefixParityContract) {
-            Write-Output ('AUTHORED_STREAM_PARITY contract=' + $playbackCoreProfile.AuthoredPrefixParityContract + ' measured_window_seconds=' + $playbackCoreProfile.SampleSeconds + ' tail_padding=reported_outside_window')
-        }
-        foreach ($load in $playbackCoreProfile.LoadCells) {
-            foreach ($workload in $playbackCoreProfile.PerformanceWorkloads) {
-                Write-Output ('PAIR_CELL load=' + $load + ' workload=' + $workload + ' pair_orders=' + (@(1..$playbackCoreProfile.PairCount | ForEach-Object { if ($_ % 2 -eq 1) { 'AB' } else { 'BA' } }) -join ','))
-            }
-        }
-        Write-Output ('STATISTICS=' + ($playbackCoreProfile.Statistics -join ','))
-        Write-Output ('METRICS=' + ($playbackCoreProfile.Metrics -join ','))
-        Write-Output ('SAFETY_SCENARIOS_PREPARED=' + ($playbackCoreProfile.SafetyScenarios -join ',') + ' status=NOT_RUN')
-        if ($PlanOnly) {
-            Write-Output 'ReceiveOnly and gameplay were not run.'
-            return
-        }
     }
     if ($PlanOnly) { throw '-PlanOnly is available only with PlaybackCoreLifecycle' }
     if ($isSessionRedesignProfile -and $Stage -ne 'Final') {
@@ -1279,7 +1227,7 @@ try {
     Assert-OutsideRepository $evidenceRoot 'output root'
     if (Test-Path -LiteralPath $evidenceRoot) {
         if ((Get-ChildItem -LiteralPath $evidenceRoot -Force | Measure-Object).Count -ne 0) { throw 'output root must be absent or empty' }
-    } else {
+    } elseif (-not $PlanOnly) {
         New-Item -ItemType Directory -Path $evidenceRoot | Out-Null
     }
     if (Test-Path -LiteralPath $zipPath) { throw ('evidence archive already exists: ' + $zipPath) }
@@ -1326,9 +1274,41 @@ try {
             throw 'control and candidate manifests do not have matching compiler, target, profile, feature, and workload identities'
         }
         if (-not $isDispatchCleanupM3) {
-            & git -C $root merge-base --is-ancestor $control.source_revision HEAD
-            if ($LASTEXITCODE -ne 0) { throw 'control source revision is not an ancestor of the candidate checkout' }
+            if ($isPlaybackCoreLifecycle) {
+                Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $root `
+                    -ProfileVersion $playbackCoreProfile.Version `
+                    -CandidateRevision $candidate.source_revision `
+                    -RemoteTipRevision $source.candidate_lineage_tip_revision `
+                    -ControlRevision $control.source_revision `
+                    -ControlTree $control.source_tree_sha `
+                    -ControlLockSha256 $control.cargo_lock_sha256 | Out-Null
+            } else {
+                & git -C $root merge-base --is-ancestor $control.source_revision HEAD
+                if ($LASTEXITCODE -ne 0) { throw 'control source revision is not an ancestor of the candidate checkout' }
+            }
         }
+    }
+
+    if ($PlanOnly) {
+        Write-Output ('PLAN_ONLY profile=' + $QualificationProfile + ' native_attempts=0 target_capture=NOT_RUN')
+        Write-Output ('BASELINE sha=' + $control.source_revision + ' tree=' + $control.source_tree_sha + ' binary_sha256=' + $control.binary_sha256)
+        Write-Output ('CANDIDATE sha=' + $candidate.source_revision + ' tree=' + $candidate.source_tree_sha + ' binary_sha256=' + $candidate.binary_sha256)
+        Write-Output ('TOOLCHAIN rust=' + $candidate.rustc_version + ' cargo=' + $candidate.cargo_version + ' target=' + $candidate.target + ' profile=' + $candidate.cargo_profile + ' features=' + (@($candidate.cargo_features) -join ',' ) + ' cargo_lock_sha256=' + $candidate.cargo_lock_sha256)
+        Write-Output ('TARGET_IDENTITY class=' + $playbackCoreProfile.TargetIdentity.target_class + ' name="' + $playbackCoreProfile.TargetIdentity.target_name + '" game_target=false capture_status=NOT_RUN requirement="owner-approved exact project-owned ReceiveOnly HWND, PID, process start FILETIME, and event-log ID at run time"')
+        Write-Output ('PAIRING loads=' + ($playbackCoreProfile.LoadCells -join ',') + ' workloads=' + ($playbackCoreProfile.PerformanceWorkloads -join ',') + ' pairs=' + $playbackCoreProfile.PairCount + ' order=' + $playbackCoreProfile.PairOrder + ' sample_seconds=' + $playbackCoreProfile.SampleSeconds)
+        if ($playbackCoreProfile.AuthoredPrefixParityContract) {
+            Write-Output ('AUTHORED_STREAM_PARITY contract=' + $playbackCoreProfile.AuthoredPrefixParityContract + ' measured_window_seconds=' + $playbackCoreProfile.SampleSeconds + ' tail_padding=reported_outside_window')
+        }
+        foreach ($load in $playbackCoreProfile.LoadCells) {
+            foreach ($workload in $playbackCoreProfile.PerformanceWorkloads) {
+                Write-Output ('PAIR_CELL load=' + $load + ' workload=' + $workload + ' pair_orders=' + (@(1..$playbackCoreProfile.PairCount | ForEach-Object { if ($_ % 2 -eq 1) { 'AB' } else { 'BA' } }) -join ','))
+            }
+        }
+        Write-Output ('STATISTICS=' + ($playbackCoreProfile.Statistics -join ','))
+        Write-Output ('METRICS=' + ($playbackCoreProfile.Metrics -join ','))
+        Write-Output ('SAFETY_SCENARIOS_PREPARED=' + ($playbackCoreProfile.SafetyScenarios -join ',') + ' status=NOT_RUN')
+        Write-Output 'ReceiveOnly and gameplay were not run.'
+        return
     }
 
     [string[]]$scenarios = @(

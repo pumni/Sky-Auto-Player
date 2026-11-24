@@ -1756,13 +1756,16 @@ $playbackCoreCollectorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot
 $playbackCoreCaseRunnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
 $playbackCoreNativeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\bin\rt_native_acceptance.rs') -Raw
 $playbackCoreRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
-$v3PlanOnlyGateIndex = $playbackCoreRunnerSource.IndexOf("if (`$PlanOnly -and `$QualificationProfile -eq 'PlaybackCoreLifecycleV3') {", [System.StringComparison]::Ordinal)
-$v3PlanOnlyMarginIndex = if ($v3PlanOnlyGateIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('Assert-QualificationTimingMargin', $v3PlanOnlyGateIndex, [System.StringComparison]::Ordinal) } else { -1 }
-$v3PlanOnlyBranchIndex = if ($v3PlanOnlyGateIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('if ($PlanOnly) {', $v3PlanOnlyGateIndex, [System.StringComparison]::Ordinal) } else { -1 }
+$v3PreflightIndex = $playbackCoreRunnerSource.IndexOf('Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $root', [System.StringComparison]::Ordinal)
+$v3FinalStageGateIndex = $playbackCoreRunnerSource.IndexOf("if (`$Stage -in @('Compare', 'Final') -and -not `$ControlManifest)", [System.StringComparison]::Ordinal)
+$v3SharedMarginIndex = if ($v3FinalStageGateIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('Assert-QualificationTimingMargin', $v3FinalStageGateIndex, [System.StringComparison]::Ordinal) } else { -1 }
+$v3PlanOnlyBranchIndex = $playbackCoreRunnerSource.IndexOf('if ($PlanOnly) {', $v3SharedMarginIndex, [System.StringComparison]::Ordinal)
 $v3PlanOnlyReturnIndex = if ($v3PlanOnlyBranchIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('return', $v3PlanOnlyBranchIndex, [System.StringComparison]::Ordinal) } else { -1 }
-if ($v3PlanOnlyGateIndex -lt 0 -or $v3PlanOnlyMarginIndex -lt $v3PlanOnlyGateIndex -or
-    $v3PlanOnlyReturnIndex -lt 0 -or $v3PlanOnlyMarginIndex -gt $v3PlanOnlyReturnIndex) {
-    throw 'PlaybackCoreLifecycleV3 PlanOnly must enforce the Final timing margin before it can return'
+$v3NativePathIndex = if ($v3PlanOnlyReturnIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('Invoke-NativeCase -Scenario', $v3PlanOnlyReturnIndex, [System.StringComparison]::Ordinal) } else { -1 }
+if ($v3PreflightIndex -lt 0 -or $v3SharedMarginIndex -lt $v3FinalStageGateIndex -or
+    $v3PlanOnlyBranchIndex -lt $v3SharedMarginIndex -or $v3PlanOnlyReturnIndex -lt $v3PlanOnlyBranchIndex -or
+    $v3PreflightIndex -gt $v3PlanOnlyBranchIndex -or $v3NativePathIndex -lt $v3PlanOnlyReturnIndex) {
+    throw 'PlaybackCoreLifecycle PlanOnly and native execution must share final parameter, manifest, and pair-lineage preflight before either no-send return or native case entry'
 }
 $pclV3ZeroMarginRejected = $false
 try { Assert-QualificationTimingMargin -RequestedStage Final -Profile PlaybackCoreLifecycleV3 -MarginUs 0 -PairCount 6 -SampleDurationSeconds 15 | Out-Null } catch { $pclV3ZeroMarginRejected = $true }
@@ -1889,6 +1892,51 @@ try {
         -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c')
 } catch { $pclV3WrongAnchorRejected = $true }
 if (-not $pclV3WrongAnchorRejected) { throw 'PlaybackCoreLifecycleV3 accepted a candidate outside the V2 anchor lineage' }
+$pclV3LineageRemoteTip = $pclV3CandidateRevision
+$pclV3PairLineageAccepted = Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+    -ProfileVersion 3 -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision $pclV3LineageRemoteTip `
+    -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+    -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256
+if (-not $pclV3PairLineageAccepted) { throw 'PlaybackCoreLifecycleV3 rejected its pinned B1 sibling and exact remote candidate pair' }
+$pclV3WrongB1Rejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -ProfileVersion 3 -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision $pclV3LineageRemoteTip `
+        -ControlRevision $pclV3Profile.LineageAnchorRevision -ControlTree $pclV3Profile.BaselineSuccessorParentRevision `
+        -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
+} catch { $pclV3WrongB1Rejected = $true }
+if (-not $pclV3WrongB1Rejected) { throw 'PlaybackCoreLifecycleV3 pair lineage accepted a control other than its exact pinned B1 revision/tree' }
+$pclV3PairWrongAnchorRejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -ProfileVersion 3 -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
+        -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
+        -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+        -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
+} catch { $pclV3PairWrongAnchorRejected = $true }
+if (-not $pclV3PairWrongAnchorRejected) { throw 'PlaybackCoreLifecycleV3 pair lineage accepted a candidate outside the immutable V2 anchor lineage' }
+$pclV3PairStaleRemoteRejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -ProfileVersion 3 -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision ('0' * 40) `
+        -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+        -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
+} catch { $pclV3PairStaleRemoteRejected = $true }
+if (-not $pclV3PairStaleRemoteRejected) { throw 'PlaybackCoreLifecycleV3 pair lineage accepted a stale remote branch tip' }
+$pclV3LegacyNonAncestorRejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -ProfileVersion 2 -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
+        -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
+        -ControlRevision $pclV2Profile.BaselineRevision -ControlTree $pclV2Profile.BaselineTree)
+} catch { $pclV3LegacyNonAncestorRejected = $true }
+if (-not $pclV3LegacyNonAncestorRejected) { throw 'legacy PlaybackCoreLifecycle pair lineage no longer rejects a non-ancestor control' }
+$pclV3GitFailureRejected = $false
+try {
+    [void](Test-DispatchGitAncestor -RepositoryRoot (Join-Path $env:TEMP ('missing-git-repo-' + [guid]::NewGuid().ToString('N'))) `
+        -AncestorRevision $pclV3Profile.LineageAnchorRevision -DescendantRevision $pclV3CandidateRevision)
+} catch { $pclV3GitFailureRejected = $_.Exception.Message -match 'git merge-base --is-ancestor failed with exit 128:' }
+if (-not $pclV3GitFailureRejected) { throw 'PlaybackCoreLifecycle ancestry validation did not fail closed on a Git command error' }
 
 function ConvertTo-PclV3CheckoutFixture {
     param($Identity)
@@ -1906,14 +1954,36 @@ function ConvertTo-PclV3CheckoutFixture {
 
 $pclV3TempRoot = Join-Path $env:TEMP ('pcl-v3-manifest-contract-' + [guid]::NewGuid().ToString('N'))
 $pclV3BaselineRoot = Join-Path $pclV3TempRoot 'baseline-worktree'
+$pclV3LineageRepoRoot = Join-Path $pclV3TempRoot 'lineage-topology-repo'
 New-Item -ItemType Directory -Path $pclV3TempRoot | Out-Null
 try {
+    & git clone --shared --no-checkout --quiet $playbackCoreRepoRoot $pclV3LineageRepoRoot
+    if ($LASTEXITCODE -ne 0) { throw 'could not create an isolated Git topology for V3 merged-B1 lineage contract tests' }
+    & git -C $pclV3LineageRepoRoot config user.name 'Qualification Contract'
+    if ($LASTEXITCODE -ne 0) { throw 'could not configure the isolated V3 lineage topology identity' }
+    & git -C $pclV3LineageRepoRoot config user.email 'qualification-contract@example.invalid'
+    if ($LASTEXITCODE -ne 0) { throw 'could not configure the isolated V3 lineage topology identity' }
     & git -c core.autocrlf=false -c core.eol=lf -C $playbackCoreRepoRoot worktree add --detach $pclV3BaselineRoot $pclV3Profile.BaselineRevision | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'could not create the pinned V3 baseline worktree for manifest contract tests' }
     Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
     Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
     $pclV3RunnerIdentity = Get-DispatchM3GitCheckoutIdentity $playbackCoreRepoRoot
     $pclV3BaselineIdentity = Get-DispatchM3GitCheckoutIdentity $pclV3BaselineRoot
+    $pclV3MergeTree = (& git -C $pclV3LineageRepoRoot rev-parse ($pclV3RunnerIdentity.revision + '^{tree}')).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'could not resolve candidate tree for the isolated V3 merged-B1 topology' }
+    $pclV3MergedB1Revision = (& git -C $pclV3LineageRepoRoot commit-tree $pclV3MergeTree `
+        -p $pclV3RunnerIdentity.revision -p $pclV3Profile.BaselineSuccessorRevision -m 'V3 merged B1 lineage contract').Trim()
+    if ($LASTEXITCODE -ne 0 -or $pclV3MergedB1Revision -notmatch '^[0-9a-f]{40}$') {
+        throw 'could not create the isolated merged-B1 candidate topology'
+    }
+    $pclV3MergedB1Rejected = $false
+    try {
+        [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $pclV3LineageRepoRoot `
+            -ProfileVersion 3 -CandidateRevision $pclV3MergedB1Revision -RemoteTipRevision $pclV3MergedB1Revision `
+            -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+            -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
+    } catch { $pclV3MergedB1Rejected = $_.Exception.Message.Contains('must remain a sibling') }
+    if (-not $pclV3MergedB1Rejected) { throw 'PlaybackCoreLifecycleV3 accepted a candidate that had merged its pinned B1 control' }
     $pclV3BaselineLockPath = Join-Path $pclV3BaselineRoot 'rust\Cargo.lock'
     $pclV3OriginalBaselineLockBytes = [System.IO.File]::ReadAllBytes($pclV3BaselineLockPath)
     $pclV3BaselineLockText = [System.Text.Encoding]::UTF8.GetString($pclV3OriginalBaselineLockBytes)
