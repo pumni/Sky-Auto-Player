@@ -5,6 +5,7 @@ import process from 'node:process';
 import test from 'node:test';
 import {
   isPidAlive,
+  isProcessGroupAlive,
   loopbackUrl,
   runOwnedCommand,
   runPlaywright,
@@ -90,13 +91,7 @@ test('terminate terminates real child and grandchild tree without affecting sent
     assert.ok(isPidAlive(sentinel.pid), 'Unrelated sentinel process must remain alive');
   } finally {
     if (sentinel.pid && isPidAlive(sentinel.pid)) {
-      try {
-        if (process.platform === 'win32') {
-          process.kill(sentinel.pid, 'SIGKILL');
-        } else {
-          process.kill(sentinel.pid, 'SIGKILL');
-        }
-      } catch {}
+      try { process.kill(sentinel.pid, 'SIGKILL'); } catch {}
     }
     if (session && session.pid && isPidAlive(session.pid)) {
       await session.terminate().catch(() => {});
@@ -108,17 +103,33 @@ test('terminate terminates real child and grandchild tree without affecting sent
 });
 
 test('terminate escalates to SIGKILL if child ignores SIGTERM', async () => {
-  // Script ignores SIGTERM
+  // Script ignores SIGTERM after signaling handler readiness
   const stubbornScript = `
     process.on('SIGTERM', () => {});
+    console.log('READY');
     setInterval(() => {}, 1000);
   `;
 
   const session = spawnOwnedProcess(process.execPath, ['-e', stubbornScript], {
-    stdio: 'ignore',
+    stdio: ['ignore', 'pipe', 'ignore'],
   });
 
   try {
+    // Wait for the handler to actually be attached
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('Child startup timeout')), 5000);
+      session.child.stdout.on('data', (chunk) => {
+        if (chunk.toString().includes('READY')) {
+          clearTimeout(timeout);
+          resolve();
+        }
+      });
+      session.child.once('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
+    });
+
     assert.ok(session.pid && isPidAlive(session.pid), 'Stubborn child must be alive');
 
     // Terminate with very short grace period to force escalation
@@ -126,6 +137,30 @@ test('terminate escalates to SIGKILL if child ignores SIGTERM', async () => {
 
     const dead = await waitForPidExit(session.pid, 2000);
     assert.ok(dead, 'Stubborn child must be terminated after escalation');
+  } finally {
+    if (session.pid && isPidAlive(session.pid)) {
+      try { process.kill(session.pid, 'SIGKILL'); } catch {}
+    }
+  }
+});
+
+test('terminate is idempotent when called multiple times concurrently', async () => {
+  const session = spawnOwnedProcess(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+  });
+
+  try {
+    assert.ok(session.pid && isPidAlive(session.pid));
+
+    const [t1, t2] = await Promise.all([
+      session.terminate({ graceTimeoutMs: 500 }),
+      session.terminate({ graceTimeoutMs: 500 }),
+    ]);
+
+    assert.equal(t1, undefined);
+    assert.equal(t2, undefined);
+    const dead = await waitForPidExit(session.pid, 2000);
+    assert.ok(dead);
   } finally {
     if (session.pid && isPidAlive(session.pid)) {
       try { process.kill(session.pid, 'SIGKILL'); } catch {}

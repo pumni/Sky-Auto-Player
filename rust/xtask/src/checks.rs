@@ -142,6 +142,12 @@ impl CheckSession {
     pub fn record_leaf(&mut self, name: &str, status: &str, reason: Option<String>) {
         if let Some(group) = &mut self.current_group {
             if let Some(entry) = group.checks.iter_mut().find(|c| c.name == name) {
+                if entry.status != "not-run" {
+                    panic!(
+                        "Duplicate leaf check execution recorded for '{name}' in group '{}'",
+                        group.name
+                    );
+                }
                 entry.status = status.to_owned();
                 entry.reason = reason;
             } else {
@@ -155,7 +161,8 @@ impl CheckSession {
 
     pub fn finish_group(&mut self, is_ok: bool) {
         if let Some(mut group) = self.current_group.take() {
-            group.status = if is_ok {
+            let has_unexecuted = group.checks.iter().any(|c| c.status == "not-run");
+            group.status = if is_ok && !has_unexecuted {
                 "passed".to_owned()
             } else {
                 "failed".to_owned()
@@ -266,13 +273,17 @@ fn check_desktop_native(root: &Path) -> Result<()> {
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-struct GitObservation {
-    head: Option<String>,
-    tree: Option<String>,
-    status: String, // "clean", "dirty", or "unknown"
+pub struct GitObservation {
+    pub head: Option<String>,
+    pub tree: Option<String>,
+    pub status: String, // "clean", "dirty", or "unknown"
 }
 
-fn observe_git_state(root: &Path) -> GitObservation {
+pub(crate) fn is_valid_hex_40(s: &str) -> bool {
+    s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+pub fn observe_git_state(root: &Path) -> GitObservation {
     let head = match std::process::Command::new("git")
         .args(["rev-parse", "--verify", "HEAD"])
         .current_dir(root)
@@ -280,7 +291,7 @@ fn observe_git_state(root: &Path) -> GitObservation {
     {
         Ok(out) if out.status.success() => {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-            if s.is_empty() { None } else { Some(s) }
+            if is_valid_hex_40(&s) { Some(s) } else { None }
         }
         _ => None,
     };
@@ -292,13 +303,13 @@ fn observe_git_state(root: &Path) -> GitObservation {
     {
         Ok(out) if out.status.success() => {
             let s = String::from_utf8_lossy(&out.stdout).trim().to_owned();
-            if s.is_empty() { None } else { Some(s) }
+            if is_valid_hex_40(&s) { Some(s) } else { None }
         }
         _ => None,
     };
 
     let status = match std::process::Command::new("git")
-        .args(["status", "--porcelain"])
+        .args(["status", "--porcelain", "--untracked-files=all"])
         .current_dir(root)
         .output()
     {
@@ -313,6 +324,44 @@ fn observe_git_state(root: &Path) -> GitObservation {
     };
 
     GitObservation { head, tree, status }
+}
+
+pub fn evaluate_source_observation(
+    start: &GitObservation,
+    end: &GitObservation,
+) -> (&'static str, String) {
+    let start_head_valid = start.head.as_deref().is_some_and(is_valid_hex_40);
+    let start_tree_valid = start.tree.as_deref().is_some_and(is_valid_hex_40);
+    let end_head_valid = end.head.as_deref().is_some_and(is_valid_hex_40);
+    let end_tree_valid = end.tree.as_deref().is_some_and(is_valid_hex_40);
+
+    if !start_head_valid
+        || !start_tree_valid
+        || !end_head_valid
+        || !end_tree_valid
+        || start.status == "unknown"
+        || end.status == "unknown"
+    {
+        return ("unknown", "unqualified-unknown-source".to_owned());
+    }
+
+    if start.status == "dirty" || end.status == "dirty" {
+        return ("dirty", "unqualified-dirty-working-tree".to_owned());
+    }
+
+    if start.head != end.head || start.tree != end.tree {
+        return (
+            "changed-head-or-tree",
+            format!(
+                "unqualified-changed-head-or-tree:{}-to-{}",
+                start.head.as_deref().unwrap_or("none"),
+                end.head.as_deref().unwrap_or("none")
+            ),
+        );
+    }
+
+    let head = start.head.clone().unwrap();
+    ("clean", head)
 }
 
 pub fn run(group: &str, skip_supply_chain: bool, json_summary: bool) -> Result<()> {
@@ -332,22 +381,7 @@ pub fn run(group: &str, skip_supply_chain: bool, json_summary: bool) -> Result<(
     if json_summary {
         let start = start_obs.unwrap();
         let end = observe_git_state(&root);
-
-        let (overall_status, source_identity) = match (start.status.as_str(), end.status.as_str()) {
-            ("clean", "clean") if start.head == end.head && start.tree == end.tree => {
-                let head_str = start
-                    .head
-                    .clone()
-                    .unwrap_or_else(|| "unqualified-unknown-source".to_owned());
-                ("clean", head_str)
-            }
-            ("clean", "dirty") => (
-                "modified-during-run",
-                "unqualified-dirty-working-tree".to_owned(),
-            ),
-            ("dirty", _) | (_, "dirty") => ("dirty", "unqualified-dirty-working-tree".to_owned()),
-            _ => ("unknown", "unqualified-unknown-source".to_owned()),
-        };
+        let (overall_status, source_identity) = evaluate_source_observation(&start, &end);
 
         println!(
             "[xtask-summary] {}",
@@ -856,6 +890,73 @@ mod tests {
             contract_pointer("binding-prep"),
             Some("rust/xtask/src/checks/bindings.rs")
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "Duplicate leaf check execution recorded for 'step-a'")]
+    fn record_leaf_rejects_duplicate_execution() {
+        let mut session = CheckSession::default();
+        session.start_group("group-test", &["step-a"]);
+        session.record_leaf("step-a", "passed", None);
+        session.record_leaf("step-a", "passed", None);
+    }
+
+    #[test]
+    fn finish_group_fails_if_unexecuted_leaves_remain() {
+        let mut session = CheckSession::default();
+        session.start_group("group-test", &["step-a", "step-b"]);
+        session.record_leaf("step-a", "passed", None);
+        // step-b is left not-run; even if caller passed is_ok = true, group must fail
+        session.finish_group(true);
+        assert_eq!(session.groups[0].status, "failed");
+    }
+
+    #[test]
+    fn evaluate_source_observation_distinguishes_honest_states() {
+        let sha1 = "0123456789abcdef0123456789abcdef01234567".to_string();
+        let tree1 = "fedcba9876543210fedcba9876543210fedcba98".to_string();
+        let sha2 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string();
+
+        let clean_a = GitObservation {
+            head: Some(sha1.clone()),
+            tree: Some(tree1.clone()),
+            status: "clean".to_string(),
+        };
+        let clean_b = clean_a.clone();
+        let (status, ident) = evaluate_source_observation(&clean_a, &clean_b);
+        assert_eq!(status, "clean");
+        assert_eq!(ident, sha1);
+
+        // Dirty start or end
+        let dirty = GitObservation {
+            head: Some(sha1.clone()),
+            tree: Some(tree1.clone()),
+            status: "dirty".to_string(),
+        };
+        let (status, ident) = evaluate_source_observation(&clean_a, &dirty);
+        assert_eq!(status, "dirty");
+        assert_eq!(ident, "unqualified-dirty-working-tree");
+
+        // Changed HEAD
+        let changed = GitObservation {
+            head: Some(sha2.clone()),
+            tree: Some(tree1.clone()),
+            status: "clean".to_string(),
+        };
+        let (status, ident) = evaluate_source_observation(&clean_a, &changed);
+        assert_eq!(status, "changed-head-or-tree");
+        assert!(ident.contains(&sha1));
+        assert!(ident.contains(&sha2));
+
+        // Invalid 40-char SHA or unknown
+        let invalid = GitObservation {
+            head: Some("short-sha".to_string()),
+            tree: Some(tree1.clone()),
+            status: "clean".to_string(),
+        };
+        let (status, ident) = evaluate_source_observation(&invalid, &clean_a);
+        assert_eq!(status, "unknown");
+        assert_eq!(ident, "unqualified-unknown-source");
     }
 
     fn temp_dir_fixture(prefix: &str) -> std::path::PathBuf {

@@ -23,6 +23,20 @@ export function isPidAlive(pid) {
   }
 }
 
+export function isProcessGroupAlive(pgid) {
+  if (!pgid || pgid <= 0) return false;
+  if (process.platform === 'win32') {
+    return isPidAlive(pgid);
+  }
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (err) {
+    if (err.code === 'EPERM') return true;
+    return false;
+  }
+}
+
 export async function waitForPidExit(pid, timeoutMs = 2000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -30,6 +44,15 @@ export async function waitForPidExit(pid, timeoutMs = 2000) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   return !isPidAlive(pid);
+}
+
+export async function waitForProcessGroupExit(pgid, timeoutMs = 2000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    if (!isProcessGroupAlive(pgid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return !isProcessGroupAlive(pgid);
 }
 
 /**
@@ -43,6 +66,7 @@ export class OwnedProcessSession {
     this.exited = false;
     this.exitCode = null;
     this.exitSignal = null;
+    this.terminationPromise = null;
 
     child.once('exit', (code, signal) => {
       this.exited = true;
@@ -53,19 +77,27 @@ export class OwnedProcessSession {
 
   /**
    * Bounded, awaited teardown of the owned process tree.
-   * On POSIX: sends SIGTERM to the owned process group (-pid), awaits exit, and escalates to SIGKILL.
+   * On POSIX: sends SIGTERM to the owned process group (-pgid), awaits exit, and escalates to SIGKILL.
    * On Windows: invokes taskkill targeting the owned PID tree (/T /F), awaits exit, and verifies cleanup.
    */
   async terminate(options = {}) {
-    if (this.exited || !this.pid || !isPidAlive(this.pid)) {
-      this.exited = true;
-      return;
+    if (this.terminationPromise) {
+      return this.terminationPromise;
     }
+    this.terminationPromise = this._performTerminate(options);
+    return this.terminationPromise;
+  }
 
+  async _performTerminate(options) {
     const graceTimeoutMs = options.graceTimeoutMs ?? 1500;
     const killTimeoutMs = options.killTimeoutMs ?? 1000;
 
     if (process.platform === 'win32') {
+      if (!this.pid || !isPidAlive(this.pid)) {
+        this.exited = true;
+        return;
+      }
+
       const result = spawnSync('taskkill', ['/pid', String(this.pid), '/T', '/F'], {
         stdio: 'ignore',
         windowsHide: true,
@@ -87,7 +119,14 @@ export class OwnedProcessSession {
       }
       this.exited = true;
     } else {
-      const target = this.isGroupLeader ? -this.pid : this.pid;
+      const pgid = this.isGroupLeader ? this.pid : null;
+      const target = pgid ? -pgid : this.pid;
+
+      const isAlive = pgid ? isProcessGroupAlive(pgid) : isPidAlive(this.pid);
+      if (!isAlive) {
+        this.exited = true;
+        return;
+      }
 
       try {
         process.kill(target, 'SIGTERM');
@@ -99,7 +138,10 @@ export class OwnedProcessSession {
         }
       }
 
-      const exitedGracefully = await waitForPidExit(this.pid, graceTimeoutMs);
+      const exitedGracefully = pgid
+        ? await waitForProcessGroupExit(pgid, graceTimeoutMs)
+        : await waitForPidExit(this.pid, graceTimeoutMs);
+
       if (!exitedGracefully) {
         try {
           process.kill(target, 'SIGKILL');
@@ -110,7 +152,9 @@ export class OwnedProcessSession {
             } catch {}
           }
         }
-        const killed = await waitForPidExit(this.pid, killTimeoutMs);
+        const killed = pgid
+          ? await waitForProcessGroupExit(pgid, killTimeoutMs)
+          : await waitForPidExit(this.pid, killTimeoutMs);
         if (!killed) {
           throw new Error(
             `Failed to cleanly terminate owned POSIX process group ${target} within deadline`,
@@ -147,14 +191,17 @@ export function runOwnedCommand(executable, args, options = {}) {
 
   return new Promise((resolve, reject) => {
     let finished = false;
+    let teardownPromise = null;
 
-    const stop = async () => {
-      if (finished) return;
-      try {
-        await session.terminate();
-      } catch (err) {
-        console.error('[process-session] Error during signal termination:', err);
+    const stop = () => {
+      if (finished) return teardownPromise;
+      if (!teardownPromise) {
+        teardownPromise = session.terminate().catch((err) => {
+          console.error('[process-session] Error during signal termination:', err);
+          throw err;
+        });
       }
+      return teardownPromise;
     };
 
     const onSigInt = () => { stop(); };
@@ -168,15 +215,26 @@ export function runOwnedCommand(executable, args, options = {}) {
       process.removeListener('SIGTERM', onSigTerm);
     }
 
-    child.once('error', (err) => {
+    child.once('error', async (err) => {
       finished = true;
       cleanupListeners();
+      try {
+        await (teardownPromise ?? session.terminate());
+      } catch {}
       reject(err);
     });
 
-    child.once('exit', (code, signal) => {
+    child.once('exit', async (code, signal) => {
       finished = true;
       cleanupListeners();
+      if (teardownPromise) {
+        try {
+          await teardownPromise;
+        } catch (err) {
+          reject(err);
+          return;
+        }
+      }
       resolve({ code: code ?? 1, signal });
     });
   });

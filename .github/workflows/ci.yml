@@ -310,6 +310,9 @@ jobs:
       - name: Test read-only CI metrics and offline fixtures
         run: node --test scripts/ci_metrics.test.mjs
 
+      - name: Test process session lifecycle (Linux)
+        run: node --test scripts/process-session.test.mjs
+
       - name: Test fail-closed ClamAV bootstrap
         shell: bash
         run: bash scripts/test_ci_bootstrap_clamav.sh
@@ -647,6 +650,9 @@ jobs:
             clippy
       - name: Rust — verify pinned stable toolchain
         run: node scripts/toolchain-pin.mjs verify rust
+
+      - name: Test process session lifecycle (Windows)
+        run: node --test scripts/process-session.test.mjs
 
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
