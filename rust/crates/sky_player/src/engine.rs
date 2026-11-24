@@ -24,7 +24,7 @@ pub use config::{
     WaitOptions,
 };
 #[cfg(any(test, feature = "test-support"))]
-pub use config::{RestoreRaceHook, StartupCheckpoint, StartupOrderingHook};
+pub use config::{StartupCheckpoint, StartupOrderingHook};
 #[cfg(feature = "real-input-acceptance")]
 pub use session::NativeAcceptanceLifecycleEvidence;
 pub use session::{

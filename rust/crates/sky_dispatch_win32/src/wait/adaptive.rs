@@ -1,17 +1,25 @@
 //! Production wait-guard mode configuration.
 //!
 //! Frozen is the only supported production wait strategy. Adaptive mode is
-//! retired for shipping; the bounded estimator experiment is maintained
-//! for isolated comparative qualification.
+//! rejected for shipping. The retired bounded estimator is compiled only by
+//! unit tests so it is not part of the production API or binary.
 
+#[cfg(test)]
 use crate::clock::{QpcClock, QpcTicks};
 
+#[cfg(test)]
 pub const MIN_SPIN_US: u64 = 250;
+#[cfg(test)]
 pub const MAX_SPIN_US: u64 = 1_500;
+#[cfg(test)]
 pub const SAFETY_PAD_US: u64 = 100;
+#[cfg(test)]
 pub const LEARNING_WINDOW_SAMPLES: usize = 64;
+#[cfg(test)]
 pub const LEARNING_WINDOW_MIN_DURATION_US: u64 = 1_000_000;
+#[cfg(test)]
 pub const MAX_DOWNWARD_STEP_US: u64 = 25;
+#[cfg(test)]
 pub const DOWNWARD_HEADROOM_US: u64 = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -44,6 +52,7 @@ impl WaitGuardMode {
 /// Implements conservative bounds [250 µs, 1500 µs], immediate upward adaptation
 /// under jitter/overshoot, bounded downward step (max 25 µs) with 100 µs headroom,
 /// and zero allocations.
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub struct AdaptiveSpinEstimator {
     current_spin_us: u64,
@@ -57,6 +66,7 @@ pub struct AdaptiveSpinEstimator {
     total_down_steps: u64,
 }
 
+#[cfg(test)]
 impl AdaptiveSpinEstimator {
     pub fn new(baseline_spin_us: u64, start_ticks: QpcTicks) -> Self {
         let baseline = baseline_spin_us.clamp(MIN_SPIN_US, MAX_SPIN_US);

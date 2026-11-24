@@ -5,8 +5,7 @@
 
 use crate::app_state::{ActivityCoordinator, ActivityReservationError, PhysicalActivityLease};
 use crate::commands::{
-    BootstrapDto, CalibrationCancelAckDto, CalibrationCancelRequest, CalibrationStartAckDto,
-    CalibrationStartRequest, CatalogDetailRequest, CatalogSearchRequest, CatalogSetLikedRequest,
+    BootstrapDto, CatalogDetailRequest, CatalogSearchRequest, CatalogSetLikedRequest,
     CatalogViewportRequest, DiagnosticsEnabledDto, DiagnosticsSetEnabledRequest,
     LibraryCreatePlaylistRequest, LibraryPlaylistIdRequest, LibraryPlaylistSongsRequest,
     LibraryRenamePlaylistRequest, PlaybackActiveStatusDto, PlaybackAdmission,
@@ -23,19 +22,11 @@ use crate::power_lifecycle::{
     system_power_platform,
 };
 use crate::ui_events::{
-    CalibrationState, CoreReadyPayload, DiagnosticsBackendStatus, NativeBuildPayload,
-    PlaybackEventState, PlaybackFailedPayload, PlaybackFinishedPayload, PlaybackFocusState,
-    PlaybackHealthState, PlaybackSnapshotPayload, PlaybackStateChangedPayload, UiEvent,
-    UpdateCheckRequest, UpdateSnapshotPayload,
+    CoreReadyPayload, DiagnosticsBackendStatus, NativeBuildPayload, PlaybackEventState,
+    PlaybackFailedPayload, PlaybackFinishedPayload, PlaybackFocusState, PlaybackHealthState,
+    PlaybackSnapshotPayload, PlaybackStateChangedPayload, UiEvent, UpdateCheckRequest,
+    UpdateSnapshotPayload,
 };
-#[cfg(test)]
-use calibration::{
-    CALIBRATION_DEFAULT_TIMEOUT_SECONDS, CALIBRATION_MIN_FULL_TIMEOUT_SECONDS,
-    CALIBRATION_MIN_NATIVE_TOTAL_SECONDS, CALIBRATION_MIN_SINGLE_TIMEOUT_SECONDS,
-    CALIBRATION_TIMING_MARGIN_GUARD_US, CalibrationRunError, calibration_budget,
-    publish_calibration_cache, recommended_calibrated_timing_margin_us, safe_calibration_evidence,
-};
-use calibration::{NativeCalibrationService, timing_margin_recommendation};
 #[cfg(test)]
 use catalog::compute_catalog_source_fingerprint;
 use catalog::{catalog_error, compute_catalog_source_static_fingerprint};
@@ -76,6 +67,7 @@ use std::time::{Duration, Instant};
 use tauri::ipc::Channel;
 
 pub(crate) const MAX_NATIVE_EVENTS: usize = 128;
+#[cfg(test)]
 const SENDER_TRACE_CAPTURE_CAPACITY: usize = 4_096;
 const MAX_PREPARED_PLANS: usize = 64;
 const MAX_DECISION_COUNT: usize = 8;
@@ -99,17 +91,8 @@ type PlaybackRetiredTestHook = Arc<dyn Fn() + Send + Sync>;
 type PlaybackPresentationCompletion = Box<dyn FnOnce(Result<(), String>) + Send + 'static>;
 #[cfg(all(test, feature = "tauri-test"))]
 type PlaybackPresentationTestHook = Arc<dyn Fn(PlaybackPresentationStage) + Send + Sync>;
-/// Production composition has no synthetic calibration/update behavior.  The
-/// package harness enters `SafePackage` only through the hidden selftest
-/// composition root, never through an environment variable.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum TestSeams {
-    #[default]
-    Disabled,
-    SafePackage,
-}
-
 pub(crate) struct NativeDesktopRuntime {
+    #[cfg(test)]
     paths: AppPaths,
     settings: Mutex<SettingsService<JsonSettingsStore>>,
     library_manifest: Mutex<LibraryManifestService<JsonLibraryManifestStore>>,
@@ -143,7 +126,6 @@ pub(crate) struct NativeDesktopRuntime {
     viewport_revision: AtomicU64,
     events: Arc<Mutex<NativeEventHub>>,
     playback: Arc<NativePlaybackService>,
-    calibration: Arc<NativeCalibrationService>,
     update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
     pre_exit_safety: Arc<dyn Fn() + Send + Sync>,
     ready_emitted: AtomicBool,
@@ -267,65 +249,47 @@ pub(super) struct NativeSheetSource {
 impl NativeDesktopRuntime {
     #[cfg(test)]
     pub(crate) fn from_install_root(install_root: PathBuf) -> Result<Self, String> {
-        Self::from_install_root_with_activity_and_seams(
-            install_root,
-            ActivityCoordinator::default(),
-            TestSeams::Disabled,
-        )
+        Self::from_install_root_with_activity(install_root, ActivityCoordinator::default())
     }
 
-    pub(crate) fn from_paths_with_activity_and_seams(
+    pub(crate) fn from_paths_with_activity(
         paths: AppPaths,
         resources: AppResources,
         activity: ActivityCoordinator,
-        test_seams: TestSeams,
     ) -> Result<Self, String> {
-        Self::from_paths_with_activity_and_seams_and_update_service(
-            paths, resources, activity, test_seams, None,
-        )
+        Self::from_paths_with_activity_and_update_service(paths, resources, activity, None)
     }
 
-    pub(crate) fn from_paths_with_activity_and_seams_and_update_service(
+    pub(crate) fn from_paths_with_activity_and_update_service(
         paths: AppPaths,
         resources: AppResources,
         activity: ActivityCoordinator,
-        test_seams: TestSeams,
         update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
     ) -> Result<Self, String> {
-        Self::from_paths_with_activity_and_seams_and_update_service_with_events(
+        Self::from_paths_with_activity_and_update_service_with_events(
             paths,
             resources,
             activity,
-            test_seams,
             update_service,
             Arc::new(Mutex::new(NativeEventHub::default())),
         )
     }
 
-    pub(crate) fn from_paths_with_activity_and_seams_and_update_service_with_events(
+    pub(crate) fn from_paths_with_activity_and_update_service_with_events(
         paths: AppPaths,
         resources: AppResources,
         activity: ActivityCoordinator,
-        test_seams: TestSeams,
         update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
         events: Arc<Mutex<NativeEventHub>>,
     ) -> Result<Self, String> {
         paths.assert_clean_boundary()?;
-        Self::from_paths_internal(
-            paths,
-            resources,
-            activity,
-            test_seams,
-            update_service,
-            events,
-        )
+        Self::from_paths_internal(paths, resources, activity, update_service, events)
     }
 
     fn from_paths_internal(
         paths: AppPaths,
         resources: AppResources,
         activity: ActivityCoordinator,
-        test_seams: TestSeams,
         update_service: Option<Arc<crate::native_update::UpdateService<crate::ShellRuntime>>>,
         events: Arc<Mutex<NativeEventHub>>,
     ) -> Result<Self, String> {
@@ -360,21 +324,12 @@ impl NativeDesktopRuntime {
         let catalog_source_static_fingerprint =
             compute_catalog_source_static_fingerprint(&resources, &songs_dir);
         let playback = Arc::new(NativePlaybackService::new(activity.clone()));
-        let calibration = Arc::new(NativeCalibrationService::new(
-            paths.clone(),
-            activity.clone(),
-            events.clone(),
-            playback.clone(),
-            test_seams,
-        ));
         let safety_activity = activity.clone();
-        let safety_calibration = calibration.clone();
         let safety_playback = playback.clone();
         let safety_events = events.clone();
         let pre_exit_safety: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             safety_activity.begin_shutdown();
             crate::record_update_safety_phase("activity.admission_closed");
-            safety_calibration.shutdown();
             if safety_playback.shutdown(safety_events.clone()) {
                 crate::record_update_safety_phase("playback.keys_released");
             }
@@ -391,6 +346,7 @@ impl NativeDesktopRuntime {
             service.set_pre_exit_safety(Arc::clone(&pre_exit_safety));
         }
         let runtime = Self {
+            #[cfg(test)]
             paths,
             settings: Mutex::new(settings),
             library_manifest: Mutex::new(library_manifest),
@@ -427,7 +383,6 @@ impl NativeDesktopRuntime {
             viewport_revision: AtomicU64::new(0),
             events,
             playback,
-            calibration,
             update_service,
             pre_exit_safety,
             ready_emitted: AtomicBool::new(false),
@@ -443,10 +398,9 @@ impl NativeDesktopRuntime {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_install_root_with_activity_and_seams(
+    pub(crate) fn from_install_root_with_activity(
         install_root: PathBuf,
         activity: ActivityCoordinator,
-        test_seams: TestSeams,
     ) -> Result<Self, String> {
         let paths = AppPaths::from_roots(
             install_root.clone(),
@@ -461,15 +415,9 @@ impl NativeDesktopRuntime {
             paths,
             resources,
             activity,
-            test_seams,
             None,
             Arc::new(Mutex::new(NativeEventHub::default())),
         )
-    }
-
-    #[cfg(test)]
-    pub(crate) fn paths(&self) -> &AppPaths {
-        &self.paths
     }
 
     #[cfg(test)]
@@ -626,16 +574,6 @@ impl NativeDesktopRuntime {
                     serde_json::from_value(params).map_err(json_error)?;
                 encode_result(self.set_diagnostics_enabled(request))
             }
-            "calibration.start" => {
-                let request: CalibrationStartRequest =
-                    serde_json::from_value(params).map_err(json_error)?;
-                encode_result(self.start_calibration(request))
-            }
-            "calibration.cancel" => {
-                let request: CalibrationCancelRequest =
-                    serde_json::from_value(params).map_err(json_error)?;
-                encode_result(self.cancel_calibration(request))
-            }
             _ => Err(format!("native command is not implemented: {method}")),
         }
     }
@@ -644,14 +582,13 @@ impl NativeDesktopRuntime {
         crate::startup_telemetry::record("bootstrap.start");
         let settings = self.settings_snapshot()?;
         let (catalog_state, catalog_generation) = self.catalog_readiness()?;
-        let settings_dto = settings_dto(&settings, self.timing_margin_recommendation());
+        let settings_dto = settings_dto(&settings);
         let result = BootstrapDto {
             app_version: env!("CARGO_PKG_VERSION").into(),
             protocol_version: crate::DESKTOP_PROTOCOL_VERSION,
             native_build: native_build_dto(),
             settings: settings_dto.clone(),
             playback_defaults: settings_dto.playback_defaults.clone(),
-            timing_margin_recommendation: settings_dto.timing_margin_recommendation.clone(),
             option_sets: crate::commands::PlaybackOptionSetsDto {
                 hold_frames: vec![1.0, 1.25, 1.5],
                 tempo_scales: vec![0.90, 0.95, 1.0, 1.05, 1.10],
@@ -744,11 +681,7 @@ impl NativeDesktopRuntime {
 
     fn reload_settings_dto(&self) -> Result<SettingsDto, String> {
         let settings = self.reload_settings_snapshot()?;
-        Ok(settings_dto(&settings, self.timing_margin_recommendation()))
-    }
-
-    fn timing_margin_recommendation(&self) -> crate::commands::TimingMarginRecommendationDto {
-        timing_margin_recommendation(self.paths.calibration_cache_path())
+        Ok(settings_dto(&settings))
     }
 
     pub(crate) fn patch_settings(&self, patch: SettingsPatch) -> Result<SettingsDto, String> {
@@ -835,7 +768,7 @@ impl NativeDesktopRuntime {
             };
             update_service.reset_and_publish_idle(channel, |event| self.publish(event))?;
         }
-        Ok(settings_dto(&snapshot, self.timing_margin_recommendation()))
+        Ok(settings_dto(&snapshot))
     }
 
     fn update_preferences(&self) -> Result<UpdatePreferencesDto, String> {
@@ -1007,7 +940,6 @@ impl NativeDesktopRuntime {
                 request.config.hold_frames,
                 request.config.timing_margin_us,
             )?;
-            let timing_margin_recommendation = self.timing_margin_recommendation();
             let options = planner_options(
                 request.conversion_mode,
                 request.target_pitch,
@@ -1091,7 +1023,6 @@ impl NativeDesktopRuntime {
                     schedule,
                     risk,
                     timing_policy: policy,
-                    timing_margin_recommendation,
                     settings_fingerprint: actual_settings_fingerprint,
                     publication_fingerprint,
                     source_path: path,
@@ -1174,27 +1105,6 @@ impl NativeDesktopRuntime {
         })
     }
 
-    fn start_calibration(
-        &self,
-        request: CalibrationStartRequest,
-    ) -> Result<CalibrationStartAckDto, String> {
-        self.calibration.start(request)
-    }
-
-    fn cancel_calibration(
-        &self,
-        request: CalibrationCancelRequest,
-    ) -> Result<CalibrationCancelAckDto, String> {
-        self.calibration.cancel(request)
-    }
-
-    pub(crate) fn wait_for_calibration_terminal(
-        &self,
-        timeout: Duration,
-    ) -> Result<CalibrationState, String> {
-        self.calibration.wait_for_terminal(timeout)
-    }
-
     fn publish(&self, event: UiEvent) -> Result<(), String> {
         self.events
             .lock()
@@ -1215,7 +1125,6 @@ impl NativeDesktopRuntime {
     }
 }
 
-mod calibration;
 mod catalog;
 mod catalog_cache;
 mod catalog_reconcile;
@@ -1356,9 +1265,6 @@ fn settings_error(error: SettingsError) -> String {
 fn playback_activity_error(error: ActivityReservationError) -> String {
     match error {
         ActivityReservationError::Closing => "closing: desktop application is closing".into(),
-        ActivityReservationError::CalibrationAlreadyActive => {
-            "calibration_active: calibration is active".into()
-        }
         ActivityReservationError::PhysicalPlaybackActive => {
             "already_running: another physical playback session is active".into()
         }
@@ -1863,12 +1769,6 @@ fn validate_ui_event(event: &UiEvent) -> Result<(), String> {
         UiEvent::DiagnosticsSnapshot { payload, .. } => {
             UiEvent::validate_diagnostics_snapshot(payload)
         }
-        UiEvent::CalibrationProgress { payload, .. } => {
-            UiEvent::validate_calibration_progress(payload)
-        }
-        UiEvent::CalibrationFinished { payload, .. } => {
-            UiEvent::validate_calibration_finished(payload)
-        }
         UiEvent::UpdateChanged { payload, .. } => UiEvent::validate_update_changed(payload),
     }
 }
@@ -1879,7 +1779,6 @@ fn snapshot_key(event: &UiEvent) -> Option<(u8, String)> {
         UiEvent::DiagnosticsSnapshot { payload, .. } => {
             Some((2, payload.session_id.clone().unwrap_or_default()))
         }
-        UiEvent::CalibrationProgress { payload, .. } => Some((3, payload.operation_id.clone())),
         _ => None,
     }
 }

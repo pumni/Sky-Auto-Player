@@ -6,7 +6,7 @@ use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
 
-fn v4_production_calibration_gate_contract(harness: &str) -> Result<()> {
+fn v4_calibration_retirement_contract(harness: &str, hook: &str) -> Result<()> {
     let normalized_harness = super::normalize_source_line_endings(harness);
     let harness = normalized_harness.as_str();
     let qualification = harness
@@ -14,53 +14,79 @@ fn v4_production_calibration_gate_contract(harness: &str) -> Result<()> {
         .map(|(_, body)| body)
         .ok_or("Rust NSIS owner is missing its package qualification function")?;
     let qualification = qualification
-        .split_once("\n#[cfg(windows)]\nfn verify_calibration_artifact(")
+        .split_once("\nfn verify_retired_calibration_upgrade(")
         .map(|(body, _)| body)
         .ok_or("Rust package qualification body is not bounded")?;
-    let install_position = qualification
-        .find("run_installer(\n        installer,")
+    let compact_qualification = qualification.split_whitespace().collect::<String>();
+    let seeded_payload = compact_qualification
+        .find("std::fs::write(install_root.join(\"native_calibration.exe\"),b\"retired-payload\",)")
+        .ok_or("NSIS harness must seed the prior install-only calibration payload")?;
+    let seeded_cache = compact_qualification
+        .find("app_data.join(\"cache/input_latency.json\")")
+        .ok_or("NSIS harness must seed the legacy app-data cache")?;
+    let install_position = compact_qualification
+        .find("run_installer(installer,")
         .ok_or("Rust NSIS owner must install the exact candidate")?;
-    let installed_gate = qualification
-        .find("verify_calibration_artifact(\n        repository_root,\n        &install_root")
-        .ok_or("Rust NSIS owner must verify installed native calibration")?;
-    let launch_position = qualification
-        .find("launch_smoke(scope, &app")
+    let migration_check = compact_qualification
+        .find("verify_retired_calibration_upgrade(&install_root,&app_data)?")
+        .ok_or("Rust NSIS owner must check retired payload removal and cache preservation")?;
+    let catalog = compact_qualification
+        .find("crate::builtin_catalog::run(")
+        .ok_or("Rust NSIS owner must retain installed catalog verification")?;
+    let launch_position = compact_qualification
+        .find("launch_smoke(scope,&app")
         .ok_or("Rust NSIS owner must launch the installed application")?;
-    if qualification
-        .matches("verify_calibration_artifact(")
-        .count()
-        != 1
-        || qualification.contains("staged_calibration_root")
-        || qualification.contains("apps/desktop/src-tauri/resources")
-        || install_position >= installed_gate
-        || installed_gate >= launch_position
+    if seeded_payload >= install_position
+        || seeded_cache >= install_position
+        || install_position >= migration_check
+        || migration_check >= catalog
+        || catalog >= launch_position
     {
-        return Err("calibration qualification must install first, verify frozen candidate bytes from the installed tree, then launch without producer staging".into());
+        return Err("retirement qualification must seed legacy state, install, verify install-only removal and cache preservation, then launch".into());
     }
 
     let verifier = harness
-        .split_once("fn verify_calibration_artifact(")
+        .split_once("fn verify_retired_calibration_upgrade(")
         .map(|(_, remainder)| remainder)
-        .ok_or("Rust NSIS owner is missing its typed calibration verifier")?;
+        .ok_or("Rust NSIS owner is missing its retirement verifier")?;
     let verifier = verifier
-        .split_once("\n#[cfg(windows)]")
+        .split_once("\n#[cfg(windows)]\nfn assert_user_songs_empty(")
         .map(|(function, _)| function)
-        .ok_or("Rust calibration verifier must be a bounded Windows owner function")?;
+        .ok_or("Rust retirement verifier must be bounded")?;
     for marker in [
-        "verify-installed",
-        "--install-root",
-        "--expected-size",
-        "candidate.manifest.calibration_binary_size",
-        "--expected-sha256",
-        "candidate.manifest.calibration_binary_sha256",
-        "crate::calibration::run(repository_root, &args)",
+        "install_root.join(\"native_calibration.exe\").exists()",
+        "app_data.join(\"cache/input_latency.json\")",
+        "RETIRED_CACHE_SENTINEL",
+        "bytes != RETIRED_CACHE_SENTINEL",
     ] {
         if !verifier.contains(marker) {
             return Err(format!(
-                "Rust installed calibration verifier is missing required marker: {marker}"
+                "Rust calibration retirement verifier is missing required marker: {marker}"
             )
             .into());
         }
+    }
+
+    let hook = super::normalize_source_line_endings(hook);
+    let preinstall = hook
+        .split_once("!macro NSIS_HOOK_PREINSTALL")
+        .and_then(|(_, body)| body.split_once("!macroend"))
+        .map(|(body, _)| body)
+        .ok_or("NSIS PREINSTALL hook is missing")?;
+    if !preinstall.contains("SetFileAttributes \"$INSTDIR\\native_calibration.exe\" NORMAL")
+        || !preinstall.contains("Delete \"$INSTDIR\\native_calibration.exe\"")
+        || !preinstall.contains(
+            "IfFileExists \"$INSTDIR\\native_calibration.exe\" sap_retired_calibration_present 0",
+        )
+        || !preinstall.contains(
+            "IfFileExists \"$INSTDIR\\native_calibration.exe\" sap_retired_calibration_failed 0",
+        )
+        || !preinstall.contains("Abort \"The retired calibration payload could not be removed")
+        || preinstall.contains("$APPDATA")
+        || preinstall.contains("input_latency.json")
+        || preinstall.contains("SKY_APP_DATA_ROOT")
+    {
+        return Err("NSIS PREINSTALL must remove only the retired install-root executable and fail closed without touching app-data".into());
     }
 
     Ok(())
@@ -480,26 +506,8 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         }
     }
     let nsis_harness = fs::read_to_string(root.join("rust/xtask/src/nsis_harness.rs"))?;
-    v4_production_calibration_gate_contract(&nsis_harness)?;
-    let installed_calibration_verifier =
-        fs::read_to_string(root.join("rust/xtask/src/calibration.rs"))?;
-    for marker in [
-        "expected calibration binary size must be positive",
-        "installed calibration SHA-256 mismatch",
-        "installed calibration executable is not x86_64",
-        "Duration::from_secs(5)",
-        "installed calibration --help exited with",
-        "InstalledCalibrationEvidence",
-        "successful_evidence_keeps_the_installed_calibration_schema",
-        "installed_verification_fails_closed_for_missing_binary_invalid_size_digest_and_pe",
-    ] {
-        if !installed_calibration_verifier.contains(marker) {
-            return Err(format!(
-                "Rust production calibration verifier is missing its fail-closed check: {marker}"
-            )
-            .into());
-        }
-    }
+    let nsis_hook = fs::read_to_string(root.join("apps/desktop/src-tauri/nsis-hooks.nsh"))?;
+    v4_calibration_retirement_contract(&nsis_harness, &nsis_hook)?;
     let retired_release_scripts = [
         "scripts/v4_release_pipeline.ps1",
         "scripts/release_doctor.ps1",
@@ -672,76 +680,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn production_release_calibration_gate_requires_installed_bytes_without_producer_staging() {
+    fn package_retirement_contract_removes_only_install_payload_and_preserves_cache() {
         let source =
             super::super::normalize_source_line_endings(include_str!("../nsis_harness.rs"));
-        v4_production_calibration_gate_contract(&source)
-            .expect("consumer must verify installed bytes from the frozen candidate");
+        let hook = include_str!("../../../../apps/desktop/src-tauri/nsis-hooks.nsh");
+        v4_calibration_retirement_contract(&source, hook)
+            .expect("installer removes the old install payload and preserves user cache bytes");
 
-        let staged_dependency = source.replace(
-            "    let install_root = scope.root.join(\"install\");",
-            "    let staged_calibration_root = repository_root.join(\"apps/desktop/src-tauri/resources\");\n    let install_root = scope.root.join(\"install\");\n    verify_calibration_artifact(repository_root, &staged_calibration_root, candidate, None)?;",
-        );
-        assert_ne!(staged_dependency, source, "qualification insertion point");
+        let missing_cache_guard =
+            source.replace("    if bytes != RETIRED_CACHE_SENTINEL {", "    if false {");
         assert!(
-            v4_production_calibration_gate_contract(&staged_dependency).is_err(),
-            "consumer must not depend on producer-local calibration staging"
+            v4_calibration_retirement_contract(&missing_cache_guard, hook).is_err(),
+            "contract must reject removal of the app-data byte-preservation check"
         );
-
-        let install_start = source
-            .find("run_installer(\n        installer,")
-            .expect("installer invocation marker");
-        let gate_start = source[install_start..]
-            .find("verify_calibration_artifact(\n        repository_root,\n        &install_root")
-            .map(|offset| install_start + offset)
-            .expect("installed calibration gate marker");
-        let launch_start = source[gate_start..]
-            .find("launch_smoke(scope, &app")
-            .map(|offset| gate_start + offset)
-            .expect("application launch marker");
-        let installed_gate = source[gate_start..launch_start].to_owned();
-
-        let mut removed_gate = source.to_owned();
-        removed_gate.replace_range(gate_start..launch_start, "");
+        let missing_cleanup = hook.replace("  Delete \"$INSTDIR\\native_calibration.exe\"", "");
         assert!(
-            v4_production_calibration_gate_contract(&removed_gate).is_err(),
-            "release contract must reject removal of installed calibration verification"
-        );
-
-        let mut moved_gate = removed_gate;
-        let evidence_start = moved_gate
-            .find("pub(crate) fn assert_uninstall_registration_absent")
-            .expect("qualification evidence boundary");
-        let evidence_line_end = moved_gate[evidence_start..]
-            .find('\n')
-            .map(|offset| evidence_start + offset + 1)
-            .expect("qualification evidence line end");
-        moved_gate.insert_str(evidence_line_end, &installed_gate);
-        assert!(
-            v4_production_calibration_gate_contract(&moved_gate).is_err(),
-            "release contract must reject installed calibration verification moved after evidence"
-        );
-
-        let crlf_source = source.replace('\n', "\r\n");
-        v4_production_calibration_gate_contract(&crlf_source)
-            .expect("CRLF source must satisfy the same ordered calibration gate contract");
-        let crlf_without_gate = source
-            .replace(
-                "verify_calibration_artifact(\n        repository_root,\n        &install_root",
-                "removed_calibration_artifact(\n        repository_root,\n        &install_root",
-            )
-            .replace('\n', "\r\n");
-        assert!(
-            v4_production_calibration_gate_contract(&crlf_without_gate).is_err(),
-            "CRLF source must still reject removing the installed calibration gate"
-        );
-        let crlf_moved_gate = moved_gate.replace('\n', "\r\n");
-        assert!(
-            v4_production_calibration_gate_contract(&crlf_moved_gate).is_err(),
-            "CRLF source must still reject the calibration gate moved after release evidence"
+            v4_calibration_retirement_contract(&source, &missing_cleanup).is_err(),
+            "contract must reject removal of installer cleanup"
         );
     }
-
     #[test]
     fn trust_guard_rejects_renamed_and_encoded_minisign_secret_keys() {
         let secret_payload = STANDARD.encode([0_u8; 158]);

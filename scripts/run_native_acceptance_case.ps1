@@ -1,8 +1,8 @@
-﻿param(
-    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle')]
+param(
+    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')]
     [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
-[ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'release-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
+[ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'short-up-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-active-cleanup', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
     [string]$Scenario,
     [ValidateSet('canonical-single', 'safety-smoke', 'dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle', 'boundary-60fps-margin-0', 'boundary-120fps-margin-500')]
     [string]$Workload,
@@ -19,6 +19,7 @@
     [string]$HarnessManifestPath,
     [string]$OutputRoot,
     [switch]$OwnerApprovedReceiveOnlyRun,
+    [switch]$PreflightOnly,
     [ValidateRange(15, 15)]
     [int]$SampleSeconds,
     [ValidateSet(60, 120)]
@@ -40,11 +41,24 @@ Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
 $isSessionRedesignProfile = $QualificationProfile -eq 'DispatchSessionRedesignM3'
-$isPlaybackCoreLifecycle = $QualificationProfile -eq 'PlaybackCoreLifecycle'
+$isPlaybackCoreLifecycle = $QualificationProfile -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')
+if ($PreflightOnly -and -not $isPlaybackCoreLifecycle) {
+    throw '-PreflightOnly is restricted to PlaybackCoreLifecycle profiles'
+}
+if ($PreflightOnly -and $OwnerApprovedReceiveOnlyRun) {
+    throw '-PreflightOnly cannot be combined with -OwnerApprovedReceiveOnlyRun'
+}
 $usesSessionQualificationContracts = $isDispatchCleanupM3 -or $isSessionRedesignProfile -or $isPlaybackCoreLifecycle
 $dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
 $sessionRedesignProfile = if ($isSessionRedesignProfile) { Get-DispatchSessionRedesignM3Profile } else { $null }
-$playbackCoreProfile = if ($isPlaybackCoreLifecycle) { Get-PlaybackCoreLifecycleProfile } else { $null }
+$playbackCoreProfile = if ($isPlaybackCoreLifecycle) { Get-PlaybackCoreLifecycleProfileForName -Name $QualificationProfile } else { $null }
+$expectedHarnessManifestSchemaVersion = if ($isPlaybackCoreLifecycle) {
+    $playbackCoreProfile.HarnessManifestSchemaVersion
+} elseif ($isSessionRedesignProfile) {
+    $sessionRedesignProfile.HarnessManifestSchemaVersion
+} else {
+    1
+}
 $sessionTimingFloors = if ($isDispatchCleanupM3) {
     Get-DispatchCleanupM3TimingFloors -Scenario $Scenario -GameFps $GameFps -TimingMarginUs $TimingMarginUs
 } elseif ($isSessionRedesignProfile) {
@@ -52,7 +66,8 @@ $sessionTimingFloors = if ($isDispatchCleanupM3) {
         -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds
 } elseif ($isPlaybackCoreLifecycle) {
     Assert-PlaybackCoreLifecycleSessionIdentity -Scenario $Scenario -Workload $Workload `
-        -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds
+        -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds `
+        -ProfileVersion $playbackCoreProfile.Version
 } else { $null }
 if ($usesSessionQualificationContracts) {
     if (-not $HarnessPath -or -not $HarnessManifestPath -or -not $OutputRoot) {
@@ -66,7 +81,7 @@ if ($usesSessionQualificationContracts) {
     }
 }
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
-$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle')
+$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')
 $receiveOnlyObserverVersion = if ($qualifiedProfile) {
     'scheduler-receiveonly-queue-v3-compat3'
 } else {
@@ -81,7 +96,6 @@ $evidenceRoot = if ($OutputRoot) {
     Join-Path $root '.benchmarks\physical-native-cases'
 }
 $runDir = Join-Path $evidenceRoot $runId
-New-Item -ItemType Directory -Force -Path $runDir | Out-Null
 $readyPath = Join-Path $runDir 'sink-ready.json'
 $eventsPath = Join-Path $runDir 'sink-events.jsonl'
 $sinkObserverSummaryPath = Join-Path $runDir 'sink-observer-summary.json'
@@ -211,11 +225,11 @@ function Assert-DispatchCleanupM3SessionIdentity {
     )
     $performanceWorkloads = @('dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
     $safetyScenarios = @(
-        'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'release-gap-stress',
+        'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'short-up-gap-stress',
         'mixed-up-down', 'ambiguous-packet', 'preflight-user-held',
         'modifier-held-final-boundary', 'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change',
         'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume',
-        'pause-resume-release-floor', 'suspend-resume', 'stop-cleanup', 'skip-cleanup',
+        'suspend-resume', 'stop-cleanup', 'skip-cleanup',
         'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile'
     )
     if ($Workload -in $performanceWorkloads) {
@@ -369,10 +383,10 @@ function Assert-PathOutsideRepository {
 }
 
 try {
-    if ($isPlaybackCoreLifecycle -and -not $OwnerApprovedReceiveOnlyRun) {
+    if ($isPlaybackCoreLifecycle -and -not $OwnerApprovedReceiveOnlyRun -and -not $PreflightOnly) {
         throw 'PlaybackCoreLifecycle native case requires -OwnerApprovedReceiveOnlyRun after explicit owner approval of this Windows machine and project-owned receiver'
     }
-    if (-not [Environment]::UserInteractive) {
+    if (-not $PreflightOnly -and -not [Environment]::UserInteractive) {
         throw 'Windows is not interactive; refusing physical acceptance'
     }
     if ([bool]$HarnessPath -ne [bool]$HarnessManifestPath) {
@@ -452,7 +466,7 @@ try {
             $expectedRole = [string]$harnessManifest.source_role
             if ($expectedRole -notin @('Baseline', 'Candidate')) { throw 'PlaybackCoreLifecycle manifest source role is invalid' }
             Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $harnessManifest -ExpectedRole $expectedRole -RepositoryRoot $root | Out-Null
-            $runnerCheckoutIdentity = Get-PlaybackCoreLifecycleRunnerIdentity -RunnerRoot $root
+            $runnerCheckoutIdentity = Get-PlaybackCoreLifecycleRunnerIdentity -RunnerRoot $root -ProfileVersion $playbackCoreProfile.Version
             if ($runnerCheckoutIdentity.revision -ne $head -or $runnerCheckoutIdentity.tree -ne $sourceTree) {
                 throw 'PlaybackCoreLifecycle runner identity changed during native case preflight'
             }
@@ -461,7 +475,7 @@ try {
             if (-not (Test-DispatchM3PathOutside -Path $evidenceRoot -RepositoryRoot $manifestSourceRoot)) {
                 throw 'PlaybackCoreLifecycle native evidence output must be outside the immutable source checkout'
             }
-            $manifestSourceIdentity = Assert-PlaybackCoreLifecycleSourceCheckout -SourceRoot $manifestSourceRoot -SourceRole $expectedRole -RunnerRoot $root
+            $manifestSourceIdentity = Assert-PlaybackCoreLifecycleSourceCheckout -SourceRoot $manifestSourceRoot -SourceRole $expectedRole -RunnerRoot $root -ProfileVersion $playbackCoreProfile.Version
             if ($manifestSourceIdentity.revision -ne $harnessManifest.source_revision -or
                 $manifestSourceIdentity.tree -ne $harnessManifest.source_tree_sha -or
                 $manifestSourceIdentity.checkout.git_dir -ne [string]$harnessManifest.source_checkout_identity.git_dir -or
@@ -528,6 +542,12 @@ try {
         if ($harnessManifest.guard_mode -eq 'adaptive') {
             throw 'adaptive guard mode is retired (#646); only frozen manifests are accepted for qualification'
         }
+        if ($harnessManifest.schema_version -ne $expectedHarnessManifestSchemaVersion) {
+            throw ($QualificationProfile + ' case runner requires harness manifest schema ' + $expectedHarnessManifestSchemaVersion + ', got ' + $harnessManifest.schema_version)
+        }
+        if ($harnessManifest.qualification_profile -ne $QualificationProfile) {
+            throw ($QualificationProfile + ' case runner cannot consume a ' + $harnessManifest.qualification_profile + ' harness manifest')
+        }
         $expectedSourceBranch = if (($qualifiedProfile -and $harnessManifest.source_role -eq 'Baseline') -or ($usesSessionQualificationContracts -and -not $isPlaybackCoreLifecycle)) { '' } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.CandidateLineageBranch } else { 'perf/dispatch-core-20261109' }
         $expectedWorkloadVersion = if ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.WorkloadVersion } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
         $sourceIdentityAllowed = if ($isDispatchCleanupM3) {
@@ -537,8 +557,7 @@ try {
         } else {
             $HistoricalSourceAllowed -or $sourceRevisionMatches
         }
-        if ($harnessManifest.schema_version -ne 1 -or
-            -not $sourceIdentityAllowed -or
+        if (-not $sourceIdentityAllowed -or
             $harnessManifest.source_revision -notmatch '^[0-9a-f]{40}$' -or
             $harnessManifest.source_tree_sha -notmatch '^[0-9a-f]{40}$' -or
             $harnessManifest.source_branch -ne $expectedSourceBranch -or
@@ -571,9 +590,22 @@ try {
         } elseif ($isPlaybackCoreLifecycle) {
             if ([string]::IsNullOrWhiteSpace($Workload)) { throw 'PlaybackCoreLifecycle native cases require an explicit workload identity' }
             Assert-PlaybackCoreLifecycleSessionIdentity -Scenario $Scenario -Workload $Workload `
-                -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds | Out-Null
+                -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds `
+                -ProfileVersion $playbackCoreProfile.Version | Out-Null
         }
     }
+    if ($PreflightOnly) {
+        if (Test-Path -LiteralPath $evidenceRoot) {
+            throw '-PreflightOnly requires a nonexistent output root so it cannot create or alter case evidence'
+        }
+        Write-Output ('CASE_PREFLIGHT_ONLY PASS profile=' + $QualificationProfile + ' role=' + $harnessManifest.source_role +
+            ' schema=' + $harnessManifest.schema_version + ' scenario=' + $Scenario + ' workload=' + $Workload +
+            ' manifest_sha256=' + $harnessManifestHash + ' binary_sha256=' + $harnessManifest.binary_sha256 +
+            ' receiver_started=false harness_started=false output_created=false')
+        $resultCode = 0
+        return
+    }
+    New-Item -ItemType Directory -Force -Path $runDir | Out-Null
     $sessionId = (Get-Process -Id $PID).SessionId
     $sinkArgv = @('-NoProfile', '-File', $sinkScript, '-Mode', 'ReceiveOnly', '-RunId', $runId, '-ReadyFile', $readyPath, '-EventLog', $eventsPath, '-ActivateRequestFile', $focusRestoreRequestPath)
     if ($receiveOnlyObserverVersion) {
@@ -632,7 +664,6 @@ try {
         hol_stall_us = $HolStallUs
         hol_cycles = $HolCycles
         expected_hold_us = if ($usesSessionQualificationContracts) { [long]$sessionTimingFloors.expected_hold_us } else { [long][Math]::Ceiling(1000000.0 / $GameFps) * 2 + $TimingMarginUs }
-        expected_release_gap_us = if ($usesSessionQualificationContracts) { [long]$sessionTimingFloors.expected_release_gap_us } else { [long][Math]::Ceiling(1000000.0 / $GameFps) + $TimingMarginUs }
         profile = 'production'
         cargo_profile = if ($harnessManifest) { $harnessManifest.cargo_profile } else { 'legacy-checkout-release' }
         cargo_features = if ($harnessManifest) { @($harnessManifest.cargo_features) } else { @() }
@@ -640,7 +671,7 @@ try {
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_control_kind = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'control_kind' } else { $null }
-        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'FrameSnapshot') { if ($harnessManifest.source_role -eq 'Baseline') { 'FrameSnapshot-Baseline' } else { 'FrameSnapshot-Candidate' } } elseif ($QualificationProfile -eq 'DispatchCleanupM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchCleanupM3-Baseline' } else { 'DispatchCleanupM3-Candidate' } } elseif ($QualificationProfile -eq 'DispatchSessionRedesignM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchSessionRedesignM3-Baseline' } else { 'DispatchSessionRedesignM3-Candidate' } } elseif ($QualificationProfile -eq 'PlaybackCoreLifecycle') { if ($harnessManifest.source_role -eq 'Baseline') { 'PlaybackCoreLifecycle-Baseline' } else { 'PlaybackCoreLifecycle-Candidate' } } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
+        harness_control_label = if ($c1TimedVerified) { 'C1-TIMED' } elseif ($QualificationProfile -eq 'FrameSnapshot') { if ($harnessManifest.source_role -eq 'Baseline') { 'FrameSnapshot-Baseline' } else { 'FrameSnapshot-Candidate' } } elseif ($QualificationProfile -eq 'DispatchCleanupM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchCleanupM3-Baseline' } else { 'DispatchCleanupM3-Candidate' } } elseif ($QualificationProfile -eq 'DispatchSessionRedesignM3') { if ($harnessManifest.source_role -eq 'Baseline') { 'DispatchSessionRedesignM3-Baseline' } else { 'DispatchSessionRedesignM3-Candidate' } } elseif ($isPlaybackCoreLifecycle) { if ($harnessManifest.source_role -eq 'Baseline') { $playbackCoreProfile.Name + '-Baseline' } else { $playbackCoreProfile.Name + '-Candidate' } } elseif ($QualificationProfile -eq 'Scheduler') { if ($harnessManifest.source_role -eq 'Baseline') { 'Scheduler-Baseline' } else { 'Scheduler-Candidate' } } elseif ($HistoricalSourceAllowed) { 'C0' } else { 'A' }
         harness_base_source_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_revision' } else { $null }
         harness_base_source_tree_sha = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_tree_sha' } else { $null }
         harness_base_source_archive_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'base_source_archive_sha256' } else { $null }
@@ -694,7 +725,6 @@ try {
         $runConfig['session_seed'] = $null
         $runConfig['seed_mode'] = 'none; deterministic workload definitions do not accept a PRNG seed'
         $runConfig['configured_H_us'] = [long]$sessionTimingFloors.configured_H_us
-        $runConfig['configured_G_us'] = [long]$sessionTimingFloors.configured_G_us
     }
     $runConfig['machine_name'] = [Environment]::MachineName
     $runConfig['os_boot_time_utc'] = $operatingSystem.LastBootUpTime.ToUniversalTime().ToString('O')
@@ -897,7 +927,6 @@ try {
         session_seed = $null
         seed_mode = if ($usesSessionQualificationContracts) { 'none; deterministic workload definitions do not accept a PRNG seed' } else { $null }
         configured_H_us = if ($usesSessionQualificationContracts) { [long]$sessionTimingFloors.configured_H_us } else { $null }
-        configured_G_us = if ($usesSessionQualificationContracts) { [long]$sessionTimingFloors.configured_G_us } else { $null }
         harness_source_revision = if ($harnessManifest) { $harnessManifest.source_revision } else { $null }
         harness_source_tree_sha = if ($harnessManifest) { $harnessManifest.source_tree_sha } else { $null }
         harness_source_role = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'source_role' } else { $null }
@@ -988,20 +1017,26 @@ try {
         $resultCode = 0
     }
 } catch {
-    $failure = [ordered]@{
-        run_id = $runId
-        scenario = $Scenario
-        timing_margin_us = $TimingMarginUs
-        game_fps = $GameFps
-        sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
-        hol_stall_us = $HolStallUs
-        hol_cycles = $HolCycles
-        source_revision = if ($head) { $head } else { $null }
-        error = $_.Exception.Message
+    if ($PreflightOnly) {
+        Write-Output ('CASE_PREFLIGHT_ONLY REJECTED profile=' + $QualificationProfile + ' scenario=' + $Scenario +
+            ' workload=' + $Workload + ' error=' + $_.Exception.Message)
+    } else {
+        New-Item -ItemType Directory -Force -Path $runDir | Out-Null
+        $failure = [ordered]@{
+            run_id = $runId
+            scenario = $Scenario
+            timing_margin_us = $TimingMarginUs
+            game_fps = $GameFps
+            sample_seconds = if ($SampleSeconds) { $SampleSeconds } else { $null }
+            hol_stall_us = $HolStallUs
+            hol_cycles = $HolCycles
+            source_revision = if ($head) { $head } else { $null }
+            error = $_.Exception.Message
+        }
+        $failure | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runDir 'runner-failure.json') -Encoding UTF8
+        Write-Output ('RUNNER FAILURE: ' + $_.Exception.Message)
+        Write-Output ('EVIDENCE ' + $runDir)
     }
-    $failure | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $runDir 'runner-failure.json') -Encoding UTF8
-    Write-Output ('RUNNER FAILURE: ' + $_.Exception.Message)
-    Write-Output ('EVIDENCE ' + $runDir)
     $resultCode = 2
 } finally {
     foreach ($process in $contentionProcesses) {
@@ -1028,6 +1063,8 @@ try {
         }
     }
 }
+
+if ($PreflightOnly) { exit $resultCode }
 
 $checksumLines = @(Get-ChildItem -LiteralPath $runDir -File | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object {
     $hash = Get-Sha256 $_.FullName

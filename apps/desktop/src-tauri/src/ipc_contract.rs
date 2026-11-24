@@ -88,14 +88,6 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
         method: "diagnostics.set_enabled",
     },
     CommandSpec {
-        invoke_name: "start_calibration",
-        method: "calibration.start",
-    },
-    CommandSpec {
-        invoke_name: "cancel_calibration",
-        method: "calibration.cancel",
-    },
-    CommandSpec {
         invoke_name: "library_list_playlists",
         method: "library.list_playlists",
     },
@@ -140,8 +132,8 @@ pub(crate) const COMMANDS: &[CommandSpec] = &[
 pub(crate) const UI_EVENTS_COMMAND: &str = "subscribe_ui_events";
 pub(crate) const STARTUP_WINDOW_REVEALED_COMMAND: &str = "startup_window_revealed";
 
-const fn tauri_command_names() -> [&'static str; 34] {
-    let mut names = [""; 34];
+const fn tauri_command_names() -> [&'static str; 32] {
+    let mut names = [""; 32];
     let mut index = 0;
     while index < COMMANDS.len() {
         names[index] = COMMANDS[index].invoke_name;
@@ -155,7 +147,7 @@ const fn tauri_command_names() -> [&'static str; 34] {
 pub(crate) const TAURI_COMMANDS: &[&str] = &tauri_command_names();
 
 pub(crate) fn is_complete() -> bool {
-    COMMANDS.len() == 32
+    COMMANDS.len() == 30
         && TAURI_COMMANDS.len() == COMMANDS.len() + 2
         && COMMANDS
             .iter()
@@ -186,7 +178,7 @@ mod tests {
     #[test]
     fn stable_command_contract_is_exactly_the_native_set() {
         assert!(is_complete());
-        assert_eq!(COMMANDS.len(), 32);
+        assert_eq!(COMMANDS.len(), 30);
         assert_eq!(
             COMMANDS[0],
             CommandSpec {
@@ -195,30 +187,30 @@ mod tests {
             }
         );
         assert_eq!(
-            COMMANDS[29],
+            COMMANDS[27],
             CommandSpec {
                 invoke_name: "library_import_local_folder_to_playlist",
                 method: "library.import_local_folder_to_playlist"
             }
         );
         assert_eq!(
-            COMMANDS[30],
+            COMMANDS[28],
             CommandSpec {
                 invoke_name: "export_sender_trace",
                 method: "playback.export_sender_trace",
             }
         );
         assert_eq!(
-            COMMANDS[31],
+            COMMANDS[29],
             CommandSpec {
                 invoke_name: "get_playback_status",
                 method: "playback.get_status",
             }
         );
         assert_eq!(UI_EVENTS_COMMAND, "subscribe_ui_events");
-        assert_eq!(TAURI_COMMANDS.len(), 34);
+        assert_eq!(TAURI_COMMANDS.len(), 32);
         assert_eq!(TAURI_COMMANDS[0], "bootstrap");
-        assert_eq!(TAURI_COMMANDS[32], UI_EVENTS_COMMAND);
-        assert_eq!(TAURI_COMMANDS[33], STARTUP_WINDOW_REVEALED_COMMAND);
+        assert_eq!(TAURI_COMMANDS[30], UI_EVENTS_COMMAND);
+        assert_eq!(TAURI_COMMANDS[31], STARTUP_WINDOW_REVEALED_COMMAND);
     }
 }

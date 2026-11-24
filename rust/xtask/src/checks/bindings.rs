@@ -63,9 +63,9 @@ fn command_names_source(root: &Path) -> Result<String> {
         };
         commands.push(rest[..end].to_owned());
     }
-    if commands.len() != 32 {
+    if commands.len() != 30 {
         return Err(format!(
-            "IPC registry contains {} commands; expected 32",
+            "IPC registry contains {} commands; expected 30",
             commands.len()
         )
         .into());
@@ -151,6 +151,36 @@ fn generate_bindings_with_env(
         root,
         &export_env,
     )?;
+    normalize_generated_type_script_whitespace(Path::new(&export_dir))?;
+    Ok(())
+}
+
+fn normalize_generated_type_script_whitespace(export_dir: &Path) -> Result<()> {
+    for entry in WalkDir::new(export_dir).follow_links(false) {
+        let entry = entry?;
+        if !entry.file_type().is_file()
+            || entry
+                .path()
+                .extension()
+                .and_then(|extension| extension.to_str())
+                != Some("ts")
+        {
+            continue;
+        }
+        let source = fs::read_to_string(entry.path())?;
+        let ends_with_newline = source.ends_with('\n');
+        let mut normalized = source
+            .lines()
+            .map(str::trim_end)
+            .collect::<Vec<_>>()
+            .join("\n");
+        if ends_with_newline {
+            normalized.push('\n');
+        }
+        if source != normalized {
+            fs::write(entry.path(), normalized)?;
+        }
+    }
     Ok(())
 }
 

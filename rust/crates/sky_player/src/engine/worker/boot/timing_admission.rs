@@ -4,7 +4,6 @@ use crate::engine::{CPU_METRICS_SAMPLE_INTERVAL_US, DurationTicks, QpcClock};
 
 pub(super) struct ConvertedTiming {
     pub(super) min_hold_ticks: DurationTicks,
-    pub(super) min_release_gap_ticks: DurationTicks,
     pub(super) worker_timing: WorkerTimingState,
 }
 
@@ -19,9 +18,6 @@ pub(super) fn convert(
     let min_hold_ticks = qpc_clock
         .duration_from_us(effective_min_hold_us)
         .map_err(|error| format!("min-hold conversion failed: {error:?}"))?;
-    let min_release_gap_ticks = qpc_clock
-        .duration_from_us(config.timing.min_release_gap_us)
-        .map_err(|error| format!("minimum release-gap conversion failed: {error:?}"))?;
     let strict_down_completion_late_ticks = qpc_clock
         .duration_from_us(config.timing.strict_down_completion_late_us)
         .map_err(|error| format!("strict note-on threshold conversion failed: {error:?}"))?;
@@ -79,7 +75,6 @@ pub(super) fn convert(
 
     Ok(ConvertedTiming {
         min_hold_ticks,
-        min_release_gap_ticks,
         worker_timing: WorkerTimingState {
             strict_timing: effective_policy.strict_failure_policy,
             strict_down_completion_late_ticks,

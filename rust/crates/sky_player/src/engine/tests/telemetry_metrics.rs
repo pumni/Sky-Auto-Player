@@ -135,11 +135,8 @@ fn assert_snapshot_common_projection(
         final_gate_focus_losses,
         final_gate_lease_expirations,
         final_sender_window_expirations,
-        release_floor_infeasible_boundaries,
         hold_floor_delay_boundaries,
         max_hold_floor_delay_us,
-        release_floor_delay_boundaries,
-        max_release_floor_delay_us,
         max_missed_lateness_ticks,
         keys_inserted_before_failure,
         keys_rolled_back,
@@ -149,9 +146,6 @@ fn assert_snapshot_common_projection(
         production_hold_pair_samples,
         production_min_hold_start_after_down_completion_ticks,
         production_hold_floor_violation_count,
-        production_release_floor_samples,
-        production_min_down_start_after_up_completion_ticks,
-        production_release_floor_violation_count,
         production_same_key_overlap_forensics_count,
         production_anchor_overwrite_count,
         production_unmatched_up_count,
@@ -359,7 +353,7 @@ fn production_qualification_observer_keeps_requested_ring_capture() {
     let mut pre_call_to_completion_us = Vec::new();
     let mut physical_floor_displacement_us = Vec::new();
     let mut hold_floor_displacement_us = Vec::new();
-    let mut release_floor_displacement_us = Vec::new();
+    let mut down_eligibility_displacement_us = Vec::new();
     let mut eligible_to_pre_call_us = Vec::new();
     for record in records {
         assert_eq!(record["target_crossing_qpc_available"], true);
@@ -418,9 +412,9 @@ fn production_qualification_observer_keeps_requested_ring_capture() {
             }
             if let Some(span) = trace_duration_us(
                 qpc_clock,
-                record["release_floor_displacement_ticks"].as_u64(),
+                record["down_eligibility_displacement_ticks"].as_u64(),
             ) {
-                release_floor_displacement_us.push(span);
+                down_eligibility_displacement_us.push(span);
             }
         }
         if let Some(span) = trace_span_us(
@@ -446,8 +440,8 @@ fn production_qualification_observer_keeps_requested_ring_capture() {
     );
     print_mock_span_stats("hold_floor_displacement", &mut hold_floor_displacement_us);
     print_mock_span_stats(
-        "release_floor_displacement",
-        &mut release_floor_displacement_us,
+        "down_eligibility_displacement",
+        &mut down_eligibility_displacement_us,
     );
     print_mock_span_stats("eligible_to_pre_call", &mut eligible_to_pre_call_us);
     println!(
@@ -583,6 +577,263 @@ fn progress_snapshot_freezes_for_manual_pause_and_resumes_afterward() {
 
     session.quit().expect("quit request");
     assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+}
+
+#[test]
+fn manual_pause_verifies_active_cleanup_before_immediate_same_key_resume() {
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 50_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "active-pause-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 100_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "active-pause-up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 100_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "active-pause-resumed-down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 160_000,
+            scan_codes: smallvec::smallvec![0x15],
+            reason: "active-pause-resumed-up".into(),
+        },
+    ];
+    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+        .expect("valid active-pause schedule");
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let capture = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let (first_packet_send_entered_tx, first_packet_send_entered_rx) = std::sync::mpsc::channel();
+    let (release_first_packet_send_tx, release_first_packet_send_rx) = std::sync::mpsc::channel();
+    let (release_entered_tx, release_entered_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    fault_script.send_input_capture = Some(Arc::clone(&capture));
+    fault_script.first_packet_send_entered = Some(Arc::new(first_packet_send_entered_tx));
+    fault_script.release_first_packet_send = Some(Arc::new(std::sync::Mutex::new(
+        release_first_packet_send_rx,
+    )));
+    fault_script.first_release_send_entered = Some(Arc::new(release_entered_tx));
+    fault_script.release_first_release_send = Some(Arc::new(std::sync::Mutex::new(release_rx)));
+    let session = NativeDispatchSession::new(test_session_options(
+        schedule,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    ))
+    .expect("mock worker session admission");
+
+    start_with_test_wall_clock_slack(&session);
+    // Hold the first Down inside the mock SendInput boundary. The QPC target
+    // lets the test request Pause after the next same-key Down is due while
+    // keeping the worker from racing ahead to the authored Up.
+    first_packet_send_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("first Down did not reach the bounded mock send gate");
+    assert_eq!(send_calls.load(Ordering::SeqCst), 1);
+    let qpc_clock = QpcClock::initialize().expect("QPC clock");
+    let epoch = session.epoch_qpc_for_test();
+    assert_ne!(
+        epoch,
+        QpcTicks::ZERO,
+        "worker must publish its playback epoch"
+    );
+    let due_ticks = qpc_clock
+        .duration_from_us(100_000)
+        .expect("next Down QPC duration");
+    let due_qpc = epoch
+        .checked_add_duration(due_ticks)
+        .expect("next Down QPC deadline");
+    let due_deadline = Instant::now() + Duration::from_secs(2);
+    while qpc_clock.now().expect("QPC now") < due_qpc {
+        assert!(
+            Instant::now() < due_deadline,
+            "next Down QPC deadline was not reached"
+        );
+        std::thread::yield_now();
+    }
+
+    let pause_generation = session
+        .pause_with_timing_token()
+        .expect("active-key pause request");
+    release_first_packet_send_tx
+        .send(())
+        .expect("release first packet mock send gate");
+    release_entered_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("pause cleanup entered its first Up send");
+    assert_eq!(send_calls.load(Ordering::SeqCst), 2);
+    assert!(
+        session
+            .pause_timing_result(pause_generation)
+            .expect("pending pause timing")
+            .is_none(),
+        "pause must not acknowledge before the in-flight cleanup Up completes"
+    );
+    let during_cleanup = session.snapshot_lite();
+    assert!(!during_cleanup.is_paused);
+    assert_eq!(
+        capture
+            .lock()
+            .expect("capture while cleanup is in flight")
+            .len(),
+        2,
+        "Down and the in-flight cleanup Up are captured before pause acknowledgment"
+    );
+
+    release_tx.send(()).expect("release the cleanup Up barrier");
+    let pause_deadline = Instant::now() + Duration::from_secs(2);
+    let pause_timing = loop {
+        if let Some(timing) = session
+            .pause_timing_result(pause_generation)
+            .expect("pause timing result")
+        {
+            break timing;
+        }
+        assert!(
+            Instant::now() < pause_deadline,
+            "verified pause cleanup acknowledgment did not publish: {:?}",
+            session.snapshot()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    let paused_snapshot = loop {
+        let snapshot = session.snapshot();
+        if snapshot.is_paused {
+            break snapshot;
+        }
+        assert!(
+            Instant::now() < pause_deadline,
+            "verified pause did not publish after cleanup acknowledgment: {snapshot:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    };
+    assert_eq!(paused_snapshot.active_count, 0);
+    assert_eq!(paused_snapshot.possibly_active_count, 0);
+    assert_eq!(paused_snapshot.final_release_obligation_mask, 0);
+    assert_eq!(paused_snapshot.failed_release_count, 0);
+    assert_eq!(paused_snapshot.terminal_error, None);
+    assert_eq!(
+        pause_timing.cleanup_obligation_mask, 1,
+        "worker must observe an active-key release obligation before cleanup"
+    );
+    assert!(pause_timing.acknowledged_ticks >= pause_timing.observed_ticks);
+
+    let paused_capture = capture.lock().expect("verified pause capture");
+    assert!(matches!(
+        paused_capture.as_slice(),
+        [
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 1
+                },
+                status: sky_dispatch_win32::input::SendTransactionStatus::Complete,
+                ..
+            },
+            MockSendInputCapture::SingleEmitter {
+                scan_codes,
+                key_up: true
+            }
+        ] if scan_codes == &[0x15]
+    ));
+    drop(paused_capture);
+
+    assert!(session.snapshot_lite().is_paused);
+    assert_eq!(
+        send_calls.load(Ordering::SeqCst),
+        2,
+        "no authored send may cross the pause barrier"
+    );
+
+    // Resume as soon as verified cleanup is acknowledged. The next same-key
+    // Down cannot be sent until this command opens playback admission.
+    session
+        .resume()
+        .expect("immediate Resume after verified cleanup");
+    let resumed_down_deadline = Instant::now() + Duration::from_secs(3);
+    while send_calls.load(Ordering::SeqCst) < 3 {
+        assert!(
+            Instant::now() < resumed_down_deadline,
+            "same-key authored Down did not resume: {:?}",
+            session.snapshot()
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let (resume_commit_qpc, resume_commit_elapsed_ticks) = session
+        .manual_resume_commit_for_test()
+        .expect("worker Resume commit evidence");
+    assert!(resume_commit_qpc >= pause_timing.acknowledged_ticks.as_u64());
+    assert!(
+        resume_commit_elapsed_ticks >= due_ticks.as_u64(),
+        "next same-key Down must already be due at the worker's committed Resume"
+    );
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    let final_snapshot = session.snapshot();
+    assert_eq!(final_snapshot.status, EnginePollStatus::Finished.as_str());
+    assert_eq!(final_snapshot.active_count, 0);
+    assert_eq!(final_snapshot.possibly_active_count, 0);
+    assert_eq!(final_snapshot.failed_release_count, 0);
+    assert_eq!(final_snapshot.terminal_error, None);
+    assert_eq!(send_calls.load(Ordering::SeqCst), 4);
+
+    let captures = capture.lock().expect("final mock SendInput capture");
+    let resumed_down_send_ticks = match captures.get(2) {
+        Some(MockSendInputCapture::Packet {
+            packet:
+                PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 1,
+                },
+            send_started_qpc_ticks: Some(ticks),
+            ..
+        }) => *ticks,
+        capture => panic!("resumed same-key Down lacks a measured send timestamp: {capture:?}"),
+    };
+    assert!(resumed_down_send_ticks >= resume_commit_qpc);
+    assert!(matches!(
+        captures.as_slice(),
+        [
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 1
+                },
+                ..
+            },
+            MockSendInputCapture::SingleEmitter { key_up: true, .. },
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 1
+                },
+                ..
+            },
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 1,
+                    down_mask: 0
+                },
+                ..
+            }
+        ]
+    ));
 }
 
 #[test]
@@ -1083,8 +1334,9 @@ fn large_runtime_schedule_starts_and_quits_cleanly() {
     }
     let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
         .expect("large schedule must compile");
-    assert_eq!(schedule.batches.len(), AUTHORED_ACTIONS);
-    assert_eq!(schedule.intents.len(), AUTHORED_ACTIONS);
+    assert_eq!(schedule.authored_timestamp_group_count, AUTHORED_ACTIONS);
+    assert_eq!(schedule.down_chords.len(), AUTHORED_ACTIONS / 2);
+    assert_eq!(schedule.generation_count, (AUTHORED_ACTIONS / 2) as u64);
 
     let session = NativeDispatchSession::new(test_session_options(
         schedule,
@@ -1318,8 +1570,8 @@ fn telemetry_ring_builds_once_and_propagates_build_error() {
             builds += 1;
             Ok(RtTraceRecord {
                 trace_record_index: 0,
-                compiled_packet_index: 0,
-                compiled_packet_index_available: false,
+                authored_down_chord_index: 0,
+                authored_down_chord_index_available: false,
                 source_action_index: 0,
                 event_index: 0,
                 kind: TRACE_KIND_DOWN,
@@ -1412,7 +1664,7 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("sent"),
             polyphony: 1,
@@ -1429,15 +1681,11 @@ fn native_trace_constructor_rejects_inconsistent_counts() {
             physical_target_qpc_ticks: None,
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
-            release_floor_qpc_ticks: None,
+            down_not_before_qpc_ticks: None,
             hold_floor_mask: 0,
-            release_floor_mask: 0,
             pre_call_qpc_ticks: None,
             sendinput_completion_qpc_ticks: None,
             observation_qpc_ticks: None,
-            pre_call_ticks: None,
-            sendinput_completion_ticks: None,
-            completion_residual_us: 0,
             core_post_send_duration_us: 0,
             post_send_metrics_available: false,
             completion_error_ticks: 0,
@@ -1463,7 +1711,7 @@ fn native_summary_ignores_non_backend_trace() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("blocked_unfocused"),
             polyphony: 3,
@@ -1480,15 +1728,11 @@ fn native_summary_ignores_non_backend_trace() {
             physical_target_qpc_ticks: None,
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
-            release_floor_qpc_ticks: None,
+            down_not_before_qpc_ticks: None,
             hold_floor_mask: 0,
-            release_floor_mask: 0,
             pre_call_qpc_ticks: None,
             sendinput_completion_qpc_ticks: None,
             observation_qpc_ticks: None,
-            pre_call_ticks: None,
-            sendinput_completion_ticks: None,
-            completion_residual_us: 0,
             core_post_send_duration_us: 0,
             post_send_metrics_available: false,
             completion_error_ticks: 0,

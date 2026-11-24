@@ -194,15 +194,11 @@ pub use outcome::{
     TerminalSendAttemptEvidence,
 };
 
-pub(crate) use packet::PreparedTaggedCalibrationPacket;
-pub(crate) use packet::send_prepared_physical_packet_once_at_target;
 pub use packet::{MAX_PACKET_EVENTS, PreparedPacketView, PreparedPhysicalPacket};
-pub use physical::is_scan_code_physically_down;
 pub use profile::{
     InstrumentKeyProfile, InstrumentKeyProfileError, InstrumentKeyProfileSpec,
     MaterializedInstrumentKeyProfile, PhysicalKey, SUPPORTED_NON_EXTENDED_SCAN_CODES,
 };
-pub(crate) use raw::send_input_raw;
 pub use scan_code::{
     FULL_INSTRUMENT_MASK, PHYSICAL_INSTRUMENT_SCAN_CODES, SKY_PLAYER_SIGNATURE,
     scan_codes_from_mask,

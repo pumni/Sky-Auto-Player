@@ -1,9 +1,10 @@
 #![cfg(any(test, feature = "test-support"))]
 
 use sky_dispatch_win32::input::PhysicalPacket;
+use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64};
-use std::sync::{Arc, Barrier};
+use std::sync::mpsc::{Receiver, Sender};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MockSendInputCapture {
@@ -12,6 +13,7 @@ pub enum MockSendInputCapture {
         status: sky_dispatch_win32::input::SendTransactionStatus,
         confirmed_mask: u16,
         attempts: u8,
+        send_started_qpc_ticks: Option<u64>,
     },
     SingleEmitter {
         scan_codes: Vec<u16>,
@@ -74,9 +76,9 @@ pub struct FaultInjectionScript {
     pub send_call_count: Option<Arc<AtomicU64>>,
     /// Optional test-only capture of exact physical send calls in send order.
     pub send_input_capture: Option<Arc<Mutex<Vec<MockSendInputCapture>>>>,
-    /// Optional first-packet send barriers for deterministic in-flight tests.
-    pub first_packet_send_entered: Option<Arc<Barrier>>,
-    pub release_first_packet_send: Option<Arc<Barrier>>,
+    /// Optional bounded first-packet send gates for deterministic in-flight tests.
+    pub first_packet_send_entered: Option<Arc<Sender<()>>>,
+    pub release_first_packet_send: Option<Arc<Mutex<Receiver<()>>>>,
     /// Optional one-shot barriers for the first physical Up. Tests use these
     /// to place Stop or origin drift inside a live worker Pause drain.
     pub first_release_send_entered: Option<Arc<std::sync::mpsc::Sender<()>>>,

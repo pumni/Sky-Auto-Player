@@ -1,15 +1,6 @@
 import type {
   BootstrapDto,
   AppearanceMode as GeneratedAppearanceMode,
-  CalibrationCancelAckDto,
-  CalibrationCancelRequest,
-  CalibrationFinishedPayload,
-  CalibrationMode,
-  CalibrationOutcome,
-  CalibrationProgressPayload,
-  CalibrationStartAckDto,
-  CalibrationStartRequest,
-  CalibrationState,
   CatalogDetailRequest,
   CatalogSetLikedDto,
   CatalogSetLikedRequest,
@@ -42,7 +33,6 @@ import type {
   PlaybackStartRequest,
   PlaybackDefaultsDto,
   PlaybackOptionSetsDto,
-  TimingMarginRecommendationDto,
   PlaybackPatch as GeneratedPlaybackPatch,
   PlaybackRecommendationDto,
   RiskSummaryDto,
@@ -70,7 +60,6 @@ export type RiskLevel = 'low' | 'medium' | 'high' | 'unknown';
 export type NativeBuild = NativeBuildDto;
 export type PlaybackDefaults = PlaybackDefaultsDto;
 export type PlaybackOptionSets = PlaybackOptionSetsDto;
-export type TimingMarginRecommendation = TimingMarginRecommendationDto;
 export type UpdatePreferences = Omit<UpdatePreferencesDto, 'channel'> & {
   channel: GeneratedUpdateChannel;
 };
@@ -101,7 +90,6 @@ export type Bootstrap = Omit<
   BootstrapDto,
   | 'settings'
   | 'playback_defaults'
-  | 'timing_margin_recommendation'
   | 'palette'
   | 'theme'
   | 'telemetry_enabled'
@@ -192,16 +180,6 @@ export type DiagnosticsSnapshot = DiagnosticsSnapshotDto;
 export type DiagnosticsBackend = DiagnosticsBackendStatus;
 export type DiagnosticsEnabled = DiagnosticsEnabledDto;
 export type DiagnosticsSetEnabled = DiagnosticsSetEnabledRequest;
-export type CalibrationStart = CalibrationStartRequest;
-export type CalibrationStartAck = CalibrationStartAckDto;
-export type CalibrationCancel = CalibrationCancelRequest;
-export type CalibrationCancelAck = CalibrationCancelAckDto;
-export type CalibrationProgress = CalibrationProgressPayload;
-export type CalibrationFinished = CalibrationFinishedPayload;
-export type CalibrationModeId = CalibrationMode;
-export type CalibrationStateId = CalibrationState;
-export type CalibrationOutcomeId = CalibrationOutcome;
-
 export type Unsubscribe = () => void;
 
 export interface DesktopBridge {
@@ -234,8 +212,6 @@ export interface DesktopBridge {
   skipPlayback(request: PlaybackSessionCommand): Promise<PlaybackCommandAckDto>;
   setDiagnosticsEnabled(request: DiagnosticsSetEnabled): Promise<DiagnosticsEnabled>;
   exportSenderTrace(): Promise<string>;
-  startCalibration(request: CalibrationStart): Promise<CalibrationStartAck>;
-  cancelCalibration(request: CalibrationCancel): Promise<CalibrationCancelAck>;
   subscribeUiEvents(listener: (event: UiEvent) => void): Promise<Unsubscribe>;
   shutdown(failed?: boolean): Promise<void>;
 }

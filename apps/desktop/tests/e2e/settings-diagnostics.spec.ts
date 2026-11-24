@@ -42,12 +42,10 @@ test('Playback Profile works through the narrow popover with focus restore', asy
   await expect(popover.getByLabel('Tempo')).toBeVisible();
   await expect(popover.getByLabel('FPS')).toBeVisible();
   await popover.getByText('Calculated timing').click();
-  await expect(popover.locator('.profile-timing-summary dt')).toHaveText([
-    'Target hold',
-    'Release gap',
-  ]);
+  await expect(popover.locator('.profile-timing-summary dt')).toHaveText(['Target hold']);
   await expect(popover.locator('.timing-margin-control')).toContainText('Timing Margin');
-  await expect(popover.locator('.timing-margin-control')).toContainText('Recommended 500 µs');
+  await expect(popover.locator('.timing-margin-control')).toContainText('500 µs');
+  await expect(popover.locator('.timing-margin-control')).not.toContainText('Recommended');
   await expect(popover.getByRole('button', { name: /Use recommended/ })).toHaveCount(0);
   await expect(popover.getByText(/Source:/)).toHaveCount(0);
   await expect(popover.getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();
@@ -89,9 +87,9 @@ test('Settings modal has no serious accessibility violations and closes accessib
     'page',
   );
   await expect(dialog.getByRole('heading', { name: 'Timing' })).toBeVisible();
-  await expect(
-    dialog.getByText('Source: Default fallback (no valid calibration cache)'),
-  ).toBeVisible();
+  const timingMargin = dialog.getByRole('group', { name: 'Timing Margin' });
+  await expect(timingMargin).toContainText('500 µs');
+  await expect(timingMargin).not.toContainText('Recommended');
   await expect(dialog.getByRole('button', { name: /Use recommended/ })).toHaveCount(0);
   await expect(dialog.getByText(/sender evidence, not proof/)).toHaveCount(0);
   const playbackContentHasHorizontalOverflow = await dialog
@@ -114,15 +112,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
   const holdCombobox = dialog.getByRole('combobox', { name: 'Hold' });
   await expect(holdCombobox).toHaveAttribute('data-value', '1');
   await expect(holdCombobox).toContainText('1 frame');
-  for (const category of [
-    'Appearance',
-    'Diagnostics',
-    'Updates',
-    'Advanced',
-    'Donate',
-    'About',
-    'Playback',
-  ]) {
+  for (const category of ['Appearance', 'Diagnostics', 'Updates', 'Donate', 'About', 'Playback']) {
     await dialog.getByRole('button', { name: category, exact: true }).click();
     const nextBox = await dialog.boundingBox();
     const nextContentWidth = await settingsContent.evaluate((element) => element.clientWidth);
@@ -604,17 +594,13 @@ test('Diagnostics drawer is bounded and accessible at the minimum viewport', asy
   await page.getByRole('button', { name: 'Close utility panel' }).click();
 });
 
-test('Calibration dialog exposes safe running and terminal states', async ({ page }) => {
+test('retired calibration controls are not exposed', async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Advanced' }).click();
-  await page.getByRole('button', { name: 'Open calibration' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Timing calibration' });
-  await expect(dialog).toBeVisible();
-  await dialog.getByRole('button', { name: 'Start quick calibration' }).click();
-  await expect(dialog).toContainText('Calibration complete');
-  await expectNoSeriousAccessibilityViolations(page);
-  await dialog.getByRole('button', { name: 'Close', exact: true }).click();
-  await expect(dialog).toBeHidden();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settings.getByRole('button', { name: 'Advanced', exact: true })).toHaveCount(0);
+  await expect(settings.getByRole('button', { name: 'Open calibration' })).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: 'Timing calibration' })).toHaveCount(0);
+  await expect(settings.getByRole('group', { name: 'Timing Margin' })).toContainText('500 µs');
 });

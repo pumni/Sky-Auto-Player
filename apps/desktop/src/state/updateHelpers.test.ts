@@ -29,12 +29,6 @@ describe('updateHelpers formatUpdateError', () => {
     );
   });
 
-  it('translates calibration_active into user-facing copy', () => {
-    expect(formatUpdateError('calibration_active')).toBe(
-      'Updates cannot be installed while timing calibration is running. Complete or cancel calibration and try again.',
-    );
-  });
-
   it('translates update_busy into user-facing copy', () => {
     expect(formatUpdateError('update_busy')).toBe('An update installation is already in progress.');
   });

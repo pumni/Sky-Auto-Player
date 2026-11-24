@@ -20,6 +20,19 @@
       ; bundle-generated default root.
       SetOutPath $INSTDIR
   ${EndIf}
+  ; Remove the retired calibration worker from any prior installation. This
+  ; operates only inside the installer-owned install root and never touches
+  ; app-data, cache, settings, or user library paths.
+  IfFileExists "$INSTDIR\native_calibration.exe" sap_retired_calibration_present 0
+  Goto sap_retired_calibration_done
+  sap_retired_calibration_present:
+  SetFileAttributes "$INSTDIR\native_calibration.exe" NORMAL
+  Delete "$INSTDIR\native_calibration.exe"
+  IfFileExists "$INSTDIR\native_calibration.exe" sap_retired_calibration_failed 0
+  Goto sap_retired_calibration_done
+  sap_retired_calibration_failed:
+  Abort "The retired calibration payload could not be removed from the install folder."
+  sap_retired_calibration_done:
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL

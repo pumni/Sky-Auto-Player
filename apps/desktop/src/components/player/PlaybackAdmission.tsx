@@ -46,8 +46,10 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
             {prepared.risk.reasons.join(' ') || 'Review the selected song before starting.'}
           </p>
           <p className="admission-estimate-note">
-            Offline timing estimates are informational; they do not change the authored song or
-            automatically remove timing risk.
+            {prepared.risk.short_up_gap_repeat_count > 0
+              ? `${prepared.risk.short_up_gap_repeat_count} feasible same-key repeat(s) have an authored Up-to-Down gap shorter than one frame. The game may miss a short Up pulse.`
+              : 'Review the prepared schedule before starting.'}{' '}
+            Proceed keeps the authored timing and selected settings unchanged.
           </p>
         </div>
         <div className="admission-actions">
@@ -65,10 +67,10 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                 const status = variant?.timing_advisory?.status;
                 const isPrimary = decision.decision === primaryDecision;
                 const estimateLabel =
-                  status === 'modeled_risk'
-                    ? 'Modeled timing pressure'
-                    : status === 'no_modeled_risk'
-                      ? 'No modeled timing pressure'
+                  status === 'short_up_gap_risk'
+                    ? 'Short same-key Up gap risk'
+                    : status === 'no_short_up_gap_risk'
+                      ? 'No short same-key Up gap'
                       : 'View timing estimate';
                 return (
                   <div className="admission-option" key={decision.decision}>

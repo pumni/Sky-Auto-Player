@@ -10,8 +10,8 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-pub(super) const RELEASE_GAP_STRESS_CYCLES: usize = 513;
-pub(super) const RELEASE_GAP_STRESS_MIN_SAMPLES: u64 = 512;
+pub(super) const SHORT_UP_GAP_STRESS_CYCLES: usize = 513;
+pub(super) const SHORT_UP_GAP_STRESS_MIN_HOLD_SAMPLES: u64 = 512;
 
 pub(super) struct IndependentHelperLivenessProbe {
     stop: Arc<AtomicBool>,
@@ -64,7 +64,7 @@ pub(super) fn healthy_generation_qualification(
             | Scenario::ChordSweep
             | Scenario::NearMinimumRetrigger
             | Scenario::RapidRetrigger
-            | Scenario::ReleaseGapStress
+            | Scenario::ShortUpGapStress
             | Scenario::MixedUpDown
             | Scenario::NoncanonicalProfile
             | Scenario::TimingMarginSweep
@@ -91,27 +91,30 @@ pub(super) fn healthy_generation_qualification(
     (Verdict::Pass, "authoritative generation accounting is clean")
 }
 
-pub(super) fn scenario_plan(timing_margin_us: u64) -> Result<ScenarioPlan, String> {
+pub(super) fn generation_stress_scenario_plan(
+    timing_margin_us: u64,
+) -> Result<ScenarioPlan, String> {
     let hold_us = ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US + timing_margin_us;
-    let gap_us = ACCEPTANCE_FRAME_US + timing_margin_us;
-    let mut actions = Vec::with_capacity(RELEASE_GAP_STRESS_CYCLES * 2);
+    let mut actions = Vec::with_capacity(SHORT_UP_GAP_STRESS_CYCLES * 2);
     let mut next_down_us = 50_000_u64;
-    for cycle in 0..RELEASE_GAP_STRESS_CYCLES {
+    for cycle in 0..SHORT_UP_GAP_STRESS_CYCLES {
         let down_index = u32::try_from(cycle * 2).map_err(|error| error.to_string())?;
         let up_us = next_down_us.checked_add(hold_us).ok_or("stress schedule overflow")?;
         actions.push(action(down_index, ActionKind::Down, next_down_us, &[0]));
         actions.push(action(down_index + 1, ActionKind::Up, up_us, &[0]));
-        next_down_us = up_us.checked_add(gap_us).ok_or("stress schedule overflow")?;
+        // The next same-key Down is authored exactly at the paired Up. The
+        // executor must send Up first, commit it, then re-evaluate Down.
+        next_down_us = up_us;
     }
     let schedule = compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
-        .map_err(|error| format!("release-gap stress schedule compilation failed: {error}"))?;
+        .map_err(|error| format!("short-Up-gap stress schedule compilation failed: {error}"))?;
     Ok(ScenarioPlan {
         schedule,
         profile: None,
-        expected_down_slots: vec![0; RELEASE_GAP_STRESS_CYCLES],
-        expected_up_slots: vec![0; RELEASE_GAP_STRESS_CYCLES],
+        expected_down_slots: vec![0; SHORT_UP_GAP_STRESS_CYCLES],
+        expected_up_slots: vec![0; SHORT_UP_GAP_STRESS_CYCLES],
         allow_unpaired_cleanup_ups: false,
-        expected_authored_up_slots: vec![0; RELEASE_GAP_STRESS_CYCLES],
+        expected_authored_up_slots: vec![0; SHORT_UP_GAP_STRESS_CYCLES],
         expected_safety_up_slots: Vec::new(),
     })
 }
@@ -120,31 +123,27 @@ pub(super) fn production_visibility_qualification(
     scenario: Scenario,
     hold_samples: u64,
     hold_floor_violations: u64,
-    release_samples: u64,
-    release_floor_violations: u64,
 ) -> (Verdict, &'static str) {
-    if hold_floor_violations > 0 || release_floor_violations > 0 {
+    if hold_floor_violations > 0 {
         return (
             Verdict::Fail,
-            "physical hold or one-frame release floor violation",
+            "physical hold floor violation",
         );
     }
-    if scenario == Scenario::ReleaseGapStress
-        && (hold_samples < RELEASE_GAP_STRESS_MIN_SAMPLES
-            || release_samples < RELEASE_GAP_STRESS_MIN_SAMPLES)
+    if scenario == Scenario::ShortUpGapStress
+        && hold_samples < SHORT_UP_GAP_STRESS_MIN_HOLD_SAMPLES
     {
-        (Verdict::NonQualifying, "stress collected fewer than 512 qualifying hold or release samples")
+        (Verdict::NonQualifying, "stress collected fewer than 512 qualifying hold samples")
     } else {
-        (Verdict::Pass, "normal delivery passed; completion-relative hold/release floors remain diagnostic evidence")
+        (Verdict::Pass, "normal delivery passed; completion-relative hold and authored Up-to-Down gaps remain diagnostic evidence")
     }
 }
 
 #[cfg(test)]
 pub(super) fn strict_physical_forensics_qualification(
     hold_floor_violations: u64,
-    release_floor_violations: u64,
 ) -> (Verdict, &'static str) {
-    if hold_floor_violations > 0 || release_floor_violations > 0 {
+    if hold_floor_violations > 0 {
         (
             Verdict::Fail,
             "strict physical timing forensics violated an intentional floor",
@@ -177,9 +176,9 @@ pub(super) fn attach_sink_window_provenance(
     object.insert("sink_event_count".to_string(), json!(events.len()));
     object.insert("expected_sink_event_count".to_string(), json!(expected_event_count));
     object.insert("observed_sink_event_count".to_string(), json!(events.len()));
-    if scenario == Scenario::ReleaseGapStress {
-        object.insert("minimum_qualifying_hold_pair_samples".to_string(), json!(RELEASE_GAP_STRESS_MIN_SAMPLES));
-        object.insert("minimum_qualifying_release_gap_samples".to_string(), json!(RELEASE_GAP_STRESS_MIN_SAMPLES));
+    if scenario == Scenario::ShortUpGapStress {
+        object.insert("minimum_qualifying_hold_pair_samples".to_string(), json!(SHORT_UP_GAP_STRESS_MIN_HOLD_SAMPLES));
+        object.insert("authored_short_up_gap_repeat_count".to_string(), json!(SHORT_UP_GAP_STRESS_CYCLES - 1));
     }
 }
 

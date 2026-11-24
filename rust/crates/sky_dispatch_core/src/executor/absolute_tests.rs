@@ -44,13 +44,8 @@ fn absolute_scheduler_keeps_an_independent_down_eligible_before_an_up_hold_floor
         },
     ];
     let schedule = compile_actions(&actions, &allowed);
-    let mut executor = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::from_raw(16),
-        DurationTicks::from_raw(1),
-        test_ticks,
-    )
-    .expect("absolute scheduler");
+    let mut executor = DispatchExecutor::new(&schedule, DurationTicks::from_raw(16), test_ticks)
+        .expect("absolute scheduler");
     let epoch = QpcTicks::from_raw(1_000);
 
     let DispatchDecision::Send { down_chord, .. } = executor
@@ -91,7 +86,7 @@ fn absolute_scheduler_keeps_an_independent_down_eligible_before_an_up_hold_floor
 
     let DispatchDecision::Send { up_mask, .. } = executor
         .evaluate_at(QpcTicks::from_raw(1_022), epoch)
-        .expect("A release floor")
+        .expect("A hold floor")
     else {
         panic!("A Up should reach its completion-relative H floor");
     };
@@ -134,13 +129,8 @@ fn absolute_scheduler_coalesces_a_full_fifteen_input_packet() {
         },
     ];
     let schedule = compile_actions(&actions, &keys);
-    let mut executor = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::ZERO,
-        DurationTicks::from_raw(1),
-        test_ticks,
-    )
-    .expect("absolute scheduler");
+    let mut executor = DispatchExecutor::new(&schedule, DurationTicks::ZERO, test_ticks)
+        .expect("absolute scheduler");
     let epoch = QpcTicks::from_raw(5_000);
     let DispatchDecision::Send { down_chord, .. } =
         executor.evaluate_at(epoch, epoch).expect("first chord")
@@ -173,7 +163,7 @@ fn absolute_scheduler_coalesces_a_full_fifteen_input_packet() {
 }
 
 #[test]
-fn absolute_scheduler_uses_up_completion_for_repress_floor_and_resume_barrier() {
+fn absolute_scheduler_uses_up_completion_for_repress_floor_and_verified_cleanup_cancellation() {
     let allowed = vec![0x15, 0x16];
     let actions = vec![
         KeyActionInput {
@@ -220,13 +210,8 @@ fn absolute_scheduler_uses_up_completion_for_repress_floor_and_resume_barrier() 
         },
     ];
     let schedule = compile_actions(&actions, &allowed);
-    let mut executor = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::ZERO,
-        DurationTicks::from_raw(5),
-        test_ticks,
-    )
-    .expect("absolute scheduler");
+    let mut executor = DispatchExecutor::new(&schedule, DurationTicks::ZERO, test_ticks)
+        .expect("absolute scheduler");
     let epoch = QpcTicks::from_raw(1_000);
     let DispatchDecision::Send { down_chord, .. } =
         executor.evaluate_at(epoch, epoch).expect("first Down")
@@ -249,31 +234,18 @@ fn absolute_scheduler_uses_up_completion_for_repress_floor_and_resume_barrier() 
     executor
         .on_send_completed_at(up_mask, 0, QpcTicks::from_raw(1_025))
         .expect("slow Up completion");
-    assert_eq!(
-        executor
-            .evaluate_at(QpcTicks::from_raw(1_029), epoch)
-            .expect("repress floor"),
-        DispatchDecision::Wait {
-            deadline_qpc: QpcTicks::from_raw(1_030)
-        }
-    );
     let DispatchDecision::Send { down_chord, .. } = executor
-        .evaluate_at(QpcTicks::from_raw(1_030), epoch)
-        .expect("repress after slow Up")
+        .evaluate_at(QpcTicks::from_raw(1_029), epoch)
+        .expect("repress after slow Up completion")
     else {
-        panic!("same key Down should follow Up completion plus G");
+        panic!("same-key Down should follow Up commit without a post-Up wait");
     };
     assert_eq!(down_chord.expect("second A chord").down_mask, 1);
 
-    // A separate owner verifies the absolute post-cleanup barrier, including
-    // the exact barrier QPC where the next chord becomes eligible.
-    let mut resumed = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::ZERO,
-        DurationTicks::from_raw(5),
-        test_ticks,
-    )
-    .expect("resume scheduler");
+    // A separate owner verifies that cleanup cancels active generations but
+    // does not insert an elapsed-time floor before the next authored Down.
+    let mut resumed = DispatchExecutor::new(&schedule, DurationTicks::ZERO, test_ticks)
+        .expect("resume scheduler");
     let DispatchDecision::Send { down_chord, .. } =
         resumed.evaluate_at(epoch, epoch).expect("resume seed Down")
     else {
@@ -282,22 +254,13 @@ fn absolute_scheduler_uses_up_completion_for_repress_floor_and_resume_barrier() 
     resumed
         .on_send_completed_at(0, down_chord.expect("seed chord").down_mask, epoch)
         .expect("resume seed commit");
-    resumed
-        .on_verified_cleanup_at(QpcTicks::from_raw(2_000))
-        .expect("verified cleanup");
-    assert_eq!(
-        resumed
-            .evaluate_at(QpcTicks::from_raw(2_004), epoch)
-            .expect("before resume barrier"),
-        DispatchDecision::Wait {
-            deadline_qpc: QpcTicks::from_raw(2_005)
-        }
-    );
+    resumed.on_verified_cleanup().expect("verified cleanup");
     assert!(matches!(
         resumed
-            .evaluate_at(QpcTicks::from_raw(2_005), epoch)
-            .expect("resume barrier boundary"),
-        DispatchDecision::Send { .. }
+            .evaluate_at(QpcTicks::from_raw(2_000), epoch)
+            .expect("authored onset after verified cleanup"),
+        DispatchDecision::Send { down_chord: Some(chord), .. }
+            if chord.source_action_index == 2
     ));
 }
 
@@ -321,13 +284,8 @@ fn absolute_scheduler_checked_overflow_does_not_mutate_slot_or_cursor() {
         },
     ];
     let schedule = compile_actions(&actions, &allowed);
-    let mut executor = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::from_raw(10),
-        DurationTicks::from_raw(1),
-        test_ticks,
-    )
-    .expect("absolute scheduler");
+    let mut executor = DispatchExecutor::new(&schedule, DurationTicks::from_raw(10), test_ticks)
+        .expect("absolute scheduler");
     let result = executor.on_send_completed_at(0, 1, QpcTicks::from_raw(u64::MAX - 5));
     assert!(result.is_err());
     assert_eq!(executor.active_mask(), 0);
@@ -336,7 +294,7 @@ fn absolute_scheduler_checked_overflow_does_not_mutate_slot_or_cursor() {
 }
 
 #[test]
-fn attempted_down_is_consumed_only_after_verified_cleanup_and_next_onset_waits_for_g() {
+fn attempted_down_is_consumed_only_after_verified_cleanup_without_added_delay() {
     let allowed = [0x15, 0x16];
     let actions = [
         KeyActionInput {
@@ -369,13 +327,8 @@ fn attempted_down_is_consumed_only_after_verified_cleanup_and_next_onset_waits_f
         },
     ];
     let schedule = compile_actions(&actions, &allowed);
-    let mut executor = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::from_raw(7),
-        DurationTicks::from_raw(5),
-        test_ticks,
-    )
-    .expect("absolute scheduler");
+    let mut executor = DispatchExecutor::new(&schedule, DurationTicks::from_raw(7), test_ticks)
+        .expect("absolute scheduler");
     let epoch = QpcTicks::from_raw(1_000);
     let (attempted_source, attempted_mask) = {
         let attempted = executor.current_chord().expect("first authored onset");
@@ -392,11 +345,10 @@ fn attempted_down_is_consumed_only_after_verified_cleanup_and_next_onset_waits_f
         "the attempt cannot be consumed before verified cleanup"
     );
 
-    // There is no successful musical completion to commit. Cleanup's actual
-    // completion QPC, and only that QPC, establishes the next-Down barrier.
-    let cleanup_completion = QpcTicks::from_raw(2_000);
+    // There is no successful musical completion to commit. Verified cleanup
+    // is required before consuming the attempted onset, with no added delay.
     executor
-        .on_verified_cleanup_at(cleanup_completion)
+        .on_verified_cleanup()
         .expect("verified release cleanup");
     executor
         .consume_attempted_down_after_verified_cleanup(41, attempted_mask)
@@ -407,22 +359,18 @@ fn attempted_down_is_consumed_only_after_verified_cleanup_and_next_onset_waits_f
     assert_eq!(executor.accounting().cancelled, 1);
     assert_eq!(executor.accounting().scheduled, 1);
     assert_eq!(executor.active_mask(), 0);
-    let barrier = cleanup_completion
-        .checked_add_duration(DurationTicks::from_raw(5))
-        .expect("cleanup completion + G");
-    assert_eq!(executor.resume_barrier_qpc(), Some(barrier));
     assert_eq!(
-        executor.evaluate_at(QpcTicks::from_raw(barrier.as_u64() - 1), epoch,),
+        executor.evaluate_at(QpcTicks::from_raw(1_010), epoch,),
         Ok(DispatchDecision::Wait {
-            deadline_qpc: barrier
+            deadline_qpc: QpcTicks::from_raw(1_011)
         }),
-        "the unattempted onset remains scheduled but is held behind verified cleanup + G"
+        "the next onset remains on its authored schedule"
     );
     let DispatchDecision::Send { down_chord, .. } = executor
-        .evaluate_at(barrier, epoch)
-        .expect("exact cleanup barrier")
+        .evaluate_at(QpcTicks::from_raw(1_011), epoch)
+        .expect("authored onset deadline")
     else {
-        panic!("the never-attempted onset must be eligible at cleanup + G");
+        panic!("the never-attempted onset must be eligible at its authored deadline");
     };
     assert_eq!(down_chord.expect("next onset").source_action_index, 43);
 }
@@ -463,13 +411,8 @@ fn proven_raw_zero_uses_checked_cursor_transition_without_cleanup_or_active_a_re
         ],
         &allowed,
     );
-    let mut executor = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::ZERO,
-        DurationTicks::ZERO,
-        test_ticks,
-    )
-    .expect("absolute scheduler");
+    let mut executor = DispatchExecutor::new(&schedule, DurationTicks::ZERO, test_ticks)
+        .expect("absolute scheduler");
     let epoch = QpcTicks::from_raw(1_000);
     executor
         .on_send_completed_at(0, 1, epoch)
@@ -507,7 +450,6 @@ fn proven_raw_zero_uses_checked_cursor_transition_without_cleanup_or_active_a_re
     assert_eq!(executor.active_mask(), 1, "A remains active");
     assert_eq!(executor.accounting().activated, 1);
     assert_eq!(executor.accounting().cancelled, 1);
-    assert_eq!(executor.resume_barrier_qpc(), None);
     executor.check_invariants().expect("executor invariants");
 }
 
@@ -533,16 +475,9 @@ fn attempted_down_consumption_rejects_a_different_authored_onset() {
         ],
         &allowed,
     );
-    let mut executor = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::ZERO,
-        DurationTicks::from_raw(1),
-        test_ticks,
-    )
-    .expect("absolute scheduler");
-    executor
-        .on_verified_cleanup_at(QpcTicks::from_raw(20))
-        .expect("verified cleanup");
+    let mut executor = DispatchExecutor::new(&schedule, DurationTicks::ZERO, test_ticks)
+        .expect("absolute scheduler");
+    executor.on_verified_cleanup().expect("verified cleanup");
     assert!(
         executor
             .consume_attempted_down_after_verified_cleanup(99, 1)
@@ -558,9 +493,9 @@ fn attempted_down_consumption_rejects_a_different_authored_onset() {
 }
 
 #[test]
-fn absolute_scheduler_hol_compression_preserves_all_down_intents() {
+fn absolute_scheduler_keeps_authored_repeat_gap_without_post_up_delay() {
     const HOLD_US: u64 = 17_167;
-    const GAP_US: u64 = 16_667;
+    const RESUME_CLEANUP_DELAY_US: u64 = 16_667;
     const A_UP_US: u64 = 20_167;
     const AB_DOWN_US: u64 = 34_334;
     const C_DOWN_US: u64 = 35_000;
@@ -627,13 +562,9 @@ fn absolute_scheduler_hol_compression_preserves_all_down_intents() {
     );
 
     let run = |delayed_sender: bool| {
-        let mut executor = DispatchExecutor::new(
-            &schedule,
-            DurationTicks::from_raw(HOLD_US),
-            DurationTicks::from_raw(GAP_US),
-            test_ticks,
-        )
-        .expect("absolute scheduler");
+        let mut executor =
+            DispatchExecutor::new(&schedule, DurationTicks::from_raw(HOLD_US), test_ticks)
+                .expect("absolute scheduler");
         let epoch = QpcTicks::ZERO;
 
         let (a_mask, a_intents) = match executor
@@ -680,25 +611,19 @@ fn absolute_scheduler_hol_compression_preserves_all_down_intents() {
         );
         assert_eq!(executor.accounting().released, 1);
 
-        let ab_eligible = if delayed_sender { 36_934 } else { 36_834 };
-        assert_eq!(A_UP_US + GAP_US, 36_834);
-        assert_eq!(a_up_completion + GAP_US, ab_eligible);
-        assert_eq!(
-            executor
-                .evaluate_at(QpcTicks::from_raw(AB_DOWN_US), epoch)
-                .expect("A+B must wait for authored onset and G floor"),
-            DispatchDecision::Wait {
-                deadline_qpc: QpcTicks::from_raw(ab_eligible)
-            }
-        );
+        let ab_eligible = AB_DOWN_US;
+        let old_musical_delay_deadline = A_UP_US + RESUME_CLEANUP_DELAY_US;
+        assert_eq!(old_musical_delay_deadline, 36_834);
+        assert!(AB_DOWN_US < old_musical_delay_deadline);
         assert_eq!(
             executor
                 .evaluate_at(QpcTicks::from_raw(ab_eligible - 1), epoch)
-                .expect("A+B remains blocked before G"),
+                .expect("A+B remains blocked before authored onset"),
             DispatchDecision::Wait {
                 deadline_qpc: QpcTicks::from_raw(ab_eligible)
             }
         );
+        assert!(a_up_completion < ab_eligible);
 
         let (ab_mask, ab_intents) = match executor
             .evaluate_at(QpcTicks::from_raw(ab_eligible), epoch)
@@ -713,16 +638,28 @@ fn absolute_scheduler_hol_compression_preserves_all_down_intents() {
         };
         assert_eq!((ab_mask, ab_intents), (0b011, 2));
         assert_eq!(executor.chord_cursor(), 1);
-        let ab_completion = if delayed_sender { 37_034 } else { ab_eligible };
+        let ab_completion = if delayed_sender {
+            ab_eligible + 100
+        } else {
+            ab_eligible
+        };
         executor
             .on_send_completed_at(0, ab_mask, QpcTicks::from_raw(ab_completion))
             .expect("commit A+B generations once");
         assert_eq!(executor.chord_cursor(), 2);
         assert_eq!(executor.accounting().activated, 3);
 
+        assert_eq!(
+            executor
+                .evaluate_at(QpcTicks::from_raw(ab_completion), epoch)
+                .expect("independent C waits only for its authored onset"),
+            DispatchDecision::Wait {
+                deadline_qpc: QpcTicks::from_raw(C_DOWN_US)
+            }
+        );
         let (c_mask, c_intents) = match executor
-            .evaluate_at(QpcTicks::from_raw(ab_completion), epoch)
-            .expect("independent C follows the cursor immediately")
+            .evaluate_at(QpcTicks::from_raw(C_DOWN_US), epoch)
+            .expect("independent C is due at its authored onset")
         {
             DispatchDecision::Send {
                 up_mask: 0,
@@ -733,7 +670,7 @@ fn absolute_scheduler_hol_compression_preserves_all_down_intents() {
         };
         assert_eq!((c_mask, c_intents), (0b100, 1));
         assert_eq!(executor.chord_cursor(), 2);
-        let c_start = ab_completion;
+        let c_start = C_DOWN_US;
         let c_completion = c_start + 100;
         executor
             .on_send_completed_at(0, c_mask, QpcTicks::from_raw(c_completion))
@@ -783,12 +720,12 @@ fn absolute_scheduler_hol_compression_preserves_all_down_intents() {
 
     let control = run(false);
     let delayed = run(true);
-    assert_eq!(control, (36_834, 36_834, 36_834, 36_934));
-    assert_eq!(delayed, (36_934, 37_034, 37_034, 37_134));
-    assert_eq!(delayed.3 - delayed.1, 100);
+    assert_eq!(control, (34_334, 34_334, 35_000, 35_100));
+    assert_eq!(delayed, (34_334, 34_434, 35_000, 35_100));
+    assert_eq!(delayed.3 - delayed.2, 100);
     assert_eq!(
         (C_DOWN_US - AB_DOWN_US) - (delayed.2 - delayed.0),
-        566,
-        "delayed completion compresses the authored 666 us gap to 100 us"
+        0,
+        "sender completion does not move later authored Down generations"
     );
 }

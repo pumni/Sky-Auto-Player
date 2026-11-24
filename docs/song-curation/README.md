@@ -33,7 +33,7 @@ AppData qualification run against the exact NSIS candidate are part of the
 
 ## Metric definitions
 
-Inventory and comparison documents use schema version 2 and distinguish these
+Inventory and comparison documents use schema version 3 and distinguish these
 stages:
 
 - `source_note_count` counts source note records: legacy `songNotes` entries
@@ -50,10 +50,16 @@ stages:
   preserves its own compatibility and scheduling semantics.
 - `output_action_count` counts scheduled key actions. These are separate from
   source notes, canonical events, physical events, and scheduled notes.
+- `short_up_gap_repeat_count` counts physically feasible same-key repeats whose
+  authored Up-to-Down gap is shorter than one configured frame. A missing value
+  means no schedule was available, not zero short gaps.
 - `authored_distinct_onset_count` counts distinct source-event onset times.
 
-Schema version 2 removes the former `authored_source_event_count` field,
-which duplicated source note count while implying a different stage.
+Schema version 2 removed the former `authored_source_event_count` field, which
+duplicated source note count while implying a different stage. Schema version 3
+removes `risky_same_key_repeat_count`, which described hold compression under
+the old release floor, and adds `short_up_gap_repeat_count` for the current
+acknowledgement risk.
 
 - **Physical onsets, chords, polyphony and fast repeats** are computed on the
   deduplicated physical event stream. Planner output actions and diagnostics

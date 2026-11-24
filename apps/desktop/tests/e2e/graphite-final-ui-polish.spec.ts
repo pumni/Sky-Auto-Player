@@ -732,27 +732,12 @@ test('Graphite text actions use a raised action role while ghost icon controls s
     '2px',
   );
 
-  await settings.getByRole('button', { name: 'Advanced', exact: true }).click();
-  const calibration = settings.getByRole('button', { name: 'Open calibration' });
-  const calibrationRest = await colors(calibration);
-  expect(sameColor(calibrationRest.background, actionRest)).toBe(true);
-  expect(sameColor(calibrationRest.border, actionEdge)).toBe(true);
-  await calibration.hover();
-  const calibrationHover = await colors(calibration);
-  expect(sameColor(calibrationHover.background, actionHover)).toBe(true);
-  expect(sameColor(calibrationHover.border, actionHoverEdge)).toBe(true);
-  const calibrationPressed = await pressWithoutClick(page, calibration);
-  expect(sameColor(calibrationPressed.background, actionPressed)).toBe(true);
-  await calibration.click();
-  await expect(settings).toBeHidden();
-  await expect(page.getByRole('dialog', { name: 'Timing calibration' })).toBeVisible();
-
-  const ghostIcon = page.getByRole('button', { name: 'Close calibration' });
+  const ghostIcon = settings.getByRole('button', { name: 'Close settings' });
   const ghostStyle = await colors(ghostIcon);
   expect(sameColor(ghostStyle.background, transparent)).toBe(true);
   expect(sameColor(ghostStyle.border, transparent)).toBe(true);
   await ghostIcon.click();
-  await expect(page.getByRole('dialog', { name: 'Timing calibration' })).toBeHidden();
+  await expect(settings).toBeHidden();
 
   await page.getByRole('button', { name: /Open update/ }).click();
   const updateDialog = page.getByRole('dialog', { name: 'Software update' });

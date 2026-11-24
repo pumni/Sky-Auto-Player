@@ -7,7 +7,7 @@ import { SettingsPanel } from './SettingsPanel';
 describe('SettingsPanel playback timing', () => {
   afterEach(() => cleanup());
 
-  it('keeps recommendation source subordinate and preserves the timing summary', async () => {
+  it('preserves the manual timing control and timing summary', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const bootstrap = store.getState().bootstrap;
@@ -37,11 +37,7 @@ describe('SettingsPanel playback timing', () => {
     );
     expect(screen.queryByText(/Late Down/)).toBeNull();
     expect(screen.getByRole('heading', { name: 'Timing' })).toBeInTheDocument();
-    expect(
-      screen.getByText('Source: Default fallback (no valid calibration cache)'),
-    ).toBeInTheDocument();
-    expect(screen.getByText('· rec. 500 µs')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: /Use recommended/ })).not.toBeInTheDocument();
+    expect(screen.getByText('500 µs')).toBeInTheDocument();
     expect(screen.queryByText(/sender evidence, not proof/)).not.toBeInTheDocument();
   });
 

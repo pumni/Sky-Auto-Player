@@ -80,19 +80,16 @@ control-plane work while using the same runtime state:
 - `native_runtime/catalog.rs` owns catalog and library operations, including
   generation-fenced loading, reconciliation, cache handling, imports, search,
   and detail projection.
-- `native_runtime/calibration.rs` owns calibration orchestration, worker
-  cancellation, evidence validation, and admitted atomic cache publication.
-  Measurement remains process-isolated in `native_calibration.exe`.
 - `native_runtime/playback/` owns playback planning and control through
   `NativePlaybackService`; the qualified worker and sender boundaries are
   unchanged.
-- `NativeEventHub` stays in `native_runtime.rs` and owns shared catalog,
-  calibration, and playback event delivery. Its subscription, queue,
+- `NativeEventHub` stays in `native_runtime.rs` and owns shared catalog and
+  playback event delivery. Its subscription, queue,
   publisher, and fail-closed behavior are unchanged.
 
 V4 update operations remain owned by the Rust `UpdateService`, which invokes
 the official Tauri updater. Native runtime tests cover catalog and library
-behavior, calibration, event delivery, and playback integration. The
+behavior, event delivery, and playback integration. The
 `sky_player` engine tests cover startup and readiness, lease supervision,
 preparation and dispatch, release and cleanup, native send paths, telemetry,
 target and focus admission, pause and suspend, and timing.
@@ -146,13 +143,16 @@ native worker, timing, and sender admission; **sky_dispatch_core** owns musical
 scheduling policy; and **sky_dispatch_win32** owns Windows physical effects.
 Dry-run playback does not reach the physical input backend.
 
-## Calibration and update boundaries
+## Timing settings and update boundaries
 
-Calibration is coordinated by the native application and measured by the
-out-of-process Rust calibration executable. Evidence is validated before
-atomic cache publication; a successful admitted publication invalidates
-prepared playback. See the calibration source and tests for current evidence
-requirements.
+Users control timing margin manually; the persisted default remains 500 µs.
+Production sender diagnostics expose only measurements owned by the active
+playback session and its frozen policy. The separate calibration UI, worker,
+cache reader, and recommendation path have been retired by product decision;
+this does not claim native parity or a timing improvement. Installer upgrade
+removes the obsolete executable from the install root and preserves app-data,
+including old cache bytes. Production startup wake calibration remains part of
+the playback timing path and its qualification evidence.
 
 The Rust UpdateService coordinates update state and invokes the Tauri updater.
 Release authority, signing, artifact integrity, and packaging requirements
@@ -166,12 +166,12 @@ Production unsafe Rust is limited to the reviewed platform boundaries below.
 The newly audited desktop and native-adapter blocks carry local `// SAFETY:`
 justifications; the existing Win32 adapter modules remain separately listed in
 the architecture allowlist. Application orchestration, domain policies
-(`sky_app_core`), Tauri command delivery, catalog indexing, calibration
-validation, and updater policy remain safe Rust.
+(`sky_app_core`), Tauri command delivery, catalog indexing, timing settings,
+and updater policy remain safe Rust.
 
 | Module                                                                                                                                                                | Unsafe operation                                                        | Safety invariant                                                                                                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `rust/crates/sky_dispatch_win32/src/{calibration,clock,cpu,event,focus,focus/foreground_watcher,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; the foreground callback is out-of-context and hint-only; owned handles are closed by their owner. |
+| `rust/crates/sky_dispatch_win32/src/{clock,cpu,event,focus,focus/foreground_watcher,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; the foreground callback is out-of-context and hint-only; owned handles are closed by their owner. |
 | `rust/crates/sky_native_adapters/src/lib.rs`                                                                                                                          | `MoveFileExW` atomic settings replacement                               | NUL-terminated source and destination buffers stay live through the synchronous replace call.                                     |
 | `apps/desktop/src-tauri/src/{power_lifecycle,single_instance,windows_caption,windows_icon}.rs`                                                                             | Power registration, process/window APIs, and window callbacks/resources | Callback context lifetime, process access limits, UI-thread HWND lifetime, and owned handles are checked at these platform edges. |
 

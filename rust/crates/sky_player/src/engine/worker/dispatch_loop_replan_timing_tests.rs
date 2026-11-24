@@ -1,6 +1,6 @@
 use super::support::ProductionDispatchTestHarness;
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
-use sky_dispatch_core::time::{DurationTicks, QpcTicks};
+use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -86,6 +86,134 @@ pub(super) fn elapsed_us(
             ticks.as_u64(),
         ))
         .expect("trace duration converts to microseconds")
+}
+
+#[test]
+fn immediate_resume_worker_decision_sends_due_down_before_retired_cleanup_floor() {
+    let actions = [
+        timing_action(900, ActionKind::Down, 0),
+        timing_action(901, ActionKind::Up, 50_000),
+        timing_action(902, ActionKind::Down, 50_000),
+        timing_action(903, ActionKind::Up, 110_000),
+    ];
+    let (mut harness, packets, _) = timing_harness_without_focus(&actions, &[0]);
+    let cleanup_capture = harness.configure_mock_cleanup_emitter_for_test();
+    let qpc_clock = harness.resources.clock;
+    let current_qpc = harness.qpc_now_for_test().expect("current test QPC");
+    let epoch_offset = qpc_clock
+        .duration_from_us(100_000)
+        .expect("place playback epoch before due Down");
+    let epoch = QpcTicks::from_raw(
+        current_qpc
+            .as_u64()
+            .checked_sub(epoch_offset.as_u64())
+            .expect("QPC has room for test epoch offset"),
+    );
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor controllable worker playback clock");
+
+    let first_down_now = harness.qpc_now_for_test().expect("first Down QPC");
+    let first_down = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage active first Down")
+        .expect("first Down candidate");
+    assert_eq!(first_down.source_action_index, 900);
+    harness.set_mock_sender_start_qpc_for_test(first_down_now);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(first_down, false),
+        super::super::StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.resources.backend.active_mask, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    assert_eq!(packets.lock().expect("first Down capture").len(), 1);
+
+    let pause_request_qpc = harness.qpc_now_for_test().expect("Pause request QPC");
+    let authored_down_due = epoch
+        .checked_add_duration(
+            qpc_clock
+                .duration_from_us(50_000)
+                .expect("same-key Down authored offset"),
+        )
+        .expect("same-key Down deadline");
+    assert!(
+        pause_request_qpc >= authored_down_due,
+        "Pause must start after the same-key authored Down is due"
+    );
+    harness
+        .commit_pause_for_test(
+            sky_dispatch_core::clock::PauseReason::Manual,
+            pause_request_qpc,
+        )
+        .expect("commit manual Pause with the key active");
+    harness
+        .apply_scheduler_resumable_lifecycle_transition_for_test()
+        .expect("verified active-key cleanup before Resume");
+    assert_eq!(
+        cleanup_capture.lock().expect("cleanup capture").as_slice(),
+        &[(vec![0x15], true)],
+        "Pause cleanup must emit Up for the active key before Resume"
+    );
+    assert_eq!(harness.resources.backend.active_mask, 0);
+    assert_eq!(harness.resources.backend.possibly_active_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(harness.generation_accounting_for_test().cancelled, 1);
+
+    let cleanup_ack_qpc = harness
+        .qpc_now_for_test()
+        .expect("QPC after verified cleanup acknowledgment");
+    let resume_commit_qpc = QpcTicks::from_raw(
+        cleanup_ack_qpc
+            .as_u64()
+            .checked_add(1)
+            .expect("Resume QPC tick increment"),
+    );
+    harness
+        .commit_resume_for_test(
+            sky_dispatch_core::clock::PauseReason::Manual,
+            resume_commit_qpc,
+        )
+        .expect("commit immediate Resume at controlled QPC");
+    assert!(!harness.is_paused_for_test());
+
+    let retired_floor_ticks = qpc_clock
+        .duration_from_us(17_167)
+        .expect("historical verified-cleanup floor duration");
+    let retired_floor_deadline = cleanup_ack_qpc
+        .checked_add_duration(retired_floor_ticks)
+        .expect("historical verified-cleanup floor deadline");
+    assert!(
+        resume_commit_qpc < retired_floor_deadline,
+        "the controlled Resume QPC must remain before the historical cleanup floor"
+    );
+
+    let (first_action, _, action_to_stage) = super::super::evaluate_scheduler_action_for_staging(
+        &harness.resources.scheduler,
+        resume_commit_qpc,
+        harness.resources.playback.epoch,
+    )
+    .expect("first worker scheduler decision after Resume");
+    assert!(matches!(
+        first_action,
+        super::super::SchedulerAction::Send {
+            up_mask: 0,
+            down_chord: Some(chord),
+            timing_window,
+        } if chord.source_action_index == 902
+            && timing_window.packet_not_before_qpc <= resume_commit_qpc
+    ));
+    assert!(matches!(
+        action_to_stage,
+        Some(super::super::SchedulerAction::Send {
+            up_mask: 0,
+            down_chord: Some(chord),
+            ..
+        }) if chord.source_action_index == 902
+    ));
 }
 
 fn wait_for_deadline(
@@ -573,7 +701,7 @@ fn scheduler_reachable_mixed_modifier_fallback_trace_spans_both_gates_without_wa
             .current_executor_chord_for_test()
             .map(|chord| chord.down_mask),
         Some(2),
-        "the blocked Down remains pending and receives no onset or G commit"
+        "the blocked Down remains pending and receives no onset before admission"
     );
     assert_eq!(harness.generation_accounting_for_test().activated, 1);
     assert_eq!(harness.generation_accounting_for_test().released, 1);

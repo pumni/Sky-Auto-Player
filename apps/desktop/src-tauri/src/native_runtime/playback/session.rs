@@ -382,7 +382,6 @@ impl NativePlaybackService {
             schedule,
             risk,
             timing_policy,
-            timing_margin_recommendation,
             settings_fingerprint,
             publication_fingerprint,
             source_path,
@@ -504,6 +503,29 @@ impl NativePlaybackService {
                 ));
             }
         };
+        let prepared_dispatch_schedule = if config.dry_run {
+            None
+        } else {
+            let compiled = base_runtime_schedule
+                .as_ref()
+                .expect("physical Prepare requires a compiled runtime schedule");
+            Some(
+                sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
+                    compiled,
+                    qpc_frequency_hz.expect("physical Prepare requires QPC admission"),
+                    timing_policy.min_hold_us,
+                    compiled.compile_memory.caller_retained_capacity_bytes,
+                    || {
+                        if cancelled.load(Ordering::Acquire) {
+                            Err("native dispatch materialization cancelled".to_string())
+                        } else {
+                            Ok(())
+                        }
+                    },
+                )
+                .map_err(|error| format!("native playback plan preparation failed: {error}"))?,
+            )
+        };
         let timing_advisory = if let Some(compiled) = &base_runtime_schedule {
             self.analyze_timing_variant(
                 source_action_count,
@@ -520,36 +542,12 @@ impl NativePlaybackService {
                 &timing_policy,
                 &fingerprint,
                 cancelled,
-                "The dry-run schedule could not be compiled for the offline advisory.",
+                "The dry-run schedule could not be compiled for the generation advisory.",
             )
         };
         if cancelled.load(Ordering::Acquire) {
             return Err("playback preparation was superseded by a newer request".into());
         }
-        let prepared_dispatch_schedule = if config.dry_run {
-            None
-        } else {
-            let compiled = base_runtime_schedule
-                .as_ref()
-                .expect("physical Prepare requires a compiled runtime schedule");
-            Some(
-                sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
-                    compiled,
-                    qpc_frequency_hz.expect("physical Prepare requires QPC admission"),
-                    timing_policy.min_hold_us,
-                    timing_policy.min_release_gap_us,
-                    compiled.compile_memory.caller_retained_capacity_bytes,
-                    || {
-                        if cancelled.load(Ordering::Acquire) {
-                            Err("native dispatch materialization cancelled".to_string())
-                        } else {
-                            Ok(())
-                        }
-                    },
-                )
-                .map_err(|error| format!("native playback plan preparation failed: {error}"))?,
-            )
-        };
         let base_dispatch_capacity_bytes = prepared_dispatch_schedule
             .as_ref()
             .map_or(0, |plan| plan.memory_metrics().plan_capacity_bytes);
@@ -558,6 +556,13 @@ impl NativePlaybackService {
         } else {
             PlaybackAdmission::ConfirmationRequired
         };
+        let short_up_gap_only = risk.short_up_gap_repeat_count > 0
+            && schedule.short_up_gap_repeat_count > 0
+            && schedule.impossible_same_key_repeats == 0
+            && risk.dense_clusters.len() <= 5
+            && risk.max_polyphony <= 8
+            && risk.suggested_hold_frames.is_none()
+            && risk.suggested_tempo_scale.is_none();
         let prepared_id = opaque_native_id()?;
         let base_variant = NativePlaybackVariant {
             config: config.clone(),
@@ -565,7 +570,6 @@ impl NativePlaybackService {
             prepared_schedule: prepared_dispatch_schedule,
             fingerprint: fingerprint.clone(),
             timing_policy: timing_policy.clone(),
-            timing_margin_recommendation: timing_margin_recommendation.clone(),
         };
         let mut decisions = Vec::new();
         let mut variants = HashMap::from([(PlaybackDecision::Proceed, base_variant)]);
@@ -582,6 +586,7 @@ impl NativePlaybackService {
                 label: "Proceed with current settings".into(),
             });
             if plan_source.is_none()
+                && !short_up_gap_only
                 && let (Some(hold_frames), Some(tempo_scale)) =
                     (risk.suggested_hold_frames, risk.suggested_tempo_scale)
                 && (hold_frames != config.hold_frames || tempo_scale != config.tempo_scale)
@@ -647,14 +652,6 @@ impl NativePlaybackService {
                     Err(_) => None,
                 };
                 if let Some(recommended_compiled) = recommended_compiled {
-                    let recommended_timing_advisory = self.analyze_timing_variant(
-                        recommended_action_count,
-                        &recommended_compiled,
-                        &recommended_config,
-                        &recommended_policy,
-                        &recommended_fingerprint,
-                        cancelled,
-                    );
                     let recommended_dispatch = if config.dry_run {
                         None
                     } else {
@@ -683,7 +680,6 @@ impl NativePlaybackService {
                             &recommended_compiled,
                             qpc_frequency_hz.expect("physical recommendation requires QPC admission"),
                             recommended_policy.min_hold_us,
-                            recommended_policy.min_release_gap_us,
                             caller_retained_capacity_bytes,
                             || {
                                 if cancelled.load(Ordering::Acquire) {
@@ -701,6 +697,14 @@ impl NativePlaybackService {
                         }
                     };
                     if config.dry_run || recommended_dispatch.is_some() {
+                        let recommended_timing_advisory = self.analyze_timing_variant(
+                            recommended_action_count,
+                            &recommended_compiled,
+                            &recommended_config,
+                            &recommended_policy,
+                            &recommended_fingerprint,
+                            cancelled,
+                        );
                         variants.insert(
                             PlaybackDecision::UseRecommended,
                             NativePlaybackVariant {
@@ -709,7 +713,6 @@ impl NativePlaybackService {
                                 prepared_schedule: recommended_dispatch,
                                 fingerprint: recommended_fingerprint.clone(),
                                 timing_policy: recommended_policy,
-                                timing_margin_recommendation: timing_margin_recommendation.clone(),
                             },
                         );
                         variant_dtos.push(PlaybackPlanVariantDto {
@@ -765,7 +768,6 @@ impl NativePlaybackService {
                         prepared_schedule: None,
                         fingerprint: dry_run_fingerprint.clone(),
                         timing_policy: timing_policy.clone(),
-                        timing_margin_recommendation: timing_margin_recommendation.clone(),
                     },
                     PlaybackPlanVariantDto {
                         decision: PlaybackDecision::DryRun,
@@ -920,7 +922,7 @@ impl NativePlaybackService {
         policy: &MaterializedTimingPolicy,
         fingerprint: &str,
         cancelled: &AtomicBool,
-    ) -> crate::commands::WholeStreamTimingAdvisoryDto {
+    ) -> crate::commands::GenerationTimingAdvisoryDto {
         #[cfg(test)]
         {
             let hook = self
@@ -1139,7 +1141,6 @@ impl NativePlaybackService {
                     total_us: variant.schedule_duration_us,
                     config: variant.config.clone(),
                     timing_policy: variant.timing_policy.clone(),
-                    timing_margin_recommendation: variant.timing_margin_recommendation.clone(),
                     plan_fingerprint: variant.fingerprint.clone(),
                     physical: true,
                     activity_lease: Mutex::new(activity_lease),
@@ -1216,11 +1217,7 @@ impl NativePlaybackService {
                             retirement.clone(),
                         );
                         let completed = terminal_presentation_completion(
-                            self.active.clone(),
-                            self.last_terminal.clone(),
                             Arc::clone(&failed_active),
-                            retirement.clone(),
-                            PlaybackSessionState::Failed,
                             #[cfg(all(test, feature = "tauri-test"))]
                             self.monitor_retired_test_hook.clone(),
                         );
@@ -1255,11 +1252,7 @@ impl NativePlaybackService {
                     retirement.clone(),
                 );
                 let completed = terminal_presentation_completion(
-                    self.active.clone(),
-                    self.last_terminal.clone(),
                     Arc::clone(&failed_active),
-                    retirement.clone(),
-                    PlaybackSessionState::Failed,
                     #[cfg(all(test, feature = "tauri-test"))]
                     self.monitor_retired_test_hook.clone(),
                 );
@@ -1287,7 +1280,6 @@ impl NativePlaybackService {
             total_us: variant.schedule_duration_us,
             config: variant.config.clone(),
             timing_policy: variant.timing_policy.clone(),
-            timing_margin_recommendation: variant.timing_margin_recommendation.clone(),
             plan_fingerprint: variant.fingerprint.clone(),
             physical: player.is_some(),
             activity_lease: Mutex::new(activity_lease),
@@ -1398,11 +1390,7 @@ impl NativePlaybackService {
                     retirement.clone(),
                 );
                 let completed = terminal_presentation_completion(
-                    self.active.clone(),
-                    self.last_terminal.clone(),
                     active.clone(),
-                    retirement.clone(),
-                    PlaybackSessionState::Failed,
                     #[cfg(all(test, feature = "tauri-test"))]
                     self.monitor_retired_test_hook.clone(),
                 );
@@ -1440,11 +1428,7 @@ impl NativePlaybackService {
                 retirement.clone(),
             );
             let completed = terminal_presentation_completion(
-                self.active.clone(),
-                self.last_terminal.clone(),
                 active.clone(),
-                retirement.clone(),
-                PlaybackSessionState::Failed,
                 #[cfg(all(test, feature = "tauri-test"))]
                 self.monitor_retired_test_hook.clone(),
             );
@@ -1513,11 +1497,7 @@ impl NativePlaybackService {
                 retirement.clone(),
             );
             let completed = terminal_presentation_completion(
-                self.active.clone(),
-                self.last_terminal.clone(),
                 active.clone(),
-                retirement.clone(),
-                PlaybackSessionState::Failed,
                 #[cfg(all(test, feature = "tauri-test"))]
                 self.monitor_retired_test_hook.clone(),
             );
@@ -1685,7 +1665,6 @@ impl NativePlaybackService {
                     timing: TimingOptions {
                         game_fps: config.fps,
                         min_hold_us: policy.min_hold_us,
-                        min_release_gap_us: policy.min_release_gap_us,
                         frame_us: policy.frame_us,
                         frame_base_hold_us: policy.frame_base_hold_us,
                         timing_margin_us: policy.timing_margin_us,
@@ -1711,10 +1690,8 @@ impl NativePlaybackService {
                         test_wait_policy: sky_player::engine::TestWaitPolicy::LegacyTestWideSpin,
                     },
                     telemetry: TelemetryOptions {
-                        mode: TelemetryMode::Ring,
-                        // Keep fixed-width schema 19 records inside the bounded
-                        // sender-trace capture budget before export.
-                        capacity: SENDER_TRACE_CAPTURE_CAPACITY,
+                        mode: TelemetryMode::Off,
+                        capacity: 0,
                     },
                     priority: PriorityOptions {
                         mode: PriorityMode::Auto,
@@ -1722,8 +1699,6 @@ impl NativePlaybackService {
                     instrument_key_profile: None,
                     #[cfg(feature = "tauri-test")]
                     startup_ordering_hook: None,
-                    #[cfg(feature = "tauri-test")]
-                    restore_race_hook: None,
                     #[cfg(feature = "tauri-test")]
                     focus_pause_hook: None,
                     #[cfg(feature = "tauri-test")]
@@ -1782,11 +1757,7 @@ impl NativePlaybackService {
                     retirement.clone(),
                 );
                 let completed = terminal_presentation_completion(
-                    self.active.clone(),
-                    self.last_terminal.clone(),
                     active.clone(),
-                    retirement.clone(),
-                    PlaybackSessionState::Failed,
                     #[cfg(all(test, feature = "tauri-test"))]
                     self.monitor_retired_test_hook.clone(),
                 );
@@ -2129,11 +2100,7 @@ impl NativePlaybackService {
             active.stop_requested.store(true, Ordering::Release);
         }
         let completed = terminal_presentation_completion(
-            self.active.clone(),
-            self.last_terminal.clone(),
             active.clone(),
-            committed_retirement.clone(),
-            terminal_state,
             #[cfg(all(test, feature = "tauri-test"))]
             self.monitor_retired_test_hook.clone(),
         );
@@ -2604,7 +2571,7 @@ pub(in crate::native_runtime) fn sender_trace_export_json(
         })
         .count();
     serde_json::to_string(&serde_json::json!({
-        "export_schema_version": 4,
+        "export_schema_version": 6,
         "raw_packet_trace_status": "not_captured",
         "session_id": active.session_id,
         "song_id": active.song_id,
@@ -2617,7 +2584,6 @@ pub(in crate::native_runtime) fn sender_trace_export_json(
             "frame_base_hold_us": active.timing_policy.frame_base_hold_us,
             "timing_margin_us": active.timing_policy.timing_margin_us,
             "target_hold_us": active.timing_policy.min_hold_us,
-            "release_gap_us": active.timing_policy.min_release_gap_us,
         },
         "analytics": {
             "aggregate_scope": "packet_trace_records",
@@ -2787,7 +2753,6 @@ pub(in crate::native_runtime) fn plan_fingerprint(
             "frame_base_hold_us": policy.frame_base_hold_us,
             "timing_margin_us": policy.timing_margin_us,
             "min_hold_us": policy.min_hold_us,
-            "min_release_gap_us": policy.min_release_gap_us,
         },
         "actions": actions,
     });
@@ -2829,6 +2794,7 @@ pub(in crate::native_runtime) fn risk_summary(risk: &RiskReport) -> RiskSummaryD
             vec![risk.reason.clone()]
         },
         recommendations: risk.recommendations.clone(),
+        short_up_gap_repeat_count: risk.short_up_gap_repeat_count as u64,
     }
 }
 
@@ -2880,6 +2846,7 @@ pub(in crate::native_runtime) fn blocked_playback_dto(
         headline: "Playback blocked".into(),
         reasons: vec![message.clone()],
         recommendations,
+        short_up_gap_repeat_count: 0,
     };
     PreparedPlaybackDto {
         prepared_id: None,
@@ -3212,8 +3179,8 @@ fn sheet_analysis_capacity_bytes(
     ])
 }
 
-fn whole_stream_advisory_capacity_bytes(
-    advisory: Option<&crate::commands::WholeStreamTimingAdvisoryDto>,
+fn generation_timing_advisory_capacity_bytes(
+    advisory: Option<&crate::commands::GenerationTimingAdvisoryDto>,
 ) -> Result<usize, String> {
     let Some(advisory) = advisory else {
         return Ok(0);
@@ -3260,7 +3227,7 @@ fn prepared_dto_capacity_bytes(
     }
     for variant in &dto.variants {
         let advisory_bytes =
-            whole_stream_advisory_capacity_bytes(variant.timing_advisory.as_ref())?;
+            generation_timing_advisory_capacity_bytes(variant.timing_advisory.as_ref())?;
         total = checked_capacity_sum([total, variant.plan_fingerprint.capacity(), advisory_bytes])?;
     }
     Ok(total)
@@ -3293,7 +3260,6 @@ fn prepared_plan_capacity_bytes(id: &String, record: &NativePreparedPlan) -> Res
         variant_payloads = checked_capacity_sum([
             variant_payloads,
             variant.fingerprint.capacity(),
-            variant.timing_margin_recommendation.source.capacity(),
             variant
                 .prepared_schedule
                 .as_ref()
@@ -3347,7 +3313,7 @@ mod preparation_cancellation_tests {
     #[cfg(feature = "tauri-test")]
     use super::{compile_dispatch_schedule_with_checkpoint, schedule_metadata_heap_capacity_bytes};
     use crate::app_state::ActivityCoordinator;
-    use crate::commands::{PlaybackConfigDto, TimingMarginRecommendationDto};
+    use crate::commands::PlaybackConfigDto;
     use crate::native_runtime::NativeEventHub;
     use sky_app_core::song::parse_song_json;
     use sky_app_core::timing::MaterializedTimingPolicy;
@@ -3384,12 +3350,11 @@ mod preparation_cancellation_tests {
             note_count: ACTION_COUNT / 2,
             deduplicated_note_count: ACTION_COUNT / 2,
             duplicate_note_count: 0,
-            compressed_holds: 0,
             impossible_same_key_repeats: 0,
-            risky_same_key_repeats: 0,
             max_polyphony: 1,
             shortest_same_key_interval_us: None,
             min_same_key_up_gap_us: None,
+            short_up_gap_repeat_count: 0,
             recommended_hold_frames: None,
             recommended_tempo_scale: None,
             warnings: Vec::new(),
@@ -3405,10 +3370,8 @@ mod preparation_cancellation_tests {
             |_| {},
         )
         .expect("baseline-equivalent one-million-action compile");
-        sky_player::adapter_support::validate_min_hold_and_release_gap_feasibility_ticks(
+        sky_player::adapter_support::validate_min_hold_feasibility_ticks(
             &baseline_compiled,
-            0,
-            sky_player::adapter_support::DurationTicks::ZERO,
             0,
             sky_player::adapter_support::DurationTicks::ZERO,
             |microseconds| {
@@ -3424,7 +3387,6 @@ mod preparation_cancellation_tests {
             .expect("baseline compiled schedule capacity");
         let baseline_executor = sky_player::adapter_support::DispatchExecutor::new(
             &baseline_compiled,
-            sky_player::adapter_support::DurationTicks::ZERO,
             sky_player::adapter_support::DurationTicks::ZERO,
             |microseconds| {
                 Ok::<_, std::convert::Infallible>(
@@ -3470,7 +3432,6 @@ mod preparation_cancellation_tests {
         let prepared = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
             &compiled,
             qpc_frequency,
-            0,
             0,
             compile_memory.caller_retained_capacity_bytes,
         )
@@ -3552,11 +3513,6 @@ mod preparation_cancellation_tests {
             schedule,
             risk,
             timing_policy,
-            timing_margin_recommendation: TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             settings_fingerprint: settings_fingerprint.into(),
             publication_fingerprint: settings_fingerprint.into(),
             source_path: PathBuf::new(),
@@ -3576,7 +3532,7 @@ mod preparation_cancellation_tests {
         prepared
     }
 
-    fn over_limit_recommendation_input(
+    fn large_recommendation_input(
         generation: u64,
         settings_fingerprint: &str,
     ) -> NativePreparedInput {
@@ -3650,7 +3606,6 @@ mod preparation_cancellation_tests {
                 timing: TimingOptions {
                     game_fps: config.fps,
                     min_hold_us: policy.min_hold_us,
-                    min_release_gap_us: policy.min_release_gap_us,
                     frame_us: policy.frame_us,
                     frame_base_hold_us: policy.frame_base_hold_us,
                     timing_margin_us: policy.timing_margin_us,
@@ -3680,7 +3635,6 @@ mod preparation_cancellation_tests {
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook: Some(Arc::clone(&hook)),
-                restore_race_hook: None,
                 focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
@@ -3949,12 +3903,12 @@ mod preparation_cancellation_tests {
 
     #[cfg(feature = "tauri-test")]
     #[test]
-    fn recommended_advisory_uses_recommended_variant_action_work_and_memory_budgets() {
+    fn recommended_advisory_uses_canonical_generation_data_for_each_variant() {
         use crate::commands::{PlaybackDecision, TimingAdvisoryStatus};
 
         let settings = sky_app_core::settings::ApplicationSettings::default();
         let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
-        let prepared = over_limit_recommendation_input(1, &fingerprint);
+        let prepared = large_recommendation_input(1, &fingerprint);
         assert_eq!(prepared.schedule.actions.len(), 50_002);
         let recommended_policy =
             MaterializedTimingPolicy::from_user_margin(60, 1.25, 800).expect("recommended policy");
@@ -3972,11 +3926,9 @@ mod preparation_cancellation_tests {
             .find(|variant| variant.decision == PlaybackDecision::Proceed)
             .expect("Proceed DTO");
         let proceed_advisory = proceed.timing_advisory.as_ref().expect("Proceed advisory");
-        assert_eq!(proceed_advisory.status, TimingAdvisoryStatus::Unavailable);
-        assert!(
-            proceed_advisory
-                .explanation
-                .contains("50002 authored actions")
+        assert_eq!(
+            proceed_advisory.status,
+            TimingAdvisoryStatus::NoShortUpGapRisk
         );
 
         let recommended = result
@@ -3988,9 +3940,9 @@ mod preparation_cancellation_tests {
             .timing_advisory
             .as_ref()
             .expect("recommended advisory");
-        assert_ne!(
+        assert_eq!(
             recommended_advisory.status,
-            TimingAdvisoryStatus::Unavailable
+            TimingAdvisoryStatus::NoShortUpGapRisk
         );
         assert_eq!(
             recommended_advisory.plan_fingerprint,
@@ -4015,7 +3967,7 @@ mod preparation_cancellation_tests {
         }));
 
         let error = service
-            .prepare(over_limit_recommendation_input(1, &fingerprint))
+            .prepare(large_recommendation_input(1, &fingerprint))
             .expect_err("cancellation must reject whole Prepare");
         assert!(error.contains("cancelled") || error.contains("superseded"));
         assert!(service.prepared.lock().expect("prepared cache").is_empty());
@@ -4044,7 +3996,7 @@ mod preparation_cancellation_tests {
         }));
 
         let error = service
-            .prepare(over_limit_recommendation_input(1, &fingerprint))
+            .prepare(large_recommendation_input(1, &fingerprint))
             .expect_err("superseded request must not publish partial variants");
         assert!(error.contains("superseded") || error.contains("cancelled"));
         let superseding_id = superseding_id
@@ -4087,22 +4039,16 @@ mod preparation_cancellation_tests {
         let baseline_min_hold = baseline_clock
             .duration_from_us(prepared_input.timing_policy.min_hold_us)
             .expect("baseline H conversion");
-        let baseline_release_gap = baseline_clock
-            .duration_from_us(prepared_input.timing_policy.min_release_gap_us)
-            .expect("baseline G conversion");
-        sky_player::adapter_support::validate_min_hold_and_release_gap_feasibility_ticks(
+        sky_player::adapter_support::validate_min_hold_feasibility_ticks(
             &baseline_compiled,
             prepared_input.timing_policy.min_hold_us,
             baseline_min_hold,
-            prepared_input.timing_policy.min_release_gap_us,
-            baseline_release_gap,
             |microseconds| baseline_clock.timeline_from_us(microseconds).ok(),
         )
         .expect("baseline-equivalent session admission validation");
         let baseline_executor = sky_player::adapter_support::DispatchExecutor::new(
             &baseline_compiled,
             baseline_min_hold,
-            baseline_release_gap,
             |microseconds| {
                 baseline_clock
                     .timeline_from_us(microseconds)
@@ -4176,7 +4122,7 @@ mod preparation_cancellation_tests {
     }
 
     #[test]
-    fn unavailable_offline_advisory_does_not_block_physical_preparation() {
+    fn generation_advisory_does_not_block_large_physical_preparation() {
         use sky_app_core::song::{ActionKind as SourceActionKind, KeyAction};
 
         const PAIR_COUNT: u64 = 25_001;
@@ -4222,7 +4168,7 @@ mod preparation_cancellation_tests {
                 .as_ref()
                 .expect("advisory result")
                 .status,
-            crate::commands::TimingAdvisoryStatus::Unavailable
+            crate::commands::TimingAdvisoryStatus::NoShortUpGapRisk
         );
         let cache = service.prepared.lock().expect("prepared cache");
         let record = cache

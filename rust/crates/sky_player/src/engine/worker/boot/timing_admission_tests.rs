@@ -99,30 +99,19 @@ fn calibration_deadline_overflow_fails_closed() {
 }
 
 #[test]
-fn timing_admission_converts_materialized_g_with_ceil_in_odd_qpc_domain() {
+fn timing_admission_converts_hold_with_ceil_in_odd_qpc_domain() {
     let mut config = WorkerConfig::default();
     config.timing.frame_us = 16_667;
     config.timing.frame_base_hold_us = 16_667;
     config.timing.timing_margin_us = 500;
     config.timing.min_hold_us = 17_167;
-    config.timing.min_release_gap_us = 17_167;
     let clock = QpcClock::from_frequency_hz(NonZeroU64::new(3_579_545).expect("QPC frequency"));
     let effective_policy = EffectiveRuntimePolicy::for_worker(&config);
 
     let converted = convert(&config, clock, &effective_policy).expect("converted policy");
     assert_eq!(
-        converted.min_release_gap_ticks,
-        clock.duration_from_us(17_167).expect("ceil G conversion")
-    );
-    assert_eq!(
         converted.min_hold_ticks,
         clock.duration_from_us(17_167).expect("ceil H conversion")
-    );
-    assert_ne!(
-        converted.min_release_gap_ticks,
-        clock
-            .duration_from_us(config.timing.frame_us)
-            .expect("T conversion")
     );
 }
 

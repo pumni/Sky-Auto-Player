@@ -21,7 +21,7 @@ function Write-StartupCalibrationProjection {
         Push-Location -LiteralPath $repositoryRoot
         try {
             $commandOutput = @(
-                & cargo --quiet xtask calibration project-evidence --input $inputPath --output $resolvedOutputPath 2>&1
+                & cargo --quiet xtask startup-calibration project-evidence --input $inputPath --output $resolvedOutputPath 2>&1
             )
             $exitCode = $LASTEXITCODE
         }

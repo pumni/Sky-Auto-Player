@@ -30,8 +30,7 @@ const MAX_RELEASE_NOTES: usize = 16 * 1024;
 const MAX_ARTIFACT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 #[cfg(not(feature = "tauri-update-fixture"))]
 const V4_STABLE_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/stable/latest.json";
-#[cfg(not(feature = "tauri-update-fixture"))]
-#[allow(dead_code)]
+#[cfg(all(test, not(feature = "tauri-update-fixture")))]
 const V4_BETA_METADATA_ENDPOINT: &str = "https://raw.githubusercontent.com/pumni/Sky-Auto-Player/release-metadata/channels/beta/latest.json";
 #[cfg(not(feature = "tauri-update-fixture"))]
 const OFFICIAL_METADATA_HOST: &str = "raw.githubusercontent.com";
@@ -216,15 +215,6 @@ impl<R: Runtime> UpdateService<R> {
     pub(crate) fn set_pre_exit_safety(&self, hook: SafetyHook) {
         if let Ok(mut safety_hook) = self.safety_hook.lock() {
             *safety_hook = Some(hook);
-        }
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn reset(&self) {
-        if let Ok(mut state) = self.state.lock() {
-            let revision = state.revision;
-            *state = NativeUpdateState::default();
-            state.revision = revision;
         }
     }
 
@@ -467,10 +457,6 @@ impl<R: Runtime> UpdateService<R> {
                     ActivityReservationError::PhysicalReleaseUnverified => {
                         (UpdateErrorCode::PlaybackActive, UpdateRetryAction::None)
                     }
-                    ActivityReservationError::CalibrationAlreadyActive => (
-                        UpdateErrorCode::CalibrationActive,
-                        UpdateRetryAction::Install,
-                    ),
                     ActivityReservationError::UpdateAlreadyActive => {
                         (UpdateErrorCode::UpdateBusy, UpdateRetryAction::Install)
                     }
@@ -985,9 +971,6 @@ fn update_activity_error(error: ActivityReservationError) -> String {
         }
         ActivityReservationError::PhysicalReleaseUnverified => {
             "playback_release_unverified: update installation is blocked because the previous physical key release could not be verified; restart the application to restore physical input".into()
-        }
-        ActivityReservationError::CalibrationAlreadyActive => {
-            "calibration_active: update installation cannot run during calibration".into()
         }
         ActivityReservationError::UpdateAlreadyActive => {
             "update_busy: another update installation is already active".into()

@@ -54,9 +54,7 @@ fn generate_scale_schedule(
 
 fn execute_scale_scenario(schedule: &RuntimeSchedule) {
     let min_hold = DurationTicks::from_raw(20_000); // 20 ms
-    let min_release_gap_ticks = DurationTicks::from_raw(16_000); // 16 ms
-    let mut executor =
-        DispatchExecutor::new(schedule, min_hold, min_release_gap_ticks, test_ticks).unwrap();
+    let mut executor = DispatchExecutor::new(schedule, min_hold, test_ticks).unwrap();
 
     let mut sim_time = TimelineTicks::ZERO;
     let mut steps = 0usize;
@@ -165,13 +163,7 @@ fn scale_fixture_1000_generations_width_5_noncanonical() {
 fn cleanup_overflow_preflights_without_mutation() {
     let canonical = vec![0x15, 0x16];
     let sched = generate_scale_schedule(2, 1, &canonical);
-    let mut exec = DispatchExecutor::new(
-        &sched,
-        DurationTicks::from_raw(500),
-        DurationTicks::from_raw(16_667),
-        test_ticks,
-    )
-    .unwrap();
+    let mut exec = DispatchExecutor::new(&sched, DurationTicks::from_raw(500), test_ticks).unwrap();
 
     exec.on_send_completed(0, 0x01, TimelineTicks::from_raw(10_000))
         .unwrap();
@@ -180,7 +172,7 @@ fn cleanup_overflow_preflights_without_mutation() {
     exec.counters.cancelled = u64::MAX;
     assert!(exec.check_cleanup_overflow().is_err());
 
-    let res = exec.on_verified_cleanup(TimelineTicks::from_raw(20_000));
+    let res = exec.on_verified_cleanup();
     assert!(res.is_err());
     assert_eq!(
         exec.active_mask(),
@@ -191,7 +183,7 @@ fn cleanup_overflow_preflights_without_mutation() {
 
 #[test]
 fn independent_down_dispatches_while_another_slot_waits_for_hold_floor() {
-    // At 60 FPS with a 500 us margin, T = 16_667 us, H = 2*T + 500 = 33_834 us, and G = 17_167 us.
+    // At 60 FPS with a 500 us margin, T = 16_667 us and H = 2*T + 500 = 33_834 us.
     // Repeating cycle every 100_000 us, starting at 50_000 us:
     // Key A Down @ 50_000 us (slot 0)
     // Key A Up   @ 84_000 us (slot 0, hold = 34_000 us >= H)
@@ -235,9 +227,7 @@ fn independent_down_dispatches_while_another_slot_waits_for_hold_floor() {
 
     let sched = compile_runtime_intents(&actions, &allowed).expect("valid schedule");
     let min_hold = DurationTicks::from_raw(33_834);
-    let min_release_gap_ticks = DurationTicks::from_raw(17_167);
-    let mut exec =
-        DispatchExecutor::new(&sched, min_hold, min_release_gap_ticks, test_ticks).unwrap();
+    let mut exec = DispatchExecutor::new(&sched, min_hold, test_ticks).unwrap();
 
     // 1. At 50_000 us: Key A Down is evaluated and returned for dispatch.
     let step_a_down = exec.evaluate(TimelineTicks::from_raw(50_000));
@@ -253,7 +243,7 @@ fn independent_down_dispatches_while_another_slot_waits_for_hold_floor() {
     exec.on_send_completed(0, 0x01, TimelineTicks::from_raw(55_000))
         .unwrap();
 
-    // Key A's release floor is now 55_000 + 33_834 = 88_834 us.
+    // Key A's hold floor is now 55_000 + 33_834 = 88_834 us.
     // 2. At 84_000 us: authored Key A Up is not yet physically eligible (84_000 < 88_834).
     let step_84 = exec.evaluate(TimelineTicks::from_raw(84_000));
     assert_eq!(
@@ -261,7 +251,7 @@ fn independent_down_dispatches_while_another_slot_waits_for_hold_floor() {
         DispatchAction::Wait {
             deadline_ticks: TimelineTicks::from_raw(85_000),
         },
-        "next event due is Key B Down at 85_000 us, not waiting for Key A release floor"
+        "next event due is Key B Down at 85_000 us, not waiting for Key A's hold floor"
     );
 
     // 3. At 85_000 us: Key B Down is evaluated.
@@ -282,7 +272,7 @@ fn independent_down_dispatches_while_another_slot_waits_for_hold_floor() {
     exec.on_send_completed(0, 0x02, TimelineTicks::from_raw(85_000))
         .unwrap();
 
-    // 4. At 88_834 us: Key A Up physical release floor expires and is dispatched.
+    // 4. At 88_834 us: Key A's hold floor expires and Up is dispatched.
     let step_a_up = exec.evaluate(TimelineTicks::from_raw(88_834));
     assert_eq!(
         step_a_up,

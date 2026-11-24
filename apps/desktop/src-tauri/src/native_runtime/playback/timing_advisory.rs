@@ -1,431 +1,484 @@
 use super::*;
 use crate::commands::{
-    PlaybackConfigDto, TimingAdvisoryAssumptionsDto, TimingAdvisoryStatus,
-    WholeStreamTimingAdvisoryDto,
+    DispatchModelStatus, GenerationTimingAdvisoryDto, PlaybackConfigDto, TimingAdvisoryStatus,
 };
-#[cfg(test)]
-use sky_app_core::song::ScheduleMetadata;
 use sky_app_core::timing::MaterializedTimingPolicy;
-use sky_player::timing_model::{
-    WholeStreamModelConfig, WholeStreamModelError, WholeStreamPacketEstimate,
-    analyze_dispatch_schedule_cancellable,
-};
 
-const QPC_FREQUENCY_HZ: u64 = 1_000_000;
+const MAX_TIMING_ADVISORY_GENERATIONS: usize = 50_000;
+const MAX_TIMING_ADVISORY_WORK_UNITS: u64 = 3_000_000;
+const MAX_TIMING_ADVISORY_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_KEY_VISITS_PER_GENERATION: u64 = 60;
+const MODEL_QPC_FREQUENCY_HZ: u64 = 1_000_000;
 const ESTIMATED_SENDER_SETUP_US: u64 = 10;
 const ESTIMATED_PER_INPUT_US: u64 = 3;
 const ESTIMATED_POST_SEND_US: u64 = 5;
-const ESTIMATED_METADATA_COST_US: u64 = 1;
-
-/// The estimate caps authored actions before compiling the stream. A compiled
-/// packet cannot outnumber its source actions, and each packet has at most 15
-/// key slots, so this bounds both the compiler adapter and model work.
-pub(super) const MAX_TIMING_ADVISORY_PACKETS: usize = 50_000;
-const MAX_TIMING_ADVISORY_ACTIONS: usize = 50_000;
-const MAX_TIMING_ADVISORY_WORK_UNITS: u64 = 3_000_000;
-const MAX_TIMING_ADVISORY_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_KEY_VISITS_PER_PACKET: u64 = 60;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct TimingModelAssumptions {
-    qpc_frequency_hz: u64,
-    sender_setup_us: u64,
-    per_input_us: u64,
-    post_send_us: u64,
-    metadata_cost_us: u64,
-}
-
-impl Default for TimingModelAssumptions {
-    fn default() -> Self {
-        Self {
-            qpc_frequency_hz: QPC_FREQUENCY_HZ,
-            sender_setup_us: ESTIMATED_SENDER_SETUP_US,
-            per_input_us: ESTIMATED_PER_INPUT_US,
-            post_send_us: ESTIMATED_POST_SEND_US,
-            metadata_cost_us: ESTIMATED_METADATA_COST_US,
-        }
-    }
-}
-
-impl TimingModelAssumptions {
-    fn to_dto(self) -> TimingAdvisoryAssumptionsDto {
-        TimingAdvisoryAssumptionsDto {
-            qpc_frequency_hz: self.qpc_frequency_hz,
-            estimated_sender_setup_us: self.sender_setup_us,
-            estimated_per_input_us: self.per_input_us,
-            estimated_post_send_us: self.post_send_us,
-            estimated_metadata_cost_us: self.metadata_cost_us,
-        }
-    }
-
-    fn model_config(self, policy: &MaterializedTimingPolicy) -> WholeStreamModelConfig {
-        WholeStreamModelConfig {
-            qpc_frequency_hz: self.qpc_frequency_hz,
-            effective_min_hold_us: policy.min_hold_us,
-            physical_release_gap_us: policy.min_release_gap_us,
-            estimated_sender_setup_us: self.sender_setup_us,
-            estimated_per_input_us: self.per_input_us,
-            estimated_post_send_us: self.post_send_us,
-            estimated_metadata_cost_us: self.metadata_cost_us,
-            // Prepare has no known resumed-session barrier. A live resume
-            // barrier is not guessed or projected into this authored stream.
-            resume_down_barrier_ticks: None,
-        }
-    }
-}
 
 #[cfg(test)]
 pub(super) fn analyze_variant(
-    schedule: &ScheduleMetadata,
+    schedule: &sky_app_core::song::ScheduleMetadata,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,
     cancelled: &AtomicBool,
-) -> WholeStreamTimingAdvisoryDto {
-    analyze_variant_with_assumptions(
-        schedule,
-        config,
-        policy,
-        plan_fingerprint,
-        cancelled,
-        TimingModelAssumptions::default(),
-    )
+) -> GenerationTimingAdvisoryDto {
+    let result = empty_advisory(plan_fingerprint, config.dry_run, policy.min_hold_us);
+    if let Err(reason) = validate_policy(config, policy) {
+        return unavailable(result, &reason);
+    }
+    if schedule.actions.len() > MAX_TIMING_ADVISORY_GENERATIONS.saturating_mul(2) {
+        return unavailable(
+            result,
+            "The authored schedule exceeds the generation advisory limit.",
+        );
+    }
+    match super::session::compile_dispatch_schedule(schedule, cancelled) {
+        Ok(compiled) => analyze_compiled_stream(&compiled, result, policy, cancelled, || {}),
+        Err(error) => unavailable(
+            result,
+            &format!("The canonical generation schedule could not be inspected: {error}"),
+        ),
+    }
 }
 
 #[cfg(test)]
 pub(super) fn analyze_compiled_variant_with_model_hook(
-    source_action_count: usize,
+    _source_action_count: usize,
     compiled: &sky_player::adapter_support::RuntimeSchedule,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,
     cancelled: &AtomicBool,
-    before_model: impl FnOnce(),
-) -> WholeStreamTimingAdvisoryDto {
+    before_analysis: impl FnOnce(),
+) -> GenerationTimingAdvisoryDto {
     analyze_compiled_variant_with_hook(
-        source_action_count,
         compiled,
         config,
         policy,
         plan_fingerprint,
         cancelled,
-        before_model,
-    )
-}
-
-#[cfg(test)]
-fn analyze_variant_with_assumptions(
-    schedule: &ScheduleMetadata,
-    config: &PlaybackConfigDto,
-    policy: &MaterializedTimingPolicy,
-    plan_fingerprint: &str,
-    cancelled: &AtomicBool,
-    assumptions: TimingModelAssumptions,
-) -> WholeStreamTimingAdvisoryDto {
-    analyze_variant_with_assumptions_and_hook(
-        schedule,
-        config,
-        policy,
-        plan_fingerprint,
-        cancelled,
-        assumptions,
-        || {},
-    )
-}
-
-#[cfg(test)]
-fn analyze_variant_with_assumptions_and_hook(
-    schedule: &ScheduleMetadata,
-    config: &PlaybackConfigDto,
-    policy: &MaterializedTimingPolicy,
-    plan_fingerprint: &str,
-    cancelled: &AtomicBool,
-    assumptions: TimingModelAssumptions,
-    before_model: impl FnOnce(),
-) -> WholeStreamTimingAdvisoryDto {
-    let (result, estimated_work) = match prepare_advisory(
-        schedule.actions.len(),
-        config,
-        policy,
-        plan_fingerprint,
-        cancelled,
-        assumptions,
-    ) {
-        Ok(prepared) => prepared,
-        Err(result) => return *result,
-    };
-    let compiled = match super::session::compile_dispatch_schedule(schedule, cancelled) {
-        Ok(compiled) => compiled,
-        Err(error) => {
-            return unavailable(
-                result,
-                &format!("The canonical packet stream could not be modeled: {error}"),
-            );
-        }
-    };
-    analyze_compiled_stream(
-        &compiled,
-        result,
-        estimated_work,
-        policy,
-        cancelled,
-        assumptions,
-        before_model,
+        before_analysis,
     )
 }
 
 #[cfg(not(test))]
 pub(super) fn analyze_compiled_variant(
-    source_action_count: usize,
+    _source_action_count: usize,
     compiled: &sky_player::adapter_support::RuntimeSchedule,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,
     cancelled: &AtomicBool,
-) -> WholeStreamTimingAdvisoryDto {
-    analyze_compiled_variant_with_hook(
-        source_action_count,
-        compiled,
-        config,
-        policy,
-        plan_fingerprint,
-        cancelled,
-        || {},
-    )
+) -> GenerationTimingAdvisoryDto {
+    analyze_compiled_variant_with_hook(compiled, config, policy, plan_fingerprint, cancelled, || {})
 }
 
 pub(super) fn unavailable_compiled_variant(
-    source_action_count: usize,
+    _source_action_count: usize,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,
     cancelled: &AtomicBool,
     explanation: &str,
-) -> WholeStreamTimingAdvisoryDto {
-    match prepare_advisory(
-        source_action_count,
-        config,
-        policy,
-        plan_fingerprint,
-        cancelled,
-        TimingModelAssumptions::default(),
-    ) {
-        Ok((result, _)) => unavailable(result, explanation),
-        Err(result) => *result,
+) -> GenerationTimingAdvisoryDto {
+    let result = empty_advisory(plan_fingerprint, config.dry_run, policy.min_hold_us);
+    if cancelled.load(Ordering::Acquire) {
+        return unavailable(
+            result,
+            "analysis was cancelled before generation inspection",
+        );
     }
+    unavailable(result, explanation)
 }
 
 fn analyze_compiled_variant_with_hook(
-    source_action_count: usize,
     compiled: &sky_player::adapter_support::RuntimeSchedule,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,
     cancelled: &AtomicBool,
-    before_model: impl FnOnce(),
-) -> WholeStreamTimingAdvisoryDto {
-    let (result, estimated_work) = match prepare_advisory(
-        source_action_count,
-        config,
-        policy,
-        plan_fingerprint,
-        cancelled,
-        TimingModelAssumptions::default(),
-    ) {
-        Ok(prepared) => prepared,
-        Err(result) => return *result,
-    };
-    analyze_compiled_stream(
-        compiled,
-        result,
-        estimated_work,
-        policy,
-        cancelled,
-        TimingModelAssumptions::default(),
-        before_model,
-    )
-}
-
-fn prepare_advisory(
-    action_count: usize,
-    config: &PlaybackConfigDto,
-    policy: &MaterializedTimingPolicy,
-    plan_fingerprint: &str,
-    cancelled: &AtomicBool,
-    assumptions: TimingModelAssumptions,
-) -> Result<(WholeStreamTimingAdvisoryDto, u64), Box<WholeStreamTimingAdvisoryDto>> {
-    let mut result = empty_advisory(plan_fingerprint, assumptions, config.dry_run, None);
+    before_analysis: impl FnOnce(),
+) -> GenerationTimingAdvisoryDto {
+    let result = empty_advisory(plan_fingerprint, config.dry_run, policy.min_hold_us);
     if cancelled.load(Ordering::Acquire) {
-        return Err(Box::new(unavailable(
+        return unavailable(
             result,
-            "analysis was cancelled before packet preparation",
-        )));
+            "analysis was cancelled before generation inspection",
+        );
     }
-    if let Err(reason) = validate_assumptions(config, policy, assumptions) {
-        result.status = TimingAdvisoryStatus::InvalidAssumptions;
-        result.explanation = reason;
-        return Err(Box::new(result));
+    if let Err(reason) = validate_policy(config, policy) {
+        return unavailable(result, &reason);
     }
-    result.effective_hold_floor_h_us = Some(policy.min_hold_us);
-    result.authored_release_gap_floor_g_us = Some(policy.min_release_gap_us);
-    result.physical_release_gap_floor_g_us = Some(policy.min_release_gap_us);
-    result.structural_same_key_cycle_minimum_us =
-        policy.min_hold_us.checked_add(policy.min_release_gap_us);
-    if action_count > MAX_TIMING_ADVISORY_ACTIONS {
-        return Err(Box::new(unavailable(
-            result,
-            &format!(
-                "The schedule has {action_count} authored actions; the offline advisory limit is {MAX_TIMING_ADVISORY_ACTIONS}."
-            ),
-        )));
-    }
-    let estimated_work = match u64::try_from(action_count)
-        .ok()
-        .and_then(|count| count.checked_mul(MAX_KEY_VISITS_PER_PACKET))
-    {
-        Some(work) if work <= MAX_TIMING_ADVISORY_WORK_UNITS => work,
-        _ => {
-            return Err(Box::new(unavailable(
-                result,
-                "The schedule exceeds the offline advisory work budget.",
-            )));
-        }
-    };
-    if estimated_peak_bytes(action_count)
-        .is_none_or(|bytes| bytes > MAX_TIMING_ADVISORY_MEMORY_BYTES)
-    {
-        return Err(Box::new(unavailable(
-            result,
-            "The schedule exceeds the offline advisory memory budget.",
-        )));
-    }
-    if cancelled.load(Ordering::Acquire) {
-        return Err(Box::new(unavailable(
-            result,
-            "analysis was cancelled before packet compilation",
-        )));
-    }
-    Ok((result, estimated_work))
+    analyze_compiled_stream(compiled, result, policy, cancelled, before_analysis)
 }
 
 fn analyze_compiled_stream(
     compiled: &sky_player::adapter_support::RuntimeSchedule,
-    mut result: WholeStreamTimingAdvisoryDto,
-    estimated_work: u64,
+    mut result: GenerationTimingAdvisoryDto,
     policy: &MaterializedTimingPolicy,
     cancelled: &AtomicBool,
-    assumptions: TimingModelAssumptions,
-    before_model: impl FnOnce(),
-) -> WholeStreamTimingAdvisoryDto {
+    before_analysis: impl FnOnce(),
+) -> GenerationTimingAdvisoryDto {
     if cancelled.load(Ordering::Acquire) {
-        return unavailable(result, "analysis was cancelled after packet compilation");
-    }
-    if compiled.packets.len() > MAX_TIMING_ADVISORY_PACKETS {
         return unavailable(
             result,
-            "The compiled packet stream exceeds the offline advisory limit.",
+            "analysis was cancelled before generation inspection",
         );
     }
-    let actual_work = match u64::try_from(compiled.packets.len())
+    let generation_count = match usize::try_from(compiled.generation_count) {
+        Ok(count) => count,
+        Err(_) => return unavailable(result, "The generation count exceeds addressable memory."),
+    };
+    result.total_authored_timestamp_group_count =
+        Some(compiled.authored_timestamp_group_count as u64);
+    result.down_generation_count = Some(compiled.generation_count);
+    result.unmatched_up_count = Some(compiled.unmatched_ups.len() as u64);
+    if generation_count > MAX_TIMING_ADVISORY_GENERATIONS {
+        return unavailable(
+            result,
+            "The compiled generation schedule exceeds the offline advisory limit.",
+        );
+    }
+    let work_units = match u64::try_from(generation_count)
         .ok()
-        .and_then(|count| count.checked_mul(MAX_KEY_VISITS_PER_PACKET))
+        .and_then(|count| count.checked_mul(MAX_KEY_VISITS_PER_GENERATION))
     {
         Some(work) if work <= MAX_TIMING_ADVISORY_WORK_UNITS => work,
         _ => {
             return unavailable(
                 result,
-                "The compiled packet stream exceeds the offline advisory work budget.",
+                "The compiled generation schedule exceeds the offline advisory work budget.",
             );
         }
     };
-    if actual_work > estimated_work {
+    let compiled_memory_bytes = match compiled.memory_metrics() {
+        Ok(metrics) => metrics
+            .heap_payload_bytes
+            .checked_add(metrics.struct_bytes)
+            .map(|bytes| bytes.max(metrics.compile_memory.phase_peak_capacity_bytes)),
+        Err(_) => None,
+    };
+    let executor_memory_bytes =
+        sky_player::adapter_support::DispatchExecutor::estimated_memory_bytes(compiled).ok();
+    let total_memory_bytes = compiled_memory_bytes
+        .zip(executor_memory_bytes)
+        .and_then(|(compiled, executor)| compiled.checked_add(executor));
+    if total_memory_bytes.is_none_or(|bytes| {
+        bytes > usize::try_from(MAX_TIMING_ADVISORY_MEMORY_BYTES).unwrap_or(usize::MAX)
+    }) {
         return unavailable(
             result,
-            "The compiled packet stream exceeded its preflight work bound.",
+            "The prepared generation schedule and executor simulation exceed the offline advisory memory budget.",
         );
     }
-    result.total_packet_count = Some(compiled.packets.len() as u64);
+    result.work_limit_units = MAX_TIMING_ADVISORY_WORK_UNITS;
+    result.working_memory_limit_bytes = MAX_TIMING_ADVISORY_MEMORY_BYTES;
 
-    for (index, packet) in compiled.packets.iter().enumerate() {
-        if index % 256 == 0 && cancelled.load(Ordering::Acquire) {
-            result.packet_count_inspected = index as u64;
-            return unavailable(result, "analysis was cancelled while preparing packets");
-        }
-        if usize::try_from(packet.packet_id).ok() != Some(index) {
-            result.packet_count_inspected = index as u64;
-            return unavailable(
-                result,
-                "The canonical packet identifiers are not contiguous.",
-            );
-        }
-        result.packet_count_inspected = (index + 1) as u64;
+    // Test callers can stop at the canonical adapter boundary to exercise
+    // cancellation while generation pairs are being inspected.
+    before_analysis();
+    if cancelled.load(Ordering::Acquire) {
+        return unavailable(result, "analysis was cancelled before paired-Up inspection");
     }
 
-    // Test callers can stop at the adapter/model boundary to deterministically
-    // exercise cancellation while an advisory analysis is in flight.
-    before_model();
-    let report = match analyze_dispatch_schedule_cancellable(
-        compiled,
-        assumptions.model_config(policy),
-        cancelled,
-    ) {
-        Ok(report) => report,
-        Err(WholeStreamModelError::Cancelled) => {
-            return unavailable(result, "analysis was cancelled while simulating packets");
-        }
-        Err(WholeStreamModelError::ZeroQpcFrequency) => {
-            result.status = TimingAdvisoryStatus::InvalidAssumptions;
-            result.explanation = "The model QPC frequency must be nonzero.".into();
-            return result;
-        }
-        Err(WholeStreamModelError::ArithmeticOverflow) => {
-            result.status = TimingAdvisoryStatus::InvalidAssumptions;
-            result.explanation = "The timing model assumptions overflow checked arithmetic.".into();
-            return result;
-        }
-        Err(error) => {
+    let mut prior_up_by_slot = [None; sky_player::adapter_support::MAX_KEYS];
+    for (index, chord) in compiled.down_chords.iter().enumerate() {
+        if index % 256 == 0 && cancelled.load(Ordering::Acquire) {
             return unavailable(
                 result,
-                &format!("The compiled stream could not be modeled: {error}"),
+                "analysis was cancelled while inspecting generations",
             );
         }
-    };
-    summarize_report(&mut result, &report.packets);
-    result.packet_count_analyzed = report.packet_count as u64;
-    result.status = if result.negative_slack_packet_count != 0
-        || result.h_floor_displaced_packet_count != 0
-        || result.g_floor_displaced_packet_count != 0
-        || result.head_of_line_packet_count != 0
-    {
-        TimingAdvisoryStatus::ModeledRisk
+        if chord.chord_index != index {
+            return unavailable(
+                result,
+                "The canonical Down chord identifiers are not contiguous.",
+            );
+        }
+        for generation in &chord.intents {
+            let slot = usize::from(generation.key_slot);
+            let Some(prior_up) = prior_up_by_slot.get_mut(slot) else {
+                return unavailable(result, "A generation refers to an invalid key slot.");
+            };
+            if let Some(up_us) = *prior_up {
+                let Some(gap_us) = chord.scheduled_us.checked_sub(up_us) else {
+                    return unavailable(
+                        result,
+                        "A same-key Down precedes the prior paired authored Up.",
+                    );
+                };
+                if gap_us < policy.frame_us {
+                    result.short_up_gap_repeat_count += 1;
+                }
+            }
+            if generation.paired_up_offset_us < chord.scheduled_us {
+                return unavailable(
+                    result,
+                    "A generation's paired authored Up precedes its Down.",
+                );
+            }
+            *prior_up = Some(generation.paired_up_offset_us);
+        }
+    }
+    result.status = if result.short_up_gap_repeat_count > 0 {
+        TimingAdvisoryStatus::ShortUpGapRisk
     } else {
-        TimingAdvisoryStatus::NoModeledRisk
+        TimingAdvisoryStatus::NoShortUpGapRisk
     };
-    result.explanation = match result.status {
-        TimingAdvisoryStatus::NoModeledRisk => format!(
-            "No lateness, H/G floor displacement, or head-of-line delay was modeled across {} packets.",
-            result.packet_count_analyzed
-        ),
-        TimingAdvisoryStatus::ModeledRisk => format!(
-            "The illustrative model found {} negative-slack packet(s), {} H-floor and {} G-floor displacement(s), and {} head-of-line delay(s).",
-            result.negative_slack_packet_count,
-            result.h_floor_displaced_packet_count,
-            result.g_floor_displaced_packet_count,
-            result.head_of_line_packet_count
-        ),
-        _ => result.explanation,
+    result.explanation = if result.short_up_gap_repeat_count > 0 {
+        format!(
+            "{} feasible same-key repeat(s) have an authored Up-to-Down gap shorter than one frame.",
+            result.short_up_gap_repeat_count
+        )
+    } else {
+        "No feasible same-key repeat has an authored Up-to-Down gap shorter than one frame.".into()
     };
+
+    let simulated = match simulate_dispatch_schedule(compiled, policy, cancelled) {
+        Ok(summary) => summary,
+        Err(reason) => {
+            if cancelled.load(Ordering::Acquire) {
+                return unavailable(
+                    result,
+                    "analysis was cancelled while simulating the executor schedule",
+                );
+            }
+            return dispatch_model_unavailable(result, &reason);
+        }
+    };
+    result.modeled_send_count = simulated.send_count;
+    result.modeled_negative_slack_send_count = simulated.negative_slack_send_count;
+    result.modeled_h_floor_displaced_send_count = simulated.h_floor_displaced_send_count;
+    result.max_modeled_h_floor_displacement_us = simulated.max_h_floor_displacement_us;
+    result.modeled_head_of_line_send_count = simulated.head_of_line_send_count;
+    result.max_modeled_head_of_line_delay_us = simulated.max_head_of_line_delay_us;
+    result.max_modeled_lateness_us = simulated.max_lateness_us;
+    result.dispatch_model_status = if simulated.negative_slack_send_count > 0
+        || simulated.h_floor_displaced_send_count > 0
+        || simulated.head_of_line_send_count > 0
+    {
+        DispatchModelStatus::ModeledRisk
+    } else {
+        DispatchModelStatus::NoModeledRisk
+    };
+    result.dispatch_model_explanation = match result.dispatch_model_status {
+        DispatchModelStatus::NoModeledRisk => format!(
+            "The illustrative executor model found no lateness, H-floor displacement, or head-of-line delay across {} sends.",
+            simulated.send_count
+        ),
+        DispatchModelStatus::ModeledRisk => format!(
+            "The illustrative executor model found {} late send(s), {} H-floor displacement(s), and {} head-of-line delay(s).",
+            simulated.negative_slack_send_count,
+            simulated.h_floor_displaced_send_count,
+            simulated.head_of_line_send_count
+        ),
+        DispatchModelStatus::NotAnalyzed | DispatchModelStatus::Unavailable => {
+            "The illustrative executor model could not be analyzed.".into()
+        }
+    };
+    let _ = work_units;
     result
 }
 
-fn validate_assumptions(
+#[derive(Default)]
+struct DispatchSimulationSummary {
+    send_count: u64,
+    negative_slack_send_count: u64,
+    h_floor_displaced_send_count: u64,
+    max_h_floor_displacement_us: u64,
+    head_of_line_send_count: u64,
+    max_head_of_line_delay_us: u64,
+    max_lateness_us: u64,
+}
+
+fn simulate_dispatch_schedule(
+    schedule: &sky_player::adapter_support::RuntimeSchedule,
+    policy: &MaterializedTimingPolicy,
+    cancelled: &AtomicBool,
+) -> Result<DispatchSimulationSummary, String> {
+    let hold_ticks = us_to_ticks_ceil(policy.min_hold_us, MODEL_QPC_FREQUENCY_HZ)?;
+    let mut executor = sky_player::adapter_support::DispatchExecutor::new_with_cancellation(
+        schedule,
+        sky_player::adapter_support::DurationTicks::from_raw(hold_ticks),
+        |us| {
+            us_to_ticks_ceil(us, MODEL_QPC_FREQUENCY_HZ)
+                .map(sky_player::adapter_support::TimelineTicks::from_raw)
+        },
+        || {
+            if cancelled.load(Ordering::Acquire) {
+                Err("cancelled".into())
+            } else {
+                Ok(())
+            }
+        },
+    )?;
+    let compiled_metrics = schedule
+        .memory_metrics()
+        .map_err(|error| format!("compiled schedule memory accounting failed: {error}"))?;
+    let retained_schedule_bytes = compiled_metrics
+        .heap_payload_bytes
+        .checked_add(compiled_metrics.struct_bytes)
+        .ok_or_else(|| "compiled schedule memory accounting overflow".to_string())?
+        .max(compiled_metrics.compile_memory.phase_peak_capacity_bytes);
+    let actual_executor_bytes = executor
+        .try_memory_metrics()
+        .map_err(|error| format!("executor memory accounting failed: {error}"))?
+        .total_bytes;
+    if retained_schedule_bytes
+        .checked_add(actual_executor_bytes)
+        .is_none_or(|bytes| {
+            bytes > usize::try_from(MAX_TIMING_ADVISORY_MEMORY_BYTES).unwrap_or(usize::MAX)
+        })
+    {
+        return Err("the prepared generation schedule and executor exceed the offline advisory memory budget".into());
+    }
+    let epoch = sky_player::adapter_support::QpcTicks::ZERO;
+    // Every generation can produce a Down and a paired Up. Each physical send
+    // can be preceded by one advancing Wait, followed by an optional schedule
+    // end Wait and the final Finished evaluation. Bound work by that event
+    // topology rather than a small fixed allowance that rejects sparse plans.
+    let max_iterations = usize::try_from(schedule.generation_count)
+        .ok()
+        .and_then(|count| count.checked_mul(4))
+        .and_then(|count| count.checked_add(2))
+        .ok_or_else(|| "executor simulation iteration bound overflow".to_string())?;
+    let mut summary = DispatchSimulationSummary::default();
+    let mut now = epoch;
+    let mut previous_worker_free = None;
+    let mut iterations = 0usize;
+
+    loop {
+        if iterations.is_multiple_of(256) && cancelled.load(Ordering::Acquire) {
+            return Err("cancelled".into());
+        }
+        iterations = iterations
+            .checked_add(1)
+            .ok_or_else(|| "executor simulation iteration overflow".to_string())?;
+        if iterations > max_iterations {
+            return Err("the executor simulation exceeded its bounded iteration count".into());
+        }
+        match executor
+            .evaluate_at(now, epoch)
+            .map_err(|error| format!("executor timeline arithmetic failed: {error}"))?
+        {
+            sky_player::adapter_support::DispatchDecision::Finished => break,
+            sky_player::adapter_support::DispatchDecision::Wait { deadline_qpc }
+                if deadline_qpc > now =>
+            {
+                now = deadline_qpc;
+            }
+            sky_player::adapter_support::DispatchDecision::Wait { .. } => {
+                return Err("the executor returned a non-advancing wait deadline".into());
+            }
+            sky_player::adapter_support::DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                timing_window,
+            } => {
+                let down_mask = down_chord.map_or(0, |chord| chord.down_mask);
+                if up_mask & down_mask != 0 || up_mask | down_mask == 0 {
+                    return Err("the executor returned an invalid physical send mask".into());
+                }
+                let authored_target = timing_window.authored_target_qpc.as_u64();
+                let mut h_constraint = 0u64;
+                let mut h_displacement = 0u64;
+                for timing in executor.up_slot_timings(up_mask) {
+                    let authored_up = timing.authored_up_offset_ticks.as_u64();
+                    let prepared_up_floor = timing.paired_up_not_before_offset_ticks.as_u64();
+                    let physical_up_floor = timing.release_not_before_qpc.as_u64();
+                    let floor = authored_up.max(prepared_up_floor).max(physical_up_floor);
+                    h_constraint = h_constraint.max(floor);
+                    h_displacement = h_displacement.max(floor.saturating_sub(authored_up));
+                }
+                let floor_ready = authored_target.max(h_constraint);
+                let constraint_ready = h_constraint.max(previous_worker_free.unwrap_or(0));
+                let ready = now.as_u64().max(floor_ready);
+                let slack = i128::from(authored_target) - i128::from(constraint_ready);
+                let lateness = ready
+                    .checked_sub(authored_target)
+                    .ok_or_else(|| "executor model produced negative lateness".to_string())?;
+                if slack < 0 {
+                    summary.negative_slack_send_count = summary
+                        .negative_slack_send_count
+                        .checked_add(1)
+                        .ok_or_else(|| "negative-slack send count overflow".to_string())?;
+                }
+                if h_displacement > 0 {
+                    summary.h_floor_displaced_send_count = summary
+                        .h_floor_displaced_send_count
+                        .checked_add(1)
+                        .ok_or_else(|| "H-floor send count overflow".to_string())?;
+                    summary.max_h_floor_displacement_us =
+                        summary.max_h_floor_displacement_us.max(h_displacement);
+                }
+                let hol_delay = previous_worker_free
+                    .map(|free| free.saturating_sub(floor_ready))
+                    .unwrap_or(0);
+                if hol_delay > 0 {
+                    summary.head_of_line_send_count = summary
+                        .head_of_line_send_count
+                        .checked_add(1)
+                        .ok_or_else(|| "head-of-line send count overflow".to_string())?;
+                    summary.max_head_of_line_delay_us =
+                        summary.max_head_of_line_delay_us.max(hol_delay);
+                }
+                summary.send_count = summary
+                    .send_count
+                    .checked_add(1)
+                    .ok_or_else(|| "modeled send count overflow".to_string())?;
+                summary.max_lateness_us = summary.max_lateness_us.max(lateness);
+
+                let event_count = u64::from(up_mask.count_ones() + down_mask.count_ones());
+                let sender_envelope = ESTIMATED_SENDER_SETUP_US
+                    .checked_add(
+                        ESTIMATED_PER_INPUT_US
+                            .checked_mul(event_count)
+                            .ok_or_else(|| "estimated SendInput cost overflow".to_string())?,
+                    )
+                    .ok_or_else(|| "estimated sender envelope overflow".to_string())?;
+                let sender_completion = ready
+                    .checked_add(sender_envelope)
+                    .ok_or_else(|| "estimated sender completion overflow".to_string())?;
+                let worker_free = sender_completion
+                    .checked_add(ESTIMATED_POST_SEND_US)
+                    .ok_or_else(|| "estimated post-send time overflow".to_string())?;
+                executor.on_send_completed_at(
+                    up_mask,
+                    down_mask,
+                    sky_player::adapter_support::QpcTicks::from_raw(sender_completion),
+                )?;
+                previous_worker_free = Some(worker_free);
+                now = sky_player::adapter_support::QpcTicks::from_raw(worker_free);
+            }
+        }
+    }
+    if cancelled.load(Ordering::Acquire) {
+        return Err("cancelled".into());
+    }
+    Ok(summary)
+}
+
+fn us_to_ticks_ceil(microseconds: u64, frequency_hz: u64) -> Result<u64, String> {
+    let numerator = u128::from(microseconds)
+        .checked_mul(u128::from(frequency_hz))
+        .and_then(|value| value.checked_add(999_999))
+        .ok_or_else(|| "microseconds-to-QPC conversion overflow".to_string())?;
+    u64::try_from(numerator / 1_000_000)
+        .map_err(|_| "microseconds-to-QPC result exceeds the timeline range".to_string())
+}
+
+fn dispatch_model_unavailable(
+    mut advisory: GenerationTimingAdvisoryDto,
+    reason: &str,
+) -> GenerationTimingAdvisoryDto {
+    advisory.dispatch_model_status = DispatchModelStatus::Unavailable;
+    advisory.dispatch_model_explanation = reason.to_owned();
+    advisory
+}
+
+fn validate_policy(
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
-    assumptions: TimingModelAssumptions,
 ) -> Result<(), String> {
-    if assumptions.qpc_frequency_hz == 0 {
-        return Err("The model QPC frequency must be nonzero.".into());
-    }
     if config.fps != policy.fps
         || config.hold_frames != policy.hold_frames
         || config.timing_margin_us != policy.timing_margin_us
@@ -438,119 +491,60 @@ fn validate_assumptions(
         .frame_base_hold_us
         .checked_add(policy.timing_margin_us)
         .ok_or_else(|| "The effective hold floor overflows.".to_string())?;
-    let expected_release_gap = policy
-        .frame_us
-        .checked_add(policy.timing_margin_us)
-        .ok_or_else(|| "The authored release gap overflows.".to_string())?;
-    if policy.frame_us == 0
-        || policy.min_hold_us != expected_hold
-        || policy.min_release_gap_us != expected_release_gap
-    {
-        return Err("The materialized H/G timing floors are inconsistent.".into());
+    if policy.frame_us == 0 || policy.min_hold_us != expected_hold {
+        return Err("The materialized H timing floor is inconsistent.".into());
     }
-    policy
-        .min_hold_us
-        .checked_add(policy.min_release_gap_us)
-        .ok_or_else(|| "The structural same-key cycle floor overflows.".to_string())?;
     Ok(())
-}
-
-fn estimated_peak_bytes(action_count: usize) -> Option<u64> {
-    use sky_player::adapter_support::{
-        CompactIntent, CompiledBatch, CompiledPacket, KeyActionInput, MAX_REASON_BYTES,
-    };
-
-    let per_action = size_of::<KeyActionInput>()
-        .checked_add(size_of::<CompiledBatch>())?
-        .checked_add(size_of::<CompiledPacket>())?
-        .checked_add(size_of::<WholeStreamPacketEstimate>())?
-        .checked_add(size_of::<i64>())?
-        // Covers three copies of a maximum-length reason across Arc, reason
-        // table, and map storage, plus SmallVec spill and hash allocation.
-        .checked_add(3 * MAX_REASON_BYTES)?
-        .checked_add(256)?;
-    let intents = action_count
-        .checked_mul(15)?
-        .checked_mul(size_of::<CompactIntent>())?;
-    let total = action_count.checked_mul(per_action)?.checked_add(intents)?;
-    u64::try_from(total).ok()
 }
 
 fn empty_advisory(
     plan_fingerprint: &str,
-    assumptions: TimingModelAssumptions,
     dry_run: bool,
-    total_packet_count: Option<u64>,
-) -> WholeStreamTimingAdvisoryDto {
-    WholeStreamTimingAdvisoryDto {
+    effective_hold_floor_h_us: u64,
+) -> GenerationTimingAdvisoryDto {
+    GenerationTimingAdvisoryDto {
         status: TimingAdvisoryStatus::NotAnalyzed,
         plan_fingerprint: plan_fingerprint.to_owned(),
-        explanation: "The offline timing advisory has not been computed.".into(),
-        total_packet_count,
-        packet_count_inspected: 0,
-        packet_count_analyzed: 0,
-        packet_limit: MAX_TIMING_ADVISORY_PACKETS as u64,
+        explanation: "The prepared generation advisory has not been computed.".into(),
+        total_authored_timestamp_group_count: None,
+        down_generation_count: None,
+        unmatched_up_count: None,
+        generation_limit: MAX_TIMING_ADVISORY_GENERATIONS as u64,
         work_limit_units: MAX_TIMING_ADVISORY_WORK_UNITS,
         working_memory_limit_bytes: MAX_TIMING_ADVISORY_MEMORY_BYTES,
-        negative_slack_packet_count: 0,
-        h_floor_displaced_packet_count: 0,
-        max_h_floor_displacement_us: 0,
-        g_floor_displaced_packet_count: 0,
-        max_g_floor_displacement_us: 0,
-        head_of_line_packet_count: 0,
-        max_head_of_line_delay_us: 0,
-        effective_hold_floor_h_us: None,
-        authored_release_gap_floor_g_us: None,
-        physical_release_gap_floor_g_us: None,
-        structural_same_key_cycle_minimum_us: None,
-        assumptions: assumptions.to_dto(),
-        receiver_acknowledged: false,
+        short_up_gap_repeat_count: 0,
+        effective_hold_floor_h_us: Some(effective_hold_floor_h_us),
+        dispatch_model_status: DispatchModelStatus::NotAnalyzed,
+        dispatch_model_explanation: "The illustrative executor model has not been computed.".into(),
+        modeled_send_count: 0,
+        modeled_negative_slack_send_count: 0,
+        modeled_h_floor_displaced_send_count: 0,
+        max_modeled_h_floor_displacement_us: 0,
+        modeled_head_of_line_send_count: 0,
+        max_modeled_head_of_line_delay_us: 0,
+        max_modeled_lateness_us: 0,
+        estimated_sender_setup_us: ESTIMATED_SENDER_SETUP_US,
+        estimated_per_input_us: ESTIMATED_PER_INPUT_US,
+        estimated_post_send_us: ESTIMATED_POST_SEND_US,
         dry_run_is_hypothetical: dry_run,
     }
 }
 
 fn unavailable(
-    mut advisory: WholeStreamTimingAdvisoryDto,
+    mut advisory: GenerationTimingAdvisoryDto,
     reason: &str,
-) -> WholeStreamTimingAdvisoryDto {
+) -> GenerationTimingAdvisoryDto {
     advisory.status = TimingAdvisoryStatus::Unavailable;
     advisory.explanation = reason.to_owned();
+    advisory.dispatch_model_status = DispatchModelStatus::Unavailable;
+    advisory.dispatch_model_explanation = reason.to_owned();
     advisory
-}
-
-fn summarize_report(
-    advisory: &mut WholeStreamTimingAdvisoryDto,
-    rows: &[WholeStreamPacketEstimate],
-) {
-    for row in rows {
-        if row.signed_slack_ticks < 0 {
-            advisory.negative_slack_packet_count += 1;
-        }
-        if row.h_floor_displacement_ticks > 0 {
-            advisory.h_floor_displaced_packet_count += 1;
-            advisory.max_h_floor_displacement_us = advisory
-                .max_h_floor_displacement_us
-                .max(row.h_floor_displacement_ticks);
-        }
-        if row.g_floor_displacement_ticks > 0 {
-            advisory.g_floor_displaced_packet_count += 1;
-            advisory.max_g_floor_displacement_us = advisory
-                .max_g_floor_displacement_us
-                .max(row.g_floor_displacement_ticks);
-        }
-        if row.hol_delay_lower_bound_ticks > 0 {
-            advisory.head_of_line_packet_count += 1;
-            advisory.max_head_of_line_delay_us = advisory
-                .max_head_of_line_delay_us
-                .max(row.hol_delay_lower_bound_ticks);
-        }
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sky_app_core::song::{ActionKind, KeyAction, Song, build_schedule_with_policy};
+    use sky_app_core::song::{ActionKind, KeyAction, ScheduleMetadata};
 
     fn config(dry_run: bool) -> PlaybackConfigDto {
         PlaybackConfigDto {
@@ -571,14 +565,15 @@ mod tests {
         .expect("valid timing policy")
     }
 
-    fn schedule(actions: &[(ActionKind, u64, Vec<u16>)]) -> ScheduleMetadata {
+    fn schedule(actions: &[(ActionKind, u64, u16)]) -> ScheduleMetadata {
         let actions = actions
             .iter()
-            .map(|(kind, at_us, scan_codes)| KeyAction {
+            .enumerate()
+            .map(|(index, (kind, at_us, scan_code))| KeyAction {
                 at_us: *at_us,
-                scan_codes: scan_codes.clone(),
+                scan_codes: vec![*scan_code],
                 kind: *kind,
-                reason: "timing-advisory-test".into(),
+                reason: format!("action-{index}"),
             })
             .collect::<Vec<_>>();
         ScheduleMetadata {
@@ -589,304 +584,190 @@ mod tests {
             note_count: 0,
             deduplicated_note_count: 0,
             duplicate_note_count: 0,
-            compressed_holds: 0,
             impossible_same_key_repeats: 0,
-            risky_same_key_repeats: 0,
             max_polyphony: 0,
             shortest_same_key_interval_us: None,
             min_same_key_up_gap_us: None,
+            short_up_gap_repeat_count: 0,
             recommended_hold_frames: None,
             recommended_tempo_scale: None,
             warnings: Vec::new(),
         }
     }
 
-    fn analyze(
-        schedule: &ScheduleMetadata,
-        config: &PlaybackConfigDto,
-        policy: &MaterializedTimingPolicy,
-        fingerprint: &str,
-    ) -> WholeStreamTimingAdvisoryDto {
-        analyze_variant(
-            schedule,
-            config,
-            policy,
-            fingerprint,
-            &AtomicBool::new(false),
-        )
-    }
-
     #[test]
-    fn empty_sparse_mixed_and_fifteen_key_packets_keep_canonical_boundaries() {
+    fn reports_canonical_generation_and_authored_group_counts() {
         let config = config(false);
         let policy = policy(&config);
-        let empty = schedule(&[]);
-        let empty_result = analyze(&empty, &config, &policy, "empty-plan");
-        assert_eq!(empty_result.status, TimingAdvisoryStatus::NoModeledRisk);
-        assert_eq!(empty_result.total_packet_count, Some(0));
-
-        let mixed_schedule = schedule(&[
-            (ActionKind::Down, 0, vec![0x15]),
-            (ActionKind::Up, 1_000, vec![0x15]),
-            (ActionKind::Down, 1_000, vec![0x16]),
-            (ActionKind::Up, 40_000, vec![0x16]),
+        let authored = schedule(&[
+            (ActionKind::Down, 0, 0x15),
+            (ActionKind::Up, 17_467, 0x15),
+            (ActionKind::Down, 17_467, 0x15),
+            (ActionKind::Up, 34_934, 0x15),
+            (ActionKind::Up, 40_000, 0x16),
         ]);
-        let mixed = analyze(&mixed_schedule, &config, &policy, "mixed-plan");
-        assert_eq!(mixed.total_packet_count, Some(3));
-        assert_eq!(mixed.packet_count_inspected, 3);
-        assert_eq!(mixed.packet_count_analyzed, 4);
-        assert_eq!(mixed.plan_fingerprint, "mixed-plan");
-
-        let sparse_schedule = schedule(&[
-            (ActionKind::Down, 0, vec![0x15]),
-            (ActionKind::Up, 100_000, vec![0x15]),
-        ]);
-        let sparse = analyze(&sparse_schedule, &config, &policy, "sparse-plan");
-        assert_eq!(sparse.status, TimingAdvisoryStatus::NoModeledRisk);
-        assert_eq!(sparse.negative_slack_packet_count, 0);
-
-        let chord_codes = sky_app_core::song::SKY_SCAN_CODES
-            .iter()
-            .take(15)
-            .copied()
-            .collect::<Vec<_>>();
-        let two_key_codes = chord_codes.iter().take(2).copied().collect::<Vec<_>>();
-        let two_key_chord_schedule = schedule(&[
-            (ActionKind::Down, 0, two_key_codes.clone()),
-            (ActionKind::Up, policy.min_hold_us, two_key_codes),
-        ]);
-        let two_key_chord = analyze(
-            &two_key_chord_schedule,
+        let advisory = analyze_variant(
+            &authored,
             &config,
             &policy,
-            "two-key-chord-plan",
+            "same-key-plan",
+            &AtomicBool::new(false),
         );
-        assert_eq!(two_key_chord.total_packet_count, Some(2));
-
-        let chord_schedule = schedule(&[
-            (ActionKind::Down, 0, chord_codes.clone()),
-            (ActionKind::Up, policy.min_hold_us, chord_codes),
-        ]);
-        let chord = analyze(&chord_schedule, &config, &policy, "chord-plan");
-        assert_eq!(chord.total_packet_count, Some(2));
-        assert_eq!(chord.status, TimingAdvisoryStatus::ModeledRisk);
+        assert_eq!(advisory.status, TimingAdvisoryStatus::ShortUpGapRisk);
+        assert_eq!(advisory.total_authored_timestamp_group_count, Some(4));
+        assert_eq!(advisory.down_generation_count, Some(2));
+        assert_eq!(advisory.unmatched_up_count, Some(1));
+        assert_eq!(advisory.short_up_gap_repeat_count, 1);
+        assert_eq!(advisory.effective_hold_floor_h_us, Some(policy.min_hold_us));
+        assert_eq!(
+            advisory.dispatch_model_status,
+            DispatchModelStatus::ModeledRisk
+        );
+        assert!(advisory.max_modeled_h_floor_displacement_us > 0);
     }
 
     #[test]
-    fn dense_alternating_keys_keep_authored_packet_count_and_report_modeled_pressure() {
+    fn exact_one_frame_authored_up_gap_is_not_short_gap_risk() {
         let config = config(false);
         let policy = policy(&config);
+        let frame_us = policy.frame_us;
+        let up_us = policy.min_hold_us;
         let authored = schedule(&[
-            (ActionKind::Down, 0, vec![0x15]),
-            (ActionKind::Up, 500, vec![0x15]),
-            (ActionKind::Down, 600, vec![0x16]),
-            (ActionKind::Up, 1_000, vec![0x16]),
-            (ActionKind::Down, 1_100, vec![0x15]),
-            (ActionKind::Up, 1_500, vec![0x15]),
-            (ActionKind::Down, 1_600, vec![0x16]),
-            (ActionKind::Up, 2_000, vec![0x16]),
+            (ActionKind::Down, 0, 0x15),
+            (ActionKind::Up, up_us, 0x15),
+            (ActionKind::Down, up_us + frame_us, 0x15),
+            (ActionKind::Up, up_us * 2 + frame_us, 0x15),
         ]);
-        let advisory = analyze(&authored, &config, &policy, "dense-alternation-plan");
-        assert_eq!(advisory.total_packet_count, Some(8));
-        assert_eq!(advisory.packet_count_analyzed, 8);
-        assert_eq!(advisory.status, TimingAdvisoryStatus::ModeledRisk);
-        assert_eq!(authored.actions.len(), 8);
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "one-frame-gap",
+            &AtomicBool::new(false),
+        );
+        assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
+        assert_eq!(advisory.short_up_gap_repeat_count, 0);
     }
 
     #[test]
-    fn supported_fps_hold_profiles_and_margin_edges_preserve_each_materialized_floor() {
-        for fps in sky_app_core::settings::VALID_FPS {
-            for hold_frames in sky_app_core::settings::HOLD_FRAME_OPTIONS {
-                for timing_margin_us in [0, 500, sky_app_core::settings::MAX_TIMING_MARGIN_US] {
-                    let config = PlaybackConfigDto {
-                        fps,
-                        hold_frames,
-                        timing_margin_us,
-                        ..config(false)
-                    };
-                    let policy = policy(&config);
-                    let advisory = analyze(&schedule(&[]), &config, &policy, "boundary-plan");
-                    assert_eq!(advisory.status, TimingAdvisoryStatus::NoModeledRisk);
-                    assert_eq!(advisory.effective_hold_floor_h_us, Some(policy.min_hold_us));
-                    assert_eq!(
-                        advisory.authored_release_gap_floor_g_us,
-                        Some(policy.min_release_gap_us)
-                    );
-                    assert_eq!(
-                        advisory.physical_release_gap_floor_g_us,
-                        Some(policy.min_release_gap_us)
-                    );
-                    assert_eq!(
-                        advisory.structural_same_key_cycle_minimum_us,
-                        Some(policy.min_hold_us + policy.min_release_gap_us)
-                    );
-                }
-            }
+    fn sparse_nine_note_schedule_with_unpaired_tail_finishes_the_bounded_executor_model() {
+        let config = config(false);
+        let policy = policy(&config);
+        let mut actions = Vec::with_capacity(19);
+        for note in 1..=9_u64 {
+            let down_us = note * 100_000;
+            actions.push((ActionKind::Down, down_us, 0x15));
+            actions.push((ActionKind::Up, down_us + policy.min_hold_us, 0x15));
         }
+        actions.push((ActionKind::Up, 1_000_000, 0x16));
+        let authored = schedule(&actions);
+
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "sparse-nine-note-plan",
+            &AtomicBool::new(false),
+        );
+
+        assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
+        assert_eq!(advisory.down_generation_count, Some(9));
+        assert_eq!(advisory.unmatched_up_count, Some(1));
+        assert_eq!(advisory.modeled_send_count, 18);
+        assert_ne!(
+            advisory.dispatch_model_status,
+            DispatchModelStatus::Unavailable
+        );
     }
 
     #[test]
-    fn near_floor_same_key_cycle_models_h_and_g_without_changing_authored_actions() {
+    fn executor_model_reports_late_up_and_hol_independently_of_one_frame_authored_gap() {
         let config = config(false);
         let policy = policy(&config);
-        let cycle = policy
-            .min_hold_us
-            .checked_add(policy.min_release_gap_us)
-            .expect("authored cycle floor");
+        let h = policy.min_hold_us;
+        let frame = policy.frame_us;
         let authored = schedule(&[
-            (ActionKind::Down, 0, vec![0x15]),
-            (ActionKind::Up, policy.min_hold_us, vec![0x15]),
-            (ActionKind::Down, cycle, vec![0x15]),
-            (ActionKind::Up, cycle + policy.min_hold_us, vec![0x15]),
+            (ActionKind::Down, 0, 0x15),
+            (ActionKind::Down, 10, 0x16),
+            (ActionKind::Up, h, 0x15),
+            (ActionKind::Up, h + 10, 0x16),
+            (ActionKind::Down, h + frame, 0x15),
+            (ActionKind::Up, h * 2 + frame, 0x15),
         ]);
-        let before = authored.clone();
-        let first = analyze(&authored, &config, &policy, "same-key-plan");
-        let second = analyze(&authored, &config, &policy, "same-key-plan");
-        assert_eq!(first, second);
-        assert_eq!(authored, before);
-        assert_eq!(first.effective_hold_floor_h_us, Some(policy.min_hold_us));
-        assert_eq!(
-            first.authored_release_gap_floor_g_us,
-            Some(policy.min_release_gap_us)
+
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "modeled-pressure-with-one-frame-gap",
+            &AtomicBool::new(false),
         );
+
+        assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
+        assert_eq!(advisory.short_up_gap_repeat_count, 0);
         assert_eq!(
-            first.physical_release_gap_floor_g_us,
-            Some(policy.min_release_gap_us)
+            advisory.dispatch_model_status,
+            DispatchModelStatus::ModeledRisk
         );
-        assert_eq!(
-            first.structural_same_key_cycle_minimum_us,
-            Some(policy.min_hold_us + policy.min_release_gap_us)
-        );
-        assert_eq!(authored.actions[2].at_us, cycle);
+        assert!(advisory.modeled_negative_slack_send_count > 0);
+        assert!(advisory.modeled_h_floor_displaced_send_count > 0);
+        assert!(advisory.max_modeled_h_floor_displacement_us > 0);
+        assert!(advisory.modeled_head_of_line_send_count > 0);
+        assert!(advisory.max_modeled_head_of_line_delay_us > 0);
+        assert!(advisory.max_modeled_lateness_us > 0);
     }
 
     #[test]
-    fn unrelated_key_head_of_line_pressure_is_reported_without_admission_changes() {
+    fn cancelled_and_invalid_schedules_fail_closed_as_advisory_only() {
         let config = config(false);
         let policy = policy(&config);
-        let authored = schedule(&[
-            (ActionKind::Down, 0, vec![0x15, 0x16]),
-            (ActionKind::Up, 80_000, vec![0x15, 0x16]),
-            (ActionKind::Down, 80_001, vec![0x17]),
-            (ActionKind::Up, 120_000, vec![0x17]),
-        ]);
-        let advisory = analyze(&authored, &config, &policy, "hol-plan");
-        assert_eq!(advisory.status, TimingAdvisoryStatus::ModeledRisk);
-        assert!(advisory.head_of_line_packet_count > 0);
-        assert!(advisory.max_head_of_line_delay_us > 0);
-        assert_eq!(authored.impossible_same_key_repeats, 0);
-    }
-
-    #[test]
-    fn validates_floor_assumptions_and_preserves_explicit_unavailable_statuses() {
-        let config = config(false);
-        let policy = policy(&config);
-        let authored = schedule(&[]);
-        let mut mismatched = config.clone();
-        mismatched.fps = 30;
-        let invalid = analyze(&authored, &mismatched, &policy, "invalid-plan");
-        assert_eq!(invalid.status, TimingAdvisoryStatus::InvalidAssumptions);
-
-        let too_large = schedule(
-            &(0..=MAX_TIMING_ADVISORY_PACKETS)
-                .map(|index| {
-                    (
-                        if index % 2 == 0 {
-                            ActionKind::Down
-                        } else {
-                            ActionKind::Up
-                        },
-                        index as u64,
-                        vec![0x15],
-                    )
-                })
-                .collect::<Vec<_>>(),
-        );
-        let unavailable = analyze(&too_large, &config, &policy, "large-plan");
-        assert_eq!(unavailable.status, TimingAdvisoryStatus::Unavailable);
-        assert_eq!(unavailable.packet_count_inspected, 0);
-        assert_eq!(unavailable.packet_limit, MAX_TIMING_ADVISORY_PACKETS as u64);
-    }
-
-    #[test]
-    fn cancellation_and_invalid_authored_order_fail_closed_as_advisory_only() {
-        let config = config(false);
-        let policy = policy(&config);
-        let authored = schedule(&[
-            (ActionKind::Down, 0, vec![0x15]),
-            (ActionKind::Up, 20_000, vec![0x15]),
-        ]);
-        let cancelled = analyze_variant_with_assumptions(
+        let authored = schedule(&[(ActionKind::Down, 0, 0x15), (ActionKind::Up, 20_000, 0x15)]);
+        let cancelled = analyze_variant(
             &authored,
             &config,
             &policy,
             "cancelled-plan",
             &AtomicBool::new(true),
-            TimingModelAssumptions::default(),
         );
         assert_eq!(cancelled.status, TimingAdvisoryStatus::Unavailable);
 
-        let mut invalid_order = authored.clone();
-        invalid_order.actions[1].at_us = 0;
-        let invalid = analyze(&invalid_order, &config, &policy, "invalid-order-plan");
+        let invalid_order = schedule(&[
+            (ActionKind::Down, 20_000, 0x15),
+            (ActionKind::Up, 10_000, 0x15),
+        ]);
+        let invalid = analyze_variant(
+            &invalid_order,
+            &config,
+            &policy,
+            "invalid-order-plan",
+            &AtomicBool::new(false),
+        );
         assert_eq!(invalid.status, TimingAdvisoryStatus::Unavailable);
-        assert!(invalid.explanation.contains("could not be modeled"));
+        assert!(invalid.explanation.contains("could not be inspected"));
     }
 
     #[test]
-    fn physical_assumption_overflow_is_reported_as_invalid_assumptions() {
-        let config = config(false);
+    fn dry_run_advisory_is_fingerprint_specific_and_hypothetical() {
+        let config = config(true);
         let policy = policy(&config);
-        let authored = schedule(&[]);
-        let advisory = analyze_variant_with_assumptions(
+        let authored = schedule(&[(ActionKind::Down, 0, 0x15), (ActionKind::Up, 50_000, 0x15)]);
+        let first = analyze_variant(
             &authored,
             &config,
             &policy,
-            "overflow-plan",
+            "dry-run-a",
             &AtomicBool::new(false),
-            TimingModelAssumptions {
-                qpc_frequency_hz: u64::MAX,
-                sender_setup_us: u64::MAX,
-                per_input_us: 0,
-                post_send_us: 0,
-                metadata_cost_us: 0,
-            },
         );
-        assert_eq!(advisory.status, TimingAdvisoryStatus::InvalidAssumptions);
-    }
-
-    #[test]
-    fn dry_run_marks_physical_projection_as_hypothetical_and_fingerprint_specific() {
-        let config = config(true);
-        let policy = policy(&config);
-        let authored = schedule(&[
-            (ActionKind::Down, 0, vec![0x15]),
-            (ActionKind::Up, 50_000, vec![0x15]),
-        ]);
-        let first = analyze(&authored, &config, &policy, "dry-run-a");
-        let second = analyze(&authored, &config, &policy, "dry-run-b");
+        let second = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "dry-run-b",
+            &AtomicBool::new(false),
+        );
         assert!(first.dry_run_is_hypothetical);
         assert_eq!(first.plan_fingerprint, "dry-run-a");
         assert_ne!(first.plan_fingerprint, second.plan_fingerprint);
-        assert_eq!(
-            first.status,
-            TimingAdvisoryStatus::NoModeledRisk,
-            "long authored hold leaves modeled slack under the fixed assumptions"
-        );
-    }
-
-    #[test]
-    fn adapter_can_construct_an_empty_model_from_a_real_domain_song() {
-        let config = config(false);
-        let policy = policy(&config);
-        let song = Song {
-            name: "empty".into(),
-            notes: Vec::new(),
-        };
-        let authored = build_schedule_with_policy(&song, config.tempo_scale, &policy)
-            .expect("empty domain song schedule");
-        let advisory = analyze(&authored, &config, &policy, "domain-empty");
-        assert_eq!(advisory.status, TimingAdvisoryStatus::NoModeledRisk);
-        assert_eq!(advisory.total_packet_count, Some(0));
+        assert_eq!(first.status, TimingAdvisoryStatus::NoShortUpGapRisk);
     }
 }

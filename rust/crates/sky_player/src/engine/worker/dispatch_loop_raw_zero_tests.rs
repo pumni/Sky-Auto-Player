@@ -372,7 +372,7 @@ fn raw_zero_classifier_rejects_short_packet_and_contradictory_qpc() {
         assert_eq!(calls.load(Ordering::Acquire), 2);
         assert_eq!(harness.resources.backend.in_flight_mask, 0);
         assert_eq!(harness.release_obligation_mask_for_test(), 0);
-        assert!(harness.resume_barrier_qpc_for_test().is_some());
+        assert!(harness.generation_accounting_for_test().cancelled > 0);
         assert!(!cleanup.lock().expect("cleanup capture").is_empty());
         let anomaly = harness
             .runtime
@@ -475,7 +475,7 @@ fn mixed_up_a_down_b_raw_zero_uses_conservative_reconciliation() {
     assert_eq!(calls.load(Ordering::Acquire), 2);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
-    assert!(harness.resume_barrier_qpc_for_test().is_some());
+    assert!(harness.generation_accounting_for_test().cancelled > 0);
     assert!(!cleanup.lock().expect("cleanup capture").is_empty());
     let captured = packets.lock().expect("packet capture");
     assert_eq!(captured[1].0, PhysicalPacket::new(0b0001, 0b0010));

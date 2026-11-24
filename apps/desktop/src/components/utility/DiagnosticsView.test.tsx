@@ -28,12 +28,6 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     frame_base_hold_us: 16_667,
     timing_margin_us: 800,
     min_hold_us: 17_467,
-    min_release_gap_us: 17_467,
-    timing_margin_recommendation: {
-      recommended_timing_margin_us: 800,
-      qualified: false,
-      source: 'default_fallback',
-    },
     pre_call_lt_250us: 0,
     pre_call_250_500us: 0,
     pre_call_500_750us: 1,
@@ -52,9 +46,6 @@ function snapshot(overrides: Partial<DiagnosticsSnapshot> = {}): DiagnosticsSnap
     final_sender_window_expirations: 0,
     hold_floor_delay_boundaries: 0,
     max_hold_floor_delay_us: 0,
-    release_floor_delay_boundaries: 0,
-    release_floor_infeasible_boundaries: 0,
-    max_release_floor_delay_us: 0,
     final_gate_control_rejections: 0,
     final_gate_target_changes: 0,
     final_gate_focus_losses: 0,
@@ -217,9 +208,6 @@ describe('DiagnosticsView', () => {
             final_sender_window_expirations: 2,
             hold_floor_delay_boundaries: 3,
             max_hold_floor_delay_us: 400,
-            release_floor_delay_boundaries: 1,
-            release_floor_infeasible_boundaries: 1,
-            max_release_floor_delay_us: 200,
             final_gate_control_rejections: 1,
             final_gate_target_changes: 1,
             final_gate_focus_losses: 1,
@@ -253,10 +241,6 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Pre-call 500–750 μs')).toBeInTheDocument();
     expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('800 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('17.467 ms');
-    expect(screen.getByText('Release gap').parentElement).toHaveTextContent('17.467 ms');
-    expect(screen.getByText('Release-floor infeasible boundaries').parentElement).toHaveTextContent(
-      '1',
-    );
     expect(screen.queryByText('Missed Down keys')).toBeNull();
     expect(screen.queryByText('Unobserved backlog boundaries')).toBeNull();
     expect(screen.getByText('Focus gate rejections')).toBeInTheDocument();
@@ -292,7 +276,7 @@ describe('DiagnosticsView', () => {
     expect(screen.queryByText(/Late Down|fixed Down late cutoff/)).toBeNull();
   });
 
-  it('shows the frozen physical timing floors and calibration recommendation', () => {
+  it('shows the frozen physical timing floors and configured margin', () => {
     const store = createDesktopStore(createMockBridge());
     const sessionId = 'd'.repeat(32);
     store.setState({
@@ -304,12 +288,6 @@ describe('DiagnosticsView', () => {
             session_id: sessionId,
             timing_margin_us: 0,
             min_hold_us: 16_667,
-            min_release_gap_us: 16_667,
-            timing_margin_recommendation: {
-              recommended_timing_margin_us: 800,
-              qualified: false,
-              source: 'default_fallback',
-            },
           }),
         ],
       },
@@ -320,11 +298,6 @@ describe('DiagnosticsView', () => {
 
     expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('0 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('16.667 ms');
-    expect(screen.getByText('Release gap').parentElement).toHaveTextContent('16.667 ms');
-    expect(screen.getByText('Recommended sender margin').parentElement).toHaveTextContent('800 µs');
-    expect(screen.getByText('Recommendation source').parentElement).toHaveTextContent(
-      'Default fallback (no valid calibration cache)',
-    );
   });
 
   it('does not present unavailable distribution metrics as zero', () => {
@@ -410,7 +383,7 @@ describe('DiagnosticsView', () => {
 
     expect(screen.getByText('Healthy')).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Deadline admission' })).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Physical floor delays' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Hold floor delays' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Input transport' })).toBeInTheDocument();
     expect(screen.getByText('Max pre-call lateness').parentElement).toHaveTextContent('327 μs');
     expect(screen.getByText('Pre-call > 2 ms').parentElement).toHaveTextContent('4');

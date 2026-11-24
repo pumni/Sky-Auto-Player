@@ -1,7 +1,6 @@
 use proptest::prelude::*;
 use sky_dispatch_core::compile::{CompileError, compile_runtime_intents};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
-use sky_dispatch_core::time::TimelineTicks;
 
 fn action(
     source_action_index: u32,
@@ -45,8 +44,8 @@ proptest! {
         prop_assert!(rejected_overlap);
     }
 
-    /// Packet intent ordering follows the immutable key registry regardless
-    /// of the order in which a chord's scan codes were authored.
+    /// Generation order follows the immutable key registry regardless of the
+    /// order in which a chord's scan codes were authored.
     #[test]
     fn canonical_chord_order_is_stable(
         mut scan_codes in prop::collection::vec(2_u16..=16, 2..=15),
@@ -67,18 +66,10 @@ proptest! {
         ];
         let schedule = compile_runtime_intents(&actions, &allowed)
             .expect("unique allowed chord must compile");
-        let packet = schedule
-            .view_packet_ticks(0, TimelineTicks::ZERO)
-            .expect("compiled first packet must be viewable");
-        let actual: Vec<u16> = packet
-            .down_intents
+        let actual: Vec<u16> = schedule.down_chords[0]
+            .intents
             .iter()
-            .map(|intent| {
-                packet
-                    .registry
-                    .scan_code_for(intent.key_slot())
-                    .expect("compiled key slot must remain registered")
-            })
+            .map(|intent| intent.scan_code)
             .collect();
         prop_assert_eq!(actual, allowed);
     }

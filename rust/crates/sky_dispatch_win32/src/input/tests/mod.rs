@@ -214,19 +214,6 @@ fn foreground_with_held_msb_reports_held_key() {
 }
 
 #[test]
-fn raw_sender_rejects_unknown_scan_code_before_backend_call() {
-    let result = send_input_raw(&[0xffff], false);
-    assert_eq!(result.requested, 1);
-    assert_eq!(result.inserted, 0);
-    assert_eq!(result.win32_error, 87);
-    assert_eq!(result.timing_error, None);
-
-    let oversized = send_input_raw(&[0x15; 16], false);
-    assert_eq!(oversized.inserted, 0);
-    assert_eq!(oversized.win32_error, 87);
-}
-
-#[test]
 fn physical_held_reports_only_held_subset() {
     let reconciled = reconcile_release_observation(
         0x0007,

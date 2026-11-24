@@ -76,18 +76,6 @@ impl CoordinatorStats {
         abs[idx]
     }
 
-    /// Return `p`-th percentile of signed_error in µs.
-    #[allow(dead_code)]
-    pub fn percentile_signed_error_us(&self, p: f64) -> i64 {
-        if self.signed_errors.is_empty() {
-            return 0;
-        }
-        let mut sorted = self.signed_errors.clone();
-        sorted.sort_unstable();
-        let idx = ((p * (sorted.len() as f64 - 1.0)).round() as usize).min(sorted.len() - 1);
-        sorted[idx]
-    }
-
     // ── Overhead metrics ─────────────────────────────────────────────────────
 
     pub fn mean_send_duration_us(&self) -> f64 {
@@ -130,16 +118,6 @@ fn mean_f64(it: impl Iterator<Item = f64>) -> f64 {
 }
 
 // ─── Report helpers ───────────────────────────────────────────────────────────
-
-/// Format a percentile value, substituting "N/A" when `n < min_samples`.
-#[allow(dead_code)]
-pub fn fmt_pct(stats: &CoordinatorStats, p: f64, min_samples: usize, label: &str) -> String {
-    if stats.n() < min_samples {
-        format!("{label}=N/A")
-    } else {
-        format!("{label}={}", stats.percentile_abs_error_us(p))
-    }
-}
 
 /// Print the TSV header for the benchmark report.
 pub fn print_header() {

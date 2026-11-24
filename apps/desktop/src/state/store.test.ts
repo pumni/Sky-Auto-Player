@@ -6,7 +6,6 @@ import type {
   LibrarySource,
   SearchRequest,
   SearchResult,
-  Settings,
   SettingsPatch,
   UiEvent,
 } from '../bridge/DesktopBridge';
@@ -55,23 +54,6 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
-}
-
-function successfulCalibrationEvent(): UiEvent {
-  return {
-    v: 1,
-    name: 'calibration.finished',
-    payload: {
-      operation_id: 'calibration-refresh-test',
-      outcome: 'succeeded',
-      status: 'complete',
-      recommended_timing_margin_us: 900,
-      recommendation_qualified: true,
-      sample_count: 10,
-      source: 'qualified_calibration',
-      message: 'Calibration finished.',
-    },
-  };
 }
 
 async function startFirstSong(store: ReturnType<typeof createDesktopStore>) {
@@ -2033,113 +2015,6 @@ describe('desktop store', () => {
     expect(calls).toEqual([{ palette: 'slate' }, { verboseHud: true }]);
     expect(store.getState().settings?.palette).toBe('slate');
     expect(store.getState().settings?.verbose_hud).toBe(true);
-  });
-
-  it('orders a calibration refresh before a later patch even when the refresh is stale', async () => {
-    const bridge = createMockBridge();
-    const store = createDesktopStore(bridge);
-    const staleSettings = await bridge.getSettings();
-    store.setState({ settings: staleSettings, settingsState: 'ready' });
-
-    const refreshResponse = deferred<Settings>();
-    const order: string[] = [];
-    const originalPatch = bridge.patchSettings;
-    bridge.getSettings = async () => {
-      order.push('refresh-start');
-      const settings = await refreshResponse.promise;
-      order.push('refresh-complete');
-      return settings;
-    };
-    bridge.patchSettings = async (patch) => {
-      order.push('patch-start');
-      return originalPatch(patch);
-    };
-
-    act(() => store.getState().applyEvent(successfulCalibrationEvent()));
-    const mutation = store.getState().patchSettings({ palette: 'slate' });
-    await Promise.resolve();
-    if (order.includes('patch-start')) await mutation;
-
-    refreshResponse.resolve(staleSettings);
-    await mutation;
-    await waitFor(() => expect(order).toContain('refresh-complete'));
-
-    expect(store.getState().settings).toEqual({ ...staleSettings, palette: 'slate' });
-    expect(order).toEqual(['refresh-start', 'refresh-complete', 'patch-start']);
-    expect(store.getState().settingsState).toBe('ready');
-  });
-
-  it('runs a calibration refresh after a settings patch already in flight', async () => {
-    const bridge = createMockBridge();
-    const store = createDesktopStore(bridge);
-    const initialSettings = await bridge.getSettings();
-    store.setState({ settings: initialSettings, settingsState: 'ready' });
-
-    const releasePatch = deferred<void>();
-    const patchStarted = deferred<void>();
-    const order: string[] = [];
-    const originalGetSettings = bridge.getSettings;
-    const originalPatch = bridge.patchSettings;
-    bridge.patchSettings = async (patch) => {
-      order.push('patch-start');
-      patchStarted.resolve();
-      await releasePatch.promise;
-      const settings = await originalPatch(patch);
-      order.push('patch-complete');
-      return settings;
-    };
-    bridge.getSettings = async () => {
-      order.push('refresh-start');
-      const settings = await originalGetSettings();
-      order.push('refresh-complete');
-      return settings;
-    };
-
-    const mutation = store.getState().patchSettings({ verboseHud: true });
-    await patchStarted.promise;
-    act(() => store.getState().applyEvent(successfulCalibrationEvent()));
-    const refreshStartedBeforePatchFinished = order.includes('refresh-start');
-
-    releasePatch.resolve();
-    await mutation;
-    await waitFor(() =>
-      expect(order).toEqual(['patch-start', 'patch-complete', 'refresh-start', 'refresh-complete']),
-    );
-
-    expect(refreshStartedBeforePatchFinished).toBe(false);
-    expect(store.getState().settings).toEqual({ ...initialSettings, verbose_hud: true });
-    expect(store.getState().settingsState).toBe('ready');
-  });
-
-  it('handles a rejected calibration refresh without losing settings or poisoning the queue', async () => {
-    const bridge = createMockBridge();
-    const store = createDesktopStore(bridge);
-    const confirmedSettings = await bridge.getSettings();
-    store.setState({ settings: confirmedSettings, settingsState: 'ready' });
-
-    const refreshResponse = deferred<Settings>();
-    const unhandledRejections: unknown[] = [];
-    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
-    process.on('unhandledRejection', onUnhandledRejection);
-    bridge.getSettings = () => refreshResponse.promise;
-
-    try {
-      act(() => store.getState().applyEvent(successfulCalibrationEvent()));
-      refreshResponse.reject(new Error('settings GET failed'));
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
-
-      expect(unhandledRejections).toEqual([]);
-      expect(store.getState().settings).toEqual(confirmedSettings);
-      expect(store.getState().fatal).toBeNull();
-
-      const recovered = await store.getState().patchSettings({ palette: 'slate' });
-      expect(recovered?.palette).toBe('slate');
-      expect(store.getState().settings?.palette).toBe('slate');
-      expect(store.getState().settingsState).toBe('ready');
-      expect(store.getState().settingsError).toBeNull();
-    } finally {
-      process.off('unhandledRejection', onUnhandledRejection);
-    }
   });
 
   it('returns null and preserves cached settings when a settings patch fails', async () => {
@@ -4175,12 +4050,6 @@ describe('desktop store', () => {
           frame_base_hold_us: 16_667,
           timing_margin_us: 800,
           min_hold_us: 17_467,
-          min_release_gap_us: 17_467,
-          timing_margin_recommendation: {
-            recommended_timing_margin_us: 800,
-            qualified: false,
-            source: 'default_fallback',
-          },
           pre_call_lt_250us: 0,
           pre_call_250_500us: 0,
           pre_call_500_750us: 0,
@@ -4199,9 +4068,6 @@ describe('desktop store', () => {
           final_sender_window_expirations: 0,
           hold_floor_delay_boundaries: 0,
           max_hold_floor_delay_us: 0,
-          release_floor_delay_boundaries: 0,
-          release_floor_infeasible_boundaries: 0,
-          max_release_floor_delay_us: 0,
           final_gate_control_rejections: 0,
           final_gate_target_changes: 0,
           final_gate_focus_losses: 0,
@@ -4287,12 +4153,6 @@ describe('desktop store', () => {
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,
         min_hold_us: 17_467,
-        min_release_gap_us: 17_467,
-        timing_margin_recommendation: {
-          recommended_timing_margin_us: 800,
-          qualified: false,
-          source: 'default_fallback',
-        },
         pre_call_lt_250us: 0,
         pre_call_250_500us: 0,
         pre_call_500_750us: seq,
@@ -4311,9 +4171,6 @@ describe('desktop store', () => {
         final_sender_window_expirations: 0,
         hold_floor_delay_boundaries: 0,
         max_hold_floor_delay_us: 0,
-        release_floor_delay_boundaries: 0,
-        release_floor_infeasible_boundaries: 0,
-        max_release_floor_delay_us: 0,
         final_gate_control_rejections: 0,
         final_gate_target_changes: 0,
         final_gate_focus_losses: seq,
@@ -4441,16 +4298,6 @@ describe('desktop store', () => {
     const event = store.getState().diagnostics.events.at(-1)?.detail;
     expect(event).toBeDefined();
     expect(new TextEncoder().encode(event).length).toBeLessThanOrEqual(4096);
-  });
-
-  it('drives calibration through typed progress and terminal events', async () => {
-    const store = createDesktopStore(createMockBridge());
-    await act(async () => store.getState().initialize());
-    await act(async () => store.getState().startCalibration('quick'));
-    await waitFor(() => expect(store.getState().calibration.state).toBe('succeeded'));
-    expect(store.getState().calibration.operationId).toMatch(/^[0-9a-f]{32}$/);
-    expect(store.getState().calibration.result?.outcome).toBe('succeeded');
-    expect(store.getState().calibration.result?.source).toBe('qualified_calibration');
   });
 
   it('restores Playing and Paused from authoritative Retry status without an error', async () => {
@@ -4773,39 +4620,6 @@ describe('desktop update UX and native authority', () => {
     const update = store.getState().update;
     expect(update.state).toBe('error');
     expect(update.errorCode).toBe('playback_active');
-    expect(update.retryAction).toBe('install');
-    expect(update.transportError).toBeNull();
-    expect(update.transportErrorAction).toBeNull();
-    expect(update.installRequestPending).toBe(false);
-  });
-
-  it('translates calibration rejection during install handoff to authoritative error state without transportError', async () => {
-    const bridge = createMockBridge({
-      beginUpdateProductError: {
-        code: 'calibration_active',
-        detail: 'calibration_active: update installation cannot run during calibration',
-        retryAction: 'install',
-        preserveCandidate: true,
-      },
-    });
-    const store = createDesktopStore(bridge);
-    await act(async () => store.getState().initialize());
-
-    act(() => {
-      store.setState({
-        update: {
-          ...store.getState().update,
-          state: 'available',
-          availableVersion: '4.2.0',
-        },
-      });
-    });
-
-    await act(async () => store.getState().beginUpdateHandoff());
-
-    const update = store.getState().update;
-    expect(update.state).toBe('error');
-    expect(update.errorCode).toBe('calibration_active');
     expect(update.retryAction).toBe('install');
     expect(update.transportError).toBeNull();
     expect(update.transportErrorAction).toBeNull();

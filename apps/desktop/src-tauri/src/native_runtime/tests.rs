@@ -1,31 +1,25 @@
 use super::{
-    CALIBRATION_DEFAULT_TIMEOUT_SECONDS, CALIBRATION_MIN_FULL_TIMEOUT_SECONDS,
-    CALIBRATION_MIN_NATIVE_TOTAL_SECONDS, CALIBRATION_MIN_SINGLE_TIMEOUT_SECONDS,
-    CALIBRATION_TIMING_MARGIN_GUARD_US, CalibrationRunError, CatalogLoadState,
-    DRY_RUN_TERMINAL_NONE, DiagnosticsBackendHealth, DiagnosticsPublicationGate,
+    CatalogLoadState, DRY_RUN_TERMINAL_NONE, DiagnosticsBackendHealth, DiagnosticsPublicationGate,
     DryRunTerminalRequest, MAX_DECISION_COUNT, MAX_NATIVE_EVENTS, MAX_PREPARED_PLANS,
-    MaterializedTimingPolicy, NativeActivePlayback, NativeCalibrationService, NativeDesktopRuntime,
-    NativeDiagnosticsSample, NativeEventHub, NativeEventSnapshotMetrics,
-    NativePlaybackPresentation, NativePlaybackService, NativePlaybackStartRequest,
-    NativePreparedInput, PLAYBACK_PRESENTATION_CRITICAL_CAPACITY, PlaybackActivation,
-    PlaybackActiveStatusDto, PlaybackHandoffDecision, PlaybackPendingControl,
+    MaterializedTimingPolicy, NativeActivePlayback, NativeDesktopRuntime, NativeDiagnosticsSample,
+    NativeEventHub, NativeEventSnapshotMetrics, NativePlaybackPresentation, NativePlaybackService,
+    NativePlaybackStartRequest, NativePreparedInput, PLAYBACK_PRESENTATION_CRITICAL_CAPACITY,
+    PlaybackActivation, PlaybackActiveStatusDto, PlaybackHandoffDecision, PlaybackPendingControl,
     PlaybackPresentationFinalization, PlaybackPresentationMetrics, PlaybackTerminalPublication,
     PlaybackTerminalStatusDto, SENDER_TRACE_CAPTURE_CAPACITY, SenderTraceState,
-    TerminalReleaseEvidence, TerminalRetirement, TestSeams, WorkerQuiescenceProof,
-    calibration_budget, compute_catalog_source_fingerprint,
-    compute_catalog_source_static_fingerprint, decide_playback_handoff, diagnostics_backend_status,
-    opaque_native_id, percentile_ms, physical_startup_failure, plan_fingerprint,
-    population_sigma_ms, publish_calibration_cache, publish_diagnostics_snapshot_for_active,
-    publish_final_diagnostics_snapshot_for_active, publish_playback_state,
-    publish_retirement_barrier, publish_terminal_event, publish_terminal_poll_result,
-    recommended_calibrated_timing_margin_us, recover_quarantined_release_once,
-    recovery_test_raw_sends, recovery_test_send_lock, release_terminal_ownership,
-    remove_oldest_snapshot, reset_recovery_test_raw_sends, resolve_install_root,
-    retain_prepared_capacity, safe_calibration_evidence, sender_sample_summary,
-    sender_trace_export_json, settings_fingerprint, target_integrity_startup_failure,
-    terminal_publication_after_worker, terminal_release_evidence,
+    TerminalReleaseEvidence, TerminalRetirement, WorkerQuiescenceProof,
+    compute_catalog_source_fingerprint, compute_catalog_source_static_fingerprint,
+    decide_playback_handoff, diagnostics_backend_status, opaque_native_id, percentile_ms,
+    physical_startup_failure, plan_fingerprint, population_sigma_ms,
+    publish_diagnostics_snapshot_for_active, publish_final_diagnostics_snapshot_for_active,
+    publish_playback_state, publish_retirement_barrier, publish_terminal_event,
+    publish_terminal_poll_result, recover_quarantined_release_once, recovery_test_raw_sends,
+    recovery_test_send_lock, release_terminal_ownership, remove_oldest_snapshot,
+    reset_recovery_test_raw_sends, resolve_install_root, retain_prepared_capacity,
+    sender_sample_summary, sender_trace_export_json, settings_fingerprint,
+    target_integrity_startup_failure, terminal_publication_after_worker, terminal_release_evidence,
     terminal_release_evidence_after_startup, terminal_retirement_commit_failure,
-    timing_margin_recommendation, validate_playback_start_request,
+    validate_playback_start_request,
 };
 #[cfg(feature = "tauri-test")]
 use super::{
@@ -34,11 +28,11 @@ use super::{
     playback_health_from_snapshot, publish_playback_snapshot,
 };
 #[cfg(feature = "tauri-test")]
-use super::{recovery_test_probe_calls, set_recovery_test_probe_result};
-use crate::app_state::ActivityCoordinator;
-use crate::commands::{
-    CalibrationStartRequest, PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest,
+use super::{
+    recovery_test_probe_calls, set_recovery_test_probe_hook, set_recovery_test_probe_result,
 };
+use crate::app_state::ActivityCoordinator;
+use crate::commands::{PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest};
 
 fn prepare_test_schedule(
     schedule: &sky_player::adapter_support::RuntimeSchedule,
@@ -49,7 +43,6 @@ fn prepare_test_schedule(
         schedule,
         qpc.frequency_hz(),
         timing.min_hold_us,
-        timing.min_release_gap_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare native test schedule before session admission")
@@ -59,8 +52,8 @@ fn prepare_test_schedule(
 type PlaybackPresentationTestGate = Arc<(Mutex<bool>, Condvar)>;
 use crate::power_lifecycle::PowerLifecycleDiagnostics;
 use crate::ui_events::{
-    CalibrationMode, DiagnosticsBackendStatus, PlaybackEventState, PlaybackFocusState,
-    PlaybackHealthState, PlaybackSnapshotPayload, UiEvent,
+    DiagnosticsBackendStatus, PlaybackEventState, PlaybackFocusState, PlaybackHealthState,
+    PlaybackSnapshotPayload, UiEvent,
 };
 use serde_json::Value;
 use sky_app_core::catalog::song_id_for_canonical_path;
@@ -69,8 +62,8 @@ use sky_app_core::song::{
     Song, analyze_schedule_with_context, build_schedule_with_policy, parse_song_json,
 };
 use sky_native_adapters::{
-    AppPaths, AppResources, CATALOG_CACHE_SCHEMA_VERSION, CatalogCache, CatalogCacheEntry,
-    CatalogCacheSource, CatalogCacheSourceKind, CatalogCacheStore, load_calibration_resolution,
+    AppResources, CATALOG_CACHE_SCHEMA_VERSION, CatalogCache, CatalogCacheEntry,
+    CatalogCacheSource, CatalogCacheSourceKind, CatalogCacheStore,
 };
 use std::fs;
 use std::path::Path;
@@ -147,7 +140,6 @@ fn projection_session_with_down(
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
-        min_release_gap_us: 17_467,
         frame_us: 16_667,
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,
@@ -196,7 +188,6 @@ fn projection_session_with_down(
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook,
-                restore_race_hook: None,
                 focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
@@ -235,11 +226,6 @@ fn terminal_projection_active(player: Arc<NativeDispatchSession>) -> NativeActiv
         },
         timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
             .expect("terminal projection timing policy"),
-        timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-            recommended_timing_margin_us: Some(800),
-            qualified: false,
-            source: "default_fallback".into(),
-        },
         plan_fingerprint: "d".repeat(64),
         physical: true,
         activity_lease: Mutex::new(None),
@@ -514,11 +500,6 @@ fn active_for_control_with_physical(
         },
         timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
             .expect("fixture timing policy"),
-        timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-            recommended_timing_margin_us: Some(800),
-            qualified: false,
-            source: "default_fallback".into(),
-        },
         plan_fingerprint: "d".repeat(64),
         physical,
         activity_lease: Mutex::new(None),
@@ -600,11 +581,6 @@ fn prepare_physical_failure_plan(
             schedule,
             risk,
             timing_policy,
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
             publication_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
             source_path: std::path::PathBuf::new(),
@@ -662,11 +638,6 @@ fn prepare_dry_run_plan(
             schedule,
             risk,
             timing_policy,
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             settings_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
             publication_fingerprint: settings_fingerprint(settings).expect("settings fingerprint"),
             source_path: std::path::PathBuf::new(),
@@ -736,7 +707,6 @@ fn native_handoff_test_player_with_focus(
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
-        min_release_gap_us: 17_467,
         frame_us: 16_667,
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,
@@ -785,7 +755,6 @@ fn native_handoff_test_player_with_focus(
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook: Some(Arc::clone(&hook)),
-                restore_race_hook: None,
                 focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
@@ -816,26 +785,6 @@ fn playback_trace(events: &Arc<Mutex<NativeEventHub>>) -> Vec<String> {
         .collect()
 }
 
-fn quick_calibration_request() -> CalibrationStartRequest {
-    CalibrationStartRequest {
-        mode: CalibrationMode::Quick,
-        class_name: None,
-        polyphony: None,
-        samples: None,
-        timeout_seconds: None,
-    }
-}
-
-fn calibration_finished_count(events: &Arc<Mutex<NativeEventHub>>) -> usize {
-    events
-        .lock()
-        .expect("event hub")
-        .buffered_for_test()
-        .iter()
-        .filter(|event| matches!(event, UiEvent::CalibrationFinished { .. }))
-        .count()
-}
-
 fn snapshot(session_id: &str, seq: u64) -> UiEvent {
     UiEvent::PlaybackSnapshot {
         v: 1,
@@ -856,8 +805,6 @@ fn snapshot(session_id: &str, seq: u64) -> UiEvent {
     }
 }
 
-#[path = "tests/calibration.rs"]
-mod calibration;
 #[path = "tests/catalog.rs"]
 mod catalog;
 #[path = "tests/catalog_package_b.rs"]

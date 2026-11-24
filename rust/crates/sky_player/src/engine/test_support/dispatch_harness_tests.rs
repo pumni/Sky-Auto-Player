@@ -113,22 +113,12 @@ fn lifecycle_fixture_admission_and_config_metadata_match_native_contract() {
         assert_eq!(config.frame_base_hold_us, DISPATCH_FRAME_US);
         assert_eq!(config.timing_margin_us, DISPATCH_MARGIN_US);
         assert_eq!(config.effective_hold_us, DISPATCH_EFFECTIVE_HOLD_US);
-        assert_eq!(config.min_release_gap_us, DISPATCH_RELEASE_GAP_US);
         assert_eq!(
             config.frame_interval_ticks,
             fixture
                 .resources
                 .clock
                 .duration_from_us(DISPATCH_FRAME_US)
-                .unwrap()
-                .as_u64()
-        );
-        assert_eq!(
-            config.min_release_gap_ticks,
-            fixture
-                .resources
-                .clock
-                .duration_from_us(DISPATCH_RELEASE_GAP_US)
                 .unwrap()
                 .as_u64()
         );
@@ -167,14 +157,13 @@ fn test_support_cleanup_accounting_uses_the_live_scheduler() {
 #[test]
 fn test_support_resumable_cleanup_releases_and_cancels_live_scheduler_state() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
-    let (_cleanup, cleanup_completion) =
-        harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
-    let clock = harness.resources.clock;
+    harness.configure_mock_cleanup_emitter_for_test();
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
         .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage scheduler Down")
         .expect("scheduler Down candidate");
+    let clock = harness.resources.clock;
     harness.resources.backend.set_packet_emitter(move |packet| {
         let completed = clock.now().expect("mock send completion");
         SendTransactionOutcome {
@@ -202,10 +191,7 @@ fn test_support_resumable_cleanup_releases_and_cancels_live_scheduler_state() {
     assert_eq!(harness.resources.scheduler.accounting().active, 1);
 
     harness
-        .apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
-            let completed = cleanup_completion.load(Ordering::Acquire);
-            Ok(QpcTicks::from_raw(completed))
-        })
+        .apply_scheduler_resumable_lifecycle_transition_for_test()
         .expect("verified scheduler suspension cleanup");
 
     let accounting = harness.resources.scheduler.accounting();
@@ -216,19 +202,6 @@ fn test_support_resumable_cleanup_releases_and_cancels_live_scheduler_state() {
         "cleanup cancels; it does not release"
     );
     assert_eq!(accounting.cancelled, 1);
-    let cleanup_qpc = QpcTicks::from_raw(cleanup_completion.load(Ordering::Acquire));
-    let gap = clock
-        .duration_from_us(harness.config.timing.min_release_gap_us)
-        .expect("production scheduler cleanup G conversion");
-    assert_eq!(
-        harness.resources.scheduler.resume_barrier_qpc(),
-        Some(
-            cleanup_qpc
-                .checked_add_duration(gap)
-                .expect("cleanup G barrier arithmetic")
-        ),
-        "verified cleanup establishes cleanup completion + G"
-    );
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
     harness
         .resources
@@ -310,7 +283,6 @@ fn probe_held_keeps_needs_probe_without_retrying_physical_up() {
     assert!((1..=4).contains(&drain_probe_count));
     assert_eq!(cleanup.lock().expect("one initial physical Up").len(), 1);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
-    assert_eq!(harness.resume_barrier_qpc_for_test(), None);
 
     let mut observation = crate::engine::worker::FinalizeTestObservation::default();
     let _outcome = harness.finalize_worker_for_test(false, &mut observation);
@@ -323,10 +295,39 @@ fn probe_held_keeps_needs_probe_without_retrying_physical_up() {
 fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
     use crate::engine::worker::StagedDispatchOutcome;
     use sky_dispatch_core::executor::DispatchDecision;
+    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 
-    let mut harness =
-        ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(1_000_000, false)
-            .expect("live scheduler lifecycle fixture");
+    let actions = [
+        KeyActionInput {
+            source_action_index: 0,
+            kind: ActionKind::Down,
+            scheduled_us: 0,
+            scan_codes: vec![0x15].into(),
+            reason: "first down".into(),
+        },
+        KeyActionInput {
+            source_action_index: 1,
+            kind: ActionKind::Up,
+            scheduled_us: 17_167,
+            scan_codes: vec![0x15].into(),
+            reason: "first up".into(),
+        },
+        KeyActionInput {
+            source_action_index: 2,
+            kind: ActionKind::Down,
+            scheduled_us: 17_167,
+            scan_codes: vec![0x15].into(),
+            reason: "authored repeat".into(),
+        },
+        KeyActionInput {
+            source_action_index: 3,
+            kind: ActionKind::Up,
+            scheduled_us: 34_334,
+            scan_codes: vec![0x15].into(),
+            reason: "second up".into(),
+        },
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
     let packets = harness.configure_mock_packet_sender_for_test(&[1_000, 1_000, 1_000, 1_000]);
     let clock = harness.resources.clock;
     let now = clock.now().expect("initial live scheduler QPC");
@@ -423,36 +424,44 @@ fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
     );
     assert_eq!(after_up.active, 0);
 
-    let gap = clock
-        .duration_from_us(harness.config.timing.min_release_gap_us)
-        .expect("live scheduler G conversion");
-    let completion_g_floor = up_completion
-        .checked_add_duration(gap)
-        .expect("live scheduler completion + G");
     let next_chord = harness
         .current_executor_chord_for_test()
         .expect("second production Down chord");
     let authored_next_down = epoch
         .checked_add_duration(DurationTicks::from_raw(next_chord.scheduled_ticks.as_u64()))
         .expect("second Down authored QPC");
-    let exact_g_floor = completion_g_floor.max(authored_next_down);
-    assert_eq!(exact_g_floor, completion_g_floor);
-    let one_tick_early = QpcTicks::from_raw(exact_g_floor.as_u64() - 1);
+    assert_eq!(
+        authored_next_down,
+        epoch
+            .checked_add_duration(clock.duration_from_us(17_167).expect("repeat target"))
+            .unwrap()
+    );
+    assert!(
+        up_completion >= authored_next_down,
+        "repeat is already authored-due after Up commit"
+    );
     let sends_before_early_evaluation =
         packets.lock().expect("live scheduler packet capture").len();
-    let early_decision = harness
+    let repeat_decision = harness
         .resources
         .scheduler
-        .evaluate_at(one_tick_early, epoch)
-        .expect("G-1 scheduler evaluation");
+        .evaluate_at(up_completion, epoch)
+        .expect("authored repeat evaluation after Up commit");
     assert!(
-        matches!(&early_decision, DispatchDecision::Wait { .. }),
-        "G-1 must be blocked before the completion + G floor; decision={early_decision:?}, G floor={exact_g_floor:?}, Up completion={up_completion:?}, Up authored floor={up_floor:?}"
+        matches!(
+            &repeat_decision,
+            DispatchDecision::Send {
+                up_mask: 0,
+                down_chord: Some(_),
+                ..
+            }
+        ),
+        "committed Up makes an authored-due same-key repeat eligible without a musical gap: {repeat_decision:?}"
     );
     assert_eq!(
         packets.lock().expect("live scheduler packet capture").len(),
         sends_before_early_evaluation,
-        "G-1 scheduler denial performs no physical send"
+        "scheduler evaluation is side-effect free before the fresh repeat dispatch"
     );
     let before_retrigger = harness.generation_accounting_for_test();
     assert_eq!(before_retrigger.activated, 1);
@@ -462,15 +471,14 @@ fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
         harness
             .resources
             .scheduler
-            .evaluate_at(exact_g_floor, epoch)
-            .expect("exact-G scheduler evaluation"),
+            .evaluate_at(up_completion, epoch)
+            .expect("repeat remains eligible after Up commit"),
         DispatchDecision::Send {
             down_chord: Some(_),
             ..
         }
     ));
-    wait_until_qpc(clock, exact_g_floor);
-    let retrigger_now = clock.now().expect("exact-G retrigger QPC");
+    let retrigger_now = clock.now().expect("authored repeat QPC");
     let (up_mask, down_mask, retrigger_outcome) =
         dispatch_live_scheduler_next(&mut harness, retrigger_now, epoch);
     assert_eq!(
@@ -551,7 +559,7 @@ fn production_scheduler_lifecycle_matrix_releases_or_quarantines_accepted_downs(
         "target_generation",
         "suspend",
         "partial_cleanup",
-        "cleanup_qpc_failure",
+        "cleanup_without_post_timestamp",
     ] {
         let mut harness = ProductionDispatchTestHarness::new_down_only();
         let packets = harness.configure_mock_packet_sender_for_test(&[]);
@@ -661,7 +669,6 @@ fn production_scheduler_lifecycle_matrix_releases_or_quarantines_accepted_downs(
                 assert_eq!(harness.release_obligation_mask_for_test(), 1);
                 assert_eq!(harness.resources.backend.failed_release_mask, 1);
                 assert_eq!(harness.resources.backend.release_attempts_total, 0);
-                assert_eq!(harness.resume_barrier_qpc_for_test(), None);
                 continue;
             }
             "partial_cleanup" => {
@@ -702,24 +709,19 @@ fn production_scheduler_lifecycle_matrix_releases_or_quarantines_accepted_downs(
                     &[(vec![0x15], true)]
                 );
             }
-            "cleanup_qpc_failure" => {
-                assert!(harness
-                    .apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
-                        || Err("injected scheduler cleanup QPC failure".to_string())
-                    )
-                    .is_err());
+            "cleanup_without_post_timestamp" => {
+                harness
+                    .apply_scheduler_resumable_lifecycle_transition_for_test()
+                    .expect("verified cleanup does not require a separate QPC timestamp");
                 assert_eq!(harness.release_obligation_mask_for_test(), 0);
-                assert_eq!(harness.resources.scheduler.accounting().active, 1);
+                assert_eq!(harness.resources.scheduler.accounting().active, 0);
                 assert_eq!(
                     cleanup
                         .lock()
-                        .expect("QPC failure cleanup capture")
+                        .expect("timestamp-free cleanup capture")
                         .as_slice(),
                     &[(vec![0x15], true)]
                 );
-                harness
-                    .apply_scheduler_resumable_lifecycle_transition_for_test()
-                    .expect("verified retry resolves scheduler state after QPC failure");
             }
             _ => unreachable!("the production scheduler lifecycle cases are explicit"),
         }
@@ -942,7 +944,7 @@ fn live_scheduler_terminal_finalizer_cleans_lease_panic_and_worker_unwind() {
 }
 
 #[test]
-fn live_scheduler_cleanup_qpc_failure_never_mints_resumable_barrier() {
+fn live_scheduler_verified_cleanup_cancels_without_a_post_cleanup_timestamp() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     harness.configure_mock_packet_sender_for_test(&[0]);
     let cleanup = harness.configure_mock_cleanup_emitter_for_test();
@@ -956,14 +958,11 @@ fn live_scheduler_cleanup_qpc_failure_never_mints_resumable_barrier() {
         crate::engine::worker::StagedDispatchOutcome::Dispatched
     ));
 
-    let outcome = harness
-        .apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
-            Err("injected post-cleanup QPC failure".to_string())
-        });
-    assert!(outcome.is_err());
+    let outcome = harness.apply_scheduler_resumable_lifecycle_transition_for_test();
+    assert!(outcome.is_ok());
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
-    assert_eq!(harness.resources.scheduler.accounting().active, 1);
-    assert_eq!(harness.resources.scheduler.resume_barrier_qpc(), None);
+    assert_eq!(harness.resources.scheduler.accounting().active, 0);
+    assert_eq!(harness.resources.scheduler.accounting().cancelled, 1);
     assert_eq!(
         cleanup
             .lock()

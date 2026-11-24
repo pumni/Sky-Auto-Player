@@ -10,8 +10,7 @@ const V4_BUNDLE_PUBLISHER: &str = "pumni";
 const PRODUCT_NAME: &str = "Sky Auto Player";
 const NSIS_TARGET: &str = "nsis";
 const CURRENT_USER_INSTALL_MODE: &str = "currentUser";
-const CALIBRATION_BUILD_COMMAND: &str =
-    "bun run build && cd ..\\.. && cargo xtask calibration build";
+const FRONTEND_BUILD_COMMAND: &str = "bun run build";
 const WINDOWS_ARCH: &str = "x64";
 const UNSIGNED_ZERO_BUDGET_MODE: &str = "unsigned-zero-budget";
 // Public Tauri updater trust material. The matching private key is generated
@@ -79,10 +78,8 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         .into());
     }
     let build = object(config, "build")?;
-    if build.get("beforeBuildCommand").and_then(Value::as_str) != Some(CALIBRATION_BUILD_COMMAND) {
-        return Err(
-            "Tauri beforeBuildCommand must build and stage the canonical native calibration executable".into(),
-        );
+    if build.get("beforeBuildCommand").and_then(Value::as_str) != Some(FRONTEND_BUILD_COMMAND) {
+        return Err("Tauri beforeBuildCommand must build the desktop frontend".into());
     }
 
     let bundle = object(config, "bundle")?;
@@ -106,20 +103,14 @@ fn validate_config_value(config: &Value, project_version: &str) -> Result<()> {
         .get("resources")
         .and_then(Value::as_object)
         .ok_or("Tauri bundle.resources must map the immutable built-in catalog")?;
-    if resources.len() != 3
+    if resources.len() != 2
         || resources.get("../../../songs/*").and_then(Value::as_str) != Some("builtin-songs/sheets")
         || resources
             .get("../../../builtin-songs/manifest.json")
             .and_then(Value::as_str)
             != Some("builtin-songs/manifest.json")
-        || resources
-            .get("resources/native_calibration.exe")
-            .and_then(Value::as_str)
-            != Some("native_calibration.exe")
     {
-        return Err(
-            "Tauri bundle.resources must map songs, the built-in manifest, and native calibration exactly".into(),
-        );
+        return Err("Tauri bundle.resources must map only songs and the built-in manifest".into());
     }
     let windows = bundle
         .get("windows")
@@ -557,7 +548,7 @@ mod tests {
             "productName": PRODUCT_NAME,
             "identifier": V4_IDENTIFIER,
             "build": {
-                "beforeBuildCommand": CALIBRATION_BUILD_COMMAND
+                "beforeBuildCommand": FRONTEND_BUILD_COMMAND
             },
             "bundle": {
                 "active": true,
@@ -567,7 +558,6 @@ mod tests {
                 "resources": {
                     "../../../songs/*": "builtin-songs/sheets",
                     "../../../builtin-songs/manifest.json": "builtin-songs/manifest.json",
-                    "resources/native_calibration.exe": "native_calibration.exe"
                 },
                 "windows": {
                     "signCommand": "pwsh -File ../../../scripts/sign_v4_authenticode.ps1 %1",
@@ -597,6 +587,38 @@ mod tests {
         let mut config = valid_config();
         config["version"] = json!("4.0.0-alpha.1");
         assert!(validate_config_value(&config, "4.0.0-alpha.1").is_err());
+    }
+
+    #[test]
+    fn bundle_excludes_retired_calibration_payload_and_mutable_cache() {
+        let valid = valid_config();
+        let resources = valid["bundle"]["resources"]
+            .as_object()
+            .expect("bundle resource map");
+        assert!(
+            !resources.keys().any(|path| {
+                path.contains("native_calibration") || path.contains("input_latency.json")
+            }),
+            "retired calibration executable and mutable user cache must stay outside the installer"
+        );
+
+        assert!(
+            validate_config_value(&valid, "4.0.0-alpha.1").is_ok(),
+            "fresh package must not require a calibration worker"
+        );
+
+        let mut bundled_cache = valid_config();
+        bundled_cache["bundle"]["resources"]
+            .as_object_mut()
+            .expect("bundle resource map")
+            .insert(
+                "native_calibration.exe".into(),
+                json!("native_calibration.exe"),
+            );
+        assert!(
+            validate_config_value(&bundled_cache, "4.0.0-alpha.1").is_err(),
+            "retired calibration executable must not become installer payload"
+        );
     }
 
     #[test]

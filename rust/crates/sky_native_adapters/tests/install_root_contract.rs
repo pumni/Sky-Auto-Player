@@ -36,19 +36,7 @@ fn v4_adapters_enforce_clean_application_data_boundary() {
     assert_eq!(catalog.root(), app_data_root.join("songs").as_path());
     assert!(!catalog.root().starts_with(&install_root));
 
-    // Calibration cache lives in app data cache, not install root
-    assert_eq!(
-        paths.calibration_cache_path(),
-        app_data_root.join("cache").join("input_latency.json")
-    );
-    assert!(!paths.calibration_cache_path().starts_with(&install_root));
-
-    // Only immutable executable payload lives in install root
-    assert_eq!(
-        paths.calibration_binary_path(),
-        install_root.join("native_calibration.exe")
-    );
-    assert!(paths.calibration_binary_path().starts_with(&install_root));
+    assert!(!install_root.join("native_calibration.exe").exists());
 }
 
 #[test]
@@ -105,11 +93,14 @@ fn v4_adapters_operate_with_immutable_install_payload_snapshot_proof() {
     let app_data_root = temp.join("app_data");
 
     fs::create_dir_all(&install_root).expect("create install root");
-    // Place simulated immutable binaries and resources in install root
-    let binary = install_root.join("native_calibration.exe");
-    fs::write(&binary, b"simulated-binary-payload").expect("write binary");
+    // Place simulated immutable resources in install root and preserve old
+    // user cache bytes as mutable app-data state across runtime operations.
     let resource = install_root.join("resources.pak");
     fs::write(&resource, b"simulated-resource-payload").expect("write resource");
+    let retired_cache = app_data_root.join("cache").join("input_latency.json");
+    fs::create_dir_all(retired_cache.parent().expect("cache parent")).expect("cache directory");
+    let retired_cache_bytes = b"legacy calibration cache sentinel\n";
+    fs::write(&retired_cache, retired_cache_bytes).expect("write retired cache sentinel");
 
     // Cryptographic snapshot before any runtime adapter interaction
     let install_snapshot_before =
@@ -152,6 +143,11 @@ fn v4_adapters_operate_with_immutable_install_payload_snapshot_proof() {
     let catalog = FileCatalogSource::new(&default_songs);
     assert_eq!(catalog.root(), paths.user_music_root());
     assert!(!install_root.join("songs").exists());
+    assert_eq!(
+        fs::read(&retired_cache).expect("retired cache remains untouched"),
+        retired_cache_bytes
+    );
+    assert!(!install_root.join("native_calibration.exe").exists());
 
     // Cryptographic proof: entire install payload is completely byte-for-byte unchanged
     let install_snapshot_after = snapshot_directory(&install_root).expect("snapshot install after");

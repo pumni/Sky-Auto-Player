@@ -139,8 +139,14 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   const confirmation = page.getByRole('group', { name: 'Playback confirmation' });
   await expect(confirmation).toBeVisible();
   await expect(
-    confirmation.getByRole('button', { name: 'Use recommended settings' }),
+    confirmation.getByRole('button', { name: 'Proceed with current settings' }),
   ).toBeFocused();
+  await expect(confirmation.getByRole('button', { name: 'Use recommended settings' })).toHaveCount(
+    0,
+  );
+  await expect(
+    confirmation.getByRole('button', { name: 'Test playback (no input)' }),
+  ).toBeVisible();
 
   await openApp(page, viewports[1], '/?mockStartFailure=target_not_found');
   await page.getByRole('row', { name: /Blue Bird/ }).click();

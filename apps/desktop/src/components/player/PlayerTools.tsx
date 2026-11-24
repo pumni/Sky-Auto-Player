@@ -130,7 +130,6 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                 <ProfileFields
                   defaults={defaults}
                   bootstrap={bootstrap}
-                  recommendation={settings?.timing_margin_recommendation}
                   patchSettings={patchSettings}
                 />
               </div>
@@ -189,22 +188,20 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
 interface ProfileFieldsProps {
   defaults: NonNullable<DesktopStore['settings']>['playback_defaults'] | undefined;
   bootstrap: DesktopStore['bootstrap'];
-  recommendation: NonNullable<DesktopStore['settings']>['timing_margin_recommendation'] | undefined;
   patchSettings: DesktopStore['patchSettings'];
 }
 
-function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: ProfileFieldsProps) {
+function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProps) {
   const holdId = useId();
   const tempoId = useId();
   const fpsId = useId();
 
-  if (!defaults || !bootstrap || !recommendation) {
+  if (!defaults || !bootstrap) {
     return <span className="muted">Profile unavailable</span>;
   }
   const frameUs = Math.ceil(1_000_000 / defaults.fps);
   const frameBaseHoldUs = Math.ceil(defaults.hold_frames * frameUs);
   const minHoldUs = frameBaseHoldUs + defaults.timing_margin_us;
-  const minReleaseGapUs = frameUs + defaults.timing_margin_us;
 
   const holdOptions = bootstrap.option_sets.hold_frames.map((value) => ({
     value: String(value),
@@ -272,7 +269,6 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
       <TimingMarginControl
         value={defaults.timing_margin_us}
         options={bootstrap.option_sets}
-        recommendation={recommendation}
         density="compact"
         onChange={(value) =>
           patchSettings({ playbackDefaults: { timingMarginUs: value } }).then(
@@ -289,10 +285,6 @@ function ProfileFields({ defaults, bootstrap, recommendation, patchSettings }: P
           <div>
             <dt>Target hold</dt>
             <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
-          </div>
-          <div>
-            <dt>Release gap</dt>
-            <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
           </div>
         </dl>
       </details>

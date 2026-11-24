@@ -10,7 +10,7 @@ import { createUpdateSlice } from './updateSlice';
 import { createDiagnosticsSlice } from './diagnosticsSlice';
 import { createPlaybackSlice } from './playbackSlice';
 import { MAX_DIAGNOSTIC_EVENTS, MAX_DIAGNOSTIC_SAMPLES } from './types';
-import type { CalibrationUiState, DesktopStore, DiagnosticsEventLine } from './types';
+import type { DesktopStore, DiagnosticsEventLine } from './types';
 import type { LibrarySlice } from './librarySlice';
 import { loadWorkbenchPreferences } from './workbenchPreferences';
 
@@ -37,7 +37,6 @@ export {
   MAX_DIAGNOSTIC_SAMPLES,
 } from './types';
 export type {
-  CalibrationUiState,
   DesktopStore,
   DetailEntry,
   DiagnosticsEventLine,
@@ -157,17 +156,6 @@ export function createDesktopStore(bridge: DesktopBridge) {
         events: [],
         error: null,
       },
-      calibration: {
-        open: false,
-        operationId: null,
-        state: 'idle',
-        phase: '',
-        completed: 0,
-        total: 0,
-        message: '',
-        result: null,
-        error: null,
-      },
       update: {
         dialogOpen: false,
         checkRequestPending: false,
@@ -270,9 +258,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
         }
 
         diagnosticsEventSeq += 1;
-        const shouldRecordEvent = !['playback.snapshot', 'calibration.progress'].includes(
-          event.name,
-        );
+        const shouldRecordEvent = event.name !== 'playback.snapshot';
         if (shouldRecordEvent) {
           const detail = boundedText(eventDetail(event));
           const diagnostics = get().diagnostics;
@@ -311,14 +297,6 @@ export function createDesktopStore(bridge: DesktopBridge) {
               transportOperation: null,
               error: eventState.fatal,
             },
-            calibration: {
-              ...get().calibration,
-              state:
-                get().calibration.state === 'running' || get().calibration.state === 'starting'
-                  ? 'failed'
-                  : get().calibration.state,
-              error: eventState.fatal,
-            },
           });
           return;
         }
@@ -344,45 +322,7 @@ export function createDesktopStore(bridge: DesktopBridge) {
           return;
         }
         if (playbackSlice.handleEvent(event)) return;
-        if (event.name === 'calibration.progress') {
-          const current = get().calibration;
-          if (current.operationId && current.operationId !== event.payload.operation_id) return;
-          set({
-            calibration: {
-              ...current,
-              operationId: current.operationId ?? event.payload.operation_id,
-              state: event.payload.state as CalibrationUiState,
-              phase: boundedText(event.payload.phase),
-              completed: event.payload.completed,
-              total: event.payload.total,
-              message: boundedText(event.payload.message),
-              error: null,
-            },
-          });
-        } else if (event.name === 'calibration.finished') {
-          const current = get().calibration;
-          if (current.operationId && current.operationId !== event.payload.operation_id) return;
-          if (['succeeded', 'failed', 'cancelled'].includes(current.state)) return;
-          const state: CalibrationUiState =
-            event.payload.outcome === 'succeeded'
-              ? 'succeeded'
-              : event.payload.outcome === 'cancelled'
-                ? 'cancelled'
-                : 'failed';
-          set({
-            calibration: {
-              ...current,
-              operationId: current.operationId ?? event.payload.operation_id,
-              state,
-              message: boundedText(event.payload.message),
-              result: event.payload,
-              error: state === 'failed' ? boundedText(event.payload.message) : null,
-            },
-          });
-          if (state === 'succeeded') {
-            void refreshSettings();
-          }
-        } else if (event.name === 'update.changed') {
+        if (event.name === 'update.changed') {
           const current = get().update;
           if (event.payload.revision <= current.lastNativeRevision) return;
           set({

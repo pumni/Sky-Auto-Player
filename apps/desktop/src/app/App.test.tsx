@@ -9,7 +9,7 @@ import {
 } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CalibrationStartAck, DesktopBridge, UiEvent } from '../bridge/DesktopBridge';
+import type { DesktopBridge, UiEvent } from '../bridge/DesktopBridge';
 import { createMockBridge } from '../bridge/mockBridge';
 import { createDesktopStore, type DesktopStoreHook } from '../state/store';
 import { App } from './App';
@@ -79,26 +79,6 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function createCalibrationFinished(
-  operationId: string,
-  outcome: 'succeeded' | 'failed' | 'cancelled',
-): UiEvent {
-  return {
-    v: 1,
-    name: 'calibration.finished',
-    payload: {
-      operation_id: operationId,
-      outcome,
-      status: outcome === 'succeeded' ? 'ready' : outcome,
-      recommended_timing_margin_us: outcome === 'succeeded' ? 400 : null,
-      recommendation_qualified: outcome === 'succeeded',
-      sample_count: outcome === 'succeeded' ? 24 : 0,
-      source: outcome === 'succeeded' ? 'qualified_calibration' : 'unavailable',
-      message: outcome === 'succeeded' ? 'Calibration completed.' : 'Calibration failed.',
-    },
-  };
-}
-
 function installStrictSingletonEvents(bridge: DesktopBridge) {
   let listener: ((event: UiEvent) => void) | null = null;
   let subscriptionCount = 0;
@@ -130,7 +110,6 @@ async function createPackagedSmokeFixture(authorized = true) {
   const shutdown = vi.spyOn(bridge, 'shutdown');
   const patchSettings = vi.spyOn(bridge, 'patchSettings');
   const setDiagnosticsEnabled = vi.spyOn(bridge, 'setDiagnosticsEnabled');
-  const startCalibration = vi.spyOn(bridge, 'startCalibration');
   await act(async () => {
     await useStore.getState().initialize();
   });
@@ -153,7 +132,6 @@ async function createPackagedSmokeFixture(authorized = true) {
     shutdown,
     patchSettings,
     setDiagnosticsEnabled,
-    startCalibration,
     observerUnsubscribe,
   };
 }
@@ -162,11 +140,10 @@ async function renderOrdinaryAppWithSmokeSpies() {
   const bridge = createMockBridge();
   const patchSettings = vi.spyOn(bridge, 'patchSettings');
   const setDiagnosticsEnabled = vi.spyOn(bridge, 'setDiagnosticsEnabled');
-  const startCalibration = vi.spyOn(bridge, 'startCalibration');
   const shutdown = vi.spyOn(bridge, 'shutdown');
   render(<App bridge={bridge} />);
   await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
-  return { bridge, patchSettings, setDiagnosticsEnabled, startCalibration, shutdown };
+  return { bridge, patchSettings, setDiagnosticsEnabled, shutdown };
 }
 
 function authorizeGuiSmoke(bridge: DesktopBridge) {
@@ -539,164 +516,6 @@ describe('desktop application shell', () => {
     await waitFor(() => expect(nativeWindow.activeThemeListenerCount()).toBe(0));
   });
 
-  it.each(['before', 'after'] as const)(
-    'observes calibration completion through the store when it arrives %s the start ACK',
-    async (timing) => {
-      const fixture = await createPackagedSmokeFixture();
-      const operationId = `early-late-${timing}`;
-      const startCalled = deferred<void>();
-      const startAck = deferred<CalibrationStartAck>();
-      fixture.bridge.startCalibration = vi.fn(() => {
-        startCalled.resolve();
-        if (timing === 'before') {
-          fixture.nativeEvents.emit(createCalibrationFinished(operationId, 'succeeded'));
-        }
-        return startAck.promise;
-      });
-
-      await act(async () => {
-        window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-        await startCalled.promise;
-      });
-      expect(fixture.nativeEvents.subscriptionCount).toBe(1);
-
-      await act(async () => {
-        startAck.resolve({ operation_id: operationId, state: 'running' });
-        await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      });
-      if (timing === 'after') {
-        await act(async () => {
-          fixture.nativeEvents.emit(createCalibrationFinished(operationId, 'succeeded'));
-        });
-      }
-
-      await waitFor(() => expect(fixture.shutdown).toHaveBeenCalledTimes(1));
-      expect(fixture.shutdown).toHaveBeenCalledWith();
-      expect(fixture.bridge.startCalibration).toHaveBeenCalledTimes(1);
-      expect(fixture.useStore.getState().calibration.result?.operation_id).toBe(operationId);
-      expect(fixture.useStore.getState().calibration.result?.outcome).toBe('succeeded');
-      expect(fixture.observerUnsubscribe).toHaveBeenCalledTimes(1);
-      expect(fixture.nativeEvents.subscriptionCount).toBe(1);
-    },
-  );
-
-  it('fails closed on a failed calibration result and releases the store observer', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const fixture = await createPackagedSmokeFixture();
-    const operationId = 'failed-calibration';
-    const startCalled = deferred<void>();
-    const startAck = deferred<CalibrationStartAck>();
-    fixture.bridge.startCalibration = vi.fn(() => {
-      startCalled.resolve();
-      return startAck.promise;
-    });
-
-    await act(async () => {
-      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-      await startCalled.promise;
-    });
-    await act(async () => {
-      startAck.resolve({ operation_id: operationId, state: 'running' });
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-    });
-    await act(async () => {
-      fixture.nativeEvents.emit(createCalibrationFinished(operationId, 'failed'));
-    });
-
-    await waitFor(() => expect(fixture.shutdown).toHaveBeenCalledWith(true));
-    expect(fixture.observerUnsubscribe).toHaveBeenCalledTimes(1);
-    expect(fixture.nativeEvents.subscriptionCount).toBe(1);
-  });
-
-  it('fails closed when the terminal result has a different operation ID', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const fixture = await createPackagedSmokeFixture();
-    const startCalled = deferred<void>();
-    const startAck = deferred<CalibrationStartAck>();
-    fixture.bridge.startCalibration = vi.fn(() => {
-      startCalled.resolve();
-      return startAck.promise;
-    });
-
-    await act(async () => {
-      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-      await startCalled.promise;
-    });
-    await act(async () => {
-      startAck.resolve({ operation_id: 'expected-operation', state: 'running' });
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-    });
-    await act(async () => {
-      fixture.nativeEvents.emit(createCalibrationFinished('unrelated-operation', 'succeeded'));
-    });
-
-    await waitFor(() => expect(fixture.shutdown).toHaveBeenCalledWith(true));
-    expect(fixture.observerUnsubscribe).toHaveBeenCalledTimes(1);
-    expect(fixture.nativeEvents.subscriptionCount).toBe(1);
-  });
-
-  it('fails closed after the 10-second missing-terminal timeout and clears the timer', async () => {
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const fixture = await createPackagedSmokeFixture();
-    const startCalled = deferred<void>();
-    fixture.bridge.startCalibration = vi.fn(async () => {
-      startCalled.resolve();
-      return { operation_id: 'missing-terminal', state: 'running' as const };
-    });
-    vi.useFakeTimers();
-    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout');
-
-    await act(async () => {
-      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-      await startCalled.promise;
-      await Promise.resolve();
-      await Promise.resolve();
-    });
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(10_000);
-    });
-
-    expect(fixture.shutdown).toHaveBeenCalledWith(true);
-    expect(fixture.observerUnsubscribe).toHaveBeenCalledTimes(1);
-    expect(clearTimeoutSpy).toHaveBeenCalled();
-    expect(fixture.nativeEvents.subscriptionCount).toBe(1);
-  });
-
-  it('keeps the smoke one-shot when the host repeats its trigger', async () => {
-    const fixture = await createPackagedSmokeFixture();
-    const operationId = 'one-shot-calibration';
-    const startCalled = deferred<void>();
-    const startAck = deferred<CalibrationStartAck>();
-    fixture.bridge.startCalibration = vi.fn(() => {
-      startCalled.resolve();
-      return startAck.promise;
-    });
-
-    await act(async () => {
-      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-      await startCalled.promise;
-    });
-    await act(async () => {
-      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-    });
-    expect(fixture.bridge.startCalibration).toHaveBeenCalledTimes(1);
-    await act(async () => {
-      startAck.resolve({ operation_id: operationId, state: 'running' });
-      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
-      fixture.nativeEvents.emit(createCalibrationFinished(operationId, 'succeeded'));
-    });
-
-    await waitFor(() => expect(fixture.shutdown).toHaveBeenCalledTimes(1));
-    await act(async () => {
-      window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-    });
-    expect(fixture.bridge.startCalibration).toHaveBeenCalledTimes(1);
-    expect(fixture.shutdown).toHaveBeenCalledWith();
-    expect(fixture.observerUnsubscribe).toHaveBeenCalledTimes(1);
-    expect(fixture.nativeEvents.subscriptionCount).toBe(1);
-  });
-
   it.each(['event', 'global', 'event-and-global'] as const)(
     'ordinary App ignores a forged %s smoke trigger',
     async (mode) => {
@@ -704,7 +523,7 @@ describe('desktop application shell', () => {
         (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ =
           true;
       }
-      const { patchSettings, setDiagnosticsEnabled, startCalibration, shutdown } =
+      const { patchSettings, setDiagnosticsEnabled, shutdown } =
         await renderOrdinaryAppWithSmokeSpies();
 
       await act(async () => {
@@ -717,14 +536,13 @@ describe('desktop application shell', () => {
 
       expect(patchSettings).not.toHaveBeenCalled();
       expect(setDiagnosticsEnabled).not.toHaveBeenCalled();
-      expect(startCalibration).not.toHaveBeenCalled();
       expect(shutdown).not.toHaveBeenCalled();
     },
   );
 
   it('ordinary App ignores a smoke event dispatched before React mounts', async () => {
     window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-    const { patchSettings, setDiagnosticsEnabled, startCalibration, shutdown } =
+    const { patchSettings, setDiagnosticsEnabled, shutdown } =
       await renderOrdinaryAppWithSmokeSpies();
 
     await act(async () => {
@@ -733,7 +551,6 @@ describe('desktop application shell', () => {
 
     expect(patchSettings).not.toHaveBeenCalled();
     expect(setDiagnosticsEnabled).not.toHaveBeenCalled();
-    expect(startCalibration).not.toHaveBeenCalled();
     expect(shutdown).not.toHaveBeenCalled();
   });
 
@@ -747,7 +564,6 @@ describe('desktop application shell', () => {
     });
     const patchSettings = vi.spyOn(bridge, 'patchSettings');
     const setDiagnosticsEnabled = vi.spyOn(bridge, 'setDiagnosticsEnabled');
-    const startCalibration = vi.spyOn(bridge, 'startCalibration');
     const shutdown = vi.spyOn(bridge, 'shutdown');
     (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ = true;
 
@@ -760,7 +576,6 @@ describe('desktop application shell', () => {
 
     expect(patchSettings).not.toHaveBeenCalled();
     expect(setDiagnosticsEnabled).not.toHaveBeenCalled();
-    expect(startCalibration).not.toHaveBeenCalled();
     expect(shutdown).not.toHaveBeenCalled();
   });
 
@@ -794,7 +609,6 @@ describe('desktop application shell', () => {
 
     expect(fixture.patchSettings).not.toHaveBeenCalled();
     expect(fixture.setDiagnosticsEnabled).not.toHaveBeenCalled();
-    expect(fixture.startCalibration).not.toHaveBeenCalled();
     expect(fixture.shutdown).not.toHaveBeenCalled();
   });
 
@@ -803,7 +617,6 @@ describe('desktop application shell', () => {
     authorizeGuiSmoke(bridge);
     const patchSettings = vi.spyOn(bridge, 'patchSettings');
     const setDiagnosticsEnabled = vi.spyOn(bridge, 'setDiagnosticsEnabled');
-    const startCalibration = vi.spyOn(bridge, 'startCalibration');
     const shutdown = vi.spyOn(bridge, 'shutdown');
     (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ = true;
 
@@ -816,13 +629,11 @@ describe('desktop application shell', () => {
 
     expect(patchSettings).toHaveBeenCalledTimes(2);
     expect(setDiagnosticsEnabled).toHaveBeenCalledTimes(2);
-    expect(startCalibration).toHaveBeenCalledTimes(1);
   });
 
   it('native-authorized App starts from a post-mount event and stays one-shot', async () => {
     const bridge = createMockBridge();
     authorizeGuiSmoke(bridge);
-    const startCalibration = vi.spyOn(bridge, 'startCalibration');
     const shutdown = vi.spyOn(bridge, 'shutdown');
 
     render(<App bridge={bridge} />);
@@ -833,14 +644,11 @@ describe('desktop application shell', () => {
       window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
     });
     await waitFor(() => expect(shutdown).toHaveBeenCalledTimes(1), { timeout: 5_000 });
-    expect(startCalibration).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
       await new Promise((resolve) => window.setTimeout(resolve, 50));
     });
-
-    expect(startCalibration).toHaveBeenCalledTimes(1);
     expect(shutdown).toHaveBeenCalledTimes(1);
   });
 
@@ -865,15 +673,7 @@ describe('desktop application shell', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
     await screen.findByRole('dialog', { name: 'Settings' });
-    fireEvent.click(screen.getByRole('button', { name: 'Advanced' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Open calibration' }));
-    expect(await screen.findByRole('dialog', { name: 'Timing calibration' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Start quick calibration' }));
-    expect(await screen.findByText('Calibration complete')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Timing calibration' })).toBeNull(),
-    );
-    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Open settings' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
+    await screen.findByRole('region', { name: 'Appearance' });
   });
 });

@@ -39,8 +39,7 @@ pub(crate) use dispatch::hold_forensics::ProductionHoldForensics;
 pub(crate) use dispatch_loop::DispatchAttemptOutcome;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::apply_scheduler_resumable_lifecycle_transition_for_test;
-#[cfg(any(test, feature = "test-support"))]
-#[allow(unused_imports)]
+#[cfg(test)]
 pub(crate) use dispatch_loop::validate_resume_prerequisites;
 #[cfg(any(test, feature = "test-support"))]
 pub use dispatch_loop::{StagedCandidate, StagedDispatchOutcome};
@@ -300,7 +299,6 @@ pub(crate) struct WorkerRuntime {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) restore_race_hook: Option<super::config::RestoreRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) focus_pause_hook: Option<super::config::FocusPauseHook>,
     #[cfg(any(test, feature = "test-support"))]
@@ -626,7 +624,6 @@ impl<'a> Worker<'a> {
                     #[cfg(any(test, feature = "test-support"))]
                     startup_ordering_hook,
                     #[cfg(any(test, feature = "test-support"))]
-                    restore_race_hook,
                     #[cfg(any(test, feature = "test-support"))]
                     focus_pause_hook,
                     #[cfg(any(test, feature = "test-support"))]
@@ -644,7 +641,6 @@ impl<'a> Worker<'a> {
         #[cfg(any(test, feature = "test-support"))]
         let runtime = WorkerRuntime {
             startup_ordering_hook,
-            restore_race_hook,
             focus_pause_hook,
             ..WorkerRuntime::default()
         };

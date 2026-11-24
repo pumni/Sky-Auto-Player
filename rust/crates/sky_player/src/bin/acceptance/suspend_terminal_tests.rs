@@ -47,7 +47,7 @@ fn timed_session_heartbeat_preserves_intentional_lease_expiry() {
         assert!(super::needs_supervisor_progress_heartbeat(scenario, Some(15)));
         assert!(!super::needs_supervisor_progress_heartbeat(scenario, None));
     }
-    for scenario in [Scenario::ReleaseGapStress, Scenario::FocusLoss, Scenario::SuspendResume] {
+    for scenario in [Scenario::ShortUpGapStress, Scenario::FocusLoss, Scenario::SuspendResume] {
         assert!(super::needs_supervisor_progress_heartbeat(scenario, None));
     }
     for scenario in [Scenario::SupervisorLeaseExpiry, Scenario::LeaseAgeWatchdogDelayed] {

@@ -75,9 +75,19 @@ pub(super) fn up_slot_trace(
         .as_u64()
         .checked_add(timing.authored_up_offset_ticks.as_u64())
         .ok_or(TimeArithmeticError::Overflow)?;
+    let prepared_up_not_before_qpc = observation
+        .epoch_qpc
+        .as_u64()
+        .checked_add(timing.paired_up_not_before_offset_ticks.as_u64())
+        .ok_or(TimeArithmeticError::Overflow)?;
+    let up_not_before_qpc = timing
+        .release_not_before_qpc
+        .as_u64()
+        .max(prepared_up_not_before_qpc);
     let floor = timing
         .release_not_before_qpc
         .as_u64()
+        .max(prepared_up_not_before_qpc)
         .max(target)
         .max(observation.packet_not_before_qpc.as_u64());
     let residual = observation
@@ -93,9 +103,7 @@ pub(super) fn up_slot_trace(
         scan_code: timing.scan_code,
         source_action_index: timing.source_action_index,
         authored_offset_ticks: timing.authored_up_offset_ticks.as_u64(),
-        release_floor_offset_ticks: timing
-            .release_not_before_qpc
-            .as_u64()
+        up_not_before_offset_ticks: up_not_before_qpc
             .saturating_sub(observation.epoch_qpc.as_u64()),
         floor_displacement_ticks: floor - target,
         pre_call_qpc_ticks: observation.pre_call_qpc.map(|qpc| qpc.as_u64()),
@@ -116,7 +124,7 @@ pub(crate) fn drain_stale_metadata_observation(
             TraceContext {
                 event_index: observation.source_action_index,
                 source_action_index: observation.source_action_index,
-                compiled_packet_index: None,
+                authored_down_chord_index: None,
                 kind: TRACE_KIND_UP,
                 outcome: trace_outcome_code("suppressed_stale_up"),
                 polyphony: observation.suppressed_intent_count,
@@ -143,19 +151,15 @@ pub(crate) fn drain_stale_metadata_observation(
                 physical_target_qpc_ticks: None,
                 physical_not_before_qpc_ticks: None,
                 hold_floor_qpc_ticks: None,
-                release_floor_qpc_ticks: None,
+                down_not_before_qpc_ticks: None,
                 previous_sendinput_completion_qpc_ticks: None,
                 previous_sender_completion_known: false,
                 hold_floor_mask: 0,
-                release_floor_mask: 0,
                 final_policy_qpc_ticks: None,
                 pre_call_qpc_ticks: None,
                 sendinput_completion_qpc_ticks: None,
                 post_send_qpc_ticks: None,
                 observation_qpc_ticks: None,
-                pre_call_ticks: None,
-                sendinput_completion_ticks: None,
-                completion_residual_us: 0,
                 core_post_send_duration_us: 0,
                 post_send_metrics_available: false,
                 completion_error_ticks: 0,
@@ -212,7 +216,9 @@ pub(crate) fn drain_up_send_outcome(
         .map_err(|error| {
             DispatchStep::Terminate(format!("note-off duration conversion failure: {error:?}"))
         })?;
-    let completion_residual_us = qpc_clock
+    // Preserve the QPC ordering and range guard formerly needed to emit the
+    // legacy completion-residual field.
+    qpc_clock
         .duration_to_us(
             observation
                 .sendinput_completion_qpc
@@ -306,7 +312,6 @@ pub(crate) fn drain_up_send_outcome(
         observation,
         qpc_clock,
         core_post_send_us,
-        completion_residual_us,
         observation.dispatch_ready_qpc.is_some(),
     )?;
     if let Some(wake_to_send_us) = wake_to_send_start_us {
@@ -382,6 +387,7 @@ mod tests {
                     scan_code: scan,
                     source_action_index: source,
                     authored_up_offset_ticks: TimelineTicks::from_raw(authored),
+                    paired_up_not_before_offset_ticks: TimelineTicks::from_raw(authored),
                     release_not_before_qpc: QpcTicks::from_raw(1_000 + floor),
                 },
                 epoch_qpc: QpcTicks::from_raw(1_000),
@@ -425,6 +431,43 @@ mod tests {
             ),
             (110, 35, Some(5))
         );
+        assert_eq!(records[0].up_not_before_offset_ticks, 120);
+        assert_eq!(records[1].up_not_before_offset_ticks, 145);
+    }
+
+    #[test]
+    fn trace_keeps_authored_up_separate_from_rounded_eligibility() {
+        const QPC_FREQUENCY_HZ: u64 = 3_579_545;
+        let ceil_ticks = |microseconds: u64| {
+            let numerator = u128::from(microseconds) * u128::from(QPC_FREQUENCY_HZ) + 999_999;
+            u64::try_from(numerator / 1_000_000).expect("QPC tick range")
+        };
+        let down_ticks = ceil_ticks(1_000);
+        let hold_ticks = ceil_ticks(17_167);
+        let authored_up_ticks = ceil_ticks(18_167);
+        let eligible_up_ticks = down_ticks + hold_ticks;
+        assert_eq!(authored_up_ticks, 65_030);
+        assert_eq!(eligible_up_ticks, 65_031);
+        let observation = UpSlotObservation {
+            timing: sky_dispatch_core::executor::UpSlotTiming {
+                slot: 0,
+                scan_code: 0x15,
+                source_action_index: 1,
+                authored_up_offset_ticks: TimelineTicks::from_raw(authored_up_ticks),
+                paired_up_not_before_offset_ticks: TimelineTicks::from_raw(eligible_up_ticks),
+                release_not_before_qpc: QpcTicks::from_raw(eligible_up_ticks),
+            },
+            epoch_qpc: QpcTicks::ZERO,
+            pre_call_qpc: Some(QpcTicks::from_raw(eligible_up_ticks)),
+            packet_not_before_qpc: QpcTicks::from_raw(eligible_up_ticks),
+            completion_qpc: QpcTicks::from_raw(eligible_up_ticks),
+            confirmed: true,
+        };
+
+        let trace = up_slot_trace(&observation).expect("trace odd-frequency Up");
+        assert_eq!(trace.authored_offset_ticks, authored_up_ticks);
+        assert_eq!(trace.up_not_before_offset_ticks, eligible_up_ticks);
+        assert_eq!(trace.floor_displacement_ticks, 1);
     }
 
     #[test]
@@ -438,6 +481,7 @@ mod tests {
                 scan_code: 21,
                 source_action_index: 7,
                 authored_up_offset_ticks: TimelineTicks::from_raw(100),
+                paired_up_not_before_offset_ticks: TimelineTicks::from_raw(100),
                 release_not_before_qpc: QpcTicks::from_raw(120),
             };
         observation.up_slots = Some(storage);
@@ -504,6 +548,7 @@ mod tests {
                 scan_code: 21,
                 source_action_index: 7,
                 authored_up_offset_ticks: TimelineTicks::from_raw(100),
+                paired_up_not_before_offset_ticks: TimelineTicks::from_raw(100),
                 release_not_before_qpc: QpcTicks::from_raw(1_120),
             },
             sky_dispatch_core::executor::UpSlotTiming {
@@ -511,6 +556,7 @@ mod tests {
                 scan_code: 22,
                 source_action_index: 8,
                 authored_up_offset_ticks: TimelineTicks::from_raw(110),
+                paired_up_not_before_offset_ticks: TimelineTicks::from_raw(110),
                 release_not_before_qpc: QpcTicks::from_raw(1_145),
             },
         ]);

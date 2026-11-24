@@ -78,12 +78,9 @@ fn measure(generation_count: usize, polyphony: usize, samples: usize) -> serde_j
     let mut timings = Vec::with_capacity(samples);
 
     for _ in 0..samples {
-        let mut executor = DispatchExecutor::new(
-            &schedule,
-            DurationTicks::ZERO,
-            DurationTicks::ZERO,
-            |microseconds| Ok::<_, String>(TimelineTicks::from_raw(microseconds)),
-        )
+        let mut executor = DispatchExecutor::new(&schedule, DurationTicks::ZERO, |microseconds| {
+            Ok::<_, String>(TimelineTicks::from_raw(microseconds))
+        })
         .expect("production executor construction");
         let down_mask = match executor
             .evaluate_at(QpcTicks::ZERO, QpcTicks::ZERO)
@@ -120,12 +117,9 @@ fn measure_scan_code_representation(samples: usize) -> serde_json::Value {
     let actions = build_actions(100, 15);
     let schedule =
         compile_runtime_intents(&actions, SCAN_CODES).expect("valid representation schedule");
-    let executor = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::ZERO,
-        DurationTicks::ZERO,
-        |microseconds| Ok::<_, String>(TimelineTicks::from_raw(microseconds)),
-    )
+    let executor = DispatchExecutor::new(&schedule, DurationTicks::ZERO, |microseconds| {
+        Ok::<_, String>(TimelineTicks::from_raw(microseconds))
+    })
     .expect("production executor construction");
     let chord = executor
         .current_chord()

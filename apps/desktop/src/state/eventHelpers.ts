@@ -29,10 +29,6 @@ export function eventDetail(event: UiEvent): string {
       return `Catalog load failed: ${event.payload.message}`;
     case 'diagnostics.snapshot':
       return `p95 ${event.payload.p95_ms === null ? 'unavailable' : `${event.payload.p95_ms.toFixed(2)} ms`}; max ${event.payload.max_lateness_us === null ? 'unavailable' : `${event.payload.max_lateness_us} μs`}`;
-    case 'calibration.progress':
-      return `${event.payload.phase}: ${event.payload.completed}/${event.payload.total}`;
-    case 'calibration.finished':
-      return `${event.payload.outcome}: ${event.payload.status}`;
     case 'update.changed':
       return `Update ${event.payload.state}${event.payload.available_version ? ` (${event.payload.available_version})` : ''}`;
     case 'playback.state_changed':
