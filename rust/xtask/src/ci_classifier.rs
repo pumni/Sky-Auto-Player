@@ -904,18 +904,69 @@ fn classify_git_range(root: &Path, mode: DiffMode, base: &str, head: &str) -> Cl
     classify_git_range_with_refs(root, mode, base, head, None)
 }
 
-fn classify_working_tree(root: &Path) -> Result<Classification> {
+fn classify_working_tree(root: &Path, base: Option<&str>) -> Result<Classification> {
     let mut paths = Vec::new();
-    for args in [
-        &["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--"][..],
-        &["diff", "--name-only", "--no-renames", "-z", "--"][..],
-        &["ls-files", "--others", "--exclude-standard", "-z"][..],
-    ] {
-        let output = git_output(root, args)?;
-        if !output.status.success() {
-            return Err(format!("git {} failed", args.join(" ")).into());
+    if let Some(base_ref) = base {
+        let valid = git_output(
+            root,
+            &[
+                "rev-parse",
+                "--verify",
+                format!("{base_ref}^{{commit}}").as_str(),
+            ],
+        )?;
+        if !valid.status.success() {
+            return Ok(Classification::full(format!(
+                "invalid or missing base ref: {base_ref} (fail-closed)"
+            )));
         }
-        paths.extend(decode_git_paths(&output.stdout)?);
+        let mb = git_output(root, &["merge-base", base_ref, "HEAD"])?;
+        if !mb.status.success() {
+            return Ok(Classification::full(format!(
+                "could not resolve merge-base for {base_ref} and HEAD (fail-closed)"
+            )));
+        }
+        let merge_base = String::from_utf8_lossy(&mb.stdout).trim().to_owned();
+        if merge_base.is_empty() {
+            return Ok(Classification::full("empty merge-base (fail-closed)"));
+        }
+        for args in [
+            &[
+                "diff",
+                "--name-only",
+                "--no-renames",
+                "-z",
+                merge_base.as_str(),
+                "--",
+            ][..],
+            &["ls-files", "--others", "--exclude-standard", "-z"][..],
+        ] {
+            let output = git_output(root, args)?;
+            if !output.status.success() {
+                return Err(format!("git {} failed", args.join(" ")).into());
+            }
+            paths.extend(decode_git_paths(&output.stdout)?);
+        }
+    } else {
+        for args in [
+            &[
+                "diff",
+                "--cached",
+                "--name-only",
+                "--no-renames",
+                "-z",
+                "HEAD",
+                "--",
+            ][..],
+            &["diff", "--name-only", "--no-renames", "-z", "--"][..],
+            &["ls-files", "--others", "--exclude-standard", "-z"][..],
+        ] {
+            let output = git_output(root, args)?;
+            if !output.status.success() {
+                return Err(format!("git {} failed", args.join(" ")).into());
+            }
+            paths.extend(decode_git_paths(&output.stdout)?);
+        }
     }
     paths.sort();
     paths.dedup();
@@ -924,10 +975,20 @@ fn classify_working_tree(root: &Path) -> Result<Classification> {
 
 fn parse_arguments(args: &[String]) -> Result<Classification> {
     if args.iter().any(|arg| arg == "--working-tree") {
-        if args.len() != 1 {
-            return Err("--working-tree is a standalone local preview option".into());
+        let mut base = None;
+        let mut index = 0;
+        while index < args.len() {
+            match args[index].as_str() {
+                "--working-tree" => {}
+                "--base" | "--base-sha" => {
+                    index += 1;
+                    base = Some(args.get(index).ok_or("missing value for --base")?.clone());
+                }
+                opt => return Err(format!("unknown option for --working-tree: {opt}").into()),
+            }
+            index += 1;
         }
-        return classify_working_tree(&crate::repo::root());
+        return classify_working_tree(&crate::repo::root(), base.as_deref());
     }
     let mut full = false;
     let mut base = None;
@@ -1208,15 +1269,49 @@ mod tests {
         fs::write(root.join("apps/website/src/page.astro"), "old").unwrap();
         git(&root, &["add", "."]);
         git(&root, &["commit", "-m", "initial"]);
-        assert_lanes(&classify_working_tree(&root).unwrap(), &[]);
+        assert_lanes(&classify_working_tree(&root, None).unwrap(), &[]);
         fs::write(root.join("apps/desktop/src/App.tsx"), "new").unwrap();
         git(&root, &["add", "apps/desktop/src/App.tsx"]);
         fs::remove_file(root.join("apps/website/src/page.astro")).unwrap();
-        let result = classify_working_tree(&root).unwrap();
+        let result = classify_working_tree(&root, None).unwrap();
         assert!(result.lane("desktop_required"));
         assert!(result.lane("site_required"));
         fs::write(root.join("unknown-file"), "new").unwrap();
-        assert_lanes(&classify_working_tree(&root).unwrap(), &LANES);
+        assert_lanes(&classify_working_tree(&root, None).unwrap(), &LANES);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn working_tree_with_base_and_renames() {
+        let root = temp_dir("working-tree-base-classifier");
+        git(&root, &["init"]);
+        git(&root, &["config", "user.name", "Test"]);
+        git(&root, &["config", "user.email", "test@example.invalid"]);
+        fs::create_dir_all(root.join("apps/desktop/src")).unwrap();
+        fs::write(root.join("apps/desktop/src/App.tsx"), "initial").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "initial"]);
+
+        // Create base branch/tag
+        git(&root, &["tag", "v-base"]);
+
+        // Commit on branch
+        fs::write(root.join("apps/desktop/src/App.tsx"), "v2").unwrap();
+        git(&root, &["commit", "-am", "branch commit"]);
+
+        // Working tree preview with base
+        let with_base = classify_working_tree(&root, Some("v-base")).unwrap();
+        assert!(with_base.lane("desktop_required"));
+
+        // Invalid base fails closed to full lanes
+        let invalid_base = classify_working_tree(&root, Some("invalid-ref-sky-9999")).unwrap();
+        assert_lanes(&invalid_base, &LANES);
+        assert!(
+            invalid_base
+                .classification_reason
+                .contains("invalid or missing base ref")
+        );
+
         fs::remove_dir_all(root).unwrap();
     }
 

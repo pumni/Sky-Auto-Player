@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test';
 import { readFileSync } from 'node:fs';
 
-const origin = 'http://localhost:4321/Sky-Auto-Player';
+const origin = process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4321/Sky-Auto-Player';
+const hostOrigin = new URL(origin).origin;
 const officialReleasesUrl = 'https://github.com/pumni/Sky-Auto-Player/releases';
 const legacyLatestUrl = `${officialReleasesUrl}/latest`;
 const publishedRelease = JSON.parse(
@@ -141,7 +142,7 @@ test.describe('published route and asset contracts', () => {
     );
 
     for (const url of new Set(localUrls)) {
-      const response = await request.get('http://localhost:4321' + url);
+      const response = await request.get(hostOrigin + url);
       expect(response.status(), url).toBe(200);
     }
   });

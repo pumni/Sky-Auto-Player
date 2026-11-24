@@ -15,12 +15,9 @@ const bundleDist = join(desktopRoot, 'dist');
 const bundleIndex = join(bundleDist, 'index.html');
 const reuseFlag = '--reuse-existing-build';
 const cliArgs = process.argv.slice(2);
-const reuseExistingBuild = cliArgs.length === 1 && cliArgs[0] === reuseFlag;
+const reuseExistingBuild = cliArgs.includes(reuseFlag);
+const forwardedArgs = cliArgs.filter((arg) => arg !== reuseFlag);
 let previewServer;
-
-if (cliArgs.length > 0 && !reuseExistingBuild) {
-  throw new Error(`Unknown option(s): ${cliArgs.join(' ')}. Supported option: ${reuseFlag}`);
-}
 
 function waitForExit(child) {
   return new Promise((resolve, reject) => {
@@ -69,7 +66,7 @@ try {
   });
   const bundleUrl = loopbackUrl(previewServer.httpServer);
   console.log(`[desktop bundle e2e] owned Vite preview: ${bundleUrl}`);
-  const code = await runPlaywright(process.execPath, [playwrightCli, 'test'], {
+  const code = await runPlaywright(process.execPath, [playwrightCli, 'test', ...forwardedArgs], {
     cwd: desktopRoot,
     env: {
       ...process.env,

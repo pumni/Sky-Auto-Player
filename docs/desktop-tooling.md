@@ -44,13 +44,15 @@ bunx playwright install chromium
 bun run test:functional
 ```
 
-## Isolated desktop browser checks
+## Isolated desktop and website browser checks
 
-`bun run test:e2e` and `bun run test:e2e:bundle` start their own loopback Vite
-server and pass its actual bound URL to Playwright. Separate worktrees can use
-independent ports without polling or attaching to an unrelated server. Test
-artifacts remain relative to the app checkout. Keep one active run per checkout
-when tests write fixed artifact paths; separate worktrees isolate those paths.
+`bun run test:e2e` and `bun run test:e2e:bundle` in `apps/desktop/` start their own loopback Vite
+server and pass its actual bound URL to Playwright.
+Similarly, `bun run test:functional` / `test:e2e` in `apps/website/` starts an owned Astro preview
+server on an OS-allocated IPv4 loopback port (`127.0.0.1:0`), completely isolated from external interfaces and other checkouts.
+Separate worktrees use independent ephemeral ports without polling, attaching to unrelated servers, or using broad process kills.
+Test artifacts remain relative to the app checkout. Worktree mutable resources (Cargo target, generated IPC binding export,
+app data, fixtures, browser output, ephemeral ports) are checkout-local.
 Browser checks remain mock-shell evidence, not native Windows qualification.
 
 ## Repository checks

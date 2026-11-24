@@ -12,6 +12,8 @@ mod trust;
 mod workflow;
 
 use crate::{Result, audits, branding, builtin_catalog, process, repo, supply_chain, tauri_bundle};
+use serde::Serialize;
+use std::net::TcpListener;
 use std::path::Path;
 
 pub(crate) use bindings::{bindings, bindings_generate};
@@ -24,10 +26,164 @@ pub(crate) fn should_skip_supply_chain(flag: bool, env_val: Option<&str>) -> boo
     flag || env_val.map(|v| v.trim()) == Some("1")
 }
 
+pub(crate) const STATIC_LEAF_CHECKS: &[&str] = &[
+    "app-boundaries",
+    "docs-integrity",
+    "architecture",
+    "security",
+    "tauri-feature-contract",
+    "supply-chain",
+    "branding",
+    "tauri-config",
+    "tauri-build-freshness",
+    "builtin-catalog",
+    "trust-material",
+    "bun-pin",
+    "rust-toolchain",
+    "ci-control-plane",
+    "release-metadata",
+    "release-runner",
+    "hosted-signing",
+    "hosted-malware",
+    "release-pipeline",
+    "packaged-ci",
+    "legacy-updater-retirement",
+];
+
+pub(crate) const RUST_LEAF_CHECKS: &[&str] =
+    &["builtin-catalog", "rust-fmt", "rust-clippy", "rust-tests"];
+
+pub(crate) const DESKTOP_LEAF_CHECKS: &[&str] = &[
+    "desktop-install",
+    "desktop-check",
+    "desktop-e2e",
+    "desktop-native",
+];
+
+pub(crate) const DESKTOP_NATIVE_LEAF_CHECKS: &[&str] = &["desktop-native"];
+
+fn contract_pointer(check_name: &str) -> Option<&'static str> {
+    match check_name {
+        "app-boundaries" => Some("docs/architecture.md"),
+        "docs-integrity" => Some("docs/INDEX.md"),
+        "architecture" => Some("docs/architecture.md"),
+        "security" => Some("SECURITY.md"),
+        "tauri-feature-contract" => Some("docs/architecture.md"),
+        "supply-chain" => Some("rust/supply-chain/config.toml"),
+        "branding" => Some("branding/README.md"),
+        "tauri-config" => Some("apps/desktop/src-tauri/tauri.conf.json"),
+        "tauri-build-freshness" => Some("docs/v4-tauri-packaging.md"),
+        "builtin-catalog" => Some("docs/architecture.md"),
+        "trust-material" => Some("docs/v4-release-authority.md"),
+        "bun-pin" => Some(".bun-version"),
+        "rust-toolchain" => Some("rust-toolchain.toml"),
+        "ci-control-plane" => Some("docs/ci-validation-topology.md"),
+        "release-metadata" => Some("docs/distribution-and-update.md"),
+        "release-runner" => Some("docs/v4-release-authority.md"),
+        "hosted-signing" => Some("docs/v4-release-authority.md"),
+        "hosted-malware" => Some("docs/distribution-and-update.md"),
+        "release-pipeline" => Some("docs/v4-release-authority.md"),
+        "packaged-ci" => Some("docs/ci-validation-topology.md"),
+        "legacy-updater-retirement" => Some("docs/distribution-and-update.md"),
+        "rust-fmt" => Some("rust-toolchain.toml"),
+        "rust-clippy" => Some("rust-toolchain.toml"),
+        "rust-tests" => Some("docs/playback-verification.md"),
+        "desktop-install" => Some(".bun-version"),
+        "desktop-check" => Some("docs/desktop-tooling.md"),
+        "desktop-e2e" => Some("docs/desktop-tooling.md"),
+        "desktop-native" => Some("docs/architecture.md"),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct CheckEntry {
+    pub name: String,
+    pub status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct GroupEntry {
+    pub name: String,
+    pub status: String,
+    pub checks: Vec<CheckEntry>,
+}
+
 #[derive(Default)]
-struct CheckSession {
-    builtin_catalog_verified: bool,
-    outcomes: Vec<(&'static str, &'static str)>,
+pub struct CheckSession {
+    pub builtin_catalog_verified: bool,
+    pub groups: Vec<GroupEntry>,
+    current_group: Option<GroupEntry>,
+}
+
+impl CheckSession {
+    pub fn start_group(&mut self, name: &'static str, planned_leaves: &[&str]) {
+        self.current_group = Some(GroupEntry {
+            name: name.to_owned(),
+            status: "not-run".to_owned(),
+            checks: planned_leaves
+                .iter()
+                .map(|&leaf| CheckEntry {
+                    name: leaf.to_owned(),
+                    status: "not-run".to_owned(),
+                    reason: None,
+                })
+                .collect(),
+        });
+    }
+
+    pub fn record_leaf(&mut self, name: &str, status: &str, reason: Option<String>) {
+        if let Some(group) = &mut self.current_group {
+            if let Some(entry) = group.checks.iter_mut().find(|c| c.name == name) {
+                entry.status = status.to_owned();
+                entry.reason = reason;
+            } else {
+                group.checks.push(CheckEntry {
+                    name: name.to_owned(),
+                    status: status.to_owned(),
+                    reason,
+                });
+            }
+        }
+    }
+
+    pub fn finish_group(&mut self, is_ok: bool) {
+        if let Some(mut group) = self.current_group.take() {
+            group.status = if is_ok {
+                "passed".to_owned()
+            } else {
+                "failed".to_owned()
+            };
+            self.groups.push(group);
+        }
+    }
+
+    pub fn add_not_run_group(&mut self, name: &'static str, planned_leaves: &[&str]) {
+        self.groups.push(GroupEntry {
+            name: name.to_owned(),
+            status: "not-run".to_owned(),
+            checks: planned_leaves
+                .iter()
+                .map(|&leaf| CheckEntry {
+                    name: leaf.to_owned(),
+                    status: "not-run".to_owned(),
+                    reason: None,
+                })
+                .collect(),
+        });
+    }
+
+    pub fn all_leaf_checks(&self) -> Vec<CheckEntry> {
+        let mut checks = Vec::new();
+        for g in &self.groups {
+            for c in &g.checks {
+                checks.push(c.clone());
+            }
+        }
+        checks
+    }
 }
 
 fn run_once_per_check_session(
@@ -46,8 +202,14 @@ fn verify_builtin_catalog(root: &Path, session: &mut CheckSession) -> Result<()>
     let ran = run_once_per_check_session(&mut session.builtin_catalog_verified, || {
         builtin_catalog::run(root, "verify", &[])
     })?;
-    session.outcomes.push(("builtin-catalog", if ran { "passed" } else { "reused" }));
-    if !ran {
+    if ran {
+        session.record_leaf("builtin-catalog", "passed", None);
+    } else {
+        session.record_leaf(
+            "builtin-catalog",
+            "reused",
+            Some("verified earlier in check session".to_owned()),
+        );
         println!("Built-in catalog verification: PASS (reused in this check session)");
     }
     Ok(())
@@ -108,18 +270,19 @@ pub fn run(group: &str, skip_supply_chain: bool, json_summary: bool) -> Result<(
     let mut session = CheckSession::default();
     let result = run_with_session(group, skip_supply_chain, &mut session);
     if json_summary {
-        let checks = session
-            .outcomes
-            .iter()
-            .map(|(name, status)| serde_json::json!({"name": name, "status": status}))
-            .collect::<Vec<_>>();
+        let root = repo::root();
+        let source_identity =
+            repo::git_head(&root, false).unwrap_or_else(|_| "unavailable".to_owned());
+        let all_checks = session.all_leaf_checks();
         println!(
             "[xtask-summary] {}",
             serde_json::json!({
                 "schema_version": 1,
                 "group": group,
                 "status": if result.is_ok() { "passed" } else { "failed" },
-                "checks": checks,
+                "source_identity": source_identity,
+                "groups": session.groups,
+                "checks": all_checks,
                 "unlisted_checks": "not-run or outside requested group",
                 "merge_readiness": "not assessed"
             })
@@ -133,9 +296,22 @@ fn record_step(
     name: &'static str,
     check: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    let result = check();
-    session.outcomes.push((name, if result.is_ok() { "passed" } else { "failed" }));
-    result
+    match check() {
+        Ok(()) => {
+            session.record_leaf(name, "passed", None);
+            Ok(())
+        }
+        Err(error) => {
+            let error_msg = error.to_string();
+            eprintln!("[xtask-failure] check: {name}");
+            eprintln!("  cause: {error_msg}");
+            if let Some(ptr) = contract_pointer(name) {
+                eprintln!("  contract pointer: {ptr}");
+            }
+            session.record_leaf(name, "failed", Some(error_msg));
+            Err(error)
+        }
+    }
 }
 
 fn run_with_session(
@@ -143,165 +319,266 @@ fn run_with_session(
     skip_supply_chain: bool,
     session: &mut CheckSession,
 ) -> Result<()> {
-    let result = run_group(group, skip_supply_chain, session);
-    let name = match group {
-        "static" => "group-static",
-        "rust" => "group-rust",
-        "desktop" => "group-desktop",
-        "desktop-native" => "group-desktop-native",
-        "all" => "group-all",
-        _ => "unknown-group",
-    };
-    session.outcomes.push((name, if result.is_ok() { "passed" } else { "failed" }));
-    result
+    match group {
+        "static" => {
+            session.start_group("group-static", STATIC_LEAF_CHECKS);
+            let res = run_static_group(skip_supply_chain, session);
+            session.finish_group(res.is_ok());
+            res
+        }
+        "rust" => {
+            session.start_group("group-rust", RUST_LEAF_CHECKS);
+            let res = run_rust_group(session);
+            session.finish_group(res.is_ok());
+            res
+        }
+        "desktop" => {
+            session.start_group("group-desktop", DESKTOP_LEAF_CHECKS);
+            let res = (|| -> Result<()> {
+                let root = repo::root();
+                record_step(session, "desktop-install", || {
+                    process::run(
+                        "bun",
+                        &["install", "--frozen-lockfile"],
+                        &root.join("apps/desktop"),
+                        &[],
+                    )
+                })?;
+                record_step(session, "desktop-check", || {
+                    process::run("bun", &["run", "check"], &root.join("apps/desktop"), &[])
+                })?;
+                if std::env::var_os("SKY_DESKTOP_SKIP_BROWSER").is_none() {
+                    record_step(session, "desktop-e2e", || {
+                        process::run("bun", &["run", "test:e2e"], &root.join("apps/desktop"), &[])
+                    })?;
+                } else {
+                    session.record_leaf(
+                        "desktop-e2e",
+                        "skipped",
+                        Some("SKY_DESKTOP_SKIP_BROWSER set".to_owned()),
+                    );
+                    println!(
+                        "[xtask] desktop browser E2E: SKIP (not required for this validation)"
+                    );
+                }
+                record_step(session, "desktop-native", || check_desktop_native(&root))?;
+                println!("[xtask] check desktop: PASS");
+                Ok(())
+            })();
+            session.finish_group(res.is_ok());
+            res
+        }
+        "desktop-native" => {
+            session.start_group("group-desktop-native", DESKTOP_NATIVE_LEAF_CHECKS);
+            let root = repo::root();
+            let res = record_step(session, "desktop-native", || check_desktop_native(&root));
+            session.finish_group(res.is_ok());
+            res
+        }
+        "all" => {
+            session.start_group("group-static", STATIC_LEAF_CHECKS);
+            let static_res = run_static_group(skip_supply_chain, session);
+            session.finish_group(static_res.is_ok());
+            if let Err(e) = static_res {
+                session.add_not_run_group("group-rust", RUST_LEAF_CHECKS);
+                session.add_not_run_group("group-desktop", DESKTOP_LEAF_CHECKS);
+                return Err(e);
+            }
+
+            session.start_group("group-rust", RUST_LEAF_CHECKS);
+            let rust_res = run_rust_group(session);
+            session.finish_group(rust_res.is_ok());
+            if let Err(e) = rust_res {
+                session.add_not_run_group("group-desktop", DESKTOP_LEAF_CHECKS);
+                return Err(e);
+            }
+
+            run_with_session("desktop", skip_supply_chain, session)
+        }
+        other => Err(format!("unknown check group: {other}").into()),
+    }
 }
 
-fn run_group(group: &str, skip_supply_chain: bool, session: &mut CheckSession) -> Result<()> {
+fn run_static_group(skip_supply_chain: bool, session: &mut CheckSession) -> Result<()> {
     let root = repo::root();
     let env_val = std::env::var("SKY_CHECK_SKIP_SUPPLY_CHAIN").ok();
     let skip_supply_chain = should_skip_supply_chain(skip_supply_chain, env_val.as_deref());
-    match group {
-        "static" => {
-            record_step(session, "app-boundaries", || audits::app_boundaries::run(&root))?;
-            record_step(session, "docs-integrity", || audits::docs_integrity::run(&root))?;
-            record_step(session, "architecture", || audits::architecture::run(&root))?;
-            record_step(session, "security", || audits::security::run(&root))?;
-            record_step(session, "tauri-feature-contract", || {
-                tauri_metadata::tauri_feature_contract(&root)
-            })?;
-            if !skip_supply_chain {
-                record_step(session, "supply-chain", || supply_chain::run(None))?;
-            } else {
-                session.outcomes.push(("supply-chain", "skipped"));
-                println!(
-                    "[xtask] cargo-vet supply-chain: SKIP (verified by dedicated supply-chain gate)"
-                );
-            }
-            record_step(session, "branding", || branding::validate(&root))?;
-            record_step(session, "tauri-config", || tauri_bundle::validate_config(&root))?;
-            record_step(session, "tauri-build-freshness", || {
-                tauri_metadata::tauri_build_freshness_contract(&root)
-            })?;
-            verify_builtin_catalog(&root, session)?;
-            record_step(session, "trust-material", || trust::v4_trust_material_contract(&root))?;
-            record_step(session, "bun-pin", || bun_pin::bun_pin_contract(&root))?;
-            record_step(session, "rust-toolchain", || {
-                rust_toolchain::rust_toolchain_contract(&root)
-            })?;
-            record_step(session, "ci-control-plane", || {
-                ci_contracts::ci_control_plane_contract(&root)
-            })?;
-            record_step(session, "release-metadata", || {
-                tauri_metadata::release_metadata_contract(&root)
-            })?;
-            record_step(session, "release-runner", || {
-                release_runner::release_runner_contract(&root)
-            })?;
-            record_step(session, "hosted-signing", || {
-                hosted_signing::hosted_v4_signing_workflow_contract(&root)
-            })?;
-            record_step(session, "hosted-malware", || {
-                hosted_malware::hosted_malware_proof_contract(&root)
-            })?;
-            record_step(session, "release-pipeline", || {
-                release_pipeline::v4_release_pipeline_contract(&root)
-            })?;
-            record_step(session, "packaged-ci", || ci_contracts::packaged_ci_contract(&root))?;
-            record_step(session, "legacy-updater-retirement", || {
-                tauri_metadata::v4_legacy_updater_retirement(&root)
-            })?;
-        }
-        "rust" => {
-            verify_builtin_catalog(&root, session)?;
-            // The canonical Windows qualification runs workspace tests in a
-            // restricted environment.  Keep process-global test fixtures
-            // deterministic there; this does not change product concurrency.
-            let export_dir = bindings::prepare_binding_export_dir(&root)?;
-            let export_dir = export_dir
-                .to_str()
-                .ok_or("binding export directory is not valid UTF-8")?
-                .to_owned();
-            let test_env = [
-                // Cargo must not replace the running xtask.exe in the shared target directory.
-                ("CARGO_TARGET_DIR", "rust/target/check-all-rust-tests"),
-                ("RUST_TEST_THREADS", "1"),
-                ("TS_RS_EXPORT_DIR", export_dir.as_str()),
-            ];
-            process::run(
-                "cargo",
-                &[
-                    "fmt",
-                    "--manifest-path",
-                    "rust/Cargo.toml",
-                    "--all",
-                    "--",
-                    "--check",
-                ],
-                &root,
-                &[],
-            )?;
-            process::run(
-                "cargo",
-                &[
-                    "clippy",
-                    "--manifest-path",
-                    "rust/Cargo.toml",
-                    "--workspace",
-                    "--all-targets",
-                    "--all-features",
-                    "--locked",
-                    "--",
-                    "-D",
-                    "warnings",
-                ],
-                &root,
-                &[],
-            )?;
-            process::run(
-                "cargo",
-                &[
-                    "test",
-                    "--manifest-path",
-                    "rust/Cargo.toml",
-                    "--workspace",
-                    "--all-features",
-                    "--locked",
-                ],
-                &root,
-                &test_env,
-            )?;
-        }
-        "desktop" => {
-            process::run(
-                "bun",
-                &["install", "--frozen-lockfile"],
-                &root.join("apps/desktop"),
-                &[],
-            )?;
-            record_step(session, "desktop-check", || {
-                process::run("bun", &["run", "check"], &root.join("apps/desktop"), &[])
-            })?;
-            if std::env::var_os("SKY_DESKTOP_SKIP_BROWSER").is_none() {
-                record_step(session, "desktop-e2e", || {
-                process::run("bun", &["run", "test:e2e"], &root.join("apps/desktop"), &[])
-            })?;
-            } else {
-                session.outcomes.push(("desktop-e2e", "skipped"));
-                println!("[xtask] desktop browser E2E: SKIP (not required for this validation)");
-            }
-            record_step(session, "desktop-native", || check_desktop_native(&root))?;
-        }
-        "desktop-native" => {
-            record_step(session, "desktop-native", || check_desktop_native(&root))?;
-        }
-        "all" => {
-            run_with_session("static", skip_supply_chain, session)?;
-            run_with_session("rust", skip_supply_chain, session)?;
-            run_with_session("desktop", skip_supply_chain, session)?;
-        }
-        other => return Err(format!("unknown check group: {other}").into()),
+
+    record_step(session, "app-boundaries", || {
+        audits::app_boundaries::run(&root)
+    })?;
+    record_step(session, "docs-integrity", || {
+        audits::docs_integrity::run(&root)
+    })?;
+    record_step(session, "architecture", || audits::architecture::run(&root))?;
+    record_step(session, "security", || audits::security::run(&root))?;
+    record_step(session, "tauri-feature-contract", || {
+        tauri_metadata::tauri_feature_contract(&root)
+    })?;
+    if !skip_supply_chain {
+        record_step(session, "supply-chain", || supply_chain::run(None))?;
+    } else {
+        session.record_leaf(
+            "supply-chain",
+            "skipped",
+            Some("verified by dedicated supply-chain gate or explicit skip".to_owned()),
+        );
+        println!("[xtask] cargo-vet supply-chain: SKIP (verified by dedicated supply-chain gate)");
     }
-    println!("[xtask] check {group}: PASS");
+    record_step(session, "branding", || branding::validate(&root))?;
+    record_step(session, "tauri-config", || {
+        tauri_bundle::validate_config(&root)
+    })?;
+    record_step(session, "tauri-build-freshness", || {
+        tauri_metadata::tauri_build_freshness_contract(&root)
+    })?;
+    verify_builtin_catalog(&root, session)?;
+    record_step(session, "trust-material", || {
+        trust::v4_trust_material_contract(&root)
+    })?;
+    record_step(session, "bun-pin", || bun_pin::bun_pin_contract(&root))?;
+    record_step(session, "rust-toolchain", || {
+        rust_toolchain::rust_toolchain_contract(&root)
+    })?;
+    record_step(session, "ci-control-plane", || {
+        ci_contracts::ci_control_plane_contract(&root)
+    })?;
+    record_step(session, "release-metadata", || {
+        tauri_metadata::release_metadata_contract(&root)
+    })?;
+    record_step(session, "release-runner", || {
+        release_runner::release_runner_contract(&root)
+    })?;
+    record_step(session, "hosted-signing", || {
+        hosted_signing::hosted_v4_signing_workflow_contract(&root)
+    })?;
+    record_step(session, "hosted-malware", || {
+        hosted_malware::hosted_malware_proof_contract(&root)
+    })?;
+    record_step(session, "release-pipeline", || {
+        release_pipeline::v4_release_pipeline_contract(&root)
+    })?;
+    record_step(session, "packaged-ci", || {
+        ci_contracts::packaged_ci_contract(&root)
+    })?;
+    record_step(session, "legacy-updater-retirement", || {
+        tauri_metadata::v4_legacy_updater_retirement(&root)
+    })?;
+    println!("[xtask] check static: PASS");
+    Ok(())
+}
+
+fn run_rust_group(session: &mut CheckSession) -> Result<()> {
+    let root = repo::root();
+    verify_builtin_catalog(&root, session)?;
+
+    let export_dir = bindings::prepare_binding_export_dir(&root)?;
+    let export_dir = export_dir
+        .to_str()
+        .ok_or("binding export directory is not valid UTF-8")?
+        .to_owned();
+    let test_env = [
+        ("CARGO_TARGET_DIR", "rust/target/check-all-rust-tests"),
+        ("RUST_TEST_THREADS", "1"),
+        ("TS_RS_EXPORT_DIR", export_dir.as_str()),
+    ];
+
+    record_step(session, "rust-fmt", || {
+        process::run(
+            "cargo",
+            &[
+                "fmt",
+                "--manifest-path",
+                "rust/Cargo.toml",
+                "--all",
+                "--",
+                "--check",
+            ],
+            &root,
+            &[],
+        )
+    })?;
+
+    record_step(session, "rust-clippy", || {
+        process::run(
+            "cargo",
+            &[
+                "clippy",
+                "--manifest-path",
+                "rust/Cargo.toml",
+                "--workspace",
+                "--all-targets",
+                "--all-features",
+                "--locked",
+                "--",
+                "-D",
+                "warnings",
+            ],
+            &root,
+            &[],
+        )
+    })?;
+
+    record_step(session, "rust-tests", || {
+        process::run(
+            "cargo",
+            &[
+                "test",
+                "--manifest-path",
+                "rust/Cargo.toml",
+                "--workspace",
+                "--all-features",
+                "--locked",
+            ],
+            &root,
+            &test_env,
+        )
+    })?;
+
+    println!("[xtask] check rust: PASS");
+    Ok(())
+}
+
+pub fn run_preflight() -> Result<()> {
+    println!("[xtask-preflight] inspecting local development environment read-only...");
+    println!(
+        "[xtask-preflight] OS / Arch: {} / {}",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+
+    let root = repo::root();
+    let rustc = process::capture_text("rustc", &["--version"], &root, &[])
+        .unwrap_or_else(|_| "unavailable".to_owned());
+    let cargo = process::capture_text("cargo", &["--version"], &root, &[])
+        .unwrap_or_else(|_| "unavailable".to_owned());
+    let bun = process::capture_text("bun", &["--version"], &root, &[])
+        .unwrap_or_else(|_| "unavailable".to_owned());
+    let node = process::capture_text("node", &["--version"], &root, &[])
+        .unwrap_or_else(|_| "unavailable".to_owned());
+    let git = process::capture_text("git", &["--version"], &root, &[])
+        .unwrap_or_else(|_| "unavailable".to_owned());
+
+    println!("[xtask-preflight] rustc: {rustc}");
+    println!("[xtask-preflight] cargo: {cargo}");
+    println!("[xtask-preflight] bun:   {bun}");
+    println!("[xtask-preflight] node:  {node}");
+    println!("[xtask-preflight] git:   {git}");
+
+    match TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => {
+            let port = listener
+                .local_addr()
+                .map(|addr| addr.port())
+                .unwrap_or_default();
+            println!("[xtask-preflight] IPv4 loopback socket: OK (bound port {port})");
+        }
+        Err(err) => {
+            return Err(format!("IPv4 loopback socket bind failed: {err}").into());
+        }
+    }
+
+    println!("[xtask-preflight] status: READY (no implicit installations performed)");
     Ok(())
 }
 
@@ -356,19 +633,12 @@ mod tests {
 
     #[test]
     fn should_skip_supply_chain_fails_closed() {
-        // Absent env var and flag false -> do not skip
         assert!(!should_skip_supply_chain(false, None));
-
-        // Explicit flag true -> skip
         assert!(should_skip_supply_chain(true, None));
         assert!(should_skip_supply_chain(true, Some("0")));
         assert!(should_skip_supply_chain(true, Some("false")));
-
-        // Env var exactly "1" -> skip
         assert!(should_skip_supply_chain(false, Some("1")));
         assert!(should_skip_supply_chain(false, Some(" 1 ")));
-
-        // Ambiguous / falsey / arbitrary env vars -> fail closed (do NOT skip)
         assert!(!should_skip_supply_chain(false, Some("0")));
         assert!(!should_skip_supply_chain(false, Some("false")));
         assert!(!should_skip_supply_chain(false, Some("FALSE")));
@@ -376,5 +646,75 @@ mod tests {
         assert!(!should_skip_supply_chain(false, Some("")));
         assert!(!should_skip_supply_chain(false, Some("yes")));
         assert!(!should_skip_supply_chain(false, Some("2")));
+    }
+
+    #[test]
+    fn check_session_records_leaves_failures_and_not_run() {
+        let mut session = CheckSession::default();
+        session.start_group("group-test", &["step-a", "step-b", "step-c"]);
+
+        assert!(record_step(&mut session, "step-a", || Ok(())).is_ok());
+        let fail = record_step(&mut session, "step-b", || Err("injected error".into()));
+        assert!(fail.is_err());
+        session.finish_group(false);
+
+        let group = &session.groups[0];
+        assert_eq!(group.name, "group-test");
+        assert_eq!(group.status, "failed");
+        assert_eq!(group.checks.len(), 3);
+
+        assert_eq!(group.checks[0].name, "step-a");
+        assert_eq!(group.checks[0].status, "passed");
+
+        assert_eq!(group.checks[1].name, "step-b");
+        assert_eq!(group.checks[1].status, "failed");
+        assert_eq!(group.checks[1].reason.as_deref(), Some("injected error"));
+
+        assert_eq!(group.checks[2].name, "step-c");
+        assert_eq!(group.checks[2].status, "not-run");
+    }
+
+    #[test]
+    fn check_session_summary_schema_free_of_secrets_and_absolute_paths() {
+        let mut session = CheckSession::default();
+        session.start_group("group-static", STATIC_LEAF_CHECKS);
+        session.record_leaf("app-boundaries", "passed", None);
+        session.record_leaf(
+            "supply-chain",
+            "skipped",
+            Some("skipped via test".to_owned()),
+        );
+        session.finish_group(true);
+
+        let json = serde_json::to_string(&session.groups).unwrap();
+        assert!(!json.contains("D:\\"));
+        assert!(!json.contains("C:\\"));
+        assert!(!json.contains("secret"));
+        assert!(json.contains("group-static"));
+        assert!(json.contains("app-boundaries"));
+        assert!(json.contains("supply-chain"));
+        assert!(json.contains("skipped"));
+    }
+
+    #[test]
+    fn contract_pointers_defined_for_critical_checks() {
+        assert_eq!(
+            contract_pointer("app-boundaries"),
+            Some("docs/architecture.md")
+        );
+        assert_eq!(contract_pointer("security"), Some("SECURITY.md"));
+        assert_eq!(
+            contract_pointer("desktop-native"),
+            Some("docs/architecture.md")
+        );
+        assert_eq!(
+            contract_pointer("desktop-e2e"),
+            Some("docs/desktop-tooling.md")
+        );
+    }
+
+    #[test]
+    fn run_preflight_succeeds_in_current_environment() {
+        assert!(run_preflight().is_ok());
     }
 }

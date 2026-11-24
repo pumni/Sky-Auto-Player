@@ -5,7 +5,7 @@ export default defineConfig({
   fullyParallel: true,
   reporter: 'html',
   use: {
-    baseURL: 'http://localhost:4321/Sky-Auto-Player',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://127.0.0.1:4321/Sky-Auto-Player',
     trace: 'on-first-retry',
   },
   projects: [

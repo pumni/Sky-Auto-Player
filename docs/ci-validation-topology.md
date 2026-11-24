@@ -155,19 +155,22 @@ trade those checks for shared state.
 
 ## Local impact inspection
 
-`cargo xtask ci classify --working-tree` is a read-only preview of PR-mode
-lanes for staged, unstaged, and untracked non-ignored paths relative to HEAD.
+`cargo xtask ci classify --working-tree [--base <ref>]` is a read-only preview of PR-mode
+lanes for staged, unstaged, and untracked non-ignored paths relative to HEAD, or from
+the local merge-base of an explicit base ref.
 It uses the existing classifier, treats renames as deletion plus addition, and
-fails closed on Git errors or malformed paths. It does not include already
-committed branch changes; use the actual PR CI result for those. This is an
+fails closed on Git errors, missing base commits, or malformed paths. This is an
 advisory impact hint, not a replacement for the canonical merge gate or a
 behavioral risk assessment.
 
-`cargo xtask check all --json-summary` emits an `[xtask-summary]` JSON record
-with observed check/group outcomes, including explicit supply-chain/browser
-skips and catalog reuse. Unlisted checks are not inferred to have passed; a
-failed command short-circuits as before. Preserve the raw command log, exit
-code, and source identity separately. This summary is not merge authorization.
+`cargo xtask check <group> --json-summary` emits an `[xtask-summary]` JSON record
+with observed leaf and group outcomes, failures, not-run steps, explicit supply-chain/browser
+skips and catalog reuse. Group success does not imply unexecuted children ran;
+ordinary failures still emit the summary while preserving non-zero exit semantics.
+Preserve the raw command log, exit code, and source identity separately. This summary is not merge authorization.
+
+`cargo xtask preflight` provides an on-demand, read-only inspection of the local toolchain
+and environment capabilities (OS, Rust, Bun, Node, Git, IPv4 loopback socket) without installing anything implicitly.
 
 ## Local command roots
 
