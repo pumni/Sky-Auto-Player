@@ -2,7 +2,7 @@
 
 This ledger maps the independent review's deleted Graphite/UI oracles to tests that exercise the
 current Tailwind v4, Base UI, and shared-component architecture. It records the reviewed source
-identity `862741b106b9d68f05d4738871b41cb214c6a9db`; old selectors and screenshot-only checks were
+identity `8bb6789589062fa5bf86595427a307fddb6a8217`; old selectors and screenshot-only checks were
 not carried forward as assertions.
 
 | Removed suite or test | Meaningful oracle | Current replacement coverage |
@@ -19,14 +19,29 @@ not carried forward as assertions.
 
 ## Current Axe limitation
 
-The open Add songs menu is covered for ArrowDown/ArrowUp, Space, Enter, Tab/Shift+Tab exit,
-Escape restoration, outside interaction, compact hit targets, and focus leaving Base UI's guards by
-`library.spec.ts`. The final full Playwright run reports Axe 4.14 `aria-hidden-focus` in
-`compact playlist source keeps Add, Import, Back, long-name access, and hit targets`, which scans
-with the Add songs menu open. Axe points to Base UI 1.9.0's own
-`span[data-base-ui-focus-guard][aria-hidden="true"][tabindex="0"]`. The issue reproduces with the
-required shared `modal={false}` Menu root. Axe remains enabled for both checks, and no
-Base UI focus guard is changed. One earlier full run reported the same finding during the populated
-playlist post-import scan; the final full run passed that scan. This is an unresolved R5 blocker
-pending an upstream-safe resolution and leader decision; the final Axe failure is not counted as
-passing.
+The ordinary Add songs menu uses the shared Base UI 1.9.0 Menu root with its supported
+`modal={false}` setting. The keyboard regression covers ArrowDown/ArrowUp, Space, Enter,
+Tab/Shift+Tab exit, Escape restoration, outside interaction, compact hit targets, and focus leaving
+Base UI's guards in `library.spec.ts`. The compact regression opens the menu at 640×448 with the
+keyboard, confirms the first item is focused, and runs the unfiltered Axe scan while the popup is
+open. That scan reproducibly reports serious Axe 4.14 `aria-hidden-focus` violations on the
+library's mounted `span[data-base-ui-focus-guard][aria-hidden="true"][tabindex="0"]` elements.
+The pinned library implements these guards in `node_modules/@base-ui/react/utils/FocusGuard.mjs`
+and its menu trigger/focus manager; the guards are intentionally focusable so their focus handlers
+can move keyboard focus out of the popup. Axe's full finding is preserved in
+`apps/desktop/test-results/library-compact-playlist-s-8c55d-name-access-and-hit-targets/error-context.md`
+for this run. The same focused reproduction is:
+
+```powershell
+$env:GRAPHITE_WORKSPACE_CAPTURE = 'candidate'
+bun run test:e2e -- tests/e2e/library.spec.ts --grep "compact playlist source keeps Add, Import, Back, long-name access, and hit targets" --reporter=line --workers=1
+```
+
+The test's accessible-role queries and focus assertions expose the menu and its focused menu item
+to the browser accessibility tree; the broader Add songs keyboard test validates the tab exit and
+focus restoration sequence. This is browser keyboard/accessibility-tree evidence, not a claim of a
+manual NVDA or Narrator session. Axe remains enabled with no rule/selector exclusions, and no
+Base UI focus guard is changed. A previous full run also found the guard during a populated
+playlist scan; the final full run passed that scan. The final canonical gate reports 148 passed,
+1 skipped, and this 1 failed E2E test. R5 therefore remains unresolved pending the required
+leader decision on the exact guard-only finding; it is not counted as passing.
