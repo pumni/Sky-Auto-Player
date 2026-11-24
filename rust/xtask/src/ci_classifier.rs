@@ -905,7 +905,8 @@ fn classify_git_range(root: &Path, mode: DiffMode, base: &str, head: &str) -> Cl
 }
 
 fn classify_working_tree(root: &Path, base: Option<&str>) -> Result<Classification> {
-    let mut paths = Vec::new();
+    let mut command_specs: Vec<Vec<&str>> = Vec::new();
+    let range;
     if let Some(base_ref) = base {
         if base_ref.starts_with('-') || base_ref.trim().is_empty() {
             return Ok(Classification::full(format!(
@@ -940,54 +941,35 @@ fn classify_working_tree(root: &Path, base: Option<&str>) -> Result<Classificati
         if merge_base.is_empty() {
             return Ok(Classification::full("empty merge-base (fail-closed)"));
         }
-        let range = format!("{merge_base}..HEAD");
-        for args in [
-            &[
-                "diff",
-                "--name-only",
-                "--no-renames",
-                "-z",
-                range.as_str(),
-                "--",
-            ][..],
-            &[
-                "diff",
-                "--cached",
-                "--name-only",
-                "--no-renames",
-                "-z",
-                "HEAD",
-                "--",
-            ][..],
-            &["diff", "--name-only", "--no-renames", "-z", "--"][..],
-            &["ls-files", "--others", "--exclude-standard", "-z"][..],
-        ] {
-            let output = git_output(root, args)?;
-            if !output.status.success() {
-                return Err(format!("git {} failed", args.join(" ")).into());
-            }
-            paths.extend(decode_git_paths(&output.stdout)?);
+        range = format!("{merge_base}..HEAD");
+        command_specs.push(vec![
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            range.as_str(),
+            "--",
+        ]);
+    }
+    command_specs.push(vec![
+        "diff",
+        "--cached",
+        "--name-only",
+        "--no-renames",
+        "-z",
+        "HEAD",
+        "--",
+    ]);
+    command_specs.push(vec!["diff", "--name-only", "--no-renames", "-z", "--"]);
+    command_specs.push(vec!["ls-files", "--others", "--exclude-standard", "-z"]);
+
+    let mut paths = Vec::new();
+    for args in &command_specs {
+        let output = git_output(root, args.as_slice())?;
+        if !output.status.success() {
+            return Err(format!("git {} failed", args.join(" ")).into());
         }
-    } else {
-        for args in [
-            &[
-                "diff",
-                "--cached",
-                "--name-only",
-                "--no-renames",
-                "-z",
-                "HEAD",
-                "--",
-            ][..],
-            &["diff", "--name-only", "--no-renames", "-z", "--"][..],
-            &["ls-files", "--others", "--exclude-standard", "-z"][..],
-        ] {
-            let output = git_output(root, args)?;
-            if !output.status.success() {
-                return Err(format!("git {} failed", args.join(" ")).into());
-            }
-            paths.extend(decode_git_paths(&output.stdout)?);
-        }
+        paths.extend(decode_git_paths(&output.stdout)?);
     }
     paths.sort();
     paths.dedup();
