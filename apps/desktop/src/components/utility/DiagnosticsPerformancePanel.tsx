@@ -1,6 +1,5 @@
 import { TabPanel } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
-import { timingMarginRecommendationSourceLabel } from '../timingMarginSource';
 import { backendStatusLabel, measure, playbackStatusLabel } from './diagnosticsPresentation';
 import {
   DiagnosticsEmptyState,
@@ -230,24 +229,6 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
             />
             <Metric label="Configured Timing Margin" value={`${latest.timing_margin_us} µs`} />
             <Metric label="Target hold" value={`${(latest.min_hold_us / 1_000).toFixed(3)} ms`} />
-            <Metric
-              label="Release gap"
-              value={`${(latest.min_release_gap_us / 1_000).toFixed(3)} ms`}
-            />
-            <Metric
-              label="Recommended sender margin"
-              value={
-                latest.timing_margin_recommendation.recommended_timing_margin_us === null
-                  ? 'Unavailable'
-                  : `${latest.timing_margin_recommendation.recommended_timing_margin_us} µs`
-              }
-            />
-            <Metric
-              label="Recommendation source"
-              value={timingMarginRecommendationSourceLabel(
-                latest.timing_margin_recommendation.source,
-              )}
-            />
           </MetricGroup>
           <MetricGroup title="Late events">
             <Metric label="Completion > 2 ms" value={senderSampleMetric(latest.late_2ms)} />
@@ -308,7 +289,7 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
               value={playerMetric(latest.final_gate_control_rejections)}
             />
           </MetricGroup>
-          <MetricGroup title="Physical floor delays">
+          <MetricGroup title="Hold floor delays">
             <Metric
               label="Hold-floor delayed boundaries"
               value={playerMetric(latest.hold_floor_delay_boundaries)}
@@ -316,18 +297,6 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
             <Metric
               label="Maximum hold-floor delay"
               value={dryRun ? 'Not measured' : measure(latest.max_hold_floor_delay_us, 'µs', 0)}
-            />
-            <Metric
-              label="Release-floor delayed boundaries"
-              value={playerMetric(latest.release_floor_delay_boundaries)}
-            />
-            <Metric
-              label="Release-floor infeasible boundaries"
-              value={playerMetric(latest.release_floor_infeasible_boundaries)}
-            />
-            <Metric
-              label="Maximum release-floor delay"
-              value={dryRun ? 'Not measured' : measure(latest.max_release_floor_delay_us, 'µs', 0)}
             />
           </MetricGroup>
           <MetricGroup title="Input transport">

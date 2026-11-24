@@ -239,23 +239,85 @@ fn verify_builtin_catalog(root: &Path, session: &mut CheckSession) -> Result<()>
     }
 }
 
-fn check_desktop_native(root: &Path) -> Result<()> {
-    const NATIVE_TAURI_CONFIG: &str = r#"{"build":{"frontendDist":null}}"#;
-    let native_env = [("TAURI_CONFIG", NATIVE_TAURI_CONFIG)];
+// Keep production targets separate from the all-features/dev-target lint pass.
+// Cargo feature unification would otherwise make test-only consumers visible
+// and hide dead production code. Use the shipped profile's cfg settings.
+const PRODUCTION_LIBRARY_PACKAGES: &[&str] = &[
+    "sky_app_core",
+    "sky_dispatch_core",
+    "sky_dispatch_win32",
+    "sky_native_adapters",
+    "sky_player",
+    "sky_windows_security",
+];
+
+fn check_production_rust(root: &Path) -> Result<()> {
+    for package in PRODUCTION_LIBRARY_PACKAGES {
+        process::run(
+            "cargo",
+            &[
+                "clippy",
+                "--manifest-path",
+                "rust/Cargo.toml",
+                "-p",
+                package,
+                "--lib",
+                "--no-default-features",
+                "--profile",
+                "dist",
+                "--locked",
+                "--",
+                "-D",
+                "warnings",
+            ],
+            root,
+            &[],
+        )?;
+    }
     process::run(
         "cargo",
         &[
-            "check",
+            "clippy",
+            "--manifest-path",
+            "rust/Cargo.toml",
+            "-p",
+            "sky_xtask",
+            "--bin",
+            "xtask",
+            "--no-default-features",
+            "--locked",
+            "--",
+            "-D",
+            "warnings",
+        ],
+        root,
+        &[],
+    )
+}
+
+fn check_desktop_native(root: &Path) -> Result<()> {
+    const NATIVE_TAURI_CONFIG: &str = r#"{"build":{"frontendDist":null}}"#;
+    let native_env = [("TAURI_CONFIG", NATIVE_TAURI_CONFIG)];
+    // Check both development-runtime and packaged production configurations
+    // without tauri-test, test-support, or dev targets.
+    process::run(
+        "cargo",
+        &[
+            "clippy",
             "--manifest-path",
             "rust/Cargo.toml",
             "-p",
             "sky_desktop_shell",
+            "--lib",
             "--bin",
             "sky_desktop_shell",
             "--no-default-features",
             "--features",
             "desktop-runtime",
             "--locked",
+            "--",
+            "-D",
+            "warnings",
         ],
         root,
         &native_env,
@@ -263,12 +325,23 @@ fn check_desktop_native(root: &Path) -> Result<()> {
     process::run(
         "cargo",
         &[
-            "check",
+            "clippy",
             "--manifest-path",
             "rust/Cargo.toml",
             "-p",
             "sky_desktop_shell",
+            "--lib",
+            "--bin",
+            "sky_desktop_shell",
+            "--no-default-features",
+            "--features",
+            "desktop-runtime,packaged-assets",
+            "--profile",
+            "dist",
             "--locked",
+            "--",
+            "-D",
+            "warnings",
         ],
         root,
         &native_env,
@@ -662,6 +735,7 @@ fn run_rust_group(session: &mut CheckSession) -> Result<()> {
     })?;
 
     record_step(session, "rust-clippy", || {
+        check_production_rust(&root)?;
         process::run(
             "cargo",
             &[

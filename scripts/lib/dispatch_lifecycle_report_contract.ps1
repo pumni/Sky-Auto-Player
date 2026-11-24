@@ -241,6 +241,122 @@ function Assert-DispatchCleanupCapture {
     }
 }
 
+function Test-DispatchLifecycleReportV4 {
+    param([Parameter(Mandatory)] [object] $Report)
+
+    $serialized = ConvertTo-Json -InputObject $Report -Depth 100 -Compress
+    foreach ($retiredField in @(
+        'resume_cleanup_delay_us', 'resume_cleanup_delay_ticks', 'resume_barrier_qpc_ticks',
+        'resume_delay_minus_one_decision', 'exact_resume_delay_decision'
+    )) {
+        if ($serialized.Contains('"' + $retiredField + '"')) {
+            throw "schema v4 must not serialize retired cleanup timing field '$retiredField'"
+        }
+    }
+    if ((Assert-DispatchReportField $Report 'report_kind' 'report') -cne 'dispatch_lifecycle' -or
+        (Assert-DispatchReportField $Report 'result' 'report') -cne 'PASS') {
+        throw 'schema v4 report_kind/result must identify a passing dispatch lifecycle report'
+    }
+
+    $provenance = Assert-DispatchReportField $Report 'provenance' 'report'
+    foreach ($name in @('source_sha', 'source_tree_sha')) {
+        $value = [string](Assert-DispatchReportField $provenance $name 'provenance')
+        if ($value -notmatch '^[0-9a-fA-F]{40}$') { throw "provenance.$name must be a full Git object ID" }
+    }
+    if ((Assert-DispatchReportField $provenance 'execution' 'provenance') -cne 'offline_test_support' -or
+        (Assert-DispatchReportField $provenance 'transport_kind' 'provenance') -cne 'deterministic_mock' -or
+        (ConvertTo-DispatchInteger (Assert-DispatchReportField $provenance 'native_sendinput_calls' 'provenance') 'provenance.native_sendinput_calls') -ne 0) {
+        throw 'schema v4 evidence must identify offline deterministic-mock execution with zero native SendInput calls'
+    }
+
+    $timing = Assert-DispatchReportField $Report 'timing' 'report'
+    foreach ($name in @('fps', 'frame_us', 'hold_frames', 'timing_margin_us', 'min_hold_us', 'qpc_frequency_hz')) {
+        [void](Assert-DispatchReportField $timing $name 'timing')
+    }
+    $fps = ConvertTo-DispatchInteger $timing.fps 'timing.fps'
+    $frameUs = ConvertTo-DispatchInteger $timing.frame_us 'timing.frame_us'
+    $holdFrames = ConvertTo-DispatchInteger $timing.hold_frames 'timing.hold_frames'
+    $marginUs = ConvertTo-DispatchInteger $timing.timing_margin_us 'timing.timing_margin_us'
+    $holdUs = ConvertTo-DispatchInteger $timing.min_hold_us 'timing.min_hold_us'
+    $frequency = ConvertTo-DispatchInteger $timing.qpc_frequency_hz 'timing.qpc_frequency_hz'
+    if ($fps -le 0 -or $holdFrames -ne 1 -or $marginUs -lt 0 -or $frequency -le 0) {
+        throw 'schema v4 timing must have positive FPS/QPC, one hold frame, and a nonnegative margin'
+    }
+    $expectedFrameUs = [System.Numerics.BigInteger]::Divide((1000000 + $fps - 1), $fps)
+    $expectedHoldUs = $holdFrames * $expectedFrameUs + $marginUs
+    if ($frameUs -ne $expectedFrameUs -or $holdUs -ne $expectedHoldUs) {
+        throw 'schema v4 frame and H values do not match the materialized timing policy'
+    }
+    $holdTicks = [System.Numerics.BigInteger]::Divide(($frequency * $holdUs + 999999), 1000000)
+
+    $live = Assert-DispatchReportField $Report 'live_scheduler' 'report'
+    if ((Assert-DispatchReportField $live 'generation_accounting_owner' 'live_scheduler') -cne 'live_scheduler') {
+        throw 'top-level generation accounting owner must be live_scheduler'
+    }
+    $normal = Assert-DispatchReportField $live 'no_pause_control' 'live_scheduler'
+    if ([bool](Assert-DispatchReportField $normal 'pause_requested' 'no_pause_control') -or
+        -not [bool](Assert-DispatchReportField $normal 'passed' 'no_pause_control') -or
+        (ConvertTo-DispatchInteger (Assert-DispatchReportField $normal 'final_release_obligation_mask' 'no_pause_control') 'no_pause_control.final_release_obligation_mask') -ne 0 -or
+        (ConvertTo-DispatchInteger (Assert-DispatchReportField $normal 'cleanup_sender_attempts' 'no_pause_control') 'no_pause_control.cleanup_sender_attempts') -ne 0 -or
+        (ConvertTo-DispatchInteger (Assert-DispatchReportField $normal 'total_mock_send_attempts' 'no_pause_control') 'no_pause_control.total_mock_send_attempts') -ne 4) {
+        throw 'no_pause_control must pass without pause and finish with zero release obligation'
+    }
+    Assert-DispatchLiveAccounting -Branch $normal -Path 'no_pause_control' -ExpectedStages @(
+        @{ phase = 'before_first_down'; total = 2; scheduled = 2; activated = 0; released = 0; cancelled = 0; active = 0 },
+        @{ phase = 'after_first_down'; total = 2; scheduled = 1; activated = 1; released = 0; cancelled = 0; active = 1 },
+        @{ phase = 'after_first_up'; total = 2; scheduled = 1; activated = 1; released = 1; cancelled = 0; active = 0 },
+        @{ phase = 'after_second_down'; total = 2; scheduled = 0; activated = 2; released = 1; cancelled = 0; active = 1 },
+        @{ phase = 'after_final_up'; total = 2; scheduled = 0; activated = 2; released = 2; cancelled = 0; active = 0 }
+    )
+    $normalPackets = @(Assert-DispatchPacketEvidence -Branch $normal -Path 'no_pause_control' -ExpectedMasks @('0:1', '1:0', '0:1', '1:0'))
+    Assert-DispatchPacketTimingFloor -PreviousPacket $normalPackets[0] -NextPacket $normalPackets[1] -FloorTicks $holdTicks -Path 'no_pause_control Down→Up H'
+    if ($normalPackets[1].Completed -gt $normalPackets[2].Started) {
+        throw 'no_pause_control sent the same-key Down before the prior Up transport and QPC commit'
+    }
+    Assert-DispatchPacketTimingFloor -PreviousPacket $normalPackets[2] -NextPacket $normalPackets[3] -FloorTicks $holdTicks -Path 'no_pause_control Down→Up H (second generation)'
+
+    $paused = Assert-DispatchReportField $live 'pause_cleanup_resume' 'live_scheduler'
+    if (-not [bool](Assert-DispatchReportField $paused 'pause_requested' 'pause_cleanup_resume') -or
+        -not [bool](Assert-DispatchReportField $paused 'passed' 'pause_cleanup_resume') -or
+        -not [bool](Assert-DispatchReportField $paused 'verified_cleanup_before_resume' 'pause_cleanup_resume') -or
+        -not [bool](Assert-DispatchReportField $paused 'resume_control_committed' 'pause_cleanup_resume') -or
+        (ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'send_attempts_while_paused' 'pause_cleanup_resume') 'pause_cleanup_resume.send_attempts_while_paused') -ne 0 -or
+        (ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'final_release_obligation_mask' 'pause_cleanup_resume') 'pause_cleanup_resume.final_release_obligation_mask') -ne 0) {
+        throw 'pause_cleanup_resume must prove verified cleanup, no send while paused, a committed Resume, and zero final obligation'
+    }
+    Assert-DispatchLiveAccounting -Branch $paused -Path 'pause_cleanup_resume' -ExpectedStages @(
+        @{ phase = 'before_first_down'; total = 2; scheduled = 2; activated = 0; released = 0; cancelled = 0; active = 0 },
+        @{ phase = 'after_initial_down'; total = 2; scheduled = 1; activated = 1; released = 0; cancelled = 0; active = 1 },
+        @{ phase = 'after_pause_cleanup'; total = 2; scheduled = 1; activated = 1; released = 0; cancelled = 1; active = 0 },
+        @{ phase = 'after_resumed_down'; total = 2; scheduled = 0; activated = 2; released = 0; cancelled = 1; active = 1 },
+        @{ phase = 'after_final_cleanup'; total = 2; scheduled = 0; activated = 2; released = 0; cancelled = 2; active = 0 }
+    )
+    $pausedPackets = @(Assert-DispatchPacketEvidence -Branch $paused -Path 'pause_cleanup_resume' -ExpectedMasks @('0:1', '0:1'))
+    $cleanup = Assert-DispatchReportField $paused 'cleanup_captures' 'pause_cleanup_resume'
+    $pauseCleanup = Assert-DispatchReportField $cleanup 'pause' 'cleanup_captures'
+    $finalCleanup = Assert-DispatchReportField $cleanup 'final' 'cleanup_captures'
+    Assert-DispatchCleanupCapture -Cleanup $pauseCleanup -Path 'pause_cleanup_resume.cleanup_captures.pause' -ExpectedScanCode 21
+    Assert-DispatchCleanupCapture -Cleanup $finalCleanup -Path 'pause_cleanup_resume.cleanup_captures.final' -ExpectedScanCode 21
+    $cleanupAttempts = ConvertTo-DispatchInteger (Assert-DispatchReportField $cleanup 'total_attempts' 'cleanup_captures') 'cleanup_captures.total_attempts'
+    if ($cleanupAttempts -ne 2 -or
+        (ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'cleanup_sender_attempts' 'pause_cleanup_resume') 'pause_cleanup_resume.cleanup_sender_attempts') -ne $cleanupAttempts -or
+        (ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'total_mock_send_attempts' 'pause_cleanup_resume') 'pause_cleanup_resume.total_mock_send_attempts') -ne 4) {
+        throw 'pause_cleanup_resume must distinguish two verified cleanup Up attempts from two musical sends'
+    }
+    $resumeCommit = ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'resume_commit_qpc_ticks' 'pause_cleanup_resume') 'pause_cleanup_resume.resume_commit_qpc_ticks'
+    $resumedEpoch = ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'resumed_epoch_qpc_ticks' 'pause_cleanup_resume') 'pause_cleanup_resume.resumed_epoch_qpc_ticks'
+    $authoredTarget = ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'resumed_authored_target_qpc_ticks' 'pause_cleanup_resume') 'pause_cleanup_resume.resumed_authored_target_qpc_ticks'
+    $packetNotBefore = ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'candidate_packet_not_before_qpc_ticks' 'pause_cleanup_resume') 'pause_cleanup_resume.candidate_packet_not_before_qpc_ticks'
+    $senderStart = ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'resumed_sender_start_qpc_ticks' 'pause_cleanup_resume') 'pause_cleanup_resume.resumed_sender_start_qpc_ticks'
+    if ($resumeCommit -le 0 -or $resumedEpoch -le 0 -or
+        $authoredTarget -gt $resumeCommit -or $packetNotBefore -ne $authoredTarget -or
+        $senderStart -ne $pausedPackets[1].Started -or $senderStart -lt $resumeCommit) {
+        throw 'pause_cleanup_resume did not dispatch at its fresh authored admission after Resume committed'
+    }
+
+    return [pscustomobject]@{ SchemaVersion = 4; EvidenceClass = 'verified_cleanup_resume_live_scheduler' }
+}
+
 function Test-DispatchLifecycleReport {
     param([Parameter(Mandatory)] [object] $Report)
 
@@ -250,7 +366,9 @@ function Test-DispatchLifecycleReport {
         [void](Assert-DispatchReportField $Report 'transport_kind' 'historical v1 report')
         return [pscustomobject]@{ SchemaVersion = 1; EvidenceClass = 'historical' }
     }
-    if ($version -ne 2) { throw "unsupported dispatch lifecycle schema_version '$version'" }
+    if ($version -eq 4) { return Test-DispatchLifecycleReportV4 -Report $Report }
+    if ($version -notin @(2, 3)) { throw "unsupported dispatch lifecycle schema_version '$version'" }
+    $schemaV3 = $version -eq 3
 
     if ((Assert-DispatchReportField $Report 'report_kind' 'report') -cne 'dispatch_lifecycle') {
         throw 'schema v2 report_kind must be dispatch_lifecycle'
@@ -275,7 +393,9 @@ function Test-DispatchLifecycleReport {
     }
 
     $timing = Assert-DispatchReportField $Report 'timing' 'report'
-    foreach ($name in @('fps', 'frame_us', 'hold_frames', 'timing_margin_us', 'min_hold_us', 'min_release_gap_us', 'qpc_frequency_hz', 'min_release_gap_ticks')) {
+    $resumeDelayUsField = if ($schemaV3) { 'resume_cleanup_delay_us' } else { 'min_release_gap_us' }
+    $resumeDelayTicksField = if ($schemaV3) { 'resume_cleanup_delay_ticks' } else { 'min_release_gap_ticks' }
+    foreach ($name in @('fps', 'frame_us', 'hold_frames', 'timing_margin_us', 'min_hold_us', $resumeDelayUsField, 'qpc_frequency_hz', $resumeDelayTicksField)) {
         [void](Assert-DispatchReportField $timing $name 'timing')
     }
     $fps = ConvertTo-DispatchInteger $timing.fps 'timing.fps'
@@ -283,28 +403,28 @@ function Test-DispatchLifecycleReport {
     $holdFrames = ConvertTo-DispatchInteger $timing.hold_frames 'timing.hold_frames'
     $marginUs = ConvertTo-DispatchInteger $timing.timing_margin_us 'timing.timing_margin_us'
     $holdUs = ConvertTo-DispatchInteger $timing.min_hold_us 'timing.min_hold_us'
-    $gapUs = ConvertTo-DispatchInteger $timing.min_release_gap_us 'timing.min_release_gap_us'
+    $resumeDelayUs = ConvertTo-DispatchInteger (Assert-DispatchReportField $timing $resumeDelayUsField 'timing') "timing.$resumeDelayUsField"
     $frequency = ConvertTo-DispatchInteger $timing.qpc_frequency_hz 'timing.qpc_frequency_hz'
-    $gapTicks = ConvertTo-DispatchInteger $timing.min_release_gap_ticks 'timing.min_release_gap_ticks'
+    $resumeDelayTicks = ConvertTo-DispatchInteger (Assert-DispatchReportField $timing $resumeDelayTicksField 'timing') "timing.$resumeDelayTicksField"
     if ($fps -le 0 -or $holdFrames -ne 1 -or $marginUs -lt 0 -or $frequency -le 0) {
         throw 'timing values must be positive with nonnegative margin and schema-v2 hold_frames exactly 1'
     }
     $expectedFrameUs = [System.Numerics.BigInteger]::Divide((1000000 + $fps - 1), $fps)
     $expectedHoldUs = $holdFrames * $expectedFrameUs + $marginUs
-    $expectedGapUs = $expectedFrameUs + $marginUs
-    if ($frameUs -ne $expectedFrameUs -or $holdUs -ne $expectedHoldUs -or $gapUs -ne $expectedGapUs) {
-        throw 'timing schedule does not match the materialized T/H/G contract'
+    $expectedResumeDelayUs = $expectedFrameUs + $marginUs
+    if ($frameUs -ne $expectedFrameUs -or $holdUs -ne $expectedHoldUs -or $resumeDelayUs -ne $expectedResumeDelayUs) {
+        throw 'timing schedule does not match the materialized frame, hold, and resume cleanup delay contract'
     }
     $expectedTicks = [System.Numerics.BigInteger]::Divide(
-        ($frequency * $gapUs + 999999),
+        ($frequency * $resumeDelayUs + 999999),
         1000000
     )
     $holdTicks = [System.Numerics.BigInteger]::Divide(
         ($frequency * $holdUs + 999999),
         1000000
     )
-    if ($gapTicks -ne $expectedTicks) {
-        throw 'timing.min_release_gap_ticks does not equal ceil(QPC frequency × G_us / 1,000,000)'
+    if ($resumeDelayTicks -ne $expectedTicks) {
+        throw "timing.$resumeDelayTicksField does not equal ceil(QPC frequency × resume_cleanup_delay_us / 1,000,000)"
     }
 
     $live = Assert-DispatchReportField $Report 'live_scheduler' 'report'
@@ -328,7 +448,14 @@ function Test-DispatchLifecycleReport {
     )
     $normalPackets = @(Assert-DispatchPacketEvidence -Branch $normal -Path 'no_pause_control' -ExpectedMasks @('0:1', '1:0', '0:1', '1:0'))
     Assert-DispatchPacketTimingFloor -PreviousPacket $normalPackets[0] -NextPacket $normalPackets[1] -FloorTicks $holdTicks -Path 'no_pause_control Down→Up H'
-    Assert-DispatchPacketTimingFloor -PreviousPacket $normalPackets[1] -NextPacket $normalPackets[2] -FloorTicks $gapTicks -Path 'no_pause_control Up→Down G'
+    if ($schemaV3) {
+        if ($normalPackets[1].Completed -gt $normalPackets[2].Started) {
+            throw 'no_pause_control sent the next Down before the prior Up transport commit'
+        }
+    }
+    else {
+        Assert-DispatchPacketTimingFloor -PreviousPacket $normalPackets[1] -NextPacket $normalPackets[2] -FloorTicks $resumeDelayTicks -Path 'no_pause_control Up→Down G'
+    }
     Assert-DispatchPacketTimingFloor -PreviousPacket $normalPackets[2] -NextPacket $normalPackets[3] -FloorTicks $holdTicks -Path 'no_pause_control Down→Up H (second generation)'
 
     $paused = Assert-DispatchReportField $live 'pause_cleanup_resume' 'live_scheduler'
@@ -371,17 +498,17 @@ function Test-DispatchLifecycleReport {
     $senderStart = ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'resumed_sender_start_qpc_ticks' 'pause_cleanup_resume') 'pause_cleanup_resume.resumed_sender_start_qpc_ticks'
     if ($cleanupQpc -le 0 -or $pauseCaptureCompletion -ne $cleanupQpc -or
         $pausedPackets[0].Completed -gt $pauseCaptureCompletion -or
-        (ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'min_release_gap_us' 'pause_cleanup_resume') 'pause_cleanup_resume.min_release_gap_us') -ne $gapUs -or
-        (ConvertTo-DispatchInteger (Assert-DispatchReportField $paused 'min_release_gap_ticks' 'pause_cleanup_resume') 'pause_cleanup_resume.min_release_gap_ticks') -ne $gapTicks -or
-        $resumeBarrier -ne ($cleanupQpc + $gapTicks) -or
+        (ConvertTo-DispatchInteger (Assert-DispatchReportField $paused $resumeDelayUsField 'pause_cleanup_resume') "pause_cleanup_resume.$resumeDelayUsField") -ne $resumeDelayUs -or
+        (ConvertTo-DispatchInteger (Assert-DispatchReportField $paused $resumeDelayTicksField 'pause_cleanup_resume') "pause_cleanup_resume.$resumeDelayTicksField") -ne $resumeDelayTicks -or
+        $resumeBarrier -ne ($cleanupQpc + $resumeDelayTicks) -or
         $candidateNotBefore -ne $resumeBarrier -or
         $senderStart -ne $pausedPackets[1].Started -or
         $pausedPackets[1].Started -lt $resumeBarrier -or
         $finalCaptureCompletion -lt $pausedPackets[1].Completed -or
-        [string](Assert-DispatchReportField $paused 'g_minus_one_decision' 'pause_cleanup_resume') -cne 'wait' -or
-        [string](Assert-DispatchReportField $paused 'exact_g_decision' 'pause_cleanup_resume') -cne 'send') {
-        throw 'pause_cleanup_resume does not prove cleanup completion + G, G-1 wait, exact-G send and sender start at/after the barrier'
+        [string](Assert-DispatchReportField $paused $(if ($schemaV3) { 'resume_delay_minus_one_decision' } else { 'g_minus_one_decision' }) 'pause_cleanup_resume') -cne 'wait' -or
+        [string](Assert-DispatchReportField $paused $(if ($schemaV3) { 'exact_resume_delay_decision' } else { 'exact_g_decision' }) 'pause_cleanup_resume') -cne 'send') {
+        throw 'pause_cleanup_resume does not prove verified cleanup completion, the configured resume cleanup delay, and send at/after the resume barrier'
     }
 
-    return [pscustomobject]@{ SchemaVersion = 2; EvidenceClass = 'live_scheduler' }
+    return [pscustomobject]@{ SchemaVersion = $version; EvidenceClass = if ($schemaV3) { 'canonical_generation_live_scheduler' } else { 'live_scheduler' } }
 }

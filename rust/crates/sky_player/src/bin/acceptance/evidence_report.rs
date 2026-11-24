@@ -42,7 +42,6 @@ pub(super) fn write_report(args: &RunArgs, verdict: Verdict, reason: &str, detai
         "sample_seconds": args.sample_seconds,
         "game_fps": args.game_fps,
         "min_hold_us": super::scenarios::scenario_min_hold_us_for_fps(args.scenario, args.timing_margin_us, args.game_fps),
-        "min_release_gap_us": super::scenarios::acceptance_min_release_gap_us_for_fps(args.timing_margin_us, args.game_fps),
         "reason": reason,
         "details": details
     });

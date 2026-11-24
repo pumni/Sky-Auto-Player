@@ -172,95 +172,6 @@ impl<'a> PreparedPacketView<'a> {
     }
 }
 
-/// Fixed-capacity calibration payload prepared before the precision handoff.
-///
-/// The correlation tag belongs only to the calibration Raw Input observer and
-/// never enters production packet identity or reconciliation state.
-pub(crate) struct PreparedTaggedCalibrationPacket {
-    requested: u8,
-    #[cfg(windows)]
-    inputs: [windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT; 15],
-}
-
-impl PreparedTaggedCalibrationPacket {
-    /// Materialize the complete tagged INPUT array before the final wait
-    /// handoff. The caller validates instrument scan codes; this constructor
-    /// still rejects an empty or oversized packet so the seam is fail-closed.
-    pub(crate) fn try_new(scan_codes: &[u16], key_up: bool, extra: usize) -> Option<Self> {
-        let requested = u8::try_from(scan_codes.len()).ok()?;
-        if requested == 0 || scan_codes.len() > 15 {
-            return None;
-        }
-
-        #[cfg(windows)]
-        {
-            use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-                INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE,
-            };
-
-            let mut inputs: [INPUT; 15] = unsafe { std::mem::zeroed() };
-            let mut flags = KEYEVENTF_SCANCODE;
-            if key_up {
-                flags |= KEYEVENTF_KEYUP;
-            }
-            for (index, &scan_code) in scan_codes.iter().enumerate() {
-                inputs[index] = INPUT {
-                    r#type: INPUT_KEYBOARD,
-                    Anonymous: INPUT_0 {
-                        ki: KEYBDINPUT {
-                            wVk: 0,
-                            wScan: scan_code,
-                            dwFlags: flags,
-                            time: 0,
-                            dwExtraInfo: extra,
-                        },
-                    },
-                };
-            }
-            Some(Self { requested, inputs })
-        }
-
-        #[cfg(not(windows))]
-        {
-            let _ = (key_up, extra);
-            Some(Self { requested })
-        }
-    }
-
-    /// Enter the shared target-crossing envelope with an already materialized
-    /// tagged payload. No INPUT construction or allocation is allowed here.
-    pub(crate) fn send_at_target(
-        &self,
-        clock: QpcClock,
-        physical_target_qpc: QpcTicks,
-    ) -> PlatformSendResult {
-        #[cfg(windows)]
-        let result = send_input_view_at_target(
-            PreparedInputView {
-                requested: self.requested,
-                inputs: self.inputs.as_ptr(),
-            },
-            clock,
-            physical_target_qpc,
-        );
-
-        #[cfg(not(windows))]
-        let result = send_input_view_at_target(self.requested, clock, physical_target_qpc);
-
-        match result {
-            Ok(result) => result,
-            Err(PreparedSendFailure::Clock(failure)) => PlatformSendResult {
-                requested: self.requested,
-                inserted: failure.inserted,
-                started_ticks: failure.started_ticks.unwrap_or(QpcTicks::ZERO),
-                completed_ticks: None,
-                win32_error: failure.win32_error,
-                timing_error: Some(failure.error),
-            },
-        }
-    }
-}
-
 #[cfg(windows)]
 const MAX_SCAN_CODE: usize = 0x36;
 
@@ -465,106 +376,6 @@ impl SendClockFailure {
 
 enum PreparedSendFailure {
     Clock(SendClockFailure),
-}
-
-#[cfg(windows)]
-struct PreparedInputView {
-    requested: u8,
-    inputs: *const windows_sys::Win32::UI::Input::KeyboardAndMouse::INPUT,
-}
-
-/// Run the shared target-aware QPC/SendInput envelope for a fixed INPUT view.
-///
-/// The view is constructed by a trusted crate-internal caller before entering
-/// this function.  Keeping this envelope shared lets the calibration packet
-/// carry its correlation tag without creating a second timing implementation.
-#[cfg(windows)]
-fn send_input_view_at_target(
-    view: PreparedInputView,
-    clock: QpcClock,
-    physical_target_qpc: QpcTicks,
-) -> Result<PlatformSendResult, PreparedSendFailure> {
-    use windows_sys::Win32::Foundation::SetLastError;
-
-    // Last-error state is preparation; it must not sit between the crossing
-    // sample and SendInput.
-    unsafe { SetLastError(0) };
-    let started_ticks = loop {
-        let ticks = match clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return Err(PreparedSendFailure::Clock(SendClockFailure::before_send(
-                    error,
-                )));
-            }
-        };
-        if ticks >= physical_target_qpc {
-            break ticks;
-        }
-        std::hint::spin_loop();
-    };
-
-    // SAFETY: the internal calibration caller supplies a fixed, initialized
-    // array prefix and retains it for this synchronous call.
-    let (inserted, win32_error) = unsafe { send_prepared_inputs_once(view.inputs, view.requested) };
-    let completed_ticks = match clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return Err(PreparedSendFailure::Clock(SendClockFailure::after_send(
-                started_ticks,
-                error,
-                inserted,
-                win32_error,
-            )));
-        }
-    };
-
-    Ok(PlatformSendResult {
-        requested: view.requested,
-        inserted,
-        started_ticks,
-        completed_ticks: Some(completed_ticks),
-        win32_error,
-        timing_error: None,
-    })
-}
-
-#[cfg(not(windows))]
-fn send_input_view_at_target(
-    requested: u8,
-    clock: QpcClock,
-    physical_target_qpc: QpcTicks,
-) -> Result<PlatformSendResult, PreparedSendFailure> {
-    let started_ticks = loop {
-        let ticks = match clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return Err(PreparedSendFailure::Clock(SendClockFailure::before_send(
-                    error,
-                )));
-            }
-        };
-        if ticks >= physical_target_qpc {
-            break ticks;
-        }
-        std::hint::spin_loop();
-    };
-    let completed_ticks = match clock.now() {
-        Ok(ticks) => ticks,
-        Err(error) => {
-            return Err(PreparedSendFailure::Clock(
-                SendClockFailure::after_pre_call_without_send(started_ticks, error),
-            ));
-        }
-    };
-    Ok(PlatformSendResult {
-        requested,
-        inserted: requested,
-        started_ticks,
-        completed_ticks: Some(completed_ticks),
-        win32_error: 0,
-        timing_error: None,
-    })
 }
 
 fn send_once_prepared_view(
@@ -800,47 +611,6 @@ pub(crate) fn send_prepared_physical_packet_view_once(
     send_prepared_physical_packet_once_impl(prepared, clock, None)
 }
 
-/// One trusted prepared packet attempt whose target-crossing QPC sample is
-/// taken inside the precision sender. All payload metadata needed by the
-/// syscall is resolved before the loop; the crossing sample is reused as the
-/// authoritative pre-call timestamp.
-pub(crate) fn send_prepared_physical_packet_once_at_target(
-    prepared: &PreparedPhysicalPacket,
-    clock: QpcClock,
-    physical_target_qpc: QpcTicks,
-) -> SendTransactionOutcome {
-    send_prepared_physical_packet_view_once_at_target(
-        prepared.as_view(),
-        clock,
-        physical_target_qpc,
-    )
-}
-
-/// One trusted borrowed prepared-packet attempt whose target-crossing QPC
-/// sample is taken immediately before `SendInput`.
-pub(crate) fn send_prepared_physical_packet_view_once_at_target(
-    prepared: PreparedPacketView<'_>,
-    clock: QpcClock,
-    physical_target_qpc: QpcTicks,
-) -> SendTransactionOutcome {
-    let packet = prepared.packet();
-    #[cfg(windows)]
-    let view = {
-        PreparedInputView {
-            requested: prepared.event_count(),
-            inputs: prepared.inputs.as_ptr(),
-        }
-    };
-    #[cfg(not(windows))]
-    let requested = prepared.event_count();
-
-    #[cfg(windows)]
-    let first = send_input_view_at_target(view, clock, physical_target_qpc);
-    #[cfg(not(windows))]
-    let first = send_input_view_at_target(requested, clock, physical_target_qpc);
-    prepared_send_outcome(packet, first)
-}
-
 #[cfg(test)]
 fn send_prepared_physical_packet_once_at_target_scripted(
     prepared: &PreparedPhysicalPacket,
@@ -901,28 +671,32 @@ mod tests {
     }
 
     #[test]
-    fn tagged_calibration_payload_is_materialized_before_sender_handoff() {
+    fn physical_payload_is_materialized_before_sender_handoff() {
         let source = include_str!("packet.rs").replace("\r\n", "\n");
         let production = source
             .split("#[cfg(test)]")
             .next()
             .expect("production packet implementation");
         let constructor = production
-            .split("pub(crate) fn try_new(")
+            .split("fn try_new_internal(")
             .nth(1)
-            .expect("prepared tagged constructor");
+            .expect("prepared packet constructor");
         let sender = production
-            .split("pub(crate) fn send_at_target(")
+            .split("fn send_once_prepared_view(")
             .nth(1)
-            .expect("prepared tagged sender")
-            .split("#[cfg(windows)]\nconst MAX_SCAN_CODE")
+            .expect("production prepared packet sender")
+            .split("enum PacketSendAttempt")
             .next()
-            .expect("prepared tagged sender body");
-        assert!(constructor.contains("INPUT {"));
-        assert!(constructor.contains("std::mem::zeroed"));
-        assert!(!sender.contains("inputs[index] = INPUT {"));
-        assert!(!sender.contains("KEYBDINPUT"));
-        assert!(!sender.contains("std::mem::zeroed"));
+            .expect("production prepared packet sender body");
+        let materializer = production
+            .split("fn build_inputs(")
+            .nth(1)
+            .expect("Win32 payload materializer");
+        assert!(constructor.contains("build_inputs(packet, profile)"));
+        assert!(materializer.contains("inputs[length].write(input)"));
+        assert!(sender.contains("send_prepared_inputs_once(inputs, prepared.event_count())"));
+        assert!(!sender.contains("build_inputs("));
+        assert!(!sender.contains("MaybeUninit::uninit"));
         assert!(!sender.contains("Vec::"));
     }
 

@@ -38,23 +38,7 @@
   box-shadow: 0 20px 64px var(--shadow-dialog);
 }
 
-.calibration-dialog {
-  display: flex;
-  flex-direction: column;
-  width: min(460px, calc(100vw - 32px));
-  max-height: calc(100dvh - 32px);
-  min-width: 0;
-  min-height: 0;
-  overflow: hidden;
-  padding: var(--space-5);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-dialog);
-  background: var(--surface-panel);
-  box-shadow: 0 20px 64px var(--shadow-dialog);
-}
-
-.update-dialog .dialog-heading,
-.calibration-dialog .dialog-heading {
+.update-dialog .dialog-heading {
   align-items: flex-start;
   gap: 14px;
   margin-bottom: 14px;
@@ -62,27 +46,12 @@
 
 .update-header-lead,
 .update-state-row,
-.calibration-header-lead {
-  display: flex;
-  align-items: flex-start;
-  gap: 12px;
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
 .update-state-row {
   align-items: center;
   margin-bottom: 4px;
 }
 
-.calibration-header-copy {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-}
-
-.update-dialog .dialog-heading h2,
-.calibration-dialog .dialog-heading h2 {
+.update-dialog .dialog-heading h2 {
   margin: 0;
   font-size: 17px;
   font-weight: 650;
@@ -105,8 +74,7 @@
   font-variant-numeric: tabular-nums;
 }
 
-.update-dialog .update-icon,
-.calibration-dialog .update-icon {
+.update-dialog .update-icon {
   flex: 0 0 36px;
   width: 36px;
   height: 36px;
@@ -129,12 +97,6 @@
   border-color: color-mix(in srgb, var(--danger-border) 60%, var(--border-subtle));
   color: var(--danger-fg);
   background: var(--danger-bg);
-}
-
-.calibration-icon-warning {
-  border-color: color-mix(in srgb, var(--warning-border) 55%, var(--border-subtle));
-  color: var(--warning-fg);
-  background: var(--warning-bg);
 }
 
 .update-close-button {
@@ -505,14 +467,11 @@
   background: var(--control-pressed);
 }
 
-.settings-dialog .icon-button.icon-button-boxed:active:not(:disabled),
-.calibration-dialog .icon-button.icon-button-boxed:active:not(:disabled) {
+.settings-dialog .icon-button.icon-button-boxed:active:not(:disabled) {
   background: var(--control-pressed);
 }
 
 .settings-dialog
-  .icon-button.icon-button-boxed:hover:active:not(:disabled):not([aria-disabled='true']),
-.calibration-dialog
   .icon-button.icon-button-boxed:hover:active:not(:disabled):not([aria-disabled='true']) {
   background: var(--control-pressed);
 }
@@ -788,12 +747,6 @@
   font-size: 12.5px;
   font-weight: 600;
   white-space: nowrap;
-}
-
-.timing-margin-recommendation {
-  color: var(--text-tertiary);
-  font-size: var(--type-metadata);
-  font-variant-numeric: tabular-nums;
 }
 
 .timing-margin-stepper {
@@ -1167,126 +1120,6 @@
   flex: 0 0 auto;
 }
 
-.calibration-body {
-  display: grid;
-  gap: 12px;
-  color: var(--text-secondary);
-}
-
-.calibration-description {
-  margin: 0;
-  color: var(--text-secondary);
-  font-size: 13px;
-  line-height: 1.5;
-}
-
-.calibration-status-card {
-  display: grid;
-  gap: 10px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-region);
-  background: var(--workbench-content);
-}
-
-.calibration-status-meta {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.calibration-status-meta strong {
-  color: var(--text-primary);
-  font-size: 13.5px;
-  font-weight: 600;
-}
-
-.calibration-progress-count {
-  color: var(--text-tertiary);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.calibration-result-card {
-  display: grid;
-  gap: 6px;
-  padding: 12px 14px;
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-region);
-  background: var(--workbench-content);
-}
-
-.calibration-result-card--success {
-  border-color: color-mix(in srgb, var(--success-border) 50%, var(--border-subtle));
-  background: var(--success-bg);
-}
-
-.calibration-result-card--danger {
-  border-color: color-mix(in srgb, var(--danger-border) 55%, var(--border-subtle));
-  background: var(--danger-bg);
-}
-
-.calibration-result-card--warning {
-  border-color: color-mix(in srgb, var(--warning-border) 50%, var(--border-subtle));
-  background: var(--warning-bg);
-}
-
-.calibration-result-heading {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.calibration-result-heading h3 {
-  margin: 0;
-  color: var(--text-primary);
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.calibration-result-card--success .calibration-description {
-  color: var(--text-primary);
-}
-
-.calibration-result-card--danger .calibration-result-heading h3,
-.calibration-result-card--danger .calibration-description {
-  color: var(--danger-fg);
-}
-
-.calibration-result-card--warning .calibration-result-heading h3 {
-  color: var(--warning-fg);
-}
-
-.calibration-result-icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 auto;
-}
-
-.calibration-result-icon--success {
-  color: var(--success-fg);
-}
-
-.calibration-result-icon--danger {
-  color: var(--danger-fg);
-}
-
-.calibration-result-icon--warning {
-  color: var(--warning-fg);
-}
-
-.calibration-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 8px;
-  margin-top: 4px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border-subtle);
-}
-
 @media (max-height: 620px) {
   .settings-dialog {
     height: min(640px, calc(100dvh - 32px));
@@ -1358,8 +1191,7 @@
     padding: 14px 14px 10px;
   }
 
-  .update-dialog,
-  .calibration-dialog {
+  .update-dialog {
     padding: var(--space-4);
   }
 

@@ -434,7 +434,7 @@ test('Light rendered text contrast holds in Settings, Diagnostics, confirmation,
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test('Light contrast holds in pagination loading, empty library, Calibration, and Update states', async ({
+test('Light contrast holds in pagination loading, empty library, and Update states', async ({
   page,
 }) => {
   await openLightApp(page, 'mockCatalogCount=106&mockSearchDelayMs=400');
@@ -470,18 +470,6 @@ test('Light contrast holds in pagination loading, empty library, Calibration, an
     contrastRatio(emptyNavStyles.color, emptyNavStyles.backgroundColor),
   ).toBeGreaterThanOrEqual(4.5);
   await textAudit(page, 'Light empty library');
-  await expectNoSeriousAccessibilityViolations(page);
-
-  await openLightApp(page);
-  await page.getByRole('button', { name: 'Open settings' }).click();
-  await page.getByRole('button', { name: 'Advanced', exact: true }).click();
-  await page.getByRole('button', { name: 'Open calibration' }).click();
-  const calibration = page.getByRole('dialog', { name: 'Timing calibration' });
-  await expect(calibration).toBeVisible();
-  await textAudit(page, 'Light Calibration');
-  await calibration.getByRole('button', { name: 'Start quick calibration' }).click();
-  await expect(calibration).toContainText('Calibration complete');
-  await textAudit(page, 'Light Calibration complete');
   await expectNoSeriousAccessibilityViolations(page);
 
   await openLightApp(page);

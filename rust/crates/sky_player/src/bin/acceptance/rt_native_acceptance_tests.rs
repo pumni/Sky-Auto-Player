@@ -1,23 +1,105 @@
 use super::{
     ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US, AdmissionVariantChoice, CalibrationPlacement,
+    active_cleanup_resume_evidence_is_ordered, active_cleanup_resumed_down_sender_qpc_ticks,
     DRAIN_DEADLINE_MS, DrainClock, DrainMode, DrainResult, EVENT_SCHEMA_VERSION, EventRecord,
     EventWindow, EventWindowReader, FULL_INSTRUMENT_MASK, INPUT_POLICY,
     MaterializedInstrumentKeyProfile, NativeCleanupEvidence, PHYSICAL_INSTRUMENT_SCAN_CODES,
     PRETERMINAL_DEADLINE_MS, PROBE_KIND, PROBE_TITLE, ParsedCommand, PhysicalExpectation,
-    RELEASE_GAP_STRESS_CYCLES,
+    SHORT_UP_GAP_STRESS_CYCLES,
     PreTerminalResult, READY_SCHEMA_VERSION, RECEIVE_ONLY_ROLE, ReadyRecord, SCRIPT_MARKER,
     SINK_KIND, SINK_TITLE, TARGET_CLASS_RECEIVE_ONLY, TARGET_CLASS_PROBE, Scenario, Verdict, acceptance_min_hold_us,
-    acceptance_min_release_gap_us, cleanup_evidence_clean, drain_event_window_with,
+    cleanup_evidence_clean, drain_event_window_with,
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
     healthy_generation_qualification, production_visibility_qualification,
     expected_mixed_up_down_event_sequence, reconcile_event_sequence, reconcile_events, scenario_plan,
     validate_event_stream, validate_ready_record, noncanonical_profile_spec, wait_for_sink_events_with,
 };
 use super::scenarios::production_options;
-use super::release_gap_stress::{
-    strict_physical_forensics_qualification, RELEASE_GAP_STRESS_MIN_SAMPLES,
+use super::generation_stress::{
+    strict_physical_forensics_qualification, SHORT_UP_GAP_STRESS_MIN_HOLD_SAMPLES,
 };
 use sky_dispatch_core::{accounting::GenerationAccounting, model::MAX_KEYS};
+
+#[test]
+fn active_cleanup_resume_ordering_uses_worker_commit_and_down_sender_qpc() {
+    assert!(active_cleanup_resume_evidence_is_ordered(
+        Some(100),
+        Some(110),
+        Some(120),
+        Some(125), // caller returned after worker commit
+        Some(122),
+        Some(123),
+    ));
+    assert!(active_cleanup_resume_evidence_is_ordered(
+        Some(100),
+        Some(110),
+        Some(120),
+        None, // caller-return sampling is diagnostic only
+        Some(122),
+        Some(123),
+    ));
+    assert!(!active_cleanup_resume_evidence_is_ordered(
+        Some(100),
+        Some(110),
+        Some(120),
+        Some(125),
+        Some(122),
+        Some(121), // same-key Down sender sampled before worker commit
+    ));
+    assert!(!active_cleanup_resume_evidence_is_ordered(
+        Some(100),
+        Some(110),
+        Some(123),
+        Some(125),
+        Some(122), // Resume request cannot follow the worker commit
+        Some(124),
+    ));
+}
+
+#[test]
+fn active_cleanup_resume_sender_qpc_requires_unique_measured_same_key_down() {
+    let telemetry = serde_json::json!({
+        "records": [
+            {
+                "source_action_index": 0,
+                "down_mask": 1,
+                "up_mask": 0,
+                "pre_call_qpc_available": true,
+                "pre_call_qpc_ticks": 90
+            },
+            {
+                "source_action_index": 2,
+                "down_mask": 1,
+                "up_mask": 0,
+                "pre_call_qpc_available": true,
+                "pre_call_qpc_ticks": 123
+            }
+        ]
+    });
+    assert_eq!(
+        active_cleanup_resumed_down_sender_qpc_ticks(&telemetry),
+        Some(123)
+    );
+
+    let unavailable = serde_json::json!({
+        "records": [{
+            "source_action_index": 2,
+            "down_mask": 1,
+            "up_mask": 0,
+            "pre_call_qpc_available": false,
+            "pre_call_qpc_ticks": 0
+        }]
+    });
+    assert_eq!(active_cleanup_resumed_down_sender_qpc_ticks(&unavailable), None);
+
+    let ambiguous = serde_json::json!({
+        "records": [
+            {"source_action_index": 2, "down_mask": 1, "up_mask": 0, "pre_call_qpc_available": true, "pre_call_qpc_ticks": 123},
+            {"source_action_index": 2, "down_mask": 1, "up_mask": 0, "pre_call_qpc_available": true, "pre_call_qpc_ticks": 124}
+        ]
+    });
+    assert_eq!(active_cleanup_resumed_down_sender_qpc_ticks(&ambiguous), None);
+}
 
 fn base_arguments(scenario: &str) -> Vec<String> {
     [
@@ -194,7 +276,7 @@ fn canonical_and_noncanonical_expectations_are_physical() {
         "chord-sweep",
         "near-minimum-retrigger",
         "rapid-retrigger",
-        "release-gap-stress",
+        "short-up-gap-stress",
         "mixed-up-down",
         "ambiguous-packet",
         "preflight-user-held",
@@ -205,6 +287,7 @@ fn canonical_and_noncanonical_expectations_are_physical() {
         "owner-query-failure",
         "owner-process-termination",
         "pause-resume",
+        "pause-resume-active-cleanup",
         "suspend-resume",
         "stop-cleanup",
         "skip-cleanup",
@@ -227,6 +310,19 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
     assert!(pause.expected_safety_up_slots.is_empty());
     assert!(pause.allow_unpaired_cleanup_ups);
 
+    let pause_active = scenario_plan(
+        Scenario::PauseResumeActiveCleanup,
+        ACCEPTANCE_TIMING_MARGIN_US,
+    )
+    .unwrap();
+    assert_eq!(pause_active.expected_down_slots, vec![0, 0]);
+    assert_eq!(pause_active.expected_up_slots, vec![0, 0]);
+    assert_eq!(pause_active.expected_authored_up_slots, vec![0]);
+    assert_eq!(pause_active.expected_safety_up_slots, vec![0]);
+    assert!(pause_active.allow_unpaired_cleanup_ups);
+    assert_eq!(pause_active.schedule.down_chords[0].scheduled_us, 50_000);
+    assert_eq!(pause_active.schedule.down_chords[1].scheduled_us, 600_000);
+
     let suspend = scenario_plan(Scenario::SuspendResume, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
     assert_eq!(suspend.expected_down_slots, vec![0, 1]);
     assert_eq!(suspend.expected_up_slots, vec![0, 0, 1]);
@@ -239,8 +335,12 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
     assert_eq!(ambiguous.expected_up_slots, vec![0, 0, 1]);
     assert_eq!(ambiguous.expected_authored_up_slots, vec![0]);
     assert_eq!(ambiguous.expected_safety_up_slots, vec![0, 1]);
-    assert_eq!(ambiguous.schedule.packets[1].up_mask, 0b01);
-    assert_eq!(ambiguous.schedule.packets[1].down_mask, 0b10);
+    assert_eq!(ambiguous.schedule.down_chords[1].scheduled_us, 100_000);
+    assert_eq!(ambiguous.schedule.down_chords[1].down_mask, 0b10);
+    assert_eq!(
+        ambiguous.schedule.down_chords[0].intents[0].paired_up_offset_us,
+        100_000
+    );
     assert!(ambiguous.allow_unpaired_cleanup_ups);
 
     let preflight = scenario_plan(Scenario::PreflightUserHeld, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
@@ -284,8 +384,8 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
         ACCEPTANCE_TIMING_MARGIN_US,
     )
     .unwrap();
-    assert_eq!(delayed.schedule.packets[0].down_mask, 1);
-    assert!(delayed.schedule.packets[0].scheduled_us > 3_000_000);
+    assert_eq!(delayed.schedule.down_chords[0].down_mask, 1);
+    assert!(delayed.schedule.down_chords[0].scheduled_us > 3_000_000);
     assert!(delayed.expected_down_slots.is_empty());
     assert!(delayed.expected_up_slots.is_empty());
 }
@@ -611,7 +711,7 @@ fn noncanonical_profile_and_cleanup_verdicts_remain_valid() {
     );
     assert_eq!(p.physical_key(0).scan_code, 0x02);
     let plan = scenario_plan(Scenario::CleanupFullRelease, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
-    assert_eq!(plan.schedule.packets[0].down_mask, FULL_INSTRUMENT_MASK);
+    assert_eq!(plan.schedule.down_chords[0].down_mask, FULL_INSTRUMENT_MASK);
     assert!(cleanup_evidence_clean(
         true,
         FULL_INSTRUMENT_MASK,
@@ -644,9 +744,7 @@ fn authorization_and_timing_contracts_remain_bounded() {
     };
     assert_eq!(args.timing_margin_us, ACCEPTANCE_TIMING_MARGIN_US);
     assert_eq!(acceptance_min_hold_us(800), 17_467);
-    assert_eq!(acceptance_min_release_gap_us(800), 17_467);
     assert_eq!(acceptance_min_hold_us(0), 16_667);
-    assert_eq!(acceptance_min_release_gap_us(0), 16_667);
     assert!(focus_evidence_clean(true, 1, 0, true, true));
     assert!(focus_evidence_clean(true, 0, 0, true, true));
 }
@@ -717,53 +815,49 @@ fn calibration_placement_is_an_explicit_paired_run_setting() {
 }
 
 #[test]
-fn timing_margin_sweep_authors_exact_hold_and_release_targets() {
+fn timing_margin_sweep_authors_hold_h_and_zero_up_gap_targets() {
     for margin in [0, 500, 800, 1_000, 3_000] {
         let plan = scenario_plan(Scenario::TimingMarginSweep, margin).unwrap();
-        let targets = plan
-            .schedule
-            .packets
-            .iter()
-            .map(|packet| packet.scheduled_us)
-            .collect::<Vec<_>>();
+        let first = &plan.schedule.down_chords[0].intents[0];
+        let second = &plan.schedule.down_chords[1].intents[0];
         let hold = ACCEPTANCE_FRAME_US + margin;
-        let gap = ACCEPTANCE_FRAME_US + margin;
-        assert_eq!(targets.len(), 4);
-        assert_eq!(targets[1] - targets[0], hold);
-        assert_eq!(targets[2] - targets[1], gap);
-        assert_eq!(targets[3] - targets[2], hold);
+        assert_eq!(first.paired_up_offset_us - plan.schedule.down_chords[0].scheduled_us, hold);
+        assert_eq!(plan.schedule.down_chords[1].scheduled_us, first.paired_up_offset_us);
+        assert_eq!(second.paired_up_offset_us - plan.schedule.down_chords[1].scheduled_us, hold);
+        assert_eq!(plan.schedule.generation_count, 2);
         assert_eq!(plan.expected_down_slots, vec![0, 0]);
         assert_eq!(plan.expected_up_slots, vec![0, 0]);
     }
 }
 
 #[test]
-fn release_gap_stress_authors_hundreds_of_exact_hold_and_gap_pairs() {
-    let plan = scenario_plan(Scenario::ReleaseGapStress, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+fn short_up_gap_stress_authors_exact_holds_and_same_timestamp_repeats() {
+    let plan = scenario_plan(Scenario::ShortUpGapStress, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
     let hold = acceptance_min_hold_us(ACCEPTANCE_TIMING_MARGIN_US);
-    let gap = acceptance_min_release_gap_us(ACCEPTANCE_TIMING_MARGIN_US);
 
-    assert_eq!(plan.schedule.packets.len(), RELEASE_GAP_STRESS_CYCLES * 2);
-    assert_eq!(plan.expected_down_slots.len(), RELEASE_GAP_STRESS_CYCLES);
-    assert_eq!(plan.expected_up_slots.len(), RELEASE_GAP_STRESS_CYCLES);
-    for pair in plan.schedule.packets.as_chunks::<2>().0 {
-        assert_eq!(pair[1].scheduled_us - pair[0].scheduled_us, hold);
+    assert_eq!(plan.schedule.down_chords.len(), SHORT_UP_GAP_STRESS_CYCLES);
+    assert_eq!(plan.schedule.generation_count, SHORT_UP_GAP_STRESS_CYCLES as u64);
+    assert_eq!(plan.schedule.authored_timestamp_group_count, SHORT_UP_GAP_STRESS_CYCLES + 1);
+    assert_eq!(plan.expected_down_slots.len(), SHORT_UP_GAP_STRESS_CYCLES);
+    assert_eq!(plan.expected_up_slots.len(), SHORT_UP_GAP_STRESS_CYCLES);
+    for chord in &plan.schedule.down_chords {
+        assert_eq!(chord.intents[0].paired_up_offset_us - chord.scheduled_us, hold);
     }
-    for pair in plan.schedule.packets.windows(2).skip(1).step_by(2) {
-        assert_eq!(pair[1].scheduled_us - pair[0].scheduled_us, gap);
+    for pair in plan.schedule.down_chords.windows(2) {
+        assert_eq!(pair[1].scheduled_us, pair[0].intents[0].paired_up_offset_us);
     }
-    assert_eq!(RELEASE_GAP_STRESS_CYCLES - 1, RELEASE_GAP_STRESS_MIN_SAMPLES as usize);
+    assert_eq!(SHORT_UP_GAP_STRESS_CYCLES - 1, SHORT_UP_GAP_STRESS_MIN_HOLD_SAMPLES as usize);
 }
 
 #[test]
-fn native_acceptance_rejects_floor_violations() {
+fn native_acceptance_rejects_hold_floor_violations() {
     assert_eq!(
-        production_visibility_qualification(Scenario::TimingMarginSweep, 4, 0, 1, 1).0,
+        production_visibility_qualification(Scenario::TimingMarginSweep, 4, 1).0,
         Verdict::Fail
     );
     assert_eq!(
-        production_visibility_qualification(Scenario::TimingMarginSweep, 4, 1, 1, 0).0,
-        Verdict::Fail
+        production_visibility_qualification(Scenario::TimingMarginSweep, 4, 0).0,
+        Verdict::Pass
     );
 }
 
@@ -798,17 +892,13 @@ fn native_acceptance_uses_authoritative_activation_accounting() {
 }
 
 #[test]
-fn strict_physical_forensics_still_reject_floor_violations() {
+fn strict_physical_forensics_still_reject_hold_floor_violations() {
     assert_eq!(
-        strict_physical_forensics_qualification(1, 0).0,
+        strict_physical_forensics_qualification(1).0,
         Verdict::Fail
     );
     assert_eq!(
-        strict_physical_forensics_qualification(0, 1).0,
-        Verdict::Fail
-    );
-    assert_eq!(
-        strict_physical_forensics_qualification(0, 0).0,
+        strict_physical_forensics_qualification(0).0,
         Verdict::Pass
     );
 }
@@ -854,24 +944,19 @@ fn unrelated_shipping_invariants_remain_fail_closed() {
 }
 
 #[test]
-fn stress_qualification_requires_enough_hold_and_release_samples() {
+fn stress_qualification_requires_enough_hold_samples() {
     assert_eq!(
-        production_visibility_qualification(Scenario::ReleaseGapStress, 511, 0, 512, 0).0,
+        production_visibility_qualification(Scenario::ShortUpGapStress, 511, 0).0,
         Verdict::NonQualifying
     );
     assert_eq!(
-        production_visibility_qualification(Scenario::ReleaseGapStress, 512, 0, 511, 0).0,
-        Verdict::NonQualifying
-    );
-    assert_eq!(
-        production_visibility_qualification(Scenario::ReleaseGapStress, 512, 0, 512, 0).0,
+        production_visibility_qualification(Scenario::ShortUpGapStress, 512, 0).0,
         Verdict::Pass
     );
 }
 #[test]
 fn acceptance_options_freeze_the_materialized_physical_timing_policy() {
     let authored_hold = acceptance_min_hold_us(ACCEPTANCE_TIMING_MARGIN_US);
-    let authored_gap = acceptance_min_release_gap_us(ACCEPTANCE_TIMING_MARGIN_US);
     let plan = scenario_plan(Scenario::CanonicalSingle, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
     let options = production_options(
         plan.schedule,
@@ -882,7 +967,6 @@ fn acceptance_options_freeze_the_materialized_physical_timing_policy() {
     )
     .expect("prepared acceptance schedule");
     assert_eq!(options.timing.min_hold_us, authored_hold);
-    assert_eq!(options.timing.min_release_gap_us, authored_gap);
     assert_eq!(options.timing.frame_us, ACCEPTANCE_FRAME_US);
     assert_eq!(options.timing.frame_base_hold_us, ACCEPTANCE_FRAME_US);
     assert_eq!(options.timing.timing_margin_us, ACCEPTANCE_TIMING_MARGIN_US);

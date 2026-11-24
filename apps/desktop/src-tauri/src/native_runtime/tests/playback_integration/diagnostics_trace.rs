@@ -224,7 +224,7 @@ fn sender_trace_export_includes_session_identity_and_frozen_policy() {
     let export = sender_trace_export_json(&active, &telemetry).expect("sender trace JSON");
     let document: Value = serde_json::from_str(&export).expect("valid sender trace JSON");
 
-    assert_eq!(document["export_schema_version"], 4);
+    assert_eq!(document["export_schema_version"], 6);
     assert_eq!(document["raw_packet_trace_status"], "not_captured");
     assert_eq!(document["session_id"], "a".repeat(32));
     assert_eq!(document["song_id"], "c".repeat(32));
@@ -234,7 +234,16 @@ fn sender_trace_export_includes_session_identity_and_frozen_policy() {
     assert_eq!(document["timing_policy"]["frame_base_hold_us"], 16_667);
     assert_eq!(document["timing_policy"]["timing_margin_us"], 800);
     assert_eq!(document["timing_policy"]["target_hold_us"], 17_467);
-    assert_eq!(document["timing_policy"]["release_gap_us"], 17_467);
+    assert!(
+        document["timing_policy"]
+            .get("resume_cleanup_delay_us")
+            .is_none()
+    );
+    assert!(
+        document["timing_policy"]
+            .get("resume_cleanup_delay_ticks")
+            .is_none()
+    );
     assert_eq!(
         document["analytics"]["aggregate_scope"],
         "packet_trace_records"
@@ -595,14 +604,6 @@ fn diagnostics_dry_run_publishes_unavailable_snapshot() {
     assert_eq!(payload.frame_base_hold_us, 16_667);
     assert_eq!(payload.timing_margin_us, 800);
     assert_eq!(payload.min_hold_us, 17_467);
-    assert_eq!(payload.min_release_gap_us, 17_467);
-    assert_eq!(
-        payload
-            .timing_margin_recommendation
-            .recommended_timing_margin_us,
-        Some(800)
-    );
-    assert!(!payload.timing_margin_recommendation.qualified);
     assert_eq!(payload.pre_call_lt_250us, 0);
     assert_eq!(payload.pre_call_250_500us, 0);
     assert_eq!(payload.pre_call_500_750us, 0);
@@ -619,15 +620,11 @@ fn diagnostics_dry_run_publishes_unavailable_snapshot() {
     assert_eq!(payload.missed_unobserved_backlog_boundaries, 0);
     assert_eq!(payload.missed_physical_window_boundaries, 0);
     assert_eq!(payload.final_sender_window_expirations, 0);
-    assert_eq!(payload.release_floor_infeasible_boundaries, 0);
     let serialized = serde_json::to_value(payload).expect("diagnostics DTO JSON");
     assert_eq!(serialized["missed_physical_window_boundaries"], 0);
     assert_eq!(serialized["final_sender_window_expirations"], 0);
-    assert_eq!(serialized["release_floor_infeasible_boundaries"], 0);
     assert_eq!(payload.hold_floor_delay_boundaries, 0);
     assert_eq!(payload.max_hold_floor_delay_us, 0);
-    assert_eq!(payload.release_floor_delay_boundaries, 0);
-    assert_eq!(payload.max_release_floor_delay_us, 0);
     assert_eq!(payload.final_gate_control_rejections, 0);
     assert_eq!(payload.final_gate_target_changes, 0);
     assert_eq!(payload.final_gate_focus_losses, 0);

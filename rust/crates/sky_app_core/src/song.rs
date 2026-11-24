@@ -195,12 +195,13 @@ pub struct ScheduleMetadata {
     pub note_count: usize,
     pub deduplicated_note_count: usize,
     pub duplicate_note_count: usize,
-    pub compressed_holds: usize,
     pub impossible_same_key_repeats: usize,
-    pub risky_same_key_repeats: usize,
     pub max_polyphony: usize,
     pub shortest_same_key_interval_us: Option<u64>,
     pub min_same_key_up_gap_us: Option<u64>,
+    /// Physically feasible repeats whose authored Up-to-Down gap is shorter
+    /// than one configured frame.
+    pub short_up_gap_repeat_count: usize,
     pub recommended_hold_frames: Option<f64>,
     pub recommended_tempo_scale: Option<f64>,
     pub warnings: Vec<String>,
@@ -225,6 +226,7 @@ pub struct RiskReport {
     pub max_chord_size: usize,
     pub chords_count: usize,
     pub timing_stress_rate: f64,
+    pub short_up_gap_repeat_count: usize,
     pub min_any_note_gap_us: Option<u64>,
     pub min_same_key_gap_us: Option<u64>,
     pub suggested_hold_frames: Option<f64>,
@@ -290,11 +292,10 @@ pub(crate) fn build_schedule_from_scaled_onsets(
     if !tempo_scale.is_finite() || tempo_scale <= 0.0 {
         return Err(SongError::InvalidTempo);
     }
-    // Keep target and minimum hold separate in the scheduler so a future
-    // policy can compress a target hold while preserving the physical floor.
+    // The authored Up follows the Down by H. Same-key repeats need no second
+    // post-Up floor; an Up at the next Down timestamp is ordered first.
     let target_hold_us = policy.min_hold_us;
     let min_hold_us = policy.min_hold_us;
-    let release_gap = policy.min_release_gap_us;
     let raw_count = drafts.len();
     let mut seen = BTreeSet::new();
     drafts.retain(|(at, scan, _)| seen.insert((*at, *scan)));
@@ -307,33 +308,22 @@ pub(crate) fn build_schedule_from_scaled_onsets(
     }
 
     let mut actions = Vec::with_capacity(drafts.len() * 2);
-    let mut compressed = 0;
     let mut impossible = 0;
-    let mut risky = 0;
+    let mut short_up_gap_repeat_count = 0;
     let mut shortest = None;
     let mut min_up_gap = None;
     for (at, scan, source_index) in &drafts {
         let next_at = next_by_source.get(source_index).copied().flatten();
-        let actual_hold = if let Some(next_at) = next_at {
+        if let Some(next_at) = next_at {
             let interval = next_at.saturating_sub(*at);
             shortest = Some(shortest.map_or(interval, |current: u64| current.min(interval)));
-            let max_hold = interval.saturating_sub(release_gap);
-            if max_hold < min_hold_us {
+            if interval < min_hold_us {
                 impossible += 1;
-                min_hold_us
-            } else if max_hold < target_hold_us {
-                // Keep this branch explicit: a policy may materialize a target
-                // hold distinct from its minimum while preserving the release
-                // gap.
-                risky += 1;
-                compressed += 1;
-                max_hold
-            } else {
-                target_hold_us
+            } else if interval - min_hold_us < policy.frame_us {
+                short_up_gap_repeat_count += 1;
             }
-        } else {
-            target_hold_us
-        };
+        }
+        let actual_hold = target_hold_us;
         if let Some(next_at) = next_at {
             let gap = next_at.saturating_sub(*at).saturating_sub(actual_hold);
             min_up_gap = Some(min_up_gap.map_or(gap, |current: u64| current.min(gap)));
@@ -394,16 +384,11 @@ pub(crate) fn build_schedule_from_scaled_onsets(
     let mut warnings = Vec::new();
     let (recommended_hold_frames, recommended_tempo_scale) = if impossible > 0 {
         if let Some(shortest) = shortest {
-            let suggestion = min_hold_us
-                .checked_add(release_gap)
-                .map(|min_cycle| {
-                    if min_cycle == 0 {
-                        tempo_scale
-                    } else {
-                        tempo_scale * shortest as f64 / min_cycle as f64
-                    }
-                })
-                .and_then(bounded_tempo_scale_recommendation);
+            let suggestion = bounded_tempo_scale_recommendation(if min_hold_us == 0 {
+                tempo_scale
+            } else {
+                tempo_scale * shortest as f64 / min_hold_us as f64
+            });
             if suggestion.is_none() {
                 warnings.push(
                     "Tempo recommendation omitted because its value was not finite and representable."
@@ -432,12 +417,11 @@ pub(crate) fn build_schedule_from_scaled_onsets(
         note_count: raw_count,
         deduplicated_note_count: drafts.len(),
         duplicate_note_count: raw_count.saturating_sub(drafts.len()),
-        compressed_holds: compressed,
         impossible_same_key_repeats: impossible,
-        risky_same_key_repeats: risky,
         max_polyphony,
         shortest_same_key_interval_us: shortest,
         min_same_key_up_gap_us: min_up_gap,
+        short_up_gap_repeat_count,
         recommended_hold_frames,
         recommended_tempo_scale,
         warnings,
@@ -516,33 +500,13 @@ pub fn analyze_schedule_with_context(
         severity = "high";
         reasons.push("infeasible same-key repeats");
         recommendations.push(format!(
-            "{} same-key repeat(s) are infeasible under the materialized hold/release policy; sender-side policy does not prove game observation.",
+            "{} same-key repeat(s) are infeasible under the materialized hold policy; sender-side timing does not prove game observation.",
             schedule.impossible_same_key_repeats
         ));
         recommendations.push(
             "Reduce tempo or edit the arrangement so the same key has more time between downs."
                 .into(),
         );
-    }
-    if schedule.risky_same_key_repeats > 0 {
-        if severity == "low" {
-            severity = "medium";
-        }
-        reasons.push("same-key hold compression");
-        recommendations.push(format!(
-            "Compressed {} same-key hold(s) to release before the next down.",
-            schedule.risky_same_key_repeats
-        ));
-    }
-    if schedule.compressed_holds > 5 {
-        if severity == "low" {
-            severity = "medium";
-        }
-        reasons.push("compressed holds");
-        recommendations.push(format!(
-            "{} note holds were compressed due to dense scheduling.",
-            schedule.compressed_holds
-        ));
     }
     if dense.len() > 5 {
         if severity != "high" {
@@ -566,27 +530,46 @@ pub fn analyze_schedule_with_context(
             schedule.max_polyphony
         ));
     }
+    let severity_before_short_gap = severity;
+    if schedule.short_up_gap_repeat_count > 0 {
+        if severity == "low" {
+            severity = "medium";
+        }
+        reasons.push("short same-key Up gaps");
+        recommendations.push(format!(
+            "{} physically feasible same-key repeat(s) have an Up-to-Down gap shorter than one frame; the game may miss a short Up pulse.",
+            schedule.short_up_gap_repeat_count
+        ));
+    }
     if let Some(interval) = schedule.shortest_same_key_interval_us {
         recommendations.push(format!(
             "Shortest same-key repeat interval: {:.1}ms.",
             interval as f64 / 1_000.0
         ));
     }
-    let (suggested_hold_frames, suggested_tempo_scale) = if schedule.impossible_same_key_repeats > 0
+    let short_gap_only =
+        schedule.short_up_gap_repeat_count > 0 && severity_before_short_gap == "low";
+    let (suggested_hold_frames, suggested_tempo_scale) = if short_gap_only {
+        // A short authored Up gap requires user acknowledgement. Automatically
+        // changing hold or tempo would change the risk under review.
+        (None, None)
+    } else if schedule.impossible_same_key_repeats > 0 {
+        (
+            schedule.recommended_hold_frames,
+            schedule.recommended_tempo_scale,
+        )
+    } else if schedule.max_polyphony >= 5
+        || (!dense.is_empty() && severity_before_short_gap != "low")
     {
-        (Some(1.0), Some(current_tempo_scale.min(0.92)))
-    } else if schedule.risky_same_key_repeats > 5 || schedule.compressed_holds > 10 {
-        (Some(1.0), Some(current_tempo_scale.min(0.95)))
-    } else if schedule.max_polyphony >= 5 || (!dense.is_empty() && severity != "low") {
         (
             Some(1.5),
-            Some(if severity != "low" {
+            Some(if severity_before_short_gap != "low" {
                 current_tempo_scale.min(0.95)
             } else {
                 current_tempo_scale
             }),
         )
-    } else if severity == "medium" {
+    } else if severity_before_short_gap == "medium" {
         (Some(1.25), Some(current_tempo_scale.min(0.95)))
     } else {
         (Some(current_hold_frames), Some(current_tempo_scale))
@@ -609,7 +592,7 @@ pub fn analyze_schedule_with_context(
     }
     if schedule.impossible_same_key_repeats > 0 {
         recommendations.push(
-            "Even the shortest supported hold cannot make a sub-frame repeat feasible; reduce tempo or edit the arrangement."
+            "One or more same-key repeats are shorter than the required hold; reduce tempo or edit the arrangement."
                 .into(),
         );
     }
@@ -675,6 +658,7 @@ pub fn analyze_schedule_with_context(
         } else {
             schedule.impossible_same_key_repeats as f64 / schedule.note_count as f64 * 100.0
         },
+        short_up_gap_repeat_count: schedule.short_up_gap_repeat_count,
         min_any_note_gap_us: min_any,
         min_same_key_gap_us: min_same,
         suggested_hold_frames,
@@ -754,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn user_margin_is_symmetric_and_never_compresses_an_infeasible_repeat() {
+    fn same_key_repeat_requires_only_the_hold_floor_after_up() {
         let song = Song {
             name: "Repeated key".into(),
             notes: vec![
@@ -774,20 +758,116 @@ mod tests {
             .expect("valid margin");
         let margin_900 = crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 900)
             .expect("valid margin");
-        let required_cycle_800 = margin_800.min_hold_us + margin_800.min_release_gap_us;
-        let required_cycle_900 = margin_900.min_hold_us + margin_900.min_release_gap_us;
-        assert_eq!(required_cycle_800, 34_934);
-        assert_eq!(required_cycle_900 - required_cycle_800, 200);
-
         let feasible = build_schedule_with_policy(&song, 1.0, &margin_800).expect("schedule");
         assert_eq!(feasible.impossible_same_key_repeats, 0);
         assert_eq!(feasible.actions[1].at_us, margin_800.min_hold_us);
-        assert_eq!(feasible.compressed_holds, 0);
 
-        let infeasible = build_schedule_with_policy(&song, 1.0, &margin_900).expect("reported");
-        assert_eq!(infeasible.impossible_same_key_repeats, 1);
-        assert_eq!(infeasible.actions[1].at_us, margin_900.min_hold_us);
-        assert_eq!(infeasible.compressed_holds, 0);
+        let margin_change = build_schedule_with_policy(&song, 1.0, &margin_900).expect("schedule");
+        assert_eq!(margin_change.impossible_same_key_repeats, 0);
+        assert_eq!(margin_change.actions[1].at_us, margin_900.min_hold_us);
+    }
+
+    #[test]
+    fn repeat_up_is_down_plus_h_and_equal_deadlines_order_up_before_down() {
+        let policy = crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 0)
+            .expect("valid policy");
+        let h = policy.min_hold_us;
+        for (interval, conflicts, up_gap, short_gap_count) in
+            [(h - 1, 1, 0, 0), (h, 0, 0, 1), (h + 1, 0, 1, 1)]
+        {
+            let schedule = build_schedule_from_scaled_onsets(
+                vec![(0, SKY_SCAN_CODES[0], 0), (interval, SKY_SCAN_CODES[0], 1)],
+                1.0,
+                &policy,
+            )
+            .expect("schedule timestamps fit");
+            assert_eq!(
+                schedule.impossible_same_key_repeats, conflicts,
+                "interval={interval}"
+            );
+            assert_eq!(
+                schedule
+                    .actions
+                    .iter()
+                    .find(|action| action.kind == ActionKind::Up)
+                    .map(|action| action.at_us),
+                Some(h),
+                "interval={interval}"
+            );
+            assert_eq!(schedule.min_same_key_up_gap_us, Some(up_gap));
+            assert_eq!(
+                schedule.short_up_gap_repeat_count, short_gap_count,
+                "interval={interval}"
+            );
+            if interval == h {
+                assert_eq!(
+                    schedule
+                        .actions
+                        .iter()
+                        .filter(|action| action.at_us == h)
+                        .map(|action| action.kind)
+                        .collect::<Vec<_>>(),
+                    [ActionKind::Up, ActionKind::Down]
+                );
+                let risk = analyze_schedule(&schedule);
+                assert_eq!(risk.severity, "medium");
+                assert_eq!(risk.short_up_gap_repeat_count, 1);
+                assert!(risk.recommendations.iter().any(|recommendation| {
+                    recommendation.contains("game may miss a short Up pulse")
+                }));
+            }
+        }
+    }
+
+    #[test]
+    fn short_gap_only_does_not_recommend_timing_changes_with_one_to_five_dense_clusters() {
+        let policy = crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 0)
+            .expect("valid policy");
+        for cluster_count in 1usize..=5 {
+            let mut notes = Vec::new();
+            let mut source_index = 0;
+            for cluster in 0..cluster_count {
+                let cluster_start_ms = i64::try_from(cluster * 200).expect("test time range");
+                for (key_index, key) in KEY_NAMES.iter().take(7).enumerate() {
+                    notes.push(Note {
+                        time_ms: cluster_start_ms
+                            + i64::try_from(key_index * 10).expect("test time range"),
+                        key: (*key).into(),
+                        source_index,
+                    });
+                    source_index += 1;
+                }
+                notes.push(Note {
+                    time_ms: cluster_start_ms + 17,
+                    key: KEY_NAMES[0].into(),
+                    source_index,
+                });
+                source_index += 1;
+            }
+            let schedule = build_schedule_with_policy(
+                &Song {
+                    name: "Short Up gap with sparse dense clusters".into(),
+                    notes,
+                },
+                1.0,
+                &policy,
+            )
+            .expect("short-gap schedule");
+            assert_eq!(schedule.short_up_gap_repeat_count, cluster_count);
+            assert_eq!(schedule.impossible_same_key_repeats, 0);
+
+            let risk = analyze_schedule(&schedule);
+            assert_eq!(risk.dense_clusters.len(), cluster_count);
+            assert!(risk.max_polyphony <= 8);
+            assert_eq!(risk.severity, "medium");
+            assert!(
+                risk.recommendations
+                    .iter()
+                    .any(|reason| { reason.contains("game may miss a short Up pulse") })
+            );
+            assert_eq!(risk.suggested_hold_frames, None);
+            assert_eq!(risk.suggested_tempo_scale, None);
+        }
     }
 
     #[test]

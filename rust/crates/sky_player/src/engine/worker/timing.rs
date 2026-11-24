@@ -70,7 +70,6 @@ pub(crate) fn signed_ticks_to_us(qpc_clock: QpcClock, delta_ticks: i64) -> Resul
 
 /// Map an authored timestamp minus lead to its exact absolute QPC boundary.
 #[cfg(test)]
-#[allow(clippy::manual_unwrap_or, clippy::manual_unwrap_or_default)]
 pub(crate) fn anchored_dispatch_target_ticks(
     qpc_clock: QpcClock,
     now_ticks: QpcTicks,
@@ -79,14 +78,10 @@ pub(crate) fn anchored_dispatch_target_ticks(
     scheduled_us: u64,
     lead_us: u64,
 ) -> Result<QpcTicks, QpcError> {
-    let target_us = match anchor_us
+    let target_us = anchor_us
         .checked_add(scheduled_us)
         .ok_or(QpcError::DeadlineOverflow)?
-        .checked_sub(lead_us)
-    {
-        Some(value) => value,
-        None => 0,
-    };
+        .saturating_sub(lead_us);
     if target_us >= now_qpc_us {
         let delta = qpc_clock
             .duration_from_us(

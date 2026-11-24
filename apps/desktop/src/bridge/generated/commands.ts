@@ -3,10 +3,6 @@
 
 import type {
   Bootstrap,
-  CalibrationCancel,
-  CalibrationCancelAck,
-  CalibrationStart,
-  CalibrationStartAck,
   DiagnosticsEnabled,
   DiagnosticsSetEnabled,
   DetailRequest,
@@ -60,8 +56,6 @@ export interface CommandRequestMap {
   skip_playback: PlaybackSessionCommand;
   set_diagnostics_enabled: DiagnosticsSetEnabled;
   export_sender_trace: undefined;
-  start_calibration: CalibrationStart;
-  cancel_calibration: CalibrationCancel;
   library_list_playlists: undefined;
   library_create_playlist: { name: string };
   library_rename_playlist: { playlistId: string; name: string };
@@ -95,8 +89,6 @@ export interface CommandResponseMap {
   skip_playback: PlaybackCommandAck;
   set_diagnostics_enabled: DiagnosticsEnabled;
   export_sender_trace: string;
-  start_calibration: CalibrationStartAck;
-  cancel_calibration: CalibrationCancelAck;
   library_list_playlists: LibraryNavigation;
   library_create_playlist: LibraryPlaylistSummary;
   library_rename_playlist: LibraryPlaylistSummary;

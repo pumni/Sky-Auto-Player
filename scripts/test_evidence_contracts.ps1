@@ -147,6 +147,89 @@ $liveV2 = [ordered]@{
 $liveResult = Test-DispatchLifecycleReport -Report $liveV2
 Assert-Contract ($liveResult.EvidenceClass -ceq 'live_scheduler') 'schema v2 must prove the live scheduler owner'
 
+$liveV3 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$liveV3.schema_version = 3
+$liveV3.timing.Remove('min_release_gap_us')
+$liveV3.timing.Remove('min_release_gap_ticks')
+$liveV3.timing['resume_cleanup_delay_us'] = 17167
+$liveV3.timing['resume_cleanup_delay_ticks'] = 171671
+$normalV3 = $liveV3.live_scheduler.no_pause_control.packets
+$normalV3[2].started_qpc_ticks = 290000
+$normalV3[2].completed_qpc_ticks = 290010
+$normalV3[3].started_qpc_ticks = 461681
+$normalV3[3].completed_qpc_ticks = 461690
+$pausedV3 = $liveV3.live_scheduler.pause_cleanup_resume
+$pausedV3.Remove('min_release_gap_us')
+$pausedV3.Remove('min_release_gap_ticks')
+$pausedV3['resume_cleanup_delay_us'] = 17167
+$pausedV3['resume_cleanup_delay_ticks'] = 171671
+$pausedV3.Remove('g_minus_one_decision')
+$pausedV3.Remove('exact_g_decision')
+$pausedV3['resume_delay_minus_one_decision'] = 'wait'
+$pausedV3['exact_resume_delay_decision'] = 'send'
+$liveV3Result = Test-DispatchLifecycleReport -Report $liveV3
+Assert-Contract ($liveV3Result.SchemaVersion -eq 3 -and $liveV3Result.EvidenceClass -ceq 'canonical_generation_live_scheduler') 'schema v3 must accept a Down after Up commit without a musical release floor'
+
+# Schema v3 fixtures remain pinned to their historical cleanup-delay contract.
+# Current v4 evidence records verified cleanup plus control-plane Resume without a time floor.
+$liveV4 = $liveV3 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$liveV4.schema_version = 4
+$liveV4.timing.Remove('resume_cleanup_delay_us')
+$liveV4.timing.Remove('resume_cleanup_delay_ticks')
+$pausedV4 = $liveV4.live_scheduler.pause_cleanup_resume
+foreach ($field in @(
+    'cleanup_completion_qpc_ticks', 'min_release_gap_us', 'min_release_gap_ticks',
+    'resume_cleanup_delay_us', 'resume_cleanup_delay_ticks', 'resume_barrier_qpc_ticks',
+    'resume_delay_minus_one_decision', 'exact_resume_delay_decision',
+    'g_minus_one_decision', 'exact_g_decision'
+)) { $pausedV4.Remove($field) }
+$pausedV4['verified_cleanup_before_resume'] = $true
+$pausedV4['send_attempts_while_paused'] = 0
+$pausedV4['resume_control_committed'] = $true
+$pausedV4['resume_commit_qpc_ticks'] = 171870
+$pausedV4['resumed_epoch_qpc_ticks'] = 171870
+$pausedV4['resumed_authored_target_qpc_ticks'] = 171800
+$pausedV4['candidate_packet_not_before_qpc_ticks'] = 171800
+$pausedV4['resumed_sender_start_qpc_ticks'] = 171871
+foreach ($capture in @($pausedV4.cleanup_captures.pause, $pausedV4.cleanup_captures.final)) {
+    $capture.Remove('completion_qpc_ticks')
+}
+$liveV4Result = Test-DispatchLifecycleReport -Report $liveV4
+Assert-Contract ($liveV4Result.SchemaVersion -eq 4 -and $liveV4Result.EvidenceClass -ceq 'verified_cleanup_resume_live_scheduler') 'schema v4 must prove verified cleanup and immediate post-Resume admission without a timing floor'
+
+$earlyMusicalDownV3 = $liveV3 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$earlyMusicalDownV3.live_scheduler.no_pause_control.packets[2].started_qpc_ticks = 289999
+$earlyMusicalDownRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $earlyMusicalDownV3) } catch { $earlyMusicalDownRejected = $true }
+Assert-Contract $earlyMusicalDownRejected 'schema v3 accepted a Down before the prior Up transport commit'
+
+$earlyResumeV3 = $liveV3 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$earlyResumeV3.live_scheduler.pause_cleanup_resume.packets[1].started_qpc_ticks = 171870
+$earlyResumeV3.live_scheduler.pause_cleanup_resume.packets[1].completed_qpc_ticks = 171870
+$earlyResumeV3.live_scheduler.pause_cleanup_resume.resumed_sender_start_qpc_ticks = 171870
+$earlyResumeRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $earlyResumeV3) } catch { $earlyResumeRejected = $true }
+Assert-Contract $earlyResumeRejected 'schema v3 accepted resume before verified cleanup plus the separate resume cleanup delay'
+
+$retiredDelayV4 = $liveV4 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$retiredDelayV4.timing['resume_cleanup_delay_us'] = 17167
+$retiredDelayRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $retiredDelayV4) } catch { $retiredDelayRejected = $true }
+Assert-Contract $retiredDelayRejected 'schema v4 accepted a retired resume cleanup delay field'
+
+$sendWhilePausedV4 = $liveV4 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$sendWhilePausedV4.live_scheduler.pause_cleanup_resume.send_attempts_while_paused = 1
+$sendWhilePausedRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $sendWhilePausedV4) } catch { $sendWhilePausedRejected = $true }
+Assert-Contract $sendWhilePausedRejected 'schema v4 accepted a musical sender attempt while paused'
+
+$futureResumeTargetV4 = $liveV4 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
+$futureResumeTargetV4.live_scheduler.pause_cleanup_resume.resumed_authored_target_qpc_ticks = 171871
+$futureResumeTargetV4.live_scheduler.pause_cleanup_resume.candidate_packet_not_before_qpc_ticks = 171871
+$futureResumeTargetRejected = $false
+try { [void](Test-DispatchLifecycleReport -Report $futureResumeTargetV4) } catch { $futureResumeTargetRejected = $true }
+Assert-Contract $futureResumeTargetRejected 'schema v4 accepted a future authored target as immediate Resume admission'
+
 $badAccountingV2 = $liveV2 | ConvertTo-Json -Depth 20 | ConvertFrom-Json -AsHashtable
 $badFinalStage = $badAccountingV2.live_scheduler.pause_cleanup_resume.accounting_stages[4]
 $badFinalStage.cancelled = 0

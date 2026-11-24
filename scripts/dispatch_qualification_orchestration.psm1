@@ -253,7 +253,8 @@ function New-QualificationRunnerFailureArtifacts {
         [Parameter(Mandatory)] [int]$AttemptedSessionCount,
         [Parameter(Mandatory)] [string]$EvidenceRoot,
         [AllowNull()] [object[]]$ExistingFailures = @(),
-        [AllowNull()] [string]$FallbackScriptPath
+        [AllowNull()] [string]$FallbackScriptPath,
+        [ValidateSet(1, 2)] [int]$SummarySchemaVersion = 1
     )
 
     $invocation = $ErrorRecord.InvocationInfo
@@ -277,7 +278,7 @@ function New-QualificationRunnerFailureArtifacts {
 
     [object[]]$failureRows = @($ExistingFailures) + @($failure)
     $summary = [ordered]@{
-        schema_version = 1
+        schema_version = $SummarySchemaVersion
         run_id = $RunId
         stage = $Stage
         source_revision = $SourceRevision

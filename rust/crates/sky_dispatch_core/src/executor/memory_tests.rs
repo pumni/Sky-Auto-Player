@@ -29,7 +29,6 @@ fn executor_new_with_cancellation_and_memory_metrics() {
     let res = DispatchExecutor::new_with_cancellation(
         &sched,
         DurationTicks::from_raw(5_000),
-        DurationTicks::from_raw(16_667),
         |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
         || {
             check_count += 1;
@@ -47,7 +46,6 @@ fn executor_new_with_cancellation_and_memory_metrics() {
     let exec = DispatchExecutor::new_with_cancellation(
         &sched,
         DurationTicks::from_raw(5_000),
-        DurationTicks::from_raw(16_667),
         |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
         || Ok(()),
     )
@@ -95,12 +93,9 @@ fn compact_executor_arena_tracks_one_five_and_fifteen_key_chords() {
             },
         ];
         let schedule = compile_runtime_intents(&actions, &allowed).expect("schedule");
-        let executor = DispatchExecutor::new(
-            &schedule,
-            DurationTicks::from_raw(1_000),
-            DurationTicks::from_raw(16_667),
-            |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
-        )
+        let executor = DispatchExecutor::new(&schedule, DurationTicks::from_raw(1_000), |us| {
+            Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
+        })
         .expect("compact executor");
         let chord = executor.current_chord().expect("compiled Down chord");
         assert_eq!(chord.chord_index, 0);
@@ -179,12 +174,9 @@ fn up_slot_timings_preserves_exact_authored_and_floor() {
         },
     ];
     let sched = compile_runtime_intents(&actions, &allowed).expect("schedule");
-    let mut exec = DispatchExecutor::new(
-        &sched,
-        DurationTicks::from_raw(8_000),
-        DurationTicks::from_raw(16_667),
-        |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
-    )
+    let mut exec = DispatchExecutor::new(&sched, DurationTicks::from_raw(8_000), |us| {
+        Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
+    })
     .expect("executor");
 
     // Before Down completion: slot 0 is inactive
@@ -195,7 +187,7 @@ fn up_slot_timings_preserves_exact_authored_and_floor() {
     exec.on_send_completed(0, 1, TimelineTicks::from_raw(12_000))
         .expect("down send completed");
 
-    // After Down completion: slot 0 has exact authored up offset (25_000) and release floor (12_000 + 8_000 = 20_000)
+    // After Down completion: slot 0 has authored Up offset (25_000) and hold floor (12_000 + 8_000 = 20_000).
     let timings_after = exec.up_slot_timings(1);
     assert_eq!(timings_after.len(), 1);
     let timing = timings_after[0];
@@ -222,7 +214,9 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
         }
         let mut actions = Vec::with_capacity(chord_count * 2);
         for i in 0..chord_count {
-            let t = (i as u64 + 1) * 20_000;
+            // Keep a 20 ms authored Up-to-next-Down gap so the pinned legacy
+            // release-gap policy can Prepare the same workload.
+            let t = (i as u64 + 1) * 30_000;
             actions.push(KeyActionInput {
                 source_action_index: (i * 2) as u32,
                 kind: ActionKind::Down,
@@ -242,12 +236,9 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
         assert_eq!(sched.down_chords.len(), chord_count);
         let schedule_memory = sched.memory_metrics().expect("schedule memory metrics");
         let compile_memory = schedule_memory.compile_memory;
-        let executor = DispatchExecutor::new(
-            &sched,
-            DurationTicks::from_raw(8_000),
-            DurationTicks::from_raw(16_667),
-            |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
-        )
+        let executor = DispatchExecutor::new(&sched, DurationTicks::from_raw(8_000), |us| {
+            Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
+        })
         .expect("production executor construction");
         let executor_memory = executor
             .try_memory_metrics()
@@ -272,6 +263,30 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
             executor_memory.struct_bytes,
             executor_memory.total_bytes,
             compile_memory.phase_peak_capacity_bytes,
+        );
+
+        drop(executor);
+        let prepared = PreparedDispatchSchedule::prepare(
+            &sched,
+            std::num::NonZeroU64::new(1_000_000).expect("QPC frequency"),
+            8_000,
+            compile_memory.caller_retained_capacity_bytes,
+        )
+        .expect("prepared dispatch plan for the representative capacity workload");
+        let prepared_memory = prepared.memory_metrics();
+        let prepared_startup_peak_capacity_bound = compile_memory
+            .phase_peak_capacity_bytes
+            .max(prepared_memory.overlapping_peak_capacity_bytes);
+        assert!(
+            prepared_memory.overlapping_peak_capacity_bytes
+                <= crate::model::MAX_RETAINED_DISPATCH_BYTES
+        );
+        assert!(prepared_startup_peak_capacity_bound <= crate::model::MAX_RETAINED_DISPATCH_BYTES);
+        eprintln!(
+            "prepared_dispatch_memory workload=one_key chords={chord_count} memory_basis=calculated_size_and_capacity complete_application_process_peak=not_measured compiler_phase_peak_capacity_bytes={} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={} prepared_startup_peak_capacity_bound_bytes={prepared_startup_peak_capacity_bound} policy_min_hold_us=8000 qpc_frequency_hz=1000000 complete_worker_and_process_overhead_not_measured",
+            compile_memory.phase_peak_capacity_bytes,
+            prepared_memory.plan_capacity_bytes,
+            prepared_memory.overlapping_peak_capacity_bytes,
         );
         assert!(
             live_scheduler_owned_bytes <= crate::model::MAX_RETAINED_DISPATCH_BYTES,
@@ -315,16 +330,13 @@ fn up_slot_timings_multiple_slots_with_distinct_authored_and_floor() {
         },
     ];
     let sched = compile_runtime_intents(&actions, &allowed).expect("schedule");
-    let mut exec = DispatchExecutor::new(
-        &sched,
-        DurationTicks::from_raw(8_000),
-        DurationTicks::from_raw(16_667),
-        |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
-    )
+    let mut exec = DispatchExecutor::new(&sched, DurationTicks::from_raw(8_000), |us| {
+        Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
+    })
     .expect("executor");
 
     // Complete Down at 20_000 ticks.
-    // Hold floor H = 8_000, so release floor is 20_000 + 8_000 = 28_000 for both keys.
+    // Hold floor H = 8_000, so Up is due at 20_000 + 8_000 = 28_000 for both keys.
     exec.on_send_completed(0, 0b11, TimelineTicks::from_raw(20_000))
         .expect("down send completed");
 
@@ -449,7 +461,6 @@ fn executor_cancellation_interrupts_large_materialization() {
     let result = DispatchExecutor::new_with_cancellation(
         &schedule,
         DurationTicks::from_raw(8_000),
-        DurationTicks::from_raw(16_667),
         |us| {
             converted_timestamps += 1;
             Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))

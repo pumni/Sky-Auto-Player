@@ -28,8 +28,7 @@ fn attempted_mixed_down_terminates_after_one_packet_and_verified_cleanup() {
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor at current QPC");
     let first_capture = harness.configure_mock_packet_sender_for_test(&[0]);
-    let (cleanup_capture, cleanup_completion_qpc) =
-        harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
+    let cleanup_capture = harness.configure_mock_cleanup_emitter_for_test();
     harness.attach_executor_for_test().expect("attach executor");
 
     let first_now = harness.qpc_now_for_test().expect("first Down QPC");
@@ -139,20 +138,6 @@ fn attempted_mixed_down_terminates_after_one_packet_and_verified_cleanup() {
     );
     assert!(anomaly.contains("completion_qpc=unavailable"), "{anomaly}");
     assert!(!cleanup_capture.lock().expect("cleanup capture").is_empty());
-    let cleanup_completion = QpcTicks::from_raw(cleanup_completion_qpc.load(Ordering::Acquire));
-    let barrier = harness
-        .resume_barrier_qpc_for_test()
-        .expect("cleanup establishes H/G resume barrier");
-    assert!(barrier >= cleanup_completion);
-    assert!(barrier > mixed_target, "C is still inside cleanup + G");
-    assert_eq!(
-        harness
-            .evaluate_live_scheduler_for_test(QpcTicks::from_raw(barrier.as_u64() - 1), epoch,)
-            .expect("evaluate just before resume barrier"),
-        DispatchDecision::Wait {
-            deadline_qpc: barrier
-        }
-    );
 
     assert_eq!(anomaly_calls.load(Ordering::Relaxed), 1);
     assert_eq!(first_capture.lock().expect("first packet capture").len(), 1);
@@ -437,7 +422,7 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
         .duration_from_us(10_000)
         .expect("focus restoration grace");
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
-    let (cleanup, _) = harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
     harness.attach_executor_for_test().expect("attach executor");
 
     let origin = super::super::load_target_stamp(&harness.target).expect("original owner stamp");
@@ -616,8 +601,6 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
         0
     });
 
-    let cleanup_qpc = Arc::new(std::sync::atomic::AtomicU64::new(0));
-    let cleanup_qpc_for_transition = Arc::clone(&cleanup_qpc);
     super::super::suspend_live_input_for_dispatch(
         &mut harness.resources.backend,
         &mut harness.resources.scheduler,
@@ -626,17 +609,8 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
             Some(origin),
             true,
         ),
-        &harness.runtime,
-        || {
-            let completed = clock
-                .now()
-                .map_err(|error| format!("cleanup completion QPC: {error:?}"))?;
-            cleanup_qpc_for_transition.store(completed.as_u64(), Ordering::Release);
-            Ok(completed)
-        },
     )
     .expect("verified cleanup under A's frozen owner proof");
-    let cleanup_completed = QpcTicks::from_raw(cleanup_qpc.load(Ordering::Acquire));
     assert_eq!(
         cleanups
             .lock()
@@ -661,18 +635,6 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
             .expect("session owner proof remains after verified cleanup")
             .same_owner(&a_origin),
         "physical cleanup does not retire the session authority proof"
-    );
-    let resume_barrier = harness
-        .resume_barrier_qpc_for_test()
-        .expect("verified cleanup resume barrier");
-    let release_gap = clock
-        .duration_from_us(harness.config.timing.min_release_gap_us)
-        .expect("resume G conversion");
-    assert_eq!(
-        resume_barrier,
-        cleanup_completed
-            .checked_add_duration(release_gap)
-            .expect("cleanup G barrier")
     );
 
     let current = super::super::load_target_stamp(&harness.target).expect("same restored owner");
@@ -710,38 +672,23 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
     assert_eq!(harness.generation_accounting_for_test().cancelled, 1);
     assert_eq!(harness.resources.scheduler.active_mask(), 0);
 
-    let before_resume_barrier = QpcTicks::from_raw(resume_barrier.as_u64() - 1);
-    assert_eq!(
-        harness
-            .evaluate_live_scheduler_for_test(
-                before_resume_barrier,
-                harness.resources.playback.epoch
-            )
-            .expect("B just before cleanup G"),
-        DispatchDecision::Wait {
-            deadline_qpc: resume_barrier
-        }
-    );
     assert!(matches!(
         harness
-            .evaluate_live_scheduler_for_test(resume_barrier, harness.resources.playback.epoch)
-            .expect("B at cleanup G"),
+            .evaluate_live_scheduler_for_test(resumed_at, harness.resources.playback.epoch)
+            .expect("B after Resume commits"),
         DispatchDecision::Send {
             up_mask: 0,
             down_chord: Some(chord),
             timing_window,
         } if chord.source_action_index == 6661
-            && timing_window.packet_not_before_qpc == resume_barrier
+            && timing_window.packet_not_before_qpc <= resumed_at
     ));
-    while clock.now().expect("resume barrier QPC") < resume_barrier {
-        std::thread::yield_now();
-    }
     let resumed_qpc = clock.now().expect("resumed B scheduler QPC");
     let (b, evaluations) = stage_from_worker_outer_evaluation(&mut harness, resumed_qpc);
     assert_eq!(evaluations, 1);
     assert_eq!(b.source_action_index, 6661);
     assert_eq!(b.packet_masks, PhysicalPacket::new(0, 2));
-    assert!(b.timing_window.packet_not_before_qpc >= resume_barrier);
+    assert!(b.timing_window.packet_not_before_qpc <= resumed_qpc);
     assert_eq!(
         harness.pre_wait_candidate_admission_for_test(&b),
         StagedDispatchOutcome::Dispatched
@@ -756,7 +703,7 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
     assert_eq!(sent[0].0, PhysicalPacket::new(0, 1));
     assert_eq!(sent[1].0, PhysicalPacket::new(0, 2));
     assert_eq!(sent[1].1.attempts, 1);
-    assert!(sent[1].1.started_ticks.expect("B sender QPC") >= resume_barrier);
+    assert!(sent[1].1.started_ticks.expect("B sender QPC") >= resumed_at);
     assert_eq!(harness.resources.scheduler.chord_cursor(), 2);
     assert_eq!(harness.resources.backend.active_mask, 2);
     assert_eq!(harness.resources.backend.possibly_active_mask, 0);
@@ -772,6 +719,63 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
     assert_eq!(b_origin.target_generation(), origin.generation);
     assert_eq!(b_origin.owner_pid(), Some(101));
     assert!(harness.runtime.terminal_error.is_none());
+}
+
+#[test]
+fn cleanup_probe_rechecks_owner_before_accepting_all_up() {
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+            sky_dispatch_win32::focus::set_window_live_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
+    let actions = [
+        test_action(6668, ActionKind::Down, 0, 0x15),
+        test_action(6669, ActionKind::Up, 500_000, 0x15),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    harness.configure_focus_owner_for_test(1, 101);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.resources.backend.active_mask = 1;
+
+    let probe_calls = Arc::new(AtomicUsize::new(0));
+    let probe_calls_for_probe = Arc::clone(&probe_calls);
+    harness.resources.backend.set_probe(move |_, _| {
+        match probe_calls_for_probe.fetch_add(1, Ordering::AcqRel) {
+            0 => InstrumentPhysicalState::Inconclusive,
+            1 => {
+                // Model owner drift after the retry's pre-probe check but
+                // before AllUp can be accepted.
+                sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(202)));
+                InstrumentPhysicalState::AllUp
+            }
+            _ => InstrumentPhysicalState::AllUp,
+        }
+    });
+    let origin = super::super::load_target_stamp(&harness.target).expect("retained origin");
+
+    let error = super::super::suspend_live_input_for_dispatch(
+        &mut harness.resources.backend,
+        &mut harness.resources.scheduler,
+        super::super::super::cleanup::CleanupTarget::for_session(
+            &harness.target,
+            Some(origin),
+            true,
+        ),
+    )
+    .expect_err("owner drift during the probe cannot clear cleanup debt");
+
+    assert!(error.contains("owner identity drifted"), "{error}");
+    assert_eq!(probe_calls.load(Ordering::Acquire), 2);
+    assert_eq!(cleanup.lock().expect("cleanup send capture").len(), 1);
+    assert_eq!(harness.resources.backend.needs_up_mask(), 0);
+    assert_eq!(harness.resources.backend.needs_probe_mask, 1);
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
 }
 
 #[test]
@@ -833,14 +837,6 @@ fn focus_recovery_cleanup_rejects_invalidated_session_target() {
                 Some(origin),
                 true,
             ),
-            &harness.runtime,
-            || {
-                harness
-                    .resources
-                    .clock
-                    .now()
-                    .map_err(|error| format!("{error:?}"))
-            },
         )
         .expect_err("recovery cannot release through an invalidated session target");
         assert!(error.contains("target HWND/generation changed"));
@@ -953,8 +949,7 @@ fn attempted_musical_up_only_is_not_replayed_and_terminates_before_next_down() {
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor playback");
     let first_capture = harness.configure_mock_packet_sender_for_test(&[0]);
-    let (cleanup_capture, cleanup_completion) =
-        harness.configure_mock_cleanup_emitter_with_completion_qpc_for_test();
+    let cleanup_capture = harness.configure_mock_cleanup_emitter_for_test();
     harness.attach_executor_for_test().expect("attach executor");
     let first = harness
         .stage_candidate_for_test(
@@ -1050,12 +1045,7 @@ fn attempted_musical_up_only_is_not_replayed_and_terminates_before_next_down() {
         anomaly.contains("attempts=1 status=IntegrityLost"),
         "{anomaly}"
     );
-    let barrier = harness
-        .resume_barrier_qpc_for_test()
-        .expect("verified cleanup + G");
-    assert!(barrier > up_target);
     assert!(!cleanup_capture.lock().expect("cleanup capture").is_empty());
-    assert!(QpcTicks::from_raw(cleanup_completion.load(Ordering::Acquire)) <= barrier);
 
     assert_eq!(up_packets.lock().expect("Up-only capture").len(), 1);
     assert_eq!(first_capture.lock().expect("initial Down capture").len(), 1);
@@ -1935,9 +1925,6 @@ fn post_focus_race_hook_flips_focus_active_up_only_focus_required_replans_and_ab
             qpc_offset(&harness, 20_000).as_u64(),
         ))
         .expect("up target");
-    while harness.qpc_now_for_test().expect("wait for up target") < up_target {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
     let (up_mask, down_chord, timing_window) = staged_send_at(&mut harness, up_target, epoch);
     assert_eq!(up_mask, 1);
     assert_eq!(down_chord, None);
@@ -2033,9 +2020,6 @@ fn post_focus_race_hook_invalidates_target_up_only_focus_required_fails_closed_w
             qpc_offset(&harness, 20_000).as_u64(),
         ))
         .expect("up target");
-    while harness.qpc_now_for_test().expect("wait for up target") < up_target {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
     let (up_mask, down_chord, timing_window) = staged_send_at(&mut harness, up_target, epoch);
     assert_eq!(up_mask, 1);
     let up_only = harness
@@ -2119,9 +2103,6 @@ fn post_focus_race_hook_invalidates_target_up_only_focus_not_required_fails_clos
             qpc_offset(&harness, 20_000).as_u64(),
         ))
         .expect("up target");
-    while harness.qpc_now_for_test().expect("wait for up target") < up_target {
-        std::thread::sleep(std::time::Duration::from_millis(1));
-    }
     let (up_mask, down_chord, timing_window) = staged_send_at(&mut harness, up_target, epoch);
     assert_eq!(up_mask, 1);
     let up_only = harness

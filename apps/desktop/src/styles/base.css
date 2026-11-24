@@ -278,7 +278,6 @@ h3 {
   .utility-surface,
   .player-bar,
   .settings-dialog,
-  .calibration-dialog,
   .library-dialog {
     border-color: CanvasText;
     color: CanvasText;
@@ -426,15 +425,6 @@ h3 {
   font-size: 12px;
 }
 
-.recommendation-grid dt {
-  color: var(--text-secondary);
-  font-size: 12px;
-}
-
-.recommendation-grid dd {
-  font-size: 14px;
-}
-
 .admission-copy strong {
   font-size: 14px;
 }
@@ -445,7 +435,6 @@ h3 {
 }
 
 .settings-dialog,
-.calibration-dialog,
 .library-dialog {
   border-color: var(--border-strong);
   border-radius: var(--workbench-radius-2xl);
@@ -460,7 +449,6 @@ h3 {
 }
 
 .settings-note,
-.timing-margin-recommendation,
 .auto-play-switch-description {
   color: var(--text-secondary);
   font-size: 12px;

@@ -64,6 +64,9 @@ impl std::error::Error for CommandTimingError {}
 pub(crate) struct CommandTimingState {
     pub(crate) next_generation: AtomicU64,
     pub(crate) phase: Mutex<PauseTimingPhase>,
+    cleanup_obligation_mask: AtomicU16,
+    manual_resume_commit_qpc_ticks: AtomicU64,
+    manual_resume_commit_elapsed_ticks: AtomicU64,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -76,6 +79,7 @@ pub struct CommandTimingResult {
     pub observation_latency_us: u64,
     pub completion_latency_us: u64,
     pub cleanup_cost_us: u64,
+    pub cleanup_obligation_mask: u16,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -109,9 +113,34 @@ impl CommandTimingState {
                     generation,
                     requested_ticks,
                 };
+                self.cleanup_obligation_mask.store(0, Ordering::Release);
+                self.manual_resume_commit_qpc_ticks
+                    .store(0, Ordering::Release);
                 Ok(generation)
             }
         }
+    }
+
+    pub(crate) fn record_pause_cleanup_obligation_mask(&self, mask: u16) {
+        self.cleanup_obligation_mask.store(mask, Ordering::Release);
+    }
+
+    pub(crate) fn record_manual_resume_commit(&self, qpc_ticks: QpcTicks, elapsed_ticks: u64) {
+        self.manual_resume_commit_elapsed_ticks
+            .store(elapsed_ticks, Ordering::Relaxed);
+        self.manual_resume_commit_qpc_ticks
+            .store(qpc_ticks.as_u64(), Ordering::Release);
+    }
+
+    pub(crate) fn manual_resume_commit(&self) -> Option<(u64, u64)> {
+        let qpc_ticks = self.manual_resume_commit_qpc_ticks.load(Ordering::Acquire);
+        (qpc_ticks != 0).then(|| {
+            (
+                qpc_ticks,
+                self.manual_resume_commit_elapsed_ticks
+                    .load(Ordering::Relaxed),
+            )
+        })
     }
 
     pub(crate) fn observe_pause(&self, observed_ticks: QpcTicks) -> Option<u64> {
@@ -219,6 +248,7 @@ impl CommandTimingState {
                     cleanup_cost_us: qpc_clock
                         .duration_to_us(cleanup_ticks)
                         .map_err(|error| CommandTimingError::Clock(format!("{error:?}")))?,
+                    cleanup_obligation_mask: self.cleanup_obligation_mask.load(Ordering::Acquire),
                 };
                 *phase = PauseTimingPhase::Idle;
                 Ok(CommandTimingLookup::Complete(result))
@@ -240,6 +270,9 @@ impl Default for CommandTimingState {
         Self {
             next_generation: AtomicU64::new(0),
             phase: Mutex::new(PauseTimingPhase::Idle),
+            cleanup_obligation_mask: AtomicU16::new(0),
+            manual_resume_commit_qpc_ticks: AtomicU64::new(0),
+            manual_resume_commit_elapsed_ticks: AtomicU64::new(0),
         }
     }
 }
@@ -255,4 +288,4 @@ impl Drop for CommandTimingCleanup<'_> {
 }
 use parking_lot::Mutex;
 use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU64, Ordering};

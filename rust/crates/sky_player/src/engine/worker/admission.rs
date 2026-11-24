@@ -844,7 +844,7 @@ pub(crate) fn verify_final_packet_admission(
 }
 
 #[cfg(test)]
-#[allow(dead_code, clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_final_down_admission(
     target: &SessionTarget,
     expected: TargetStamp,
@@ -873,38 +873,5 @@ pub(crate) fn verify_final_down_admission(
         runtime,
         metrics,
         MusicalPacketKind::DownOnly,
-    )
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::too_many_arguments)]
-pub(crate) fn verify_final_musical_up_admission(
-    target: &SessionTarget,
-    expected: TargetStamp,
-    require_focus: bool,
-    focus_active: &AtomicBool,
-    control_signals: FinalControlSignals<'_>,
-    lease_timeout_ticks: DurationTicks,
-    qpc_clock: QpcClock,
-    progress_clock: &SharedProgressClock,
-    backend: &TrackedKeyState,
-    playback: &mut PlaybackClockState,
-    runtime: &mut WorkerRuntime,
-    metrics: &mut WorkerMetricsLocal,
-) -> FinalDownAdmissionResult {
-    verify_final_packet_admission(
-        target,
-        expected,
-        require_focus,
-        focus_active,
-        control_signals,
-        lease_timeout_ticks,
-        qpc_clock,
-        progress_clock,
-        backend,
-        playback,
-        runtime,
-        metrics,
-        MusicalPacketKind::UpOnly,
     )
 }

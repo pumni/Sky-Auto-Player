@@ -23,7 +23,6 @@ describe('SettingsCategoryContent', () => {
       'appearance',
       'diagnostics',
       'updates',
-      'advanced',
       'donate',
       'about',
     ]);
@@ -34,7 +33,6 @@ describe('SettingsCategoryContent', () => {
     ['appearance', 'Appearance'],
     ['diagnostics', 'Telemetry and diagnostics'],
     ['updates', 'Updates'],
-    ['advanced', 'Advanced'],
     ['donate', 'Support Sky Auto Player'],
     ['about', 'About Sky Auto Player'],
   ] as const)('renders the %s section with its accessible name', async (category, name) => {

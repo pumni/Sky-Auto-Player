@@ -249,7 +249,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     }
     let ConvertedTiming {
         min_hold_ticks,
-        min_release_gap_ticks,
         mut worker_timing,
         ..
     } = match convert_timing(config, qpc_clock, &effective_policy) {
@@ -259,7 +258,7 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let lease_timeout_ticks = worker_timing.lease_timeout_ticks;
     core.runtime
         .production_forensics
-        .set_timing_policies(min_hold_ticks, min_release_gap_ticks);
+        .set_timing_policies(min_hold_ticks);
     #[cfg(any(test, feature = "test-support"))]
     if let Err(error) = startup_checkpoint(
         shared,
@@ -270,15 +269,11 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         return admission_failure(&mut backend, metrics, error);
     }
     let prepared_schedule = schedule;
-    if !prepared_schedule.is_compatible(
-        qpc_clock.frequency_hz(),
-        config.timing.min_hold_us,
-        config.timing.min_release_gap_us,
-    ) {
+    if !prepared_schedule.is_compatible(qpc_clock.frequency_hz(), config.timing.min_hold_us) {
         return admission_failure(
             &mut backend,
             metrics,
-            "prepared dispatch plan no longer matches the worker QPC domain or H/G policy"
+            "prepared dispatch plan no longer matches the worker QPC domain or hold policy"
                 .to_string(),
         );
     }

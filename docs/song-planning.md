@@ -94,9 +94,15 @@ schedule builder. The plan retains both source and scheduled onsets so this
 transformation is visible. Before scheduling each mapped onset, the planner
 rejects a scaled timestamp outside the u64 range or one that cannot
 accommodate the materialized minimum physical hold; it never uses saturating
-time arithmetic for the new conversion path. Same-key repeats are not delayed
-to avoid conflicts: impossible_same_key_repeats, physical timing conflicts,
-and RiskReport come from the existing scheduler and analyzer. Conversion
+time arithmetic for the new conversion path. Each Up is authored at Down + H
+with checked arithmetic. A repeat less than H remains infeasible and is
+rejected during Prepare with its source action positions. A physically feasible
+repeat whose Up-to-Down gap is shorter than one configured frame is counted in
+the risk report and raises a medium risk, so the existing confirmation flow can
+show the sampling warning and offer Proceed. Equal Up/Down deadlines are
+ordered Up first. Tempo advice for an infeasible repeat is computed from H, and
+Prepare rebuilds and revalidates any selected variant. These warnings do not
+rewrite saved timing settings or silently change hold or tempo. Conversion
 status does not override a downstream preparation or physical-risk gate.
 
 ### Numeric compatibility and checked scheduling

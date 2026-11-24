@@ -38,7 +38,6 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
-        min_release_gap_us: 17_467,
         frame_us: 16_667,
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,
@@ -52,7 +51,6 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
         &schedule,
         qpc.frequency_hz(),
         timing.min_hold_us,
-        timing.min_release_gap_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
@@ -95,7 +93,6 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook: None,
-                restore_race_hook: None,
                 focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
@@ -127,11 +124,6 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
             },
             timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
                 .expect("runtime fixture timing policy"),
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             plan_fingerprint: "d".repeat(64),
             physical: false,
             activity_lease: Mutex::new(None),
@@ -657,7 +649,6 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
-        min_release_gap_us: 17_467,
         frame_us: 16_667,
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,
@@ -671,7 +662,6 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
         &schedule,
         qpc.frequency_hz(),
         timing.min_hold_us,
-        timing.min_release_gap_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
@@ -714,7 +704,6 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook: None,
-                restore_race_hook: None,
                 focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
@@ -746,11 +735,6 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
             },
             timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
                 .expect("runtime fixture timing policy"),
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             plan_fingerprint: "2".repeat(64),
             physical: false,
             activity_lease: Mutex::new(None),
@@ -858,7 +842,6 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
-        min_release_gap_us: 17_467,
         frame_us: 16_667,
         frame_base_hold_us: 16_667,
         timing_margin_us: 800,
@@ -872,7 +855,6 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
         &schedule,
         qpc.frequency_hz(),
         timing.min_hold_us,
-        timing.min_release_gap_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
@@ -915,7 +897,6 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook: None,
-                restore_race_hook: None,
                 focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
@@ -948,11 +929,6 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
             },
             timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
                 .expect("runtime fixture timing policy"),
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             plan_fingerprint: "6".repeat(64),
             physical: false,
             activity_lease: Mutex::new(None),
@@ -1040,11 +1016,6 @@ fn native_monitor_activation_failure_does_not_arm_guard() {
             },
             timing_policy: MaterializedTimingPolicy::from_user_margin(60, 1.0, 800)
                 .expect("runtime fixture timing policy"),
-            timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto {
-                recommended_timing_margin_us: Some(800),
-                qualified: false,
-                source: "default_fallback".into(),
-            },
             plan_fingerprint: "0".repeat(64),
             physical: false,
             activity_lease: Mutex::new(None),

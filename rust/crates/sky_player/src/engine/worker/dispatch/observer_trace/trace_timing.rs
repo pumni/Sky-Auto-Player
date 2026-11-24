@@ -3,14 +3,9 @@ use crate::engine::TraceTiming;
 
 pub(in crate::engine::worker::dispatch) struct DownSendTraceTiming {
     pub(in crate::engine::worker::dispatch) core_post_send_us: u64,
-    pub(in crate::engine::worker::dispatch) completion_residual_us: u64,
     pub(in crate::engine::worker::dispatch) post_send_metrics_available: bool,
     pub(in crate::engine::worker::dispatch) completion_error_ticks: i64,
     pub(in crate::engine::worker::dispatch) authored_completion_error_ticks: i64,
-    pub(in crate::engine::worker::dispatch) pre_call_ticks:
-        Option<sky_dispatch_core::time::TimelineTicks>,
-    pub(in crate::engine::worker::dispatch) sendinput_completion_ticks:
-        Option<sky_dispatch_core::time::TimelineTicks>,
     pub(in crate::engine::worker::dispatch) wake_ticks:
         Option<sky_dispatch_core::time::TimelineTicks>,
     pub(in crate::engine::worker::dispatch) observer_qpc_ticks: sky_dispatch_win32::clock::QpcTicks,
@@ -92,7 +87,7 @@ pub(in crate::engine::worker::dispatch) fn down_send_trace_timing(
                 .musical_up_not_before_qpc
                 .as_u64(),
         ),
-        release_floor_qpc_ticks: Some(
+        down_not_before_qpc_ticks: Some(
             observation
                 .physical_timing_window
                 .down_not_before_qpc
@@ -103,15 +98,11 @@ pub(in crate::engine::worker::dispatch) fn down_send_trace_timing(
             .map(|ticks| ticks.as_u64()),
         previous_sender_completion_known: observation.previous_sender_completion_known,
         hold_floor_mask: observation.physical_timing_window.hold_floor_mask,
-        release_floor_mask: observation.physical_timing_window.release_floor_mask,
         final_policy_qpc_ticks: observation.final_policy_qpc.map(|ticks| ticks.as_u64()),
         pre_call_qpc_ticks: observation.pre_call_qpc.map(|ticks| ticks.as_u64()),
         sendinput_completion_qpc_ticks: Some(observation.sendinput_completion_qpc.as_u64()),
         post_send_qpc_ticks: observation.dispatch_ready_qpc.map(|ticks| ticks.as_u64()),
         observation_qpc_ticks: Some(timing.observer_qpc_ticks.as_u64()),
-        pre_call_ticks: timing.pre_call_ticks,
-        sendinput_completion_ticks: timing.sendinput_completion_ticks,
-        completion_residual_us: timing.completion_residual_us,
         core_post_send_duration_us: timing.core_post_send_us,
         post_send_metrics_available: timing.post_send_metrics_available,
         completion_error_ticks: timing.completion_error_ticks,

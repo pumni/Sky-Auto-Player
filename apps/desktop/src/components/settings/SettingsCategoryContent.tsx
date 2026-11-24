@@ -1,4 +1,4 @@
-import { Gauge, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { useId } from 'react';
 import appIcon40 from '../../assets/brand/app-icon-40.png';
 import { resolveAppearance } from '../../appearance/resolveAppearance';
@@ -21,7 +21,6 @@ export type SettingsCategory =
   | 'appearance'
   | 'diagnostics'
   | 'updates'
-  | 'advanced'
   | 'donate'
   | 'about';
 
@@ -30,7 +29,6 @@ export const SETTINGS_CATEGORIES: Array<{ id: SettingsCategory; label: string }>
   { id: 'appearance', label: 'Appearance' },
   { id: 'diagnostics', label: 'Diagnostics' },
   { id: 'updates', label: 'Updates' },
-  { id: 'advanced', label: 'Advanced' },
   { id: 'donate', label: 'Donate' },
   { id: 'about', label: 'About' },
 ];
@@ -84,8 +82,6 @@ export function SettingsCategoryContent({
   const autoCheckId = useId();
   const autoCheckDescId = useId();
   const patchSettings = useStore((store) => store.patchSettings);
-  const setOpen = useStore((store) => store.setSettingsOpen);
-  const setCalibrationOpen = useStore((store) => store.setCalibrationOpen);
   const update = useStore((store) => store.update);
   const checkForUpdate = useStore((store) => store.checkForUpdate);
   const patch = (value: SettingsPatch) => void patchSettings(value);
@@ -102,7 +98,6 @@ export function SettingsCategoryContent({
   const frameUs = Math.ceil(1_000_000 / defaults.fps);
   const frameBaseHoldUs = Math.ceil(defaults.hold_frames * frameUs);
   const minHoldUs = frameBaseHoldUs + defaults.timing_margin_us;
-  const minReleaseGapUs = frameUs + defaults.timing_margin_us;
   const checkingUpdates = update.checkRequestPending || update.state === 'checking';
 
   return (
@@ -180,7 +175,6 @@ export function SettingsCategoryContent({
               <TimingMarginControl
                 value={defaults.timing_margin_us}
                 options={bootstrap.option_sets}
-                recommendation={settings.timing_margin_recommendation}
                 density="full"
                 onChange={(value) =>
                   patchSettings({ playbackDefaults: { timingMarginUs: value } }).then(
@@ -200,10 +194,6 @@ export function SettingsCategoryContent({
                 <div>
                   <dt>Target hold</dt>
                   <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
-                </div>
-                <div>
-                  <dt>Release gap</dt>
-                  <dd>{(minReleaseGapUs / 1_000).toFixed(3)} ms</dd>
                 </div>
               </dl>
             </div>
@@ -369,34 +359,6 @@ export function SettingsCategoryContent({
               {checkingUpdates ? 'Checking…' : 'Check for updates'}
             </button>
             <span className="settings-version-meta">Current version · {bootstrap.app_version}</span>
-          </div>
-        </section>
-      )}
-
-      {category === 'advanced' && (
-        <section className="settings-section" aria-labelledby="advanced-settings-title">
-          <h3 id="advanced-settings-title">Advanced</h3>
-          <p className="settings-note">
-            Native timing, input and security policy remain owned by the local Rust runtime.
-          </p>
-          <div className="settings-subsection settings-action-card">
-            <div className="settings-action-card-copy">
-              <h3>Advanced timing</h3>
-              <p className="settings-note">
-                Run a safe, testable timing calibration for this machine.
-              </p>
-            </div>
-            <button
-              className="button settings-inline-action"
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                setCalibrationOpen(true);
-              }}
-            >
-              <Gauge size={14} aria-hidden="true" />
-              Open calibration
-            </button>
           </div>
         </section>
       )}

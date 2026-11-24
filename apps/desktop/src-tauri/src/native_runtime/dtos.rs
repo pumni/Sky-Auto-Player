@@ -1,6 +1,5 @@
 use crate::commands::{
-    AppearanceMode, NativeBuildDto, PlaybackDefaultsDto, SettingsDto,
-    TimingMarginRecommendationDto, UpdatePreferencesDto,
+    AppearanceMode, NativeBuildDto, PlaybackDefaultsDto, SettingsDto, UpdatePreferencesDto,
 };
 use sky_app_core::settings::{AppearanceMode as CoreAppearanceMode, ApplicationSettings};
 
@@ -10,7 +9,7 @@ pub(crate) fn native_build_dto() -> NativeBuildDto {
             .unwrap_or("unknown")
             .into(),
         native_version: env!("CARGO_PKG_VERSION").into(),
-        schema_version: sky_dispatch_win32::calibration::CALIBRATION_SCHEMA_VERSION as u64,
+        schema_version: sky_player::adapter_support::SCHEMA_VERSION as u64,
         native_abi: option_env!("SKY_NATIVE_ABI")
             .unwrap_or("native-win32")
             .into(),
@@ -45,10 +44,7 @@ pub(super) fn update_preferences_dto(settings: &ApplicationSettings) -> UpdatePr
     }
 }
 
-pub(super) fn settings_dto(
-    settings: &ApplicationSettings,
-    timing_margin_recommendation: TimingMarginRecommendationDto,
-) -> SettingsDto {
+pub(super) fn settings_dto(settings: &ApplicationSettings) -> SettingsDto {
     SettingsDto {
         appearance_mode: match settings.appearance_mode {
             CoreAppearanceMode::System => AppearanceMode::System,
@@ -59,7 +55,6 @@ pub(super) fn settings_dto(
         ui_background_mode: settings.ui_background_mode.clone(),
         playback_defaults: playback_defaults(settings),
         auto_play: settings.playback_behavior.auto_play,
-        timing_margin_recommendation,
         telemetry_enabled: settings.telemetry_enabled,
         verbose_hud: settings.verbose_hud,
         update_preferences: update_preferences_dto(settings),

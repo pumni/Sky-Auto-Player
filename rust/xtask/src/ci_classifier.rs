@@ -448,7 +448,7 @@ fn classify_path(
         "rust/xtask/src/ci_artifacts.rs",
         "rust/xtask/src/ci_candidate.rs",
         "rust/xtask/src/ci_bridge.rs",
-        "rust/xtask/src/calibration.rs",
+        "rust/xtask/src/startup_calibration.rs",
     ]
     .contains(&path)
     {

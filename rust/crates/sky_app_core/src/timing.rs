@@ -1,7 +1,7 @@
 //! Materialized playback timing policy shared by planning and execution.
 //!
-//! Timing Margin is the only authored execution headroom. It extends both the
-//! base hold floor and same-key release gap by the same amount.
+//! Timing Margin is the only authored execution headroom. It extends the
+//! base hold floor; verified cleanup has no elapsed-time floor.
 
 use crate::song::SongError;
 
@@ -15,7 +15,6 @@ pub struct MaterializedTimingPolicy {
     pub frame_base_hold_us: u64,
     pub timing_margin_us: u64,
     pub min_hold_us: u64,
-    pub min_release_gap_us: u64,
     pub focus_restore_grace_us: u64,
 }
 
@@ -40,10 +39,6 @@ impl MaterializedTimingPolicy {
         let min_hold_us = frame_base_hold_us
             .checked_add(timing_margin_us)
             .ok_or(SongError::TimingOverflow)?;
-        let min_release_gap_us = frame_us
-            .checked_add(timing_margin_us)
-            .ok_or(SongError::TimingOverflow)?;
-
         Ok(Self {
             fps,
             frame_us,
@@ -51,7 +46,6 @@ impl MaterializedTimingPolicy {
             frame_base_hold_us,
             timing_margin_us,
             min_hold_us,
-            min_release_gap_us,
             focus_restore_grace_us: DEFAULT_FOCUS_RESTORE_GRACE_US,
         })
     }
@@ -62,67 +56,46 @@ mod tests {
     use super::MaterializedTimingPolicy;
 
     #[test]
-    fn materializes_symmetric_user_margin_for_supported_hold_profiles() {
+    fn materializes_user_margin_for_supported_hold_profiles() {
         let expected = [
-            (1.0, 16_667, 17_467, 17_467),
-            (1.25, 20_834, 21_634, 17_467),
-            (1.5, 25_001, 25_801, 17_467),
+            (1.0, 16_667, 17_467),
+            (1.25, 20_834, 21_634),
+            (1.5, 25_001, 25_801),
         ];
-        for (hold_frames, base_hold_us, min_hold_us, release_gap_us) in expected {
+        for (hold_frames, base_hold_us, min_hold_us) in expected {
             let policy =
                 MaterializedTimingPolicy::from_user_margin(60, hold_frames, 800).expect("valid");
             assert_eq!(policy.frame_us, 16_667);
             assert_eq!(policy.frame_base_hold_us, base_hold_us);
             assert_eq!(policy.timing_margin_us, 800);
             assert_eq!(policy.min_hold_us, min_hold_us);
-            assert_eq!(policy.min_release_gap_us, release_gap_us);
             assert_eq!(
                 policy.frame_base_hold_us + policy.timing_margin_us,
                 policy.min_hold_us
-            );
-            assert_eq!(
-                policy.frame_us + policy.timing_margin_us,
-                policy.min_release_gap_us
             );
         }
     }
 
     #[test]
-    fn timing_margin_zero_is_valid_and_increases_both_floors_equally() {
+    fn timing_margin_zero_is_valid_and_extends_only_the_hold_floor() {
         let zero = MaterializedTimingPolicy::from_user_margin(60, 1.0, 0).expect("zero is valid");
         let eight_hundred =
             MaterializedTimingPolicy::from_user_margin(60, 1.0, 800).expect("valid margin");
         let nine_hundred =
             MaterializedTimingPolicy::from_user_margin(60, 1.0, 900).expect("valid margin");
-        assert_eq!(
-            (zero.min_hold_us, zero.min_release_gap_us),
-            (16_667, 16_667)
-        );
-        assert_eq!(zero.min_release_gap_us, zero.frame_us);
+        assert_eq!(zero.min_hold_us, 16_667);
         assert_eq!(eight_hundred.min_hold_us, 17_467);
-        assert_eq!(eight_hundred.min_release_gap_us, 17_467);
         assert_eq!(nine_hundred.min_hold_us - eight_hundred.min_hold_us, 100);
-        assert_eq!(
-            nine_hundred.min_release_gap_us - eight_hundred.min_release_gap_us,
-            100
-        );
-        assert_eq!(
-            (nine_hundred.min_hold_us + nine_hundred.min_release_gap_us)
-                - (eight_hundred.min_hold_us + eight_hundred.min_release_gap_us),
-            200
-        );
     }
 
     #[test]
-    fn frame_snapshot_policy_uses_the_same_margin_extended_g_at_60_and_120_fps() {
-        let cases = [(60, 16_667, 17_167, 34_334), (120, 8_334, 8_834, 17_668)];
-        for (fps, frame_us, floor_us, cycle_us) in cases {
+    fn frame_snapshot_policy_keeps_the_hold_floor_at_60_and_120_fps() {
+        let cases = [(60, 16_667, 17_167), (120, 8_334, 8_834)];
+        for (fps, frame_us, floor_us) in cases {
             let policy =
                 MaterializedTimingPolicy::from_user_margin(fps, 1.0, 500).expect("valid policy");
             assert_eq!(policy.frame_us, frame_us);
             assert_eq!(policy.min_hold_us, floor_us);
-            assert_eq!(policy.min_release_gap_us, floor_us);
-            assert_eq!(policy.min_hold_us + policy.min_release_gap_us, cycle_us);
         }
     }
 
@@ -132,7 +105,6 @@ mod tests {
             let policy = MaterializedTimingPolicy::from_user_margin(fps, 1.25, 1_200)
                 .expect("valid FPS policy");
             assert_eq!(policy.min_hold_us, policy.frame_base_hold_us + 1_200);
-            assert_eq!(policy.min_release_gap_us, policy.frame_us + 1_200);
         }
     }
 

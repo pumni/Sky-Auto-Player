@@ -216,15 +216,6 @@ impl WaitableTimer {
     }
 
     #[cfg(windows)]
-    #[allow(dead_code)]
-    pub(crate) fn arm_relative_us(&self, us: NonZeroU64) -> Result<(), u32> {
-        let Some(intervals) = us.get().checked_mul(10).and_then(NonZeroU64::new) else {
-            return Err(87);
-        };
-        self.arm_relative_100ns(intervals)
-    }
-
-    #[cfg(windows)]
     pub(crate) fn raw_handle(&self) -> windows_sys::Win32::Foundation::HANDLE {
         self.handle
     }

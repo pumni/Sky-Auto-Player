@@ -116,20 +116,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
             qpc_offset(&harness, 42_500).as_u64(),
         ))
         .expect("B2 authored Down target");
-    let g_ticks = clock
-        .duration_from_us(harness.config.timing.min_release_gap_us)
-        .expect("G floor conversion");
-    let b1_up_completion = packets
-        .lock()
-        .expect("B1 Up evidence")
-        .get(1)
-        .and_then(|(_, evidence)| evidence.completed_ticks)
-        .expect("confirmed B1 Up completion");
-    let b2_g_floor = b1_up_completion
-        .checked_add_duration(g_ticks)
-        .expect("B2 G floor");
-    assert!(b2_g_floor > b2_authored, "B2 is G limited");
-    let b2_eval = QpcTicks::from_raw(b2_g_floor.as_u64() - 1);
+    let b2_eval = QpcTicks::from_raw(b2_authored.as_u64() - 1);
     let (b2_action, scheduler_wait_target, projected_b2) =
         super::super::evaluate_scheduler_action_for_staging(
             &harness.resources.scheduler,
@@ -139,10 +126,10 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         .expect("evaluate future B2");
     assert!(matches!(
         b2_action,
-        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == b2_g_floor
+        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == b2_authored
     ));
-    assert_eq!(scheduler_wait_target, b2_g_floor);
-    let projected_b2 = projected_b2.expect("scheduler projects B2 at its G boundary");
+    assert_eq!(scheduler_wait_target, b2_authored);
+    let projected_b2 = projected_b2.expect("scheduler projects B2 at its authored target");
     assert!(matches!(
         projected_b2,
         super::super::SchedulerAction::Send {
@@ -150,7 +137,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
             down_chord: Some(chord),
             timing_window,
         } if chord.source_action_index == 6682
-            && timing_window.packet_not_before_qpc == b2_g_floor
+            && timing_window.packet_not_before_qpc == b2_authored
     ));
     let b2 = super::super::stage_scheduler_send_candidate(
         projected_b2,
@@ -162,15 +149,14 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         &mut harness.runtime,
     )
     .expect("stage projected B2")
-    .expect("B2 is staged for its future G deadline");
+    .expect("B2 is staged for its authored deadline");
     assert_eq!(b2.source_action_index, 6682);
     assert_eq!(
         b2.packet_masks,
         sky_dispatch_win32::input::PhysicalPacket::new(0, 2)
     );
     assert_eq!(b2.timing_window.authored_target_qpc, b2_authored);
-    assert_eq!(b2.timing_window.packet_not_before_qpc, b2_g_floor);
-    assert_ne!(b2.timing_window.release_floor_mask & 2, 0);
+    assert_eq!(b2.timing_window.packet_not_before_qpc, b2_authored);
     assert_eq!(
         harness.pre_wait_candidate_admission_for_test(&b2),
         StagedDispatchOutcome::Dispatched
@@ -187,13 +173,13 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     let a_up_physical_target = authored_a_up.max(a_h_floor);
     assert_eq!(a_up_physical_target, authored_a_up);
     let _waiter_override = crate::engine::worker::wait::install_waiter_result_for_test(
-        b2_g_floor,
+        b2_authored,
         WaitResult {
             outcome: WaitOutcome::Deadline,
             wake_qpc: Some(a_up_physical_target),
             spin_ticks: sky_dispatch_core::time::DurationTicks::ZERO,
             timer_return_qpc: Some(a_up_physical_target),
-            timer_arm_target_qpc: Some(b2_g_floor),
+            timer_arm_target_qpc: Some(b2_authored),
             timer_arm_qpc: None,
             timer_arm_generation: None,
             timer_return_generation: None,
@@ -223,12 +209,12 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
             dispatch_qpc,
             ..
         } => {
-            assert_eq!(target_qpc, b2_g_floor);
+            assert_eq!(target_qpc, b2_authored);
             assert_eq!(result.outcome, WaitOutcome::Deadline);
             assert_eq!(result.wake_qpc, Some(a_up_physical_target));
             assert!(
                 dispatch_qpc > target_qpc,
-                "Due wake overshoots B2's G deadline"
+                "Due wake overshoots B2's authored deadline"
             );
             assert!(
                 dispatch_qpc >= a_up_physical_target,
@@ -248,7 +234,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         sky_dispatch_win32::input::PhysicalPacket::new(0, 2)
     );
     harness.runtime.last_dispatch_deadline_wake_qpc = Some(late_wake_qpc);
-    harness.runtime.last_dispatch_deadline_target_qpc = Some(b2_g_floor);
+    harness.runtime.last_dispatch_deadline_target_qpc = Some(b2_authored);
     harness.set_mock_sender_start_qpc_for_test(late_wake_qpc);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(b2, false),
@@ -353,7 +339,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     assert!(sent.iter().all(|(_, evidence)| evidence.attempts == 1));
     assert_eq!(sent[0].1.started_ticks, Some(epoch));
     assert!(sent[1].1.started_ticks.expect("B1 Up sender QPC") >= authored_b_up.max(b_h_floor));
-    assert!(sent[2].1.started_ticks.expect("B2 sender QPC") >= b2_g_floor);
+    assert!(sent[2].1.started_ticks.expect("B2 sender QPC") >= b2_authored);
     assert!(sent[3].1.started_ticks.expect("A Up/C Down sender QPC") >= a_up_physical_target);
     assert_eq!(
         sent.iter()
@@ -371,7 +357,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         elapsed_us(clock, epoch, a_h_floor),
         elapsed_us(clock, epoch, authored_b_up),
         elapsed_us(clock, epoch, b2_authored),
-        elapsed_us(clock, epoch, b2_g_floor),
+        elapsed_us(clock, epoch, b2_authored),
         elapsed_us(clock, epoch, late_wake_qpc),
         elapsed_us(clock, epoch, authored_a_up),
     );

@@ -25,7 +25,8 @@ struct IntentOracle {
     reason: String,
     paired_up_source_action_index: u32,
     paired_up_offset_us: u64,
-    paired_up_offset_ticks: u64,
+    authored_up_offset_ticks: u64,
+    paired_up_not_before_offset_ticks: u64,
 }
 
 fn qpc_ceil(microseconds: u64) -> TimelineTicks {
@@ -116,21 +117,21 @@ fn intent_oracle(schedule: &RuntimeSchedule, intents: &[DownIntentTicks]) -> Vec
             reason: schedule.reason_table[usize::from(intent.reason_id)].clone(),
             paired_up_source_action_index: intent.paired_up_source_action_index,
             paired_up_offset_us: intent.paired_up_offset_us,
-            paired_up_offset_ticks: intent.paired_up_offset_ticks.as_u64(),
+            authored_up_offset_ticks: intent.authored_up_offset_ticks.as_u64(),
+            paired_up_not_before_offset_ticks: intent.paired_up_not_before_offset_ticks.as_u64(),
         })
         .collect()
 }
 
 #[test]
-fn independent_reviewed_head_arena_arrays_and_qpc_rounding_are_unchanged() {
+fn canonical_generation_arena_arrays_and_qpc_rounding_match_the_reference() {
     let schedule = fixture();
     let frequency = NonZeroU64::new(FREQUENCY_HZ).expect("odd QPC frequency");
-    let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 77, 0)
+    let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 0)
         .expect("prepared oracle schedule");
     let legacy = DispatchExecutor::new(
         &schedule,
         DurationTicks::from_raw(qpc_ceil(101).as_u64()),
-        DurationTicks::from_raw(qpc_ceil(77).as_u64()),
         |us| Ok::<_, std::convert::Infallible>(qpc_ceil(us)),
     )
     .expect("legacy oracle schedule");
@@ -176,7 +177,8 @@ fn independent_reviewed_head_arena_arrays_and_qpc_rounding_are_unchanged() {
             reason: "first chord".into(),
             paired_up_source_action_index: 11,
             paired_up_offset_us: 1_301,
-            paired_up_offset_ticks: 4_657,
+            authored_up_offset_ticks: 4_657,
+            paired_up_not_before_offset_ticks: 4_657,
         },
         IntentOracle {
             source_action_index: 10,
@@ -186,7 +188,8 @@ fn independent_reviewed_head_arena_arrays_and_qpc_rounding_are_unchanged() {
             reason: "first chord".into(),
             paired_up_source_action_index: 12,
             paired_up_offset_us: 1_701,
-            paired_up_offset_ticks: 6_089,
+            authored_up_offset_ticks: 6_089,
+            paired_up_not_before_offset_ticks: 6_089,
         },
         IntentOracle {
             source_action_index: 13,
@@ -196,7 +199,8 @@ fn independent_reviewed_head_arena_arrays_and_qpc_rounding_are_unchanged() {
             reason: "second A".into(),
             paired_up_source_action_index: 14,
             paired_up_offset_us: 2_501,
-            paired_up_offset_ticks: 8_953,
+            authored_up_offset_ticks: 8_953,
+            paired_up_not_before_offset_ticks: 8_953,
         },
         IntentOracle {
             source_action_index: 15,
@@ -206,7 +210,8 @@ fn independent_reviewed_head_arena_arrays_and_qpc_rounding_are_unchanged() {
             reason: "third C".into(),
             paired_up_source_action_index: 16,
             paired_up_offset_us: 3_201,
-            paired_up_offset_ticks: 11_459,
+            authored_up_offset_ticks: 11_459,
+            paired_up_not_before_offset_ticks: 11_459,
         },
     ];
 
@@ -220,6 +225,10 @@ fn independent_reviewed_head_arena_arrays_and_qpc_rounding_are_unchanged() {
     assert_eq!(legacy_intents, expected_intents);
 
     let memory = prepared.memory_metrics();
+    assert_eq!(
+        DispatchExecutor::estimated_memory_bytes(&schedule).expect("executor memory estimate"),
+        legacy.memory_metrics().total_bytes
+    );
     assert_eq!(memory.chord_count, 3);
     assert_eq!(memory.chord_capacity, 3);
     assert_eq!(memory.intent_count, 4);
@@ -233,8 +242,8 @@ fn independent_reviewed_head_arena_arrays_and_qpc_rounding_are_unchanged() {
             + std::mem::size_of::<PreparedDispatchSchedule>()
     );
     if usize::BITS == 64 {
-        assert_eq!(memory.plan_capacity_bytes, 568);
-        assert_eq!(memory.overlapping_peak_capacity_bytes, 3_978);
+        assert_eq!(memory.plan_capacity_bytes, 584);
+        assert_eq!(memory.overlapping_peak_capacity_bytes, 3_410);
     }
     assert_eq!(legacy.memory_metrics().chord_count, 3);
     assert_eq!(legacy.memory_metrics().intent_count, 4);
@@ -244,7 +253,7 @@ fn independent_reviewed_head_arena_arrays_and_qpc_rounding_are_unchanged() {
 fn empty_and_fresh_legacy_executors_keep_zeroed_arena_state() {
     let empty = compile_runtime_intents(&[], &[0x15]).expect("empty schedule");
     let frequency = NonZeroU64::new(FREQUENCY_HZ).expect("odd QPC frequency");
-    let prepared = PreparedDispatchSchedule::prepare(&empty, frequency, 101, 77, 0)
+    let prepared = PreparedDispatchSchedule::prepare(&empty, frequency, 101, 0)
         .expect("empty prepared schedule");
     assert!(prepared.down_chords.is_empty());
     assert!(prepared.down_intents.is_empty());
@@ -255,14 +264,12 @@ fn empty_and_fresh_legacy_executors_keep_zeroed_arena_state() {
     let legacy_first = DispatchExecutor::new(
         &empty,
         DurationTicks::from_raw(qpc_ceil(101).as_u64()),
-        DurationTicks::from_raw(qpc_ceil(77).as_u64()),
         |us| Ok::<_, std::convert::Infallible>(qpc_ceil(us)),
     )
     .expect("first empty legacy executor");
     let legacy_second = DispatchExecutor::new(
         &empty,
         DurationTicks::from_raw(qpc_ceil(101).as_u64()),
-        DurationTicks::from_raw(qpc_ceil(77).as_u64()),
         |us| Ok::<_, std::convert::Infallible>(qpc_ceil(us)),
     )
     .expect("fresh empty legacy executor");
@@ -281,11 +288,58 @@ fn empty_and_fresh_legacy_executors_keep_zeroed_arena_state() {
 }
 
 #[test]
-fn prepared_retained_capacity_budget_keeps_exact_accept_and_reject_boundary() {
-    let schedule = fixture();
+fn prepared_retained_capacity_budget_uses_actual_plan_capacities_and_exact_boundary() {
+    let schedule = compile_runtime_intents(
+        &[
+            KeyActionInput {
+                source_action_index: 20,
+                kind: ActionKind::Down,
+                scheduled_us: 1_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "paired Down".into(),
+            },
+            KeyActionInput {
+                source_action_index: 21,
+                kind: ActionKind::Up,
+                scheduled_us: 2_000,
+                scan_codes: smallvec::smallvec![0x15],
+                reason: "paired Up".into(),
+            },
+            KeyActionInput {
+                source_action_index: 22,
+                kind: ActionKind::Up,
+                scheduled_us: 3_000,
+                scan_codes: smallvec::smallvec![0x16],
+                reason: "unmatched Up".into(),
+            },
+        ],
+        &[0x15, 0x16],
+    )
+    .expect("paired generation and unmatched Up schedule");
     let frequency = NonZeroU64::new(FREQUENCY_HZ).expect("odd QPC frequency");
     let baseline =
-        PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 77, 0).expect("baseline plan");
+        PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 0).expect("baseline plan");
+    let plan_memory = baseline.memory_metrics();
+    assert_eq!(plan_memory.unmatched_up_count, 1);
+    assert!(plan_memory.unmatched_up_capacity >= plan_memory.unmatched_up_count);
+    let expected_plan_capacity = plan_memory
+        .chord_capacity
+        .checked_mul(std::mem::size_of::<DownChordHeaderTicks>())
+        .and_then(|bytes| {
+            plan_memory
+                .intent_capacity
+                .checked_mul(std::mem::size_of::<DownIntentTicks>())
+                .and_then(|intents| bytes.checked_add(intents))
+        })
+        .and_then(|bytes| {
+            plan_memory
+                .unmatched_up_capacity
+                .checked_mul(std::mem::size_of::<PreparedUnmatchedUpMetadata>())
+                .and_then(|unmatched| bytes.checked_add(unmatched))
+        })
+        .and_then(|bytes| bytes.checked_add(std::mem::size_of::<PreparedDispatchSchedule>()))
+        .expect("prepared plan capacity from actual allocations");
+    assert_eq!(plan_memory.plan_capacity_bytes, expected_plan_capacity);
     let schedule_memory = schedule
         .memory_metrics()
         .expect("schedule capacity metrics");
@@ -296,17 +350,21 @@ fn prepared_retained_capacity_budget_keeps_exact_accept_and_reject_boundary() {
     let combined_capacity = schedule_bytes
         .checked_add(baseline.memory_metrics().plan_capacity_bytes)
         .expect("overlapping capacity bytes");
+    let expected_peak = schedule
+        .compile_memory
+        .phase_peak_capacity_bytes
+        .max(combined_capacity);
+    assert_eq!(plan_memory.overlapping_peak_capacity_bytes, expected_peak);
     let exact_fit_caller = crate::model::MAX_RETAINED_DISPATCH_BYTES - combined_capacity;
-    let exact_fit =
-        PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 77, exact_fit_caller)
-            .expect("plan exactly at retained startup budget");
+    let exact_fit = PreparedDispatchSchedule::prepare(&schedule, frequency, 101, exact_fit_caller)
+        .expect("plan exactly at retained startup budget");
     assert_eq!(
         exact_fit.memory_metrics().overlapping_peak_capacity_bytes,
         crate::model::MAX_RETAINED_DISPATCH_BYTES
     );
 
     let over_budget =
-        PreparedDispatchSchedule::prepare(&schedule, frequency, 101, 77, exact_fit_caller + 1)
+        PreparedDispatchSchedule::prepare(&schedule, frequency, 101, exact_fit_caller + 1)
             .expect_err("one byte over retained startup budget must fail");
     assert_eq!(
         over_budget,
@@ -319,7 +377,7 @@ fn prepared_retained_capacity_budget_keeps_exact_accept_and_reject_boundary() {
 }
 
 #[test]
-fn caller_specific_invalid_range_and_timestamp_errors_remain_stable() {
+fn prepared_schedule_validates_unmatched_up_timestamps() {
     let mut unmatched_up = compile_runtime_intents(
         &[KeyActionInput {
             source_action_index: 7,
@@ -331,34 +389,26 @@ fn caller_specific_invalid_range_and_timestamp_errors_remain_stable() {
         &[0x15],
     )
     .expect("unmatched Up schedule");
-    unmatched_up.batches[0].intent_start = 1;
+    unmatched_up.unmatched_ups[0].scheduled_us = u64::MAX;
     let prepared_error = PreparedDispatchSchedule::prepare(
         &unmatched_up,
         NonZeroU64::new(FREQUENCY_HZ).expect("frequency"),
         101,
-        77,
         0,
     )
     .expect_err("prepared unmatched-Up range must be checked");
-    assert_eq!(
-        prepared_error,
-        "prepared native schedule admission failed: schedule contains an invalid compiled batch range for packet 0"
-    );
+    assert!(prepared_error.contains("supported timestamp range"));
 
     let schedule = fixture();
-    let legacy_error = DispatchExecutor::new(
-        &schedule,
-        DurationTicks::from_raw(1),
-        DurationTicks::from_raw(1),
-        |microseconds| {
+    let legacy_error =
+        DispatchExecutor::new(&schedule, DurationTicks::from_raw(1), |microseconds| {
             if microseconds == 1_001 {
                 Err("oracle conversion failure")
             } else {
                 Ok(TimelineTicks::from_raw(microseconds))
             }
-        },
-    )
-    .expect_err("legacy conversion error must retain caller text");
+        })
+        .expect_err("legacy conversion error must retain caller text");
     assert_eq!(
         legacy_error,
         "scheduled timestamp conversion failed for chord at 1001us: oracle conversion failure"
@@ -370,27 +420,19 @@ fn caller_specific_invalid_range_and_timestamp_errors_remain_stable() {
         &near_overflow,
         NonZeroU64::new(FREQUENCY_HZ).expect("frequency"),
         101,
-        77,
         0,
     )
     .expect_err("prepared end conversion should detect overflow");
-    assert_eq!(
-        prepared_overflow,
-        "schedule end offset timestamp conversion overflow"
-    );
-    let legacy_overflow = DispatchExecutor::new(
-        &near_overflow,
-        DurationTicks::from_raw(1),
-        DurationTicks::from_raw(1),
-        |microseconds| {
+    assert!(prepared_overflow.contains("supported timestamp range"));
+    let legacy_overflow =
+        DispatchExecutor::new(&near_overflow, DurationTicks::from_raw(1), |microseconds| {
             if microseconds == u64::MAX {
                 Err("near-overflow conversion")
             } else {
                 Ok(TimelineTicks::from_raw(microseconds))
             }
-        },
-    )
-    .expect_err("legacy end conversion should preserve adapter failure");
+        })
+        .expect_err("legacy end conversion should preserve adapter failure");
     assert_eq!(
         legacy_overflow,
         format!(
@@ -409,7 +451,6 @@ fn prepared_builder_keeps_its_first_chord_checkpoint_boundary() {
     let result = PreparedDispatchSchedule::prepare_with_cancellation(
         &schedule,
         NonZeroU64::new(1_000_000).expect("QPC frequency"),
-        0,
         0,
         0,
         || {
@@ -432,14 +473,9 @@ fn prepared_builder_keeps_its_first_chord_checkpoint_boundary() {
 #[test]
 fn prepared_retained_capacity_matrix_matches_reviewed_head() {
     let frequency = NonZeroU64::new(1_000_000).expect("QPC frequency");
-    for (chord_count, expected_plan_bytes, expected_peak_bytes) in [
-        (0usize, 264usize, 480usize),
-        (1, 352, 1_574),
-        (100, 9_064, 82_358),
-        (5_000, 440_264, 4_080_758),
-    ] {
+    for chord_count in [0usize, 1, 100, 5_000] {
         let schedule = one_key_repeat_schedule(chord_count);
-        let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 0, 0, 0)
+        let prepared = PreparedDispatchSchedule::prepare(&schedule, frequency, 0, 0)
             .expect("prepared capacity schedule");
         let memory = prepared.memory_metrics();
         assert_eq!(memory.chord_count, chord_count);
@@ -448,6 +484,15 @@ fn prepared_retained_capacity_matrix_matches_reviewed_head() {
         assert_eq!(memory.intent_capacity, chord_count);
         assert_eq!(memory.unmatched_up_count, 0);
         assert_eq!(memory.unmatched_up_capacity, 0);
+        let expected_plan_bytes = chord_count * std::mem::size_of::<DownChordHeaderTicks>()
+            + chord_count * std::mem::size_of::<DownIntentTicks>()
+            + std::mem::size_of::<PreparedDispatchSchedule>();
+        let schedule_metrics = schedule.memory_metrics().expect("schedule memory");
+        let schedule_bytes = schedule_metrics.heap_payload_bytes + schedule_metrics.struct_bytes;
+        let expected_peak_bytes = schedule_bytes
+            .checked_add(expected_plan_bytes)
+            .expect("schedule and prepared plan capacity")
+            .max(schedule.compile_memory.phase_peak_capacity_bytes);
         assert_eq!(memory.plan_capacity_bytes, expected_plan_bytes);
         assert_eq!(memory.overlapping_peak_capacity_bytes, expected_peak_bytes);
     }

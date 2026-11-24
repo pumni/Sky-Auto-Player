@@ -37,7 +37,9 @@ pub(super) use retirement::{
     terminal_release_evidence_after_startup,
 };
 #[cfg(all(test, feature = "tauri-test"))]
-pub(super) use retirement::{recovery_test_probe_calls, set_recovery_test_probe_result};
+pub(super) use retirement::{
+    recovery_test_probe_calls, set_recovery_test_probe_hook, set_recovery_test_probe_result,
+};
 pub(super) use session::{
     cleanup_failed_event_delivery, is_failure_status, opaque_native_id, playback_event_state,
     settings_fingerprint, terminal_success_outcome, validate_playback_start_request,
@@ -163,7 +165,6 @@ pub(super) struct NativePlaybackVariant {
     pub(super) prepared_schedule: Option<sky_player::adapter_support::PreparedDispatchSchedule>,
     pub(super) fingerprint: String,
     pub(super) timing_policy: MaterializedTimingPolicy,
-    pub(super) timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
 }
 
 pub(super) struct NativePreparedInput {
@@ -175,7 +176,6 @@ pub(super) struct NativePreparedInput {
     pub(super) schedule: ScheduleMetadata,
     pub(super) risk: RiskReport,
     pub(super) timing_policy: MaterializedTimingPolicy,
-    pub(super) timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub(super) settings_fingerprint: String,
     pub(super) publication_fingerprint: String,
     pub(super) source_path: PathBuf,
@@ -267,7 +267,6 @@ pub(super) struct NativeActivePlayback {
     pub(super) total_us: u64,
     pub(super) config: PlaybackConfigDto,
     pub(super) timing_policy: MaterializedTimingPolicy,
-    pub(super) timing_margin_recommendation: crate::commands::TimingMarginRecommendationDto,
     pub(super) plan_fingerprint: String,
     pub(super) physical: bool,
     pub(super) activity_lease: Mutex<Option<PhysicalActivityLease>>,

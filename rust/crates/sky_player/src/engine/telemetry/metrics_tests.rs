@@ -455,11 +455,10 @@ fn publication_derives_public_lateness_microseconds_from_ticks() {
 }
 
 #[test]
-fn publication_derives_floor_delay_microseconds_from_qpc_ticks() {
+fn publication_derives_hold_floor_delay_microseconds_from_qpc_ticks() {
     let shared = SharedMetrics::default();
     let mut local = WorkerMetricsLocal {
         max_hold_floor_delay_ticks: 1_234,
-        max_release_floor_delay_ticks: 2_345,
         ..WorkerMetricsLocal::default()
     };
     let qpc_clock = QpcClock::from_frequency_hz(NonZeroU64::new(1_000_000).unwrap());
@@ -469,8 +468,6 @@ fn publication_derives_floor_delay_microseconds_from_qpc_ticks() {
     let published = shared.snapshot.load(qpc_clock);
     assert_eq!(published.max_hold_floor_delay_ticks, 1_234);
     assert_eq!(published.max_hold_floor_delay_us, 1_234);
-    assert_eq!(published.max_release_floor_delay_ticks, 2_345);
-    assert_eq!(published.max_release_floor_delay_us, 2_345);
 }
 
 #[test]

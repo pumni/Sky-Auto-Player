@@ -1,4 +1,8 @@
 
 # cargo-vet audits file
 
-[audits]
+[[audits.cookie]]
+who = "OpenAI GPT-6 (delegated AI source-delta review; not a human reviewer)"
+criteria = "safe-to-deploy"
+delta = "0.18.2 -> 0.18.3"
+notes = "2026-11-23: Reviewed the upstream 0.18.2...0.18.3 release-tag diff (rwf2/cookie-rs); it changes only CHANGELOG.md, the package version in Cargo.toml (MSRV stays 1.56), and the private-cookie nonce RNG in src/secure/private.rs from rand::thread_rng() to rand::rngs::OsRng. No unsafe blocks, dependencies, or capabilities were added by this delta. This avoids fork-related thread-local nonce reuse (RUSTSEC-2026-0594). The 0.18.2 starting version retains its existing safe-to-deploy exemption; this entry audits only the upgrade delta. The published 0.18.3 checksum is d55f2d6c30eeec7d5c6f98bd4395d4abb1895629eab97ee6522d340623615f8a (matched to Cargo.lock in the CLI spike report). AI-assisted review was explicitly delegated by the repository owner in ChatGPT; this field does not represent an independent human sign-off. Upstream diff: https://github.com/rwf2/cookie-rs/compare/0.18.2...0.18.3 ; fix: https://github.com/rwf2/cookie-rs/commit/98de6032defb10ad5e49d83fa1a9bbed1873cbe4 ."

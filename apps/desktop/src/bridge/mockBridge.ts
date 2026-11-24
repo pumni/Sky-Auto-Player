@@ -3,11 +3,6 @@ import type {
   Bootstrap,
   PlaybackConfig,
   PreparedPlayback,
-  CalibrationCancel,
-  CalibrationCancelAck,
-  CalibrationStart,
-  CalibrationStartAck,
-  CalibrationStateId,
   DesktopBridge,
   DetailRequest,
   SearchRequest,
@@ -36,47 +31,43 @@ import type {
   UpdateSnapshotPayload,
 } from './DesktopBridge';
 import type { DiagnosticsBackend } from './DesktopBridge';
-import type { WholeStreamTimingAdvisoryDto } from './generated';
+import type { GenerationTimingAdvisoryDto } from './generated';
 import { getMockUpdateFixtureOptions } from './mockUpdateFixtures';
 import type { MockUpdateFixtureOptions } from './mockUpdateFixtures';
 
 function mockTimingAdvisory(
   fingerprint: string,
-  status: WholeStreamTimingAdvisoryDto['status'],
+  status: GenerationTimingAdvisoryDto['status'],
   dryRun: boolean,
-): WholeStreamTimingAdvisoryDto {
-  const hasModeledPressure = status === 'modeled_risk';
+): GenerationTimingAdvisoryDto {
+  const hasShortGapRisk = status === 'short_up_gap_risk';
   return {
     status,
     plan_fingerprint: fingerprint,
-    explanation: hasModeledPressure
-      ? 'The illustrative model found 3 negative-slack packet(s), 2 H-floor and 1 G-floor displacement(s), and 2 head-of-line delay(s).'
-      : 'No lateness, H/G floor displacement, or head-of-line delay was modeled across 12 packets.',
-    total_packet_count: 12,
-    packet_count_inspected: 12,
-    packet_count_analyzed: 12,
-    packet_limit: 50_000,
+    explanation: hasShortGapRisk
+      ? '2 feasible same-key repeats have an authored Up-to-Down gap shorter than one frame.'
+      : 'No feasible same-key repeat has an authored Up-to-Down gap shorter than one frame.',
+    total_authored_timestamp_group_count: 12,
+    down_generation_count: 12,
+    unmatched_up_count: 0,
+    generation_limit: 50_000,
     work_limit_units: 3_000_000,
     working_memory_limit_bytes: 67_108_864,
-    negative_slack_packet_count: hasModeledPressure ? 3 : 0,
-    h_floor_displaced_packet_count: hasModeledPressure ? 2 : 0,
-    max_h_floor_displacement_us: hasModeledPressure ? 24 : 0,
-    g_floor_displaced_packet_count: hasModeledPressure ? 1 : 0,
-    max_g_floor_displacement_us: hasModeledPressure ? 8 : 0,
-    head_of_line_packet_count: hasModeledPressure ? 2 : 0,
-    max_head_of_line_delay_us: hasModeledPressure ? 16 : 0,
+    short_up_gap_repeat_count: hasShortGapRisk ? 2 : 0,
     effective_hold_floor_h_us: 17_467,
-    authored_release_gap_floor_g_us: 17_467,
-    physical_release_gap_floor_g_us: 16_667,
-    structural_same_key_cycle_minimum_us: 34_934,
-    assumptions: {
-      qpc_frequency_hz: 1_000_000,
-      estimated_sender_setup_us: 10,
-      estimated_per_input_us: 3,
-      estimated_post_send_us: 5,
-      estimated_metadata_cost_us: 1,
-    },
-    receiver_acknowledged: false,
+    dispatch_model_status: 'modeled_risk',
+    dispatch_model_explanation:
+      'The illustrative executor model found 1 late send, 1 H-floor displacement, and 1 head-of-line delay.',
+    modeled_send_count: 4,
+    modeled_negative_slack_send_count: 1,
+    modeled_h_floor_displaced_send_count: 1,
+    max_modeled_h_floor_displacement_us: 13,
+    modeled_head_of_line_send_count: 1,
+    max_modeled_head_of_line_delay_us: 8,
+    max_modeled_lateness_us: 21,
+    estimated_sender_setup_us: 10,
+    estimated_per_input_us: 3,
+    estimated_post_send_us: 5,
     dry_run_is_hypothetical: dryRun,
   };
 }
@@ -270,11 +261,6 @@ function initialSettings(): Settings {
       dry_run: false,
     },
     auto_play: true,
-    timing_margin_recommendation: {
-      recommended_timing_margin_us: 500,
-      qualified: false,
-      source: 'default_fallback',
-    },
     telemetry_enabled: true,
     verbose_hud: false,
     update_preferences: {
@@ -297,7 +283,7 @@ export interface MockBridgeOptions {
   libraryNavigationFailures?: number;
   searchDelayMs?: number;
   diagnosticsBackendStatus?: DiagnosticsBackend;
-  readyPlanAdvisoryStatus?: WholeStreamTimingAdvisoryDto['status'];
+  readyPlanAdvisoryStatus?: GenerationTimingAdvisoryDto['status'];
   playbackDurationMs?: number;
   startDelayMs?: number;
   startResponseDelayMs?: number;
@@ -401,7 +387,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   let diagnosticsEnabled = false;
   let diagnosticsSeq = 0;
   let diagnosticsTimer: ReturnType<typeof setInterval> | null = null;
-  let calibration: { operationId: string; state: CalibrationStateId } | null = null;
   const likedSongIds = new Set<string>();
   const playlistMembership = new Map<string, Set<string>>();
   const localRows = new Map<string, SearchResult['items'][number]>([
@@ -410,7 +395,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
   ]);
   let playlists: LibraryPlaylistSummary[] = [];
   let playlistSequence = 0;
-  let calibrationTimer: ReturnType<typeof setTimeout> | null = null;
   const listeners = new Set<(event: UiEvent) => void>();
   const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
   let updateRevision = updateSnapshot?.revision ?? 0;
@@ -486,8 +470,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         frame_base_hold_us: frameBaseHoldUs,
         timing_margin_us: config.timing_margin_us,
         min_hold_us: frameBaseHoldUs + config.timing_margin_us,
-        min_release_gap_us: frameUs + config.timing_margin_us,
-        timing_margin_recommendation: settings.timing_margin_recommendation,
         pre_call_lt_250us: 0,
         pre_call_250_500us: 0,
         pre_call_500_750us: 1,
@@ -506,9 +488,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         final_sender_window_expirations: 0,
         hold_floor_delay_boundaries: 0,
         max_hold_floor_delay_us: 0,
-        release_floor_delay_boundaries: 0,
-        release_floor_infeasible_boundaries: 0,
-        max_release_floor_delay_us: 0,
         final_gate_control_rejections: 0,
         final_gate_target_changes: 1,
         final_gate_focus_losses: 1,
@@ -536,34 +515,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         system_suspend_notifications: 0,
         system_resume_notifications: 0,
         duplicate_system_power_notifications: 0,
-      },
-    });
-  };
-  const emitCalibrationFinished = (operationId: string, outcome: 'succeeded' | 'cancelled') => {
-    const recommendedTimingMarginUs =
-      outcome === 'succeeded' ? Math.ceil((300 + 100) / 100) * 100 : null;
-    if (outcome === 'succeeded') {
-      settings = {
-        ...settings,
-        timing_margin_recommendation: {
-          recommended_timing_margin_us: recommendedTimingMarginUs!,
-          qualified: true,
-          source: 'qualified_calibration',
-        },
-      };
-    }
-    emit({
-      v: 1,
-      name: 'calibration.finished',
-      payload: {
-        operation_id: operationId,
-        outcome,
-        status: outcome === 'succeeded' ? 'ready' : 'cancelled',
-        recommended_timing_margin_us: recommendedTimingMarginUs,
-        recommendation_qualified: outcome === 'succeeded',
-        sample_count: outcome === 'succeeded' ? 24 : 0,
-        source: outcome === 'succeeded' ? 'qualified_calibration' : 'unavailable',
-        message: outcome === 'succeeded' ? 'Calibration completed.' : 'Calibration cancelled.',
       },
     });
   };
@@ -698,7 +649,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         native_build: MOCK_NATIVE,
         settings: { ...settings },
         playback_defaults: settings.playback_defaults,
-        timing_margin_recommendation: settings.timing_margin_recommendation,
         option_sets: {
           hold_frames: [1, 1.25, 1.5],
           tempo_scales: [0.75, 0.9, 1, 1.1],
@@ -776,6 +726,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                 ],
           recommendations:
             found.risk_level === 'low' ? ['Keep the selected settings.'] : ['Try 0.9× tempo.'],
+          short_up_gap_repeat_count: 0,
         },
         recommendation: {
           recommended_hold_frames: 2,
@@ -1218,6 +1169,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                   : 'Dense note transitions may need a slower tempo.',
               ],
         recommendations: ['Keep the selected settings.'],
+        short_up_gap_repeat_count: 0,
       };
       const songDetail: PreparedPlayback['song'] = {
         song_id: found.song_id,
@@ -1261,23 +1213,23 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         };
       }
       const proceedAdvisoryStatus =
-        risk === 'low' ? (options.readyPlanAdvisoryStatus ?? 'no_modeled_risk') : 'modeled_risk';
+        risk === 'low'
+          ? (options.readyPlanAdvisoryStatus ?? 'no_short_up_gap_risk')
+          : 'short_up_gap_risk';
       const preparedId = `prepared-${++preparedPlaybackSequence}-${found.song_id}`;
       preparedConfigs.set(preparedId, request.config);
       preparedSongIds.set(preparedId, found.song_id);
-      const recommendedConfig: PlaybackConfig = {
-        ...request.config,
-        tempo_scale: request.config.tempo_scale * 0.9,
-      };
-      const dryRunConfig: PlaybackConfig = { ...request.config, dry_run: true };
+      const dryRunConfig = { ...request.config, dry_run: true };
+      const hasDryRunVariant = risk !== 'low' && !request.config.dry_run;
       preparedVariantConfigs.set(
         preparedId,
         new Map([
           ['proceed', request.config],
-          ['use_recommended', recommendedConfig],
-          ['dry_run', dryRunConfig],
+          ...(hasDryRunVariant ? ([['dry_run', dryRunConfig]] as const) : []),
         ]),
       );
+      const shortGapReason =
+        '2 feasible same-key repeats have an authored Up-to-Down gap shorter than one frame. The game may miss a short Up pulse.';
       return {
         prepared_id: preparedId,
         song: {
@@ -1295,9 +1247,10 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                 : [
                     found.song_id === mockId(LONG_CONTENT_INDEX)
                       ? LONG_CONTENT_REASON
-                      : 'Dense note transitions may need a slower tempo.',
+                      : shortGapReason,
                   ],
-            recommendations: ['Keep the selected settings.'],
+            recommendations: [],
+            short_up_gap_repeat_count: risk === 'low' ? 0 : 2,
           },
           recommendation: null,
           sheet_analysis: sheetAnalysis,
@@ -1313,17 +1266,19 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
               : [
                   found.song_id === mockId(LONG_CONTENT_INDEX)
                     ? LONG_CONTENT_REASON
-                    : 'Dense note transitions may need a slower tempo.',
+                    : shortGapReason,
                 ],
-          recommendations: ['Keep the selected settings.'],
+          recommendations: [],
+          short_up_gap_repeat_count: risk === 'low' ? 0 : 2,
         },
         decisions:
           risk === 'low'
             ? []
             : [
                 { decision: 'proceed', label: 'Proceed with current settings' },
-                { decision: 'use_recommended', label: 'Use recommended settings' },
-                { decision: 'dry_run', label: 'Run a dry-run first' },
+                ...(hasDryRunVariant
+                  ? [{ decision: 'dry_run' as const, label: 'Run a dry-run first' }]
+                  : []),
               ],
         plan_fingerprint: 'mock-plan',
         variants:
@@ -1347,26 +1302,24 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                   plan_fingerprint: 'mock-plan',
                   timing_advisory: mockTimingAdvisory(
                     'mock-plan',
-                    'modeled_risk',
+                    'short_up_gap_risk',
                     request.config.dry_run,
                   ),
                 },
-                {
-                  decision: 'use_recommended',
-                  config: recommendedConfig,
-                  plan_fingerprint: 'mock-recommended-plan',
-                  timing_advisory: mockTimingAdvisory(
-                    'mock-recommended-plan',
-                    'no_modeled_risk',
-                    request.config.dry_run,
-                  ),
-                },
-                {
-                  decision: 'dry_run',
-                  config: dryRunConfig,
-                  plan_fingerprint: 'mock-dry-run-plan',
-                  timing_advisory: mockTimingAdvisory('mock-dry-run-plan', 'modeled_risk', true),
-                },
+                ...(hasDryRunVariant
+                  ? [
+                      {
+                        decision: 'dry_run' as const,
+                        config: dryRunConfig,
+                        plan_fingerprint: 'mock-dry-run-plan',
+                        timing_advisory: mockTimingAdvisory(
+                          'mock-dry-run-plan',
+                          'short_up_gap_risk',
+                          true,
+                        ),
+                      },
+                    ]
+                  : []),
               ],
         error_code: null,
         error_message: null,
@@ -1570,7 +1523,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           frame_base_hold_us: 16_667,
           timing_margin_us: 500,
           target_hold_us: 17_167,
-          release_gap_us: 17_167,
         },
         telemetry: {
           schema_version: 19,
@@ -1584,47 +1536,6 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         },
       });
     },
-    async startCalibration(request: CalibrationStart): Promise<CalibrationStartAck> {
-      if (activeSession) throw new Error('calibration conflicts with active playback');
-      if (calibration && ['starting', 'running', 'cancelling'].includes(calibration.state)) {
-        throw new Error('calibration is already running');
-      }
-      const operationId = `c${Date.now().toString(16).padStart(31, '0')}`.slice(-32);
-      calibration = { operationId, state: 'running' };
-      emit({
-        v: 1,
-        name: 'calibration.progress',
-        payload: {
-          operation_id: operationId,
-          state: 'running',
-          phase: request.mode,
-          completed: 0,
-          total: 3,
-          message: 'Calibration is running.',
-        },
-      });
-      calibrationTimer = setTimeout(() => {
-        if (!calibration || calibration.operationId !== operationId) return;
-        calibration = { operationId, state: 'succeeded' };
-        emitCalibrationFinished(operationId, 'succeeded');
-      }, 30);
-      return { operation_id: operationId, state: 'running' };
-    },
-    async cancelCalibration(request: CalibrationCancel): Promise<CalibrationCancelAck> {
-      if (!calibration || calibration.operationId !== request.operationId) {
-        throw new Error('calibration operation is stale');
-      }
-      if (calibration.state === 'succeeded' || calibration.state === 'cancelled') {
-        return { operation_id: request.operationId, state: calibration.state, accepted: false };
-      }
-      if (calibrationTimer !== null) {
-        clearTimeout(calibrationTimer);
-        calibrationTimer = null;
-      }
-      calibration = { operationId: request.operationId, state: 'cancelled' };
-      emitCalibrationFinished(request.operationId, 'cancelled');
-      return { operation_id: request.operationId, state: 'cancelled', accepted: true };
-    },
     async subscribeUiEvents(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -1632,9 +1543,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
     async shutdown(_failed = false) {
       if (diagnosticsTimer !== null) clearInterval(diagnosticsTimer);
       stopPlaybackTimer();
-      if (calibrationTimer !== null) clearTimeout(calibrationTimer);
       diagnosticsTimer = null;
-      calibrationTimer = null;
       activeSession = null;
       listeners.clear();
     },

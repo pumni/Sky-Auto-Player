@@ -7,21 +7,21 @@ use super::{
 use sky_dispatch_core::time::TimelineTicks;
 
 fn record_with_index(event_index: u32, kind: u8, requested: usize, sent: usize) -> RtTraceRecord {
-    record_with_packet_index(event_index, kind, requested, sent, None)
+    record_with_down_chord_index(event_index, kind, requested, sent, None)
 }
 
-fn record_with_packet_index(
+fn record_with_down_chord_index(
     event_index: u32,
     kind: u8,
     requested: usize,
     sent: usize,
-    compiled_packet_index: Option<u64>,
+    authored_down_chord_index: Option<u64>,
 ) -> RtTraceRecord {
     RtTraceRecord::dispatched(
         TraceContext {
             event_index,
             source_action_index: event_index,
-            compiled_packet_index,
+            authored_down_chord_index,
             kind,
             outcome: trace_outcome_code("sent"),
             polyphony: requested,
@@ -61,13 +61,9 @@ fn record_with_packet_index(
             physical_target_qpc_ticks: None,
             physical_not_before_qpc_ticks: None,
             hold_floor_qpc_ticks: None,
-            release_floor_qpc_ticks: None,
+            down_not_before_qpc_ticks: None,
             hold_floor_mask: 0,
-            release_floor_mask: 0,
             observation_qpc_ticks: None,
-            pre_call_ticks: Some(TimelineTicks::from_raw(1)),
-            sendinput_completion_ticks: Some(TimelineTicks::from_raw(2)),
-            completion_residual_us: 0,
             core_post_send_duration_us: 0,
             post_send_metrics_available: false,
             completion_error_ticks: 0,
@@ -153,27 +149,19 @@ fn serialized_timestamp_provenance_distinguishes_measured_derived_and_unavailabl
     assert_eq!(value["waiter_return_qpc_provenance"], "measured");
     assert_eq!(value["pre_call_qpc_provenance"], "measured");
     assert_eq!(value["sendinput_completion_qpc_provenance"], "measured");
-    assert_eq!(
-        value["send_started_ticks_provenance"],
-        "derived_from_pre_call"
-    );
-    assert_eq!(
-        value["send_completed_ticks_provenance"],
-        "derived_from_send_input_completion"
-    );
     assert_eq!(value["final_policy_qpc_provenance"], "unavailable");
     assert_eq!(value["final_policy_qpc_available"], false);
     assert_eq!(value["final_policy_qpc_ticks"], 0);
-    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 25);
+    assert_eq!(super::NATIVE_TELEMETRY_SCHEMA_VERSION, 28);
 }
 
 #[test]
-fn derived_offsets_are_unavailable_without_their_absolute_qpc_source() {
+fn wake_offset_is_unavailable_without_its_absolute_qpc_source() {
     let record = RtTraceRecord::dispatched(
         TraceContext {
             event_index: 0,
             source_action_index: 0,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("sent"),
             polyphony: 1,
@@ -187,8 +175,6 @@ fn derived_offsets_are_unavailable_without_their_absolute_qpc_source() {
             authored_ticks: TimelineTicks::ZERO,
             effective_deadline_ticks: TimelineTicks::ZERO,
             wake_ticks: Some(TimelineTicks::from_raw(7)),
-            pre_call_ticks: Some(TimelineTicks::from_raw(8)),
-            sendinput_completion_ticks: Some(TimelineTicks::from_raw(9)),
             ..TraceTiming::default()
         },
         TraceDelivery {
@@ -201,33 +187,10 @@ fn derived_offsets_are_unavailable_without_their_absolute_qpc_source() {
     .expect("trace with derived values but no source samples");
     let value = serde_json::to_value(record).expect("serialize trace");
 
-    for (value_key, available_key, provenance_key, available) in [
-        (
-            "wake_offset_ticks",
-            Some("wake_offset_available"),
-            "wake_offset_provenance",
-            record.wake_offset_available,
-        ),
-        (
-            "send_started_ticks",
-            None,
-            "send_started_ticks_provenance",
-            record.send_started_ticks_provenance == TimestampProvenance::Measured,
-        ),
-        (
-            "send_completed_ticks",
-            None,
-            "send_completed_ticks_provenance",
-            record.send_completed_ticks_provenance == TimestampProvenance::Measured,
-        ),
-    ] {
-        assert!(!available, "{value_key} requires its absolute QPC source");
-        assert_eq!(value[provenance_key], "unavailable");
-        if let Some(available_key) = available_key {
-            assert_eq!(value[available_key], false);
-        }
-        assert_eq!(value[value_key], 0);
-    }
+    assert!(!record.wake_offset_available);
+    assert_eq!(value["wake_offset_available"], false);
+    assert_eq!(value["wake_offset_provenance"], "unavailable");
+    assert_eq!(value["wake_offset_ticks"], 0);
 }
 
 #[test]
@@ -236,7 +199,7 @@ fn absent_pre_call_qpc_never_uses_a_relative_or_schedule_value_as_a_sample() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("sent"),
             polyphony: 1,
@@ -249,7 +212,6 @@ fn absent_pre_call_qpc_never_uses_a_relative_or_schedule_value_as_a_sample() {
         TraceTiming {
             authored_ticks: TimelineTicks::from_raw(90),
             effective_deadline_ticks: TimelineTicks::from_raw(95),
-            pre_call_ticks: Some(TimelineTicks::from_raw(100)),
             ..TraceTiming::default()
         },
         TraceDelivery {
@@ -265,15 +227,9 @@ fn absent_pre_call_qpc_never_uses_a_relative_or_schedule_value_as_a_sample() {
         record.pre_call_qpc_provenance,
         TimestampProvenance::Unavailable
     );
-    assert_eq!(
-        record.send_started_ticks_provenance,
-        TimestampProvenance::Unavailable
-    );
     assert!(!record.authored_lateness_available);
     assert_eq!(value["pre_call_qpc_ticks"], 0);
     assert_eq!(value["pre_call_qpc_provenance"], "unavailable");
-    assert_eq!(value["send_started_ticks"], 0);
-    assert_eq!(value["send_started_ticks_provenance"], "unavailable");
 
     let mut summary = NativeTelemetrySummary::default();
     summary.observe(&record);
@@ -287,7 +243,7 @@ fn pre_send_transaction_failure_is_counted_without_fabricating_an_attempt() {
         TraceContext {
             event_index: 0,
             source_action_index: 0,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_DOWN,
             outcome: trace_outcome_code("aborted"),
             polyphony: 1,
@@ -317,19 +273,16 @@ fn pre_send_transaction_failure_is_counted_without_fabricating_an_attempt() {
 }
 
 #[test]
-fn signed_start_error_max_preserves_all_negative_samples() {
+fn signed_authored_lateness_max_preserves_all_negative_samples() {
     let mut summary = NativeTelemetrySummary::default();
 
     for (event_index, start_error_ticks) in [(0, -40), (1, -30), (2, -20)] {
         let mut record = record_with_index(event_index, TRACE_KIND_UP, 1, 1);
         record.authored_lateness_available = true;
         record.authored_lateness_ticks = start_error_ticks;
-        record.dispatch_start_error_ticks = start_error_ticks;
         summary.observe(&record);
     }
 
-    assert_eq!(summary.max_dispatch_start_error_ticks, -20);
-    assert_eq!(summary.max_dispatch_start_error_abs_ticks, 40);
     assert_eq!(summary.max_authored_lateness_ticks, -20);
     assert_eq!(summary.max_authored_lateness_abs_ticks, 40);
 }
@@ -416,11 +369,11 @@ fn telemetry_retains_all_records_above_303() {
 }
 
 #[test]
-fn trace_sequence_is_distinct_from_compiled_packet_identity() {
+fn trace_sequence_is_distinct_from_down_chord_identity() {
     let mut collector = TelemetryCollector::new(TelemetryMode::Ring, 4);
-    let first = record_with_packet_index(12, TRACE_KIND_UP, 1, 1, Some(37));
-    let second = record_with_packet_index(13, TRACE_KIND_UP, 1, 1, Some(41));
-    let zero_packet = record_with_packet_index(14, TRACE_KIND_UP, 1, 1, Some(0));
+    let first = record_with_down_chord_index(12, TRACE_KIND_UP, 1, 1, Some(37));
+    let second = record_with_down_chord_index(13, TRACE_KIND_UP, 1, 1, Some(41));
+    let zero_chord = record_with_down_chord_index(14, TRACE_KIND_UP, 1, 1, Some(0));
     collector
         .try_push(|| Ok(first))
         .expect("first trace record");
@@ -428,19 +381,19 @@ fn trace_sequence_is_distinct_from_compiled_packet_identity() {
         .try_push(|| Ok(second))
         .expect("second trace record");
     collector
-        .try_push(|| Ok(zero_packet))
-        .expect("zero-valued compiled packet id");
+        .try_push(|| Ok(zero_chord))
+        .expect("zero-valued authored Down chord id");
 
     let records = collector.output.records;
     assert_eq!(records[0].trace_record_index, 0);
-    assert_eq!(records[0].compiled_packet_index, 37);
-    assert!(records[0].compiled_packet_index_available);
+    assert_eq!(records[0].authored_down_chord_index, 37);
+    assert!(records[0].authored_down_chord_index_available);
     assert_eq!(records[1].trace_record_index, 1);
-    assert_eq!(records[1].compiled_packet_index, 41);
-    assert!(records[1].compiled_packet_index_available);
+    assert_eq!(records[1].authored_down_chord_index, 41);
+    assert!(records[1].authored_down_chord_index_available);
     assert_eq!(records[2].trace_record_index, 2);
-    assert_eq!(records[2].compiled_packet_index, 0);
-    assert!(records[2].compiled_packet_index_available);
+    assert_eq!(records[2].authored_down_chord_index, 0);
+    assert!(records[2].authored_down_chord_index_available);
 }
 
 #[test]
@@ -469,18 +422,23 @@ fn telemetry_sets_truncated_only_when_capacity_is_exceeded() {
 }
 
 #[test]
-fn native_telemetry_schema_25_serialized_key_sets_are_pinned() {
+fn native_telemetry_schema_28_serialized_key_sets_are_pinned() {
     let expected: serde_json::Value = serde_json::from_str(include_str!(
-        "../../../tests/fixtures/native-telemetry-schema-25-keys.json"
+        "../../../tests/fixtures/native-telemetry-schema-28-keys.json"
     ))
-    .expect("schema-25 key fixture");
-    let record = record_with_index(7, TRACE_KIND_UP, 1, 1);
+    .expect("schema-28 key fixture");
+    let record = record_with_down_chord_index(7, TRACE_KIND_DOWN, 1, 1, Some(37));
     let mut output = super::NativeTelemetryOutput::new(TelemetryMode::Off, 0);
     output.records.push_back(record);
     output.summary.observe(&record);
 
     let value = serde_json::to_value(output).expect("serialize current telemetry output");
-    assert_eq!(value["schema_version"], 25);
+    assert_eq!(value["schema_version"], 28);
+    assert_eq!(value["records"][0]["authored_down_chord_index"], 37);
+    assert_eq!(
+        value["records"][0]["authored_down_chord_index_available"],
+        true
+    );
     for (value, expected_key) in [
         (&value, "NativeTelemetryOutput"),
         (&value["summary"], "NativeTelemetrySummary"),
@@ -514,12 +472,12 @@ fn native_telemetry_schema_25_serialized_key_sets_are_pinned() {
 }
 
 #[test]
-fn schema_25_missing_completion_keeps_attempt_and_error_without_timing_envelope() {
+fn schema_28_missing_completion_keeps_attempt_and_error_without_timing_envelope() {
     let record = RtTraceRecord::dispatched(
         TraceContext {
             event_index: 41,
             source_action_index: 41,
-            compiled_packet_index: Some(9),
+            authored_down_chord_index: Some(9),
             kind: TRACE_KIND_UP,
             outcome: trace_outcome_code("failed_note_off"),
             polyphony: 1,
@@ -535,8 +493,6 @@ fn schema_25_missing_completion_keeps_attempt_and_error_without_timing_envelope(
             physical_target_qpc_ticks: Some(500),
             pre_call_qpc_ticks: Some(510),
             sendinput_completion_qpc_ticks: None,
-            pre_call_ticks: Some(TimelineTicks::from_raw(100)),
-            sendinput_completion_ticks: None,
             ..TraceTiming::default()
         },
         TraceDelivery {
@@ -555,9 +511,9 @@ fn schema_25_missing_completion_keeps_attempt_and_error_without_timing_envelope(
 
     let value = serde_json::to_value(output).expect("serialize attempted anomaly evidence");
     let trace = &value["records"][0];
-    assert_eq!(value["schema_version"], 25);
+    assert_eq!(value["schema_version"], 28);
     assert_eq!(trace["source_action_index"], 41);
-    assert_eq!(trace["compiled_packet_index"], 9);
+    assert_eq!(trace["authored_down_chord_index"], 9);
     assert_eq!(trace["up_mask"], 1);
     assert_eq!(trace["down_mask"], 0);
     assert_eq!(trace["send_status"], super::TRACE_SEND_STATUS_COMPLETE);
@@ -572,8 +528,6 @@ fn schema_25_missing_completion_keeps_attempt_and_error_without_timing_envelope(
     assert_eq!(trace["sendinput_completion_qpc_ticks"], 0);
     assert_eq!(trace["sendinput_completion_qpc_available"], false);
     assert_eq!(trace["sendinput_completion_qpc_provenance"], "unavailable");
-    assert_eq!(trace["send_completed_ticks"], 0);
-    assert_eq!(trace["send_completed_ticks_provenance"], "unavailable");
     assert_eq!(trace["sendinput_envelope_available"], false);
     assert_eq!(value["summary"]["sender_envelope_samples"], 0);
     assert_eq!(value["summary"]["transport_anomaly_count"], 0);
@@ -585,7 +539,7 @@ fn schema_25_reversed_sender_qpc_is_rejected_instead_of_clamped_or_reconstructed
         TraceContext {
             event_index: 42,
             source_action_index: 42,
-            compiled_packet_index: None,
+            authored_down_chord_index: None,
             kind: TRACE_KIND_UP,
             outcome: trace_outcome_code("failed_note_off"),
             polyphony: 1,
@@ -598,8 +552,6 @@ fn schema_25_reversed_sender_qpc_is_rejected_instead_of_clamped_or_reconstructed
         TraceTiming {
             pre_call_qpc_ticks: Some(510),
             sendinput_completion_qpc_ticks: Some(509),
-            pre_call_ticks: Some(TimelineTicks::from_raw(100)),
-            sendinput_completion_ticks: Some(TimelineTicks::from_raw(99)),
             ..TraceTiming::default()
         },
         TraceDelivery {

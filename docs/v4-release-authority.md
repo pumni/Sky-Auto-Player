@@ -123,9 +123,9 @@ The ordering is security-critical:
    and `release-metadata` branch readiness. It is externally read-only: collision state and any
    matching stale draft are observed and classified, but not mutated.
 2. **BuildUnsigned**: Builds one unsigned canonical NSIS installer with Tauri updater sidecar
-   creation disabled. Its typed run/attempt-bound artifact contains `manifest.json`, the installer,
-   and the `native_calibration.exe` produced by that Windows build. The manifest records exact
-   sizes and SHA-256 values for both executables and requires the calibration file to be an x64 PE.
+   creation disabled. Its typed run/attempt-bound artifact contains `manifest.json` and the
+   installer. The v3 manifest records the installer's exact size and SHA-256 plus source/workflow
+   identity. The dedicated calibration executable is retired and is not a release artifact.
    This job has no production secrets or write permissions.
 3. **SignCandidate**: Independently verifies the downloaded artifact name, inventory, source and
    workflow SHAs, run ID/attempt, canonical filename, size, and digest. The Rust adapter verifies the

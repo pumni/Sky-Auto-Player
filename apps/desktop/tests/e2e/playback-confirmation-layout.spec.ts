@@ -17,11 +17,17 @@ for (const viewport of [
     await expect(confirmation).toBeVisible();
     await expect(confirmation.getByText('Medium timing risk')).toBeVisible();
     await expect(
-      confirmation.getByRole('button', { name: 'Use recommended settings' }),
+      confirmation.getByRole('button', { name: 'Proceed with current settings' }),
     ).toBeFocused();
+    await expect(
+      confirmation.getByRole('button', { name: 'Test playback (no input)' }),
+    ).toBeVisible();
+    await expect(
+      confirmation.getByRole('button', { name: 'Use recommended settings' }),
+    ).toHaveCount(0);
     const notNow = confirmation.getByRole('button', { name: 'Not now' });
     await expect(notNow).toBeVisible();
-    await expect(confirmation.locator('.admission-option')).toHaveCount(3);
+    await expect(confirmation.locator('.admission-option')).toHaveCount(2);
 
     const panel = await confirmation.boundingBox();
     const dismiss = await notNow.boundingBox();
@@ -44,7 +50,7 @@ for (const viewport of [
     await expect(estimate).not.toHaveAttribute('open');
     await estimate.locator(':scope > summary').click();
     await expect(estimate).toHaveAttribute('open');
-    await expect(estimate.getByLabel('Offline whole-stream timing advisory')).toBeVisible();
+    await expect(estimate.getByLabel('Prepared playback generation advisory')).toBeVisible();
     await estimate.locator(':scope > summary').click();
     await notNow.click();
     await expect(confirmation).toHaveCount(0);

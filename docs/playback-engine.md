@@ -33,6 +33,14 @@ Preparation compiles and validates the immutable dispatch schedule before a
 worker starts. The worker moves prepared storage into its executor; it does not
 compile or materialize the sheet. Healthy dispatch does not allocate.
 
+Prepare reports two independent timing signals. The authored Up-gap check counts
+feasible same-key repeats whose authored Up-to-next-Down gap is shorter than one
+frame. A bounded offline estimate also advances the canonical schedule through
+the production `DispatchExecutor` with explicit sender-cost assumptions and
+reports lateness, H-floor displacement, and head-of-line delay. The estimate is
+diagnostic only: it does not change admission, schedule timing, or playback, and
+does not predict whether the game observes an Up pulse.
+
 ## Session authority and final admission
 
 A physical session binds one immutable target HWND, owner PID, retained process
@@ -86,15 +94,20 @@ Authored Down order is retained, and each slot's eligible Up is considered
 independently.
 
 Let T be the ceiling of 1,000,000 divided by configured FPS, in microseconds.
-The sender floors are:
+The sender timing policy is:
 
 - H = ceiling(hold_frames × T) + timing margin.
-- G = T + timing margin.
 
 An Up is eligible no earlier than both its authored Up time and successful
-Down completion plus H. A same-key Down is not eligible before successful Up
-completion plus G. Completion is measured at the sender boundary using QPC;
-these floors do not promise which game frame samples a key.
+Down completion plus H. After a successful Up commits, the next same-key Down
+can be sent at its authored time after a fresh scheduler evaluation; there is
+no additional musical release delay. Resume waits for verified cleanup, a
+reconciled release journal, current generation and foreground ownership, a
+valid owner lease, and the committed Resume control. The next send uses a fresh
+QPC admission sample and the playback epoch updated at Resume; cleanup does
+not add an elapsed-time floor. H and sender completion are measured at the
+sender boundary using QPC; these policies do not promise which game frame
+samples a key.
 
 A musical onset is attempted at most once. The worker commits a musical action
 only from valid transport and QPC completion evidence. A packet with a
@@ -112,7 +125,11 @@ Worker metrics keep QPC tick counters as their source values and retain the
 existing 50 ms live-publication cadence. A snapshot reader copies the dispatch
 and observer source slots as one readout, then derives public microsecond
 fields after releasing the slots. This keeps unit conversion out of the
-dispatch publisher while preserving the public snapshot and telemetry schema.
+dispatch publisher while keeping the public snapshot projection and telemetry
+schema coordinated. Native telemetry schema 28 omits unconsumed compatibility
+aliases for timeline-relative send timestamps, completion residual, dispatch
+start error, and adaptive lead; consumers use sampled absolute QPC fields and
+authored lateness. Historical schema 25–27 key fixtures remain pinned.
 Observer sample expectations, pending work, missing samples, and queue drops
 remain explicit in the snapshot.
 
@@ -157,10 +174,17 @@ only to **needs_up**; **needs_probe** can be probed but never causes another Up.
 A Held or Inconclusive probe keeps the residual unresolved. No cleanup path
 releases keys outside the session journal.
 
+Before and after each physical release probe, cleanup revalidates the retained
+origin process/window proof and, where required, the exact foreground HWND/PID.
+Only a probe bracketed by current authority may clear `needs_probe`; authority
+drift leaves that residual quarantined. Probe-only cleanup never emits another
+Up.
+
 After worker join, one recovery attempt can make at most one raw Up call, then
 probe the retained origin. Recovery uses the original HWND/PID/process
-incarnation and never runs concurrently with the session worker. A Held or
-Inconclusive result preserves the residual.
+incarnation, freshly rechecks that authority around the probe, and never runs
+concurrently with the session worker. A Held, Inconclusive, or authority-drift
+result preserves the residual.
 
 ## Retirement, quarantine, and publication
 

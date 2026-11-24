@@ -1,7 +1,6 @@
 use proptest::prelude::*;
 use sky_dispatch_core::compile::{CompileError, compile_runtime_intents};
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
-use sky_dispatch_core::time::TimelineTicks;
 
 fn action(
     source_action_index: u32,
@@ -45,8 +44,8 @@ proptest! {
         prop_assert!(rejected_overlap);
     }
 
-    /// Packet intent ordering follows the immutable key registry regardless
-    /// of the order in which a chord's scan codes were authored.
+    /// Generation order follows the immutable key registry regardless of the
+    /// order in which a chord's scan codes were authored.
     #[test]
     fn canonical_chord_order_is_stable(
         mut scan_codes in prop::collection::vec(2_u16..=16, 2..=15),
@@ -67,58 +66,12 @@ proptest! {
         ];
         let schedule = compile_runtime_intents(&actions, &allowed)
             .expect("unique allowed chord must compile");
-        let packet = schedule
-            .view_packet_ticks(0, TimelineTicks::ZERO)
-            .expect("compiled first packet must be viewable");
-        let actual: Vec<u16> = packet
-            .down_intents
+        let actual: Vec<u16> = schedule.down_chords[0]
+            .intents
             .iter()
-            .map(|intent| {
-                packet
-                    .registry
-                    .scan_code_for(intent.key_slot())
-                    .expect("compiled key slot must remain registered")
-            })
+            .map(|intent| intent.scan_code)
             .collect();
         prop_assert_eq!(actual, allowed);
-    }
-
-    /// Packet timeline ticks and packet indices are strictly monotonic and contiguous,
-    /// and every Down intent occupies a valid and registered key slot.
-    #[test]
-    fn packet_timeline_ticks_and_ordering_are_monotonic(
-        mut scan_codes in prop::collection::vec(2_u16..=16, 1..=8),
-        step_us in 1_000_u64..=10_000,
-    ) {
-        scan_codes.sort_unstable();
-        scan_codes.dedup();
-        let chord = scan_codes.clone();
-
-        let actions = vec![
-            action(1, ActionKind::Down, 0, chord.clone()),
-            action(2, ActionKind::Up, step_us, chord.clone()),
-            action(3, ActionKind::Down, step_us * 2, chord.clone()),
-            action(4, ActionKind::Up, step_us * 3, chord),
-        ];
-
-        let schedule = compile_runtime_intents(&actions, &scan_codes)
-            .expect("sequential chords must compile");
-        let count = schedule.packets.len();
-        prop_assert!(count >= 2);
-
-        let mut prev_ticks = TimelineTicks::ZERO;
-        for i in 0..count {
-            let packet = schedule
-                .view_packet_ticks(i, TimelineTicks::ZERO)
-                .expect("all packet indices 0..count must be valid");
-            prop_assert!(packet.effective_ticks >= prev_ticks);
-            prev_ticks = packet.effective_ticks;
-
-            for intent in packet.down_intents {
-                let slot = intent.key_slot();
-                prop_assert!(packet.registry.scan_code_for(slot).is_some());
-            }
-        }
     }
 
     /// Actions with scan codes outside the registered allowlist fail closed.

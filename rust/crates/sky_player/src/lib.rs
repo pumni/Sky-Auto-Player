@@ -6,27 +6,24 @@
 
 /// Narrow, typed native surface for delivery adapters.
 ///
-/// Keep the small set of compilation, timing, calibration, and schedule types
+/// Keep the small set of compilation, timing, and schedule types
 /// needed by the desktop adapter behind one typed facade.
 pub mod adapter_support {
     pub use sky_dispatch_core::compile::{CompileError, MAX_ACTIONS, MAX_REASON_BYTES};
     pub use sky_dispatch_core::executor::{
-        DispatchExecutor, PreparedDispatchMemoryMetrics, PreparedDispatchSchedule,
-        PreparedUnmatchedUpMetadata,
+        DispatchDecision, DispatchExecutor, PreparedDispatchMemoryMetrics,
+        PreparedDispatchSchedule, PreparedUnmatchedUpMetadata,
     };
     pub use sky_dispatch_core::model::{
-        ActionKind, CompactIntent, CompileMemoryMetrics, CompiledBatch, CompiledPacket,
-        KeyActionInput, MAX_KEYS, RuntimeSchedule,
+        ActionKind, CompileMemoryMetrics, CompiledDownChord, CompiledDownIntent, KeyActionInput,
+        MAX_KEYS, RuntimeSchedule, UnmatchedUpMetadata,
     };
     pub use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     pub use sky_dispatch_core::validation::{
-        ScheduleTimingError, validate_min_hold_and_release_gap_feasibility_ticks,
-    };
-    pub use sky_dispatch_win32::calibration::{
-        CALIBRATION_SCHEMA_VERSION, CalibrationConfig, CalibrationError, HostFingerprint,
-        run_calibration_json,
+        ScheduleTimingError, validate_min_hold_feasibility_ticks,
     };
     pub use sky_dispatch_win32::clock::QpcError;
+    pub use sky_dispatch_win32::clock::QpcTicks;
     pub use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
     pub use sky_dispatch_win32::mmcss::PriorityMode;
 
@@ -70,20 +67,14 @@ pub mod adapter_support {
         )
     }
 
-    pub fn validate_min_hold_and_release_gap_feasibility(
+    pub fn validate_min_hold_feasibility(
         schedule: &RuntimeSchedule,
         effective_min_hold_us: u64,
-        min_release_gap_us: u64,
     ) -> Result<(), ScheduleTimingError> {
-        sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility(
+        sky_dispatch_core::validation::validate_min_hold_feasibility(
             schedule,
             effective_min_hold_us,
-            min_release_gap_us,
         )
-    }
-
-    pub fn build_host_fingerprint() -> Result<HostFingerprint, CalibrationError> {
-        sky_dispatch_win32::calibration::build_host_fingerprint()
     }
 
     pub fn qpc_frequency_hz() -> Result<u64, QpcError> {
@@ -96,4 +87,3 @@ pub mod adapter_support {
 }
 
 pub mod engine;
-pub mod timing_model;

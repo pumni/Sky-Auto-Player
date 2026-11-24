@@ -22,8 +22,9 @@ bun run tauri:dev
 
 The Vite development server is the frontend-only entry point. `tauri:dev`
 starts the native shell and uses the configured Vite server. The Tauri package
-build starts from this same app directory; its Windows `beforeBuildCommand`
-returns to the repository root before running `cargo xtask calibration build`.
+build starts from this same app directory; its `beforeBuildCommand` runs only
+`bun run build`. The dedicated calibration executable is no longer built or
+bundled.
 
 ## Website setup and checks
 

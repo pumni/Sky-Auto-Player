@@ -67,7 +67,9 @@ $requiredFunctions = @(
     'Get-ComparisonDescription',
     'Get-PairedMetrics',
     'Get-DeadlineCrossingToPreCallSample',
+    'Get-TelemetryDownChordIdentity',
     'Get-TimingMetrics',
+    'Get-PlaybackCoreLifecycleTimedRowDisposition',
     'Invoke-NativeCaseFailStopSequence',
     'Assert-SchedulerManifestIdentity',
     'Assert-SchedulerObserverPairMode',
@@ -80,6 +82,98 @@ foreach ($name in $requiredFunctions) {
     }, $true)
     if ($null -eq $functionAst) { throw "missing runner function: $name" }
     Invoke-Expression $functionAst.Extent.Text
+}
+$identityFixture25 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_25.json') -Raw | ConvertFrom-Json
+$identityFixture26 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_26.json') -Raw | ConvertFrom-Json
+$identityFixture27 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_27.json') -Raw | ConvertFrom-Json
+$identityFixture28 = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'fixtures/telemetry_identity_schema_28.json') -Raw | ConvertFrom-Json
+$identityFixture28Missing = $identityFixture28 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$identityFixture28Missing.records[0].authored_down_chord_index_available = $false
+$identityFixture29 = $identityFixture28 | ConvertTo-Json -Depth 8 | ConvertFrom-Json
+$identityFixture29.schema_version = 29
+$identityMetrics25 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture25 } })
+$identityMetrics26 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture26 } })
+$identityMetrics27 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture27 } })
+$identityMetrics28 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture28 } })
+$identityMetrics28Missing = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture28Missing } })
+$identityMetrics29 = Get-TimingMetrics ([pscustomobject]@{ details = [pscustomobject]@{ native_timing_telemetry = $identityFixture29 } })
+$identityRecord25 = @($identityMetrics25.event_chord_identities)[0]
+$identityRecord26 = @($identityMetrics26.event_chord_identities)[0]
+$identityRecord27 = @($identityMetrics27.event_chord_identities)[0]
+$identityRecord28 = @($identityMetrics28.event_chord_identities)[0]
+$identityRecord28Missing = @($identityMetrics28Missing.event_chord_identities)[0]
+$identityRecord29 = @($identityMetrics29.event_chord_identities)[0]
+if ($identityRecord25.down_chord_index -ne 17 -or
+    $identityRecord25.down_chord_identity_kind -ne 'compiled_packet_index_v25' -or
+    $identityRecord25.down_chord_identity_schema_version -ne 25 -or
+    -not $identityRecord25.down_chord_identity_available -or
+    $identityRecord26.down_chord_index -ne 23 -or
+    $identityRecord26.down_chord_identity_kind -ne 'authored_down_chord_index_v26' -or
+    $identityRecord26.down_chord_identity_schema_version -ne 26 -or
+    -not $identityRecord26.down_chord_identity_available -or
+    $identityRecord27.down_chord_index -ne 31 -or
+    $identityRecord27.down_chord_identity_kind -ne 'authored_down_chord_index_v27' -or
+    $identityRecord27.down_chord_identity_schema_version -ne 27 -or
+    -not $identityRecord27.down_chord_identity_available -or
+    $identityRecord28.down_chord_index -ne 37 -or
+    $identityRecord28.down_chord_identity_kind -ne 'authored_down_chord_index_v28' -or
+    $identityRecord28.down_chord_identity_schema_version -ne 28 -or
+    -not $identityRecord28.down_chord_identity_available -or
+    $identityMetrics25.counts.missing_down_chord_identity -ne 0 -or
+    $identityMetrics26.counts.missing_down_chord_identity -ne 0 -or
+    $identityMetrics27.counts.missing_down_chord_identity -ne 0 -or
+    $identityMetrics28.counts.missing_down_chord_identity -ne 0 -or
+    $identityRecord28Missing.down_chord_identity_available -or
+    $null -ne $identityRecord28Missing.down_chord_index -or
+    $identityRecord28Missing.down_chord_identity_kind -ne 'authored_down_chord_index_v28' -or
+    $identityMetrics28Missing.counts.missing_down_chord_identity -ne 1 -or
+    $identityRecord29.down_chord_identity_available -or
+    $identityRecord29.down_chord_identity_kind -ne 'unsupported_schema_v29' -or
+    $identityRecord29.down_chord_identity_schema_version -ne 29 -or
+    $identityMetrics29.counts.missing_down_chord_identity -ne 1) {
+    throw 'qualification reader did not preserve v25/v26/v27/v28 Down chord identity or fail closed for missing and future identities'
+}
+$identityDisposition27 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics27
+$identityDisposition28V2 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics28
+$identityDisposition28V3 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV3' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics28
+$identityDisposition28MissingV2 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics28Missing
+$identityDisposition28MissingV3 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV3' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics28Missing
+$identityDisposition29V2 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV2' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics29
+$identityDisposition29V3 = Get-PlaybackCoreLifecycleTimedRowDisposition -Profile 'PlaybackCoreLifecycleV3' `
+    -SampleSeconds 15 -Status 'PASS' -Reason 'native report passed' -Metrics $identityMetrics29
+$identityMetrics27Json = ConvertTo-Json -InputObject $identityMetrics27 -Depth 12 -Compress
+if ($identityDisposition27.status -ne 'PASS' -or
+    $identityDisposition27.attribution_status -ne 'COMPLETE' -or
+    $identityDisposition27.attributed_down_chord_count -ne 1 -or
+    $identityDisposition28V2.status -ne 'PASS' -or
+    $identityDisposition28V2.attribution_status -ne 'COMPLETE' -or
+    $identityDisposition28V2.attributed_down_chord_count -ne 1 -or
+    $identityDisposition28V3.status -ne 'PASS' -or
+    $identityDisposition28V3.attribution_status -ne 'COMPLETE' -or
+    $identityDisposition28V3.attributed_down_chord_count -ne 1 -or
+    $identityDisposition28MissingV2.status -ne 'INCOMPLETE' -or
+    $identityDisposition28MissingV2.attribution_status -ne 'INCOMPLETE' -or
+    $identityDisposition28MissingV3.status -ne 'INCOMPLETE' -or
+    $identityDisposition28MissingV3.attribution_status -ne 'INCOMPLETE' -or
+    $identityDisposition29V2.status -ne 'INCOMPLETE' -or
+    $identityDisposition29V2.attribution_status -ne 'INCOMPLETE' -or
+    $identityDisposition29V3.status -ne 'INCOMPLETE' -or
+    $identityDisposition29V3.attribution_status -ne 'INCOMPLETE' -or
+    $identityDisposition28MissingV3.reason -notmatch 'attribution-dependent timed results are ineligible' -or
+    $identityMetrics27Json -match 'resume_cleanup_delay') {
+    throw ('PlaybackCoreLifecycle V2/V3 timed rows did not accept complete schema-28 identity, reject missing/future identity, or preserve the retired delay diagnostic: v27=' +
+        (ConvertTo-Json -InputObject $identityDisposition27 -Compress) + '; v28-v2=' +
+        (ConvertTo-Json -InputObject $identityDisposition28V2 -Compress) + '; v28-v3=' +
+        (ConvertTo-Json -InputObject $identityDisposition28V3 -Compress) + '; v28-missing-v3=' +
+        (ConvertTo-Json -InputObject $identityDisposition28MissingV3 -Compress) + '; v29-v3=' +
+        (ConvertTo-Json -InputObject $identityDisposition29V3 -Compress) + '; retired_delay=' +
+        [string]($identityMetrics27Json -match 'resume_cleanup_delay'))
 }
 $caseRunnerPath = Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'
 $caseRunnerTokens = $null
@@ -328,10 +422,10 @@ if (-not $finalSafetyBlock.Success -or
     throw 'Final safety case construction, loads, boundaries, or case-specific load dispatch changed'
 }
 $finalScenarioNames = @(
-    'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'release-gap-stress',
+    'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'short-up-gap-stress',
     'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary',
     'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change', 'owner-mismatch',
-    'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor',
+    'owner-query-failure', 'owner-process-termination', 'pause-resume',
     'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
     'lease-age-watchdog-delayed', 'noncanonical-profile'
 )
@@ -343,12 +437,12 @@ $finalModel = @(
     [pscustomobject]@{ scenario = 'timing-margin-sweep'; workload = 'boundary-120fps-margin-500'; load = 'Quiet'; margin = 500; fps = 120 }
 )
 $safetyModel = @($finalModel | Where-Object { $_.scenario -ne 'timing-margin-sweep' })
-if ($finalModel.Count -ne 46 -or @($safetyModel | Where-Object load -eq 'Quiet').Count -ne 22 -or
-    @($safetyModel | Where-Object load -eq 'Contention').Count -ne 22 -or
-    @($safetyModel | Group-Object load | Where-Object { $_.Count -ne 22 -or @($_.Group.scenario | Select-Object -Unique).Count -ne 22 }).Count -ne 0 -or
-    $finalModel[44].workload -ne 'boundary-60fps-margin-0' -or $finalModel[44].margin -ne 0 -or $finalModel[44].fps -ne 60 -or
-    $finalModel[45].workload -ne 'boundary-120fps-margin-500' -or $finalModel[45].margin -ne 500 -or $finalModel[45].fps -ne 120) {
-    throw 'Final model must contain 22 unique scenarios per load and the two fixed boundaries'
+if ($finalModel.Count -ne 44 -or @($safetyModel | Where-Object load -eq 'Quiet').Count -ne 21 -or
+    @($safetyModel | Where-Object load -eq 'Contention').Count -ne 21 -or
+    @($safetyModel | Group-Object load | Where-Object { $_.Count -ne 21 -or @($_.Group.scenario | Select-Object -Unique).Count -ne 21 }).Count -ne 0 -or
+    $finalModel[42].workload -ne 'boundary-60fps-margin-0' -or $finalModel[42].margin -ne 0 -or $finalModel[42].fps -ne 60 -or
+    $finalModel[43].workload -ne 'boundary-120fps-margin-500' -or $finalModel[43].margin -ne 500 -or $finalModel[43].fps -ne 120) {
+    throw 'Final model must contain 21 unique scenarios per load and the two fixed boundaries'
 }
 $scenarioBlock = [regex]::Match($runnerSource, '(?s)\$scenarios\s*=\s*@\((.*?)\n\s*\)')
 $runnerScenarioNames = if ($scenarioBlock.Success) {
@@ -356,7 +450,7 @@ $runnerScenarioNames = if ($scenarioBlock.Success) {
 } else { @() }
 if ($runnerScenarioNames.Count -ne $finalScenarioNames.Count -or
     (@(Compare-Object -ReferenceObject $finalScenarioNames -DifferenceObject $runnerScenarioNames -SyncWindow 0)).Count -ne 0) {
-    throw 'Final safety scenarios differ from the approved 22-scenario inventory'
+    throw 'Final safety scenarios differ from the current 21-scenario inventory'
 }
 $acceptanceSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
 foreach ($requiredSchedulerLabel in @('Scheduler-Baseline', 'Scheduler-Candidate')) {
@@ -446,7 +540,7 @@ try { Assert-FrameSnapshotManifestIdentity -Manifest $wrongFramePinnedHash -Expe
 if (-not $wrongFrameHashRejected) { throw 'FrameSnapshot accepted a baseline source tree hash other than the pinned tree' }
 
 $frameBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
-$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle'\)"
+$m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3'\)"
 if ($frameBuilderSource -notmatch $m3ProfileSet -or
     $acceptanceSource -notmatch $m3ProfileSet) {
     throw 'FrameSnapshot profile is missing from an immutable build or case-runner boundary'
@@ -484,6 +578,32 @@ if ($qualifierSource -notmatch "ValidateSet\('Canary', 'Smoke', 'Compare', 'Fina
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Force
 Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_orchestration.psm1') -Force
+$reportSchemaSelectionFixtures = @(
+    @{ Profile = 'DispatchCleanupM3'; Expected = 2 },
+    @{ Profile = 'DispatchSessionRedesignM3'; Expected = 2 },
+    @{ Profile = 'PlaybackCoreLifecycle'; Expected = 2 },
+    @{ Profile = 'PlaybackCoreLifecycleV2'; Expected = 2 },
+    @{ Profile = 'PlaybackCoreLifecycleV3'; Expected = 2 },
+    @{ Profile = 'DispatchCore'; Expected = 1 },
+    @{ Profile = 'Scheduler'; Expected = 1 }
+)
+$successReportSchemaFixture = [ordered]@{}
+foreach ($fixture in $reportSchemaSelectionFixtures) {
+    $selectedSchemaVersion = Get-QualificationReportSchemaVersion -Profile $fixture.Profile
+    $successReportSchemaFixture[$fixture.Profile] = $selectedSchemaVersion
+    if ($selectedSchemaVersion -ne $fixture.Expected) {
+        throw ('success report schema selection changed for profile ' + $fixture.Profile)
+    }
+}
+if ($successReportSchemaFixture.DispatchCleanupM3 -ne 2 -or
+    $successReportSchemaFixture.DispatchSessionRedesignM3 -ne 2 -or
+    $successReportSchemaFixture.PlaybackCoreLifecycle -ne 2 -or
+    $successReportSchemaFixture.PlaybackCoreLifecycleV2 -ne 2 -or
+    $successReportSchemaFixture.PlaybackCoreLifecycleV3 -ne 2 -or
+    -not $qualifierSource.Contains('$qualificationReportSchemaVersion = Get-QualificationReportSchemaVersion -Profile $QualificationProfile') -or
+    -not $qualifierSource.Contains('schema_version = $qualificationReportSchemaVersion')) {
+    throw 'shared current report projection schema v2 boundary changed or leaked into unrelated profiles'
+}
 if (-not (Get-Command Get-DispatchCleanupM3Profile -ErrorAction SilentlyContinue)) {
     throw 'DispatchCleanupM3 profile helper must remain available after manifest module initialization'
 }
@@ -877,7 +997,7 @@ $timingRecord = [ordered]@{
     kind = 0; down_mask = 1; up_mask = 0; flags = 1; send_status = 0
     requested_count = 1; sent_count = 1; send_attempts = 1
     authored_offset_ticks = 100; source_action_index = 0; event_index = 0
-    compiled_packet_index_available = $false; compiled_packet_index = 0
+    authored_down_chord_index_available = $false; authored_down_chord_index = 0
     authored_lateness_available = $false; authored_lateness_ticks = 0
     floor_displacement_available = $false; physical_floor_displacement_ticks = 0
     residual_lateness_available = $false; residual_lateness_ticks = 0
@@ -1185,12 +1305,12 @@ $m3Floors60Margin0 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-sing
 $m3Floors60Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-single' -GameFps 60 -TimingMarginUs 500
 $m3Floors120Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'canonical-single' -GameFps 120 -TimingMarginUs 500
 $m3HolFloors60Margin500 = Get-DispatchCleanupM3TimingFloors -Scenario 'hol-interleaved' -GameFps 60 -TimingMarginUs 500
-if ($m3Floors60Margin0.configured_H_us -ne 16667 -or $m3Floors60Margin0.configured_G_us -ne 16667 -or
-    $m3Floors60Margin500.configured_H_us -ne 17167 -or $m3Floors60Margin500.configured_G_us -ne 17167 -or
-    $m3Floors120Margin500.configured_H_us -ne 8834 -or $m3Floors120Margin500.configured_G_us -ne 8834 -or
-    $m3HolFloors60Margin500.configured_H_us -ne 33834 -or $m3HolFloors60Margin500.configured_G_us -ne 17167 -or
+if ($m3Floors60Margin0.configured_H_us -ne 16667 -or
+    $m3Floors60Margin500.configured_H_us -ne 17167 -or
+    $m3Floors120Margin500.configured_H_us -ne 8834 -or
+    $m3HolFloors60Margin500.configured_H_us -ne 33834 -or
     $m3HolFloors60Margin500.hold_frames -ne 2) {
-    throw 'DispatchCleanupM3 frame, hold, or release-gap arithmetic does not match native scenario configuration'
+    throw 'DispatchCleanupM3 frame and hold arithmetic does not match native scenario configuration'
 }
 
 $m3ReportCandidate = [pscustomobject]@{
@@ -1204,10 +1324,10 @@ $m3ReportBaseline = [pscustomobject]@{
     guard_mode = 'frozen'; performance_timing_margin_us = 0; safety_timing_margin_us = 500
 }
 $m3SafetyScenarioNames = @(
-    'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'release-gap-stress',
+    'canonical-single', 'canonical-max-chord', 'near-minimum-retrigger', 'short-up-gap-stress',
     'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary',
     'modifier-held-after-owned', 'focus-loss', 'target-hwnd-change', 'owner-mismatch',
-    'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-release-floor',
+    'owner-query-failure', 'owner-process-termination', 'pause-resume',
     'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry',
     'lease-age-watchdog-delayed', 'noncanonical-profile'
 )
@@ -1229,7 +1349,7 @@ if ($m3CanaryProjection.StageSummary.planned_session_count -ne 1 -or
     $m3CanaryProjection.StageSummary.candidate_session_count -ne 1 -or
     $m3CanaryProjection.StageSummary.control_session_count -ne 0 -or
     $m3CanaryProjection.StageSummary.configured_H_us -ne 17167 -or
-    $m3CanaryProjection.StageSummary.configured_G_us -ne 17167 -or
+    $m3CanaryProjection.StageSummary.configured_H_summary -ne 'H=17167 us' -or
     $m3CanaryProjection.SummaryParameters.pairs -ne $null -or
     $m3CanaryProjection.SummaryParameters.sample_seconds -ne $null -or
     $m3CanaryProjection.ManifestParameters.pairs -ne $null -or
@@ -1241,17 +1361,17 @@ if ($m3CanaryProjection.StageSummary.planned_session_count -ne 1 -or
     -not (($m3CanaryProjection.MarkdownStageLines -join "`n").Contains('candidate-only safety stage')) -or
     -not (($m3CanaryProjection.MarkdownStageLines -join "`n").Contains('no timed performance samples')) -or
     (($m3CanaryProjection.MarkdownStageLines -join "`n") -match 'AB/BA|six pairs|15 seconds per performance session')) {
-    throw 'DispatchCleanupM3 Canary projection implies a comparison/sample or reports incorrect H/G/session identity'
+    throw 'DispatchCleanupM3 Canary projection implies a comparison/sample or reports incorrect hold/session identity'
 }
-if ($m3SmokeProjection.StageSummary.planned_session_count -ne 22 -or
+if ($m3SmokeProjection.StageSummary.planned_session_count -ne 21 -or
     $m3SmokeProjection.StageSummary.stage_kind -ne 'safety-only; candidate-only' -or
-    $m3SmokeProjection.StageSummary.candidate_session_count -ne 22 -or
+    $m3SmokeProjection.StageSummary.candidate_session_count -ne 21 -or
     $m3SmokeProjection.StageSummary.control_session_count -ne 0 -or
-    $m3SmokeProjection.StageSummary.workload_summary -ne '22 candidate-only safety scenarios' -or
+    $m3SmokeProjection.StageSummary.workload_summary -ne '21 candidate-only safety scenarios' -or
     -not $m3SmokeProjection.MarkdownStageLines[0].Contains('safety-only') -or
     $m3SmokeProjection.StageSummary.timed_performance_samples -or
     $m3SmokeProjection.StageSummary.configured_H_us -ne 17167 -or
-    $m3SmokeProjection.StageSummary.configured_G_us -ne 17167) {
+    $m3SmokeProjection.StageSummary.configured_H_summary -ne 'H=17167 us') {
     throw 'DispatchCleanupM3 Smoke projection does not describe its candidate-only safety cases'
 }
 if ($m3CompareProjection.StageSummary.planned_session_count -ne 72 -or
@@ -1261,7 +1381,7 @@ if ($m3CompareProjection.StageSummary.planned_session_count -ne 72 -or
     $m3CompareProjection.StageSummary.game_fps -ne 60 -or
     $m3CompareProjection.StageSummary.timing_margin_us -ne 0 -or
     $m3CompareProjection.StageSummary.configured_H_us -ne 16667 -or
-    $m3CompareProjection.StageSummary.configured_G_us -ne 16667 -or
+    $m3CompareProjection.StageSummary.configured_H_summary -ne 'H=16667 us' -or
     $m3CompareProjection.StageSummary.pairs -ne 6 -or
     -not $m3CompareProjection.StageSummary.pair_order.Contains('AB/BA') -or
     -not $m3CompareProjection.ManifestParameters.pair_order.Contains('AB/BA') -or
@@ -1269,17 +1389,16 @@ if ($m3CompareProjection.StageSummary.planned_session_count -ne 72 -or
     $m3CompareProjection.SummaryParameters.safety_timing_margin_us -ne 500) {
     throw 'DispatchCleanupM3 Compare projection lost its paired performance protocol or per-session timing settings'
 }
-if ($m3FinalProjection.StageSummary.planned_session_count -ne 166 -or
+if ($m3FinalProjection.StageSummary.planned_session_count -ne 164 -or
     $m3FinalProjection.StageSummary.stage_kind -ne 'paired performance plus candidate-only safety and boundaries' -or
-    $m3FinalProjection.StageSummary.candidate_session_count -ne 106 -or
+    $m3FinalProjection.StageSummary.candidate_session_count -ne 104 -or
     $m3FinalProjection.StageSummary.control_session_count -ne 60 -or
     $null -ne $m3FinalProjection.StageSummary.game_fps -or
     $null -ne $m3FinalProjection.StageSummary.timing_margin_us -or
     $null -ne $m3FinalProjection.StageSummary.configured_H_us -or
-    $null -ne $m3FinalProjection.StageSummary.configured_G_us -or
-    $m3FinalProjection.StageSummary.configured_H_G_mode -ne 'varies_by_session' -or
-    -not $m3FinalProjection.StageSummary.configured_H_G_summary.Contains('varies by session') -or
-    -not $m3FinalProjection.ManifestParameters.configured_H_G_summary.Contains('varies by session') -or
+    $m3FinalProjection.StageSummary.configured_H_mode -ne 'varies_by_session' -or
+    -not $m3FinalProjection.StageSummary.configured_H_summary.Contains('H varies by session') -or
+    -not $m3FinalProjection.ManifestParameters.configured_H_summary.Contains('H varies by session') -or
     -not $m3FinalProjection.StageSummary.timing_margin_summary.Contains('0 us performance; 500 us safety') -or
     $m3FinalProjection.StageSummary.timed_performance_sample_seconds -ne 15) {
     throw 'DispatchCleanupM3 Final projection fabricated aggregate timing values for a mixed stage'
@@ -1287,8 +1406,8 @@ if ($m3FinalProjection.StageSummary.planned_session_count -ne 166 -or
 
 $m3RunConfig = [pscustomobject]@{
     qualification_profile = 'DispatchCleanupM3'; scenario = 'canonical-single'; workload = 'canonical-single'
-    game_fps = 60; timing_margin_us = 500; expected_hold_us = 17167; expected_release_gap_us = 17167
-    configured_H_us = 17167; configured_G_us = 17167
+    game_fps = 60; timing_margin_us = 500; expected_hold_us = 17167
+    configured_H_us = 17167
 }
 $verifiedCanaryFloors = Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario 'canonical-single' `
     -RunConfig $m3RunConfig -ExpectedWorkload 'canonical-single' -ExpectedGameFps 60 -ExpectedTimingMarginUs 500
@@ -1298,7 +1417,7 @@ $m3CanaryRow = [pscustomobject]@{
     planned_session_count = $m3CanaryProjection.StageSummary.planned_session_count
     attempted_session_count = 1; role = 'candidate'; scenario = $m3RunConfig.scenario
     game_fps = $m3RunConfig.game_fps; timing_margin_us = $m3RunConfig.timing_margin_us
-    configured_H_us = $m3RunConfig.configured_H_us; configured_G_us = $m3RunConfig.configured_G_us
+    configured_H_us = $m3RunConfig.configured_H_us
 }
 $m3ReportRoot = Join-Path $env:TEMP ('m3-report-contract-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $m3ReportRoot | Out-Null
@@ -1313,15 +1432,15 @@ try {
     $csvCanary = Import-Csv -LiteralPath (Join-Path $m3ReportRoot 'sessions.csv') | Select-Object -First 1
     $jsonCanary = Get-Content -LiteralPath (Join-Path $m3ReportRoot 'summary.json') -Raw | ConvertFrom-Json
     if ([long]$m3RunConfig.expected_hold_us -ne [long]$jsonCanary.session_plan.configured_H_us -or
-        [long]$m3RunConfig.expected_release_gap_us -ne [long]$jsonCanary.session_plan.configured_G_us -or
         [long]$csvCanary.configured_H_us -ne [long]$jsonCanary.session_plan.configured_H_us -or
-        [long]$csvCanary.configured_G_us -ne [long]$jsonCanary.session_plan.configured_G_us -or
         $csvCanary.stage -ne $jsonCanary.stage -or
         $csvCanary.qualification_profile -ne $jsonCanary.qualification_profile -or
         $csvCanary.planned_session_count -ne $jsonCanary.session_plan.planned_session_count -or
         $csvCanary.role -ne 'candidate' -or $csvCanary.game_fps -ne $jsonCanary.session_plan.game_fps -or
         $csvCanary.timing_margin_us -ne $jsonCanary.session_plan.timing_margin_us -or
-        $verifiedCanaryFloors.configured_H_us -ne 17167 -or $verifiedCanaryFloors.configured_G_us -ne 17167) {
+        $verifiedCanaryFloors.configured_H_us -ne 17167 -or
+        $jsonCanary.session_plan.PSObject.Properties.Name -contains 'resume_cleanup_delay_us' -or
+        $csvCanary.PSObject.Properties.Name -contains 'resume_cleanup_delay_us') {
         throw 'DispatchCleanupM3 Canary run-config, CSV, and JSON timing/stage identity disagree'
     }
 } finally {
@@ -1339,14 +1458,14 @@ $wrongScenarioRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-J
 $wrongScenarioRejected = $false
 try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario hol-interleaved -RunConfig $wrongScenarioRunConfig `
     -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $wrongScenarioRejected = $true }
-if (-not $wrongScenarioRejected) { throw 'DispatchCleanupM3 accepted incorrect scenario attribution for H/G reporting' }
+if (-not $wrongScenarioRejected) { throw 'DispatchCleanupM3 accepted incorrect scenario attribution for hold/resume-delay reporting' }
 $m3NegativeContractCount++
-$badM3GRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json
-$badM3GRunConfig.configured_G_us = $badM3GRunConfig.configured_G_us + 1
-$badM3GRejected = $false
-try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario canonical-single -RunConfig $badM3GRunConfig `
-    -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $badM3GRejected = $true }
-if (-not $badM3GRejected) { throw 'DispatchCleanupM3 accepted a release gap different from frame interval plus margin' }
+$badM3RetiredFieldRunConfig = $m3RunConfig | ConvertTo-Json -Depth 4 | ConvertFrom-Json
+$badM3RetiredFieldRunConfig | Add-Member -NotePropertyName resume_cleanup_delay_us -NotePropertyValue 17167
+$badM3RetiredFieldRejected = $false
+try { Assert-DispatchCleanupM3RunConfigTiming -ExpectedScenario canonical-single -RunConfig $badM3RetiredFieldRunConfig `
+    -ExpectedWorkload canonical-single -ExpectedGameFps 60 -ExpectedTimingMarginUs 500 | Out-Null } catch { $badM3RetiredFieldRejected = $true }
+if (-not $badM3RetiredFieldRejected) { throw 'DispatchCleanupM3 accepted a retired resume cleanup timing field' }
 $m3NegativeContractCount++
 
 $sessionRedesignProfile = Get-DispatchSessionRedesignM3Profile
@@ -1391,9 +1510,9 @@ foreach ($safetyCase in $sessionRedesignProfile.SafetyCases) {
 }
 $floors60 = Get-DispatchSessionRedesignM3TimingFloors -Scenario canonical-single -GameFps 60 -TimingMarginUs 500
 $floors120 = Get-DispatchSessionRedesignM3TimingFloors -Scenario near-minimum-retrigger -GameFps 120 -TimingMarginUs 500
-if ($floors60.frame_us -ne 16667 -or $floors60.configured_H_us -ne 17167 -or $floors60.configured_G_us -ne 17167 -or
-    $floors120.frame_us -ne 8334 -or $floors120.configured_H_us -ne 8834 -or $floors120.configured_G_us -ne 8834) {
-    throw 'DispatchSessionRedesignM3 H/G floors differ from ceiling frame interval plus the fixed 500 us margin'
+if ($floors60.frame_us -ne 16667 -or $floors60.configured_H_us -ne 17167 -or
+    $floors120.frame_us -ne 8334 -or $floors120.configured_H_us -ne 8834) {
+    throw 'DispatchSessionRedesignM3 hold values differ from ceiling frame interval plus the fixed 500 us margin'
 }
 Assert-QualificationTimingMargin -RequestedStage Final -Profile DispatchSessionRedesignM3 -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15 | Out-Null
 $sessionRedesignValidCases = @(
@@ -1438,7 +1557,7 @@ if ($sessionRedesignProjection.StageSummary.planned_session_count -ne 32 -or
     $sessionRedesignProjection.StageSummary.safety_timing_margin_us -ne 500 -or
     $sessionRedesignProjection.StageSummary.performance_timing_margin_us -ne 500 -or
     $sessionRedesignProjection.StageSummary.game_fps_summary -ne 'varies by session (60, 120 FPS)' -or
-    $sessionRedesignProjection.StageSummary.configured_H_G_summary -ne '60 FPS H=G=17,167 us; 120 FPS H=G=8,834 us' -or
+    $sessionRedesignProjection.StageSummary.configured_H_summary -ne '60 FPS H=17,167 us; 120 FPS H=8,834 us' -or
     -not $sessionRedesignProjection.StageSummary.timed_performance_samples -or
     $sessionRedesignProjection.StageSummary.timed_performance_sample_seconds -ne 15) {
     throw 'DispatchSessionRedesignM3 report projection lost its session count, timing, workload, FPS, or sample provenance'
@@ -1558,6 +1677,33 @@ try {
         -RunId 'offline-zero-attempts' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
         -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount $zeroAttemptCalls.Count `
         -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath
+    $zeroFailureArtifactsV2 = New-QualificationRunnerFailureArtifacts -ErrorRecord $zeroAttemptError `
+        -RunId 'offline-zero-attempts-v2' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
+        -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount 0 `
+        -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath -SummarySchemaVersion 2
+    $cleanupFailureSchemaVersion = Get-QualificationReportSchemaVersion -Profile 'DispatchCleanupM3'
+    $sessionRedesignFailureSchemaVersion = Get-QualificationReportSchemaVersion -Profile 'DispatchSessionRedesignM3'
+    $dispatchCoreFailureSchemaVersion = Get-QualificationReportSchemaVersion -Profile 'DispatchCore'
+    $zeroCleanupFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $zeroAttemptError `
+        -RunId 'offline-zero-attempts-cleanup-m3' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
+        -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount 0 `
+        -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath -SummarySchemaVersion $cleanupFailureSchemaVersion
+    $zeroSessionRedesignFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $zeroAttemptError `
+        -RunId 'offline-zero-attempts-session-redesign-m3' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
+        -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount 0 `
+        -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath -SummarySchemaVersion $sessionRedesignFailureSchemaVersion
+    $zeroDispatchCoreFailureArtifacts = New-QualificationRunnerFailureArtifacts -ErrorRecord $zeroAttemptError `
+        -RunId 'offline-zero-attempts-dispatch-core' -Stage 'Final' -SourceRevision 'd76d4fb7cdcc49fcd0f0a7d80c1f691578c86fed' `
+        -SourceTreeSha '17a8ea0d3a22ee4bf2771988dc92fa9ddabfe926' -AttemptedSessionCount 0 `
+        -EvidenceRoot $offlineFailureRoot -FallbackScriptPath $runnerPath -SummarySchemaVersion $dispatchCoreFailureSchemaVersion
+    if ($zeroFailureArtifacts.Summary.schema_version -ne 1 -or $zeroFailureArtifactsV2.Summary.schema_version -ne 2 -or
+        $cleanupFailureSchemaVersion -ne 2 -or $sessionRedesignFailureSchemaVersion -ne 2 -or
+        $zeroCleanupFailureArtifacts.Summary.schema_version -ne $cleanupFailureSchemaVersion -or
+        $zeroSessionRedesignFailureArtifacts.Summary.schema_version -ne $sessionRedesignFailureSchemaVersion -or
+        $dispatchCoreFailureSchemaVersion -ne 1 -or
+        $zeroDispatchCoreFailureArtifacts.Summary.schema_version -ne $dispatchCoreFailureSchemaVersion) {
+        throw 'runner failure summaries did not preserve the selected current report schema version'
+    }
     Write-QualificationRunnerFailureArtifacts -Artifacts $zeroFailureArtifacts -EvidenceRoot $offlineFailureRoot `
         -CommandRows ([System.Collections.Generic.List[string]]::new())
     $zeroSummary = Get-Content -LiteralPath (Join-Path $offlineFailureRoot 'summary.json') -Raw | ConvertFrom-Json
@@ -1610,13 +1756,53 @@ $playbackCoreCollectorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot
 $playbackCoreCaseRunnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
 $playbackCoreNativeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\bin\rt_native_acceptance.rs') -Raw
 $playbackCoreRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
+$caseRunnerPreflightIndex = $playbackCoreCaseRunnerSource.IndexOf("Write-Output ('CASE_PREFLIGHT_ONLY PASS", [System.StringComparison]::Ordinal)
+$caseRunnerSinkStartIndex = $playbackCoreCaseRunnerSource.IndexOf('$sinkProcess = Start-Process', [System.StringComparison]::Ordinal)
+$caseRunnerHarnessStartIndex = $playbackCoreCaseRunnerSource.IndexOf('@(& $harness @harnessArgs', [System.StringComparison]::Ordinal)
+$caseRunnerOutputCreateIndex = $playbackCoreCaseRunnerSource.IndexOf('New-Item -ItemType Directory -Force -Path $runDir', [System.StringComparison]::Ordinal)
+if (-not $playbackCoreCaseRunnerSource.Contains('[switch]$PreflightOnly') -or
+    -not $playbackCoreCaseRunnerSource.Contains('$expectedHarnessManifestSchemaVersion = if ($isPlaybackCoreLifecycle)') -or
+    -not $playbackCoreCaseRunnerSource.Contains('$playbackCoreProfile.HarnessManifestSchemaVersion') -or
+    -not $playbackCoreCaseRunnerSource.Contains('$sessionRedesignProfile.HarnessManifestSchemaVersion') -or
+    $playbackCoreCaseRunnerSource.Contains('$harnessManifest.schema_version -ne 1') -or
+    -not $playbackCoreCaseRunnerSource.Contains('$harnessManifest.qualification_profile -ne $QualificationProfile') -or
+    -not $playbackCoreCaseRunnerSource.Contains('if ($PreflightOnly -and $OwnerApprovedReceiveOnlyRun)') -or
+    -not $playbackCoreCaseRunnerSource.Contains('if ($isPlaybackCoreLifecycle -and -not $OwnerApprovedReceiveOnlyRun -and -not $PreflightOnly)') -or
+    $caseRunnerPreflightIndex -lt 0 -or $caseRunnerSinkStartIndex -lt $caseRunnerPreflightIndex -or
+    $caseRunnerHarnessStartIndex -lt $caseRunnerPreflightIndex -or $caseRunnerOutputCreateIndex -lt $caseRunnerPreflightIndex) {
+    throw 'case-runner must use requested-profile manifest schemas and provide a no-write pre-receiver boundary that preserves the production owner gate'
+}
+$v3PreflightIndex = $playbackCoreRunnerSource.IndexOf('Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $root', [System.StringComparison]::Ordinal)
+$v3FinalStageGateIndex = $playbackCoreRunnerSource.IndexOf("if (`$Stage -in @('Compare', 'Final') -and -not `$ControlManifest)", [System.StringComparison]::Ordinal)
+$v3SharedMarginIndex = if ($v3FinalStageGateIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('Assert-QualificationTimingMargin', $v3FinalStageGateIndex, [System.StringComparison]::Ordinal) } else { -1 }
+$v3PlanOnlyBranchIndex = $playbackCoreRunnerSource.IndexOf('if ($PlanOnly) {', $v3SharedMarginIndex, [System.StringComparison]::Ordinal)
+$v3PlanOnlyReturnIndex = if ($v3PlanOnlyBranchIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('return', $v3PlanOnlyBranchIndex, [System.StringComparison]::Ordinal) } else { -1 }
+$v3NativePathIndex = if ($v3PlanOnlyReturnIndex -ge 0) { $playbackCoreRunnerSource.IndexOf('Invoke-NativeCase -Scenario', $v3PlanOnlyReturnIndex, [System.StringComparison]::Ordinal) } else { -1 }
+if ($v3PreflightIndex -lt 0 -or $v3SharedMarginIndex -lt $v3FinalStageGateIndex -or
+    $v3PlanOnlyBranchIndex -lt $v3SharedMarginIndex -or $v3PlanOnlyReturnIndex -lt $v3PlanOnlyBranchIndex -or
+    $v3PreflightIndex -gt $v3PlanOnlyBranchIndex -or $v3NativePathIndex -lt $v3PlanOnlyReturnIndex -or
+    -not $playbackCoreRunnerSource.Contains('if ($PlanOnly -and -not $isPlaybackCoreLifecycle) {') -or
+    -not $playbackCoreRunnerSource.Contains('-CandidateLockSha256 $candidate.cargo_lock_sha256')) {
+    throw 'PlaybackCoreLifecycle PlanOnly and native execution must share final parameter, manifest, and pair-lineage preflight before either no-send return or native case entry'
+}
+$pclV3ZeroMarginRejected = $false
+try { Assert-QualificationTimingMargin -RequestedStage Final -Profile PlaybackCoreLifecycleV3 -MarginUs 0 -PairCount 6 -SampleDurationSeconds 15 | Out-Null } catch { $pclV3ZeroMarginRejected = $true }
+if (-not $pclV3ZeroMarginRejected -or
+    -not (Assert-QualificationTimingMargin -RequestedStage Final -Profile PlaybackCoreLifecycleV3 -MarginUs 500 -PairCount 6 -SampleDurationSeconds 15)) {
+    throw 'PlaybackCoreLifecycleV3 PlanOnly timing margin gate must reject 0 us and accept 500 us'
+}
 $playbackCoreBaselineNativeSource = (& git -C $playbackCoreRepoRoot show '2544daa13eb23fdf03bd922e65b96fcffaba421c:rust/crates/sky_player/src/bin/rt_native_acceptance.rs') -join [Environment]::NewLine
 if ($LASTEXITCODE -ne 0) { throw 'could not read the frozen PlaybackCoreLifecycle baseline native acceptance source' }
 $playbackCoreWorkerBootSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\boot.rs') -Raw
 $playbackCoreWorkerFinalizeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\cleanup\finalize.rs') -Raw
-if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -or
-    -not $playbackCoreProfileSource.Contains("BaselineRevision = '2544daa13eb23fdf03bd922e65b96fcffaba421c'") -or
-    -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = 'refactor/playback-core-lifecycle'") -or
+if (-not $playbackCoreProfileSource.Contains("Name = switch (`$Version)") -or
+    -not $playbackCoreProfileSource.Contains("BaselineRevision = switch (`$Version)") -or
+    -not $playbackCoreProfileSource.Contains("BaselineTree = switch (`$Version)") -or
+    -not $playbackCoreProfileSource.Contains("'PlaybackCoreLifecycleV3'") -or
+    -not $playbackCoreProfileSource.Contains("LineageAnchorRevision = if (`$Version -eq 3)") -or
+    -not $playbackCoreProfileSource.Contains('Assert-PlaybackCoreLifecycleV3BaselineSuccessor') -or
+    -not $playbackCoreProfileSource.Contains('Assert-PlaybackCoreLifecycleV3LockfileBytes') -or
+    -not $playbackCoreProfileSource.Contains("CandidateLineageBranch = if (`$Version -eq 1) { 'refactor/playback-core-lifecycle' } else { 'refactor/playback-remove-release-gap' }") -or
     -not $playbackCoreProfileSource.Contains("'near-minimum-retrigger'") -or
     -not $playbackCoreBuilderSource.Contains('Assert-PlaybackCoreLifecycleSourceCheckout') -or
     -not $playbackCoreBuilderSource.Contains("['qualification_plan'] = [ordered]@{") -or
@@ -1628,11 +1814,15 @@ if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -
     $playbackCoreManifestSource.Contains("Get-ManifestProperty `$targetIdentity 'application'") -or
     -not $playbackCoreManifestSource.Contains("`$targetGameTarget -isnot [bool]") -or
     -not $playbackCoreRunnerSource.Contains('[switch]$PlanOnly') -or
+    -not $playbackCoreRunnerSource.Contains('schema_version = $qualificationReportSchemaVersion') -or
     -not $playbackCoreRunnerSource.Contains('native_attempts=0 target_capture=NOT_RUN') -or
     -not $playbackCoreRunnerSource.Contains('[switch]$OwnerApprovedReceiveOnlyRun') -or
     -not $playbackCoreRunnerSource.Contains('repository owner explicitly approves this Windows machine, target receiver, and physical input scope') -or
     -not $playbackCoreProfileSource.Contains("target_class = 'project-owned-non-game-receive-only'") -or
     -not $playbackCoreRunnerSource.Contains('New-PlaybackCoreLifecycleMeasurementReport') -or
+    -not $playbackCoreRunnerSource.Contains('PlaybackCoreLifecycleV2') -or
+    -not $playbackCoreRunnerSource.Contains('PlaybackCoreLifecycleV3') -or
+    -not $playbackCoreRunnerSource.Contains('Assert-PlaybackCoreLifecyclePairedWorkloadParity') -or
     -not $playbackCoreRunnerSource.Contains("'lifecycle-metrics.json'") -or
     -not $playbackCoreProfileSource.Contains("'scripts/lib/playback_core_lifecycle_collector.psm1'") -or
     -not $playbackCoreCollectorSource.Contains('project-owned-non-game-receive-only') -or
@@ -1659,16 +1849,507 @@ if (-not $playbackCoreProfileSource.Contains("Name = 'PlaybackCoreLifecycle'") -
     throw 'PlaybackCoreLifecycle exact-source provenance, worker event boundaries, actual raw-call evidence, or no-send dry-run boundary is incomplete'
 }
 
+$pclV1Profile = Get-PlaybackCoreLifecycleProfile
+$pclV2Profile = Get-PlaybackCoreLifecycleProfile -Version 2
+$pclV3Profile = Get-PlaybackCoreLifecycleProfile -Version 3
+if ($pclV1Profile.Name -ne 'PlaybackCoreLifecycle' -or
+    $pclV1Profile.BaselineRevision -ne '2544daa13eb23fdf03bd922e65b96fcffaba421c' -or
+    $pclV1Profile.CandidateLineageBranch -ne 'refactor/playback-core-lifecycle' -or
+    $pclV1Profile.SafetyScenarios -contains 'short-up-gap-stress' -or
+    $pclV2Profile.Name -ne 'PlaybackCoreLifecycleV2' -or
+    $pclV2Profile.WorkloadVersion -ne 'playback-core-lifecycle-v2' -or
+    $pclV2Profile.BaselineRevision -ne '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' -or
+    $pclV2Profile.BaselineTree -ne '25a20291b9cf84b1283804f451b33e3c4605507c' -or
+    $pclV2Profile.CandidateLineageBranch -ne 'refactor/playback-remove-release-gap' -or
+    $pclV2Profile.SafetyScenarios[-2] -ne 'short-up-gap-stress' -or
+    $pclV2Profile.SafetyScenarios[-1] -ne 'pause-resume-active-cleanup' -or
+    $pclV2Profile.HarnessManifestSchemaVersion -ne 2 -or
+    $pclV2Profile.AuthoredPrefixParityContract -ne 'timestamp-kind-scan-mask-v1' -or
+    $pclV3Profile.Name -ne 'PlaybackCoreLifecycleV3' -or
+    $pclV3Profile.WorkloadVersion -ne 'playback-core-lifecycle-v3-cookie-0183-v1' -or
+    $pclV3Profile.HarnessManifestSchemaVersion -ne 3 -or
+    $pclV3Profile.BaselineRevision -ne '4bc4a8409d3250da012be6e92f6681e721c17f3a' -or
+    $pclV3Profile.BaselineTree -ne '8e2ce7c115458d95b9e13aa144b3d6cc16c083a4' -or
+    $pclV3Profile.LineageAnchorRevision -ne '1d00c3b71fbf1f94003865bad6c4eba6d8dcd902' -or
+    $pclV3Profile.BaselineSuccessorParentRevision -ne $pclV2Profile.BaselineRevision -or
+    $pclV3Profile.BaselineSuccessorRef -ne 'refs/heads/qualification/playback-core-lifecycle-v3-baseline' -or
+    $pclV3Profile.BaselineSuccessorLockSha256 -ne 'baaf6e57419a1f28d9a880d655a48863676fe2fe0ddcd9a1467153912af13b68' -or
+    $pclV3Profile.AuthoredPrefixParityContract -ne $pclV2Profile.AuthoredPrefixParityContract -or
+    $pclV3Profile.SafetyScenarios.Count -ne $pclV2Profile.SafetyScenarios.Count -or
+    (Get-PlaybackCoreLifecycleProfileForName -Name 'PlaybackCoreLifecycleV3').Version -ne 3) {
+    throw 'PlaybackCoreLifecycleV2 changed the immutable v1 profile or failed to pin its strict PR-base identity and workload contract'
+}
+
+$pclV3BaselineSuccessor = Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $playbackCoreRepoRoot
+if ($pclV3BaselineSuccessor.revision -ne $pclV3Profile.BaselineSuccessorRevision -or
+    $pclV3BaselineSuccessor.tree -ne $pclV3Profile.BaselineSuccessorTree -or
+    $pclV3BaselineSuccessor.parent_revision -ne $pclV3Profile.LineageAnchorRevision -or
+    ($pclV3BaselineSuccessor.changed_paths -join '|') -ne 'rust/Cargo.lock' -or
+    $pclV3BaselineSuccessor.lock_sha256 -ne $pclV3Profile.BaselineSuccessorLockSha256) {
+    throw 'PlaybackCoreLifecycleV3 baseline successor is not the clean, lock-only cookie upgrade from the immutable V2 anchor'
+}
+$pclV3BaselineShaRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $playbackCoreRepoRoot -Revision ('0' * 40)) } catch { $pclV3BaselineShaRejected = $true }
+if (-not $pclV3BaselineShaRejected) { throw 'PlaybackCoreLifecycleV3 accepted a baseline successor with the wrong revision' }
+$pclV3BaselineTreeRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $playbackCoreRepoRoot -ExpectedTree ('0' * 40)) } catch { $pclV3BaselineTreeRejected = $true }
+if (-not $pclV3BaselineTreeRejected) { throw 'PlaybackCoreLifecycleV3 accepted a baseline successor with the wrong tree identity' }
+$pclV3BaselineLockRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $playbackCoreRepoRoot -ExpectedLockSha256 ('0' * 64)) } catch { $pclV3BaselineLockRejected = $true }
+if (-not $pclV3BaselineLockRejected) { throw 'PlaybackCoreLifecycleV3 accepted a baseline successor with the wrong lock hash' }
+$pclV3CandidateRevision = (& git -C $playbackCoreRepoRoot rev-parse HEAD).Trim()
+$pclV3StaleRemoteRejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecycleV3CandidateLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision ('0' * 40))
+} catch { $pclV3StaleRemoteRejected = $true }
+if (-not $pclV3StaleRemoteRejected) { throw 'PlaybackCoreLifecycleV3 accepted a candidate that does not match the remote PR head' }
+$pclV3WrongAnchorRejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecycleV3CandidateLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c')
+} catch { $pclV3WrongAnchorRejected = $true }
+if (-not $pclV3WrongAnchorRejected) { throw 'PlaybackCoreLifecycleV3 accepted a candidate outside the V2 anchor lineage' }
+$pclV3LineageRemoteTip = $pclV3CandidateRevision
+$pclV3PairLineageAccepted = Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+    -ProfileVersion 3 -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision $pclV3LineageRemoteTip `
+    -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+    -CandidateLockSha256 $pclV3Profile.BaselineSuccessorLockSha256 `
+    -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256
+if (-not $pclV3PairLineageAccepted) { throw 'PlaybackCoreLifecycleV3 rejected its pinned B1 sibling and exact remote candidate pair' }
+$pclV3WrongB1Rejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -ProfileVersion 3 -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision $pclV3LineageRemoteTip `
+        -ControlRevision $pclV3Profile.LineageAnchorRevision -ControlTree $pclV3Profile.BaselineSuccessorParentRevision `
+        -CandidateLockSha256 $pclV3Profile.BaselineSuccessorLockSha256 `
+        -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
+} catch { $pclV3WrongB1Rejected = $true }
+if (-not $pclV3WrongB1Rejected) { throw 'PlaybackCoreLifecycleV3 pair lineage accepted a control other than its exact pinned B1 revision/tree' }
+$pclV3PairWrongAnchorRejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -ProfileVersion 3 -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
+        -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
+        -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+        -CandidateLockSha256 $pclV3Profile.BaselineSuccessorLockSha256 `
+        -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
+} catch { $pclV3PairWrongAnchorRejected = $true }
+if (-not $pclV3PairWrongAnchorRejected) { throw 'PlaybackCoreLifecycleV3 pair lineage accepted a candidate outside the immutable V2 anchor lineage' }
+$pclV3PairStaleRemoteRejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -ProfileVersion 3 -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision ('0' * 40) `
+        -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+        -CandidateLockSha256 $pclV3Profile.BaselineSuccessorLockSha256 `
+        -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
+} catch { $pclV3PairStaleRemoteRejected = $true }
+if (-not $pclV3PairStaleRemoteRejected) { throw 'PlaybackCoreLifecycleV3 pair lineage accepted a stale remote branch tip' }
+$pclV1V2LockMismatchRejected = @{}
+foreach ($version in @(1, 2)) {
+    $profile = Get-PlaybackCoreLifecycleProfile -Version $version
+    $rejected = $false
+    try {
+        [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+            -ProfileVersion $version -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision $pclV3CandidateRevision `
+            -ControlRevision $profile.BaselineRevision -ControlTree $profile.BaselineTree `
+            -CandidateLockSha256 ('a' * 64) -ControlLockSha256 ('b' * 64))
+    } catch { $rejected = $_.Exception.Message.Contains('Cargo.lock SHA-256') }
+    if (-not $rejected) { throw ('PlaybackCoreLifecycleV' + $version + ' accepted a pair with different Cargo.lock SHA-256 values before case entry') }
+    $pclV1V2LockMismatchRejected[$version] = $true
+}
+$pclV3LegacyNonAncestorRejected = $false
+try {
+    [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+        -ProfileVersion 2 -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
+        -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
+        -ControlRevision $pclV2Profile.BaselineRevision -ControlTree $pclV2Profile.BaselineTree `
+        -CandidateLockSha256 ('a' * 64) -ControlLockSha256 ('a' * 64))
+} catch { $pclV3LegacyNonAncestorRejected = $true }
+if (-not $pclV3LegacyNonAncestorRejected) { throw 'legacy PlaybackCoreLifecycle pair lineage no longer rejects a non-ancestor control' }
+$pclV3GitFailureRejected = $false
+try {
+    [void](Test-DispatchGitAncestor -RepositoryRoot (Join-Path $env:TEMP ('missing-git-repo-' + [guid]::NewGuid().ToString('N'))) `
+        -AncestorRevision $pclV3Profile.LineageAnchorRevision -DescendantRevision $pclV3CandidateRevision)
+} catch { $pclV3GitFailureRejected = $_.Exception.Message -match 'git merge-base --is-ancestor failed with exit 128:' }
+if (-not $pclV3GitFailureRejected) { throw 'PlaybackCoreLifecycle ancestry validation did not fail closed on a Git command error' }
+
+function ConvertTo-PclV3CheckoutFixture {
+    param($Identity)
+    [ordered]@{
+        root = $Identity.root
+        top_level = $Identity.checkout.top_level
+        git_dir = $Identity.checkout.git_dir
+        git_common_dir = $Identity.checkout.git_common_dir
+        revision = $Identity.revision
+        tree = $Identity.tree
+        branch = $Identity.branch
+        clean = $Identity.clean
+    }
+}
+
+$pclV3TempRoot = Join-Path $env:TEMP ('pcl-v3-manifest-contract-' + [guid]::NewGuid().ToString('N'))
+$pclV3BaselineRoot = Join-Path $pclV3TempRoot 'baseline-worktree'
+$pclV3LineageRepoRoot = Join-Path $pclV3TempRoot 'lineage-topology-repo'
+New-Item -ItemType Directory -Path $pclV3TempRoot | Out-Null
+try {
+    & git clone --shared --no-checkout --quiet $playbackCoreRepoRoot $pclV3LineageRepoRoot
+    if ($LASTEXITCODE -ne 0) { throw 'could not create an isolated Git topology for V3 merged-B1 lineage contract tests' }
+    & git -C $pclV3LineageRepoRoot config user.name 'Qualification Contract'
+    if ($LASTEXITCODE -ne 0) { throw 'could not configure the isolated V3 lineage topology identity' }
+    & git -C $pclV3LineageRepoRoot config user.email 'qualification-contract@example.invalid'
+    if ($LASTEXITCODE -ne 0) { throw 'could not configure the isolated V3 lineage topology identity' }
+    & git -c core.autocrlf=false -c core.eol=lf -C $playbackCoreRepoRoot worktree add --detach $pclV3BaselineRoot $pclV3Profile.BaselineRevision | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'could not create the pinned V3 baseline worktree for manifest contract tests' }
+    Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
+    Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
+    $pclV3RunnerIdentity = Get-DispatchM3GitCheckoutIdentity $playbackCoreRepoRoot
+    $pclV3BaselineIdentity = Get-DispatchM3GitCheckoutIdentity $pclV3BaselineRoot
+    $pclV3MergeTree = (& git -C $pclV3LineageRepoRoot rev-parse ($pclV3RunnerIdentity.revision + '^{tree}')).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'could not resolve candidate tree for the isolated V3 merged-B1 topology' }
+    $pclV3MergedB1Revision = (& git -C $pclV3LineageRepoRoot commit-tree $pclV3MergeTree `
+        -p $pclV3RunnerIdentity.revision -p $pclV3Profile.BaselineSuccessorRevision -m 'V3 merged B1 lineage contract').Trim()
+    if ($LASTEXITCODE -ne 0 -or $pclV3MergedB1Revision -notmatch '^[0-9a-f]{40}$') {
+        throw 'could not create the isolated merged-B1 candidate topology'
+    }
+    $pclV3MergedB1Rejected = $false
+    try {
+        [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $pclV3LineageRepoRoot `
+            -ProfileVersion 3 -CandidateRevision $pclV3MergedB1Revision -RemoteTipRevision $pclV3MergedB1Revision `
+            -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+            -CandidateLockSha256 $pclV3Profile.BaselineSuccessorLockSha256 `
+            -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
+    } catch { $pclV3MergedB1Rejected = $_.Exception.Message.Contains('must remain a sibling') }
+    if (-not $pclV3MergedB1Rejected) { throw 'PlaybackCoreLifecycleV3 accepted a candidate that had merged its pinned B1 control' }
+    $pclV3BaselineLockPath = Join-Path $pclV3BaselineRoot 'rust\Cargo.lock'
+    $pclV3OriginalBaselineLockBytes = [System.IO.File]::ReadAllBytes($pclV3BaselineLockPath)
+    $pclV3BaselineLockText = [System.Text.Encoding]::UTF8.GetString($pclV3OriginalBaselineLockBytes)
+    if ($pclV3BaselineLockText.Contains("`r")) { throw 'PlaybackCoreLifecycleV3 baseline contract worktree did not start with LF Cargo.lock bytes' }
+    try {
+        $pclV3CrlfLockBytes = [System.Text.Encoding]::UTF8.GetBytes($pclV3BaselineLockText.Replace("`n", "`r`n"))
+        [System.IO.File]::WriteAllBytes($pclV3BaselineLockPath, $pclV3CrlfLockBytes)
+        $pclV3CrlfLockRejected = $false
+        $pclV3CrlfLockError = ''
+        try { Assert-PlaybackCoreLifecycleV3LockfileBytes -RepositoryRoot $pclV3BaselineRoot -SourceRole Baseline | Out-Null } catch {
+            $pclV3CrlfLockRejected = $true
+            $pclV3CrlfLockError = $_.Exception.Message
+        }
+        if (-not $pclV3CrlfLockRejected -or
+            -not $pclV3CrlfLockError.Contains('CR bytes') -or
+            -not $pclV3CrlfLockError.Contains('checkout-index --force -- rust/Cargo.lock') -or
+            -not $pclV3CrlfLockError.Contains($pclV3Profile.BaselineSuccessorLockSha256)) {
+            throw 'PlaybackCoreLifecycleV3 did not clearly reject a CRLF lockfile checkout with LF repair instructions'
+        }
+    } finally {
+        [System.IO.File]::WriteAllBytes($pclV3BaselineLockPath, $pclV3OriginalBaselineLockBytes)
+    }
+    if ((Assert-PlaybackCoreLifecycleV3LockfileBytes -RepositoryRoot $pclV3BaselineRoot -SourceRole Baseline) -ne $pclV3Profile.BaselineSuccessorLockSha256) {
+        throw 'PlaybackCoreLifecycleV3 baseline lockfile byte preflight changed its pinned LF hash'
+    }
+    $pclV3RustcVersion = (& rustc -Vv) -join [Environment]::NewLine
+    if ($LASTEXITCODE -ne 0) { throw 'could not identify rustc for V3 manifest contract fixtures' }
+    $pclV3CargoVersion = (& cargo -V).Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'could not identify cargo for V3 manifest contract fixtures' }
+    $pclV3BuilderPath = Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1'
+    $pclV3BuilderHash = (Get-FileHash -LiteralPath $pclV3BuilderPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    $pclV3RunnerProvenance = @($pclV3Profile.RunnerProvenancePaths | ForEach-Object {
+        $sourcePath = $_
+        $fullPath = Join-Path $playbackCoreRepoRoot ($sourcePath.Replace('/', '\'))
+        [pscustomobject]@{
+            source_path = $sourcePath
+            evidence_path = 'runner-provenance/' + $sourcePath.Replace('/', '\')
+            sha256 = (Get-FileHash -LiteralPath $fullPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
+    })
+    function New-PclV3ManifestFixture {
+        param([ValidateSet('Baseline', 'Candidate')] [string]$Role)
+        $isBaseline = $Role -eq 'Baseline'
+        $sourceIdentity = if ($isBaseline) { $pclV3BaselineIdentity } else { $pclV3RunnerIdentity }
+        $sourceRoot = $sourceIdentity.root
+        $lockPath = Join-Path $sourceRoot 'rust\Cargo.lock'
+        $outputRoot = Join-Path $pclV3TempRoot ($Role.ToLowerInvariant() + '-output')
+        $checkout = ConvertTo-PclV3CheckoutFixture $sourceIdentity
+        $runnerCheckout = ConvertTo-PclV3CheckoutFixture $pclV3RunnerIdentity
+        [pscustomobject][ordered]@{
+            schema_version = 3
+            qualification_profile = $pclV3Profile.Name
+            workload_version = $pclV3Profile.WorkloadVersion
+            source_role = $Role
+            source_revision = $sourceIdentity.revision
+            source_tree_sha = $sourceIdentity.tree
+            source_branch = $sourceIdentity.branch
+            source_tree_clean = $sourceIdentity.clean
+            clean_build = $true
+            base_source_revision = $pclV3Profile.BaselineRevision
+            base_source_tree_sha = $pclV3Profile.BaselineTree
+            baseline_source_revision = $pclV3Profile.BaselineRevision
+            baseline_source_tree_sha = $pclV3Profile.BaselineTree
+            candidate_source_revision = $pclV3RunnerIdentity.revision
+            candidate_source_tree_sha = $pclV3RunnerIdentity.tree
+            cargo_profile = $pclV3Profile.CargoProfile
+            cargo_features = @($pclV3Profile.RequiredFeatures)
+            qpc_read_counting = $false
+            observer_mode = 'qualification-on'
+            receiveonly_observer_mode = $pclV3Profile.ObserverMode
+            receiveonly_observer_version = $pclV3Profile.ObserverVersion
+            receiveonly_observer_schema_version = $pclV3Profile.ObserverSchemaVersion
+            receiveonly_observer_event_schema_version = $pclV3Profile.ObserverEventSchemaVersion
+            guard_mode = 'frozen'
+            performance_timing_margin_us = $pclV3Profile.PerformanceTimingMarginUs
+            safety_timing_margin_us = $pclV3Profile.SafetyTimingMarginUs
+            target = $pclV3Profile.Target
+            target_identity_status = 'NOT_RUN'
+            target_identity = $pclV3Profile.TargetIdentity
+            rustc_version = $pclV3RustcVersion
+            cargo_version = $pclV3CargoVersion
+            cargo_clean_exit_code = 0
+            cargo_build_exit_code = 0
+            binary_name = 'rt-native-acceptance.exe'
+            binary_sha256 = 'a' * 64
+            builder_script_sha256 = $pclV3BuilderHash
+            source_root = $sourceRoot
+            source_checkout_identity = $checkout
+            runner_source_revision = $pclV3RunnerIdentity.revision
+            runner_source_tree_sha = $pclV3RunnerIdentity.tree
+            runner_source_branch = $pclV3RunnerIdentity.branch
+            runner_source_root = $playbackCoreRepoRoot
+            runner_source_clean = $pclV3RunnerIdentity.clean
+            runner_source_checkout_identity = $runnerCheckout
+            candidate_lineage_branch = $pclV3Profile.CandidateLineageBranch
+            candidate_lineage_tip_revision = $pclV3RunnerIdentity.revision
+            candidate_lineage_verified = $true
+            lineage_anchor_revision = $pclV3Profile.LineageAnchorRevision
+            baseline_successor_revision = $pclV3Profile.BaselineSuccessorRevision
+            baseline_successor_tree_sha = $pclV3Profile.BaselineSuccessorTree
+            baseline_successor_parent_revision = $pclV3Profile.BaselineSuccessorParentRevision
+            baseline_successor_ref = $pclV3Profile.BaselineSuccessorRef
+            baseline_successor_lock_sha256 = $pclV3Profile.BaselineSuccessorLockSha256
+            output_root = $outputRoot
+            cargo_target_dir = Join-Path $outputRoot 'cargo-target'
+            cargo_lock_path = $lockPath
+            cargo_lock_sha256 = (Get-FileHash -LiteralPath $lockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+            qualification_plan = [pscustomobject]@{
+                pair_order = $pclV3Profile.PairOrder
+                pair_count = $pclV3Profile.PairCount
+                sample_seconds = $pclV3Profile.SampleSeconds
+            }
+            runner_script_provenance = $pclV3RunnerProvenance
+        }
+    }
+    $pclV3ValidBaseline = New-PclV3ManifestFixture -Role Baseline
+    $pclV3ValidCandidate = New-PclV3ManifestFixture -Role Candidate
+    Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3ValidBaseline -ExpectedRole Baseline -RepositoryRoot $playbackCoreRepoRoot | Out-Null
+    Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3ValidCandidate -ExpectedRole Candidate -RepositoryRoot $playbackCoreRepoRoot | Out-Null
+
+    function Write-PclV3CaseArtifactManifest {
+        param([Parameter(Mandatory)] [string]$ArtifactRoot, [Parameter(Mandatory)] $Manifest)
+        $manifestPath = Join-Path $ArtifactRoot 'manifest.json'
+        $manifestJson = $Manifest | ConvertTo-Json -Depth 20
+        [System.IO.File]::WriteAllText($manifestPath, $manifestJson + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+        $artifactNames = @('manifest.json', 'rt-native-acceptance.exe', 'build_dispatch_core_harness.ps1', 'build.log', 'clean.log') +
+            @($Manifest.runner_script_provenance | ForEach-Object { [string]$_.evidence_path })
+        $checksumLines = foreach ($name in $artifactNames) {
+            $path = Join-Path $ArtifactRoot ($name.Replace('/', '\'))
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            $hash + '  ' + $name.Replace('\', '/')
+        }
+        [System.IO.File]::WriteAllText((Join-Path $ArtifactRoot 'SHA256SUMS.txt'), ($checksumLines -join [Environment]::NewLine) + [Environment]::NewLine, [System.Text.UTF8Encoding]::new($false))
+        [pscustomobject]@{ Root = $ArtifactRoot; ManifestPath = $manifestPath; Manifest = $Manifest }
+    }
+    function New-PclV3CaseArtifact {
+        param([Parameter(Mandatory)] $Template, [Parameter(Mandatory)] [string]$Name)
+        $artifactRoot = Join-Path $pclV3TempRoot ($Name + '-case-artifact')
+        New-Item -ItemType Directory -Path $artifactRoot | Out-Null
+        $binaryPath = Join-Path $artifactRoot 'rt-native-acceptance.exe'
+        [System.IO.File]::WriteAllBytes($binaryPath, [System.Text.Encoding]::ASCII.GetBytes('no-send-only harness fixture'))
+        Copy-Item -LiteralPath $pclV3BuilderPath -Destination (Join-Path $artifactRoot 'build_dispatch_core_harness.ps1')
+        [System.IO.File]::WriteAllText((Join-Path $artifactRoot 'build.log'), 'fixture build log' + [Environment]::NewLine)
+        [System.IO.File]::WriteAllText((Join-Path $artifactRoot 'clean.log'), 'fixture clean log' + [Environment]::NewLine)
+        $manifest = $Template | ConvertTo-Json -Depth 20 | ConvertFrom-Json
+        $manifest.output_root = $artifactRoot
+        $manifest.cargo_target_dir = Join-Path $artifactRoot 'cargo-target'
+        $manifest.binary_name = 'rt-native-acceptance.exe'
+        $manifest | Add-Member -NotePropertyName binary_path -NotePropertyValue $binaryPath -Force
+        $manifest.binary_sha256 = (Get-FileHash -LiteralPath $binaryPath -Algorithm SHA256).Hash.ToLowerInvariant()
+        foreach ($entry in $manifest.runner_script_provenance) {
+            $sourcePath = Join-Path $playbackCoreRepoRoot ([string]$entry.source_path).Replace('/', '\')
+            $evidencePath = Join-Path $artifactRoot ([string]$entry.evidence_path).Replace('/', '\')
+            $evidenceDirectory = Split-Path -Parent $evidencePath
+            New-Item -ItemType Directory -Force -Path $evidenceDirectory | Out-Null
+            Copy-Item -LiteralPath $sourcePath -Destination $evidencePath
+        }
+        Write-PclV3CaseArtifactManifest -ArtifactRoot $artifactRoot -Manifest $manifest
+    }
+    function Copy-PclV3CaseArtifactMutation {
+        param([Parameter(Mandatory)] $Artifact, [Parameter(Mandatory)] [string]$Name, [Parameter(Mandatory)] [scriptblock]$Mutation)
+        $artifactRoot = Join-Path $pclV3TempRoot ($Name + '-mutated-artifact')
+        New-Item -ItemType Directory -Path $artifactRoot | Out-Null
+        Get-ChildItem -LiteralPath $Artifact.Root -Force | Copy-Item -Destination $artifactRoot -Recurse -Force
+        $manifest = Get-Content -LiteralPath (Join-Path $artifactRoot 'manifest.json') -Raw | ConvertFrom-Json
+        $manifest.output_root = $artifactRoot
+        $manifest.cargo_target_dir = Join-Path $artifactRoot 'cargo-target'
+        $manifest.binary_path = Join-Path $artifactRoot 'rt-native-acceptance.exe'
+        & $Mutation $manifest
+        Write-PclV3CaseArtifactManifest -ArtifactRoot $artifactRoot -Manifest $manifest
+    }
+    function Invoke-PclV3CaseEntryPreflight {
+        param(
+            [Parameter(Mandatory)] $Artifact,
+            [Parameter(Mandatory)] [string]$Name,
+            [Parameter(Mandatory)] [string]$Scenario,
+            [Parameter(Mandatory)] [string]$Workload,
+            [int]$SampleSeconds = 0,
+            [bool]$Historical = $false,
+            [bool]$OwnerApproved = $false
+        )
+        $caseOutputRoot = Join-Path $pclV3TempRoot ($Name + '-case-output')
+        if (Test-Path -LiteralPath $caseOutputRoot) { throw ('case preflight output root unexpectedly exists: ' + $caseOutputRoot) }
+        $arguments = @(
+            '-NoProfile', '-File', (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1'),
+            '-QualificationProfile', 'PlaybackCoreLifecycleV3',
+            '-Scenario', $Scenario, '-Workload', $Workload,
+            '-TimingMarginUs', '500', '-CalibrationPlacement', 'Baseline',
+            '-TimingObserverForQualification',
+            '-HarnessPath', $Artifact.Manifest.binary_path,
+            '-HarnessManifestPath', $Artifact.ManifestPath,
+            '-OutputRoot', $caseOutputRoot, '-GameFps', '60', '-PreflightOnly'
+        )
+        if ($SampleSeconds -gt 0) { $arguments += @('-SampleSeconds', [string]$SampleSeconds) }
+        if ($Historical) { $arguments += '-HistoricalSourceAllowed' }
+        if ($OwnerApproved) { $arguments += '-OwnerApprovedReceiveOnlyRun' }
+        $output = @(& (Get-Command pwsh.exe).Source @arguments 2>&1 | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+        $exitCode = $LASTEXITCODE
+        [pscustomobject]@{ ExitCode = $exitCode; Output = $output; OutputRoot = $caseOutputRoot }
+    }
+    $pclV3BaselineCaseArtifact = New-PclV3CaseArtifact -Template $pclV3ValidBaseline -Name 'baseline'
+    $pclV3CandidateCaseArtifact = New-PclV3CaseArtifact -Template $pclV3ValidCandidate -Name 'candidate'
+    foreach ($case in @(
+            [pscustomobject]@{ name = 'baseline-performance'; artifact = $pclV3BaselineCaseArtifact; role = 'Baseline'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; sample = 15; historical = $true },
+            [pscustomobject]@{ name = 'candidate-performance'; artifact = $pclV3CandidateCaseArtifact; role = 'Candidate'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; sample = 15; historical = $false },
+            [pscustomobject]@{ name = 'candidate-safety'; artifact = $pclV3CandidateCaseArtifact; role = 'Candidate'; scenario = 'owner-process-termination'; workload = 'safety-smoke'; sample = 0; historical = $false }
+        )) {
+        $result = Invoke-PclV3CaseEntryPreflight -Artifact $case.artifact -Name $case.name -Scenario $case.scenario `
+            -Workload $case.workload -SampleSeconds $case.sample -Historical $case.historical
+        if ($result.ExitCode -ne 0 -or $result.Output -notmatch ('CASE_PREFLIGHT_ONLY PASS profile=PlaybackCoreLifecycleV3 role=' + $case.role + ' schema=3') -or
+            $result.Output -notmatch 'receiver_started=false harness_started=false output_created=false' -or
+            (Test-Path -LiteralPath $result.OutputRoot)) {
+            throw ('PlaybackCoreLifecycleV3 direct case-runner no-send preflight failed for ' + $case.name + ': ' + $result.Output)
+        }
+    }
+    foreach ($mutation in @(
+            [pscustomobject]@{ name = 'wrong-schema'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.schema_version = 2 } },
+            [pscustomobject]@{ name = 'wrong-profile'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.qualification_profile = 'PlaybackCoreLifecycleV2'; $m.schema_version = 2 } },
+            [pscustomobject]@{ name = 'wrong-binary-hash'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.binary_sha256 = '0' * 64 } },
+            [pscustomobject]@{ name = 'wrong-role'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.source_role = 'Baseline' } }
+        )) {
+        $mutatedArtifact = Copy-PclV3CaseArtifactMutation -Artifact $mutation.artifact -Name $mutation.name -Mutation $mutation.apply
+        $result = Invoke-PclV3CaseEntryPreflight -Artifact $mutatedArtifact -Name ($mutation.name + '-reject') `
+            -Scenario 'mixed-up-down' -Workload 'mixed-up-down' -SampleSeconds 15
+        if ($result.ExitCode -eq 0 -or $result.Output -notmatch 'CASE_PREFLIGHT_ONLY REJECTED' -or
+            (Test-Path -LiteralPath $result.OutputRoot)) {
+            throw ('PlaybackCoreLifecycleV3 case-runner preflight did not reject ' + $mutation.name + ' without creating output: ' + $result.Output)
+        }
+    }
+    $ownerSwitchRejected = Invoke-PclV3CaseEntryPreflight -Artifact $pclV3BaselineCaseArtifact -Name 'owner-switch-reject' `
+        -Scenario 'mixed-up-down' -Workload 'mixed-up-down' -SampleSeconds 15 -Historical $true -OwnerApproved $true
+    if ($ownerSwitchRejected.ExitCode -eq 0 -or
+        $ownerSwitchRejected.Output -notmatch '-PreflightOnly cannot be combined with -OwnerApprovedReceiveOnlyRun' -or
+        (Test-Path -LiteralPath $ownerSwitchRejected.OutputRoot)) {
+        throw 'PlaybackCoreLifecycleV3 no-send preflight accepted owner approval or created output'
+    }
+
+    foreach ($mutation in @(
+            [pscustomobject]@{ name = 'baseline SHA'; role = 'Baseline'; apply = { param($m) $m.source_revision = '0' * 40 } },
+            [pscustomobject]@{ name = 'baseline tree'; role = 'Baseline'; apply = { param($m) $m.source_tree_sha = '0' * 40 } },
+            [pscustomobject]@{ name = 'lock hash'; role = 'Baseline'; apply = { param($m) $m.cargo_lock_sha256 = '0' * 64 } },
+            [pscustomobject]@{ name = 'dirty source'; role = 'Baseline'; apply = { param($m) $m.source_tree_clean = $false; $m.source_checkout_identity.clean = $false } },
+            [pscustomobject]@{ name = 'toolchain'; role = 'Baseline'; apply = { param($m) $m.rustc_version = 'release: 0.0.0' } },
+            [pscustomobject]@{ name = 'target'; role = 'Baseline'; apply = { param($m) $m.target = 'aarch64-pc-windows-msvc' } },
+            [pscustomobject]@{ name = 'features'; role = 'Baseline'; apply = { param($m) $m.cargo_features = @('wrong-feature') } },
+            [pscustomobject]@{ name = 'workload'; role = 'Baseline'; apply = { param($m) $m.workload_version = 'wrong-workload' } },
+            [pscustomobject]@{ name = 'successor ref'; role = 'Baseline'; apply = { param($m) $m.baseline_successor_ref = 'refs/heads/moved-baseline' } },
+            [pscustomobject]@{ name = 'candidate lock hash'; role = 'Candidate'; apply = { param($m) $m.cargo_lock_sha256 = '0' * 64 } }
+        )) {
+        $sourceFixture = if ($mutation.role -eq 'Baseline') { $pclV3ValidBaseline } else { $pclV3ValidCandidate }
+        $mutatedFixture = $sourceFixture | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+        & $mutation.apply $mutatedFixture
+        $rejected = $false
+        try { Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $mutatedFixture -ExpectedRole $mutation.role -RepositoryRoot $playbackCoreRepoRoot | Out-Null } catch { $rejected = $true }
+        if (-not $rejected) { throw ('PlaybackCoreLifecycleV3 accepted a mismatched ' + $mutation.name) }
+    }
+    $pclV3WrongSchema = $pclV3ValidCandidate | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $pclV3WrongSchema.qualification_profile = 'PlaybackCoreLifecycleV2'
+    $pclV3WrongSchema.schema_version = 2
+    $pclV3WrongSchemaRejected = $false
+    try { Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3WrongSchema -ExpectedRole Candidate -RepositoryRoot $playbackCoreRepoRoot | Out-Null } catch { $pclV3WrongSchemaRejected = $true }
+    if (-not $pclV3WrongSchemaRejected) { throw 'PlaybackCoreLifecycleV2 accepted a V3 manifest contract' }
+} finally {
+    $resolvedTempRoot = [System.IO.Path]::GetFullPath($pclV3TempRoot)
+    $resolvedSystemTemp = [System.IO.Path]::GetFullPath($env:TEMP).TrimEnd('\') + '\'
+    if (-not $resolvedTempRoot.StartsWith($resolvedSystemTemp, [System.StringComparison]::OrdinalIgnoreCase) -or
+        -not $resolvedTempRoot.Split([System.IO.Path]::DirectorySeparatorChar)[-1].StartsWith('pcl-v3-manifest-contract-', [System.StringComparison]::Ordinal)) {
+        throw 'refusing to remove an unexpected V3 qualification test directory'
+    }
+    if (Test-Path -LiteralPath $pclV3BaselineRoot) {
+        & git -C $playbackCoreRepoRoot worktree remove --force $pclV3BaselineRoot | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'could not remove the temporary V3 baseline contract worktree' }
+    }
+    if (Test-Path -LiteralPath $pclV3TempRoot) { Remove-Item -LiteralPath $pclV3TempRoot -Recurse -Force }
+}
+
+$pclBaselineProjection = [pscustomobject]@{ details = [pscustomobject]@{ authored_packet_targets = @(
+    [pscustomobject]@{ scheduled_us = 50000; up_mask = 0; down_mask = 1 },
+    [pscustomobject]@{ scheduled_us = 67167; up_mask = 1; down_mask = 0 },
+    [pscustomobject]@{ scheduled_us = 1050000; up_mask = 0; down_mask = 1 }
+) } }
+$pclCandidateProjection = [pscustomobject]@{ details = [pscustomobject]@{ authored_timestamp_group_targets = @(
+    [pscustomobject]@{ scheduled_us = 50000; up_mask = 0; down_mask = 1 },
+    [pscustomobject]@{ scheduled_us = 67167; up_mask = 1; down_mask = 0 },
+    [pscustomobject]@{ scheduled_us = 1050000; up_mask = 0; down_mask = 1 }
+) } }
+$pclBaselinePairRow = [pscustomobject]@{ report = $pclBaselineProjection; workload = 'near-minimum-retrigger'; load = 'Quiet'; pair_id = 'near-minimum-retrigger/Quiet/01' }
+$pclCandidatePairRow = [pscustomobject]@{ report = $pclCandidateProjection; workload = 'near-minimum-retrigger'; load = 'Quiet'; pair_id = 'near-minimum-retrigger/Quiet/01' }
+[void](Assert-PlaybackCoreLifecyclePairedWorkloadParity -ControlRow $pclBaselinePairRow -CandidateRow $pclCandidatePairRow -SampleSeconds 1)
+if ($pclBaselinePairRow.authored_workload_measured_event_count -ne 2 -or
+    $pclBaselinePairRow.authored_workload_tail_group_count -ne 1 -or
+    $pclBaselinePairRow.authored_workload_full_event_count -ne 3 -or
+    $pclBaselinePairRow.authored_workload_tail_event_count -ne 1 -or
+    $pclBaselinePairRow.authored_workload_measured_prefix_sha256 -ne $pclCandidatePairRow.authored_workload_measured_prefix_sha256 -or
+    $pclBaselinePairRow.authored_workload_full_stream_sha256 -ne $pclCandidatePairRow.authored_workload_full_stream_sha256) {
+    throw 'PlaybackCoreLifecycleV2 did not compare the full authored stream and retain its measured-prefix/tail evidence'
+}
+$pclCandidateProjection.details.authored_timestamp_group_targets[1].scheduled_us = 67168
+$pclMismatchRejected = $false
+try { [void](Assert-PlaybackCoreLifecyclePairedWorkloadParity -ControlRow $pclBaselinePairRow -CandidateRow $pclCandidatePairRow -SampleSeconds 1) } catch { $pclMismatchRejected = $true }
+if (-not $pclMismatchRejected) { throw 'PlaybackCoreLifecycleV2 accepted a mismatched authored timestamp/kind/scan-mask prefix' }
+$pclCandidateProjection.details.authored_timestamp_group_targets[1].scheduled_us = 67167
+$pclCandidateProjection.details.authored_timestamp_group_targets[2].scheduled_us = 1050001
+$pclTailMismatchRejected = $false
+try { [void](Assert-PlaybackCoreLifecyclePairedWorkloadParity -ControlRow $pclBaselinePairRow -CandidateRow $pclCandidatePairRow -SampleSeconds 1) } catch { $pclTailMismatchRejected = $true }
+if (-not $pclTailMismatchRejected) { throw 'PlaybackCoreLifecycleV2 accepted different authored tail padding after a matching measured prefix' }
+
 Import-Module (Join-Path $PSScriptRoot 'lib/playback_core_lifecycle_collector.psm1') -Force
 $pclValidSafetyIdentity = Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'stop-cleanup' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0
 $pclValidPerformanceIdentity = Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'mixed-up-down' -Workload 'mixed-up-down' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 15
-if ($pclValidSafetyIdentity.configured_H_us -ne 17167 -or $pclValidSafetyIdentity.configured_G_us -ne 17167 -or
+if ($pclValidSafetyIdentity.configured_H_us -ne 17167 -or
     $pclValidPerformanceIdentity.workload -ne 'mixed-up-down') {
     throw 'PlaybackCoreLifecycle case identity did not preserve its 60 FPS/500 us workload configuration'
 }
 $pclInvalidCaseRejected = $false
 try { [void](Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'timing-margin-sweep' -Workload 'boundary-60fps-margin-0' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0) } catch { $pclInvalidCaseRejected = $true }
 if (-not $pclInvalidCaseRejected) { throw 'PlaybackCoreLifecycle accepted a case outside its exact profile matrix' }
+$pclV1ShortGapRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'short-up-gap-stress' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0) } catch { $pclV1ShortGapRejected = $true }
+if (-not $pclV1ShortGapRejected -or
+    (Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'short-up-gap-stress' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0 -ProfileVersion 2).scenario -ne 'short-up-gap-stress') {
+    throw 'PlaybackCoreLifecycleV2 did not isolate short-up-gap-stress to its candidate-only safety contract'
+}
+$pclV1ActivePauseRejected = $false
+try { [void](Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'pause-resume-active-cleanup' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0) } catch { $pclV1ActivePauseRejected = $true }
+if (-not $pclV1ActivePauseRejected -or
+    (Assert-PlaybackCoreLifecycleSessionIdentity -Scenario 'pause-resume-active-cleanup' -Workload 'safety-smoke' -TimingMarginUs 500 -GameFps 60 -SampleSeconds 0 -ProfileVersion 2).scenario -ne 'pause-resume-active-cleanup') {
+    throw 'PlaybackCoreLifecycleV2 did not isolate active-key pause cleanup to its candidate-only safety contract'
+}
 $pclRevision = '1111111111111111111111111111111111111111'
 $pclTree = '2222222222222222222222222222222222222222'
 $pclManifestHash = 'a' * 64
@@ -1761,6 +2442,41 @@ foreach ($workload in $pclProfile.PerformanceWorkloads) {
     }
 }
 $pclRows = $pclRowsList.ToArray()
+$pclV2Rows = @(Copy-PclTestRows $pclRows)
+foreach ($pclV2Row in $pclV2Rows) {
+    if ($pclV2Row.role -eq 'control') {
+        $pclV2Row.source_revision = $pclV2Profile.BaselineRevision
+        $pclV2Row.source_tree_sha = $pclV2Profile.BaselineTree
+        if ($pclV2Row.sample_seconds -eq 15) {
+            $armedTicks = 1000 + ([int]$pclV2Row.sequence_index * 100)
+            $pclV2Row.lifecycle_measurement = [pscustomobject]@{
+                schema_version = 2; qpc_clock_source = 'Windows QueryPerformanceCounter'; qpc_frequency_hz = 10000000
+                native_session_identity = [pscustomobject]@{ run_id = $pclV2Row.run_id; scenario = $pclV2Row.scenario }
+                playback_admission_event = 'system_power_ready_to_armed_publication'
+                playback_armed_qpc_ticks = $armedTicks; worker_joined_qpc_ticks = $armedTicks + 40
+            }
+        }
+    }
+    if ($pclV2Row.sample_seconds -eq 15) {
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_prefix_sha256 -NotePropertyValue ('e' * 64) -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_event_count -NotePropertyValue 42 -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_window_start_us -NotePropertyValue 50000 -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_measured_window_end_us -NotePropertyValue 15050000 -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_full_stream_sha256 -NotePropertyValue ('f' * 64) -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_full_event_count -NotePropertyValue 100 -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_tail_sha256 -NotePropertyValue ('a' * 64) -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_tail_event_count -NotePropertyValue 58 -Force
+        $pclV2Row | Add-Member -NotePropertyName authored_workload_tail_group_count -NotePropertyValue 27 -Force
+    }
+}
+function New-PclV2TestReport {
+    param([Parameter(Mandatory)] [object[]]$Rows)
+    New-PlaybackCoreLifecycleMeasurementReport -RunRows $Rows `
+        -CandidateRevision $pclRevision -CandidateTree $pclTree `
+        -CandidateManifestSha256 $pclManifestHash -CandidateBinarySha256 $pclBinaryHash `
+        -ControlManifestSha256 $pclBaselineManifestHash -ControlBinarySha256 $pclBaselineBinaryHash `
+        -RunnerMachineName $pclMachine -RunnerOsBootTimeUtc $pclBootUtc -ProfileVersion 2
+}
 $pclSingleCellRows = @($pclRows | Where-Object { $_.cell_id -eq 'mixed-up-down/Quiet' -or $_.sequence_index -eq 0 })
 $pclSingleCellRoleOrder = @($pclSingleCellRows | Where-Object { $_.sample_seconds -eq 15 } | ForEach-Object { $_.role }) -join ','
 if ($pclSingleCellRoleOrder -ne 'control,candidate,candidate,control,control,candidate,candidate,control,control,candidate,candidate,control') {
@@ -1799,14 +2515,169 @@ if ($pclReport.status -ne 'INCOMPLETE' -or
     $pclReport.worker_joined_to_runner_pre_next_process_launch_us.status -ne 'DIAGNOSTIC_ONLY' -or
     $pclReport.worker_joined_to_runner_pre_next_process_launch_us.statistics.sample_count -ne 60 -or
     $pclReport.raw_up_syscall_count.statistics.p50 -ne 2 -or
-    $pclReport.source_identity.manifest_sha256 -ne $pclManifestHash) {
+    $pclReport.source_identity.manifest_sha256 -ne $pclManifestHash -or
+    $pclReport.Contains('qualification_profile') -or
+    $pclReport.Contains('authored_prefix_parity_contract')) {
     throw 'PlaybackCoreLifecycle full six-pair role-order fixture did not preserve incomplete baseline coverage and real candidate Armed evidence'
+}
+$pclV2Report = New-PclV2TestReport -Rows $pclV2Rows
+if ($pclV2Report.qualification_profile -ne 'PlaybackCoreLifecycleV2' -or
+    $pclV2Report.workload_version -ne 'playback-core-lifecycle-v2' -or
+    $pclV2Report.authored_prefix_parity_contract -ne 'timestamp-kind-scan-mask-v1' -or
+    $pclV2Report.status -ne 'COMPLETE' -or
+    $pclV2Report.worker_joined_to_next_start_us.status -ne 'COMPLETE' -or
+    $pclV2Report.stop_to_verified_release_us.status -ne 'COMPLETE' -or
+    $pclV2Report.raw_up_syscall_count.status -ne 'COMPLETE' -or
+    $pclV2Report.stop_to_verified_release_us.samples.Count -ne 1 -or
+    $pclV2Report.raw_up_syscall_count.samples.Count -ne 1 -or
+    $pclV2Report.worker_joined_to_next_start_us.statistics.sample_count -ne 60 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.planned_transition_count -ne 60 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.eligible_transition_count -ne 60 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.measured_transition_count -ne 60 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.unavailable_transition_count -ne 0 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 0 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.missing_planned_transition_count -ne 0 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.incomplete_transition_count -ne 0 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.by_transition[0].eligible_count -ne 30 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.by_transition[0].measured_count -ne 30 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.by_transition[1].eligible_count -ne 30 -or
+    $pclV2Report.worker_joined_to_next_start_us.coverage.by_transition[1].measured_count -ne 30) {
+    throw 'PlaybackCoreLifecycleV2 did not measure all 60 candidate-to-candidate and candidate-to-baseline successor Armed transitions'
+}
+$pclSafetyScenarios = @('focus-loss', 'owner-mismatch', 'owner-process-termination', 'pause-resume', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry')
+$pclV2SafetyScenarios = $pclSafetyScenarios + @('short-up-gap-stress', 'pause-resume-active-cleanup')
+$pclPerformanceWorkloads = @('mixed-up-down', 'dense-alternating', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle')
+$pclV1StageSummary = Get-PlaybackCoreLifecycleStageSummary -Stage Final -TimingMarginUs 500 -Pairs 6 -SampleSeconds 15 `
+    -SafetyScenarios $pclSafetyScenarios -PerformanceWorkloads $pclPerformanceWorkloads -LoadCells @('Quiet', 'Contention')
+$pclV2StageSummary = Get-PlaybackCoreLifecycleStageSummary -Stage Final -TimingMarginUs 500 -Pairs 6 -SampleSeconds 15 `
+    -SafetyScenarios $pclV2SafetyScenarios -PerformanceWorkloads $pclPerformanceWorkloads -LoadCells @('Quiet', 'Contention') -ProfileVersion 2
+if ($pclV1StageSummary.Contains('authored_prefix_parity_contract') -or
+    $pclV1StageSummary.candidate_session_count -ne 68 -or
+    $pclV2StageSummary.authored_prefix_parity_contract -ne 'timestamp-kind-scan-mask-v1' -or
+    $pclV2StageSummary.authored_prefix_measured_window_seconds -ne 15 -or
+    $pclV2StageSummary.candidate_session_count -ne 70 -or
+    $pclV2StageSummary.planned_session_count -ne 130 -or
+    $pclV2StageSummary.scenarios -notcontains 'short-up-gap-stress' -or
+    $pclV2StageSummary.scenarios -notcontains 'pause-resume-active-cleanup') {
+    throw 'PlaybackCoreLifecycleV2 changed the v1 report contract or omitted its candidate-only safety cases and full paired-session plan'
 }
 foreach ($controlRow in @($pclRows | Where-Object { $_.role -eq 'control' })) {
     if ($null -ne $controlRow.lifecycle_measurement) {
         throw 'realistic frozen-baseline fixture invented candidate lifecycle evidence on a control row'
     }
 }
+
+$pclV2BaselineSuccessor = @($pclV2Rows | Where-Object {
+    $_.role -eq 'control' -and $_.sample_seconds -eq 15 -and $_.pair_order -eq 'BA'
+})[0]
+$pclV2BaselinePredecessor = @($pclV2Rows | Where-Object {
+    $_.role -eq 'candidate' -and $_.sample_seconds -eq 15 -and $_.pair_id -eq $pclV2BaselineSuccessor.pair_id
+})[0]
+function Assert-PclV2TransitionIncomplete {
+    param([Parameter(Mandatory)] $Report, [Parameter(Mandatory)] [string]$Case)
+    if ($Report.status -ne 'INCOMPLETE' -or
+        $Report.worker_joined_to_next_start_us.status -ne 'INCOMPLETE' -or
+        [string]::IsNullOrWhiteSpace(($Report.incompleteness -join '; '))) {
+        throw ('PlaybackCoreLifecycleV2 ' + $Case + ' did not make both the transition metric and total report INCOMPLETE with a reason')
+    }
+}
+function Assert-PclV2StopEvidenceIncomplete {
+    param([Parameter(Mandatory)] $Report, [Parameter(Mandatory)] [string]$Case)
+    if ($Report.status -ne 'INCOMPLETE' -or
+        $Report.stop_to_verified_release_us.status -ne 'INCOMPLETE' -or
+        $Report.raw_up_syscall_count.status -ne 'INCOMPLETE' -or
+        $Report.stop_to_verified_release_us.samples.Count -ne 0 -or
+        $Report.raw_up_syscall_count.samples.Count -ne 0 -or
+        -not (($Report.incompleteness -join '; ') -match 'pcl-candidate-stop')) {
+        throw ('PlaybackCoreLifecycleV2 ' + $Case + ' did not exclude the stop row from both child metrics and mark the report INCOMPLETE with its run ID: report=' + $Report.status + ' stop=' + $Report.stop_to_verified_release_us.status + '/' + $Report.stop_to_verified_release_us.samples.Count + ' raw=' + $Report.raw_up_syscall_count.status + '/' + $Report.raw_up_syscall_count.samples.Count + ' reasons=' + ($Report.incompleteness -join '; '))
+    }
+}
+
+foreach ($stopMutation in @('binary', 'machine', 'boot', 'qpc-frequency', 'schema', 'native-run-id', 'native-scenario')) {
+    $pclV2StopRows = @(Copy-PclTestRows $pclV2Rows)
+    $pclV2StopRow = @($pclV2StopRows | Where-Object { $_.run_id -eq 'pcl-candidate-stop' })[0]
+    switch ($stopMutation) {
+        'binary' { $pclV2StopRow.harness_sha256 = 'e' * 64 }
+        'machine' { $pclV2StopRow.machine_name = 'different-machine' }
+        'boot' { $pclV2StopRow.os_boot_time_utc = '2026-11-18T00:00:00.0000000Z' }
+        'qpc-frequency' { $pclV2StopRow.lifecycle_measurement.qpc_frequency_hz = 9999999 }
+        'schema' { $pclV2StopRow.lifecycle_measurement.schema_version = 1 }
+        'native-run-id' { $pclV2StopRow.lifecycle_measurement.native_session_identity.run_id = 'unrelated-run' }
+        'native-scenario' { $pclV2StopRow.lifecycle_measurement.native_session_identity.scenario = 'other-scenario' }
+    }
+    $pclV2StopReport = New-PclV2TestReport -Rows $pclV2StopRows
+    Assert-PclV2StopEvidenceIncomplete -Report $pclV2StopReport -Case ('stop-cleanup ' + $stopMutation)
+}
+
+$pclV2MissingBaselineArmedRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2MissingBaselineArmed = @($pclV2MissingBaselineArmedRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+[void]$pclV2MissingBaselineArmed.lifecycle_measurement.PSObject.Properties.Remove('playback_armed_qpc_ticks')
+$pclV2MissingBaselineArmedReport = New-PclV2TestReport -Rows $pclV2MissingBaselineArmedRows
+Assert-PclV2TransitionIncomplete -Report $pclV2MissingBaselineArmedReport -Case 'missing baseline Armed QPC'
+if ($pclV2MissingBaselineArmedReport.worker_joined_to_next_start_us.statistics.sample_count -ne 59 -or
+    $pclV2MissingBaselineArmedReport.worker_joined_to_next_start_us.coverage.invalid_transition_count -ne 1 -or
+    $pclV2MissingBaselineArmedReport.worker_joined_to_next_start_us.coverage.incomplete_transition_count -ne 1) {
+    throw 'PlaybackCoreLifecycleV2 missing baseline Armed fixture did not invalidate exactly one required sample'
+}
+
+$pclV2BaselineClockRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2BaselineClock = @($pclV2BaselineClockRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+$pclV2BaselineClock.lifecycle_measurement.qpc_frequency_hz = 9999999
+$pclV2BaselineClockReport = New-PclV2TestReport -Rows $pclV2BaselineClockRows
+Assert-PclV2TransitionIncomplete -Report $pclV2BaselineClockReport -Case 'baseline QPC frequency mismatch'
+
+$pclV2MalformedQpcRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2MalformedQpc = @($pclV2MalformedQpcRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+$pclV2MalformedQpc.lifecycle_measurement.qpc_frequency_hz = 'not-a-frequency'
+$pclV2MalformedQpcReport = New-PclV2TestReport -Rows $pclV2MalformedQpcRows
+Assert-PclV2TransitionIncomplete -Report $pclV2MalformedQpcReport -Case 'malformed baseline QPC frequency'
+
+$pclV2ClockSourceRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2ClockSource = @($pclV2ClockSourceRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+$pclV2ClockSource.lifecycle_measurement.qpc_clock_source = 'different-clock'
+$pclV2ClockSourceReport = New-PclV2TestReport -Rows $pclV2ClockSourceRows
+Assert-PclV2TransitionIncomplete -Report $pclV2ClockSourceReport -Case 'baseline QPC clock source mismatch'
+
+$pclV2MalformedJoinRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2MalformedJoin = @($pclV2MalformedJoinRows | Where-Object { $_.run_id -eq $pclV2BaselinePredecessor.run_id })[0]
+$pclV2MalformedJoin.lifecycle_measurement.worker_joined_qpc_ticks = 'not-a-timestamp'
+$pclV2MalformedJoinReport = New-PclV2TestReport -Rows $pclV2MalformedJoinRows
+Assert-PclV2TransitionIncomplete -Report $pclV2MalformedJoinReport -Case 'malformed candidate worker-join QPC'
+
+foreach ($rowIdentityMutation in @('machine_name', 'os_boot_time_utc')) {
+    $pclV2WrongRunnerRows = @(Copy-PclTestRows $pclV2Rows)
+    $pclV2WrongRunnerRow = @($pclV2WrongRunnerRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+    if ($rowIdentityMutation -eq 'machine_name') { $pclV2WrongRunnerRow.machine_name = 'different-machine' }
+    else { $pclV2WrongRunnerRow.os_boot_time_utc = '2026-11-18T00:00:00.0000000Z' }
+    $pclV2WrongRunnerReport = New-PclV2TestReport -Rows $pclV2WrongRunnerRows
+    Assert-PclV2TransitionIncomplete -Report $pclV2WrongRunnerReport -Case ('baseline ' + $rowIdentityMutation + ' mismatch')
+}
+
+foreach ($identityMutation in @('source_revision', 'source_tree_sha', 'manifest_sha256', 'harness_sha256')) {
+    $pclV2BadIdentityRows = @(Copy-PclTestRows $pclV2Rows)
+    $pclV2BadIdentity = @($pclV2BadIdentityRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+    if ($identityMutation -eq 'source_revision') { $pclV2BadIdentity.source_revision = 'f' * 40 }
+    elseif ($identityMutation -eq 'source_tree_sha') { $pclV2BadIdentity.source_tree_sha = 'e' * 40 }
+    elseif ($identityMutation -eq 'manifest_sha256') { $pclV2BadIdentity.manifest_sha256 = 'e' * 64 }
+    else { $pclV2BadIdentity.harness_sha256 = 'e' * 64 }
+    $pclV2BadIdentityReport = New-PclV2TestReport -Rows $pclV2BadIdentityRows
+    Assert-PclV2TransitionIncomplete -Report $pclV2BadIdentityReport -Case ('baseline ' + $identityMutation + ' mismatch')
+}
+
+$pclV2BaselineChronologyRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2BaselineChronology = @($pclV2BaselineChronologyRows | Where-Object { $_.run_id -eq $pclV2BaselineSuccessor.run_id })[0]
+$pclV2BaselineChronology.lifecycle_measurement.playback_armed_qpc_ticks = $pclV2BaselinePredecessor.lifecycle_measurement.worker_joined_qpc_ticks - 1
+$pclV2BaselineChronologyReport = New-PclV2TestReport -Rows $pclV2BaselineChronologyRows
+Assert-PclV2TransitionIncomplete -Report $pclV2BaselineChronologyReport -Case 'Armed-before-Join chronology'
+
+$pclV2InvalidSuccessorRows = @(Copy-PclTestRows $pclV2Rows)
+$pclV2CandidateSuccessor = @($pclV2InvalidSuccessorRows | Where-Object {
+    $_.role -eq 'candidate' -and $_.sample_seconds -eq 15 -and $_.pair_order -eq 'BA'
+})[0]
+$pclV2CandidateSuccessor.status = 'FAIL'
+$pclV2CandidateSuccessor.case_exit_code = 1
+$pclV2InvalidSuccessorReport = New-PclV2TestReport -Rows $pclV2InvalidSuccessorRows
+Assert-PclV2TransitionIncomplete -Report $pclV2InvalidSuccessorReport -Case 'failed candidate successor'
 
 foreach ($drainCompletionTicks in @(211, 10000, 900000000)) {
     $pclDelayedDrainRows = @(Copy-PclTestRows $pclRows)
@@ -1981,5 +2852,6 @@ if ($pclIncompleteReport.status -ne 'INCOMPLETE' -or $pclIncompleteReport.stop_t
 }
 
 Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 schema-v2 provenance inventory, mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
-Write-Output ('PASS: PlaybackCoreLifecycle frozen-baseline schema and six-pair AB/BA contracts; per cell 3 candidate→candidate measurable / 3 candidate→baseline unavailable; full plan planned=60 eligible=30 measured=30 unavailable=30 incomplete=30; Stop→release and raw syscall evidence contracts pass')
+Write-Output ('PASS: PlaybackCoreLifecycle v1 frozen-baseline semantics remain planned=60 eligible=30 measured=30 unavailable=30 incomplete=30; v2 positive coverage=60/60 COMPLETE (30 candidate→candidate, 30 candidate→baseline); missing/malformed Armed, Join, QPC, source/tree/manifest/binary, machine/boot, chronology, and invalid-successor fixtures set both metric and report INCOMPLETE; v2 stop provenance fixtures exclude binary/machine/boot/QPC/schema/native-session identity failures from both Stop and raw-Up metrics; Stop→release and raw syscall evidence contracts pass')
+Write-Output 'PASS: PlaybackCoreLifecycle V1/V2 shared preflight rejects candidate/control Cargo.lock mismatches before case entry'
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'

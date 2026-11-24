@@ -4,7 +4,7 @@
   "identifier": "io.github.pumni.skyautoplayer",
   "build": {
     "beforeDevCommand": "bun run dev -- --host 127.0.0.1",
-    "beforeBuildCommand": "bun run build && cd ..\\.. && cargo xtask calibration build",
+    "beforeBuildCommand": "bun run build",
     "additionalWatchFolders": [
       "../../../rust/crates",
       "../../../rust/Cargo.toml",
@@ -42,8 +42,7 @@
     "icon": ["icons/icon.ico"],
     "resources": {
       "../../../songs/*": "builtin-songs/sheets",
-      "../../../builtin-songs/manifest.json": "builtin-songs/manifest.json",
-      "resources/native_calibration.exe": "native_calibration.exe"
+      "../../../builtin-songs/manifest.json": "builtin-songs/manifest.json"
     },
     "targets": ["nsis"],
     "createUpdaterArtifacts": true,

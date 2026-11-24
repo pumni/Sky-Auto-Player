@@ -338,7 +338,8 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
         [string]$RepositoryRoot
     )
 
-    $profile = Get-PlaybackCoreLifecycleProfile
+    $profileName = [string](Get-ManifestProperty $Manifest 'qualification_profile')
+    $profile = Get-PlaybackCoreLifecycleProfileForName -Name $profileName
     $sourceRevision = [string](Get-ManifestProperty $Manifest 'source_revision')
     $sourceTree = [string](Get-ManifestProperty $Manifest 'source_tree_sha')
     $candidateRevision = [string](Get-ManifestProperty $Manifest 'candidate_source_revision')
@@ -431,7 +432,72 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
         (Get-ManifestProperty $qualificationPlan 'pair_count') -ne $profile.PairCount -or
         (Get-ManifestProperty $qualificationPlan 'sample_seconds') -ne $profile.SampleSeconds -or
         $scriptProvenance.Count -ne $expectedRunnerPaths.Count) {
-        throw ('PlaybackCoreLifecycle ' + $ExpectedRole + ' manifest profile, source, runner, target, workload, or build identity is invalid')
+        throw ('PlaybackCoreLifecycle ' + $ExpectedRole + ' manifest profile, source, runner, target, workload, or build identity is invalid: ' +
+            'schema=' + (Get-ManifestProperty $Manifest 'schema_version') + '/' + $profile.HarnessManifestSchemaVersion +
+            '; source=' + $sourceRevision + '/' + $sourceTree + '; expected=' + $expectedRevision + '/' + $expectedTree +
+            '; branch=' + (Get-ManifestProperty $Manifest 'source_branch') + '/' + $expectedBranch +
+            '; runner=' + $runnerRevision + '/' + $candidateRevision + '; runner-tree=' + $runnerTree + '/' + $candidateTree +
+            '; clean=' + (Get-ManifestProperty $Manifest 'source_tree_clean') + '/' + (Get-ManifestProperty $Manifest 'runner_source_clean') +
+            '; profile=' + (Get-ManifestProperty $Manifest 'qualification_profile') + '/' + $profile.Name +
+            '; workload=' + (Get-ManifestProperty $Manifest 'workload_version') + '/' + $profile.WorkloadVersion +
+            '; role=' + (Get-ManifestProperty $Manifest 'source_role') + '/' + $ExpectedRole +
+            '; lineage=' + (Get-ManifestProperty $Manifest 'candidate_lineage_branch') + '/' + $profile.CandidateLineageBranch +
+            '; lineage-tip=' + $lineageTip + '/' + $candidateRevision +
+            '; runner-branch=' + $runnerBranch + '/' + $profile.CandidateLineageBranch +
+            '; cargo=' + (Get-ManifestProperty $Manifest 'cargo_profile') + '/' + $profile.CargoProfile +
+            '; features=' + (@((Get-ManifestProperty $Manifest 'cargo_features')) -join ',') + '/' + (@($profile.RequiredFeatures) -join ',') +
+            '; qpc=' + (Get-ManifestProperty $Manifest 'qpc_read_counting') +
+            '; observer=' + (Get-ManifestProperty $Manifest 'receiveonly_observer_mode') + '/' + $profile.ObserverMode +
+            '; observer-version=' + (Get-ManifestProperty $Manifest 'receiveonly_observer_version') + '/' + $profile.ObserverVersion +
+            '; observer-schema=' + (Get-ManifestProperty $Manifest 'receiveonly_observer_schema_version') + '/' + $profile.ObserverSchemaVersion +
+            '; observer-event-schema=' + (Get-ManifestProperty $Manifest 'receiveonly_observer_event_schema_version') + '/' + $profile.ObserverEventSchemaVersion +
+            '; guard=' + (Get-ManifestProperty $Manifest 'guard_mode') +
+            '; margins=' + (Get-ManifestProperty $Manifest 'performance_timing_margin_us') + '/' + $profile.PerformanceTimingMarginUs + ',' + (Get-ManifestProperty $Manifest 'safety_timing_margin_us') + '/' + $profile.SafetyTimingMarginUs +
+            '; target=' + (Get-ManifestProperty $Manifest 'target') + '/' + $profile.Target +
+            '; target-status=' + (Get-ManifestProperty $Manifest 'target_identity_status') +
+            '; target-id=' + (Get-ManifestProperty $targetIdentity 'target_class') + '/' + (Get-ManifestProperty $targetIdentity 'target_name') + '/' + (Get-ManifestProperty $targetIdentity 'game_target') + '/' + (Get-ManifestProperty $targetIdentity 'capture_status') +
+            '; rustc=' + ([string](Get-ManifestProperty $Manifest 'rustc_version') -replace '[\r\n]+', '|') +
+            '; cargo-version=' + (Get-ManifestProperty $Manifest 'cargo_version') +
+            '; exit-codes=' + (Get-ManifestProperty $Manifest 'cargo_clean_exit_code') + '/' + (Get-ManifestProperty $Manifest 'cargo_build_exit_code') +
+            '; binary=' + (Get-ManifestProperty $Manifest 'binary_name') + '/' + (Get-ManifestProperty $Manifest 'binary_sha256') +
+            '; paths=' + $sourceRoot + '/' + $runnerRoot + '/' + $outputRoot + '/' + $cargoTargetDir + '/' + $cargoLockPath +
+            '; plan=' + (Get-ManifestProperty $qualificationPlan 'pair_order') + '/' + (Get-ManifestProperty $qualificationPlan 'pair_count') + '/' + (Get-ManifestProperty $qualificationPlan 'sample_seconds') +
+            '; lock=' + $cargoLockSha256 + '; provenance=' + $scriptProvenance.Count + '/' + $expectedRunnerPaths.Count)
+    }
+
+    if ($profile.Version -eq 3) {
+        $successor = Assert-PlaybackCoreLifecycleV3BaselineSuccessor -RepositoryRoot $runnerRoot
+        $lineageAnchor = [string](Get-ManifestProperty $Manifest 'lineage_anchor_revision')
+        $successorRevision = [string](Get-ManifestProperty $Manifest 'baseline_successor_revision')
+        $successorTree = [string](Get-ManifestProperty $Manifest 'baseline_successor_tree_sha')
+        $successorParent = [string](Get-ManifestProperty $Manifest 'baseline_successor_parent_revision')
+        $successorRef = [string](Get-ManifestProperty $Manifest 'baseline_successor_ref')
+        $successorLockSha = [string](Get-ManifestProperty $Manifest 'baseline_successor_lock_sha256')
+        if ($lineageAnchor -ne $profile.LineageAnchorRevision -or
+            $successorRevision -ne $successor.revision -or
+            $successorTree -ne $successor.tree -or
+            $successorParent -ne $successor.parent_revision -or
+            $successorRef -ne $profile.BaselineSuccessorRef -or
+            $successorLockSha -ne $profile.BaselineSuccessorLockSha256) {
+            throw 'PlaybackCoreLifecycleV3 manifest lineage anchor or baseline-successor provenance is invalid'
+        }
+        if (-not (Test-DispatchGitAncestor -RepositoryRoot $runnerRoot `
+                -AncestorRevision $profile.LineageAnchorRevision -DescendantRevision $runnerRevision)) {
+            throw 'PlaybackCoreLifecycleV3 candidate is not descended from the immutable V2 lineage anchor'
+        }
+        if (Test-DispatchGitAncestor -RepositoryRoot $runnerRoot `
+                -AncestorRevision $profile.BaselineSuccessorRevision -DescendantRevision $runnerRevision) {
+            throw 'PlaybackCoreLifecycleV3 baseline successor must remain a sibling of the candidate lineage'
+        }
+        if ($ExpectedRole -eq 'Baseline' -and $cargoLockSha256 -ne $profile.BaselineSuccessorLockSha256) {
+            throw 'PlaybackCoreLifecycleV3 baseline manifest lock hash differs from the pinned successor lock'
+        }
+        if ($ExpectedRole -eq 'Candidate' -and $cargoLockSha256 -ne $profile.BaselineSuccessorLockSha256) {
+            throw 'PlaybackCoreLifecycleV3 candidate lock hash differs from the pinned baseline successor lock'
+        }
+    } elseif ($null -ne (Get-ManifestProperty $Manifest 'lineage_anchor_revision') -or
+        $null -ne (Get-ManifestProperty $Manifest 'baseline_successor_revision')) {
+        throw 'V1/V2 PlaybackCoreLifecycle manifests must not carry V3 successor-lineage fields'
     }
 
     foreach ($checkout in @($sourceCheckout, $runnerCheckout)) {
@@ -453,6 +519,9 @@ function Assert-PlaybackCoreLifecycleManifestIdentity {
         throw 'PlaybackCoreLifecycle candidate source must be the exact runner checkout'
     }
     $expectedCargoLockPath = [System.IO.Path]::GetFullPath((Join-Path $sourceRoot 'rust\Cargo.lock'))
+    if ($profile.Version -eq 3) {
+        Assert-PlaybackCoreLifecycleV3LockfileBytes -RepositoryRoot $sourceRoot -SourceRole $ExpectedRole | Out-Null
+    }
     if (-not [string]::Equals([System.IO.Path]::GetFullPath($cargoLockPath), $expectedCargoLockPath, [System.StringComparison]::OrdinalIgnoreCase) -or
         -not (Test-Path -LiteralPath $cargoLockPath -PathType Leaf) -or
         (Get-FileSha256 $cargoLockPath) -ne $cargoLockSha256) {
@@ -500,6 +569,15 @@ function Assert-PlaybackCoreLifecycleRunnerProvenance {
         [string](Get-ManifestProperty $Manifest 'candidate_lineage_branch') -ne $RunnerIdentity.candidate_lineage_branch -or
         -not [bool]$RunnerIdentity.clean -or -not [bool]$RunnerIdentity.candidate_lineage_verified) {
         throw 'PlaybackCoreLifecycle manifest runner differs from the clean pushed candidate checkout'
+    }
+    if ([string](Get-ManifestProperty $Manifest 'qualification_profile') -eq 'PlaybackCoreLifecycleV3' -and
+        ([string](Get-ManifestProperty $Manifest 'lineage_anchor_revision') -ne [string]$RunnerIdentity.lineage_anchor_revision -or
+            [string](Get-ManifestProperty $Manifest 'baseline_successor_revision') -ne [string]$RunnerIdentity.baseline_successor_revision -or
+            [string](Get-ManifestProperty $Manifest 'baseline_successor_tree_sha') -ne [string]$RunnerIdentity.baseline_successor_tree_sha -or
+            [string](Get-ManifestProperty $Manifest 'baseline_successor_parent_revision') -ne [string]$RunnerIdentity.baseline_successor_parent_revision -or
+            [string](Get-ManifestProperty $Manifest 'baseline_successor_ref') -ne [string]$RunnerIdentity.baseline_successor_ref -or
+            [string](Get-ManifestProperty $Manifest 'baseline_successor_lock_sha256') -ne [string]$RunnerIdentity.baseline_successor_lock_sha256)) {
+        throw 'PlaybackCoreLifecycleV3 manifest differs from its verified lock-only baseline successor provenance'
     }
     $runnerCheckout = Get-ManifestProperty $Manifest 'runner_source_checkout_identity'
     foreach ($key in @('top_level', 'git_dir', 'git_common_dir')) {
@@ -674,7 +752,7 @@ function Assert-ImmutableHarnessManifestIntegrity {
             }
         }
     }
-    if ((Get-ManifestProperty $Manifest 'qualification_profile') -eq 'PlaybackCoreLifecycle') {
+    if ((Get-ManifestProperty $Manifest 'qualification_profile') -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')) {
         Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $Manifest -ExpectedRole ([string](Get-ManifestProperty $Manifest 'source_role')) | Out-Null
         $manifestOutputRoot = [System.IO.Path]::GetFullPath([string](Get-ManifestProperty $Manifest 'output_root'))
         if (-not [string]::Equals($manifestOutputRoot, [System.IO.Path]::GetDirectoryName($manifestFullPath), [System.StringComparison]::OrdinalIgnoreCase)) {

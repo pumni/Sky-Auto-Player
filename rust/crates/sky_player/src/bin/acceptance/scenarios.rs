@@ -1,7 +1,7 @@
 use super::{
     ACCEPTANCE_FOCUS_RESTORE_GRACE_US, ACCEPTANCE_HOLD_FRAMES,
     ACCEPTANCE_INPUT_PATH_WARN_US, PhysicalExpectation, Scenario, ScenarioPlan,
-    release_gap_scenario_plan,
+    generation_stress_scenario_plan,
 };
 use sky_dispatch_core::model::{ActionKind, KeyActionInput, MAX_KEYS};
 use sky_dispatch_win32::mmcss::PriorityMode;
@@ -126,7 +126,7 @@ pub(super) fn scenario_plan_for_settings(
             ),
             Scenario::LongSingleSequence => {
                 let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                let gap_us = acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps);
+                let gap_us = frame_period_us(game_fps);
                 let mut actions = Vec::with_capacity(48);
                 let mut down_slots = Vec::with_capacity(24);
                 let mut up_slots = Vec::with_capacity(24);
@@ -147,7 +147,10 @@ pub(super) fn scenario_plan_for_settings(
             }
             Scenario::DenseAlternating => {
                 let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                let gap_us = acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps);
+                // Paired qualification retains the pinned baseline cadence.
+                // This spacing belongs only to the workload generator; it is
+                // not a playback or planner release-gap floor.
+                let gap_us = frame_period_us(game_fps).saturating_add(timing_margin_us);
                 let mut actions = Vec::with_capacity(32);
                 let mut down_slots = Vec::with_capacity(16);
                 let mut up_slots = Vec::with_capacity(16);
@@ -196,7 +199,9 @@ pub(super) fn scenario_plan_for_settings(
             }
             Scenario::NearMinimumRetrigger => {
                 let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                let gap_us = acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps);
+                // Preserve the pinned baseline paired-workload geometry. The
+                // separate short-up-gap-stress scenario remains candidate-only.
+                let gap_us = frame_period_us(game_fps).saturating_add(timing_margin_us);
                 let mut actions = Vec::with_capacity(8);
                 let mut down_slots = Vec::with_capacity(4);
                 let mut up_slots = Vec::with_capacity(4);
@@ -229,7 +234,9 @@ pub(super) fn scenario_plan_for_settings(
                 vec![0, 0, 0],
                 false,
             ),
-            Scenario::ReleaseGapStress => return release_gap_scenario_plan(timing_margin_us),
+            Scenario::ShortUpGapStress => {
+                return generation_stress_scenario_plan(timing_margin_us);
+            }
             Scenario::MixedUpDown => (
                 vec![
                     action(0, ActionKind::Down, 50_000, &[0]),
@@ -343,23 +350,18 @@ pub(super) fn scenario_plan_for_settings(
                 vec![0, 1],
                 true,
             ),
-            Scenario::PauseResumeReleaseFloor => {
-                let mut actions = Vec::with_capacity(42);
-                let mut down = 50_000;
-                for pair in 0..21_u32 {
-                    let up = down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                    actions.push(action(2 * pair, ActionKind::Down, down, &[0]));
-                    actions.push(action(2 * pair + 1, ActionKind::Up, up, &[0]));
-                    down = up + acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps);
-                }
-                (
-                    actions,
-                    None,
-                    vec![0; 21],
-                    vec![0; 21],
-                    false,
-                )
-            }
+            Scenario::PauseResumeActiveCleanup => (
+                vec![
+                    action(0, ActionKind::Down, 50_000, &[0]),
+                    action(1, ActionKind::Up, 500_000, &[0]),
+                    action(2, ActionKind::Down, 600_000, &[0]),
+                    action(3, ActionKind::Up, 670_000, &[0]),
+                ],
+                None,
+                vec![0, 0],
+                vec![0, 0],
+                true,
+            ),
             Scenario::SuspendResume => (
                 vec![
                     action(0, ActionKind::Down, 50_000, &[0]),
@@ -405,7 +407,7 @@ pub(super) fn scenario_plan_for_settings(
             Scenario::TimingMarginSweep => {
                 let down = 50_000;
                 let up = down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                let next_down = up + acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps);
+                let next_down = up;
                 let next_up = next_down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
                 (
                     vec![
@@ -477,7 +479,7 @@ pub(super) fn scenario_plan_for_settings(
         } else if scenario == Scenario::HolInterleaved {
             31_000
         } else {
-            acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps)
+            frame_period_us(game_fps).saturating_add(timing_margin_us)
         };
         let cycle_duration_us = last_scheduled_us
             .checked_sub(first_scheduled_us)
@@ -517,6 +519,7 @@ pub(super) fn scenario_plan_for_settings(
         | Scenario::SkipCleanup
         | Scenario::SuspendResume
         | Scenario::ModifierHeldAfterOwned => vec![0],
+        Scenario::PauseResumeActiveCleanup => vec![0],
         Scenario::AmbiguousPacket => vec![0, 1],
         _ => Vec::new(),
     };
@@ -542,11 +545,6 @@ pub(super) fn acceptance_min_hold_us(timing_margin_us: u64) -> u64 {
     acceptance_min_hold_us_for_fps(timing_margin_us, 60)
 }
 
-#[cfg(test)]
-pub(super) fn acceptance_min_release_gap_us(timing_margin_us: u64) -> u64 {
-    acceptance_min_release_gap_us_for_fps(timing_margin_us, 60)
-}
-
 pub(super) fn acceptance_min_hold_us_for_fps(timing_margin_us: u64, game_fps: u16) -> u64 {
     ACCEPTANCE_HOLD_FRAMES * frame_period_us(game_fps) + timing_margin_us
 }
@@ -554,10 +552,6 @@ pub(super) fn acceptance_min_hold_us_for_fps(timing_margin_us: u64, game_fps: u1
 pub(super) fn scenario_min_hold_us_for_fps(scenario: Scenario, timing_margin_us: u64, game_fps: u16) -> u64 {
     let frames = if scenario == Scenario::HolInterleaved { 2 } else { ACCEPTANCE_HOLD_FRAMES };
     frames * frame_period_us(game_fps) + timing_margin_us
-}
-
-pub(super) fn acceptance_min_release_gap_us_for_fps(timing_margin_us: u64, game_fps: u16) -> u64 {
-    frame_period_us(game_fps) + timing_margin_us
 }
 
 const fn frame_period_us(game_fps: u16) -> u64 {
@@ -596,7 +590,6 @@ pub(super) fn production_options_for_fps(
     let timing = TimingOptions {
         game_fps,
         min_hold_us: scenario_min_hold_us_for_fps(scenario, timing_margin_us, game_fps),
-        min_release_gap_us: acceptance_min_release_gap_us_for_fps(timing_margin_us, game_fps),
         frame_us,
         frame_base_hold_us: if scenario == Scenario::HolInterleaved {
             2 * frame_us
@@ -617,7 +610,6 @@ pub(super) fn production_options_for_fps(
         &schedule,
         qpc_frequency_hz,
         timing.min_hold_us,
-        timing.min_release_gap_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .map_err(|error| format!("native acceptance schedule Prepare failed: {error}"))?;
@@ -660,7 +652,6 @@ pub(super) fn production_options_for_fps(
         #[cfg(feature = "test-support")]
         startup_ordering_hook: None,
         #[cfg(feature = "test-support")]
-        restore_race_hook: None,
         #[cfg(feature = "test-support")]
         focus_pause_hook: None,
         #[cfg(feature = "test-support")]

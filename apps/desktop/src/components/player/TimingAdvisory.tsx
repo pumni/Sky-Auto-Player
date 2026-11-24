@@ -1,91 +1,87 @@
-import type { WholeStreamTimingAdvisoryDto } from '../../bridge/generated';
+import type { GenerationTimingAdvisoryDto } from '../../bridge/generated';
 
 interface TimingAdvisoryProps {
-  advisory: WholeStreamTimingAdvisoryDto | null | undefined;
+  advisory: GenerationTimingAdvisoryDto | null | undefined;
 }
 
-const statusLabel: Record<WholeStreamTimingAdvisoryDto['status'], string> = {
+const statusLabel: Record<GenerationTimingAdvisoryDto['status'], string> = {
   not_analyzed: 'Not analyzed',
-  invalid_assumptions: 'Assumptions invalid',
   unavailable: 'Unavailable',
-  no_modeled_risk: 'No modeled timing pressure',
-  modeled_risk: 'Modeled timing pressure',
+  no_short_up_gap_risk: 'No short same-key Up gap',
+  short_up_gap_risk: 'Short same-key Up gap risk',
+};
+
+const dispatchModelStatusLabel: Record<
+  GenerationTimingAdvisoryDto['dispatch_model_status'],
+  string
+> = {
+  not_analyzed: 'Executor model not analyzed',
+  unavailable: 'Executor model unavailable',
+  no_modeled_risk: 'No modeled executor pressure',
+  modeled_risk: 'Modeled executor pressure',
 };
 
 export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
   if (!advisory) {
     return (
       <div className="timing-advisory" data-status="unavailable">
-        <strong>Offline timing advisory unavailable for this plan.</strong>
+        <strong>Prepared generation details are unavailable.</strong>
       </div>
     );
   }
-
-  const inspected =
-    advisory.total_packet_count === null
-      ? `${advisory.packet_count_inspected} packets inspected (limit ${advisory.packet_limit})`
-      : `${advisory.packet_count_analyzed} of ${advisory.total_packet_count} packets analyzed (limit ${advisory.packet_limit})`;
 
   return (
     <div
       className="timing-advisory"
       data-status={advisory.status}
       data-plan-fingerprint={advisory.plan_fingerprint}
-      aria-label="Offline whole-stream timing advisory"
+      aria-label="Prepared playback generation advisory"
     >
       <strong>{statusLabel[advisory.status]}</strong>
       <span>{advisory.explanation}</span>
-      <span>{inspected}</span>
-      {(advisory.status === 'no_modeled_risk' || advisory.status === 'modeled_risk') && (
-        <>
+      {advisory.total_authored_timestamp_group_count !== null &&
+        advisory.down_generation_count !== null && (
           <span>
-            Modeled pressure: {advisory.negative_slack_packet_count} late ·{' '}
-            {advisory.h_floor_displaced_packet_count} H-floor ·{' '}
-            {advisory.g_floor_displaced_packet_count} G-floor · {advisory.head_of_line_packet_count}{' '}
-            HOL packet(s)
-          </span>
-          <span>
-            Maximum displacement: H {advisory.max_h_floor_displacement_us} µs · G{' '}
-            {advisory.max_g_floor_displacement_us} µs · HOL {advisory.max_head_of_line_delay_us} µs
-          </span>
-        </>
-      )}
-      {advisory.effective_hold_floor_h_us !== null &&
-        advisory.authored_release_gap_floor_g_us !== null &&
-        advisory.physical_release_gap_floor_g_us !== null && (
-          <span>
-            H floor {advisory.effective_hold_floor_h_us} µs · G floor (authored and physical){' '}
-            {advisory.physical_release_gap_floor_g_us} µs
+            {advisory.total_authored_timestamp_group_count} authored timestamp groups ·{' '}
+            {advisory.down_generation_count} Down generations
+            {advisory.unmatched_up_count !== null &&
+              ` · ${advisory.unmatched_up_count} unmatched Up metadata item(s)`}
           </span>
         )}
-      {advisory.structural_same_key_cycle_minimum_us !== null && (
+      {advisory.status !== 'unavailable' && advisory.status !== 'not_analyzed' && (
         <span>
-          Same-key structural cycle floor (H + G): {advisory.structural_same_key_cycle_minimum_us}{' '}
-          µs
+          Short authored Up gaps: {advisory.short_up_gap_repeat_count}
+          {advisory.effective_hold_floor_h_us !== null &&
+            ` · minimum hold H: ${advisory.effective_hold_floor_h_us} µs`}
         </span>
       )}
-      {advisory.dry_run_is_hypothetical && (
+      <div className="timing-model-advisory" data-status={advisory.dispatch_model_status}>
+        <strong>{dispatchModelStatusLabel[advisory.dispatch_model_status]}</strong>
+        <span>{advisory.dispatch_model_explanation}</span>
         <span>
-          A physical playback projection is hypothetical for this dry-run; no input is sent.
+          {advisory.modeled_send_count} modeled sends · {advisory.modeled_negative_slack_send_count}{' '}
+          late boundaries · {advisory.modeled_h_floor_displaced_send_count} H-floor delays (max{' '}
+          {advisory.max_modeled_h_floor_displacement_us} µs) ·{' '}
+          {advisory.modeled_head_of_line_send_count} head-of-line delays (max{' '}
+          {advisory.max_modeled_head_of_line_delay_us} µs) · max lateness{' '}
+          {advisory.max_modeled_lateness_us} µs
         </span>
+      </div>
+      {advisory.dry_run_is_hypothetical && (
+        <span>This is a prepared dry-run schedule; no input is sent.</span>
       )}
       <details>
-        <summary>About this estimate</summary>
+        <summary>About this check</summary>
         <span>
-          Assumed sender setup {advisory.assumptions.estimated_sender_setup_us} µs,{' '}
-          {advisory.assumptions.estimated_per_input_us} µs per input,{' '}
-          {advisory.assumptions.estimated_post_send_us} µs post-send, and{' '}
-          {advisory.assumptions.estimated_metadata_cost_us} µs per metadata packet.
+          The advisory counts canonical Down generations and authored Up-to-Down gaps. Its
+          illustrative execution model reuses the production DispatchExecutor with{' '}
+          {advisory.estimated_sender_setup_us} µs sender setup, {advisory.estimated_per_input_us} µs
+          per input, and {advisory.estimated_post_send_us} µs post-send assumptions. It does not
+          model receiver observation or change authored timing, hold, tempo, admission, or playback.
         </span>
         <span>
-          Bounds: {advisory.packet_limit} packets, {advisory.work_limit_units} key-mask visits, and
-          an estimated {Math.round(advisory.working_memory_limit_bytes / 1_048_576)} MiB working
-          set.
-        </span>
-        <span>
-          Offline illustration only. It is not measured receiver or audio timing, Sky does not
-          acknowledge these estimates, and this advisory does not change authored timing or playback
-          settings.
+          Bounds: {advisory.generation_limit} generations, {advisory.work_limit_units} key visits,
+          and {Math.round(advisory.working_memory_limit_bytes / 1_048_576)} MiB working memory.
         </span>
       </details>
     </div>

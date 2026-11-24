@@ -1460,7 +1460,6 @@ fn build_unsigned(root: &Path, options: &Options) -> Result<()> {
     let manifest = release_handoff::create_unsigned_handoff(
         &options.state_root,
         &installer,
-        &root.join("apps/desktop/src-tauri/resources/native_calibration.exe"),
         &release_handoff::ExpectedHandoffIdentity {
             repository: &context.repository,
             source_sha: &context.source_sha,
@@ -1695,11 +1694,6 @@ fn qualify_candidate(root: &Path, options: &Options) -> Result<()> {
                 .ok_or("invalid bundle path")?,
             "--public-key",
             canonical_key.to_str().ok_or("invalid public key path")?,
-            "--calibration-binary",
-            incoming
-                .join(&handoff.calibration_binary)
-                .to_str()
-                .ok_or("invalid calibration path")?,
             "--output-root",
             candidate_root.to_str().ok_or("invalid candidate path")?,
             "--source-sha",
@@ -6730,7 +6724,7 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
         .find(|record| record.role == "installer")
         .ok_or("mock fixture installer record missing")?;
     let unsigned_handoff = release_handoff::UnsignedArtifactManifest {
-        schema_version: 2,
+        schema_version: 3,
         repository: context.repository.clone(),
         source_sha: context.source_sha.clone(),
         workflow_sha: context.workflow_sha.clone(),
@@ -6740,10 +6734,6 @@ fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)> {
         installer_name: installer_record.source_name.clone(),
         installer_size: installer_record.size,
         installer_sha256: installer_record.sha256.clone(),
-        calibration_binary: "native_calibration.exe".to_owned(),
-        calibration_binary_size: 1,
-        calibration_binary_sha256: "c".repeat(64),
-        calibration_binary_architecture: "x86_64".to_owned(),
         producer_job: "build_unsigned".to_owned(),
         artifact_name: release_handoff::artifact_name(&context.run_id, context.run_attempt)?,
     };

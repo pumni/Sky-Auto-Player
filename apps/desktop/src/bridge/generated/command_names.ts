@@ -22,8 +22,6 @@ export const COMMANDS = {
   resumePlayback: 'resume_playback',
   skipPlayback: 'skip_playback',
   setDiagnosticsEnabled: 'set_diagnostics_enabled',
-  startCalibration: 'start_calibration',
-  cancelCalibration: 'cancel_calibration',
   libraryListPlaylists: 'library_list_playlists',
   libraryCreatePlaylist: 'library_create_playlist',
   libraryRenamePlaylist: 'library_rename_playlist',

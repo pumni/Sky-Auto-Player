@@ -248,19 +248,6 @@ pub(crate) fn validate_native_timing_contract(timing: &TimingOptions) -> Result<
         ));
     }
 
-    let expected_min_release_gap_us = timing
-        .frame_us
-        .checked_add(timing.timing_margin_us)
-        .ok_or_else(|| {
-            "native timing contract overflow: frame_us + timing_margin_us".to_string()
-        })?;
-    if timing.min_release_gap_us != expected_min_release_gap_us {
-        return Err(format!(
-            "native timing contract mismatch: min_release_gap_us is {}, expected frame_us + timing_margin_us = {expected_min_release_gap_us}",
-            timing.min_release_gap_us
-        ));
-    }
-
     Ok(())
 }
 
@@ -270,7 +257,6 @@ pub struct NativeDispatchSession {
     observer_enabled: bool,
     focus_required: bool,
     generation_count: u64,
-    effective_min_release_gap_us: u64,
     shared: Arc<SessionShared>,
     supervisor_lease_timeout_us: u64,
     supervisor_lease_timeout_ticks: AtomicU64,
@@ -354,14 +340,12 @@ impl NativeDispatchSession {
         // after the worker has started.
         let qpc_clock = QpcClock::initialize()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;
-        let min_release_gap_us = options.timing.min_release_gap_us;
-        if !options.schedule.is_compatible(
-            qpc_clock.frequency_hz(),
-            options.timing.min_hold_us,
-            min_release_gap_us,
-        ) {
+        if !options
+            .schedule
+            .is_compatible(qpc_clock.frequency_hz(), options.timing.min_hold_us)
+        {
             return Err(
-                "prepared dispatch plan no longer matches the QPC domain or H/G timing policy"
+                "prepared dispatch plan no longer matches the QPC domain or hold policy"
                     .to_string(),
             );
         }
@@ -479,7 +463,6 @@ impl NativeDispatchSession {
             focus_required: admitted_options.options.focus.require_focus,
             config: Mutex::new(Some(admitted_options)),
             generation_count,
-            effective_min_release_gap_us: min_release_gap_us,
             shared,
             supervisor_lease_timeout_us,
             supervisor_lease_timeout_ticks: AtomicU64::new(0),
@@ -487,11 +470,6 @@ impl NativeDispatchSession {
             thread_handle: Mutex::new(None),
             watchdog_handle: Mutex::new(None),
         })
-    }
-
-    /// Effective same-key release floor admitted for this session.
-    pub fn effective_min_release_gap_us(&self) -> u64 {
-        self.effective_min_release_gap_us
     }
 
     /// Read the per-session worker evidence used by the native qualification
@@ -1151,6 +1129,15 @@ impl NativeDispatchSession {
         }
     }
 
+    /// Return the playback worker's QPC and timeline position at its most
+    /// recent committed manual Resume. Available only to test and native
+    /// acceptance builds so caller-side command timestamps cannot stand in
+    /// for worker evidence.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn manual_resume_commit_for_test(&self) -> Option<(u64, u64)> {
+        self.shared.commands.command_timing.manual_resume_commit()
+    }
+
     pub fn resume(&self) -> Result<(), String> {
         if self.shared.lifecycle.lifecycle.load(Ordering::Acquire) != LIFECYCLE_RUNNING {
             return Err("session commands require a running worker".to_string());
@@ -1683,11 +1670,8 @@ impl NativeDispatchSession {
             final_gate_focus_losses: local.final_gate_focus_losses,
             final_gate_lease_expirations: local.final_gate_lease_expirations,
             final_sender_window_expirations: 0,
-            release_floor_infeasible_boundaries: 0,
             hold_floor_delay_boundaries: local.hold_floor_delay_boundaries,
             max_hold_floor_delay_us: local.max_hold_floor_delay_us,
-            release_floor_delay_boundaries: local.release_floor_delay_boundaries,
-            max_release_floor_delay_us: local.max_release_floor_delay_us,
             max_missed_lateness_ticks: 0,
             keys_inserted_before_failure: local.keys_inserted_before_failure,
             keys_rolled_back: local.keys_rolled_back,
@@ -1698,11 +1682,6 @@ impl NativeDispatchSession {
             production_min_hold_start_after_down_completion_ticks: local
                 .production_min_hold_start_after_down_completion_ticks,
             production_hold_floor_violation_count: local.production_hold_floor_violation_count,
-            production_release_floor_samples: local.production_release_floor_samples,
-            production_min_down_start_after_up_completion_ticks: local
-                .production_min_down_start_after_up_completion_ticks,
-            production_release_floor_violation_count: local
-                .production_release_floor_violation_count,
             production_same_key_overlap_forensics_count: local
                 .production_same_key_overlap_forensics_count,
             production_anchor_overwrite_count: local.production_anchor_overwrite_count,

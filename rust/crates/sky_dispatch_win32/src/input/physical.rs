@@ -407,39 +407,6 @@ pub(crate) fn mask_for_scan_codes(scan_codes: &[u16]) -> Option<u16> {
     })
 }
 
-/// Single-scan verification retained for the calibration harness. Playback
-/// preflight and cleanup use `instrument_physical_state_for_mask` so they
-/// resolve the target keyboard context only once per pass.
-pub fn is_scan_code_physically_down(scan_code: u16, target_hwnd: isize) -> Option<bool> {
-    #[cfg(windows)]
-    {
-        let context = keyboard_context_for_target(target_hwnd)?;
-        // SAFETY: MapVirtualKeyExW reads only the validated scalar and borrowed
-        // HKL handle; it does not retain either value.
-        let virtual_key = unsafe {
-            windows_sys::Win32::UI::Input::KeyboardAndMouse::MapVirtualKeyExW(
-                u32::from(scan_code),
-                windows_sys::Win32::UI::Input::KeyboardAndMouse::MAPVK_VSC_TO_VK_EX,
-                context.layout,
-            )
-        };
-        if virtual_key == 0 {
-            return None;
-        }
-        // SAFETY: GetAsyncKeyState accepts the mapped virtual-key scalar and
-        // does not retain pointers or transfer ownership.
-        let state = unsafe {
-            windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState(virtual_key as i32)
-        };
-        Some((state as u16 & 0x8000) != 0)
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = (scan_code, target_hwnd);
-        None
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{

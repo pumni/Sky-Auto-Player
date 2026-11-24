@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::executor::DispatchExecutor;
-use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
+use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::input::ReleaseAllOutcome;
 #[cfg(any(test, feature = "test-support"))]
 use sky_dispatch_win32::input::TerminalReleaseEvidence;
@@ -195,7 +195,6 @@ pub(crate) fn suspend_scheduler_input(
     scheduler: &mut DispatchExecutor,
     cleanup_target: CleanupTarget<'_>,
     drain_control: impl FnMut() -> Result<sky_dispatch_win32::input::CleanupDrainDecision, String>,
-    post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
 ) -> Result<usize, String> {
     let mut release = backend.release_tracked_with_attempt_admission_and_drain_control(
         cleanup_target.verification_hwnd,
@@ -224,7 +223,7 @@ pub(crate) fn suspend_scheduler_input(
         .any(|attempt| attempt.qpc_error.is_some())
     {
         return Err(format!(
-            "tracked safety cleanup lost QPC evidence; resume barrier is withheld: {:?}",
+            "tracked safety cleanup lost QPC evidence; Resume admission is withheld: {:?}",
             release.send_attempts
         ));
     }
@@ -235,8 +234,6 @@ pub(crate) fn suspend_scheduler_input(
             "release verification failed: {summary}; evidence={evidence:?}"
         ));
     }
-    let cleanup_completed_qpc = post_cleanup_qpc()
-        .map_err(|error| format!("post-cleanup resume-barrier QPC failure: {error}"))?;
-    let cancelled = scheduler.on_verified_cleanup_at(cleanup_completed_qpc)?;
+    let cancelled = scheduler.on_verified_cleanup()?;
     Ok(cancelled as usize)
 }

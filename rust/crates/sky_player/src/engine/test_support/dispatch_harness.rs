@@ -23,7 +23,7 @@ use sky_dispatch_core::executor::{
 };
 use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
-use sky_dispatch_core::validation::validate_min_hold_and_release_gap_feasibility;
+use sky_dispatch_core::validation::validate_min_hold_feasibility;
 use sky_dispatch_win32::clock::{QpcClock, qpc_frequency_checked};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
@@ -39,7 +39,6 @@ use std::sync::{Arc, Mutex};
 pub const DISPATCH_FRAME_US: u64 = 16_667;
 pub const DISPATCH_MARGIN_US: u64 = 500;
 pub const DISPATCH_EFFECTIVE_HOLD_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
-pub const DISPATCH_RELEASE_GAP_US: u64 = DISPATCH_FRAME_US + DISPATCH_MARGIN_US;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DispatchTimingConfigEvidence {
@@ -50,8 +49,6 @@ pub struct DispatchTimingConfigEvidence {
     pub timing_margin_ticks: u64,
     pub effective_hold_us: u64,
     pub effective_hold_ticks: u64,
-    pub min_release_gap_us: u64,
-    pub min_release_gap_ticks: u64,
     pub lease_enabled: bool,
     pub lease_timeout_us: u64,
     pub lease_timeout_ticks: u64,
@@ -187,23 +184,14 @@ impl ProductionDispatchTestHarness {
         config.timing.frame_base_hold_us = DISPATCH_FRAME_US;
         config.timing.timing_margin_us = DISPATCH_MARGIN_US;
         config.timing.min_hold_us = DISPATCH_EFFECTIVE_HOLD_US;
-        config.timing.min_release_gap_us = DISPATCH_RELEASE_GAP_US;
-        validate_min_hold_and_release_gap_feasibility(
-            &schedule,
-            config.timing.min_hold_us,
-            config.timing.min_release_gap_us,
-        )
-        .map_err(|error| format!("production scheduler admission failed: {error}"))?;
+        validate_min_hold_feasibility(&schedule, config.timing.min_hold_us)
+            .map_err(|error| format!("production scheduler admission failed: {error}"))?;
         let min_hold_ticks = clock
             .duration_from_us(config.timing.min_hold_us)
             .map_err(|error| format!("minimum hold conversion failed: {error:?}"))?;
-        let min_release_gap_ticks = clock
-            .duration_from_us(config.timing.min_release_gap_us)
-            .map_err(|error| format!("minimum release gap conversion failed: {error:?}"))?;
         let scheduler = DispatchExecutor::new(
             &schedule,
             DurationTicks::from_raw(min_hold_ticks.as_u64()),
-            DurationTicks::from_raw(min_release_gap_ticks.as_u64()),
             |us| {
                 clock
                     .timeline_from_us(us)
@@ -299,10 +287,6 @@ impl ProductionDispatchTestHarness {
 
     pub fn current_executor_chord_for_test(&self) -> Option<DownChordMetadata> {
         self.resources.scheduler.current_chord().map(Into::into)
-    }
-
-    pub fn resume_barrier_qpc_for_test(&self) -> Option<QpcTicks> {
-        self.resources.scheduler.resume_barrier_qpc()
     }
 
     pub fn stage_candidate_for_test(
@@ -484,6 +468,36 @@ impl ProductionDispatchTestHarness {
         Ok(())
     }
 
+    pub fn commit_pause_for_test(
+        &mut self,
+        reason: sky_dispatch_core::clock::PauseReason,
+        now: QpcTicks,
+    ) -> Result<(), String> {
+        self.resources
+            .playback
+            .enter_pause(reason, now)
+            .map_err(|error| format!("test Pause control: {error}"))?;
+        self.progress_clock.publish(&self.resources.playback);
+        Ok(())
+    }
+
+    pub fn commit_resume_for_test(
+        &mut self,
+        reason: sky_dispatch_core::clock::PauseReason,
+        now: QpcTicks,
+    ) -> Result<QpcTicks, String> {
+        self.resources
+            .playback
+            .exit_pause(reason, now)
+            .map_err(|error| format!("test Resume control: {error}"))?;
+        self.progress_clock.publish(&self.resources.playback);
+        Ok(self.resources.playback.epoch)
+    }
+
+    pub fn is_paused_for_test(&self) -> bool {
+        self.resources.playback.is_paused()
+    }
+
     pub fn configure_mock_packet_sender_for_test(&mut self, latency_us: &[u64]) -> PacketCapture {
         let captured = Arc::new(Mutex::new(Vec::with_capacity(8)));
         let capture = Arc::clone(&captured);
@@ -530,17 +544,8 @@ impl ProductionDispatchTestHarness {
     }
 
     pub fn configure_mock_cleanup_emitter_for_test(&mut self) -> CleanupCapture {
-        self.configure_mock_cleanup_emitter_with_completion_qpc_for_test()
-            .0
-    }
-
-    pub fn configure_mock_cleanup_emitter_with_completion_qpc_for_test(
-        &mut self,
-    ) -> (CleanupCapture, Arc<AtomicU64>) {
         let captured = Arc::new(Mutex::new(Vec::with_capacity(4)));
         let capture = Arc::clone(&captured);
-        let completion = Arc::new(AtomicU64::new(0));
-        let completion_store = Arc::clone(&completion);
         let clock = self.resources.clock;
         self.resources
             .backend
@@ -550,7 +555,6 @@ impl ProductionDispatchTestHarness {
                     .expect("cleanup capture lock")
                     .push((scan_codes.to_vec(), key_up));
                 let now = clock.now().expect("cleanup QPC");
-                completion_store.store(now.as_u64(), Ordering::Release);
                 PlatformSendResult {
                     requested: scan_codes.len() as u8,
                     inserted: scan_codes.len() as u8,
@@ -560,7 +564,7 @@ impl ProductionDispatchTestHarness {
                     timing_error: None,
                 }
             });
-        (captured, completion)
+        captured
     }
 
     pub fn set_mock_sender_start_qpc_for_test(&self, start_qpc: QpcTicks) {
@@ -610,28 +614,14 @@ impl ProductionDispatchTestHarness {
     pub fn apply_scheduler_resumable_lifecycle_transition_for_test(
         &mut self,
     ) -> Result<(), String> {
-        let clock = self.resources.clock;
-        self.apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(|| {
-            clock
-                .now()
-                .map_err(|error| format!("test cleanup QPC: {error:?}"))
-        })
-    }
-
-    pub fn apply_scheduler_resumable_lifecycle_transition_with_post_cleanup_qpc_for_test(
-        &mut self,
-        post_cleanup_qpc: impl FnOnce() -> Result<QpcTicks, String>,
-    ) -> Result<(), String> {
         let expected_target = crate::engine::worker::load_target_stamp(&self.target);
         crate::engine::worker::apply_scheduler_resumable_lifecycle_transition_for_test(
             &mut self.resources.backend,
             &mut self.resources.scheduler,
-            &mut self.runtime,
             &self.target,
             expected_target,
             self.config.focus.require_focus,
             self.target.hwnd_for_safety_release(),
-            post_cleanup_qpc,
         )
     }
 
@@ -752,11 +742,6 @@ impl ProductionDispatchTestHarness {
             .clock
             .duration_from_us(timing.min_hold_us)
             .map_err(|error| format!("hold conversion: {error:?}"))?;
-        let min_release_gap_ticks = self
-            .resources
-            .clock
-            .duration_from_us(timing.min_release_gap_us)
-            .map_err(|error| format!("release gap conversion: {error:?}"))?;
         let lease_timeout_ticks = self
             .resources
             .clock
@@ -770,8 +755,6 @@ impl ProductionDispatchTestHarness {
             timing_margin_ticks: timing_margin_ticks.as_u64(),
             effective_hold_us: timing.min_hold_us,
             effective_hold_ticks: effective_hold_ticks.as_u64(),
-            min_release_gap_us: timing.min_release_gap_us,
-            min_release_gap_ticks: min_release_gap_ticks.as_u64(),
             lease_enabled: self.config.wait.supervisor_lease_timeout_us > 0,
             lease_timeout_us: self.config.wait.supervisor_lease_timeout_us,
             lease_timeout_ticks: lease_timeout_ticks.as_u64(),

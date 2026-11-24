@@ -1070,7 +1070,7 @@ fn catalog_reload_completes_while_prepare_model_is_paused_and_supersedes_it() {
         let _ = reload.join();
         runtime.shutdown();
         let _ = fs::remove_dir_all(root);
-        panic!("catalog reload waited for paused whole-stream analysis");
+        panic!("catalog reload waited for paused generation timing analysis");
     }
     reload_result
         .expect("reload result received")

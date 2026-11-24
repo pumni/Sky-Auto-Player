@@ -1,8 +1,10 @@
 use sky_dispatch_win32::clock::QpcClock;
 use sky_player::engine::SystemPowerEndpoint;
 use std::ffi::c_void;
+#[cfg(not(test))]
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, OnceLock, Weak};
 
 pub(crate) type SuspendResumeCallback =
     unsafe extern "system" fn(*const c_void, u32, *const c_void) -> u32;
@@ -173,10 +175,10 @@ struct CallbackContext {
 // one Arc per playback session. The callback only touches atomics and QPC.
 static POWER_ENDPOINT: OnceLock<Result<Arc<SystemPowerEndpoint>, String>> = OnceLock::new();
 static CALLBACK_CONTEXT: OnceLock<Arc<CallbackContext>> = OnceLock::new();
-#[allow(dead_code)]
+#[cfg(not(test))]
 static PROCESS_REGISTRATION: OnceLock<Mutex<Option<ProcessRegistration>>> = OnceLock::new();
 
-#[allow(dead_code)]
+#[cfg(not(test))]
 struct ProcessRegistration {
     _platform: Arc<dyn PowerPlatform>,
     _handle: isize,
@@ -203,7 +205,7 @@ fn callback_context() -> Result<Arc<CallbackContext>, u32> {
         .clone())
 }
 
-#[allow(dead_code)]
+#[cfg(not(test))]
 fn ensure_process_registration(
     platform: Arc<dyn PowerPlatform>,
     diagnostics: &Arc<PowerLifecycleDiagnostics>,
@@ -244,7 +246,7 @@ pub(crate) struct SuspendResumeRegistration {
 }
 
 impl SuspendResumeRegistration {
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn register(
         platform: Arc<dyn PowerPlatform>,
         _player: Weak<sky_player::engine::NativeDispatchSession>,
@@ -744,7 +746,6 @@ mod tests {
             let timing = TimingOptions {
                 game_fps: 60,
                 min_hold_us: 500,
-                min_release_gap_us: 17_167,
                 frame_us: 16_667,
                 frame_base_hold_us: 0,
                 timing_margin_us: 500,
@@ -758,7 +759,6 @@ mod tests {
                 &schedule,
                 qpc.frequency_hz(),
                 timing.min_hold_us,
-                timing.min_release_gap_us,
                 schedule.compile_memory.caller_retained_capacity_bytes,
             )
             .expect("prepare callback-test schedule before session admission");
@@ -796,8 +796,6 @@ mod tests {
                 instrument_key_profile: None,
                 #[cfg(feature = "tauri-test")]
                 startup_ordering_hook: None,
-                #[cfg(feature = "tauri-test")]
-                restore_race_hook: None,
                 #[cfg(feature = "tauri-test")]
                 focus_pause_hook: None,
                 #[cfg(feature = "tauri-test")]

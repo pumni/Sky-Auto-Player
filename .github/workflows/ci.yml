@@ -671,13 +671,14 @@ jobs:
       - name: Fail fast on Windows validation dependencies
         run: pwsh scripts/ci_require_windows_tools.ps1 -Tool cargo,rustc,rustup,git,sccache
 
-      - name: Stage calibration resource for Tauri validation
-        run: cargo xtask calibration build
-
       - name: Repository verification — Rust
         if: needs.changes.outputs.rust_required == 'true'
         run: |
           $ErrorActionPreference = "Stop"
+          cargo build --manifest-path rust/Cargo.toml --locked -p sky_xtask --bin xtask
+          if ($LASTEXITCODE -ne 0) {
+            throw "Locked xtask build failed with exit code $LASTEXITCODE"
+          }
           $isolatedXtask = Join-Path $env:RUNNER_TEMP ("xtask-rust-check-" + [guid]::NewGuid().ToString("N") + ".exe")
           Copy-Item -LiteralPath "rust/target/debug/xtask.exe" -Destination $isolatedXtask
           try {
@@ -1063,7 +1064,6 @@ jobs:
           cargo xtask ci candidate create `
             --bundle-dir $env:SKY_CANDIDATE_BUNDLE `
             --public-key $env:SKY_CANDIDATE_PUBLIC_KEY `
-            --calibration-binary apps/desktop/src-tauri/resources/native_calibration.exe `
             --output-root $candidateRoot `
             --source-sha $env:SKY_CI_SOURCE_SHA
           if ($LASTEXITCODE -ne 0) { throw "Current-candidate contract creation failed with exit code $LASTEXITCODE" }
@@ -1439,7 +1439,6 @@ jobs:
             rust/target/dist/V4_QUALIFICATION_EVIDENCE.json
             rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
             rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
-            rust/target/dist/INSTALLED_CALIBRATION_EVIDENCE.json
             rust/target/dist/SBOM.spdx.json
           if-no-files-found: error
           retention-days: 14
