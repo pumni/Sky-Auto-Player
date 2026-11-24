@@ -68,7 +68,7 @@ Separate worktrees use independent ephemeral ports without polling, attaching to
 Run the canonical pre-review gate from the repository root on Windows:
 
 ```powershell
-cargo xtask check all
+node scripts/toolchain-pin.mjs exec -- cargo xtask check all
 ```
 
 It runs Rust static contracts, workspace checks and tests, then the desktop

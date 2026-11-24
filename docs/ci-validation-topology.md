@@ -174,8 +174,9 @@ Preserve the raw command log, exit code, and source identity separately. This su
 
 ## Local command roots
 
-- Run `cargo xtask check all` at the repository root for the canonical
-  pre-review static, Rust, and desktop gate. `cargo xtask check desktop-native`
+- At the repository root, run `node scripts/toolchain-pin.mjs exec -- cargo xtask check all`
+  for the canonical final static, Rust, and desktop gate. Prefix other root Cargo commands
+  below with the same resolver (see [Rust toolchain policy](rust-toolchain-policy.md)). `cargo xtask check desktop-native`
   runs warning-denying native Tauri production lint, all-feature checking,
   and generated binding comparison. `cargo xtask check rust` also lints each
   first-party library separately without test features, in the `dist` profile,

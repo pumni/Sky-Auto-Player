@@ -7,7 +7,8 @@ Windows 11 Tauri 2/React desktop with Rust-native sheet playback for Sky.
 - Gameplay input is Windows `SendInput` only. No game-memory access, file
   tampering, input hooks, injection, debugger attach or anti-cheat bypass.
   The audited out-of-context foreground WinEvent adapter supplies hints only.
-  [SECURITY.md](SECURITY.md) owns this boundary and release trust.
+  [SECURITY.md](SECURITY.md) owns the security boundary; preserve updater,
+  signing and [release authority](docs/v4-release-authority.md).
 - Preserve native timing, target authority, cleanup and domain/Win32 separation.
   Physical input and ReceiveOnly qualification require the owner's explicit
   authorization for the machine, receiver and scope; follow the
@@ -22,7 +23,8 @@ Windows 11 Tauri 2/React desktop with Rust-native sheet playback for Sky.
 
 - Inspect the actual checkout, task-relevant source, tests and configuration.
   [docs/INDEX.md](docs/INDEX.md) routes to current owning contracts; open only
-  what the task needs. [HISTORY.md](docs/HISTORY.md) and old PR evidence are
+  what the task needs. Consult scoped AGENTS.md when editing outside the
+  initially loaded scope. [HISTORY.md](docs/HISTORY.md) and old PR evidence are
   revision-bound provenance, not current instructions or qualification.
 - Active contracts define intended invariants; code/tests show implementation.
   Investigate drift. Preserve live public/wire identifiers and behavior, not
