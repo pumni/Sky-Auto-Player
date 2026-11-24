@@ -197,11 +197,8 @@ and context-field diagnostics are advisory.
 
 Use the Rust repository tool for current verification groups:
 
-```powershell
-cargo xtask check static
-cargo xtask check rust
-cargo xtask check desktop
-cargo xtask check all
-```
+Use the pinned root command in [CI validation topology](ci-validation-topology.md#local-command-roots);
+select focused groups during iteration rather than running all of them before
+repeating the canonical aggregate.
 
 The `xtask` architecture, security, branding, and runtime-boundary checks are canonical.

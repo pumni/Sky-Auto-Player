@@ -1,26 +1,30 @@
+import { fileURLToPath } from 'node:url';
 import { chromium } from '@playwright/test';
-import { spawn } from 'child_process';
+import { preview } from 'astro';
+import { loopbackUrl } from '../../../scripts/process-session.mjs';
+
+const websiteRoot = fileURLToPath(new URL('..', import.meta.url));
 
 (async () => {
+  let previewServer;
+  let rootUrl = process.env.PLAYWRIGHT_BASE_URL;
+
+  if (!rootUrl) {
+    previewServer = await preview({
+      root: websiteRoot,
+      server: { host: '127.0.0.1', port: 0 },
+    });
+    rootUrl = `${loopbackUrl(previewServer.server)}/Sky-Auto-Player/`;
+  }
+
   const browser = await chromium.launch();
   const page = await browser.newPage();
-
-  // Start server or assume it's running? The task before ran build.
-  // Let's just use a local file or start a server.
-  // Actually, we can run `bun run preview` in background, or just use the local file server.
-  // We can use the preview server URL http://localhost:4321/Sky-Auto-Player/
-
-  // Since we need a server, we can spawn one
-  const server = spawn('bun', ['run', 'preview'], { stdio: 'ignore' });
-
-  // wait a bit for server
-  await new Promise((r) => setTimeout(r, 2000));
 
   try {
     const widths = [320, 390, 768, 1024, 1280, 1440];
     for (const w of widths) {
       await page.setViewportSize({ width: w, height: 900 });
-      await page.goto('http://localhost:4321/Sky-Auto-Player/');
+      await page.goto(rootUrl);
       await page.waitForLoadState('networkidle');
 
       const metrics = await page.evaluate(() => {
@@ -56,7 +60,7 @@ import { spawn } from 'child_process';
 
     // Step 8: Measure hero header-to-kicker gap, padding, etc. at 1440px
     await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto('http://localhost:4321/Sky-Auto-Player/');
+    await page.goto(rootUrl);
     await page.waitForLoadState('networkidle');
 
     const layoutMetrics = await page.evaluate(() => {
@@ -82,6 +86,8 @@ import { spawn } from 'child_process';
     console.log('Layout metrics at 1440px:', layoutMetrics);
   } finally {
     await browser.close();
-    server.kill();
+    if (previewServer) {
+      await previewServer.stop();
+    }
   }
 })();

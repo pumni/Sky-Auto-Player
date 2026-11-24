@@ -73,4 +73,19 @@ proptest! {
             .collect();
         prop_assert_eq!(actual, allowed);
     }
+
+    /// Actions with scan codes outside the registered allowlist fail closed.
+    #[test]
+    fn unregistered_scan_code_actions_are_rejected(
+        allowed_code in 2_u16..=10,
+        unregistered_code in 11_u16..=20,
+    ) {
+        let actions = vec![
+            action(1, ActionKind::Down, 0, vec![unregistered_code]),
+            action(2, ActionKind::Up, 1_000, vec![unregistered_code]),
+        ];
+        let err = compile_runtime_intents(&actions, &[allowed_code]);
+        let rejected = matches!(err, Err(CompileError::ScanCodeNotAllowed { .. }));
+        prop_assert!(rejected);
+    }
 }

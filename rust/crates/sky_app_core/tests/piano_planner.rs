@@ -560,3 +560,59 @@ fn duplicated_track_ids_are_rejected_even_when_instrument_names_are_valid() {
         Err(PlannerError::AmbiguousTrackId { track_id: 0 })
     ));
 }
+
+#[test]
+fn piano_planner_invariants_across_boundary_pitches_and_modes() {
+    use sky_app_core::song::PianoPitch;
+
+    let source = canonical_single_note_source();
+    let modes = [
+        ConversionMode::MergePlayable,
+        ConversionMode::SingleTrack { track_id: 0 },
+    ];
+    let pitches = [
+        PianoPitch::C,
+        PianoPitch::D,
+        PianoPitch::Eb,
+        PianoPitch::F,
+        PianoPitch::G,
+        PianoPitch::Ab,
+        PianoPitch::Bb,
+    ];
+
+    for mode in modes {
+        for pitch in pitches {
+            let options = PianoPlannerOptions {
+                mode: Some(mode),
+                target_pitch: Some(pitch),
+                tempo_scale: 1.0,
+            };
+            let plan = plan_canonical_song(&source, &options, &policy())
+                .unwrap_or_else(|e| panic!("failed to plan song for {mode:?} at {pitch:?}: {e:?}"));
+
+            for event in &plan.events {
+                assert!(
+                    event.button_index < 15,
+                    "button index {} must be within 0..15",
+                    event.button_index
+                );
+                assert!(
+                    SKY_SCAN_CODES.contains(&event.scan_code),
+                    "scan code {:#x} must be in SKY_SCAN_CODES",
+                    event.scan_code
+                );
+            }
+
+            if let Some(schedule) = &plan.schedule {
+                let mut prev = 0;
+                for action in &schedule.actions {
+                    assert!(
+                        action.at_us >= prev,
+                        "action timestamps must be non-decreasing"
+                    );
+                    prev = action.at_us;
+                }
+            }
+        }
+    }
+}

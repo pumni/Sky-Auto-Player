@@ -1,6 +1,11 @@
 import { test, expect } from '@playwright/test';
 
-const origin = 'http://localhost:4321/Sky-Auto-Player';
+const origin = process.env.PLAYWRIGHT_BASE_URL;
+if (!origin) {
+  throw new Error(
+    'PLAYWRIGHT_BASE_URL is required. Run tests through "bun run test:e2e" or provide an explicit PLAYWRIGHT_BASE_URL.',
+  );
+}
 
 test.describe('locale switch contrast (bug repro)', () => {
   for (const route of ['/', '/vi/'] as const) {

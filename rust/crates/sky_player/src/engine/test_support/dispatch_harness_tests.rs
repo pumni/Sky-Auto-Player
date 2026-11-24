@@ -992,3 +992,156 @@ fn lifecycle_precision_fixture_lease_config_materializes_qpc_timeout() {
             .as_u64()
     );
 }
+
+#[test]
+fn admissible_down_fences_when_focus_lost_or_stale_preflight() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    harness.configure_focus_owner_for_test(1, 77);
+    let packets = harness.configure_mock_packet_sender_for_test(&[0]);
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage Down candidate")
+        .expect("Down candidate exists");
+
+    // Focus is dropped between staging (preflight) and final admission
+    harness.focus_active.store(false, Ordering::Release);
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+
+    assert_eq!(
+        outcome,
+        crate::engine::worker::StagedDispatchOutcome::Replan
+    );
+    assert!(
+        packets.lock().expect("packets lock").is_empty(),
+        "no packets sent when focus is lost at final admission"
+    );
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(harness.generation_accounting_for_test().activated, 0);
+}
+
+#[test]
+fn focus_and_pause_fencing_suppresses_pending_down() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let packets = harness.configure_mock_packet_sender_for_test(&[0]);
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage Down candidate")
+        .expect("Down candidate exists");
+
+    harness.desired_pause.store(true, Ordering::Release);
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+
+    assert_eq!(
+        outcome,
+        crate::engine::worker::StagedDispatchOutcome::Replan
+    );
+    assert!(
+        packets.lock().expect("packets lock").is_empty(),
+        "no packets sent when paused"
+    );
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(harness.generation_accounting_for_test().activated, 0);
+}
+
+#[test]
+fn generation_and_release_obligation_lifecycle() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    let chord = harness.current_executor_chord_for_test();
+    let down_candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage Down candidate")
+        .expect("Down candidate exists");
+
+    let down_outcome = harness.dispatch_staged_candidate_for_test(down_candidate, false);
+    assert_eq!(
+        down_outcome,
+        crate::engine::worker::StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.release_obligation_mask_for_test(), 1);
+    assert_eq!(harness.generation_accounting_for_test().active, 1);
+    assert_eq!(harness.generation_accounting_for_test().activated, 1);
+    assert_eq!(harness.generation_accounting_for_test().released, 0);
+
+    let up_floor = harness.resources.scheduler.up_slot_timings(1)[0].release_not_before_qpc;
+    wait_until_qpc(harness.resources.clock, up_floor);
+
+    let up_candidate = harness
+        .stage_candidate_for_test(1, None, TimelineTicks::ZERO)
+        .expect("stage Up candidate")
+        .expect("Up candidate exists");
+    let up_outcome = harness.dispatch_staged_candidate_for_test(up_candidate, false);
+    assert_eq!(
+        up_outcome,
+        crate::engine::worker::StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(harness.generation_accounting_for_test().active, 0);
+    assert_eq!(harness.generation_accounting_for_test().released, 1);
+    assert_eq!(packets.lock().expect("packets lock").len(), 2);
+}
+
+#[test]
+fn target_owner_proof_invalidation_rejects_at_final_admission() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let packets = harness.configure_mock_packet_sender_for_test(&[0]);
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage Down candidate")
+        .expect("Down candidate exists");
+
+    harness.target.invalidate_owner_identity();
+
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    assert_eq!(
+        outcome,
+        crate::engine::worker::StagedDispatchOutcome::Replan
+    );
+    assert!(packets.lock().expect("packets lock").is_empty());
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+}
+
+#[test]
+fn negative_control_unconfirmed_packet_fails_closed() {
+    let mut harness = ProductionDispatchTestHarness::new_down_only();
+    let clock = harness.resources.clock;
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        let completed = clock.now().expect("now");
+        SendTransactionOutcome {
+            status: SendTransactionStatus::IntegrityLost,
+            evidence: SendEvidence {
+                requested_mask: packet.up_mask | packet.down_mask,
+                confirmed_mask: 0,
+                skipped_mask: 0,
+                first_inserted: 0,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::PartialProgress { inserted_count: 0 },
+                first_win32_error: Some(5),
+                last_win32_error: Some(5),
+                started_ticks: Some(completed),
+                completed_ticks: Some(completed),
+                timing_error: None,
+            },
+        }
+    });
+
+    let chord = harness.current_executor_chord_for_test();
+    let candidate = harness
+        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .expect("stage Down")
+        .expect("candidate");
+
+    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    assert_eq!(outcome, crate::engine::worker::StagedDispatchOutcome::Exit);
+    assert!(
+        harness
+            .runtime
+            .attempted_dispatch_anomaly
+            .detail()
+            .is_some()
+    );
+}

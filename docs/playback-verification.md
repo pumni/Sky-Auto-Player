@@ -12,24 +12,36 @@ window. Experimental B/C process QoS and runtime adaptive spin are not deployed.
 Physical SendInput tests require interactive foreground authorization; in
 unattended CI and automated runs, physical SendInput remains **NOT RUN**.
 
+## Evidence reachability
+
+A test of a helper or hand-constructed state proves only that isolated behavior.
+For claims about production scheduling, admission, dispatch, or retirement,
+exercise the corresponding production entry path with reachable inputs and
+controlled effects, or explicitly bound the claim. Prefer the existing
+`ProductionDispatchTestHarness`, fault injection, and independent golden or
+reference invariants. A passing synthetic state is not proof of a reachable
+production transition. Native timing and physical-input claims still require
+the separate qualification below.
+
 ## Local Windows gates
 
 Run from the repository root. Record the exact command, exit code, test count,
 ignored or skipped tests, and any environmental limitation.
 
-    cargo xtask check rust
-    cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc -- --test-threads=1
-    cargo test --locked --manifest-path rust/xtask/Cargo.toml audits::security::tests -- --test-threads=1
-    cargo check --locked --manifest-path rust/Cargo.toml -p sky_player -p sky_dispatch_win32 --all-targets --features sky_player/real-input-acceptance
+    node scripts/toolchain-pin.mjs exec -- cargo xtask check rust
+    node scripts/toolchain-pin.mjs exec -- cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc -- --test-threads=1
+    node scripts/toolchain-pin.mjs exec -- cargo test --locked --manifest-path rust/xtask/Cargo.toml audits::security::tests -- --test-threads=1
+    node scripts/toolchain-pin.mjs exec -- cargo check --locked --manifest-path rust/Cargo.toml -p sky_player -p sky_dispatch_win32 --all-targets --features sky_player/real-input-acceptance
     cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p sky_desktop_shell --lib
-    cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p sky_desktop_shell --lib --all-features -- --test-threads=1
-    cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p sky_desktop_shell --lib --all-features -- -D warnings
-    cargo xtask check static --skip-supply-chain
+    node scripts/toolchain-pin.mjs exec -- cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p sky_desktop_shell --lib --all-features -- --test-threads=1
+    node scripts/toolchain-pin.mjs exec -- cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p sky_desktop_shell --lib --all-features -- -D warnings
+    node scripts/toolchain-pin.mjs exec -- cargo xtask check static --skip-supply-chain
     pwsh -NoProfile -File scripts/test_qualify_dispatch_core_contracts.ps1
     git diff --check
 
-Run **cargo xtask check all** on the final source when the pinned supply-chain
-tooling is available. Report its exact result. **check static --skip-supply-chain**
+For final merge readiness, run **node scripts/toolchain-pin.mjs exec -- cargo xtask check all**
+on final relevant source. If pinned supply-chain tooling is unavailable, report the blocker
+rather than qualifying a partial check. **check static --skip-supply-chain**
 does not satisfy or waive the supply-chain gate.
 
 For changed frontend or website sources, run the owning Bun checks from that

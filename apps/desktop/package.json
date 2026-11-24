@@ -13,7 +13,7 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "test": "vitest run",
-    "test:tooling": "node --test scripts/tooling-policy.test.mjs",
+    "test:tooling": "node --test scripts/tooling-policy.test.mjs ../../scripts/process-session.test.mjs",
     "test:watch": "vitest",
     "test:e2e": "node scripts/run-e2e.mjs",
     "ui:refresh": "node scripts/refresh-ui-snapshots.mjs",

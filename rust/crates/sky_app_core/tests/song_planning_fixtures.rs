@@ -164,3 +164,39 @@ fn timing_policy_cases_match_the_authored_timing_contract() {
         );
     }
 }
+
+#[test]
+fn planner_invariants_across_boundary_tempo_scales() {
+    let raw = fixture();
+    let cases = raw["schedule_cases"].as_array().unwrap();
+    let first_case = &cases[0];
+    let bytes = serde_json::to_vec(&first_case["raw"]).unwrap();
+    let song = parse_song_json(&bytes, "boundary-test").expect("valid test song");
+
+    let policy =
+        MaterializedTimingPolicy::from_user_margin(60, 1.0, 500).expect("valid timing policy");
+
+    for tempo in [0.25, 0.5, 1.0, 1.5, 2.0] {
+        let schedule = build_schedule_with_policy(&song, tempo, &policy)
+            .unwrap_or_else(|e| panic!("failed to build schedule for tempo {tempo}: {e:?}"));
+
+        let mut prev_us = 0;
+        let mut down_count = 0;
+        let mut up_count = 0;
+        for action in &schedule.actions {
+            assert!(
+                action.at_us >= prev_us,
+                "action at {} preceded previous at {} for tempo {}",
+                action.at_us,
+                prev_us,
+                tempo
+            );
+            prev_us = action.at_us;
+            match action.kind {
+                ActionKind::Down => down_count += action.scan_codes.len(),
+                ActionKind::Up => up_count += action.scan_codes.len(),
+            }
+        }
+        assert_eq!(down_count, up_count, "down and up note count must balance");
+    }
+}
