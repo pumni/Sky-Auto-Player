@@ -514,6 +514,35 @@ fn calibration_recommendation_never_changes_the_persisted_user_margin() {
         )
         .expect("prepare with explicit user margin");
     assert_eq!(prepared["config"]["timing_margin_us"], 1_200);
+    assert_eq!(prepared["admission"], "ready");
+    assert!(prepared["error_code"].is_null());
+    assert!(prepared["error_message"].is_null());
+    let prepared_id = prepared["prepared_id"]
+        .as_str()
+        .expect("valid dry-run Prepare must publish a prepared ID");
+    assert_eq!(prepared_id.len(), 32);
+    assert!(
+        prepared_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    );
+
+    let settings_after_prepare = runtime
+        .dispatch("settings.get", Value::Object(Default::default()))
+        .expect("settings after Prepare");
+    assert_eq!(
+        settings_after_prepare["playback_defaults"]["timing_margin_us"],
+        1_200
+    );
+    assert_eq!(
+        settings_after_prepare["timing_margin_recommendation"]["recommended_timing_margin_us"],
+        900
+    );
+    let persisted_after_prepare: Value = serde_json::from_slice(
+        &fs::read(root.join("config.json")).expect("settings after Prepare"),
+    )
+    .expect("JSON settings after Prepare");
+    assert_eq!(persisted_after_prepare["default_timing_margin_us"], 1_200);
     assert_eq!(
         fs::read(&cache_path).expect("cache after bootstrap and Prepare"),
         cache_bytes,

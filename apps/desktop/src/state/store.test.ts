@@ -2,6 +2,7 @@ import { act, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../bridge/mockBridge';
 import type {
+  CalibrationCancelAck,
   LibraryNavigation,
   LibrarySource,
   SearchRequest,
@@ -4535,6 +4536,106 @@ describe('desktop store', () => {
     await act(async () => store.getState().cancelCalibration());
     expect(store.getState().calibration.state).toBe('cancelled');
     expect(store.getState().calibration.result?.operation_id).toBe('calibration-b');
+  });
+
+  it('does not let deferred cancelling ACKs regress a finished or newer calibration', async () => {
+    const bridge = createMockBridge();
+    const listeners: Array<(event: UiEvent) => void> = [];
+    vi.spyOn(bridge, 'subscribeUiEvents').mockImplementation(async (listener) => {
+      listeners.push(listener);
+      return () => undefined;
+    });
+    const emit = (event: UiEvent) => listeners.forEach((listener) => listener(event));
+    const emitCancelled = (operationId: string) =>
+      emit({
+        v: 1,
+        name: 'calibration.finished',
+        payload: {
+          operation_id: operationId,
+          outcome: 'cancelled',
+          status: 'cancelled',
+          recommended_timing_margin_us: null,
+          recommendation_qualified: false,
+          sample_count: 0,
+          source: 'cancelled',
+          message: 'Calibration was cancelled.',
+        },
+      });
+    const operationIds = ['calibration-a', 'calibration-b', 'calibration-c', 'calibration-d'];
+    const cancelA = deferred<CalibrationCancelAck>();
+    const cancelB = deferred<CalibrationCancelAck>();
+    const cancelC = deferred<CalibrationCancelAck>();
+    const pendingCancels = new Map<string, Promise<CalibrationCancelAck>>([
+      ['calibration-a', cancelA.promise],
+      ['calibration-b', cancelB.promise],
+      ['calibration-c', cancelC.promise],
+    ]);
+    vi.spyOn(bridge, 'startCalibration').mockImplementation(async ({ mode }) => {
+      const operationId = operationIds.shift();
+      if (!operationId) throw new Error('test calibration operation IDs exhausted');
+      emit({
+        v: 1,
+        name: 'calibration.progress',
+        payload: {
+          operation_id: operationId,
+          state: 'running',
+          phase: mode,
+          completed: 0,
+          total: 2,
+          message: 'Calibration is running.',
+        },
+      });
+      return { operation_id: operationId, state: 'running' };
+    });
+    vi.spyOn(bridge, 'cancelCalibration').mockImplementation(({ operationId }) => {
+      const pending = pendingCancels.get(operationId);
+      if (!pending) throw new Error(`no deferred cancel ACK for ${operationId}`);
+      return pending;
+    });
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+
+    await act(async () => store.getState().startCalibration('quick'));
+    const cancelPromiseA = store.getState().cancelCalibration();
+    expect(store.getState().calibration.state).toBe('cancelling');
+    await act(async () => {
+      cancelA.resolve({ operation_id: 'calibration-a', state: 'cancelling', accepted: true });
+      await cancelPromiseA;
+    });
+    expect(store.getState().calibration.state).toBe('cancelling');
+    act(() => emitCancelled('calibration-a'));
+    expect(store.getState().calibration.state).toBe('cancelled');
+    expect(store.getState().calibration.result?.operation_id).toBe('calibration-a');
+
+    await act(async () => store.getState().startCalibration('full'));
+    const cancelPromiseB = store.getState().cancelCalibration();
+    act(() => emitCancelled('calibration-b'));
+    expect(store.getState().calibration.state).toBe('cancelled');
+    await act(async () => {
+      cancelB.resolve({ operation_id: 'calibration-b', state: 'cancelling', accepted: true });
+      await cancelPromiseB;
+    });
+    expect(store.getState().calibration.state).toBe('cancelled');
+    expect(store.getState().calibration.result?.operation_id).toBe('calibration-b');
+
+    await act(async () => store.getState().startCalibration('quick'));
+    const cancelPromiseC = store.getState().cancelCalibration();
+    act(() => emitCancelled('calibration-c'));
+    expect(store.getState().calibration.state).toBe('cancelled');
+    await act(async () => store.getState().startCalibration('full'));
+    expect(store.getState().calibration.operationId).toBe('calibration-d');
+    await act(async () => {
+      cancelC.resolve({ operation_id: 'calibration-c', state: 'cancelling', accepted: true });
+      await cancelPromiseC;
+    });
+
+    expect(bridge.cancelCalibration).toHaveBeenNthCalledWith(1, { operationId: 'calibration-a' });
+    expect(bridge.cancelCalibration).toHaveBeenNthCalledWith(2, { operationId: 'calibration-b' });
+    expect(bridge.cancelCalibration).toHaveBeenNthCalledWith(3, { operationId: 'calibration-c' });
+    expect(store.getState().calibration.operationId).toBe('calibration-d');
+    expect(store.getState().calibration.state).toBe('running');
+    expect(store.getState().calibration.phase).toBe('full');
+    expect(store.getState().calibration.result).toBeNull();
   });
 
   it('restores Playing and Paused from authoritative Retry status without an error', async () => {

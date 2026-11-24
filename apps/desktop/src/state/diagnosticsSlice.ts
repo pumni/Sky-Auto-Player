@@ -151,11 +151,26 @@ export function createDiagnosticsSlice(context: DiagnosticsSliceContext): Diagno
       set({ calibration: { ...get().calibration, state: 'cancelling' } });
       try {
         const ack = await bridge.cancelCalibration({ operationId });
-        set({ calibration: { ...get().calibration, state: ack.state as CalibrationUiState } });
+        const current = get().calibration;
+        if (
+          ack.operation_id !== operationId ||
+          current.operationId !== operationId ||
+          ['succeeded', 'failed', 'cancelled'].includes(current.state)
+        ) {
+          return;
+        }
+        set({ calibration: { ...current, state: ack.state as CalibrationUiState } });
       } catch (error) {
+        const current = get().calibration;
+        if (
+          current.operationId !== operationId ||
+          ['succeeded', 'failed', 'cancelled'].includes(current.state)
+        ) {
+          return;
+        }
         set({
           calibration: {
-            ...get().calibration,
+            ...current,
             state: 'failed',
             error: error instanceof Error ? error.message : String(error),
           },
