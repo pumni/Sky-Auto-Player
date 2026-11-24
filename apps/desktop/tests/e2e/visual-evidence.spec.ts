@@ -1,6 +1,7 @@
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { chooseSelectOption } from './testHelpers';
 
 const captureStage = process.env.GRAPHITE_WORKSPACE_CAPTURE;
 const requestedCaptureViews = process.env.GRAPHITE_WORKSPACE_CAPTURE_VIEWS?.split(',')
@@ -34,7 +35,7 @@ async function openApp(
     { key: workbenchPreferenceKey, preference: navigatorPreference, openUtility: utilityOpen },
   );
   await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
-  await expect(page.locator('.app-shell')).toBeVisible();
+  await expect(page.locator('[data-app-shell]')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
   await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
 }
@@ -55,25 +56,25 @@ async function startDryRunWithSelection(page: Page) {
     'true',
   );
   await expect(playingRow).toHaveAttribute('aria-current', 'true');
-  await expect(player.locator('.player-track-status')).toHaveText('Playing');
+  await expect(player.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
   return player;
 }
 
 async function openDetails(page: Page) {
-  const utilityToggle = page.locator('.player-utility-button');
+  const utilityToggle = page.locator('button[aria-label$="utility panel"]');
   await expect(utilityToggle).toBeVisible();
   if ((await utilityToggle.getAttribute('aria-expanded')) !== 'true') await utilityToggle.click();
-  const inspector = page.locator('.utility-surface');
+  const inspector = page.locator('[role="region"][aria-label^="Utility:"]');
   await expect(inspector).toBeVisible();
   await inspector.getByRole('tab', { name: 'Details' }).click();
   return inspector;
 }
 
 async function openRuntimeDiagnostics(page: Page) {
-  const utilityToggle = page.locator('.player-utility-button');
+  const utilityToggle = page.locator('button[aria-label$="utility panel"]');
   await expect(utilityToggle).toBeVisible();
   if ((await utilityToggle.getAttribute('aria-expanded')) !== 'true') await utilityToggle.click();
-  const inspector = page.locator('.utility-surface');
+  const inspector = page.locator('[role="region"][aria-label^="Utility:"]');
   await expect(inspector).toBeVisible();
   await inspector.getByRole('tab', { name: 'Runtime' }).click();
   await expect(page.getByRole('region', { name: 'Utility: Diagnostics' })).toBeVisible();
@@ -121,12 +122,14 @@ async function readWorkspaceGeometry(page: Page) {
       const { x, y, width, height, right, bottom } = element.getBoundingClientRect();
       return { x, y, width, height, right, bottom };
     };
-    const trackTable = document.querySelector<HTMLElement>('.track-table');
-    const trackFrame = document.querySelector<HTMLElement>('.track-table-frame');
-    const browserPane = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
-    const tableHeader = document.querySelector<HTMLElement>('.track-table-header');
+    const trackTable = document.querySelector<HTMLElement>('[role="grid"]');
+    const trackFrame = document.querySelector<HTMLElement>('[data-slot="track-table-frame"]');
+    const browserPane = document.querySelector<HTMLElement>('[data-pane="browser"]');
+    const tableHeader = document.querySelector<HTMLElement>('[role="row"][aria-rowindex="1"]');
     const headerCells = Array.from(
-      document.querySelectorAll<HTMLElement>('.track-table-header [role="columnheader"]'),
+      document.querySelectorAll<HTMLElement>(
+        '[role="row"][aria-rowindex="1"] [role="columnheader"]',
+      ),
     ).filter((cell) => getComputedStyle(cell).display !== 'none');
     const rowMeasurements = (selector: string) => {
       const row = document.querySelector<HTMLElement>(selector);
@@ -205,18 +208,20 @@ async function readWorkspaceGeometry(page: Page) {
     const tableRect = trackTable?.getBoundingClientRect();
     const frameRect = trackFrame?.getBoundingClientRect();
     const headerRect = tableHeader?.getBoundingClientRect();
-    const titlebar = document.querySelector<HTMLElement>('.app-titlebar');
-    const titlebarLeading = document.querySelector<HTMLElement>('.app-titlebar-leading');
-    const titlebarBrand = document.querySelector<HTMLElement>('.app-titlebar-brand');
-    const titlebarSearch = document.querySelector<HTMLElement>('.global-search');
-    const titlebarEnd = document.querySelector<HTMLElement>('.app-titlebar-end');
+    const titlebar = document.querySelector<HTMLElement>('[data-slot="titlebar"]');
+    const titlebarLeading = document.querySelector<HTMLElement>('[data-slot="titlebar-leading"]');
+    const titlebarBrand = document.querySelector<HTMLElement>('[data-slot="titlebar-brand"]');
+    const titlebarSearch = document.querySelector<HTMLElement>('[data-slot="global-search"]');
+    const titlebarEnd = document.querySelector<HTMLElement>('[data-slot="titlebar-trailing"]');
     const titlebarLeadingRect = titlebarLeading?.getBoundingClientRect();
     const titlebarBrandRect = titlebarBrand?.getBoundingClientRect();
     const titlebarSearchRect = titlebarSearch?.getBoundingClientRect();
     const titlebarEndRect = titlebarEnd?.getBoundingClientRect();
-    const collapseButton = document.querySelector<HTMLElement>('.library-collapse-button');
+    const collapseButton = document.querySelector<HTMLElement>(
+      'button[aria-label="Collapse library navigator"], button[aria-label="Expand library navigator"]',
+    );
     const collapseStyle = collapseButton ? getComputedStyle(collapseButton) : null;
-    const inspectorPane = document.querySelector<HTMLElement>('.utility-workbench-pane');
+    const inspectorPane = document.querySelector<HTMLElement>('[data-pane="inspector"]');
     const inspectorStyle = inspectorPane ? getComputedStyle(inspectorPane) : null;
     const utilityPreferenceText = localStorage.getItem(preferenceKey);
     const utilityPreference = utilityPreferenceText ? JSON.parse(utilityPreferenceText) : null;
@@ -241,23 +246,23 @@ async function readWorkspaceGeometry(page: Page) {
     return {
       viewport: { width: innerWidth, height: innerHeight, dpr: devicePixelRatio },
       semanticTokens: {
-        workbenchContent: rootStyle.getPropertyValue('--workbench-content').trim(),
-        chromeSurface: rootStyle.getPropertyValue('--chrome-surface').trim(),
-        paneEdge: rootStyle.getPropertyValue('--workbench-pane-edge').trim(),
+        workbenchContent: rootStyle.getPropertyValue('--background').trim(),
+        chromeSurface: rootStyle.getPropertyValue('--surface').trim(),
+        paneEdge: rootStyle.getPropertyValue('--border').trim(),
         controlHover: rootStyle.getPropertyValue('--control-hover').trim(),
-        controlBorder: rootStyle.getPropertyValue('--control-border').trim(),
-        textPrimary: rootStyle.getPropertyValue('--text-primary').trim(),
+        controlBorder: rootStyle.getPropertyValue('--input').trim(),
+        textPrimary: rootStyle.getPropertyValue('--foreground').trim(),
         textSecondary: rootStyle.getPropertyValue('--text-secondary').trim(),
-        focusRing: rootStyle.getPropertyValue('--focus-ring').trim(),
+        focusRing: rootStyle.getPropertyValue('--ring').trim(),
       },
       titlebar: {
-        rect: rect('.app-titlebar'),
-        leading: rect('.app-titlebar-leading'),
-        brand: rect('.app-titlebar-brand'),
-        search: rect('.global-search'),
-        trailingActions: rect('.app-titlebar-end'),
-        leftDrag: rect('.titlebar-drag-space'),
-        rightDrag: rect('.titlebar-drag-space-trailing'),
+        rect: rect('[data-slot="titlebar"]'),
+        leading: rect('[data-slot="titlebar-leading"]'),
+        brand: rect('[data-slot="titlebar-brand"]'),
+        search: rect('[data-slot="global-search"]'),
+        trailingActions: rect('[data-slot="titlebar-trailing"]'),
+        leftDrag: rect('[data-slot="titlebar-drag-space"]'),
+        rightDrag: rect('[data-slot="titlebar-drag-space-trailing"]'),
         freeRegionMidpoint,
         searchMidpoint: titlebarSearchRect
           ? titlebarSearchRect.left + titlebarSearchRect.width / 2
@@ -267,10 +272,13 @@ async function readWorkspaceGeometry(page: Page) {
             ? Math.abs(titlebarSearchRect.left + titlebarSearchRect.width / 2 - freeRegionMidpoint)
             : null,
         updateAvailable: titlebar?.dataset.updateAvailable ?? null,
-        searchFocused: document.activeElement === document.querySelector('.global-search input'),
+        searchFocused:
+          document.activeElement === document.querySelector('[data-slot="global-search"] input'),
       },
       collapseButton: {
-        rect: rect('.library-collapse-button'),
+        rect: rect(
+          'button[aria-label="Collapse library navigator"], button[aria-label="Expand library navigator"]',
+        ),
         borderColor: collapseStyle?.borderColor ?? null,
         borderWidth: collapseStyle?.borderWidth ?? null,
         backgroundColor: collapseStyle?.backgroundColor ?? null,
@@ -282,24 +290,25 @@ async function readWorkspaceGeometry(page: Page) {
       },
       inspector: {
         presentation:
-          document.querySelector<HTMLElement>('.workbench')?.dataset.utilityPresentation ?? null,
-        rect: rect('.utility-workbench-pane'),
+          document.querySelector<HTMLElement>('[data-slot="workbench"]')?.dataset
+            .utilityPresentation ?? null,
+        rect: rect('[data-pane="inspector"]'),
         widthStyle: inspectorPane?.style.width || null,
         persistedDockWidth: utilityPreference?.utilityWidth ?? null,
         borderColor: inspectorStyle?.borderColor ?? null,
         borderWidth: inspectorStyle?.borderWidth ?? null,
         borderRadius: inspectorStyle?.borderRadius ?? null,
       },
-      browserContainer: rect('.track-browser-workbench-pane'),
-      browserSection: rect('.track-browser'),
-      sourceHeader: rect('.track-browser-header'),
-      sourceLabel: rect('.track-browser-source-label'),
-      sourceTitle: rect('.track-browser-header h1'),
-      count: rect('.track-browser-count'),
-      tableHeader: rect('.track-table-header'),
-      firstSong: rect('.track-row'),
+      browserContainer: rect('[data-pane="browser"]'),
+      browserSection: rect('[data-slot="track-browser"]'),
+      sourceHeader: rect('[data-slot="track-browser-header"]'),
+      sourceLabel: rect('[data-slot="track-browser-header"] h1'),
+      sourceTitle: rect('[data-slot="track-browser-header"] h1'),
+      count: rect('[data-slot="track-browser-count"]'),
+      tableHeader: rect('[role="row"][aria-rowindex="1"]'),
+      firstSong: rect('[data-slot="track-row"]'),
       trackCanvas: {
-        pane: rect('.track-browser-workbench-pane'),
+        pane: rect('[data-pane="browser"]'),
         scrollport: tableRect
           ? { x: tableRect.x, y: tableRect.y, width: tableRect.width, right: tableRect.right }
           : null,
@@ -337,25 +346,29 @@ async function readWorkspaceGeometry(page: Page) {
             }
           : null,
         rows: {
-          selected: rowMeasurements('.track-row.is-selected'),
-          playing: rowMeasurements('.track-row.is-playing:not(.is-selected)'),
-          hovered: rowMeasurements('.track-row:hover'),
+          selected: rowMeasurements('[data-slot="track-row"][data-selected="true"]'),
+          playing: rowMeasurements(
+            '[data-slot="track-row"][data-playing="true"][data-selected="false"]',
+          ),
+          hovered: rowMeasurements('[data-slot="track-row"]:hover'),
         },
       },
       surfaces: {
-        header: computed('.track-browser-header'),
-        sourceLabel: computed('.track-browser-source-label'),
-        canvas: computed('.track-browser-workbench-pane'),
-        browserSection: computed('.track-browser'),
-        table: computed('.track-table'),
-        tableHeader: computed('.track-table-header'),
+        header: computed('[data-slot="track-browser-header"]'),
+        sourceLabel: computed('[data-slot="track-browser-header"] h1'),
+        canvas: computed('[data-pane="browser"]'),
+        browserSection: computed('[data-slot="track-browser"]'),
+        table: computed('[role="grid"]'),
+        tableHeader: computed('[role="row"][aria-rowindex="1"]'),
       },
       documentWidth: document.documentElement.scrollWidth,
       bodyWidth: document.body.scrollWidth,
-      heading: document.querySelector('.track-browser h1')?.textContent?.trim() ?? null,
-      headingTag: document.querySelector('.track-browser h1')?.tagName ?? null,
-      browserHeaderTablists: document.querySelectorAll('.track-browser-header [role="tablist"]')
-        .length,
+      heading:
+        document.querySelector('[data-slot="track-browser"] h1')?.textContent?.trim() ?? null,
+      headingTag: document.querySelector('[data-slot="track-browser"] h1')?.tagName ?? null,
+      browserHeaderTablists: document.querySelectorAll(
+        '[data-slot="track-browser-header"] [role="tablist"]',
+      ).length,
     };
   }, workbenchPreferenceKey);
 }
@@ -374,16 +387,18 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   const widePlayer = await startDryRunWithSelection(page);
   const wideInspector = await openDetails(page);
   await expect(wideInspector.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
-  await expect(widePlayer.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  await expect(widePlayer.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Candle Run',
+  );
   await page.getByRole('row', { name: /Aurora Landing/ }).hover();
   const classicScrollbarSimulation = await page.addStyleTag({
     content: `
-      .track-table {
+      [role="grid"] {
         overflow-y: scroll !important;
         scrollbar-gutter: stable !important;
         scrollbar-width: auto !important;
       }
-      .track-table::-webkit-scrollbar {
+      [role="grid"]::-webkit-scrollbar {
         width: 16px !important;
       }
     `,
@@ -406,9 +421,12 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   await openApp(page, { width: 640, height: 448 }, 'expanded');
   const compactPlayer = await startDryRunWithSelection(page);
   const compactInspector = await openDetails(page);
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'overlay',
+  );
   await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
-  await expect(compactPlayer.locator('.player-track-status')).toHaveText('Playing');
+  await expect(compactPlayer.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
   await expect(compactInspector).toBeVisible();
   await page.getByRole('row', { name: /Aurora Landing/ }).hover({ position: { x: 24, y: 23 } });
   measurements['640x448'] = await readWorkspaceGeometry(page);
@@ -437,26 +455,107 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     ),
   ).toBeVisible();
   await expect(runtime.getByText('Sender samples', { exact: true })).toHaveCount(0);
-  await expect(runtimePlayer.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  await expect(
+    runtimePlayer.locator('[role="group"][aria-label^="Playback for"] strong'),
+  ).toHaveText('Candle Run');
   measurements['runtime-1366x768'] = await page.evaluate(() => {
-    const inspector = document.querySelector<HTMLElement>('.utility-surface');
+    const inspector = document.querySelector<HTMLElement>(
+      '[role="region"][aria-label^="Utility:"]',
+    );
     const rect = inspector?.getBoundingClientRect();
     return {
       viewport: { width: innerWidth, height: innerHeight },
       inspector: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
       dryRun: true,
-      dryRunNotice: document.querySelector('.diagnostics-empty-state')?.textContent?.trim() ?? null,
+      dryRunNotice:
+        document.querySelector('[data-slot="diagnostics-empty-state"]')?.textContent?.trim() ??
+        null,
       playbackSummary:
-        document.querySelector('.diagnostics-playback-summary')?.textContent?.trim() ?? null,
+        document.querySelector('[data-slot="diagnostics-playback-summary"]')?.textContent?.trim() ??
+        null,
       senderSummary:
-        document.querySelector('.diagnostics-sender-summary')?.textContent?.trim() ?? null,
+        document.querySelector('[data-slot="diagnostics-sender-summary"]')?.textContent?.trim() ??
+        null,
       senderSamples:
-        [...document.querySelectorAll('.diagnostics-metric')]
+        [...document.querySelectorAll('[data-slot="diagnostics-metric"]')]
           .find((metric) => metric.textContent?.includes('Sender samples'))
           ?.textContent?.trim() ?? null,
     };
   });
   if (shouldCapture('runtime')) await capture(page, 'candidate-runtime-diagnostics-1366x768.png');
+
+  await openApp(page, { width: 1366, height: 768 });
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settings).toBeVisible();
+  if (shouldCapture('settings')) await capture(page, 'candidate-settings-1366x768.png');
+
+  await openApp(page, { width: 1366, height: 768 });
+  await page.getByRole('button', { name: 'Configure playback profile' }).click();
+  const profile = page.getByRole('dialog', { name: 'Playback profile' });
+  await expect(profile).toBeVisible();
+  if (shouldCapture('profile')) await capture(page, 'candidate-profile-1366x768.png');
+
+  await openApp(page, { width: 1366, height: 768 });
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
+  await page
+    .getByRole('contentinfo', { name: 'Player controls' })
+    .getByRole('button', { name: 'Play', exact: true })
+    .click();
+  const admission = page.getByRole('group', { name: 'Playback confirmation' });
+  await expect(admission).toBeVisible();
+  if (shouldCapture('admission')) await capture(page, 'candidate-admission-1366x768.png');
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/?mockReleaseNotes=short');
+  const updateTrigger = page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ });
+  await expect(updateTrigger).toBeVisible();
+  await updateTrigger.click();
+  const update = page.getByRole('dialog');
+  await expect(update).toContainText('Version 4.0.0-alpha.2-mock is available');
+  if (shouldCapture('update')) await capture(page, 'candidate-update-1366x768.png');
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/?mockLibraryState=empty');
+  const emptyState = page.locator('[data-slot="library-empty-state"]');
+  await expect(emptyState).toContainText('No Built-in Songs are available');
+  if (shouldCapture('empty')) await capture(page, 'candidate-empty-library-1366x768.png');
+
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/?mockStartFailure=target_not_found');
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await page
+    .getByRole('contentinfo', { name: 'Player controls' })
+    .getByRole('button', { name: 'Play', exact: true })
+    .click();
+  const recovery = page.getByRole('alert');
+  await expect(recovery).toContainText('Sky window was not found');
+  if (shouldCapture('error')) await capture(page, 'candidate-recovery-error-1366x768.png');
+
+  await openApp(page, { width: 1366, height: 768 });
+  const appearanceSettings = async () => {
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Settings' });
+    await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
+    return dialog;
+  };
+  const lightSettings = await appearanceSettings();
+  await chooseSelectOption(page, lightSettings.getByRole('combobox', { name: 'Theme' }), 'light');
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+  await lightSettings.getByRole('button', { name: 'Close settings' }).click();
+  if (shouldCapture('light')) await capture(page, 'candidate-light-1366x768.png');
+
+  const auroraSettings = await appearanceSettings();
+  await chooseSelectOption(page, auroraSettings.getByRole('combobox', { name: 'Theme' }), 'dark');
+  await chooseSelectOption(
+    page,
+    auroraSettings.getByRole('combobox', { name: 'Dark palette' }),
+    'aurora',
+  );
+  await expect(page.locator('html')).toHaveAttribute('data-palette', 'aurora');
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+  await auroraSettings.getByRole('button', { name: 'Close settings' }).click();
+  if (shouldCapture('aurora')) await capture(page, 'candidate-aurora-1366x768.png');
 
   mkdirSync(evidenceDirectory, { recursive: true });
   await import('node:fs/promises').then(({ writeFile }) =>

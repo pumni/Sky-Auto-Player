@@ -5,6 +5,7 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
+    "paths": { "@/*": ["./src/*"] },
     "useDefineForClassFields": true,
     "resolveJsonModule": true,
     "isolatedModules": true,

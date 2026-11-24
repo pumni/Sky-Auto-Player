@@ -72,15 +72,29 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const testModeDescription = 'Dry run: no physical keyboard input is sent.';
 
   return (
-    <div className="player-track-info" role="group" aria-label={`Playback for ${title}`}>
-      <span className="player-track-icon" aria-hidden="true">
+    <div
+      className="col-start-1 row-start-1 flex min-w-0 items-center gap-2.5"
+      role="group"
+      aria-label={`Playback for ${title}`}
+    >
+      <span
+        className="grid size-[30px] flex-none place-items-center rounded-control text-text-secondary max-[700px]:hidden"
+        aria-hidden="true"
+      >
         <Music2 size={17} />
       </span>
-      <div className="player-track-copy">
-        <strong title={title}>{title}</strong>
-        <div className="player-track-subtitle">
+      <div className="grid min-w-0 gap-0.5">
+        <strong
+          className="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-foreground"
+          title={title}
+        >
+          {title}
+        </strong>
+        <div className="flex min-w-0 items-center gap-1.5">
           <span
-            className={`muted player-track-status${active ? ' is-active' : ''}${sessionStatusConcern !== null ? ' is-attention' : ''}`}
+            data-slot="player-track-status"
+            className={`block min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-xs ${sessionStatusConcern !== null ? 'text-warning' : active ? 'text-accent-ink' : 'text-muted-foreground'}`}
+            role="status"
             aria-label={statusAccessibilityLabel}
             aria-live="polite"
             aria-atomic="true"
@@ -90,19 +104,19 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           </span>
           {playbackMode === 'test' && (
             <StatusBadge
-              className="player-test-mode"
+              className="shrink-0"
               appearance="plain"
               aria-label={testModeDescription}
               title={testModeDescription}
             >
-              Test<span className="player-test-mode-detail"> · no keys</span>
+              Test<span className="max-[1100px]:hidden"> · no keys</span>
             </StatusBadge>
           )}
         </div>
       </div>
       {likeSongId && (hasCurrentSong || fallbackIdentity) && (
         <button
-          className={`icon-button player-like-button${liked ? ' is-liked' : ''}`}
+          className={`size-[30px] flex-none border-0 bg-transparent p-0 text-text-tertiary hover:bg-control-hover hover:text-accent-ink focus-visible:text-accent-ink ${liked ? 'text-accent-ink' : ''}`}
           type="button"
           aria-label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
           aria-pressed={liked}
@@ -114,7 +128,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       )}
       {preparedRisk && ['medium', 'high'].includes(preparedRisk.level) && (
         <StatusBadge
-          className="player-risk"
+          className="shrink-0"
           tone={preparedRisk.level === 'high' ? 'danger' : 'warning'}
           aria-label={preparedRisk.headline}
           title={preparedRisk.headline}

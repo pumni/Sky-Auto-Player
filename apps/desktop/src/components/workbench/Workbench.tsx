@@ -141,6 +141,9 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       if (rebase || live.navigator !== resolved.width) {
         live.navigator = resolved.width;
         shell.style.setProperty('--navigator-pane-width', `${resolved.width}px`);
+        shell
+          .querySelector<HTMLElement>('[data-pane="navigator"]')
+          ?.style.setProperty('--navigator-pane-width', `${resolved.width}px`);
         navigatorSeparatorRef.current?.setAttribute('aria-valuemax', String(navigatorMax));
       }
       return { value: resolved.width, snapHint: resolved.snapHint };
@@ -181,7 +184,13 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       live.utility = resolved.width;
       live.navigator = navigatorWidth;
       shell.style.setProperty('--utility-pane-width', `${resolved.width}px`);
+      shell
+        .querySelector<HTMLElement>('[data-pane="inspector"]')
+        ?.style.setProperty('--utility-pane-width', `${resolved.width}px`);
       shell.style.setProperty('--navigator-pane-width', `${navigatorWidth}px`);
+      shell
+        .querySelector<HTMLElement>('[data-pane="navigator"]')
+        ?.style.setProperty('--navigator-pane-width', `${navigatorWidth}px`);
       navigatorSeparatorRef.current?.setAttribute('aria-valuenow', String(navigatorWidth));
       navigatorSeparatorRef.current?.setAttribute('aria-valuemax', String(navigatorMax));
     }
@@ -290,7 +299,9 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
     if (!openedFromClosed || presentationMode !== 'overlay') return;
 
     const frame = window.requestAnimationFrame(() => {
-      const surface = workbenchRef.current?.querySelector<HTMLElement>('.utility-surface');
+      const surface = workbenchRef.current?.querySelector<HTMLElement>(
+        'section[role="region"][aria-label^="Utility:"]',
+      );
       const activeTab = surface?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
       const firstControl = surface?.querySelector<HTMLElement>(
         'button:not([disabled]), [tabindex="0"]',
@@ -305,8 +316,9 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   return (
     <main
       ref={workbenchRef}
-      className={`workbench${utility.open ? ' has-utility' : ''}`}
+      className="relative flex min-h-0 min-w-0 gap-0 overflow-hidden px-1 pb-1"
       aria-label="Music sheet workbench"
+      data-slot="workbench"
       data-layout-fits={layout.geometry.fits ? 'true' : 'false'}
       data-utility-presentation={presentationMode}
       data-workbench-gap={layout.geometry.gutter}
@@ -320,8 +332,15 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       }
     >
       <WorkbenchPane
-        className={`navigator-workbench-pane${layout.navigatorCollapsed ? ' is-collapsed' : ''}`}
-        style={{ flex: '0 0 var(--navigator-pane-width)' }}
+        pane="navigator"
+        collapsed={layout.navigatorCollapsed}
+        className="shrink-0 bg-card"
+        style={
+          {
+            '--navigator-pane-width': `${layout.navigatorWidth}px`,
+            flex: '0 0 var(--navigator-pane-width)',
+          } as CSSProperties
+        }
       >
         <LibraryNavigator
           collapsed={layout.navigatorCollapsed}
@@ -361,7 +380,11 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
           }
         }}
       />
-      <WorkbenchPane className="track-browser-workbench-pane">
+      <WorkbenchPane
+        pane="browser"
+        className="min-w-[420px] flex-[1_1_0] [container-name:track-browser] [container-type:inline-size]"
+        style={{ minWidth: MIN_TRACK_BROWSER_WIDTH }}
+      >
         <TrackBrowser useStore={useStore} />
       </WorkbenchPane>
       {utility.open && (
@@ -402,17 +425,26 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
             />
           )}
           <WorkbenchPane
-            className={`utility-workbench-pane${
+            pane="inspector"
+            collapsed={layout.utilityCollapsed}
+            presentationMode={presentationMode}
+            className={`shrink-0 bg-card [container-name:utility] [container-type:inline-size] ${
               presentationMode === 'overlay'
-                ? ' is-overlay'
+                ? 'absolute top-0 right-1 bottom-1 z-20 max-w-[calc(100%-8px)] rounded-dialog border-border shadow-xl [contain:none]'
                 : layout.utilityCollapsed
-                  ? ' is-collapsed'
+                  ? ''
                   : ''
             }`}
             style={
               presentationMode === 'overlay'
-                ? { width: utilityOverlayWidth }
-                : { flex: '0 0 var(--utility-pane-width)' }
+                ? ({
+                    '--utility-pane-width': `${layout.utilityWidth}px`,
+                    width: utilityOverlayWidth,
+                  } as CSSProperties)
+                : ({
+                    '--utility-pane-width': `${layout.utilityWidth}px`,
+                    flex: '0 0 var(--utility-pane-width)',
+                  } as CSSProperties)
             }
           >
             <UtilityPane

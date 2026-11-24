@@ -1,8 +1,8 @@
 import { ChevronLeft, ChevronRight, Disc3, Heart, ListMusic, RefreshCw } from 'lucide-react';
 import { useRef, useState } from 'react';
-import { Button } from 'react-aria-components';
-import { Tooltip, TooltipTrigger } from 'react-aria-components/Tooltip';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { Button } from '../ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { PlaylistCreateDialog } from './PlaylistCreateDialog';
 import { PlaylistNavItem } from './PlaylistNavItem';
 import { PlaylistRenameDialog } from './PlaylistRenameDialog';
@@ -39,34 +39,38 @@ function CollapsedPlaylistTile({
   active,
   onSelect,
 }: CollapsedPlaylistTileProps) {
-  const [focusTooltipOpen, setFocusTooltipOpen] = useState(false);
-  const [interactionTooltipOpen, setInteractionTooltipOpen] = useState(false);
-
   return (
-    <TooltipTrigger
-      delay={350}
-      closeDelay={0}
-      isOpen={focusTooltipOpen || interactionTooltipOpen}
-      onOpenChange={setInteractionTooltipOpen}
-    >
-      <Button
-        className={`library-nav-item library-collapsed-playlist-tile${active ? ' is-active' : ''}`}
-        type="button"
-        aria-label={accessibleName}
-        {...(active ? { 'aria-current': 'page' as const } : {})}
-        data-playlist-id={id}
-        onFocus={() => setFocusTooltipOpen(true)}
-        onBlur={() => setFocusTooltipOpen(false)}
-        onPress={onSelect}
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-10 rounded-control border-0 bg-transparent p-0 hover:bg-control-hover data-[active=true]:bg-selection"
+            type="button"
+            aria-label={accessibleName}
+            {...(active ? { 'aria-current': 'page' as const } : {})}
+            data-playlist-id={id}
+            data-slot="collapsed-playlist-tile"
+            data-active={active}
+            onClick={onSelect}
+          />
+        }
       >
-        <span className="library-playlist-monogram" aria-hidden="true">
+        <span
+          className="grid size-[30px] place-items-center rounded-control bg-surface text-sm font-semibold uppercase text-text-secondary"
+          aria-hidden="true"
+        >
           {monogram ? <span>{monogram}</span> : <ListMusic size={18} />}
         </span>
-      </Button>
-      <Tooltip className="library-playlist-tooltip" placement="right">
+      </TooltipTrigger>
+      <TooltipContent
+        side="right"
+        className="max-w-[min(320px,calc(100vw-64px))] break-words rounded-control border border-border bg-popover px-2 py-1.5 text-xs leading-[1.4] text-popover-foreground shadow-lg"
+      >
         {displayName}
-      </Tooltip>
-    </TooltipTrigger>
+      </TooltipContent>
+    </Tooltip>
   );
 }
 
@@ -120,15 +124,28 @@ export function LibraryNavigator({
   };
 
   return (
-    <nav className="library-navigator" aria-label="Library">
-      <div className="library-navigator-heading">
-        {!collapsed && <h2>Your Library</h2>}
-        <div className="library-heading-actions">
+    <nav
+      data-slot="library-navigator"
+      className={`flex min-h-0 min-w-0 flex-1 flex-col ${collapsed ? 'items-center px-[3px] py-2' : 'px-2 pb-3'}`}
+      aria-label="Library"
+    >
+      <div
+        data-slot="library-navigator-heading"
+        className={`flex min-h-10 min-w-0 items-center justify-between ${collapsed ? 'mb-1 justify-center' : 'mb-1.5 pl-2'}`}
+      >
+        {!collapsed && (
+          <h2 className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[13px] font-semibold text-foreground">
+            Your Library
+          </h2>
+        )}
+        <div data-slot="library-heading-actions" className="flex flex-none items-center gap-1">
           {!collapsed && (
             <LibraryAddMenu triggerRef={addTriggerRef} onNewPlaylist={() => setCreateOpen(true)} />
           )}
-          <button
-            className="icon-button icon-button-boxed library-collapse-button"
+          <Button
+            variant="ghost"
+            size={collapsed ? 'icon-lg' : 'icon-sm'}
+            className={`${collapsed ? '' : 'size-[30px]'} border-0 bg-transparent p-0 !text-text-secondary hover:bg-control-hover hover:!text-foreground`}
             type="button"
             aria-label={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
             title={collapsed ? 'Expand library navigator' : 'Collapse library navigator'}
@@ -139,11 +156,11 @@ export function LibraryNavigator({
             ) : (
               <ChevronLeft size={17} aria-hidden="true" />
             )}
-          </button>
+          </Button>
         </div>
       </div>
 
-      <div className="library-primary-items">
+      <div data-slot="library-primary-items" className="grid min-w-0 gap-1">
         <LibraryNavItem
           collapsed={collapsed}
           label={builtinLabel}
@@ -153,7 +170,7 @@ export function LibraryNavigator({
             : {})}
           disabled={!navigationReady || !navigation.builtinAvailable}
           icon={<Disc3 size={18} />}
-          onPress={() => void selectLibrarySource({ kind: 'smart', id: 'builtin' })}
+          onSelect={() => void selectLibrarySource({ kind: 'smart', id: 'builtin' })}
         >
           {builtinChecking ? 'Checking Built-in Songs…' : 'Built-in Songs'}
         </LibraryNavItem>
@@ -164,25 +181,25 @@ export function LibraryNavigator({
           count={likedTotal}
           icon={<Heart size={18} />}
           iconTone="liked"
-          onPress={() => void selectLibrarySource({ kind: 'smart', id: 'liked' })}
+          onSelect={() => void selectLibrarySource({ kind: 'smart', id: 'liked' })}
         >
           Liked Songs
         </LibraryNavItem>
       </div>
 
       {!collapsed && builtinChecking && (
-        <p className="library-loading muted" role="status">
+        <p className="min-w-0 overflow-hidden px-2 text-xs text-muted-foreground" role="status">
           Checking Built-in Songs…
         </p>
       )}
       {!collapsed && navigation.loadState === 'error' && (
-        <div className="library-empty-playlists" aria-label="Library navigation recovery">
-          <p role="alert">
+        <div className="grid min-w-0 gap-2 px-2 pt-2" aria-label="Library navigation recovery">
+          <p className="m-0 text-xs leading-relaxed text-danger" role="alert">
             Couldn’t check Built-in Songs or playlists.
             {navigation.lastError ? ` ${navigation.lastError}` : ''}
           </p>
           <button
-            className="button library-empty-playlists-create"
+            className="h-9 justify-center border-border text-[13px] text-foreground"
             type="button"
             aria-label="Retry library navigation"
             onClick={() => void useStore.getState().loadLibraryNavigation()}
@@ -192,15 +209,23 @@ export function LibraryNavigator({
         </div>
       )}
       {!collapsed && navigation.loadState === 'ready' && !navigation.builtinAvailable && (
-        <p className="library-loading muted" role="status">
+        <p className="min-w-0 overflow-hidden px-2 text-xs text-muted-foreground" role="status">
           Built-in Songs aren’t available in this installation. Liked Songs and playlists remain
           available.
         </p>
       )}
 
       {collapsed ? (
-        <div className="library-collapsed-launchers">
-          <div className="library-collapsed-playlist-scroller" role="group" aria-label="Playlists">
+        <div
+          data-slot="library-collapsed-playlists"
+          className="mt-2 flex min-h-0 w-11 flex-1 flex-col border-t border-border pt-[6px]"
+        >
+          <div
+            data-slot="library-collapsed-playlist-scroller"
+            className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain"
+            role="group"
+            aria-label="Playlists"
+          >
             {collapsedPlaylists.map((playlist, index) => {
               const active = source.kind === 'playlist' && source.id === playlist.id;
               const duplicateName = (playlistNameCounts.get(playlist.name) ?? 0) > 1;
@@ -224,28 +249,33 @@ export function LibraryNavigator({
             })}
             {navigation.loadState === 'error' && (
               <>
-                <span className="visually-hidden" role="alert">
+                <span className="sr-only" role="alert">
                   Couldn’t load playlists. {navigation.lastError ?? ''}
                 </span>
                 <Button
-                  className="library-collapsed-retry"
+                  variant="ghost"
+                  size="icon-sm"
+                  className="grid size-10 place-items-center rounded-control border-0 bg-transparent text-text-secondary hover:bg-control-hover hover:text-foreground"
                   type="button"
                   aria-label="Retry library navigation"
-                  onPress={() => void useStore.getState().loadLibraryNavigation()}
+                  onClick={() => void useStore.getState().loadLibraryNavigation()}
                 >
                   <RefreshCw size={16} aria-hidden="true" />
                 </Button>
               </>
             )}
             {!navigationReady && navigation.loadState !== 'error' && (
-              <span className="visually-hidden" role="status">
+              <span className="sr-only" role="status">
                 Loading playlists.
               </span>
             )}
           </div>
         </div>
       ) : (
-        <div className="library-secondary-sections">
+        <div
+          data-slot="library-secondary-sections"
+          className="mt-3 grid min-h-0 min-w-0 flex-1 content-start gap-3 overflow-auto border-t border-border pt-2"
+        >
           <LibrarySection label="Playlists" showWhenEmpty>
             {navigation.playlistOrder.map((id) => {
               const playlist = navigation.playlistsById.get(id);
@@ -267,12 +297,18 @@ export function LibraryNavigator({
               );
             })}
             {navigation.loadState === 'ready' && navigation.playlistOrder.length === 0 && (
-              <div className="library-empty-playlists">
+              <div data-slot="library-empty-playlists" className="mx-2 mt-2 grid min-w-0 gap-2">
                 {(!navigation.builtinAvailable || navigation.builtinSongCount === 0) && (
-                  <p>Create a playlist to collect songs or import local sheet files and folders.</p>
+                  <p
+                    data-slot="library-empty-playlists-guidance"
+                    className="m-0 text-xs leading-relaxed text-text-secondary"
+                  >
+                    Create a playlist to collect songs or import local sheet files and folders.
+                  </p>
                 )}
                 <button
-                  className="button library-empty-playlists-create"
+                  data-slot="library-empty-playlists-create"
+                  className="h-9 justify-center border-border text-[13px] text-foreground"
                   type="button"
                   onClick={() => setCreateOpen(true)}
                 >
@@ -285,12 +321,15 @@ export function LibraryNavigator({
       )}
 
       {!collapsed && navigation.lastError && navigation.loadState !== 'error' && (
-        <p className="library-inline-error" role="status">
+        <p className="mt-2 min-w-0 overflow-hidden px-2 text-xs text-danger" role="status">
           {navigation.lastError}
         </p>
       )}
 
-      <div className="library-navigator-footer">
+      <div
+        data-slot="library-navigator-footer"
+        className="mt-auto flex min-w-0 items-center justify-center pt-2"
+      >
         {collapsed && (
           <LibraryAddMenu
             collapsed

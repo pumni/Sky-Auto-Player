@@ -40,18 +40,21 @@ export async function expectWorkbenchWithinBounds(
     };
     return {
       viewportWidth: window.innerWidth,
-      presentation: document.querySelector<HTMLElement>('.workbench')?.dataset.utilityPresentation,
-      gutter: Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
-      ),
+      presentation:
+        document.querySelector<HTMLElement>('[data-slot="workbench"]')?.dataset.utilityPresentation,
+      gutter:
+        document
+          .querySelector<HTMLElement>('[data-slot="resizable-separator"]')
+          ?.getBoundingClientRect().width ?? Number.NaN,
       solverGutter: Number.parseFloat(
-        document.querySelector<HTMLElement>('.workbench')?.dataset.workbenchGap ?? 'NaN',
+        document.querySelector<HTMLElement>('[data-slot="workbench"]')?.dataset.workbenchGap ??
+          'NaN',
       ),
-      workbench: box('.workbench'),
-      navigator: box('.navigator-workbench-pane'),
-      track: box('.track-browser-workbench-pane'),
-      utility: box('.utility-workbench-pane'),
-      player: box('.player-bar'),
+      workbench: box('[data-slot="workbench"]'),
+      navigator: box('[data-pane="navigator"]'),
+      track: box('[data-pane="browser"]'),
+      utility: box('[data-pane="inspector"]'),
+      player: box('[data-slot="player-dock"]'),
       rootMinWidth: getComputedStyle(document.documentElement).minWidth,
       bodyMinWidth: getComputedStyle(document.body).minWidth,
     };
@@ -88,7 +91,10 @@ export async function expectWorkbenchWithinBounds(
       if (geometry.player) {
         expect(geometry.utility.bottom).toBeLessThanOrEqual(geometry.player.y - geometry.gutter);
       }
-      await expect(page.locator('.utility-workbench-pane')).toHaveClass(/is-overlay/);
+      await expect(page.locator('[data-pane="inspector"]')).toHaveAttribute(
+        'data-presentation-mode',
+        'overlay',
+      );
       await expect(page.getByRole('separator', { name: 'Resize utility pane' })).toHaveCount(0);
     }
     expect(Math.round(geometry.viewportWidth - geometry.utility.right)).toBeGreaterThanOrEqual(
@@ -99,16 +105,16 @@ export async function expectWorkbenchWithinBounds(
   }
   expect(geometry.rootMinWidth).toBe('0px');
   expect(geometry.bodyMinWidth).toBe('0px');
-  await expect(page.locator('.workbench')).toHaveAttribute('data-layout-fits', 'true');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute('data-layout-fits', 'true');
 }
 
 export async function readPlayerBarGeometry(page: Page) {
   return page.evaluate(() => {
-    const player = document.querySelector<HTMLElement>('.player-bar');
+    const player = document.querySelector<HTMLElement>('[data-slot="player-dock"]');
     const primary = player?.querySelector<HTMLElement>('[data-testid="player-primary-slot"]');
     const controls = player?.querySelector<HTMLElement>('[data-testid="player-controls-row"]');
-    const timeline = player?.querySelector<HTMLElement>('.player-timeline');
-    const rail = player?.querySelector<HTMLElement>('.player-timeline progress');
+    const timeline = player?.querySelector<HTMLElement>('[data-slot="player-timeline"]');
+    const rail = player?.querySelector<HTMLElement>('[data-slot="player-timeline"] progress');
     if (!player || !primary || !controls || !timeline || !rail) return null;
 
     const rect = (element: Element) => {
@@ -116,11 +122,11 @@ export async function readPlayerBarGeometry(page: Page) {
       return { x: box.x, y: box.y, width: box.width, height: box.height };
     };
     const controlSelectors: Record<string, string> = {
-      Shuffle: '.player-shuffle-action',
-      Previous: '.player-previous-action',
-      Primary: '.player-primary-action',
-      Next: '.player-next-action',
-      Stop: '.player-stop-action',
+      Shuffle: 'button[aria-label="Shuffle"]',
+      Previous: 'button[aria-label="Previous"]',
+      Primary: '[data-slot="primary-transport"]',
+      Next: 'button[aria-label="Next"]',
+      Stop: 'button[aria-label="Stop"]',
     };
     const visibleControlCenters: Record<string, number> = {};
     const visibleControls: Record<
@@ -166,7 +172,7 @@ export async function expectFiveTransportControls(player: Locator, primaryName: 
   for (const name of ['Shuffle', 'Previous', primaryName, 'Next', 'Stop']) {
     await expect(player.getByRole('button', { name, exact: true })).toBeVisible();
   }
-  await expect(player.locator('.player-controls-row button')).toHaveCount(5);
+  await expect(player.locator('[data-testid="player-controls-row"] button')).toHaveCount(5);
 }
 
 export async function readRightDockGeometry(page: Page) {
@@ -178,7 +184,7 @@ export async function readRightDockGeometry(page: Page) {
     };
     const result: Record<string, { x: number; right: number; centerY: number }> = {};
     for (const [name, selector] of Object.entries(selectors)) {
-      const button = document.querySelector<HTMLElement>(`.player-tools ${selector}`);
+      const button = document.querySelector<HTMLElement>(`[data-slot="player-tools"] ${selector}`);
       if (!button) return null;
       const box = button.getBoundingClientRect();
       result[name] = { x: box.x, right: box.right, centerY: box.y + box.height / 2 };
@@ -236,30 +242,36 @@ export async function expectRecoveryBannerWithinViewport(page: Page) {
   expect(documentWidth).toBeLessThanOrEqual(viewport?.width ?? 0);
 }
 
-export async function startSelectedSong(page: Page) {
+export async function startSelectedSong(
+  page: Page,
+  options: { waitFor?: 'playing' | 'pending' | 'recovery' } = {},
+) {
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   const proceed = player.getByRole('button', { name: 'Proceed with current settings' });
-  if (await proceed.isVisible().catch(() => false)) await proceed.click();
+  if (options.waitFor === 'recovery') {
+    await expect(page.getByRole('alert')).toBeVisible();
+  } else if (options.waitFor === 'pending') {
+    await expect(player.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
+  } else {
+    if (await proceed.isVisible().catch(() => false)) await proceed.click();
+    await expect(player.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
+  }
   return player;
 }
 
-export async function chooseAppSelectOption(page: Page, trigger: Locator, value: string) {
+export async function chooseSelectOption(page: Page, trigger: Locator, value: string) {
   await trigger.click();
-  await page.locator(`.app-select-option[data-value="${value}"]`).click();
-  await expect(page.locator('.app-select-popover')).toBeHidden();
+  await page.locator(`[data-slot="select-item"][data-value="${value}"]`).click();
+  await expect(page.locator('[data-slot="select-content"]:visible')).toHaveCount(0);
 }
 
 export async function selectPalette(page: Page, palette: PaletteId) {
   await page.getByRole('button', { name: 'Open settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
-  await chooseAppSelectOption(
-    page,
-    dialog.getByRole('combobox', { name: 'Dark palette' }),
-    palette,
-  );
+  await chooseSelectOption(page, dialog.getByRole('combobox', { name: 'Dark palette' }), palette);
   await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
   await dialog.getByRole('button', { name: 'Close settings' }).click();

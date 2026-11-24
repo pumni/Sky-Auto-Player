@@ -20,7 +20,7 @@ async function openSongDetails(page: Page, title: string) {
     );
   });
   await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
-  await expect(page.locator('.app-shell')).toBeVisible();
+  await expect(page.locator('[data-app-shell]')).toBeVisible();
   await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
   await page.getByRole('searchbox', { name: 'Search Built-in Songs' }).fill(title);
   const row = page.getByRole('row', { name: new RegExp(title, 'i') });
@@ -59,13 +59,15 @@ test('loss proposal requires explicit acceptance before preparing a multitrack p
   await primarySlot.getByRole('button', { name: 'Play' }).click();
   const accept = page.getByRole('button', { name: 'Accept conversion losses and prepare' });
   await expect(accept).toBeVisible();
-  await page.locator('.sheet-consent-panel').scrollIntoViewIfNeeded();
+  await page
+    .locator('[role="group"][aria-label="Conversion loss consent"]')
+    .scrollIntoViewIfNeeded();
   await capture(page, 'multitrack-loss-proposal.png');
 
   await accept.click();
   await expect(page.getByText('Conversion losses accepted for this plan.')).toBeVisible();
   await expect(primarySlot.getByRole('button', { name: 'Play' })).toBeVisible();
-  await page.locator('.sheet-consent-accepted').scrollIntoViewIfNeeded();
+  await page.locator('[data-slot="sheet-consent-accepted"]').scrollIntoViewIfNeeded();
   await capture(page, 'multitrack-loss-accepted.png');
 });
 

@@ -6,8 +6,8 @@ test('song title tooltip appears only for clipped text at narrow and wide layout
   // Use the named default fixture so Aurora Landing exists in both viewport sizes.
   await page.goto('/');
   const row = page.getByRole('row', { name: /Aurora Landing/ });
-  const title = row.locator('.track-title-text');
-  const cell = row.locator('.track-cell-title');
+  const title = row.locator('[data-track-title]');
+  const cell = row.locator('[data-slot="track-title-cell"]');
 
   for (const viewport of [
     { width: 1649, height: 927 },

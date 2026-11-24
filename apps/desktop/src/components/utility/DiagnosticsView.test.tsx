@@ -614,7 +614,9 @@ describe('DiagnosticsView', () => {
       ),
     ).toBeInTheDocument();
     expect(screen.getByText(/Completion p95 observer value -1\.50 ms/)).toBeInTheDocument();
-    expect(document.querySelector('.plot-zero-axis')).not.toBeNull();
+    expect(
+      screen.getByRole('img', { name: /Session max SendInput pre-call lateness/ }),
+    ).toBeInTheDocument();
   });
 
   it('uses backend severity precedence and renders the last error', () => {

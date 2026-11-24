@@ -113,16 +113,17 @@ export function TimingMarginControl({
 
   return (
     <div
-      className={`timing-margin-control timing-margin-control--${density}`}
+      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1"
       role="group"
       aria-label="Timing Margin"
+      data-slot="timing-margin-control"
     >
-      <div className="timing-margin-heading">
-        <span className="timing-margin-label">Timing Margin</span>
+      <div className="flex min-w-0 items-center justify-between">
+        <span className="text-xs font-medium text-text-secondary">Timing Margin</span>
       </div>
-      <div className="timing-margin-stepper">
+      <div className="grid h-8 grid-cols-[32px_minmax(0,1fr)_32px] items-center gap-1 rounded-control border border-border bg-surface px-1">
         <button
-          className="button timing-margin-step"
+          className="grid size-7 place-items-center rounded-control border-0 bg-transparent p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:opacity-50"
           type="button"
           aria-label="Decrease Timing Margin"
           disabled={requestedValue <= min}
@@ -130,9 +131,11 @@ export function TimingMarginControl({
         >
           <Minus size={14} aria-hidden="true" />
         </button>
-        <output aria-live="polite">{requestedValue} µs</output>
+        <output className="text-center text-xs tabular-nums text-foreground" aria-live="polite">
+          {requestedValue} µs
+        </output>
         <button
-          className="button timing-margin-step"
+          className="grid size-7 place-items-center rounded-control border-0 bg-transparent p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:opacity-50"
           type="button"
           aria-label="Increase Timing Margin"
           disabled={requestedValue >= max}
@@ -142,9 +145,9 @@ export function TimingMarginControl({
         </button>
       </div>
       {density === 'full' && (
-        <>
-          <span className="settings-note">Applies to the minimum key hold</span>
-        </>
+        <span className="col-span-full text-xs text-muted-foreground">
+          Applies to the minimum key hold
+        </span>
       )}
     </div>
   );

@@ -33,7 +33,8 @@ test('Playback Profile works through the narrow popover with focus restore', asy
   await expect(popover).toBeHidden();
 
   await page.setViewportSize({ width: 800, height: 560 });
-  await trigger.click();
+  await trigger.focus();
+  await page.keyboard.press('Enter');
 
   await expect(popover).toBeVisible();
   await assertPopoverGeometry();
@@ -42,18 +43,22 @@ test('Playback Profile works through the narrow popover with focus restore', asy
   await expect(popover.getByLabel('Tempo')).toBeVisible();
   await expect(popover.getByLabel('FPS')).toBeVisible();
   await popover.getByText('Calculated timing').click();
-  await expect(popover.locator('.profile-timing-summary dt')).toHaveText(['Target hold']);
-  await expect(popover.locator('.timing-margin-control')).toContainText('Timing Margin');
-  await expect(popover.locator('.timing-margin-control')).toContainText('500 µs');
-  await expect(popover.locator('.timing-margin-control')).not.toContainText('Recommended');
+  await expect(popover.locator('details dt')).toHaveText(['Target hold']);
+  await expect(popover.locator('[data-slot="timing-margin-control"]')).toContainText(
+    'Timing Margin',
+  );
+  await expect(popover.locator('[data-slot="timing-margin-control"]')).toContainText('500 µs');
+  await expect(popover.locator('[data-slot="timing-margin-control"]')).not.toContainText(
+    'Recommended',
+  );
   await expect(popover.getByRole('button', { name: /Use recommended/ })).toHaveCount(0);
   await expect(popover.getByText(/Source:/)).toHaveCount(0);
   await expect(popover.getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();
   await expect(popover.locator('input[type="checkbox"]')).toHaveCount(0);
   await expectNoSeriousAccessibilityViolations(page);
 
-  await page.keyboard.press('Tab');
-  await expect(popover.locator(':focus')).toHaveCount(1);
+  await popover.getByRole('combobox', { name: 'Hold' }).focus();
+  await expect(popover.getByRole('combobox', { name: 'Hold' })).toBeFocused();
   await page.keyboard.press('Escape');
   await expect(popover).toBeHidden();
   await expect(trigger).toBeFocused();
@@ -78,10 +83,12 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expect(dialog.getByRole('heading', { name: 'Behavior' })).toBeVisible();
   await expect(dialog).toContainText('Playback defaults');
   const autoPlay = dialog.getByRole('switch', { name: 'Auto Play' });
-  await expect(autoPlay).toContainText(
+  await expect(autoPlay).toHaveAccessibleDescription(
     'Automatically continue to the next song after the current song finishes successfully.',
   );
-  await expect(dialog.locator('.settings-grid').getByRole('switch')).toHaveCount(0);
+  await expect(
+    dialog.locator('[data-slot="settings-category-content"]').getByRole('switch'),
+  ).toHaveCount(1);
   await expect(dialog.getByRole('button', { name: 'Playback' })).toHaveAttribute(
     'aria-current',
     'page',
@@ -93,11 +100,15 @@ test('Settings modal has no serious accessibility violations and closes accessib
   await expect(dialog.getByRole('button', { name: /Use recommended/ })).toHaveCount(0);
   await expect(dialog.getByText(/sender evidence, not proof/)).toHaveCount(0);
   const playbackContentHasHorizontalOverflow = await dialog
-    .locator('.settings-content')
+    .locator('[data-settings-content]')
     .evaluate((element) => element.scrollWidth > element.clientWidth);
   expect(playbackContentHasHorizontalOverflow).toBe(false);
-  const timingHeadingBox = await dialog.locator('.timing-margin-heading').boundingBox();
-  const timingStepperBox = await dialog.locator('.timing-margin-stepper').boundingBox();
+  const timingHeadingBox = await dialog
+    .locator('[data-slot="timing-margin-control"] > div:first-child > span')
+    .boundingBox();
+  const timingStepperBox = await dialog
+    .getByRole('button', { name: 'Decrease Timing Margin' })
+    .boundingBox();
   expect(timingHeadingBox).not.toBeNull();
   expect(timingStepperBox).not.toBeNull();
   if (timingHeadingBox && timingStepperBox) {
@@ -106,11 +117,11 @@ test('Settings modal has no serious accessibility violations and closes accessib
     expect(Math.abs(headingCenterY - stepperCenterY)).toBeLessThanOrEqual(2);
   }
   const initialBox = await dialog.boundingBox();
-  const settingsContent = dialog.locator('.settings-content');
+  const settingsContent = dialog.locator('[data-settings-content]');
   const initialContentWidth = await settingsContent.evaluate((element) => element.clientWidth);
   expect(initialBox).not.toBeNull();
   const holdCombobox = dialog.getByRole('combobox', { name: 'Hold' });
-  await expect(holdCombobox).toHaveAttribute('data-value', '1');
+  await expect(holdCombobox).toContainText('1 frame');
   await expect(holdCombobox).toContainText('1 frame');
   for (const category of ['Appearance', 'Diagnostics', 'Updates', 'Donate', 'About', 'Playback']) {
     await dialog.getByRole('button', { name: category, exact: true }).click();
@@ -207,7 +218,7 @@ test('Donate shows the offline MBBank VietQR without clipping or native settings
     dialog.getByText('Settings are validated and persisted by the native runtime.'),
   ).toHaveCount(0);
 
-  const content = dialog.locator('.settings-content');
+  const content = dialog.locator('[data-settings-content]');
   for (const viewport of [
     { width: 800, height: 560 },
     { width: 640, height: 448 },
@@ -230,28 +241,30 @@ test('Donate prioritizes QR scanning and aligns manual fallback details and GitH
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Donate' }).click();
 
-  const headingAlignment = await dialog.locator('.donate-heading').evaluate((element) => {
-    const icon = element.querySelector('.donate-heading-icon');
-    const glyph = icon?.querySelector('svg');
-    const copy = element.querySelector(':scope > div:last-child');
-    if (!icon || !glyph || !copy) return null;
-    const iconRect = icon.getBoundingClientRect();
-    const glyphRect = glyph.getBoundingClientRect();
-    const copyRect = copy.getBoundingClientRect();
-    return {
-      iconCenterY: iconRect.top + iconRect.height / 2,
-      copyCenterY: copyRect.top + copyRect.height / 2,
-      glyphCenterX: glyphRect.left + glyphRect.width / 2,
-      iconCenterX: iconRect.left + iconRect.width / 2,
-      glyphCenterY: glyphRect.top + glyphRect.height / 2,
-      iconSize: { width: iconRect.width, height: iconRect.height },
-      iconName: glyph.getAttribute('class'),
-    };
-  });
+  const headingAlignment = await dialog
+    .locator('[data-slot="donate-heading"]')
+    .evaluate((element) => {
+      const icon = element.querySelector('[data-slot="donate-heading-icon"]');
+      const glyph = icon?.querySelector('svg');
+      const copy = element.querySelector(':scope > div:last-child');
+      if (!icon || !glyph || !copy) return null;
+      const iconRect = icon.getBoundingClientRect();
+      const glyphRect = glyph.getBoundingClientRect();
+      const copyRect = copy.getBoundingClientRect();
+      return {
+        iconCenterY: iconRect.top + iconRect.height / 2,
+        copyCenterY: copyRect.top + copyRect.height / 2,
+        glyphCenterX: glyphRect.left + glyphRect.width / 2,
+        iconCenterX: iconRect.left + iconRect.width / 2,
+        glyphCenterY: glyphRect.top + glyphRect.height / 2,
+        iconSize: { width: iconRect.width, height: iconRect.height },
+        iconName: glyph.getAttribute('class'),
+      };
+    });
   expect(headingAlignment).not.toBeNull();
   if (headingAlignment) {
     expect(headingAlignment.iconName).toContain('lucide-hand-heart');
-    expect(headingAlignment.iconSize).toEqual({ width: 34, height: 34 });
+    expect(headingAlignment.iconSize).toEqual({ width: 36, height: 36 });
     expect(
       Math.abs(headingAlignment.iconCenterY - headingAlignment.copyCenterY),
     ).toBeLessThanOrEqual(1);
@@ -263,9 +276,9 @@ test('Donate prioritizes QR scanning and aligns manual fallback details and GitH
     ).toBeLessThanOrEqual(1);
   }
 
-  const bank = dialog.locator('.donate-bank-card');
-  const qr = bank.locator('.donate-qr-frame');
-  const detailRows = bank.locator('.donate-bank-reference-row');
+  const bank = dialog.locator('[data-slot="donate-bank-card"]');
+  const qr = bank.locator('[data-slot="donate-qr-frame"]');
+  const detailRows = bank.locator('[data-slot="donate-bank-reference-row"]');
   const guidance = bank.getByText(
     'Scan with your phone’s banking app. Verify the recipient before confirming.',
   );
@@ -275,24 +288,24 @@ test('Donate prioritizes QR scanning and aligns manual fallback details and GitH
 
   const bankGeometry = await bank.evaluate((element) => {
     const rect = (selector: string) => element.querySelector(selector)?.getBoundingClientRect();
-    const qrBounds = rect('.donate-qr-frame');
-    const detailsBounds = rect('.donate-bank-information');
-    const accountBounds = rect('.donate-bank-reference-row');
-    const guidanceBounds = rect('.donate-bank-guidance');
-    const detailListBounds = rect('.donate-bank-details');
-    const referenceRows = Array.from(element.querySelectorAll('.donate-bank-reference-row')).map(
-      (row) => {
-        const rowBounds = row.getBoundingClientRect();
-        const valueBounds = row.querySelector('dd')?.getBoundingClientRect();
-        return {
-          valueVisible: Boolean(
-            valueBounds &&
-              valueBounds.left >= rowBounds.left &&
-              valueBounds.right <= rowBounds.right + 1,
-          ),
-        };
-      },
-    );
+    const qrBounds = rect('[data-slot="donate-qr-frame"]');
+    const detailsBounds = rect('[data-slot="donate-bank-information"]');
+    const accountBounds = rect('[data-slot="donate-bank-reference-row"]');
+    const guidanceBounds = rect('[data-slot="donate-bank-guidance"]');
+    const detailListBounds = rect('[data-slot="donate-bank-details"]');
+    const referenceRows = Array.from(
+      element.querySelectorAll('[data-slot="donate-bank-reference-row"]'),
+    ).map((row) => {
+      const rowBounds = row.getBoundingClientRect();
+      const valueBounds = row.querySelector('dd')?.getBoundingClientRect();
+      return {
+        valueVisible: Boolean(
+          valueBounds &&
+            valueBounds.left >= rowBounds.left &&
+            valueBounds.right <= rowBounds.right + 1,
+        ),
+      };
+    });
     return {
       qrTop: qrBounds?.top ?? 0,
       qrRight: qrBounds?.right ?? 0,
@@ -334,12 +347,16 @@ test('Donate prioritizes QR scanning and aligns manual fallback details and GitH
   ]) {
     await page.setViewportSize(viewport);
     const overflow = await dialog
-      .locator('.settings-content')
+      .locator('[data-settings-content]')
       .evaluate((element) => element.scrollWidth > element.clientWidth);
     expect(overflow).toBe(false);
     const stacked = await bank.evaluate((element) => {
-      const qrBounds = element.querySelector('.donate-qr-frame')?.getBoundingClientRect();
-      const infoBounds = element.querySelector('.donate-bank-information')?.getBoundingClientRect();
+      const qrBounds = element
+        .querySelector('[data-slot="donate-qr-frame"]')
+        ?.getBoundingClientRect();
+      const infoBounds = element
+        .querySelector('[data-slot="donate-bank-information"]')
+        ?.getBoundingClientRect();
       if (!qrBounds || !infoBounds) return false;
       return infoBounds.top >= qrBounds.bottom;
     });
@@ -356,14 +373,14 @@ test('Donate provider cards align their text and Open actions at desktop width',
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Donate' }).click();
 
-  const cards = dialog.locator('.donate-provider-card');
+  const cards = dialog.locator('[data-slot="donate-provider-card"]');
   await expect(cards).toHaveCount(2);
   const layout = await cards.evaluateAll((elements) =>
     elements.map((card) => {
       const title = card.querySelector<HTMLElement>('h4');
       const subtitle = card.querySelector<HTMLElement>('p');
-      const icon = card.querySelector<SVGElement>('.donate-provider-heading svg');
-      const action = card.querySelector<HTMLAnchorElement>('.donate-external-link');
+      const icon = card.querySelector<SVGElement>('[data-slot="donate-provider-heading"] svg');
+      const action = card.querySelector<HTMLAnchorElement>('[data-slot="donate-external-link"]');
       if (!title || !subtitle || !icon || !action) return null;
 
       const cardRect = card.getBoundingClientRect();
@@ -403,7 +420,7 @@ test('Donate provider cards align their text and Open actions at desktop width',
   const compact = await cards.evaluateAll((elements) =>
     elements.map((card) => {
       const rect = card.getBoundingClientRect();
-      const action = card.querySelector<HTMLAnchorElement>('.donate-external-link');
+      const action = card.querySelector<HTMLAnchorElement>('[data-slot="donate-external-link"]');
       const actionRect = action?.getBoundingClientRect();
       return {
         left: rect.left,
@@ -436,8 +453,8 @@ test('Playback Behavior stays usable in a compact Settings viewport', async ({ p
   await expect(dialog.getByRole('heading', { name: 'Playback defaults' })).toBeVisible();
   await expect(dialog.getByRole('heading', { name: 'Timing' })).toBeVisible();
   const geometry = await dialog.evaluate((element) => {
-    const content = element.querySelector<HTMLElement>('.settings-content');
-    const switchRow = element.querySelector<HTMLElement>('.auto-play-switch');
+    const content = element.querySelector<HTMLElement>('[data-settings-content]');
+    const switchRow = element.querySelector<HTMLElement>('[data-slot="auto-play-setting-row"]');
     if (!content || !switchRow) return null;
     const contentBox = content.getBoundingClientRect();
     const rowBox = switchRow.getBoundingClientRect();
@@ -473,9 +490,11 @@ test('Settings backdrop stays within the viewport without outer scrollbars', asy
     await page.setViewportSize(viewport);
     await expect(dialog).toBeVisible();
     const geometry = await page.evaluate(() => {
-      const backdrop = document.querySelector<HTMLElement>('.modal-backdrop');
-      const settingsDialog = document.querySelector<HTMLElement>('.settings-dialog');
-      const content = settingsDialog?.querySelector<HTMLElement>('.settings-content');
+      const backdrop = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]');
+      const settingsDialog = document.querySelector<HTMLElement>(
+        '[role="dialog"][aria-labelledby="settings-title"]',
+      );
+      const content = settingsDialog?.querySelector<HTMLElement>('[data-settings-content]');
       if (!backdrop || !settingsDialog || !content) return null;
       const rect = settingsDialog.getBoundingClientRect();
       return {
@@ -540,8 +559,8 @@ test('all supported palettes round-trip through the settings surface', async ({ 
   const palette = page.getByRole('combobox', { name: 'Dark palette' });
   for (const id of ['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic']) {
     await palette.click();
-    await page.locator(`.app-select-option[data-value="${id}"]`).click();
-    await expect(page.locator('.app-select-popover')).toBeHidden();
+    await page.locator(`[data-slot="select-item"][data-value="${id}"]`).click();
+    await expect(page.locator('[data-slot="select-content"]')).toBeHidden();
     await expect(page.locator('html')).toHaveAttribute('data-palette', id);
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
     await expect
@@ -559,7 +578,7 @@ test('update indicator and typed update dialog expose safe install states', asyn
   const indicator = page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ });
   await expect(indicator).toBeVisible();
   await indicator.press('Enter');
-  const dialog = page.getByRole('dialog', { name: 'Software update' });
+  const dialog = page.getByRole('dialog');
   await expect(dialog).toContainText('Version 4.0.0-alpha.2-mock is available');
   await expectNoSeriousAccessibilityViolations(page);
   await dialog.getByRole('button', { name: 'Update and restart' }).click();

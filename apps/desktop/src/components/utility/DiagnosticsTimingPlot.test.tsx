@@ -97,9 +97,8 @@ describe('DiagnosticsTimingPlot', () => {
     );
 
     expect(screen.getByRole('img')).toBeInTheDocument();
-    expect(container.querySelectorAll('.plot-grid-line')).toHaveLength(2);
-    expect(container.querySelector('.plot-zero-axis')).not.toBeNull();
-    expect(container.querySelector('.plot-latest-dot')).not.toBeNull();
+    expect(container.querySelectorAll('svg line')).toHaveLength(3);
+    expect(container.querySelectorAll('svg circle')).toHaveLength(1);
     expect(screen.getByText('500 µs')).toBeInTheDocument();
     expect(screen.getByText('250 µs')).toBeInTheDocument();
   });

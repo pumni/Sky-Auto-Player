@@ -1,5 +1,5 @@
-import { TabPanel } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { TabsContent } from '../ui/tabs';
 import { backendStatusLabel, measure, playbackStatusLabel } from './diagnosticsPresentation';
 import {
   DiagnosticsEmptyState,
@@ -144,7 +144,7 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
           ? 'danger'
           : 'neutral';
   return (
-    <TabPanel id="performance" className="diagnostics-panel">
+    <TabsContent value="performance" className="min-h-[116px] min-w-0 flex-1 pt-3">
       {diagnostics.error ? (
         <DiagnosticsEmptyState
           title="Diagnostics error"
@@ -184,12 +184,15 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
       ) : (
         <>
           <section
-            className="diagnostics-sender-summary"
+            className={`mb-3 grid gap-1 border-l-[3px] border-border rounded-r-control bg-surface px-2.5 py-2 ${senderSummary.tone === 'healthy' ? 'border-l-success text-success' : senderSummary.tone === 'warning' ? 'border-l-warning text-warning' : senderSummary.tone === 'danger' ? 'border-l-danger text-danger' : 'text-text-secondary'}`}
             data-tone={senderSummary.tone}
             aria-label="Sender-side status"
+            data-slot="diagnostics-sender-summary"
           >
-            <strong>Sender-side status: {senderSummary.status}</strong>
-            <span>{senderSummary.detail}</span>
+            <strong className="text-xs font-semibold">
+              Sender-side status: {senderSummary.status}
+            </strong>
+            <span className="text-xs text-text-secondary">{senderSummary.detail}</span>
           </section>
           <MetricGroup title="Sender availability">
             <Metric
@@ -372,6 +375,6 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
           </MetricGroup>
         </>
       )}
-    </TabPanel>
+    </TabsContent>
   );
 }

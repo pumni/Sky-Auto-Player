@@ -5,16 +5,7 @@ import { App } from './app/App';
 import { ErrorBoundary } from './app/ErrorBoundary';
 import { isTauriRuntime } from './platform/runtime';
 import { recordStartupTelemetry } from './bridge/startupTelemetry';
-import './styles/tokens.css';
-import './styles/reset.css';
-import './styles/base.css';
-import './styles/chrome.css';
-import './styles/layout.css';
-import './styles/workbench.css';
-import './styles/tracks.css';
-import './styles/player.css';
-import './styles/overlays.css';
-import './styles/themes.css';
+import './styles/globals.css';
 
 recordStartupTelemetry('frontend.entry');
 const mockDurations = (

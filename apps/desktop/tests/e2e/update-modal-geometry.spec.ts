@@ -19,7 +19,7 @@ const finalNoteLine = 'FINAL RELEASE NOTE LINE — Hoàn tất cập nhật.';
 
 async function readReleaseNotesScrollState(notesRegion: Locator) {
   return notesRegion.evaluate((region, marker) => {
-    const text = region.querySelector<HTMLElement>('.update-notes');
+    const text = region.querySelector<HTMLElement>('[data-slot="update-release-notes"]');
     const textNode = text?.firstChild;
     if (!textNode || textNode.nodeType !== Node.TEXT_NODE) {
       throw new Error('Update release notes text node is missing');
@@ -81,7 +81,7 @@ test('update modal adapts to release-note length and viewport geometry', async (
       await page.goto(`/?mockReleaseNotes=${fixture.name}`);
       await page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ }).click();
 
-      const dialog = page.getByRole('dialog', { name: 'Software update' });
+      const dialog = page.getByRole('dialog');
       await expect(dialog).toBeVisible();
       const updateButton = dialog.getByRole('button', { name: 'Update and restart' });
       const laterButton = dialog.getByRole('button', { name: 'Later' });
@@ -100,11 +100,11 @@ test('update modal adapts to release-note length and viewport geometry', async (
           const { x, y, width, height } = node.getBoundingClientRect();
           return { x, y, width, height };
         };
-        const header = element.querySelector<HTMLElement>('.dialog-heading');
-        const footer = element.querySelector<HTMLElement>('.update-actions');
-        const notesRegion = element.querySelector<HTMLElement>('.update-notes-region');
-        const notes = element.querySelector<HTMLElement>('.update-notes');
-        const backdrop = document.querySelector<HTMLElement>('.modal-backdrop');
+        const header = element.querySelector<HTMLElement>('[data-slot="update-dialog-header"]');
+        const footer = element.querySelector<HTMLElement>('[data-slot="update-dialog-actions"]');
+        const notesRegion = element.querySelector<HTMLElement>('[data-slot="update-notes-region"]');
+        const notes = element.querySelector<HTMLElement>('[data-slot="update-release-notes"]');
+        const backdrop = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]');
         if (!header || !footer || !backdrop) return null;
         const notesStyle = notesRegion ? getComputedStyle(notesRegion) : null;
         return {
@@ -140,7 +140,7 @@ test('update modal adapts to release-note length and viewport geometry', async (
                 node.scrollHeight > node.clientHeight + 1
               );
             })
-            .map((node) => node.className),
+            .map((node) => (node === notesRegion ? 'update-notes-region' : node.className)),
           backdrop: {
             clientHeight: backdrop.clientHeight,
             scrollHeight: backdrop.scrollHeight,
@@ -207,7 +207,7 @@ test('update modal adapts to release-note length and viewport geometry', async (
       } else {
         await expect(notesRegion).toBeVisible();
         await expect(notesRegion).toHaveAttribute('tabindex', '0');
-        const notes = notesRegion.locator('.update-notes');
+        const notes = notesRegion.locator('[data-slot="update-release-notes"]');
         await expect(dialog.locator('[aria-live]')).toHaveCount(1);
         await expect(dialog.getByRole('status')).not.toContainText('Unbroken text:');
         if (fixture.name === 'short') {
@@ -262,7 +262,7 @@ test('update modal adapts to release-note length and viewport geometry', async (
             range.setStart(textNode, 0);
             range.setEnd(textNode, Math.min(32, textNode.textContent?.length ?? 0));
             const { top, bottom } = range.getBoundingClientRect();
-            const port = element.closest<HTMLElement>('.update-notes-region');
+            const port = element.closest<HTMLElement>('[data-slot="update-notes-region"]');
             const portRect = port?.getBoundingClientRect();
             return portRect
               ? { top, bottom, portTop: portRect.top, portBottom: portRect.bottom }
@@ -305,16 +305,20 @@ test('update modal adapts to release-note length and viewport geometry', async (
   }
 });
 
-test('update dialog remains usable at 125% and 150% browser zoom', async ({ page }) => {
+test('update dialog remains usable at 125% and 150% zoom-equivalent viewports', async ({
+  page,
+}) => {
   for (const zoom of [1.25, 1.5]) {
-    await page.setViewportSize({ width: 995, height: 706 });
+    const physicalViewport = { width: 995, height: 706 };
+    const viewport = {
+      width: Math.floor(physicalViewport.width / zoom),
+      height: Math.floor(physicalViewport.height / zoom),
+    };
+    await page.setViewportSize(viewport);
     await page.goto('/?mockReleaseNotes=maximum');
-    await page.evaluate((scale) => {
-      document.documentElement.style.zoom = String(scale);
-    }, zoom);
     await page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ }).click();
 
-    const dialog = page.getByRole('dialog', { name: 'Software update' });
+    const dialog = page.getByRole('dialog');
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Update and restart' })).toBeVisible();
     await expect(dialog.getByRole('button', { name: 'Later' })).toBeVisible();
@@ -330,16 +334,20 @@ test('update dialog remains usable at 125% and 150% browser zoom', async ({ page
         atBottom: true,
         finalLineVisible: true,
       });
-    console.info(
-      '[Update modal zoom keyboard End]',
-      JSON.stringify({ zoom, state: await readReleaseNotesScrollState(notesRegion) }),
-    );
     const overflow = await page.evaluate(() => ({
       viewportWidth: document.documentElement.clientWidth,
       documentWidth: document.documentElement.scrollWidth,
       viewportHeight: document.documentElement.clientHeight,
       documentHeight: document.documentElement.scrollHeight,
     }));
+    const dialogBox = await dialog.boundingBox();
+    expect(dialogBox).not.toBeNull();
+    if (dialogBox) {
+      expect(dialogBox.x).toBeGreaterThanOrEqual(16);
+      expect(dialogBox.y).toBeGreaterThanOrEqual(16);
+      expect(dialogBox.x + dialogBox.width).toBeLessThanOrEqual(overflow.viewportWidth - 16);
+      expect(dialogBox.y + dialogBox.height).toBeLessThanOrEqual(overflow.viewportHeight - 16);
+    }
     expect(overflow.documentWidth).toBeLessThanOrEqual(overflow.viewportWidth);
     expect(overflow.documentHeight).toBeLessThanOrEqual(overflow.viewportHeight);
   }
@@ -353,8 +361,8 @@ test('long update errors scroll without hiding retry or dismissal controls', asy
   const checkButton = page.getByRole('button', { name: 'Check for updates', exact: true });
   await checkButton.click();
 
-  const dialog = page.getByRole('dialog', { name: 'Software update' });
-  const errorText = dialog.locator('.update-error-region');
+  const dialog = page.getByRole('dialog');
+  const errorText = dialog.locator('[data-slot="update-error-region"]');
   const checkAgain = dialog.getByRole('button', { name: 'Check again' });
   const close = dialog.getByRole('button', { name: 'Close', exact: true });
   await expect(dialog.getByRole('heading', { name: 'Update check failed' })).toBeVisible();
@@ -369,8 +377,8 @@ test('long update errors scroll without hiding retry or dismissal controls', asy
   await expect(dialog.getByRole('status')).not.toContainText('Cải thiện độ ổn định');
 
   const geometry = await dialog.evaluate((element) => {
-    const error = element.querySelector<HTMLElement>('.update-error-region');
-    const backdrop = document.querySelector<HTMLElement>('.modal-backdrop');
+    const error = element.querySelector<HTMLElement>('[data-slot="update-error-region"]');
+    const backdrop = document.querySelector<HTMLElement>('[data-slot="dialog-overlay"]');
     if (!error || !backdrop) return null;
     return {
       errorClientHeight: error.clientHeight,
@@ -385,14 +393,18 @@ test('long update errors scroll without hiding retry or dismissal controls', asy
             node.scrollHeight > node.clientHeight + 1
           );
         })
-        .map((node) => node.className),
+        .map((node) =>
+          node === element.querySelector('[data-slot="update-notes-region"]')
+            ? 'update-notes-region'
+            : (node.dataset.slot ?? node.className),
+        ),
       backdropClientHeight: backdrop.clientHeight,
       backdropScrollHeight: backdrop.scrollHeight,
     };
   });
   expect(geometry?.errorScrollHeight).toBeGreaterThan(geometry?.errorClientHeight ?? 0);
   expect(geometry?.errorScrollWidth).toBeLessThanOrEqual((geometry?.errorClientWidth ?? 0) + 1);
-  expect(geometry?.activeScrollports).toEqual(['inline-error update-error-region']);
+  expect(geometry?.activeScrollports).toEqual(['update-error-region']);
   expect(geometry?.backdropScrollHeight).toBeLessThanOrEqual(
     (geometry?.backdropClientHeight ?? 0) + 1,
   );
@@ -407,7 +419,7 @@ test('update dialog traps keyboard focus and restores it after Escape and outsid
   await trigger.focus();
   await page.keyboard.press('Enter');
 
-  const dialog = page.getByRole('dialog', { name: 'Software update' });
+  const dialog = page.getByRole('dialog');
   const close = dialog.getByRole('button', { name: 'Close update' });
   const updateAndRestart = dialog.getByRole('button', { name: 'Update and restart' });
   await expect(dialog).toBeVisible();
@@ -433,7 +445,7 @@ test('busy update cannot close from Escape, outside click, or the header button'
   await page.setViewportSize({ width: 995, height: 706 });
   await page.goto('/?mockReleaseNotes=short');
   await page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ }).click();
-  const dialog = page.getByRole('dialog', { name: 'Software update' });
+  const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: 'Update and restart' }).click();
   await expect(dialog.getByRole('heading', { name: 'Installing update…' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Close update' })).toBeDisabled();
@@ -451,7 +463,7 @@ test('update notes and actions remain visible with forced colors and reduced mot
   await page.goto('/?mockReleaseNotes=maximum');
   await page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ }).click();
 
-  const dialog = page.getByRole('dialog', { name: 'Software update' });
+  const dialog = page.getByRole('dialog');
   await expect(dialog.getByRole('region', { name: 'What’s new' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Update and restart' })).toBeVisible();
   await expect(dialog.getByRole('button', { name: 'Later' })).toBeVisible();

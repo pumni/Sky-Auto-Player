@@ -34,26 +34,37 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
   if (admissionRequired && prepared) {
     return (
       <section
-        className="player-admission player-admission-confirmation"
+        className="absolute bottom-[calc(100%+8px)] left-1/2 z-20 grid max-h-[min(68dvh,520px)] w-[min(600px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 grid-cols-1 gap-3 overflow-auto overscroll-contain rounded-pane border border-warning-border border-l-[3px] bg-popover px-4 py-3 shadow-2xl"
         role="group"
+        data-slot="playback-admission"
         aria-labelledby="playback-confirmation-title"
         aria-describedby="playback-confirmation-reason"
       >
-        <div className="admission-copy">
-          <strong id="playback-confirmation-title">Playback confirmation</strong>
-          <span className="admission-risk">{prepared.risk.headline}</span>
-          <p id="playback-confirmation-reason" className="admission-risk-reason">
+        <div className="grid min-w-0 gap-1.5">
+          <strong
+            className="text-sm font-semibold text-foreground"
+            id="playback-confirmation-title"
+          >
+            Playback confirmation
+          </strong>
+          <span className="overflow-visible whitespace-normal text-[13px] font-semibold text-warning">
+            {prepared.risk.headline}
+          </span>
+          <p
+            id="playback-confirmation-reason"
+            className="m-0 break-words text-xs leading-relaxed text-foreground"
+          >
             {prepared.risk.reasons.join(' ') || 'Review the selected song before starting.'}
           </p>
-          <p className="admission-estimate-note">
+          <p className="m-0 break-words text-xs leading-relaxed text-muted-foreground">
             {prepared.risk.short_up_gap_repeat_count > 0
               ? `${prepared.risk.short_up_gap_repeat_count} feasible same-key repeat(s) have an authored Up-to-Down gap shorter than one frame. The game may miss a short Up pulse.`
               : 'Review the prepared schedule before starting.'}{' '}
             Proceed keeps the authored timing and selected settings unchanged.
           </p>
         </div>
-        <div className="admission-actions">
-          <div className="admission-decisions">
+        <div className="grid min-w-0 gap-2.5">
+          <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,165px),1fr))] items-stretch gap-2.5">
             {(() => {
               const primaryDecision = prepared.decisions.some(
                 (item) => item.decision === 'use_recommended',
@@ -73,9 +84,13 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                       ? 'No short same-key Up gap'
                       : 'View timing estimate';
                 return (
-                  <div className="admission-option" key={decision.decision}>
+                  <div
+                    className="grid min-w-0 grid-rows-[minmax(48px,auto)_auto] content-start gap-1.5"
+                    data-slot="admission-option"
+                    key={decision.decision}
+                  >
                     <button
-                      className={`button${isPrimary ? ' button-primary' : ''}`}
+                      className="h-full min-h-12 w-full justify-center whitespace-normal px-2.5 py-1.5 text-center text-xs leading-[1.3]"
                       type="button"
                       disabled={transportOperation !== null}
                       ref={
@@ -89,8 +104,13 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                     >
                       {admissionDecisionLabel(decision.decision, decision.label)}
                     </button>
-                    <details className="admission-option-estimate">
-                      <summary>{estimateLabel}</summary>
+                    <details
+                      data-slot="admission-option-estimate"
+                      className="min-w-0 text-[11px] text-text-secondary"
+                    >
+                      <summary className="cursor-pointer break-words py-1 hover:text-foreground">
+                        {estimateLabel}
+                      </summary>
                       <TimingAdvisory advisory={variant?.timing_advisory} />
                     </details>
                   </div>
@@ -99,7 +119,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
             })()}
           </div>
           <button
-            className="button admission-cancel"
+            className="min-h-8 min-w-[100px] justify-self-end"
             type="button"
             title="Dismiss the prepared playback without starting"
             disabled={transportOperation !== null}
@@ -146,35 +166,43 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
 
   return (
     <section
-      className={`player-admission player-admission-error player-admission-${presentedIssue.kind}`}
+      className={`absolute bottom-[calc(100%+8px)] left-3 right-3 z-20 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-control border border-danger-border border-l-[3px] bg-danger-surface px-3 py-2.5 shadow-xl max-[700px]:grid-cols-1 ${['recoverable_status', 'conflict'].includes(presentedIssue.kind) ? 'border-warning-border bg-warning-surface' : ''}`}
       role="alert"
+      data-slot="playback-recovery"
       aria-labelledby="playback-recovery-title"
       aria-describedby="playback-recovery-message"
     >
-      <div className="admission-copy">
-        <strong id="playback-recovery-title">{presentedIssue.title}</strong>
-        <span id="playback-recovery-message" className="player-message">
+      <div className="grid min-w-0 gap-px">
+        <strong className="text-xs font-semibold text-foreground" id="playback-recovery-title">
+          {presentedIssue.title}
+        </strong>
+        <span
+          id="playback-recovery-message"
+          className={`block max-h-8 overflow-auto text-xs leading-[1.35] ${['recoverable_status', 'conflict'].includes(presentedIssue.kind) ? 'text-text-secondary' : 'break-words text-danger'}`}
+        >
           {presentedIssue.message}
         </span>
       </div>
-      <div className="admission-recovery-actions">
+      <div className="flex flex-none flex-wrap justify-end gap-2 max-[700px]:justify-start">
         {statusRecovery && (
           <button
-            className="button admission-recovery-action"
+            className="inline-flex min-h-8 items-center justify-center whitespace-nowrap px-2.5 text-xs"
             type="button"
             aria-label="Retry status"
             disabled={playback.statusRetryPending}
             onClick={() => void retryStatus()}
           >
-            <span className="admission-recovery-spinner-slot" aria-hidden="true">
-              {playback.statusRetryPending && <LoaderCircle size={13} />}
+            <span className="mr-1 grid size-3.5 place-items-center" aria-hidden="true">
+              {playback.statusRetryPending && (
+                <LoaderCircle className="animate-spin motion-reduce:animate-none" size={13} />
+              )}
             </span>
             <span>Retry status</span>
           </button>
         )}
         {canStop && (
           <button
-            className="button admission-recovery-action"
+            className="inline-flex min-h-8 items-center justify-center whitespace-nowrap px-2.5 text-xs"
             type="button"
             disabled={transportOperation === 'stopping'}
             onClick={() => void stop()}
@@ -184,7 +212,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
         )}
         {canTryAgain && (
           <button
-            className="button button-primary admission-recovery-action"
+            className="inline-flex min-h-8 items-center justify-center whitespace-nowrap px-2.5 text-xs"
             type="button"
             disabled={transportOperation !== null}
             onClick={() => void tryAgain()}
@@ -194,7 +222,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
         )}
         {blockedMessage && (
           <button
-            className="button admission-recovery-action"
+            className="inline-flex min-h-8 items-center justify-center whitespace-nowrap px-2.5 text-xs"
             type="button"
             disabled={transportOperation !== null}
             onClick={cancel}

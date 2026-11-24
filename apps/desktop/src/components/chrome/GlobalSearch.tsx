@@ -28,6 +28,15 @@ export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
         : source.id === 'builtin'
           ? 'Search Built-in Songs'
           : 'Search Library';
+  const scopeText = playlistAddMode
+    ? 'Built-in'
+    : source.kind === 'playlist'
+      ? (playlistName ?? 'Playlist')
+      : source.id === 'liked'
+        ? 'Liked'
+        : source.id === 'builtin'
+          ? 'Built-in'
+          : 'Library';
   return (
     <SearchInput
       key={playlistAddMode?.playlistId ?? 'library'}
@@ -35,6 +44,7 @@ export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
       {...(inputRef ? { inputRef } : {})}
       useStore={useStore}
       searchLabel={searchLabel}
+      scopeText={scopeText}
       placeholder={playlistAddMode ? 'Search Built-in Songs…' : `${searchLabel}…`}
     />
   );
@@ -43,6 +53,7 @@ export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
 interface SearchInputProps extends GlobalSearchProps {
   query: string;
   searchLabel: string;
+  scopeText: string;
   placeholder: string;
 }
 
@@ -52,7 +63,14 @@ interface SearchDraftState {
   inFlight: readonly string[];
 }
 
-function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: SearchInputProps) {
+function SearchInput({
+  inputRef,
+  query,
+  useStore,
+  searchLabel,
+  scopeText,
+  placeholder,
+}: SearchInputProps) {
   const search = useStore((store) => store.search);
   const [draftState, setDraftState] = useState<SearchDraftState | null>(null);
   const debounceTimerRef = useRef<number | null>(null);
@@ -121,9 +139,19 @@ function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: Se
   };
 
   return (
-    <label className="global-search" data-tauri-drag-region="false">
-      <Search size={16} aria-hidden="true" />
-      <span className="visually-hidden">{searchLabel}</span>
+    <label
+      data-slot="global-search"
+      className="flex h-8 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-card px-[9px] text-muted-foreground focus-within:border-ring focus-within:outline focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-ring"
+      data-tauri-drag-region="false"
+    >
+      <Search size={16} className="shrink-0" aria-hidden="true" />
+      <span className="sr-only">{searchLabel}</span>
+      <span
+        className="max-w-[72px] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border pr-2 text-[11px] text-text-tertiary"
+        aria-hidden="true"
+      >
+        {scopeText}
+      </span>
       <input
         ref={inputRef}
         value={inputValue}
@@ -134,7 +162,12 @@ function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: Se
         aria-label={searchLabel}
         data-tauri-drag-region="false"
       />
-      <kbd aria-hidden="true">/</kbd>
+      <kbd
+        className="rounded border border-border px-1 text-xs leading-[18px] text-muted-foreground max-[1100px]:hidden"
+        aria-hidden="true"
+      >
+        /
+      </kbd>
     </label>
   );
 }

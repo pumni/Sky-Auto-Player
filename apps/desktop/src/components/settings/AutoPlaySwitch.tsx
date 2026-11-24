@@ -1,4 +1,5 @@
 import { useId } from 'react';
+import { Switch } from '../ui/switch';
 
 interface AutoPlaySwitchProps {
   checked: boolean;
@@ -8,27 +9,27 @@ interface AutoPlaySwitchProps {
 export function AutoPlaySwitch({ checked, onChange }: AutoPlaySwitchProps) {
   const descriptionId = useId();
   return (
-    <button
-      className={`auto-play-switch${checked ? ' is-on' : ''}`}
-      type="button"
-      role="switch"
-      aria-label="Auto Play"
-      aria-checked={checked}
-      aria-describedby={descriptionId}
-      onClick={() => onChange(!checked)}
+    <div
+      data-slot="auto-play-setting-row"
+      className="flex min-w-0 items-center justify-between gap-2 px-0 py-1 text-text-secondary"
     >
-      <span className="auto-play-switch-copy">
-        <span className="auto-play-switch-label">Auto Play</span>
-        <span id={descriptionId} className="auto-play-switch-description">
+      <span className="grid min-w-0 gap-0.5">
+        <strong className="text-[13px] font-semibold text-foreground">Auto Play</strong>
+        <span id={descriptionId} className="text-xs leading-relaxed text-muted-foreground">
           Automatically continue to the next song after the current song finishes successfully.
         </span>
       </span>
-      <span className="auto-play-switch-control" aria-hidden="true">
-        <span className="auto-play-switch-track">
-          <span />
+      <div className="flex flex-none items-center gap-2">
+        <span className="text-xs tabular-nums text-muted-foreground" aria-live="polite">
+          {checked ? 'On' : 'Off'}
         </span>
-        <span className="auto-play-switch-state">{checked ? 'On' : 'Off'}</span>
-      </span>
-    </button>
+        <Switch
+          checked={checked}
+          onCheckedChange={onChange}
+          aria-label="Auto Play"
+          aria-describedby={descriptionId}
+        />
+      </div>
+    </div>
   );
 }

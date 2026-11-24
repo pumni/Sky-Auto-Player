@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { Tab, TabList, Tabs } from 'react-aria-components';
 import type { DesktopStoreHook } from '../../state/store';
+import { Tabs, TabsList, TabsTrigger } from '../ui/tabs';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import { DiagnosticsEventsPanel } from './DiagnosticsEventsPanel';
 import { DiagnosticsPerformancePanel } from './DiagnosticsPerformancePanel';
@@ -51,21 +51,25 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
   return (
     <div
       ref={scrollRef}
-      className="diagnostics-view scroll-surface"
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-auto px-4 pb-4"
       aria-labelledby="diagnostics-title"
+      data-slot="diagnostics-view"
     >
-      <h3 id="diagnostics-title" className="visually-hidden">
+      <h3 id="diagnostics-title" className="sr-only">
         Runtime diagnostics
       </h3>
       {diagnostics.error && (
-        <p className="inline-error" role="alert">
+        <p
+          className="rounded-control border border-danger-border bg-danger-surface px-2 py-1.5 text-xs text-danger"
+          role="alert"
+        >
           {diagnostics.error}
         </p>
       )}
       {diagnostics.enabled && <DiagnosticsPlaybackSummary useStore={useStore} />}
-      <div className="diagnostics-export">
+      <div className="mb-2.5 flex flex-wrap items-center gap-2">
         <button
-          className="diagnostics-export-button"
+          className="min-h-[30px] rounded-control border border-border bg-surface px-2.5 text-xs text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-progress disabled:opacity-70"
           type="button"
           title="Export the last available session envelope. Raw packet traces are not captured in production."
           disabled={traceExporting}
@@ -73,23 +77,45 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
         >
           {traceExporting ? 'Preparing sender metadata…' : 'Export sender metadata'}
         </button>
-        <span role="status">
+        <span className="text-xs text-text-tertiary" role="status">
           {visibleTraceExportIdentity
             ? 'Session metadata exported; raw packet trace was not captured in production.'
             : 'Exports the last available session, when present; no raw packet trace is recorded.'}
         </span>
       </div>
       {traceExportError && (
-        <p className="inline-error" role="alert">
+        <p
+          className="rounded-control border border-danger-border bg-danger-surface px-2 py-1.5 text-xs text-danger"
+          role="alert"
+        >
           {traceExportError}
         </p>
       )}
-      <Tabs className="diagnostics-tabs" defaultSelectedKey="performance">
-        <TabList aria-label="Diagnostics views">
-          <Tab id="performance">Performance</Tab>
-          <Tab id="timing">Timing</Tab>
-          <Tab id="events">Events</Tab>
-        </TabList>
+      <Tabs className="flex min-h-0 flex-1 flex-col gap-0" defaultValue="performance">
+        <TabsList
+          className="flex flex-none gap-0.5 overflow-x-auto border-b border-border"
+          aria-label="Diagnostics views"
+          activateOnFocus
+        >
+          <TabsTrigger
+            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink"
+            value="performance"
+          >
+            Performance
+          </TabsTrigger>
+          <TabsTrigger
+            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink"
+            value="timing"
+          >
+            Timing
+          </TabsTrigger>
+          <TabsTrigger
+            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink"
+            value="events"
+          >
+            Events
+          </TabsTrigger>
+        </TabsList>
         <DiagnosticsPerformancePanel useStore={useStore} />
         <DiagnosticsTimingPanel useStore={useStore} />
         <DiagnosticsEventsPanel useStore={useStore} />

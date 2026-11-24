@@ -1,6 +1,12 @@
 import { ListMusic, ListPlus, MoreHorizontal, Pencil, Trash2 } from 'lucide-react';
-import { Button, Menu, MenuItem, MenuTrigger, Popover } from 'react-aria-components';
 import type { LibraryPlaylistSummary } from '../../bridge/DesktopBridge';
+import { Button } from '../ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
 import { LibraryNavItem } from './LibraryNavItem';
 
 interface PlaylistNavItemProps {
@@ -23,40 +29,52 @@ export function PlaylistNavItem({
   onDelete,
 }: PlaylistNavItemProps) {
   return (
-    <div className={`library-nav-action-row${active ? ' is-active' : ''}`}>
+    <div
+      data-slot="playlist-nav-item"
+      className={`group relative grid min-h-[42px] min-w-0 grid-cols-[minmax(0,1fr)_30px] items-center rounded-control ${active ? 'bg-selection' : 'hover:bg-control-hover'}`}
+    >
       <LibraryNavItem
         label={playlist.name}
         active={active}
         icon={<ListMusic size={18} />}
-        onPress={onSelect}
+        onSelect={onSelect}
       >
         {playlist.name}
       </LibraryNavItem>
-      <MenuTrigger>
-        <Button
-          className="icon-button library-more-button"
-          aria-label={`More actions for ${playlist.name}`}
-          isDisabled={pending}
+      <DropdownMenu>
+        <DropdownMenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="size-[30px] border-0 bg-transparent p-0 text-text-tertiary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-control-hover hover:text-foreground focus-visible:opacity-100"
+              type="button"
+              aria-label={`More actions for ${playlist.name}`}
+              disabled={pending}
+            />
+          }
         >
           <MoreHorizontal size={16} aria-hidden="true" />
-        </Button>
-        <Popover className="library-menu-popover" placement="bottom end" offset={4}>
-          <Menu aria-label={`${playlist.name} actions`}>
-            <MenuItem id="add-songs" onAction={onAddSongs} className="library-menu-item">
-              <ListPlus size={15} aria-hidden="true" />
-              <span>Add songs</span>
-            </MenuItem>
-            <MenuItem id="rename" onAction={onRename} className="library-menu-item">
-              <Pencil size={15} aria-hidden="true" />
-              <span>Rename</span>
-            </MenuItem>
-            <MenuItem id="delete" onAction={onDelete} className="library-menu-item is-danger">
-              <Trash2 size={15} aria-hidden="true" />
-              <span>Delete playlist</span>
-            </MenuItem>
-          </Menu>
-        </Popover>
-      </MenuTrigger>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" aria-label={`${playlist.name} actions`}>
+          <DropdownMenuItem className="h-8 gap-2 text-[13px]" onClick={onAddSongs}>
+            <ListPlus size={15} aria-hidden="true" />
+            <span>Add songs</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem className="h-8 gap-2 text-[13px]" onClick={onRename}>
+            <Pencil size={15} aria-hidden="true" />
+            <span>Rename</span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            variant="destructive"
+            className="h-8 gap-2 text-[13px]"
+            onClick={onDelete}
+          >
+            <Trash2 size={15} aria-hidden="true" />
+            <span>Delete playlist</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
   );
 }

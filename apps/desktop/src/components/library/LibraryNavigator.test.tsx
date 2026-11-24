@@ -202,10 +202,10 @@ describe('LibraryNavigator built-in source', () => {
         ),
       );
       if (count > 0) {
-        expect(tiles[0]?.querySelector('.library-playlist-monogram')).toHaveTextContent('Á');
+        expect(tiles[0]).toHaveTextContent('Á');
       }
       if (count > 2) {
-        expect(tiles[2]?.querySelector('.library-playlist-monogram')).toHaveTextContent('👨‍👩‍👧‍👦');
+        expect(tiles[2]).toHaveTextContent('👨‍👩‍👧‍👦');
       }
       expect(screen.queryByRole('button', { name: 'Playlists' })).toBeNull();
       expect(screen.queryByRole('menu', { name: 'Playlists' })).toBeNull();

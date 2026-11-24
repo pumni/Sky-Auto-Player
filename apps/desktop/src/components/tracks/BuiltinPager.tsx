@@ -45,8 +45,8 @@ function BuiltinPagerNavigation({
   }, [editing]);
 
   const pageDigits = String(pageCount).length;
-  // Reserve both tabular digit groups plus two ch for the spaced slash.
-  const indicatorCharacters = pageDigits * 2 + 2;
+  // Reserve both tabular digit groups plus three ch for the spaced slash.
+  const indicatorCharacters = pageDigits * 2 + 3;
   const indicatorWidth = `max(36px, ${indicatorCharacters}ch)`;
   const pagerWidth = `calc(${indicatorWidth} + 72px)`;
 
@@ -135,17 +135,26 @@ function BuiltinPagerNavigation({
 
   return (
     <nav
-      className="builtin-pager"
+      className="grid h-8 min-w-0 flex-none grid-cols-[32px_minmax(0,1fr)_32px] items-center justify-self-end gap-1 text-[11px] tabular-nums whitespace-nowrap data-[editing=true]:grid-cols-1"
       aria-label="Built-in Songs pages"
+      data-slot="builtin-pager-navigation"
       aria-busy={busy}
       data-editing={editing ? 'true' : 'false'}
       style={{ width: pagerWidth }}
       onKeyDown={onPagerKeyDown}
     >
       {editing ? (
-        <div className="builtin-pager-page-slot" style={{ width: '100%' }} data-editing="true">
-          <div className="builtin-pager-editor" ref={editorRef} onBlur={onEditorBlur}>
-            <label className="visually-hidden" htmlFor={pageInputId}>
+        <div
+          className="relative grid h-8 min-w-9 place-items-center"
+          style={{ width: '100%' }}
+          data-editing="true"
+        >
+          <div
+            className="relative grid h-8 w-full grid-cols-[minmax(0,1fr)_auto_32px] items-center gap-[3px]"
+            ref={editorRef}
+            onBlur={onEditorBlur}
+          >
+            <label className="sr-only" htmlFor={pageInputId}>
               Page number
             </label>
             <input
@@ -170,25 +179,34 @@ function BuiltinPagerNavigation({
               }}
               onKeyDown={onEditorKeyDown}
             />
-            <span className="builtin-pager-page-count" aria-hidden="true">
+            <span
+              data-slot="builtin-pager-page-count"
+              className="whitespace-nowrap text-[11px] tabular-nums text-text-tertiary"
+              aria-hidden="true"
+            >
               / {pageCount}
             </span>
             <button
-              className="builtin-pager-confirm"
+              className="inline-flex size-8 items-center justify-center rounded-control border-0 bg-transparent p-0 text-text-secondary hover:bg-control-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               type="button"
               aria-label="Confirm page change"
+              data-slot="builtin-pager-confirm"
               title="Confirm page change"
               onPointerDown={(event) => event.preventDefault()}
               onClick={() => void commitEditing()}
             >
               <Check size={14} aria-hidden="true" />
             </button>
-            <span id={pageInstructionsId} className="visually-hidden">
+            <span id={pageInstructionsId} className="sr-only">
               Enter a whole page number from 1 to {pageCount}. Press Enter to navigate or Escape to
               cancel.
             </span>
             {pageError && (
-              <span id={pageErrorId} className="builtin-pager-error" role="alert">
+              <span
+                id={pageErrorId}
+                className="absolute bottom-[calc(100%+5px)] left-1/2 z-10 max-w-[calc(100vw-24px)] -translate-x-1/2 whitespace-nowrap rounded-control border border-border bg-popover px-2 py-1 text-[11px] leading-[1.4] text-danger shadow-lg"
+                role="alert"
+              >
                 {pageError}
               </span>
             )}
@@ -197,7 +215,7 @@ function BuiltinPagerNavigation({
       ) : (
         <>
           <button
-            className="builtin-pager-control"
+            className="inline-flex size-8 min-h-8 min-w-8 items-center justify-center rounded-control border-0 bg-transparent p-0 text-[11px] tabular-nums text-text-secondary hover:bg-control-hover hover:text-foreground disabled:opacity-50 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             type="button"
             aria-label="Previous page"
             title="Previous page"
@@ -206,10 +224,15 @@ function BuiltinPagerNavigation({
           >
             <ChevronLeft size={16} aria-hidden="true" />
           </button>
-          <div className="builtin-pager-page-slot" style={{ width: indicatorWidth }}>
+          <div
+            className="relative grid h-8 min-w-9 place-items-center"
+            style={{ width: indicatorWidth }}
+          >
             <button
               ref={triggerRef}
-              className="builtin-pager-jump-trigger"
+              className="h-8 w-full min-w-0 rounded-control border border-transparent bg-transparent px-1.5 py-1 text-[11px] tabular-nums text-foreground hover:bg-control-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              data-page-jump="true"
+              data-slot="builtin-pager-jump-trigger"
               type="button"
               title="Jump to page"
               aria-label={`${page} / ${pageCount}, Page ${page} of ${pageCount}. Jump to page`}
@@ -220,7 +243,7 @@ function BuiltinPagerNavigation({
             </button>
           </div>
           <button
-            className="builtin-pager-control"
+            className="inline-flex size-8 min-h-8 min-w-8 items-center justify-center rounded-control border-0 bg-transparent p-0 text-[11px] tabular-nums text-text-secondary hover:bg-control-hover hover:text-foreground disabled:opacity-50 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             type="button"
             aria-label="Next page"
             title="Next page"
@@ -290,16 +313,24 @@ export function BuiltinPager({ useStore, onLocateSelected }: BuiltinPagerProps) 
           : `${rangeStatus}. Page ${page} of ${pageCount}.`;
 
   return (
-    <div className="builtin-pager-wrap">
-      <div className="builtin-pager-leading">
-        <span className="builtin-pager-range" aria-hidden="true">
+    <div
+      data-slot="builtin-pager"
+      className="relative grid min-w-0 flex-none grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1 border-t border-border px-3 py-0.5 pl-[18px] text-text-secondary @max-[640px]/track-browser:gap-x-2 @max-[640px]/track-browser:px-1.5 @max-[640px]/track-browser:pl-[18px]"
+    >
+      <div className="flex min-w-0 items-center gap-2">
+        <span
+          data-slot="builtin-pager-range"
+          className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] tabular-nums text-text-tertiary"
+          aria-hidden="true"
+        >
           {rangeText}
         </span>
         {onLocateSelected && (
           <button
-            className="builtin-pager-locate"
+            className="grid size-8 flex-none place-items-center rounded-control border-0 bg-transparent p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             type="button"
             aria-label="Locate selected"
+            data-slot="builtin-pager-locate"
             title="Go to selected song"
             disabled={!canLocateSelected}
             onClick={onLocateSelected}
@@ -319,7 +350,13 @@ export function BuiltinPager({ useStore, onLocateSelected }: BuiltinPagerProps) 
           editorFocusIntentRef={editorFocusIntentRef}
         />
       )}
-      <p className="builtin-pager-status" role="status" aria-live="polite" aria-atomic="true">
+      <p
+        className="sr-only"
+        data-slot="builtin-pager-status"
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+      >
         {status}
       </p>
     </div>

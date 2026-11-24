@@ -23,15 +23,24 @@ export class ErrorBoundary extends Component<PropsWithChildren, State> {
   public override render(): ReactNode {
     if (this.state.error) {
       return (
-        <main className="fatal-screen" role="alert">
-          <p className="eyebrow">DESKTOP UI</p>
-          <h1>The desktop surface stopped rendering.</h1>
-          <p>{this.state.error.message}</p>
+        <main
+          className="grid min-h-dvh content-center justify-items-center gap-2 bg-background p-6 text-center"
+          role="alert"
+        >
+          <p className="m-0 text-[11px] font-semibold tracking-wide text-danger">DESKTOP UI</p>
+          <h1 className="m-0 max-w-[580px] text-xl font-semibold leading-7 text-foreground">
+            The desktop surface stopped rendering.
+          </h1>
+          <p className="m-0 max-w-[580px] text-sm text-text-secondary">
+            {this.state.error.message}
+          </p>
           {isTauriRuntime() ? (
-            <p className="muted">Close and reopen the full application to recover.</p>
+            <p className="m-0 text-sm text-muted-foreground">
+              Close and reopen the full application to recover.
+            </p>
           ) : (
             <button
-              className="button button-primary"
+              className="h-9 rounded-control bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               type="button"
               onClick={() => window.location.reload()}
             >

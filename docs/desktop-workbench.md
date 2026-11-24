@@ -1,21 +1,22 @@
 # Desktop Workbench
 
 The app shell presents the Library Navigator, Track Browser, Inspector, and fixed Player Dock.
-`apps/desktop/src/app/App.tsx` renders `<Workbench />` and `<PlayerBar />` as siblings inside
-`.app-shell`. `Workbench.tsx` contains the Library Navigator, Track Browser, Inspector, and their
-separators only. `PlayerBar.tsx` owns the fixed 92 px Player Dock outside the Workbench subtree.
+`apps/desktop/src/app/App.tsx` renders `<Workbench />` and `<PlayerBar />` as siblings inside the
+`data-app-shell` root. `Workbench.tsx` contains the Library Navigator, Track Browser, Inspector, and
+their separators only. `PlayerBar.tsx` owns the fixed 92 px Player Dock outside the Workbench subtree.
 The Inspector presents Song Details and Runtime Diagnostics in both docked and compact layouts.
 
 ## Frontend ownership
 
 `apps/desktop/src/app/App.tsx` owns the app-shell composition: it renders `AppTitleBar`, `<Workbench />`,
-and `<PlayerBar />` as sibling children inside `.app-shell`.
+and `<PlayerBar />` as sibling children inside `[data-app-shell]`.
 `apps/desktop/src/components/workbench/Workbench.tsx` composes the Library Navigator, Track Browser,
 Inspector, and their separators only. `apps/desktop/src/components/player/PlayerBar.tsx` owns the fixed
 92 px Player Dock and is outside the Workbench subtree.
 `apps/desktop/src/components/workbench/workbenchGeometry.ts` is the pure geometry owner;
 `MIN_TRACK_BROWSER_WIDTH` is the single 420 px source passed to the workbench as
-`--min-track-browser-width`. `apps/desktop/src/components/workbench/useWorkbenchLayout.ts` connects
+`--min-track-browser-width`. The separator is 4 px wide and is measured from its rendered element.
+`apps/desktop/src/components/workbench/useWorkbenchLayout.ts` connects
 measured viewport changes and separator input to the geometry policy.
 `apps/desktop/src/components/workbench/workbenchDragPolicy.ts` keeps resize rebasing and in-session
 topology decisions transient. `apps/desktop/src/components/workbench/useWorkbenchPreferences.ts`
@@ -25,6 +26,12 @@ persists the existing v5 preference contract.
 Pointer moves update live geometry without writing preferences. Pointer release and explicit
 keyboard resize commits persist the final bounded widths. Viewport-driven collapse, overlay
 presentation, and temporary widths do not become saved preferences.
+
+`apps/desktop/components.json` records the shadcn Base UI registry configuration (`base-vega` style).
+The source-owned primitives in `apps/desktop/src/components/ui/` use Base UI; `apps/desktop/src/styles/globals.css`
+is the single imported Tailwind CSS v4 entry and semantic token owner. Composition and feature
+styles use Tailwind utilities and shared component variants. Semantic `data-slot` and ARIA
+attributes provide stable UI ownership and browser-test anchors; CSS classes are not a public API.
 
 `apps/desktop/src/components/settings/SettingsPanel.tsx` retains Settings modal, category navigation,
 and focus ownership; `apps/desktop/src/components/settings/SettingsCategoryContent.tsx` renders the
@@ -149,50 +156,27 @@ pre-bootstrap Windows app color preference until its settings arrive. The native
 background remains fixed at RGB `(18, 19, 20)` and may show through before WebView content paints.
 
 Graphite remains the default dark palette with persisted ID `graphite`; Settings calls it
-**Graphite (Default)**. The five other persisted palette IDs remain selectable and their
-palette-specific dark colors stay in `apps/desktop/src/styles/themes.css`. Light uses a separate
-semantic token override and does not introduce a palette ID.
+**Graphite (Default)**. The other five persisted palette IDs remain selectable. `data-palette` and
+`data-color-mode` select overrides in the one frontend stylesheet, `apps/desktop/src/styles/globals.css`.
+Light is a mode override and does not add a palette ID.
 
-Production Graphite uses the unified Sky Indigo palette: accent ink and focus `#9AA8FF`, primary
-action fill `#8E9DFF`, hover `#A3B0FF`, pressed `#7888F0`, with dark on-accent text/icons
-`#11131A` (`--on-accent`). In Dark Graphite, the primary Play/Pause/Resume transport and dialog
-actions employ a light Indigo background paired with dark foreground content (`#11131A` on `#8E9DFF`,
-providing >= 7.4:1 contrast ratio, exceeding WCAG AA and meeting WCAG AAA requirements). This prevents eye strain
-while preserving visual hierarchy and clarity. The selected surface is `#222534`, search focus is
-`#8B99EB`, and active toggle ink is `#9AA8FF`. Semantic roles remain strictly separated:
-accent text/ink (`--accent-ink`), primary action fill (`--accent-fill`) and on-fill content (`--on-accent`),
-focus indication (`--focus-ring`), search focus (`--search-focus-ring`), selected surfaces (`--selection-bg`)
-and indicators, toggle state (`--toggle-active-ink`), and status roles (danger/warning/success).
-Compatibility `--workbench-*` aliases resolve through those canonical roles.
+The Sky Graphite 2 default uses `--accent-ink` and `--ring` `#9AA8FF`; primary action fill,
+hover, and pressed colors are `#8E9DFF`, `#A3B0FF`, and `#7888F0`, with `#11131A` as the primary
+foreground. Its selected and playing surfaces remain distinct (`#222534` and `#1A1D28`). The
+semantic graph separates surface, text, action, focus, input boundary, selection, playing, control
+state, and success/warning/danger roles. Tailwind's `@theme inline` maps utilities to those CSS
+properties; its `dark` variant follows `data-color-mode`. There are no `--workbench-*` color aliases.
 
-Light appearance uses a corresponding Clean Windows Light Sky Indigo pairing: primary action fill
-`#3C54CF`, hover `#3248BA`, pressed `#293DA3`, with crisp white on-accent text/icons `#FFFFFF`
-(`--on-accent`), accent ink `#3449B5`, focus ring `#3449B5`, search focus `#3449B5`, and active toggle
-ink `#3449B5`. White content canvas (`#FFFFFF`), a near-white shell and Navigator (`#F7F8FA`), charcoal
-primary text (`#252A31`), hairline neutral separators (`#DFE4EB`), and selection surface (`#EAEFFE`)
-maintain WCAG AA compliance across all states. Graphite's component-specific workbench aliases are
-overridden in the theme layer so they cannot leave dark surfaces behind in Light mode. Component styles
-consume semantic variables; the six dark palette IDs and their rendered role values remain unchanged. Package B's browser captures and computed
-contrast report are recorded in [`issue-565-package-b evidence`](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-565-package-b/README.md).
-Package C's Windows/WebView2, startup, focus and contrast qualification is recorded in
-[`issue-565-package-c evidence`](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-565-package-c/README.md). It distinguishes the
-release-profile Windows WebView run from browser media emulation and lists the packaged startup
-cases that could not be forced in this environment.
-Package D's final A–C integration audit and PASS/FAILED/SKIPPED/UNVERIFIED matrix is recorded in
-[`issue-565-package-d evidence`](https://github.com/pumni/Sky-Auto-Player/blob/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-565-package-d/README.md). The Package B compact
-utility-overlay PNGs are explicitly loading-state captures: Diagnostics Runtime still displayed
-`Loading diagnostics…`; they are not described as settled runtime evidence.
+Light keeps the saved dark palette while resolving its own tokens. Its action fill, hover, and
+pressed colors are `#3C54CF`, `#3248BA`, and `#293DA3`, with white primary foreground; its
+background, text, separators, and selected surface use the Light overrides in `globals.css`. The
+six dark palettes and Light appearance are checked against the semantic role pairs in
+`apps/desktop/tests/e2e/theme-accessibility.spec.ts`.
 
-Soft Graphite B is a review preview only. Its override exists in the opt-in
-`apps/desktop/tests/e2e/graphite-package-c.spec.ts` A/B capture and
-[historical Issue #563 Package C captures](https://github.com/pumni/Sky-Auto-Player/tree/41ef5335f4f4a357c7160b782b00b0d576586ec2/docs/evidence/issue-563-package-c); it is not a production selector or shipped
-`apps/desktop/src/styles/themes.css` palette. Graphite A stays selected unless the owner and Agent Lead
-explicitly approve a future visual decision.
-
-The automated contrast gates use 4.5:1 for text and 3:1 for essential non-text/focus indicators.
-They compute CSS token/color-pair ratios and assert rendered interaction styles; they do not
-sample every screenshot pixel. Forced-colors and reduced-motion browser tests use Chromium media
-emulation and do not prove Windows High Contrast or packaged WebView2 behavior.
+Text contrast checks use 4.5:1 and essential non-text/focus checks use 3:1. The browser tests also
+check distinct selected/playing row surfaces, forced-colors focus, and reduced-motion overlay
+behavior. They use Chromium media emulation and computed styles; they do not sample every screenshot
+pixel or prove Windows High Contrast or packaged WebView2 behavior.
 
 ## Regression and evidence contract
 
@@ -221,12 +205,11 @@ emulation and do not prove Windows High Contrast or packaged WebView2 behavior.
   `apps/desktop/tests/e2e/workbench-state-regression.spec.ts` cover pane geometry, pointer/keyboard
   resize, focus/ARIA state, responsive topology, and preference v5 persistence.
 - `apps/desktop/tests/e2e/settings-diagnostics.spec.ts`,
-  `apps/desktop/tests/e2e/palette-appearance.spec.ts`,
-  `apps/desktop/tests/e2e/light-appearance.spec.ts`,
-  `apps/desktop/tests/e2e/graphite-final-ui-polish.spec.ts`, and
-  `apps/desktop/tests/e2e/graphite-package-c.spec.ts` cover modal/accessibility, Diagnostics
-  truthfulness, all six palettes, Light and Graphite Dark rendering, focus and semantic color roles,
-  forced-colors, and reduced-motion behavior.
+  `apps/desktop/tests/e2e/theme-accessibility.spec.ts`,
+  `apps/desktop/tests/e2e/update-modal-geometry.spec.ts`, and
+  `apps/desktop/tests/e2e/visual-evidence.spec.ts` cover modal accessibility, Diagnostics
+  truthfulness, all six palettes, Light and Graphite rendering, focus and semantic color roles,
+  forced-colors, reduced motion, update states, and representative visual states.
 
 Browser tests use the mock bridge. The 640×448 overlay cases are responsive browser fallbacks,
 not supported native sizes. Packaged WebView2 resize/startup measurements and their baseline

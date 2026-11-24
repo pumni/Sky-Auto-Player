@@ -39,10 +39,16 @@ export function DiagnosticsPlaybackSummary({ useStore }: { useStore: DesktopStor
   if (!hasPlaybackContext) return null;
 
   return (
-    <section className="diagnostics-playback-summary" aria-label="Playback identity and status">
-      <strong>Playback status: {status}</strong>
+    <section
+      data-slot="diagnostics-playback-summary"
+      className="mb-3 grid min-w-0 gap-1 border-b border-border pb-2.5"
+      aria-label="Playback identity and status"
+    >
+      <strong className="text-[13px] font-semibold text-foreground">
+        Playback status: {status}
+      </strong>
       {hasCurrentSong && (
-        <span>
+        <span className="break-words text-xs text-text-secondary">
           {sessionStatusConcern !== null
             ? 'Last confirmed session song'
             : isActive
@@ -52,10 +58,14 @@ export function DiagnosticsPlaybackSummary({ useStore }: { useStore: DesktopStor
         </span>
       )}
       {playback.prepared?.song && playback.prepared.song.song_id !== currentSongId && (
-        <span>Prepared: {playback.prepared.song.title}</span>
+        <span className="break-words text-xs text-text-secondary">
+          Prepared: {playback.prepared.song.title}
+        </span>
       )}
       {dryRun !== null && (isActive || playback.prepared) && (
-        <span>Mode: {dryRun ? 'Dry run · no physical input sent' : 'Physical input'}</span>
+        <span className="break-words text-xs text-text-secondary">
+          Mode: {dryRun ? 'Dry run · no physical input sent' : 'Physical input'}
+        </span>
       )}
     </section>
   );

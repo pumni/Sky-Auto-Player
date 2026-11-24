@@ -68,7 +68,7 @@ function PackagedSmokeHarness({
   authorized?: boolean;
 }) {
   usePackagedSmokeTest({ bridge, useStore, authorized });
-  return <div className="app-shell" />;
+  return <div data-app-shell />;
 }
 
 function deferred<T>() {
@@ -209,15 +209,17 @@ describe('desktop application shell', () => {
     expect(screen.getByText('Medium timing risk')).toBeInTheDocument();
 
     const settingsButton = screen.getByRole('button', { name: 'Open settings' });
+    settingsButton.focus();
     await act(async () => {
       fireEvent.click(settingsButton);
       await vi.dynamicImportSettled();
     });
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
-    expect(screen.getByLabelText('Dark palette')).toHaveAttribute('data-value', 'graphite');
     expect(screen.getByLabelText('Dark palette')).toHaveTextContent('Graphite (Default)');
-    fireEvent.click(screen.getByRole('button', { name: 'About' }));
+    const aboutButton = screen.getByRole('button', { name: 'About' });
+    aboutButton.focus();
+    fireEvent.click(aboutButton);
     expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveTextContent('3.5.0-mock');
     expect(screen.getByRole('dialog', { name: 'Settings' })).toHaveTextContent('Native ABI');
     expect(screen.getByRole('dialog', { name: 'Settings' })).toContainElement(
@@ -369,14 +371,14 @@ describe('desktop application shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
     const theme = await screen.findByLabelText('Theme');
     fireEvent.click(theme);
-    fireEvent.click(screen.getByRole('option', { name: 'Light' }));
+    fireEvent.keyDown(screen.getByRole('option', { name: 'Light' }), { key: 'Enter' });
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('light'));
 
     nativeWindow.emitTheme('dark');
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('light'));
 
     fireEvent.click(theme);
-    fireEvent.click(screen.getByRole('option', { name: /Follow Windows/ }));
+    fireEvent.keyDown(screen.getByRole('option', { name: /Follow Windows/ }), { key: 'Enter' });
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('dark'));
   });
 
@@ -388,7 +390,7 @@ describe('desktop application shell', () => {
     });
     const fatalUiVisibleWhenShown: boolean[] = [];
     nativeWindow.show.mockImplementation(async () => {
-      fatalUiVisibleWhenShown.push(Boolean(document.querySelector('.fatal-screen')));
+      fatalUiVisibleWhenShown.push(Boolean(screen.queryByRole('alert')));
     });
 
     render(<App bridge={bridge} />);

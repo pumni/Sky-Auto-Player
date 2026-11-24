@@ -48,7 +48,7 @@ export function usePackagedSmokeTest({
 
       await waitForReady();
       const state = useStore.getState();
-      if (!document.querySelector('.app-shell')) {
+      if (!document.querySelector('[data-app-shell]')) {
         throw new Error('packaged GUI shell did not render');
       }
       await waitForStore(() => {

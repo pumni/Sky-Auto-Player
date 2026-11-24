@@ -1,9 +1,15 @@
 import { ChevronRight, FlaskConical, ListVideo, PanelRight, SlidersHorizontal } from 'lucide-react';
-import { Button as AriaButton, Dialog, DialogTrigger, Popover } from 'react-aria-components';
 import { useId, useRef, useState, type RefObject } from 'react';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
-import { AppSelect } from '../ui/AppSelect';
-import { formatFpsFrameHint, formatHoldFramesHint, formatTempoHint } from '../ui/appSelectHelpers';
+import {
+  formatFpsFrameHint,
+  formatHoldFramesHint,
+  formatTempoHint,
+} from '../ui/playbackOptionFormatting';
+import { Button } from '../ui/button';
+import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import {
   playbackSessionStatusConcern,
   type DesktopStore,
@@ -84,69 +90,115 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   };
 
   return (
-    <div className="player-tools">
-      <div className="player-tooltip-anchor">
-        <AriaButton
-          className={`icon-button player-tool-button player-auto-play-button${autoPlayEnabled ? ' is-on' : ''}`}
-          aria-label="Auto Play"
-          aria-describedby="player-auto-play-tooltip"
-          aria-pressed={autoPlayEnabled}
-          isDisabled={!settings}
-          aria-busy={autoPlayPending}
-          onPress={() => void toggleAutoPlay()}
+    <div
+      data-slot="player-tools"
+      className="col-start-3 row-start-1 flex min-w-0 flex-nowrap items-center justify-self-end gap-2"
+    >
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="size-8 text-text-tertiary aria-pressed:text-accent-ink focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Auto Play"
+              aria-pressed={autoPlayEnabled}
+              disabled={!settings}
+              aria-busy={autoPlayPending}
+              onClick={() => void toggleAutoPlay()}
+            />
+          }
         >
           <ListVideo size={18} aria-hidden="true" />
-        </AriaButton>
-        <span id="player-auto-play-tooltip" className="player-tool-tooltip" role="tooltip">
+        </TooltipTrigger>
+        <TooltipContent>
           Auto Play {autoPlayEnabled ? 'on' : 'off'} · Continue to the next song
-        </span>
-      </div>
-      <div className={`player-profile player-tooltip-anchor${profileOpen ? ' is-open' : ''}`}>
-        <DialogTrigger isOpen={profileOpen} onOpenChange={setProfileOpen}>
-          <AriaButton
-            ref={profileTriggerRef}
-            className={`player-tool-button profile-summary-button${profileOpen ? ' is-open' : ''}`}
-            type="button"
-            aria-label="Configure playback profile"
-            aria-describedby="player-profile-tooltip"
-            aria-expanded={profileOpen}
-          >
-            <SlidersHorizontal size={18} aria-hidden="true" />
-          </AriaButton>
-          <Popover className="profile-popover" placement="top end" offset={8}>
-            <Dialog aria-label="Playback profile">
-              <header className="profile-popover-header">
-                <div className="profile-popover-heading">
-                  <h3>Playback profile</h3>
-                  <p>Fine-tune how each song is played.</p>
+        </TooltipContent>
+      </Tooltip>
+      <div className="relative w-8 min-w-0">
+        <Tooltip>
+          <Popover open={profileOpen} onOpenChange={setProfileOpen}>
+            <TooltipTrigger
+              render={
+                <PopoverTrigger
+                  render={
+                    <Button
+                      ref={profileTriggerRef}
+                      variant="ghost"
+                      size="icon-sm"
+                      className="relative size-8 text-text-tertiary aria-expanded:text-accent-ink after:absolute after:bottom-0.5 after:left-1/2 after:size-1 after:-translate-x-1/2 after:rounded-full after:bg-accent-ink after:opacity-0 aria-expanded:after:opacity-100"
+                      type="button"
+                      aria-label="Configure playback profile"
+                      aria-expanded={profileOpen}
+                    />
+                  }
+                />
+              }
+            >
+              <SlidersHorizontal size={18} aria-hidden="true" />
+            </TooltipTrigger>
+            <TooltipContent>
+              {profileSummary ? `Playback profile · ${profileSummary}` : 'Playback profile'}
+            </TooltipContent>
+            <PopoverContent
+              side="top"
+              align="end"
+              sideOffset={8}
+              className="grid max-h-[calc(100vh-130px)] w-[min(350px,calc(100vw-24px))] min-w-[min(280px,calc(100vw-24px))] max-w-[calc(100vw-24px)] gap-2.5 overflow-y-auto rounded-pane border border-border bg-card p-4 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              role="dialog"
+              aria-label="Playback profile"
+            >
+              <header className="flex items-start justify-between gap-2.5">
+                <div className="min-w-0">
+                  <h3 className="m-0 text-sm font-semibold leading-[1.3] text-foreground">
+                    Playback profile
+                  </h3>
+                  <p className="mb-0 mt-1 text-xs leading-[1.4] text-text-tertiary">
+                    Fine-tune how each song is played.
+                  </p>
                 </div>
                 {profileSummary && (
-                  <span className="profile-header-summary" aria-hidden="true">
+                  <span
+                    className="mt-0.5 flex-none whitespace-nowrap font-mono text-[11px] tabular-nums text-text-tertiary"
+                    aria-hidden="true"
+                  >
                     {defaults?.hold_frames}f · {defaults?.tempo_scale}× · {defaults?.fps}
                   </span>
                 )}
               </header>
-              <div className="profile-fields">
+              <div
+                data-slot="profile-fields"
+                className="grid min-w-0 grid-cols-3 gap-x-2.5 gap-y-3"
+              >
                 <ProfileFields
                   defaults={defaults}
                   bootstrap={bootstrap}
                   patchSettings={patchSettings}
                 />
               </div>
-              <div className="profile-preview">
-                <div className="profile-preview-copy">
-                  <div className="profile-preview-heading">
-                    <strong>Safe preview</strong>
+              <div className="flex min-w-0 items-start justify-between gap-3 border-t border-border pt-3">
+                <div className="min-w-0">
+                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                    <strong className="text-[13px] font-semibold text-foreground">
+                      Safe preview
+                    </strong>
                     {selectedSongTitle && (
-                      <span className="profile-preview-song" title={selectedSongTitle}>
+                      <span
+                        className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-secondary"
+                        title={selectedSongTitle}
+                      >
                         {selectedSongTitle}
                       </span>
                     )}
                   </div>
-                  <p className="profile-test-explanation">{previewDescription}</p>
+                  <p className="mt-1.5 mb-0 text-xs leading-relaxed text-text-secondary">
+                    {previewDescription}
+                  </p>
                 </div>
-                <button
-                  className={`button profile-test-action${canPreparePlayback ? ' is-ready' : ''}`}
+                <Button
+                  variant="default"
+                  size="default"
+                  className="min-h-9 flex-none px-3 text-xs disabled:border-border disabled:bg-card disabled:text-muted-foreground"
                   type="button"
                   disabled={!canPreparePlayback}
                   onClick={() => {
@@ -156,31 +208,31 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                 >
                   <FlaskConical size={15} aria-hidden="true" />
                   Test playback (no input)
-                </button>
+                </Button>
               </div>
-            </Dialog>
+            </PopoverContent>
           </Popover>
-        </DialogTrigger>
-        <span id="player-profile-tooltip" className="player-tool-tooltip" role="tooltip">
-          {profileSummary ? `Playback profile · ${profileSummary}` : 'Playback profile'}
-        </span>
+        </Tooltip>
       </div>
-      <div className="player-tooltip-anchor">
-        <AriaButton
-          className="icon-button player-tool-button player-utility-button"
-          aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
-          aria-describedby="player-utility-tooltip"
-          aria-expanded={utility.open}
-          {...(utility.open ? { 'aria-controls': 'utility-inspector' } : {})}
-          ref={utilityTriggerRef}
-          onPress={() => toggleUtility()}
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="size-8 flex-none text-text-secondary aria-expanded:text-accent-ink"
+              aria-label={utility.open ? 'Close utility panel' : 'Open utility panel'}
+              aria-expanded={utility.open}
+              {...(utility.open ? { 'aria-controls': 'utility-inspector' } : {})}
+              ref={utilityTriggerRef}
+              onClick={() => toggleUtility()}
+            />
+          }
         >
           <PanelRight size={16} aria-hidden="true" />
-        </AriaButton>
-        <span id="player-utility-tooltip" className="player-tool-tooltip" role="tooltip">
-          {utility.open ? 'Close Inspector' : 'Open Inspector'}
-        </span>
-      </div>
+        </TooltipTrigger>
+        <TooltipContent>{utility.open ? 'Close Inspector' : 'Open Inspector'}</TooltipContent>
+      </Tooltip>
     </div>
   );
 }
@@ -197,7 +249,7 @@ function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProp
   const fpsId = useId();
 
   if (!defaults || !bootstrap) {
-    return <span className="muted">Profile unavailable</span>;
+    return <span className="text-muted-foreground">Profile unavailable</span>;
   }
   const frameUs = Math.ceil(1_000_000 / defaults.fps);
   const frameBaseHoldUs = Math.ceil(defaults.hold_frames * frameUs);
@@ -224,47 +276,80 @@ function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProp
 
   return (
     <>
-      <div className="profile-field">
-        <label htmlFor={holdId}>Base Hold</label>
-        <AppSelect
-          id={holdId}
-          listboxLabel="Base Hold"
-          density="compact"
-          popoverMinWidth={154}
+      <div className="grid min-w-0 gap-1">
+        <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={holdId}>
+          Base Hold
+        </label>
+        <Select
           value={String(defaults.hold_frames)}
-          options={holdOptions}
-          onChange={(nextValue) =>
-            void patchSettings({ playbackDefaults: { holdFrames: Number(nextValue) } })
-          }
-        />
+          onValueChange={(value) => {
+            if (value !== null)
+              void patchSettings({ playbackDefaults: { holdFrames: Number(value) } });
+          }}
+        >
+          <SelectTrigger id={holdId} className="h-8" aria-label="Base Hold">
+            <SelectValue>
+              {(value: string | null) => (value === null ? 'Base Hold' : `${value}f`)}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent className="min-w-40">
+            {holdOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                <span>{option.label}</span>
+                <span className="text-text-tertiary">{option.hint}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
-      <div className="profile-field">
-        <label htmlFor={tempoId}>Tempo</label>
-        <AppSelect
-          id={tempoId}
-          listboxLabel="Tempo"
-          density="compact"
-          popoverMinWidth={144}
+      <div className="grid min-w-0 gap-1">
+        <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={tempoId}>
+          Tempo
+        </label>
+        <Select
           value={String(defaults.tempo_scale)}
-          options={tempoOptions}
-          onChange={(nextValue) =>
-            void patchSettings({ playbackDefaults: { tempoScale: Number(nextValue) } })
-          }
-        />
+          onValueChange={(value) => {
+            if (value !== null)
+              void patchSettings({ playbackDefaults: { tempoScale: Number(value) } });
+          }}
+        >
+          <SelectTrigger id={tempoId} className="h-8" aria-label="Tempo">
+            <SelectValue>
+              {(value: string | null) => (value === null ? 'Tempo' : `${value}×`)}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent className="min-w-36">
+            {tempoOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                <span>{option.label}</span>
+                {option.hint && <span className="text-text-tertiary">{option.hint}</span>}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
-      <div className="profile-field">
-        <label htmlFor={fpsId}>FPS</label>
-        <AppSelect
-          id={fpsId}
-          listboxLabel="FPS"
-          density="compact"
-          popoverMinWidth={154}
+      <div className="grid min-w-0 gap-1">
+        <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={fpsId}>
+          FPS
+        </label>
+        <Select
           value={String(defaults.fps)}
-          options={fpsOptions}
-          onChange={(nextValue) =>
-            void patchSettings({ playbackDefaults: { fps: Number(nextValue) } })
-          }
-        />
+          onValueChange={(value) => {
+            if (value !== null) void patchSettings({ playbackDefaults: { fps: Number(value) } });
+          }}
+        >
+          <SelectTrigger id={fpsId} className="h-8" aria-label="FPS">
+            <SelectValue>{(value: string | null) => value ?? 'FPS'}</SelectValue>
+          </SelectTrigger>
+          <SelectContent className="min-w-40">
+            {fpsOptions.map((option) => (
+              <SelectItem key={option.value} value={option.value}>
+                <span>{option.label}</span>
+                <span className="text-text-tertiary">{option.hint}</span>
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
       <TimingMarginControl
         value={defaults.timing_margin_us}
@@ -276,15 +361,21 @@ function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProp
           )
         }
       />
-      <details className="profile-advanced">
-        <summary>
-          <ChevronRight className="profile-advanced-chevron" size={14} aria-hidden="true" />
+      <details className="group min-w-0 border-t border-border pt-2">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-xs text-text-secondary hover:text-foreground">
+          <ChevronRight
+            className="size-3.5 transition-transform duration-fast group-open:rotate-90"
+            size={14}
+            aria-hidden="true"
+          />
           <span>Calculated timing</span>
         </summary>
-        <dl className="profile-timing-summary">
+        <dl className="mt-2 grid grid-cols-[1fr_auto] gap-1 text-xs">
           <div>
-            <dt>Target hold</dt>
-            <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
+            <dt className="text-text-tertiary">Target hold</dt>
+            <dd className="m-0 font-mono tabular-nums text-foreground">
+              {(minHoldUs / 1_000).toFixed(3)} ms
+            </dd>
           </div>
         </dl>
       </details>

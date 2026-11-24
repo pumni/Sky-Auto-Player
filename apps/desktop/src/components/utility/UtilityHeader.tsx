@@ -1,7 +1,7 @@
 import { ChevronRight, X } from 'lucide-react';
 import type { RefObject } from 'react';
-import { Tab, TabList } from 'react-aria-components';
 import type { UtilityView } from '../../state/store';
+import { TabsList, TabsTrigger } from '../ui/tabs';
 
 interface UtilityHeaderProps {
   activeView: UtilityView;
@@ -20,14 +20,17 @@ export function UtilityHeader({
   const showCollapse = presentationMode === 'docked' && onCollapse !== undefined;
 
   return (
-    <header className="utility-header">
-      <div className="utility-header-title">
-        <h2>Inspector</h2>
+    <header
+      data-slot="utility-header"
+      className="grid w-full min-w-0 flex-none grid-cols-[minmax(0,1fr)_32px] grid-rows-[32px_auto] items-center gap-x-2 gap-y-1 px-3.5 pt-1"
+    >
+      <div className="col-start-1 row-start-1 min-w-0">
+        <h2 className="m-0 text-sm font-semibold leading-[1.4] text-foreground">Inspector</h2>
       </div>
       {showCollapse ? (
         <button
           ref={collapseButtonRef}
-          className="icon-button icon-button-boxed utility-collapse-button"
+          className="col-start-2 row-start-1 size-[30px] justify-self-end border-0 bg-transparent p-0 hover:bg-control-hover"
           type="button"
           aria-label="Collapse Inspector"
           title="Collapse Inspector"
@@ -37,7 +40,7 @@ export function UtilityHeader({
         </button>
       ) : (
         <button
-          className="icon-button utility-close-button"
+          className="col-start-2 row-start-1 size-[30px] justify-self-end border-0 bg-transparent p-0 hover:bg-control-hover"
           type="button"
           aria-label="Close utility"
           title="Close utility"
@@ -46,14 +49,25 @@ export function UtilityHeader({
           <X size={16} aria-hidden="true" />
         </button>
       )}
-      <TabList className="utility-view-tabs" aria-label="Utility views">
-        <Tab id="details">
+      <TabsList
+        className="col-span-2 row-start-2 w-full justify-start gap-0 border-b border-border p-0"
+        aria-label="Utility views"
+        variant="line"
+        activateOnFocus
+      >
+        <TabsTrigger
+          className="min-h-[34px] flex-none rounded-none border-0 border-b-2 border-b-transparent px-3 text-xs text-text-secondary hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink"
+          value="details"
+        >
           <span>Details</span>
-        </Tab>
-        <Tab id="diagnostics">
+        </TabsTrigger>
+        <TabsTrigger
+          className="min-h-[34px] flex-none rounded-none border-0 border-b-2 border-b-transparent px-3 text-xs text-text-secondary hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink"
+          value="diagnostics"
+        >
           <span>Runtime</span>
-        </Tab>
-      </TabList>
+        </TabsTrigger>
+      </TabsList>
     </header>
   );
 }

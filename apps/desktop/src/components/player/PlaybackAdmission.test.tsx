@@ -41,9 +41,9 @@ describe('PlaybackAdmission recovery actions', () => {
       screen.getAllByText(/2 feasible same-key repeats have an authored Up-to-Down gap/),
     ).not.toHaveLength(0);
     expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
-    expect(container.querySelector('.admission-option-estimate summary')).toHaveTextContent(
-      'Short same-key Up gap risk',
-    );
+    const estimates = screen.getAllByText('Short same-key Up gap risk', { selector: 'summary' });
+    expect(estimates).toHaveLength(2);
+    estimates.forEach((summary) => expect(summary).toBeVisible());
     expect(
       container.querySelector('[data-plan-fingerprint="mock-plan"]')?.getAttribute('data-status'),
     ).toBe('short_up_gap_risk');
@@ -54,9 +54,7 @@ describe('PlaybackAdmission recovery actions', () => {
       'Bounds: 50000 generations, 3000000 key visits, and 64 MiB working memory.',
     );
     expect(screen.getAllByRole('button')).toHaveLength(3);
-    expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toHaveClass(
-      'button-primary',
-    );
+    expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toBeEnabled();
     expect(screen.queryByRole('button', { name: /Use recommended/i })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Test playback (no input)' })).toBeEnabled();
   });
@@ -76,15 +74,23 @@ describe('PlaybackAdmission recovery actions', () => {
     expect(prepared.decisions.map((decision) => decision.decision)).toEqual(['proceed', 'dry_run']);
     expect(prepared.variants.map((variant) => variant.decision)).toEqual(['proceed', 'dry_run']);
 
-    const { container } = render(<PlaybackAdmission useStore={store} />);
-    expect(container.querySelectorAll('.admission-option')).toHaveLength(2);
+    render(<PlaybackAdmission useStore={store} />);
+    expect(
+      screen.getAllByRole('button', {
+        name: /^(Proceed with current settings|Test playback \(no input\))$/,
+      }),
+    ).toHaveLength(2);
     expect(screen.getByText(prepared.risk.headline)).toBeVisible();
     expect(screen.getByText(prepared.risk.reasons[0]!)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Test playback (no input)' })).toBeEnabled();
-    const collapse = container.querySelector('details.admission-option-estimate');
-    expect(collapse).not.toBeNull();
-    expect(collapse).not.toHaveAttribute('open');
+    const estimates = screen.getAllByText('Short same-key Up gap risk', { selector: 'summary' });
+    expect(estimates).toHaveLength(2);
+    for (const summary of estimates) {
+      const collapse = summary.closest('details');
+      expect(collapse).not.toBeNull();
+      expect(collapse).not.toHaveAttribute('open');
+    }
     fireEvent.click(screen.getByRole('button', { name: 'Not now' }));
     expect(store.getState().playback.prepared).toBeNull();
     expect(screen.queryByRole('group', { name: 'Playback confirmation' })).toBeNull();

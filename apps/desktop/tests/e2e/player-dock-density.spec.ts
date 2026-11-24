@@ -19,7 +19,7 @@ for (const viewport of [
     const autoPlay = dock.getByRole('button', { name: 'Auto Play' });
     await expect(autoPlay).toBeVisible();
     await expect(autoPlay).toBeEnabled();
-    await expect(autoPlay.locator('svg')).toHaveClass(/lucide-list-video/);
+    await expect(autoPlay).toHaveAccessibleName('Auto Play');
     await autoPlay.hover();
     await expect(page.getByRole('tooltip')).toContainText('Auto Play on');
     await page.mouse.move(0, 0);
@@ -31,10 +31,13 @@ for (const viewport of [
     await autoPlay.hover();
     await expect(page.getByRole('tooltip')).toContainText('Auto Play off');
     await page.mouse.move(0, 0);
-    await expect(dock.locator('.player-test-button')).toHaveCount(0);
-    await expect(dock.locator('.player-auto-play-label')).toHaveCount(0);
-    await expect(dock.locator('.profile-summary-button')).not.toContainText('FPS');
-    expect(await dock.locator('.profile-summary-button').innerText()).toBe('');
+    await expect(dock.getByRole('button', { name: 'Test playback (no input)' })).toHaveCount(0);
+    await expect(dock.locator('button[aria-label="Configure playback profile"]')).not.toContainText(
+      'FPS',
+    );
+    expect(await dock.locator('button[aria-label="Configure playback profile"]').innerText()).toBe(
+      '',
+    );
     expect(await dock.getByRole('button', { name: 'Auto Play' }).innerText()).toBe('');
 
     const geometry = await page.evaluate(() => {
@@ -44,13 +47,13 @@ for (const viewport of [
         return element;
       };
       const rect = (element: Element) => element.getBoundingClientRect();
-      const tools = required('.player-tools');
-      const dock = rect(required('.player-bar'));
-      const browser = rect(required('.track-browser'));
-      const pager = rect(required('.builtin-pager-wrap'));
+      const tools = required('[data-slot="player-tools"]');
+      const dock = rect(required('[data-slot="player-dock"]'));
+      const browser = rect(required('[data-slot="track-browser"]'));
+      const pager = rect(required('[data-slot="builtin-pager"]'));
       return {
         pagerHeight: pager.height,
-        progressHeight: rect(required('.player-timeline progress')).height,
+        progressHeight: rect(required('[data-slot="player-timeline"] progress')).height,
         bottomGap: browser.bottom - pager.bottom,
         documentWidth: document.documentElement.scrollWidth,
         dock: { left: dock.left, right: dock.right, top: dock.top, bottom: dock.bottom },
@@ -72,7 +75,7 @@ for (const viewport of [
     expect(geometry.documentWidth).toBeLessThanOrEqual(viewport.width);
     expect(geometry.tools).toHaveLength(3);
     expect(geometry.tools.map((tool) => tool.label)).not.toContain('Locate selected');
-    await expect(page.locator('.builtin-pager-locate')).toBeVisible();
+    await expect(page.locator('[data-slot="builtin-pager-locate"]')).toBeVisible();
     for (const tool of geometry.tools) {
       expect(tool.left, tool.label).toBeGreaterThanOrEqual(geometry.dock.left);
       expect(tool.right, tool.label).toBeLessThanOrEqual(geometry.dock.right);
@@ -91,7 +94,7 @@ for (const viewport of [
       ),
     ).toBeVisible();
     const basicControls = await profile
-      .locator('.profile-fields .app-select-trigger')
+      .locator('[data-slot="profile-fields"] [data-slot="select-trigger"]')
       .evaluateAll((selects) =>
         selects.map((select) => {
           const box = select.getBoundingClientRect();
@@ -104,12 +107,14 @@ for (const viewport of [
         Math.min(...basicControls.map((box) => box.y)),
     ).toBeLessThanOrEqual(1);
     for (const control of basicControls) expect(control.width).toBeGreaterThanOrEqual(60);
-    const marginBounds = await profile.locator('.timing-margin-control').boundingBox();
+    const marginBounds = await profile.locator('[data-slot="timing-margin-control"]').boundingBox();
     expect(marginBounds).not.toBeNull();
     expect(marginBounds!.y).toBeGreaterThanOrEqual(
       Math.max(...basicControls.map((box) => box.bottom)) + 4,
     );
-    const popoverBounds = await page.locator('.profile-popover').boundingBox();
+    const popoverBounds = await page
+      .locator('[role="dialog"][aria-label="Playback profile"]')
+      .boundingBox();
     expect(popoverBounds).not.toBeNull();
     if (popoverBounds) {
       expect(popoverBounds.x).toBeGreaterThanOrEqual(0);

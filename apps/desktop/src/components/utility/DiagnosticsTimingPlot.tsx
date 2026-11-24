@@ -1,5 +1,5 @@
-import { TabPanel } from 'react-aria-components';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { TabsContent } from '../ui/tabs';
 import { number } from './diagnosticsPresentation';
 import { DiagnosticsEmptyState } from './DiagnosticsReadouts';
 
@@ -122,8 +122,9 @@ export function DiagnosticsTimingPlot({
   const maxY = yFor(scaleMax);
   const latestSample = availableSamples[availableSamples.length - 1];
   return (
-    <figure className="diagnostics-plot">
+    <figure className="my-2 grid min-w-0 gap-1">
       <svg
+        className="max-h-40 w-full overflow-visible"
         viewBox={`0 0 ${width} ${height}`}
         role="img"
         aria-labelledby="timing-plot-title timing-plot-description"
@@ -135,25 +136,63 @@ export function DiagnosticsTimingPlot({
           Cumulative session maximum observed at each diagnostics snapshot; it does not decrease
           after recovery. Completion latency is reported separately.
         </desc>
-        <line x1={plotLeft} y1={maxY} x2={plotRight} y2={maxY} className="plot-grid-line" />
-        <line x1={plotLeft} y1={midY} x2={plotRight} y2={midY} className="plot-grid-line" />
-        <line x1={plotLeft} y1={zeroY} x2={plotRight} y2={zeroY} className="plot-zero-axis" />
-        <text x={plotLeft - 8} y={maxY + 4} textAnchor="end" className="plot-axis-label">
+        <line
+          x1={plotLeft}
+          y1={maxY}
+          x2={plotRight}
+          y2={maxY}
+          className="stroke-border stroke-[1]"
+        />
+        <line
+          x1={plotLeft}
+          y1={midY}
+          x2={plotRight}
+          y2={midY}
+          className="stroke-border stroke-[1]"
+        />
+        <line
+          x1={plotLeft}
+          y1={zeroY}
+          x2={plotRight}
+          y2={zeroY}
+          className="stroke-text-tertiary stroke-[1]"
+        />
+        <text
+          x={plotLeft - 8}
+          y={maxY + 4}
+          textAnchor="end"
+          className="fill-text-tertiary text-[10px]"
+        >
           {formatAxisUs(scaleMax)}
         </text>
-        <text x={plotLeft - 8} y={midY + 4} textAnchor="end" className="plot-axis-label">
+        <text
+          x={plotLeft - 8}
+          y={midY + 4}
+          textAnchor="end"
+          className="fill-text-tertiary text-[10px]"
+        >
           {formatAxisUs(midValue)}
         </text>
-        <text x={plotLeft - 8} y={zeroY + 4} textAnchor="end" className="plot-axis-label">
+        <text
+          x={plotLeft - 8}
+          y={zeroY + 4}
+          textAnchor="end"
+          className="fill-text-tertiary text-[10px]"
+        >
           0
         </text>
-        {areaPoints && <polygon points={areaPoints} className="plot-area" />}
-        {points && <polyline points={points} className="plot-line" />}
+        {areaPoints && <polygon points={areaPoints} className="fill-accent-ink/10" />}
+        {points && <polyline points={points} className="fill-none stroke-accent-ink stroke-2" />}
         {lastPoint && (
-          <circle cx={lastPoint.x} cy={lastPoint.y} r="3.5" className="plot-latest-dot" />
+          <circle
+            cx={lastPoint.x}
+            cy={lastPoint.y}
+            r="3.5"
+            className="fill-accent-ink stroke-card stroke-[1.5]"
+          />
         )}
       </svg>
-      <figcaption>
+      <figcaption className="mt-1.5 text-xs text-text-tertiary">
         {latest === null
           ? 'No sender-side timing samples yet.'
           : `Session max pre-call lateness observed at the latest diagnostics snapshot: ${latest} μs across ${values.length} snapshots. This cumulative value does not decrease after recovery.${
@@ -180,12 +219,12 @@ export function DiagnosticsTimingPanel({ useStore }: { useStore: DesktopStoreHoo
   const activeSession = nativeSessionActive && latest?.session_id === sessionId;
 
   return (
-    <TabPanel id="timing" className="diagnostics-panel">
+    <TabsContent value="timing" className="min-h-[116px] min-w-0 flex-1 pt-3">
       <DiagnosticsTimingPlot
         samples={activeSession ? samples : []}
         hasActiveSession={nativeSessionActive}
         dryRun={nativeSessionActive && dryRun}
       />
-    </TabPanel>
+    </TabsContent>
   );
 }

@@ -5,10 +5,10 @@ import { StatusBadge } from './StatusBadge';
 afterEach(cleanup);
 
 describe('StatusBadge', () => {
-  it('shares neutral theme styling without inline color overrides', () => {
+  it('uses semantic neutral styling without inline color overrides', () => {
     render(<StatusBadge aria-label="Metadata loading">Loading</StatusBadge>);
     const badge = screen.getByText('Loading');
-    expect(badge).toHaveClass('status-badge');
+    expect(badge).toHaveClass('bg-secondary', 'text-secondary-foreground');
     expect(badge).toHaveAttribute('data-tone', 'neutral');
     expect(badge).toHaveAttribute('data-appearance', 'soft');
     expect(badge).toHaveAttribute('aria-label', 'Metadata loading');

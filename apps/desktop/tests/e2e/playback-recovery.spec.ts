@@ -18,7 +18,7 @@ test('status Retry restores Playing and clears the recovery banner without movin
   await page.goto(
     '/?mockPlaybackDurationMs=120000&mockStartDelayMs=10&mockStartResponseDelayMs=60000&mockStatusQueryFailures=1&mockDropPlaybackSnapshots=1&mockDropPlaybackStartConfirmation=1',
   );
-  const player = await startSelectedSong(page);
+  const player = await startSelectedSong(page, { waitFor: 'pending' });
   await expect(player.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
   const beforeRecovery = await readPlayerBarGeometry(page);
   expectPlayerBarGeometry(beforeRecovery);
@@ -46,7 +46,7 @@ test('Stop playback remains explicit and actionable from a recovery banner at 80
   await page.goto(
     '/?mockPlaybackDurationMs=120000&mockStartDelayMs=10&mockStartResponseDelayMs=60000&mockStatusQueryFailures=1&mockDropPlaybackSnapshots=1&mockDropPlaybackStartConfirmation=1',
   );
-  const player = await startSelectedSong(page);
+  const player = await startSelectedSong(page, { waitFor: 'pending' });
   await expect(player.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
   await page.clock.fastForward(15_000);
   await expectRecoveryBannerWithinViewport(page);
@@ -67,7 +67,7 @@ test('authoritative no-session recovery returns to Play and Try again at 800×56
   await page.goto('/?mockNeverCreateSession=1');
   await expect(page.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
   const idleGeometry = await readPlayerBarGeometry(page);
-  const player = await startSelectedSong(page);
+  const player = await startSelectedSong(page, { waitFor: 'pending' });
   await expect(player.getByRole('button', { name: 'Starting playback' })).toBeDisabled();
   await page.clock.fastForward(15_000);
   await expectRecoveryBannerWithinViewport(page);

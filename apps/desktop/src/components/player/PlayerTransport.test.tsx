@@ -46,7 +46,7 @@ function expectFiveTransportButtons(primaryName: string) {
   expect(screen.getByRole('button', { name: primaryName })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Next' })).toBeVisible();
   expect(screen.getByRole('button', { name: 'Stop' })).toBeVisible();
-  expect(document.querySelectorAll('.player-controls-row button')).toHaveLength(5);
+  expect(document.querySelectorAll('[data-testid="player-controls-row"] button')).toHaveLength(5);
 }
 
 describe('PlayerTransport', () => {

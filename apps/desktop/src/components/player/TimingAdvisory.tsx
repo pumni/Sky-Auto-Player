@@ -24,20 +24,25 @@ const dispatchModelStatusLabel: Record<
 export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
   if (!advisory) {
     return (
-      <div className="timing-advisory" data-status="unavailable">
-        <strong>Prepared generation details are unavailable.</strong>
+      <div
+        data-slot="timing-advisory"
+        className="grid min-w-0 gap-1 rounded-control border border-border bg-surface p-2 text-xs text-text-secondary"
+        data-status="unavailable"
+      >
+        <strong className="text-foreground">Prepared generation details are unavailable.</strong>
       </div>
     );
   }
 
   return (
     <div
-      className="timing-advisory"
+      className="grid min-w-0 gap-1 rounded-control border border-border bg-surface p-2 text-xs text-text-secondary data-[status=short_up_gap_risk]:border-warning-border data-[status=short_up_gap_risk]:bg-warning-surface"
+      data-slot="timing-advisory"
       data-status={advisory.status}
       data-plan-fingerprint={advisory.plan_fingerprint}
       aria-label="Prepared playback generation advisory"
     >
-      <strong>{statusLabel[advisory.status]}</strong>
+      <strong className="font-semibold text-foreground">{statusLabel[advisory.status]}</strong>
       <span>{advisory.explanation}</span>
       {advisory.total_authored_timestamp_group_count !== null &&
         advisory.down_generation_count !== null && (
@@ -55,8 +60,13 @@ export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
             ` · minimum hold H: ${advisory.effective_hold_floor_h_us} µs`}
         </span>
       )}
-      <div className="timing-model-advisory" data-status={advisory.dispatch_model_status}>
-        <strong>{dispatchModelStatusLabel[advisory.dispatch_model_status]}</strong>
+      <div
+        className="grid min-w-0 gap-1 border-t border-border pt-1.5 data-[status=modeled_risk]:text-warning"
+        data-status={advisory.dispatch_model_status}
+      >
+        <strong className="font-semibold text-foreground">
+          {dispatchModelStatusLabel[advisory.dispatch_model_status]}
+        </strong>
         <span>{advisory.dispatch_model_explanation}</span>
         <span>
           {advisory.modeled_send_count} modeled sends · {advisory.modeled_negative_slack_send_count}{' '}
@@ -70,16 +80,18 @@ export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
       {advisory.dry_run_is_hypothetical && (
         <span>This is a prepared dry-run schedule; no input is sent.</span>
       )}
-      <details>
-        <summary>About this check</summary>
-        <span>
+      <details className="border-t border-border pt-1.5">
+        <summary className="cursor-pointer text-text-secondary hover:text-foreground">
+          About this check
+        </summary>
+        <span className="mt-1 block">
           The advisory counts canonical Down generations and authored Up-to-Down gaps. Its
           illustrative execution model reuses the production DispatchExecutor with{' '}
           {advisory.estimated_sender_setup_us} µs sender setup, {advisory.estimated_per_input_us} µs
           per input, and {advisory.estimated_post_send_us} µs post-send assumptions. It does not
           model receiver observation or change authored timing, hold, tempo, admission, or playback.
         </span>
-        <span>
+        <span className="mt-1 block">
           Bounds: {advisory.generation_limit} generations, {advisory.work_limit_units} key visits,
           and {Math.round(advisory.working_memory_limit_bytes / 1_048_576)} MiB working memory.
         </span>

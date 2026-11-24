@@ -12,7 +12,11 @@ interface PlayerBarProps {
 
 export function PlayerBar({ useStore, utilityTriggerRef }: PlayerBarProps) {
   return (
-    <footer className="player-bar" aria-label="Player controls">
+    <footer
+      data-slot="player-dock"
+      className="relative grid min-w-0 grid-cols-[minmax(140px,1fr)_minmax(320px,600px)_minmax(140px,1fr)] items-center gap-2 border-t border-border bg-card px-3 py-2 text-text-secondary"
+      aria-label="Player controls"
+    >
       <PlaybackAdmission useStore={useStore} />
       <PlayerTrackInfo useStore={useStore} />
       <PlayerTransport useStore={useStore} />

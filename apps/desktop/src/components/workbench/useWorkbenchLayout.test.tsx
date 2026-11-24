@@ -215,15 +215,16 @@ describe('shared palette geometry boundary', () => {
     );
     expect(solver).not.toMatch(/palette|PaletteId/);
 
-    const workbenchCss = readFileSync(resolve(process.cwd(), 'src/styles/workbench.css'), 'utf8');
-    expect(workbenchCss).toContain('min-width: var(--min-track-browser-width);');
-    expect(workbenchCss).not.toMatch(/min-width:\s*420px/);
-    const tokensCss = readFileSync(resolve(process.cwd(), 'src/styles/tokens.css'), 'utf8');
-    expect(tokensCss).not.toMatch(/--min-track-browser-width\s*:/);
+    const workbench = readFileSync(
+      resolve(process.cwd(), 'src/components/workbench/Workbench.tsx'),
+      'utf8',
+    );
+    expect(workbench).toContain('style={{ minWidth: MIN_TRACK_BROWSER_WIDTH }}');
+    expect(workbench).not.toMatch(/minWidth:\s*420/);
 
-    const themes = readFileSync(resolve(process.cwd(), 'src/styles/themes.css'), 'utf8');
+    const themes = readFileSync(resolve(process.cwd(), 'src/styles/globals.css'), 'utf8');
     const paletteRules = [...themes.matchAll(/([^{}]*data-palette[^{}]*)\{([^{}]*)\}/g)];
-    expect(paletteRules).toHaveLength(6);
+    expect(paletteRules).toHaveLength(5);
     for (const paletteRule of paletteRules) {
       const selector = paletteRule[1];
       const declarations = paletteRule[2];

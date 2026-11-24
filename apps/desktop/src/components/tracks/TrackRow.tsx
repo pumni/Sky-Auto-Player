@@ -1,11 +1,10 @@
-import { memo, useState, type CSSProperties, type ReactNode } from 'react';
-import { Focusable } from 'react-aria-components';
-import { Tooltip, TooltipTrigger } from 'react-aria-components/Tooltip';
+import { memo, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { Heart, Music2 } from 'lucide-react';
 import type { SongRow } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
 import { selectNowPlayingSongId, selectRowAtIndex } from '../../state/store';
 import { StatusBadge, type StatusBadgeTone } from '../ui/StatusBadge';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { TrackActionsMenu } from './TrackActionsMenu';
 
 interface TrackRowProps {
@@ -55,7 +54,9 @@ function metadataStatus(state: SongRow['metadata_state']): {
 function isInteractiveRowTarget(target: EventTarget | null): boolean {
   return (
     target instanceof Element &&
-    target.closest('button, a[href], input, select, textarea, [contenteditable="true"]') !== null
+    target.closest(
+      'button, a[href], input, select, textarea, [contenteditable="true"], [role="menuitem"], [role="menuitemcheckbox"], [role="menuitemradio"], [role="menu"], [role="dialog"], [role="listbox"], [role="option"]',
+    ) !== null
   );
 }
 
@@ -72,12 +73,16 @@ export const TrackRow = memo(function TrackRow({
   actions,
 }: TrackRowProps) {
   const [clippedHoverSongId, setClippedHoverSongId] = useState<string | null>(null);
+  const titleTextRef = useRef<HTMLSpanElement>(null);
   const style: CSSProperties = { transform: `translateY(${start}px)` };
   const metadata = row.metadata_state === 'ready' ? null : metadataStatus(row.metadata_state);
   return (
     <div
       id={`song-row-${row.song_id}`}
-      className={`track-table-row track-row${selected ? ' is-selected' : ''}${playing ? ' is-playing' : ''}`}
+      className={`group absolute inset-x-1.5 grid h-[46px] min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 rounded-control border-l-2 border-l-transparent px-[10px] pr-1.5 text-[13px] font-medium outline-none transition-colors duration-fast hover:bg-control-hover focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/track-browser:right-1 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-1.5 @max-[440px]/track-browser:left-1 @max-[440px]/track-browser:right-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:pl-0.5 ${selected ? 'border-l-accent-ink bg-selection font-semibold text-foreground' : 'text-text-secondary'} ${playing ? (selected ? 'border-l-accent-ink bg-selection' : 'border-l-accent-ink bg-playing') : ''}`}
+      data-selected={selected}
+      data-playing={playing}
+      data-slot="track-row"
       role="row"
       aria-selected={selected}
       aria-current={playing ? 'true' : undefined}
@@ -91,54 +96,75 @@ export const TrackRow = memo(function TrackRow({
         onSelect();
       }}
     >
-      <span className="track-cell track-cell-index" role="gridcell">
+      <span
+        className={`min-w-0 text-center tabular-nums ${playing ? 'grid place-items-center font-semibold text-accent-ink' : 'text-text-tertiary'}`}
+        role="gridcell"
+      >
         {playing ? <Music2 size={14} aria-hidden="true" /> : ordinal}
       </span>
-      <TooltipTrigger
-        isOpen={clippedHoverSongId === row.song_id}
+      <Tooltip
+        open={clippedHoverSongId === row.song_id}
         onOpenChange={(isOpen) => {
-          if (!isOpen) setClippedHoverSongId(null);
+          if (!isOpen) {
+            setClippedHoverSongId(null);
+          } else {
+            const title = titleTextRef.current;
+            setClippedHoverSongId(
+              title && title.scrollWidth > title.clientWidth ? row.song_id : null,
+            );
+          }
         }}
       >
-        <Focusable>
-          <span className="track-cell track-cell-title" role="gridcell" tabIndex={-1}>
+        <TooltipTrigger
+          render={
             <span
-              className="track-title-text"
-              onPointerEnter={(event) => {
-                // Preserve the grid's one-focus-target keyboard model. The existing
-                // gridcell is the tooltip anchor; text clipping alone controls opening.
-                if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
-                const element = event.currentTarget;
-                setClippedHoverSongId(
-                  element.scrollWidth > element.clientWidth ? row.song_id : null,
-                );
-              }}
-              onPointerLeave={() => setClippedHoverSongId(null)}
-            >
-              {row.title}
-            </span>
-            {metadata && (
-              <StatusBadge
-                className="track-metadata-status"
-                tone={metadata.tone}
-                aria-label={metadata.label}
-                title={metadata.label}
-              >
-                {metadata.value}
-              </StatusBadge>
-            )}
-            {selected && <span className="visually-hidden">Selected for inspection</span>}
-            {playing && <span className="visually-hidden">Now Playing</span>}
-            {actions}
+              data-slot="track-title-cell"
+              className="flex min-w-0 items-center gap-1.5 overflow-hidden"
+              role="gridcell"
+              tabIndex={-1}
+            />
+          }
+          onPointerEnter={(event) => {
+            if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+            const title = event.currentTarget.querySelector<HTMLElement>('[data-track-title]');
+            setClippedHoverSongId(
+              title && title.scrollWidth > title.clientWidth ? row.song_id : null,
+            );
+          }}
+          onPointerLeave={() => setClippedHoverSongId(null)}
+        >
+          <span
+            ref={titleTextRef}
+            data-track-title
+            className={`min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap ${playing ? 'font-semibold text-accent-ink' : ''}`}
+          >
+            {row.title}
           </span>
-        </Focusable>
-        <Tooltip className="track-title-tooltip" placement="top start">
+          {metadata && (
+            <StatusBadge
+              className="shrink-0"
+              tone={metadata.tone}
+              aria-label={metadata.label}
+              title={metadata.label}
+            >
+              {metadata.value}
+            </StatusBadge>
+          )}
+          {selected && <span className="sr-only">Selected for inspection</span>}
+          {playing && <span className="sr-only">Now Playing</span>}
+          {actions}
+        </TooltipTrigger>
+        <TooltipContent
+          side="top"
+          align="start"
+          className="max-w-[min(320px,calc(100vw-64px))] break-words rounded-control border border-border bg-popover px-2 py-1.5 text-xs leading-[1.4] text-popover-foreground shadow-lg"
+        >
           {row.title}
-        </Tooltip>
-      </TooltipTrigger>
-      <span className="track-cell track-cell-liked" role="gridcell">
+        </TooltipContent>
+      </Tooltip>
+      <span className="flex min-w-0 items-center justify-center" role="gridcell">
         <button
-          className={`track-like-button${row.liked ? ' is-liked' : ''}`}
+          className={`grid size-7 place-items-center rounded-full border-0 bg-transparent p-0 text-text-tertiary opacity-0 transition-colors duration-fast group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-control-hover hover:text-accent-ink focus-visible:opacity-100 focus-visible:text-accent-ink ${row.liked ? 'bg-transparent text-accent-ink opacity-100' : ''}`}
           type="button"
           aria-label={
             row.liked ? `Remove ${row.title} from Liked Songs` : `Add ${row.title} to Liked Songs`
@@ -154,10 +180,13 @@ export const TrackRow = memo(function TrackRow({
           <Heart size={16} fill={row.liked ? 'currentColor' : 'none'} aria-hidden="true" />
         </button>
       </span>
-      <span className="track-cell track-cell-notes" role="gridcell">
+      <span
+        className="min-w-0 text-right tabular-nums text-text-secondary @max-[520px]/track-browser:hidden"
+        role="gridcell"
+      >
         {metadata ? '—' : (row.note_count ?? '—')}
       </span>
-      <span className="track-cell track-cell-duration" role="gridcell">
+      <span className="min-w-0 text-right tabular-nums text-text-secondary" role="gridcell">
         {metadata ? '—' : formatDuration(row.duration_us)}
       </span>
     </div>
@@ -192,16 +221,16 @@ export const VirtualTrackRow = memo(function VirtualTrackRow({
   if (!row) {
     return (
       <div
-        className="track-table-row track-row track-row-placeholder"
+        className="absolute inset-x-1.5 grid h-[46px] min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 px-[10px] pr-1.5 text-[13px] text-text-tertiary opacity-70 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:px-0.5"
         role="row"
         aria-busy="true"
         aria-rowindex={index + 2}
         style={{ transform: `translateY(${start}px)` }}
       >
-        <span className="track-cell track-cell-index" role="gridcell">
+        <span className="min-w-0 text-center tabular-nums" role="gridcell">
           {sourceIndex + 1}
         </span>
-        <span className="track-cell track-cell-title" role="gridcell">
+        <span className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap" role="gridcell">
           Loading song…
         </span>
       </div>

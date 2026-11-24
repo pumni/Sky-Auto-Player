@@ -20,19 +20,21 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
   await expect(page.getByRole('heading', { name: 'Built-in Songs' })).toBeVisible();
   await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
-  const navigatorPane = await page.locator('.navigator-workbench-pane').boundingBox();
-  const trackPane = await page.locator('.track-browser-workbench-pane').boundingBox();
+  const navigatorPane = await page.locator('[data-pane="navigator"]').boundingBox();
+  const trackPane = await page.locator('[data-pane="browser"]').boundingBox();
   const playerBar = await page.getByRole('contentinfo', { name: 'Player controls' }).boundingBox();
   expect(navigatorPane).not.toBeNull();
   expect(trackPane).not.toBeNull();
   expect(playerBar).not.toBeNull();
   if (navigatorPane && trackPane && playerBar) {
     const geometry = await page.evaluate(() => ({
-      cssGutter: Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
-      ),
+      cssGutter:
+        document
+          .querySelector<HTMLElement>('[data-slot="resizable-separator"]')
+          ?.getBoundingClientRect().width ?? Number.NaN,
       solverGutter: Number.parseFloat(
-        document.querySelector<HTMLElement>('.workbench')?.dataset.workbenchGap ?? 'NaN',
+        document.querySelector<HTMLElement>('[data-slot="workbench"]')?.dataset.workbenchGap ??
+          'NaN',
       ),
     }));
     expect(geometry.solverGutter).toBe(geometry.cssGutter);
@@ -43,7 +45,7 @@ test('minimum viewport keeps the workbench and Player Bar bounded', async ({ pag
       geometry.cssGutter,
     );
   }
-  const titlebar = await page.locator('.app-titlebar').boundingBox();
+  const titlebar = await page.locator('[data-slot="titlebar"]').boundingBox();
   expect(titlebar).not.toBeNull();
   if (titlebar && navigatorPane) {
     expect(Math.round(navigatorPane.y - (titlebar.y + titlebar.height))).toBe(0);
@@ -82,16 +84,21 @@ test('configured Tauri minimum keeps Inspector docked in the Chromium UI contrac
   await page.goto('/');
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
-  await expect(page.locator('.utility-workbench-pane')).toBeVisible();
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
+  await expect(page.locator('[data-pane="inspector"]')).toBeVisible();
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'docked',
+  );
   await expect(page.getByRole('columnheader', { name: 'Notes' })).toBeHidden();
   await expect(page.getByRole('columnheader', { name: 'Liked' })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: 'Duration' })).toBeVisible();
-  const recommendationGrid = page.locator('.recommendation-grid');
+  const recommendationGrid = page.locator(
+    '[data-slot="timing-recommendation"] [data-slot="recommendation-values"]',
+  );
   await expect(recommendationGrid).toBeVisible();
   await expect(recommendationGrid).toHaveCSS('grid-template-columns', /\S+px$/);
   await expectWorkbenchWithinBounds(page);
-  const navigator = await page.locator('.navigator-workbench-pane').boundingBox();
+  const navigator = await page.locator('[data-pane="navigator"]').boundingBox();
   expect(navigator).not.toBeNull();
   if (navigator) expect(Math.round(navigator.width)).toBe(48);
 });
@@ -106,8 +113,8 @@ test('Chromium fallback emulation uses overlay below the docked threshold', asyn
     await page.evaluate(() => window.localStorage.clear());
     await page.goto('/');
     await page.getByRole('button', { name: 'Open utility panel' }).click();
-    await expect(page.locator('.utility-workbench-pane')).toBeVisible();
-    await expect(page.locator('.workbench')).toHaveAttribute(
+    await expect(page.locator('[data-pane="inspector"]')).toBeVisible();
+    await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
       'data-utility-presentation',
       expectedUtilityPresentation(viewport.width),
     );
@@ -129,7 +136,7 @@ test('Chromium checks layout at Tauri-supported desktop dimensions', async ({ pa
     await page.setViewportSize(viewport);
     await page.evaluate(() => window.localStorage.clear());
     await page.reload();
-    await expect(page.locator('.app-titlebar')).toBeVisible();
+    await expect(page.locator('[data-slot="titlebar"]')).toBeVisible();
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
     await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
 
@@ -143,7 +150,7 @@ test('Chromium checks layout at Tauri-supported desktop dimensions', async ({ pa
     expect(dimensions.documentHeight).toBeLessThanOrEqual(dimensions.viewportHeight);
 
     await page.getByRole('button', { name: 'Open utility panel' }).click();
-    await expect(page.locator('.workbench')).toHaveAttribute(
+    await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
       'data-utility-presentation',
       expectedUtilityPresentation(viewport.width),
     );
@@ -168,15 +175,15 @@ test('Titlebar Search uses the available center axis and Player controls stay vi
 }) => {
   await page.setViewportSize({ width: 1920, height: 1080 });
   await page.goto('/');
-  await expect(page.locator('.app-titlebar')).toBeVisible();
+  await expect(page.locator('[data-slot="titlebar"]')).toBeVisible();
   const viewportCenter = 1920 / 2;
   const titlebarFreeCenter = await page.evaluate(() => {
-    const leading = document.querySelector<HTMLElement>('.app-titlebar-leading');
-    const trailing = document.querySelector<HTMLElement>('.app-titlebar-end');
+    const leading = document.querySelector<HTMLElement>('[data-slot="titlebar-leading"]');
+    const trailing = document.querySelector<HTMLElement>('[data-slot="titlebar-trailing"]');
     if (!leading || !trailing) throw new Error('Titlebar occupied boundaries are unavailable');
     return (leading.getBoundingClientRect().right + trailing.getBoundingClientRect().left) / 2;
   });
-  const searchBox = await page.getByLabel('Search Built-in Songs').boundingBox();
+  const searchBox = await page.locator('[data-slot="global-search"]').boundingBox();
   const idleBox = await page.getByRole('button', { name: 'Play', exact: true }).boundingBox();
   expect(searchBox).not.toBeNull();
   expect(idleBox).not.toBeNull();
@@ -249,9 +256,7 @@ test('Player Bar geometry covers native desktop and Chromium fallback emulation'
     await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
     const activeShuffleTone = await shuffle.evaluate((element) => {
       const token =
-        document.documentElement.dataset.palette === 'graphite'
-          ? '--workbench-toggle-on'
-          : '--accent';
+        document.documentElement.dataset.palette === 'graphite' ? '--accent-ink' : '--accent';
       const probe = document.createElement('span');
       probe.style.color = `var(${token})`;
       document.body.append(probe);
@@ -295,8 +300,8 @@ test('Player Bar geometry covers native desktop and Chromium fallback emulation'
     expectPlayerBarGeometry(resumed);
     expectStablePlayerBar(idle, resumed);
 
-    const toolsBox = await player.locator('.player-tools').boundingBox();
-    const timelineBox = await player.locator('.player-timeline').boundingBox();
+    const toolsBox = await player.locator('[data-slot="player-tools"]').boundingBox();
+    const timelineBox = await player.locator('[data-slot="player-timeline"]').boundingBox();
     expect(toolsBox).not.toBeNull();
     expect(timelineBox).not.toBeNull();
     if (toolsBox && timelineBox) {
@@ -326,14 +331,17 @@ test('separator fills the existing 4px gutter while pane borders and corner shap
       return element;
     };
     const rect = (element: Element) => element.getBoundingClientRect();
-    const navigator = required('.navigator-workbench-pane');
-    const browser = required('.track-browser-workbench-pane');
-    const inspector = required('.utility-workbench-pane');
-    const separators = Array.from(document.querySelectorAll<HTMLElement>('.resizable-separator'));
+    const navigator = required('[data-pane="navigator"]');
+    const browser = required('[data-pane="browser"]');
+    const inspector = required('[data-pane="inspector"]');
+    const separators = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-slot="resizable-separator"]'),
+    );
     return {
-      gap: Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
-      ),
+      gap:
+        document
+          .querySelector<HTMLElement>('[data-slot="resizable-separator"]')
+          ?.getBoundingClientRect().width ?? Number.NaN,
       separators: separators.map((separator) => {
         const area = rect(separator);
         const fillElement = separator.querySelector('span')!;
@@ -393,9 +401,9 @@ test('separator fills the existing 4px gutter while pane borders and corner shap
   if (!box) throw new Error('Missing utility separator bounds');
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
   await page.mouse.down();
-  await expect(separator).toHaveClass(/is-dragging/);
+  await expect(page.locator('body')).toHaveAttribute('data-resizing');
   await page.mouse.up();
-  await expect(separator).not.toHaveClass(/is-dragging/);
+  await expect(page.locator('body')).not.toHaveAttribute('data-resizing');
 });
 
 test('Library separator resizes by pointer and persists after reload', async ({ page }) => {

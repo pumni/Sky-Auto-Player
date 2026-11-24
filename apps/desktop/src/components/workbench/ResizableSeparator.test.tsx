@@ -141,7 +141,7 @@ describe('separator drag sessions', () => {
       expect(props.onChange.mock.calls).toEqual([[350]]);
       expect(props.onCommit.mock.calls).toEqual([[350]]);
       expect(props.onDragEnd).toHaveBeenCalledTimes(1);
-      expect(document.body).not.toHaveClass('is-resizing');
+      expect(document.body).not.toHaveAttribute('data-resizing');
     },
   );
   it('rebases pending and already applied widths to changed viewport bounds', () => {
@@ -161,7 +161,7 @@ describe('separator drag sessions', () => {
     const { props, move, unmount } = setup();
     move(440);
     const staleCallback = [...frames.values()][0]!;
-    expect(document.body).toHaveClass('is-resizing');
+    expect(document.body).toHaveAttribute('data-resizing', '');
     unmount();
     frame();
     act(() => staleCallback(0));
@@ -169,7 +169,7 @@ describe('separator drag sessions', () => {
     expect(props.onChange).not.toHaveBeenCalled();
     expect(props.onCommit).not.toHaveBeenCalled();
     expect(props.onDragEnd).not.toHaveBeenCalled();
-    expect(document.body).not.toHaveClass('is-resizing');
+    expect(document.body).not.toHaveAttribute('data-resizing');
   });
   it('ignores other pointers and keeps capture until the owning pointer finishes', () => {
     const { props, separator, move } = setup();

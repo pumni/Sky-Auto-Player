@@ -62,22 +62,17 @@ describe('SettingsCategoryContent', () => {
     );
 
     const palette = screen.getByRole('combobox', { name: 'Dark palette' });
-    expect(palette).toHaveAttribute('data-value', 'graphite');
+    expect(palette).toHaveTextContent('Graphite (Default)');
     await act(async () => palette.click());
 
     const options = screen.getAllByRole('option');
-    expect(
-      options.map((option) => [
-        option.getAttribute('data-value'),
-        option.querySelector('.app-select-option-label')?.textContent,
-      ]),
-    ).toEqual([
-      ['graphite', 'Graphite (Default)'],
-      ['aurora', 'Aurora'],
-      ['minimalist', 'Minimalist'],
-      ['slate', 'Slate'],
-      ['cyberpunk', 'Cyberpunk'],
-      ['classic', 'Classic'],
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      'Graphite (Default)',
+      'Aurora',
+      'Minimalist',
+      'Slate',
+      'Cyberpunk',
+      'Classic',
     ]);
 
     await act(async () => screen.getByRole('option', { name: 'Slate' }).click());
@@ -97,19 +92,14 @@ describe('SettingsCategoryContent', () => {
     );
 
     const theme = screen.getByRole('combobox', { name: 'Theme' });
-    expect(theme).toHaveAttribute('data-value', 'system');
+    expect(theme).toHaveTextContent('Follow Windows (recommended)');
     await act(async () => theme.click());
 
     const themeOptions = screen.getAllByRole('option');
-    expect(
-      themeOptions.map((option) => [
-        option.getAttribute('data-value'),
-        option.querySelector('.app-select-option-label')?.textContent,
-      ]),
-    ).toEqual([
-      ['system', 'Follow Windows (recommended)'],
-      ['light', 'Light'],
-      ['dark', 'Dark'],
+    expect(themeOptions.map((option) => option.textContent?.trim())).toEqual([
+      'Follow Windows (recommended)Auto',
+      'Light',
+      'Dark',
     ]);
 
     await act(async () => screen.getByRole('option', { name: 'Light' }).click());

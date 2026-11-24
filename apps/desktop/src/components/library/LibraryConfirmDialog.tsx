@@ -1,4 +1,13 @@
-import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '../ui/alert-dialog';
 
 interface LibraryConfirmDialogProps {
   open: boolean;
@@ -20,59 +29,44 @@ export function LibraryConfirmDialog({
   onConfirm,
 }: LibraryConfirmDialogProps) {
   return (
-    <ModalOverlay
-      isOpen={open}
-      isDismissable={!pending}
-      onOpenChange={onOpenChange}
-      className="modal-backdrop"
+    <AlertDialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!pending || nextOpen) onOpenChange(nextOpen);
+      }}
     >
-      <Modal className="library-dialog library-confirm-dialog">
-        <Dialog aria-label={title}>
-          <div className="dialog-heading">
-            <div>
-              <p className="eyebrow">CONFIRM ACTION</p>
-              <h2>{title}</h2>
-            </div>
-            <button
-              className="icon-button icon-button-boxed"
-              type="button"
-              aria-label="Close confirmation dialog"
-              onClick={() => onOpenChange(false)}
-              disabled={pending}
-            >
-              ×
-            </button>
-          </div>
-          <p className="library-confirm-message">{message}</p>
-          <div className="library-dialog-actions">
-            <button
-              className="button"
-              type="button"
-              onClick={() => onOpenChange(false)}
-              disabled={pending}
-            >
-              Cancel
-            </button>
-            <button
-              className="button button-danger"
-              type="button"
-              onClick={() => {
-                void (async () => {
-                  try {
-                    await onConfirm();
-                    onOpenChange(false);
-                  } catch {
-                    // The mutation surface reports the error inline; keep the dialog open.
-                  }
-                })();
-              }}
-              disabled={pending}
-            >
-              {pending ? 'Working…' : confirmLabel}
-            </button>
-          </div>
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
+      <AlertDialogContent className="w-[min(520px,calc(100vw-32px))] gap-4 rounded-dialog border-border bg-card p-6">
+        <AlertDialogHeader className="items-start text-left">
+          <p className="m-0 text-[11px] font-semibold tracking-wide text-text-tertiary">
+            CONFIRM ACTION
+          </p>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription className="text-sm leading-relaxed text-muted-foreground">
+            {message}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter className="mt-2 flex justify-end gap-2">
+          <AlertDialogCancel variant="outline" disabled={pending}>
+            Cancel
+          </AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            onClick={() => {
+              void (async () => {
+                try {
+                  await onConfirm();
+                  onOpenChange(false);
+                } catch {
+                  // The mutation surface reports the error inline; keep the dialog open.
+                }
+              })();
+            }}
+            disabled={pending}
+          >
+            {pending ? 'Working…' : confirmLabel}
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

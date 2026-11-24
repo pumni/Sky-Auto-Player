@@ -1,9 +1,10 @@
 import type { HTMLAttributes } from 'react';
+import { cn } from 'cn';
 
 export type StatusBadgeTone = 'neutral' | 'warning' | 'danger';
-export type StatusBadgeAppearance = 'soft' | 'plain';
+type StatusBadgeAppearance = 'soft' | 'plain';
 
-export interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
+interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
   tone?: StatusBadgeTone;
   appearance?: StatusBadgeAppearance;
 }
@@ -22,10 +23,19 @@ export function StatusBadge({
   return (
     <span
       {...props}
-      className={`status-badge${className ? ` ${className}` : ''}`}
+      data-slot="status-badge"
+      className={cn(
+        'inline-flex min-h-5 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium leading-4',
+        'border-border bg-secondary text-secondary-foreground',
+        'data-[tone=warning]:border-warning-border data-[tone=warning]:bg-warning-surface data-[tone=warning]:text-warning',
+        'data-[tone=danger]:border-danger-border data-[tone=danger]:bg-danger-surface data-[tone=danger]:text-danger',
+        'data-[appearance=plain]:border-transparent data-[appearance=plain]:bg-transparent',
+        className,
+      )}
       data-tone={tone}
       data-appearance={appearance}
     >
+      <span className="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />
       {children}
     </span>
   );

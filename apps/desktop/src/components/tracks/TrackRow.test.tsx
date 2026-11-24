@@ -49,17 +49,9 @@ describe('Track Browser primitives', () => {
 
     const renderedRow = screen.getByRole('row', { name: /Liminal Garden/ });
     expect(renderedRow).toHaveAttribute('aria-selected', 'false');
-    expect(
-      [...renderedRow.querySelectorAll<HTMLElement>('[role="gridcell"]')].map(
-        (cell) => cell.className,
-      ),
-    ).toEqual([
-      'track-cell track-cell-index',
-      'track-cell track-cell-title',
-      'track-cell track-cell-liked',
-      'track-cell track-cell-notes',
-      'track-cell track-cell-duration',
-    ]);
+    const cells = [...renderedRow.querySelectorAll<HTMLElement>('[role="gridcell"]')];
+    expect(cells).toHaveLength(5);
+    expect(cells[1]).toHaveTextContent(row.title);
     expect(screen.getByRole('gridcell', { name: '—' })).toBeInTheDocument();
     expect(screen.getByRole('gridcell', { name: '2:05' })).toBeInTheDocument();
     const likeButton = screen.getByRole('button', { name: 'Add Liminal Garden to Liked Songs' });
@@ -80,8 +72,8 @@ describe('Track Browser primitives', () => {
       <TrackRow row={row} index={6} selected={false} start={276} onSelect={vi.fn()} />,
     );
 
-    const title = screen.getByText(row.title, { selector: '.track-title-text' });
-    const titleCell = title.closest('.track-cell-title');
+    const title = screen.getByText(row.title);
+    const titleCell = title.closest('[role="gridcell"]');
     expect(title).not.toHaveAttribute('title');
     expect(titleCell).not.toHaveAttribute('title');
 
@@ -108,7 +100,7 @@ describe('Track Browser primitives', () => {
     rerender(
       <TrackRow row={replacement} index={6} selected={false} start={276} onSelect={vi.fn()} />,
     );
-    const replacementTitle = screen.getByText(replacement.title, { selector: '.track-title-text' });
+    const replacementTitle = screen.getByText(replacement.title);
     expect(replacementTitle).not.toHaveAttribute('title');
     await waitFor(() => expect(screen.queryByRole('tooltip')).not.toBeInTheDocument());
     expect(screen.getByRole('row', { name: /A different song/ })).toBeInTheDocument();
@@ -120,14 +112,15 @@ describe('Track Browser primitives', () => {
     const renderedRow = screen.getByRole('row', { name: /Liminal Garden/ });
     expect(renderedRow).toHaveAttribute('aria-selected', 'true');
     expect(renderedRow).toHaveAttribute('aria-current', 'true');
-    expect(renderedRow).toHaveClass('is-selected', 'is-playing');
-    expect(renderedRow.querySelector('.track-title-text')).toHaveTextContent(row.title);
+    expect(renderedRow).toHaveAttribute('data-selected', 'true');
+    expect(renderedRow).toHaveAttribute('data-playing', 'true');
+    expect(renderedRow.querySelector('[data-track-title]')).toHaveTextContent(row.title);
     expect(renderedRow.style.transform).toBe('translateY(276px)');
-    expect(renderedRow.querySelector('.track-cell-index svg')).toHaveAttribute(
+    expect(renderedRow.querySelector('[role="gridcell"] svg')).toHaveAttribute(
       'aria-hidden',
       'true',
     );
-    expect(renderedRow.querySelector('.track-cell-index svg')).toHaveClass('lucide-music-2');
+    expect(renderedRow.querySelector('[role="gridcell"] svg')).toHaveClass('lucide-music-2');
   });
 
   it('formats song counts with singular grammar', () => {
@@ -163,14 +156,13 @@ describe('Track Browser primitives', () => {
 
     expect(screen.getByText('Loading')).toHaveAttribute('aria-label', 'Metadata loading');
     expect(screen.getByText('Unavailable')).toHaveAttribute('aria-label', 'Metadata unavailable');
-    expect(document.querySelectorAll('.track-metadata-status')).toHaveLength(2);
-    expect(screen.getByText('Loading')).toHaveClass('status-badge');
+    expect(document.querySelectorAll('[data-slot="status-badge"]')).toHaveLength(2);
+    expect(screen.getByText('Loading')).toHaveAttribute('data-slot', 'status-badge');
     expect(screen.getByText('Loading')).toHaveAttribute('data-tone', 'neutral');
-    expect(screen.getByText('Unavailable')).toHaveClass('status-badge');
+    expect(screen.getByText('Unavailable')).toHaveAttribute('data-slot', 'status-badge');
     expect(screen.getByText('Unavailable')).toHaveAttribute('data-tone', 'danger');
     expect(screen.getAllByRole('gridcell', { name: '—' })).toHaveLength(4);
     expect(screen.queryByText('Unknown')).toBeNull();
-    expect(document.querySelectorAll('.risk-dot')).toHaveLength(0);
   });
 
   it('shares the same neutral design for metadata review and physical risk', () => {
@@ -194,7 +186,7 @@ describe('Track Browser primitives', () => {
     );
     expect(screen.getByText('Review')).toHaveAttribute('data-tone', 'warning');
     expect(screen.getByText('Risk')).toHaveAttribute('data-tone', 'warning');
-    expect(document.querySelectorAll('.track-metadata-status.status-badge')).toHaveLength(2);
+    expect(document.querySelectorAll('[data-slot="status-badge"]')).toHaveLength(2);
   });
 
   it('renders loading placeholders for unloaded rows', () => {

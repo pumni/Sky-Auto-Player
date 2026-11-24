@@ -1,6 +1,12 @@
 import { ChevronDown, FilePlus2, ListMusic, Plus } from 'lucide-react';
-import { Button, Menu, MenuItem, MenuTrigger, Popover } from 'react-aria-components';
 import type { DesktopStoreHook } from '../../state/store';
+import { Button } from '../ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../ui/dropdown-menu';
 
 interface PlaylistAddSongsMenuProps {
   playlistId: string;
@@ -46,42 +52,46 @@ export function PlaylistAddSongsMenu({
   };
 
   return (
-    <MenuTrigger>
-      <Button className="button playlist-add-songs-button">
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            data-slot="playlist-add-songs-button"
+            variant="outline"
+            className="h-[30px] gap-1.5 border-border bg-surface px-2.5 text-xs text-text-secondary hover:bg-control-hover"
+            type="button"
+          />
+        }
+      >
         <Plus size={16} aria-hidden="true" />
         <span>Add songs</span>
         <ChevronDown size={14} aria-hidden="true" />
-      </Button>
-      <Popover className="track-menu-popover" placement="bottom end" offset={6}>
-        <Menu aria-label="Add songs">
-          <MenuItem
-            id="browse-builtin-songs"
-            onAction={() => void openPlaylistAdd(playlistId)}
-            className="library-menu-item"
-          >
-            <ListMusic size={15} aria-hidden="true" />
-            <span>Browse Built-in Songs…</span>
-          </MenuItem>
-          <MenuItem
-            id="import-files-to-playlist"
-            isDisabled={pending.has(`playlist:${playlistId}:import:file`)}
-            onAction={() => void runImport('files', importFiles)}
-            className="library-menu-item"
-          >
-            <FilePlus2 size={15} aria-hidden="true" />
-            <span>Import files…</span>
-          </MenuItem>
-          <MenuItem
-            id="import-folder-to-playlist"
-            isDisabled={pending.has(`playlist:${playlistId}:import:folder`)}
-            onAction={() => void runImport('folder', importFolder)}
-            className="library-menu-item"
-          >
-            <FilePlus2 size={15} aria-hidden="true" />
-            <span>Import folder…</span>
-          </MenuItem>
-        </Menu>
-      </Popover>
-    </MenuTrigger>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" aria-label="Add songs">
+        <DropdownMenuItem
+          className="h-8 gap-2 text-[13px]"
+          onClick={() => void openPlaylistAdd(playlistId)}
+        >
+          <ListMusic size={15} aria-hidden="true" />
+          <span>Browse Built-in Songs…</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="h-8 gap-2 text-[13px]"
+          disabled={pending.has(`playlist:${playlistId}:import:file`)}
+          onClick={() => void runImport('files', importFiles)}
+        >
+          <FilePlus2 size={15} aria-hidden="true" />
+          <span>Import files…</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="h-8 gap-2 text-[13px]"
+          disabled={pending.has(`playlist:${playlistId}:import:folder`)}
+          onClick={() => void runImport('folder', importFolder)}
+        >
+          <FilePlus2 size={15} aria-hidden="true" />
+          <span>Import folder…</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

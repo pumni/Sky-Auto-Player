@@ -27,7 +27,7 @@ for (const viewport of [
     ).toHaveCount(0);
     const notNow = confirmation.getByRole('button', { name: 'Not now' });
     await expect(notNow).toBeVisible();
-    await expect(confirmation.locator('.admission-option')).toHaveCount(2);
+    await expect(confirmation.locator('[data-slot="admission-option"]')).toHaveCount(2);
 
     const panel = await confirmation.boundingBox();
     const dismiss = await notNow.boundingBox();
@@ -46,7 +46,7 @@ for (const viewport of [
     expect(dismiss.height).toBeLessThanOrEqual(42);
     expect(dismiss.width).toBeLessThanOrEqual(150);
 
-    const estimate = confirmation.locator('.admission-option-estimate').first();
+    const estimate = confirmation.locator('[data-slot="admission-option-estimate"]').first();
     await expect(estimate).not.toHaveAttribute('open');
     await estimate.locator(':scope > summary').click();
     await expect(estimate).toHaveAttribute('open');

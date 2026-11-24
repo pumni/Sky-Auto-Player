@@ -1,5 +1,6 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
+  useCallback,
   useEffect,
   useImperativeHandle,
   useLayoutEffect,
@@ -114,6 +115,13 @@ function observeDimensions(
 export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const scrollVisibilityRef = useScrollVisibility<HTMLDivElement>();
+  const setScrollElement = useCallback(
+    (element: HTMLDivElement | null) => {
+      parentRef.current = element;
+      scrollVisibilityRef(element);
+    },
+    [scrollVisibilityRef],
+  );
   const resultTotal = useStore((store) => store.library.resultTotal);
   const committedPage = useStore((store) => store.library.builtinPage.committedPage);
   const focusNowPlaying = useStore((store) => store.library.builtinPage.focusNowPlaying);
@@ -386,11 +394,8 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
 
   return (
     <div
-      ref={(element) => {
-        parentRef.current = element;
-        scrollVisibilityRef.current = element;
-      }}
-      className="track-table scroll-surface"
+      ref={setScrollElement}
+      className="relative min-h-0 min-w-0 flex-1 overflow-auto bg-card [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
       role="grid"
       aria-label={isBuiltin ? `Built-in Songs, page ${committedPage}` : 'Songs'}
       aria-activedescendant={activeDescendantId}
@@ -400,9 +405,9 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
       tabIndex={0}
       onKeyDown={onTableKeyDown}
     >
-      <div className="track-table-frame">
+      <div data-slot="track-table-frame" className="relative min-h-full min-w-0">
         <TrackTableHeader />
-        <div className="track-table-virtual-inner" style={{ height: virtualizer.getTotalSize() }}>
+        <div className="relative min-h-full w-full" style={{ height: virtualizer.getTotalSize() }}>
           {renderedItems.map((virtualRow) => {
             return (
               <VirtualTrackRow

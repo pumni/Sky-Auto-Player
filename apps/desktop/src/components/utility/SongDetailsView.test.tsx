@@ -14,8 +14,10 @@ describe('SongDetailsView', () => {
     const { container } = render(<SongDetailsView useStore={store} />);
     expect(screen.getByText('No song selected')).toBeInTheDocument();
     expect(screen.getByText('Select a song to view details.')).toBeInTheDocument();
-    expect(container.querySelector('.utility-empty-icon')).toHaveClass('lucide-mouse-pointer-2');
-    expect(screen.getByLabelText('Song details')).toHaveClass('utility-empty');
+    expect(container.querySelector('svg[aria-hidden="true"]')).toHaveClass(
+      'lucide-mouse-pointer-2',
+    );
+    expect(screen.getByLabelText('Song details')).toHaveAttribute('data-scroll-region', '');
   });
 
   async function selectFixture(index: number) {
@@ -55,9 +57,9 @@ describe('SongDetailsView', () => {
     store.setState({ library: { ...store.getState().library, pages } });
 
     await act(async () => store.getState().selectSong(first.song_id));
-    const { container } = render(<SongDetailsView useStore={store} />);
+    render(<SongDetailsView useStore={store} />);
     expect(screen.getByRole('heading', { name: first.title })).toBeInTheDocument();
-    expect(container.querySelector('.song-details-context')).toBeNull();
+    expect(screen.getByText('Selected song')).toBeInTheDocument();
     expect(screen.getByText('Timing risk')).toBeInTheDocument();
     expect(screen.queryByText(/Test playback \(no input\).*dry-run playback/i)).toBeNull();
 
@@ -66,16 +68,12 @@ describe('SongDetailsView', () => {
 
     expect(screen.getByRole('heading', { name: second.title })).toBeInTheDocument();
     expect(screen.queryByText('Medium timing risk')).toBeNull();
-    expect(container.querySelectorAll('.utility-section').length).toBeGreaterThan(0);
-    expect(container.querySelector('.song-details-heading p')).toHaveTextContent(
-      'TXT · … · … notes',
-    );
+    expect(screen.getByText('Timing rationale and settings')).toBeInTheDocument();
+    expect(screen.getByText('TXT · … · … notes')).toBeInTheDocument();
 
     releaseDetail?.();
     await act(async () => pending);
-    expect(container.querySelector('.song-details-heading p')).toHaveTextContent(
-      'TXT · … · … notes',
-    );
+    expect(screen.getByText('TXT · … · … notes')).toBeInTheDocument();
   });
 
   it('keeps the selected song visible after its browser page is evicted', async () => {
@@ -117,7 +115,7 @@ describe('SongDetailsView', () => {
       .find((option) => option.getAttribute('data-value') === 'track:0');
     if (!firstTrackOption) throw new Error('expected track:0 option');
     await act(async () => {
-      fireEvent.click(firstTrackOption);
+      fireEvent.keyDown(firstTrackOption, { key: 'Enter' });
     });
     expect(getDetail).toHaveBeenLastCalledWith(
       expect.objectContaining({ conversionMode: { kind: 'single_track', track_id: 0 } }),

@@ -73,8 +73,8 @@ export function ResizableSeparator({
   const latestRef = useRef({ min, max, direction, onChange, onDragChange, onDragRaw });
 
   const setDraggingClass = (active: boolean) => {
-    document.body.classList.toggle('is-resizing', active);
-    separatorRef.current?.classList.toggle('is-dragging', active);
+    document.body.toggleAttribute('data-resizing', active);
+    separatorRef.current?.toggleAttribute('data-dragging', active);
     if (!active) separatorRef.current?.removeAttribute('data-snap-hint');
   };
 
@@ -83,7 +83,7 @@ export function ResizableSeparator({
       if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
       if (dragRef.current !== null) {
         dragRef.current = null;
-        document.body.classList.remove('is-resizing');
+        document.body.removeAttribute('data-resizing');
       }
     },
     [],
@@ -198,7 +198,8 @@ export function ResizableSeparator({
         separatorRef.current = node;
         assignRef(ref, node);
       }}
-      className={`resizable-separator${disabled ? ' is-disabled' : ''}`}
+      className={`group relative z-[1] min-h-0 flex-[0_0_4px] touch-none select-none rounded-full outline-offset-[-1px] before:absolute before:inset-y-0 before:-left-0.5 before:-right-0.5 before:content-[''] focus-visible:outline-2 focus-visible:outline-ring ${disabled ? 'cursor-default' : 'cursor-col-resize'}`}
+      data-slot="resizable-separator"
       role="separator"
       aria-label={label}
       aria-orientation="vertical"
@@ -229,7 +230,10 @@ export function ResizableSeparator({
       }}
       onKeyDown={onKeyDown}
     >
-      <span aria-hidden="true" />
+      <span
+        className="pointer-events-none absolute inset-0 rounded-[999px] bg-transparent transition-colors duration-fast group-hover:bg-accent-ink/80 group-focus-visible:bg-ring group-data-[dragging=true]:bg-accent-ink group-data-[dragging=true][data-snap-hint]:bg-accent-ink/70"
+        aria-hidden="true"
+      />
     </div>
   );
 }

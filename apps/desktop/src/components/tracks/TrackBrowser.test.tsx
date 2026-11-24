@@ -19,7 +19,7 @@ describe('TrackBrowser playlist import feedback', () => {
   async function chooseImport(action: 'Import files…' | 'Import folder…') {
     const trigger = screen.getByRole('button', { name: 'Add songs' });
     trigger.focus();
-    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
     await screen.findByRole('menu', { name: 'Add songs' });
     await act(async () => {
       fireEvent.click(screen.getByRole('menuitem', { name: action }));

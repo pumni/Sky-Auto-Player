@@ -15,6 +15,7 @@ import {
   revealStartupWindow,
   scheduleStartupWindowRevealFallback,
 } from '../platform/startupWindowReveal';
+import { TooltipProvider } from '../components/ui/tooltip';
 
 const SettingsPanel = lazy(() =>
   import('../components/settings/SettingsPanel').then(({ SettingsPanel: component }) => ({
@@ -101,32 +102,35 @@ export function App({ bridge }: AppProps) {
   }, [settingsOpen, useStore]);
 
   return (
-    <BootstrapGate useStore={useStore}>
-      {bootstrap?.gui_smoke === true && <PackagedSmokeTest bridge={bridge} useStore={useStore} />}
-      {bootstrap && (
-        <div className="app-shell">
-          <AppTitleBar
-            bootstrap={bootstrap}
-            useStore={useStore}
-            settingsTriggerRef={settingsTriggerRef}
-            searchInputRef={searchInputRef}
-            windowControls={windowControls}
-            onSettingsOpen={() => setSettingsMounted(true)}
-          />
-          <Workbench useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
-          <PlayerBar useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
-          <Suspense fallback={null}>
-            {(settingsOpen || settingsMounted) && (
-              <SettingsPanel
-                bootstrap={bootstrap}
-                useStore={useStore}
-                settingsTriggerRef={settingsTriggerRef}
-              />
-            )}
-            {updateDialogOpen && <UpdateDialog useStore={useStore} />}
-          </Suspense>
-        </div>
-      )}
-    </BootstrapGate>
+    <TooltipProvider delay={100} closeDelay={80}>
+      <BootstrapGate useStore={useStore}>
+        {bootstrap?.gui_smoke === true && <PackagedSmokeTest bridge={bridge} useStore={useStore} />}
+        {bootstrap && (
+          <div
+            data-app-shell
+            className="grid h-dvh min-h-0 w-full min-w-0 grid-rows-[40px_minmax(0,1fr)_92px] overflow-hidden bg-background"
+          >
+            <AppTitleBar
+              bootstrap={bootstrap}
+              useStore={useStore}
+              settingsTriggerRef={settingsTriggerRef}
+              searchInputRef={searchInputRef}
+              windowControls={windowControls}
+              onSettingsOpen={() => setSettingsMounted(true)}
+            />
+            <Workbench useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
+            <PlayerBar useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
+            <Suspense fallback={null}>
+              {(settingsOpen || settingsMounted) && (
+                <SettingsPanel bootstrap={bootstrap} useStore={useStore}>
+                  {settingsOpen && updateDialogOpen && <UpdateDialog useStore={useStore} />}
+                </SettingsPanel>
+              )}
+              {updateDialogOpen && !settingsOpen && <UpdateDialog useStore={useStore} />}
+            </Suspense>
+          </div>
+        )}
+      </BootstrapGate>
+    </TooltipProvider>
   );
 }

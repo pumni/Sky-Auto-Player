@@ -37,7 +37,7 @@ describe('AppTitleBar', () => {
 
     const titlebar = screen.getByRole('banner', { name: 'Sky Auto Player' });
     expect(titlebar).toHaveAttribute('data-update-available', 'true');
-    expect(titlebar.querySelector('.titlebar-drag-space')).toHaveAttribute(
+    expect(titlebar.querySelector('[data-tauri-drag-region="true"]')).toHaveAttribute(
       'data-tauri-drag-region',
       'true',
     );
@@ -97,11 +97,14 @@ describe('AppTitleBar', () => {
 
     const indicator = await screen.findByRole('button', { name: 'Open update 4.0.2' });
     expect(titlebar).toHaveAttribute('data-update-available', 'true');
-    expect(indicator.closest('.update-indicator-shell')).toHaveAttribute(
+    expect(indicator.closest('[title^="Update available:"]')).toHaveAttribute(
       'title',
       'Update available: 4.0.2. Open update details.',
     );
-    expect(indicator.querySelector('.update-indicator-dot')).toHaveAttribute('aria-hidden', 'true');
+    expect(indicator.querySelector('[data-update-indicator]')).toHaveAttribute(
+      'aria-hidden',
+      'true',
+    );
 
     fireEvent.click(indicator);
     expect(useStore.getState().update.dialogOpen).toBe(true);

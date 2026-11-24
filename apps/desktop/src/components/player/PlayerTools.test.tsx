@@ -87,11 +87,10 @@ describe('PlayerTools playback modes and profile', () => {
   it('does not expose raw profile parameters or a Test button in the player dock', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
-    const { container } = render(<PlayerTools useStore={store} />);
+    render(<PlayerTools useStore={store} />);
 
-    expect(container.querySelector('.player-test-button')).toBeNull();
-    expect(container.querySelector('.profile-summary-button')?.textContent).toBe('');
-    expect(container.querySelector('.player-auto-play-label')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Test playback (no input)' })).toBeNull();
+    expect(screen.queryByLabelText('Base Hold')).toBeNull();
     await act(async () =>
       screen.getByRole('button', { name: 'Configure playback profile' }).click(),
     );

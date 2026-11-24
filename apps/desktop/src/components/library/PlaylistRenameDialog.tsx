@@ -1,5 +1,7 @@
-import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { useState } from 'react';
+import { Button } from '../ui/button';
+import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
+import { Input } from '../ui/input';
 
 interface PlaylistRenameDialogProps {
   open: boolean;
@@ -37,66 +39,82 @@ export function PlaylistRenameDialog({
   };
 
   return (
-    <ModalOverlay
-      isOpen={open}
-      isDismissable={!pending}
-      onOpenChange={onOpenChange}
-      className="modal-backdrop"
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!pending || nextOpen) onOpenChange(nextOpen);
+      }}
     >
-      <Modal className="library-dialog">
-        <Dialog aria-label={`Rename ${initialName}`}>
-          <div className="dialog-heading">
-            <div>
-              <p className="eyebrow">PLAYLIST</p>
-              <h2>Rename playlist</h2>
-            </div>
-            <button
-              className="icon-button icon-button-boxed"
+      <DialogContent
+        className="w-[min(420px,calc(100vw-32px))] gap-0 rounded-dialog border-border bg-card p-5"
+        aria-labelledby="playlist-rename-title"
+        showCloseButton={false}
+      >
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div className="grid gap-px">
+            <p className="m-0 text-[11px] font-semibold tracking-wide text-text-tertiary">
+              PLAYLIST
+            </p>
+            <DialogTitle
+              className="m-0 text-2xl font-semibold leading-8"
+              id="playlist-rename-title"
+            >
+              Rename playlist
+            </DialogTitle>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-8 border-0 bg-transparent p-0 hover:bg-control-hover"
+            type="button"
+            aria-label="Close rename dialog"
+            onClick={() => onOpenChange(false)}
+            disabled={pending}
+          >
+            <span className="text-xl leading-none" aria-hidden="true">
+              ×
+            </span>
+          </Button>
+        </div>
+        <form
+          className="grid min-w-0 gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <label className="grid gap-1.5 text-xs font-medium text-text-secondary">
+            Playlist name
+            <Input
+              className="mt-1"
+              autoFocus
+              aria-label="Playlist name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              aria-invalid={validationError !== null}
+            />
+          </label>
+          {(validationError || error) && (
+            <p className="m-0 text-xs text-danger" role="alert">
+              {validationError ?? error}
+            </p>
+          )}
+          <div className="mt-2 flex justify-end gap-2">
+            <Button
+              variant="outline"
+              className="h-9"
               type="button"
-              aria-label="Close rename dialog"
               onClick={() => onOpenChange(false)}
               disabled={pending}
             >
-              ×
-            </button>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={pending}>
+              {pending ? 'Saving…' : 'Save'}
+            </Button>
           </div>
-          <form
-            className="library-dialog-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submit();
-            }}
-          >
-            <label>
-              Playlist name
-              <input
-                autoFocus
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                aria-invalid={validationError !== null}
-              />
-            </label>
-            {(validationError || error) && (
-              <p className="inline-error" role="alert">
-                {validationError ?? error}
-              </p>
-            )}
-            <div className="library-dialog-actions">
-              <button
-                className="button"
-                type="button"
-                onClick={() => onOpenChange(false)}
-                disabled={pending}
-              >
-                Cancel
-              </button>
-              <button className="button button-primary" type="submit" disabled={pending}>
-                {pending ? 'Saving…' : 'Save'}
-              </button>
-            </div>
-          </form>
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

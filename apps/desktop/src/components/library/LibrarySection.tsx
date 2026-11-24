@@ -9,11 +9,15 @@ interface LibrarySectionProps {
 export function LibrarySection({ label, children, showWhenEmpty = false }: LibrarySectionProps) {
   if (!showWhenEmpty && Children.count(children) === 0) return null;
   return (
-    <section className="library-section" aria-labelledby={`library-section-${label.toLowerCase()}`}>
-      <h3 id={`library-section-${label.toLowerCase()}`} className="library-section-heading">
+    <section className="min-w-0" aria-labelledby={`library-section-${label.toLowerCase()}`}>
+      <h3
+        data-slot="library-section-heading"
+        id={`library-section-${label.toLowerCase()}`}
+        className="mb-1.5 ml-2 mr-2 mt-0 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary"
+      >
         {label}
       </h3>
-      <div className="library-section-items">{children}</div>
+      <div className="grid min-w-0 gap-1">{children}</div>
     </section>
   );
 }

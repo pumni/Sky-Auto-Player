@@ -1,32 +1,35 @@
-import { useEffect, useRef } from 'react';
+import { useCallback, useRef } from 'react';
 
 const SCROLL_HIDE_DELAY_MS = 750;
 
 export function useScrollVisibility<T extends HTMLElement>(active = true) {
-  const ref = useRef<T>(null);
+  const detachRef = useRef<(() => void) | null>(null);
 
-  useEffect(() => {
-    if (!active) return;
-    const element = ref.current;
-    if (!element) return;
+  return useCallback(
+    (element: T | null) => {
+      detachRef.current?.();
+      detachRef.current = null;
+      if (!active || !element) return;
 
-    let hideTimer: number | undefined;
-    const onScroll = () => {
-      element.classList.add('is-scrolling');
-      if (hideTimer !== undefined) window.clearTimeout(hideTimer);
-      hideTimer = window.setTimeout(() => {
-        element.classList.remove('is-scrolling');
-        hideTimer = undefined;
-      }, SCROLL_HIDE_DELAY_MS);
-    };
+      element.setAttribute('data-scroll-region', '');
+      let hideTimer: number | undefined;
+      const onScroll = () => {
+        element.setAttribute('data-scrolling', 'true');
+        if (hideTimer !== undefined) window.clearTimeout(hideTimer);
+        hideTimer = window.setTimeout(() => {
+          element.removeAttribute('data-scrolling');
+          hideTimer = undefined;
+        }, SCROLL_HIDE_DELAY_MS);
+      };
 
-    element.addEventListener('scroll', onScroll, { passive: true });
-    return () => {
-      element.removeEventListener('scroll', onScroll);
-      if (hideTimer !== undefined) window.clearTimeout(hideTimer);
-      element.classList.remove('is-scrolling');
-    };
-  }, [active]);
-
-  return ref;
+      element.addEventListener('scroll', onScroll, { passive: true });
+      detachRef.current = () => {
+        element.removeEventListener('scroll', onScroll);
+        if (hideTimer !== undefined) window.clearTimeout(hideTimer);
+        element.removeAttribute('data-scrolling');
+        element.removeAttribute('data-scroll-region');
+      };
+    },
+    [active],
+  );
 }

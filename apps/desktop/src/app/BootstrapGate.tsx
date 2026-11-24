@@ -12,26 +12,45 @@ export function BootstrapGate({ useStore, children }: BootstrapGateProps) {
 
   if (status === 'loading' || status === 'idle') {
     return (
-      <main className="startup-screen" aria-live="polite">
-        <div className="startup-mark" aria-hidden="true">
+      <main
+        className="grid min-h-dvh content-center justify-items-center gap-2 bg-background p-6 text-center"
+        aria-live="polite"
+      >
+        <div
+          className="mb-2 grid size-12 place-items-center rounded-pane bg-primary text-2xl text-primary-foreground"
+          aria-hidden="true"
+        >
           ♪
         </div>
-        <p className="eyebrow">SKY AUTO PLAYER</p>
-        <h1>Opening your library…</h1>
-        <p className="muted">Starting the native application.</p>
+        <p className="m-0 text-[11px] font-semibold tracking-wide text-text-tertiary">
+          SKY AUTO PLAYER
+        </p>
+        <h1 className="m-0 text-xl font-semibold leading-7 text-foreground">
+          Opening your library…
+        </h1>
+        <p className="m-0 text-sm text-muted-foreground">Starting the native application.</p>
       </main>
     );
   }
 
   if (status === 'fatal') {
     return (
-      <main className="fatal-screen" role="alert">
-        <p className="eyebrow">APPLICATION UNAVAILABLE</p>
-        <h1>Sky Auto Player could not start.</h1>
-        <p className="fatal-message">
+      <main
+        className="grid min-h-dvh content-center justify-items-center gap-2 bg-background p-6 text-center"
+        role="alert"
+      >
+        <p className="m-0 text-[11px] font-semibold tracking-wide text-danger">
+          APPLICATION UNAVAILABLE
+        </p>
+        <h1 className="m-0 max-w-[580px] text-xl font-semibold leading-7 text-foreground">
+          Sky Auto Player could not start.
+        </h1>
+        <p className="m-0 max-w-[580px] text-sm text-text-secondary">
           {fatal ?? 'The native application returned an unknown error.'}
         </p>
-        <p className="muted">Close and reopen the application after correcting the native setup.</p>
+        <p className="m-0 text-sm text-muted-foreground">
+          Close and reopen the application after correcting the native setup.
+        </p>
       </main>
     );
   }

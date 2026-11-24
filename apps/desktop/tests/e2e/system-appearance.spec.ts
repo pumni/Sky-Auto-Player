@@ -16,26 +16,26 @@ test('fresh System mode follows the OS while manual mode and dark palette stay i
   const theme = settings.getByLabel('Theme');
   const palette = settings.getByLabel('Dark palette');
 
-  await expect(theme).toHaveAttribute('data-value', 'system');
-  await expect(palette).toHaveAttribute('data-value', 'graphite');
+  await expect(theme).toContainText('Follow Windows (recommended)');
+  await expect(palette).toContainText('Graphite (Default)');
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(root).toHaveAttribute('data-color-mode', 'light');
   await expect(root).toHaveAttribute('data-palette', 'graphite');
 
   await palette.click();
-  await page.locator('.app-select-option[data-value="slate"]').click();
+  await page.locator('[data-slot="select-item"][data-value="slate"]').click();
   await expect(root).toHaveAttribute('data-color-mode', 'light');
   await expect(root).toHaveAttribute('data-palette', 'slate');
 
   await theme.click();
-  await page.locator('.app-select-option[data-value="dark"]').click();
+  await page.locator('[data-slot="select-item"][data-value="dark"]').click();
   await expect(root).toHaveAttribute('data-color-mode', 'dark');
   await page.emulateMedia({ colorScheme: 'dark' });
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(root).toHaveAttribute('data-color-mode', 'dark');
 
   await theme.click();
-  await page.locator('.app-select-option[data-value="system"]').click();
+  await page.locator('[data-slot="select-item"][data-value="system"]').click();
   await expect(root).toHaveAttribute('data-color-mode', 'light');
   expect(
     await page.evaluate(() =>

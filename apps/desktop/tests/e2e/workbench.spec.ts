@@ -56,23 +56,24 @@ async function readWorkbenchGeometry(page: Page) {
         height: box.height,
       };
     };
-    const workbench = document.querySelector<HTMLElement>('.workbench');
+    const workbench = document.querySelector<HTMLElement>('[data-slot="workbench"]');
     return {
       mode: workbench?.dataset.utilityPresentation ?? 'missing',
-      gutter: Number.parseFloat(
-        getComputedStyle(document.documentElement).getPropertyValue('--workbench-gap'),
-      ),
+      gutter:
+        document
+          .querySelector<HTMLElement>('[data-slot="resizable-separator"]')
+          ?.getBoundingClientRect().width ?? Number.NaN,
       solverGutter: Number.parseFloat(workbench?.dataset.workbenchGap ?? 'NaN'),
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,
         dpr: window.devicePixelRatio,
       },
-      workbench: rectangle('.workbench'),
-      navigator: rectangle('.navigator-workbench-pane'),
-      track: rectangle('.track-browser-workbench-pane'),
-      inspector: rectangle('.utility-workbench-pane'),
-      player: rectangle('.player-bar'),
+      workbench: rectangle('[data-slot="workbench"]'),
+      navigator: rectangle('[data-pane="navigator"]'),
+      track: rectangle('[data-pane="browser"]'),
+      inspector: rectangle('[data-pane="inspector"]'),
+      player: rectangle('[data-slot="player-dock"]'),
       document: {
         width: document.documentElement.scrollWidth,
         height: document.documentElement.scrollHeight,
@@ -84,19 +85,19 @@ async function readWorkbenchGeometry(page: Page) {
 async function readInspectorHeaderGeometry(page: Page) {
   return page.evaluate(() => {
     const selectors = [
-      '.utility-workbench-pane',
-      '.utility-surface',
-      '.utility-tabs',
-      '.utility-header',
-      '.utility-header-title',
-      '.utility-header > button',
-      '.utility-header > button svg',
-      '.utility-view-tabs',
-      '.utility-view-tabs [role="tab"]:first-child',
-      '.utility-view-tabs [role="tab"]:last-child',
-      '.utility-content',
-      '.utility-empty p',
-      '.song-details-heading h3',
+      '[data-pane="inspector"]',
+      '[role="region"][aria-label^="Utility:"]',
+      '[data-slot="tabs-list"]',
+      '[data-slot="utility-header"]',
+      '[data-slot="utility-header"] h2',
+      '[data-slot="utility-header"] > button',
+      '[data-slot="utility-header"] > button svg',
+      '[role="tablist"][aria-label="Utility views"]',
+      '[role="tablist"][aria-label="Utility views"] [role="tab"]:first-child',
+      '[role="tablist"][aria-label="Utility views"] [role="tab"]:last-child',
+      '[data-slot="tabs-content"]',
+      '[data-slot="song-details"][aria-label="Song details"] p',
+      '#song-details-title',
     ];
     return Object.fromEntries(
       selectors.map((selector) => {
@@ -135,18 +136,20 @@ async function readInspectorHeaderGeometry(page: Page) {
 
 async function readInspectorTabTextAlignment(page: Page) {
   return page.evaluate(() =>
-    Array.from(document.querySelectorAll<HTMLElement>('.utility-view-tabs [role="tab"]')).map(
-      (tab) => {
-        const range = document.createRange();
-        range.selectNodeContents(tab);
-        const text = range.getBoundingClientRect();
-        const button = tab.getBoundingClientRect();
-        return {
-          xOffset: text.x + text.width / 2 - (button.x + button.width / 2),
-          yOffset: text.y + text.height / 2 - (button.y + button.height / 2),
-        };
-      },
-    ),
+    Array.from(
+      document.querySelectorAll<HTMLElement>(
+        '[role="tablist"][aria-label="Utility views"] [role="tab"]',
+      ),
+    ).map((tab) => {
+      const range = document.createRange();
+      range.selectNodeContents(tab);
+      const text = range.getBoundingClientRect();
+      const button = tab.getBoundingClientRect();
+      return {
+        xOffset: text.x + text.width / 2 - (button.x + button.width / 2),
+        yOffset: text.y + text.height / 2 - (button.y + button.height / 2),
+      };
+    }),
   );
 }
 
@@ -179,19 +182,25 @@ async function expectInspectorGeometry(page: Page, mode: 'docked' | 'overlay') {
   );
   expect(geometry.document.width).toBeLessThanOrEqual(geometry.viewport.width);
   expect(geometry.document.height).toBeLessThanOrEqual(geometry.viewport.height);
-  await expect(page.locator('.workbench')).toHaveAttribute('data-layout-fits', 'true');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute('data-layout-fits', 'true');
 
   if (mode === 'docked') {
     expect(geometry.track.right).toBeLessThanOrEqual(geometry.inspector.x);
     expect(geometry.inspector.width).toBeGreaterThanOrEqual(280);
     await expect(page.getByRole('separator', { name: 'Resize utility pane' })).toBeVisible();
-    await expect(page.locator('.utility-workbench-pane')).not.toHaveClass(/is-overlay/);
+    await expect(page.locator('[data-pane="inspector"]')).not.toHaveAttribute(
+      'data-presentation-mode',
+      'overlay',
+    );
   } else {
     expect(geometry.inspector.width).toBeGreaterThanOrEqual(280);
     expect(geometry.inspector.width).toBeLessThanOrEqual(400);
     expect(geometry.inspector.x).toBeLessThan(geometry.track.right);
     await expect(page.getByRole('separator', { name: 'Resize utility pane' })).toHaveCount(0);
-    await expect(page.locator('.utility-workbench-pane')).toHaveClass(/is-overlay/);
+    await expect(page.locator('[data-pane="inspector"]')).toHaveAttribute(
+      'data-presentation-mode',
+      'overlay',
+    );
   }
   return geometry;
 }
@@ -200,7 +209,7 @@ async function startMockPlayback(page: Page) {
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page
     .getByRole('row', { name: /Blue Bird/ })
-    .locator('.track-title-text')
+    .locator('[data-track-title]')
     .click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   const proceed = player.getByRole('button', { name: 'Proceed with current settings' });
@@ -232,11 +241,14 @@ test('Inspector presentation covers desktop sizes and Chromium-only narrow emula
     await page.evaluate(() => window.localStorage.clear());
     await page.reload();
 
-    const trigger = page.locator('.player-utility-button');
+    const trigger = page.locator('button[aria-label$="utility panel"]');
     await trigger.click();
     await expect(trigger).toHaveAttribute('aria-expanded', 'true');
     const mode = expectedUtilityPresentation(viewport.width);
-    await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', mode);
+    await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+      'data-utility-presentation',
+      mode,
+    );
     const details = page.getByRole('region', { name: 'Utility: Song Details' });
     await expect(details).toBeVisible();
     await expectInspectorGeometry(page, mode);
@@ -247,13 +259,16 @@ test('Inspector presentation covers desktop sizes and Chromium-only narrow emula
 
     await page.getByRole('tab', { name: 'Runtime' }).click();
     const diagnostics = page.getByRole('region', { name: 'Utility: Diagnostics' });
-    await expect(diagnostics.locator('.diagnostics-view')).toBeVisible();
+    await expect(diagnostics.locator('[data-slot="diagnostics-view"]')).toBeVisible();
     await expectInspectorGeometry(page, mode);
     await page.getByRole('tab', { name: 'Details' }).click();
     await expect(details).toBeVisible();
     await trigger.click();
     await expect(trigger).toHaveAttribute('aria-expanded', 'false');
-    await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'closed');
+    await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+      'data-utility-presentation',
+      'closed',
+    );
   }
 });
 
@@ -262,7 +277,7 @@ test('Chromium fallback emulation keeps compact Inspector interactions usable', 
 }) => {
   await page.setViewportSize({ width: 640, height: 448 });
   await page.goto('/');
-  const trigger = page.locator('.player-utility-button');
+  const trigger = page.locator('button[aria-label$="utility panel"]');
   const details = page.getByRole('region', { name: 'Utility: Song Details' });
   const grid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
 
@@ -278,15 +293,15 @@ test('Chromium fallback emulation keeps compact Inspector interactions usable', 
   const detailsTab = details.getByRole('tab', { name: 'Details' });
   await expect(detailsTab).toBeFocused();
   await page.keyboard.press('Tab');
-  await expect(details.locator('.song-details-view')).toBeFocused();
+  await expect(details.locator('[data-slot="tabs-content"][role="tabpanel"]')).toBeFocused();
   await page.keyboard.press('Shift+Tab');
   await expect(detailsTab).toBeFocused();
 
   const auroraTitle = page
     .getByRole('row', { name: /Aurora Landing/ })
-    .locator('.track-title-text');
+    .locator('[data-track-title]');
   const auroraTitleBox = await auroraTitle.boundingBox();
-  const inspectorBox = await page.locator('.utility-workbench-pane').boundingBox();
+  const inspectorBox = await page.locator('[data-pane="inspector"]').boundingBox();
   expect(auroraTitleBox).not.toBeNull();
   expect(inspectorBox).not.toBeNull();
   if (auroraTitleBox && inspectorBox) {
@@ -298,14 +313,23 @@ test('Chromium fallback emulation keeps compact Inspector interactions usable', 
   await expect(grid).toBeFocused();
 
   await page.setViewportSize({ width: 800, height: 560 });
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'docked',
+  );
   await expect(grid).toBeFocused();
   await page.setViewportSize({ width: 640, height: 448 });
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'overlay',
+  );
   await expect(grid).toBeFocused();
 
   await page.keyboard.press('Escape');
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'closed');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'closed',
+  );
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await expect(trigger).toBeFocused();
 
@@ -314,13 +338,19 @@ test('Chromium fallback emulation keeps compact Inspector interactions usable', 
   await details.getByRole('button', { name: 'Close utility' }).click();
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await expect(trigger).toBeFocused();
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'closed');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'closed',
+  );
 
   await trigger.click();
   await expect(details).toBeVisible();
   await trigger.click();
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'closed');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'closed',
+  );
   await expect(trigger).toBeFocused();
 });
 
@@ -335,7 +365,7 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
     await page.goto('/');
     await page.evaluate(() => window.localStorage.clear());
     await page.reload();
-    const trigger = page.locator('.player-utility-button');
+    const trigger = page.locator('button[aria-label$="utility panel"]');
     await trigger.click();
     const inspector = page.locator('#utility-inspector');
     await expect(inspector).toBeVisible();
@@ -355,6 +385,21 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       >
     > = {};
     const record = async (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
+      if (state === 'empty' || state === 'runtime') {
+        const label = state === 'empty' ? 'Details' : 'Runtime';
+        const activeTab = inspector.getByRole('tab', { name: label });
+        const accentInk = await page.evaluate(() => {
+          const probe = document.createElement('span');
+          probe.style.color = 'var(--accent-ink)';
+          document.body.append(probe);
+          const color = getComputedStyle(probe).color;
+          probe.remove();
+          return color;
+        });
+        await expect
+          .poll(() => activeTab.evaluate((tab) => getComputedStyle(tab).color))
+          .toBe(accentInk);
+      }
       measurements[state] = await readInspectorHeaderGeometry(page);
       tabTextAlignment[state] = await readInspectorTabTextAlignment(page);
     };
@@ -372,7 +417,7 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
     }
 
     const selectedRow = page.getByRole('row', { name: /Blue Bird/ });
-    await selectedRow.locator('.track-title-text').click();
+    await selectedRow.locator('[data-track-title]').click();
     await expect(inspector.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
     await expectInspectorGeometry(page, presentation);
     await record('selected');
@@ -399,18 +444,30 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       if (!geometry) throw new Error(`${selector} missing in ${state} Inspector state`);
       return geometry;
     };
-    const baselineHeader = geometryFor('empty', '.utility-header');
-    const baselineTabs = geometryFor('empty', '.utility-view-tabs');
-    const baselineTitle = geometryFor('empty', '.utility-header-title');
-    const baselineClose = geometryFor('empty', '.utility-header > button');
-    const baselineCloseIcon = geometryFor('empty', '.utility-header > button svg');
-    const baselineSurface = geometryFor('empty', '.utility-surface');
-    const baselineDetailsTab = geometryFor('empty', '.utility-view-tabs [role="tab"]:first-child');
-    const baselineRuntimeTab = geometryFor('empty', '.utility-view-tabs [role="tab"]:last-child');
+    const baselineHeader = geometryFor('empty', '[data-slot="utility-header"]');
+    const baselineTabs = geometryFor('empty', '[role="tablist"][aria-label="Utility views"]');
+    const baselineTitle = geometryFor('empty', '[data-slot="utility-header"] h2');
+    const baselineClose = geometryFor('empty', '[data-slot="utility-header"] > button');
+    const baselineCloseIcon = geometryFor('empty', '[data-slot="utility-header"] > button svg');
+    const baselineSurface = geometryFor('empty', '[role="region"][aria-label^="Utility:"]');
+    const baselineDetailsTab = geometryFor(
+      'empty',
+      '[role="tablist"][aria-label="Utility views"] [role="tab"]:first-child',
+    );
+    const baselineRuntimeTab = geometryFor(
+      'empty',
+      '[role="tablist"][aria-label="Utility views"] [role="tab"]:last-child',
+    );
     const expectOriginalTabs = (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
-      const tabs = geometryFor(state, '.utility-view-tabs');
-      const details = geometryFor(state, '.utility-view-tabs [role="tab"]:first-child');
-      const runtime = geometryFor(state, '.utility-view-tabs [role="tab"]:last-child');
+      const tabs = geometryFor(state, '[role="tablist"][aria-label="Utility views"]');
+      const details = geometryFor(
+        state,
+        '[role="tablist"][aria-label="Utility views"] [role="tab"]:first-child',
+      );
+      const runtime = geometryFor(
+        state,
+        '[role="tablist"][aria-label="Utility views"] [role="tab"]:last-child',
+      );
       expect(tabs.borderBottomWidth).toBe('1px');
       expect(tabs.borderBottomStyle).toBe('solid');
       expect(tabs.borderBottomColor).toBe('rgb(42, 43, 44)');
@@ -432,7 +489,7 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
         expect(tab.borderBottomWidth).toBe('2px');
         expect(tab.borderBottomStyle).toBe('solid');
       }
-      expect(selectedTab.backgroundColor).toBe('rgb(36, 37, 38)');
+      expect(selectedTab.backgroundColor).toBe('rgba(0, 0, 0, 0)');
       expect(selectedTab.color).toBe('rgb(154, 168, 255)');
       expect(selectedTab.borderBottomColor).toBe('rgb(154, 168, 255)');
       expect(inactiveTab.backgroundColor).toBe('rgba(0, 0, 0, 0)');
@@ -451,12 +508,12 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
     await expect(inspector.getByRole('tab')).toHaveText(['Details', 'Runtime']);
     expectOriginalTabs('empty');
     for (const state of ['selected', 'cleared', 'runtime'] as const) {
-      const header = geometryFor(state, '.utility-header');
-      const tabs = geometryFor(state, '.utility-view-tabs');
-      const headerTitle = geometryFor(state, '.utility-header-title');
-      const close = geometryFor(state, '.utility-header > button');
-      const closeIcon = geometryFor(state, '.utility-header > button svg');
-      const surface = geometryFor(state, '.utility-surface');
+      const header = geometryFor(state, '[data-slot="utility-header"]');
+      const tabs = geometryFor(state, '[role="tablist"][aria-label="Utility views"]');
+      const headerTitle = geometryFor(state, '[data-slot="utility-header"] h2');
+      const close = geometryFor(state, '[data-slot="utility-header"] > button');
+      const closeIcon = geometryFor(state, '[data-slot="utility-header"] > button svg');
+      const surface = geometryFor(state, '[role="region"][aria-label^="Utility:"]');
       expect(Math.abs(header.x - baselineHeader.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(header.y - baselineHeader.y)).toBeLessThanOrEqual(1);
       expect(Math.abs(header.width - baselineHeader.width)).toBeLessThanOrEqual(1);
@@ -480,16 +537,16 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       expectOriginalTabs(state);
     }
     // The empty cue is centered; the populated Inspector starts at the top.
-    expect(geometryFor('empty', '.utility-empty p').y).toBeGreaterThan(
-      geometryFor('selected', '.song-details-heading h3').y + 80,
-    );
+    expect(
+      geometryFor('empty', '[data-slot="song-details"][aria-label="Song details"] p').y,
+    ).toBeGreaterThan(geometryFor('selected', '#song-details-title').y + 80);
     const widthOverflow = await page.evaluate(() =>
       [
-        '.utility-surface',
-        '.utility-tabs',
-        '.utility-header',
-        '.utility-view-tabs',
-        '.utility-content',
+        '[role="region"][aria-label^="Utility:"]',
+        '[data-slot="tabs-list"]',
+        '[data-slot="utility-header"]',
+        '[role="tablist"][aria-label="Utility views"]',
+        '[data-slot="tabs-content"]',
       ].map((selector) => {
         const element = document.querySelector<HTMLElement>(selector);
         return element ? element.scrollWidth <= element.clientWidth + 1 : false;
@@ -498,15 +555,15 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
     expect(widthOverflow.every(Boolean)).toBe(true);
 
     const measuredSelectors = [
-      '.utility-workbench-pane',
-      '.utility-surface',
-      '.utility-tabs',
-      '.utility-header',
-      '.utility-header-title',
-      '.utility-header > button',
-      '.utility-header > button svg',
-      '.utility-view-tabs',
-      '.utility-content',
+      '[data-pane="inspector"]',
+      '[role="region"][aria-label^="Utility:"]',
+      '[data-slot="tabs-list"]',
+      '[data-slot="utility-header"]',
+      '[data-slot="utility-header"] h2',
+      '[data-slot="utility-header"] > button',
+      '[data-slot="utility-header"] > button svg',
+      '[role="tablist"][aria-label="Utility views"]',
+      '[data-slot="tabs-content"]',
     ];
     const measuredBounds = Object.fromEntries(
       Object.entries(measurements).map(([state, elements]) => [
@@ -554,7 +611,7 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       await expect(inspector).not.toHaveAttribute('aria-modal');
       await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
       await page.keyboard.press('Escape');
-      await expect(page.locator('.workbench')).toHaveAttribute(
+      await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
         'data-utility-presentation',
         'closed',
       );
@@ -563,7 +620,7 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       await expect(inspector).toBeVisible();
       await inspector.getByRole('button', { name: 'Close utility' }).click();
       await expect(trigger).toBeFocused();
-      await expect(page.locator('.workbench')).toHaveAttribute(
+      await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
         'data-utility-presentation',
         'closed',
       );
@@ -581,11 +638,11 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   const proceed = player.getByRole('button', { name: 'Proceed with current settings' });
   if (await proceed.isVisible().catch(() => false)) await proceed.click();
-  const title = player.locator('.player-track-copy strong');
-  const status = player.locator('.player-track-status');
+  const title = player.locator('[role="group"][aria-label^="Playback for"] strong');
+  const status = player.locator('[data-slot="player-track-status"]');
   await expect(title).toHaveText('Blue Bird');
   await expect(status).toHaveText('Playing');
-  await expect(player.locator('.player-mode-badge')).toHaveCount(0);
+  await expect(player.locator('[data-slot="player-mode-badge"]')).toHaveCount(0);
   await expect(status).toHaveCount(1);
   await expect(player.getByText('Now Playing', { exact: true })).toHaveCount(0);
 
@@ -608,11 +665,12 @@ test('compact Player Dock presents one readable dry-run status without moving tr
   await expect(title).toHaveText('Blue Bird');
   await expect(status).toHaveText('Playing');
   await expect(status).toHaveAttribute('aria-label', /no physical input is sent/i);
-  await expect(player.locator('.player-test-mode')).toContainText('Test');
-  await expect(player.locator('.player-test-mode')).toHaveAttribute(
-    'aria-label',
-    /no physical keyboard input is sent/i,
+  await expect(player.locator('[data-slot="status-badge"][data-appearance="plain"]')).toContainText(
+    'Test',
   );
+  await expect(
+    player.locator('[data-slot="status-badge"][data-appearance="plain"]'),
+  ).toHaveAttribute('aria-label', /no physical keyboard input is sent/i);
   await expect(status).toHaveCount(1);
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
   await expect(player.getByRole('button', { name: 'Add to Liked Songs' })).toBeVisible();
@@ -627,14 +685,18 @@ test('compact Player Dock presents one readable dry-run status without moving tr
         ? { x: rect.x, y: rect.y, right: rect.right, width: rect.width, height: rect.height }
         : null;
     };
-    const statusElement = document.querySelector<HTMLElement>('.player-track-status');
-    const testModeElement = document.querySelector<HTMLElement>('.player-test-mode');
-    const progressElement = document.querySelector<HTMLElement>('.player-timeline progress');
+    const statusElement = document.querySelector<HTMLElement>('[data-slot="player-track-status"]');
+    const testModeElement = document.querySelector<HTMLElement>(
+      '[data-slot="status-badge"][data-appearance="plain"]',
+    );
+    const progressElement = document.querySelector<HTMLElement>(
+      '[data-slot="player-timeline"] progress',
+    );
     return {
-      dock: getRect('.player-bar'),
-      title: getRect('.player-track-copy strong'),
-      status: getRect('.player-track-status'),
-      transport: getRect('.player-transport'),
+      dock: getRect('[data-slot="player-dock"]'),
+      title: getRect('[role="group"][aria-label^="Playback for"] strong'),
+      status: getRect('[data-slot="player-track-status"]'),
+      transport: getRect('[data-slot="player-transport"]'),
       testModeMetrics: testModeElement
         ? { clientWidth: testModeElement.clientWidth, scrollWidth: testModeElement.scrollWidth }
         : null,
@@ -656,7 +718,7 @@ test('compact Player Dock presents one readable dry-run status without moving tr
             scrollWidth: statusElement.scrollWidth,
           }
         : null,
-      primary: getRect('.player-transport .player-primary-action'),
+      primary: getRect('[data-slot="player-transport"] [data-slot="primary-transport"]'),
     };
   });
   expect(geometry.dock?.height).toBe(92);
@@ -699,7 +761,7 @@ test('active Runtime tab and focus survive docked-to-overlay viewport transition
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
-  const trigger = page.locator('.player-utility-button');
+  const trigger = page.locator('button[aria-label$="utility panel"]');
   await trigger.click();
   await page.getByRole('tab', { name: 'Runtime' }).click();
   const diagnostics = page.getByRole('region', { name: 'Utility: Diagnostics' });
@@ -708,19 +770,28 @@ test('active Runtime tab and focus survive docked-to-overlay viewport transition
   await expect(runtimeTab).toBeFocused();
 
   await page.setViewportSize({ width: 640, height: 448 });
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'overlay',
+  );
   await expect(diagnostics).toBeVisible();
   await expect(runtimeTab).toBeFocused();
   await expectInspectorGeometry(page, 'overlay');
 
   await page.setViewportSize({ width: 1366, height: 768 });
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'docked',
+  );
   await expect(diagnostics).toBeVisible();
   await expect(runtimeTab).toBeFocused();
   await expectInspectorGeometry(page, 'docked');
 
   await trigger.click();
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'closed');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'closed',
+  );
   await expect(trigger).toHaveAttribute('aria-expanded', 'false');
   await trigger.click();
   const reopenedDiagnostics = page.getByRole('region', { name: 'Utility: Diagnostics' });
@@ -732,7 +803,10 @@ test('active Runtime tab and focus survive docked-to-overlay viewport transition
   await expect(trigger).toBeFocused();
 
   await trigger.click();
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'closed');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'closed',
+  );
   await expect(trigger).toBeFocused();
 });
 
@@ -765,14 +839,14 @@ test('resizing never rewrites persisted widths or the user open preference', asy
     for (const viewport of viewports) {
       await page.setViewportSize(viewport);
       const expectedMode = utilityOpen ? expectedUtilityPresentation(viewport.width) : 'closed';
-      await expect(page.locator('.workbench')).toHaveAttribute(
+      await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
         'data-utility-presentation',
         expectedMode,
       );
       if (utilityOpen) {
         await expect(page.getByRole('region', { name: 'Utility: Song Details' })).toBeVisible();
       } else {
-        await expect(page.locator('.utility-workbench-pane')).toHaveCount(0);
+        await expect(page.locator('[data-pane="inspector"]')).toHaveCount(0);
       }
       await expect
         .poll(() => page.evaluate((key) => window.localStorage.getItem(key), workbenchStorageKey))
@@ -798,8 +872,11 @@ test('Graphite overlay width is responsive and preserves docked width preference
       { key: workbenchStorageKey, value: preference },
     );
     await page.reload();
-    await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
-    const dockedPane = page.locator('.utility-workbench-pane');
+    await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+      'data-utility-presentation',
+      'docked',
+    );
+    const dockedPane = page.locator('[data-pane="inspector"]');
     await expect(dockedPane).toBeVisible();
     await expect
       .poll(() => dockedPane.evaluate((element) => element.getBoundingClientRect().width))
@@ -810,11 +887,14 @@ test('Graphite overlay width is responsive and preserves docked width preference
     );
 
     await page.setViewportSize({ width: 640, height: 448 });
-    await expect(page.locator('.workbench')).toHaveAttribute(
+    await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
       'data-utility-presentation',
       'overlay',
     );
-    await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '640');
+    await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+      'data-workbench-width',
+      '640',
+    );
     await expect
       .poll(() => dockedPane.evaluate((element) => element.getBoundingClientRect().width))
       .toBe(288);
@@ -824,7 +904,10 @@ test('Graphite overlay width is responsive and preserves docked width preference
       .toBe(preferenceBeforeOverlay);
 
     await page.setViewportSize({ width: 1366, height: 768 });
-    await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
+    await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+      'data-utility-presentation',
+      'docked',
+    );
     await expect
       .poll(() => dockedPane.evaluate((element) => element.getBoundingClientRect().width))
       .toBe(utilityWidth);
@@ -843,7 +926,7 @@ test('long Song Details content scrolls independently in the compact overlay', a
       page.getByRole('grid', { name: `Built-in Songs, page ${pageNumber}` }),
     ).toBeVisible();
   }
-  const trackTable = page.locator('.track-table');
+  const trackTable = page.locator('[role="grid"]');
   await trackTable.evaluate((element) => {
     element.scrollTop = 95 * 46;
     element.dispatchEvent(new Event('scroll'));
@@ -851,8 +934,8 @@ test('long Song Details content scrolls independently in the compact overlay', a
   const longTitle = /A sheet with an intentionally long title/;
   const longRow = page.getByRole('row', { name: longTitle });
   await expect(longRow).toBeVisible();
-  await longRow.locator('.track-title-text').click();
-  await page.locator('.player-utility-button').click();
+  await longRow.locator('[data-track-title]').click();
+  await page.locator('button[aria-label$="utility panel"]').click();
 
   const details = page.getByRole('region', { name: 'Utility: Song Details' });
   await expect(details.getByRole('heading', { name: longTitle })).toBeVisible();
@@ -860,13 +943,13 @@ test('long Song Details content scrolls independently in the compact overlay', a
     details.getByText(/This intentionally long timing-risk explanation verifies wrapping/),
   ).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
-  const detailsContent = details.locator('.song-details-view');
+  const detailsContent = details.locator('[data-slot="song-details"]');
   const contentSize = await detailsContent.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight,
-    trackScrollTop: document.querySelector<HTMLElement>('.track-table')?.scrollTop ?? 0,
+    trackScrollTop: document.querySelector<HTMLElement>('[role="grid"]')?.scrollTop ?? 0,
   }));
   expect(contentSize.scrollWidth).toBeLessThanOrEqual(contentSize.clientWidth);
   expect(contentSize.scrollHeight).toBeGreaterThan(contentSize.clientHeight);
@@ -898,7 +981,7 @@ test('compact Runtime retains live metrics, event history, trace export, and ind
     await expect(pause).toBeVisible();
   }
   const playerBeforeInspector = await player.boundingBox();
-  const trigger = page.locator('.player-utility-button');
+  const trigger = page.locator('button[aria-label$="utility panel"]');
   await trigger.click();
   const details = page.getByRole('region', { name: 'Utility: Song Details' });
   await expect(details.getByRole('tab', { name: 'Details' })).toBeFocused();
@@ -913,9 +996,9 @@ test('compact Runtime retains live metrics, event history, trace export, and ind
   await expect(senderSamples).toContainText(/[1-9]\d*/);
   await expect(diagnostics.getByText('Completion p95', { exact: true })).toBeVisible();
 
-  const runtimeView = diagnostics.locator('.diagnostics-view');
+  const runtimeView = diagnostics.locator('[data-slot="diagnostics-view"]');
   const trackScrollTop = await page
-    .locator('.track-table')
+    .locator('[role="grid"]')
     .evaluate((element) => element.scrollTop);
   const performanceSize = await runtimeView.evaluate((element) => ({
     clientHeight: element.clientHeight,
@@ -926,7 +1009,7 @@ test('compact Runtime retains live metrics, event history, trace export, and ind
     element.scrollTop = element.scrollHeight;
   });
   expect(await runtimeView.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-  expect(await page.locator('.track-table').evaluate((element) => element.scrollTop)).toBe(
+  expect(await page.locator('[role="grid"]').evaluate((element) => element.scrollTop)).toBe(
     trackScrollTop,
   );
 
@@ -937,12 +1020,11 @@ test('compact Runtime retains live metrics, event history, trace export, and ind
   await page.keyboard.press('ArrowRight');
   await expect(diagnostics.getByRole('img', { name: /SendInput pre-call lateness/ })).toBeVisible();
   await page.keyboard.press('ArrowRight');
-  const eventPanel = diagnostics.locator('.diagnostics-scroll');
+  const eventPanel = diagnostics.locator(
+    '[data-slot="tabs-content"][role="tabpanel"][data-scroll-region]',
+  );
   await expect(
-    eventPanel
-      .locator('.diagnostics-lines strong')
-      .filter({ hasText: 'playback.state_changed' })
-      .first(),
+    eventPanel.locator('li strong').filter({ hasText: 'playback.state_changed' }).first(),
   ).toBeVisible();
   const eventPanelSize = await eventPanel.evaluate((element) => ({
     clientHeight: element.clientHeight,
@@ -969,7 +1051,10 @@ test('compact Runtime retains live metrics, event history, trace export, and ind
   await expectInspectorGeometry(page, 'overlay');
 
   await page.keyboard.press('Escape');
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'closed');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'closed',
+  );
   await expect(trigger).toBeFocused();
 });
 
@@ -983,7 +1068,7 @@ test('Chromium fallback emulation stays usable at DPR 1.25', async ({ browser, p
   try {
     const scaledPage = await context.newPage();
     await scaledPage.goto(baseUrl);
-    await scaledPage.locator('.player-utility-button').click();
+    await scaledPage.locator('button[aria-label$="utility panel"]').click();
     const geometry = await expectInspectorGeometry(scaledPage, 'overlay');
     expect(geometry.viewport).toEqual({ width: 640, height: 448, dpr: 1.25 });
     await expect(scaledPage.getByRole('region', { name: 'Utility: Song Details' })).toBeVisible();
