@@ -1281,6 +1281,7 @@ try {
                     -RemoteTipRevision $source.candidate_lineage_tip_revision `
                     -ControlRevision $control.source_revision `
                     -ControlTree $control.source_tree_sha `
+                    -CandidateLockSha256 $candidate.cargo_lock_sha256 `
                     -ControlLockSha256 $control.cargo_lock_sha256 | Out-Null
             } else {
                 & git -C $root merge-base --is-ancestor $control.source_revision HEAD

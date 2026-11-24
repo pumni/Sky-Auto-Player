@@ -433,7 +433,8 @@ function Assert-PlaybackCoreLifecyclePairLineage {
         [Parameter(Mandatory)] [string]$RemoteTipRevision,
         [Parameter(Mandatory)] [string]$ControlRevision,
         [Parameter(Mandatory)] [string]$ControlTree,
-        [string]$ControlLockSha256
+        [Parameter(Mandatory)] [string]$CandidateLockSha256,
+        [Parameter(Mandatory)] [string]$ControlLockSha256
     )
     $profile = Get-PlaybackCoreLifecycleProfile -Version $ProfileVersion
     if ($CandidateRevision -notmatch '^[0-9a-f]{40}$' -or $CandidateRevision -ne $RemoteTipRevision) {
@@ -441,6 +442,11 @@ function Assert-PlaybackCoreLifecyclePairLineage {
     }
     if ($ControlRevision -ne $profile.BaselineRevision -or $ControlTree -ne $profile.BaselineTree) {
         throw ('PlaybackCoreLifecycle ' + $profile.Name + ' control must use its exact pinned baseline revision and tree')
+    }
+    if ($CandidateLockSha256 -notmatch '^[0-9a-f]{64}$' -or
+        $ControlLockSha256 -notmatch '^[0-9a-f]{64}$' -or
+        $CandidateLockSha256 -ne $ControlLockSha256) {
+        throw ('PlaybackCoreLifecycle ' + $profile.Name + ' candidate and control Cargo.lock SHA-256 values must match')
     }
 
     if ($ProfileVersion -eq 3) {

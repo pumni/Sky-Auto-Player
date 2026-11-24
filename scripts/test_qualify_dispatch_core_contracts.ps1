@@ -1765,7 +1765,8 @@ $v3NativePathIndex = if ($v3PlanOnlyReturnIndex -ge 0) { $playbackCoreRunnerSour
 if ($v3PreflightIndex -lt 0 -or $v3SharedMarginIndex -lt $v3FinalStageGateIndex -or
     $v3PlanOnlyBranchIndex -lt $v3SharedMarginIndex -or $v3PlanOnlyReturnIndex -lt $v3PlanOnlyBranchIndex -or
     $v3PreflightIndex -gt $v3PlanOnlyBranchIndex -or $v3NativePathIndex -lt $v3PlanOnlyReturnIndex -or
-    -not $playbackCoreRunnerSource.Contains('if ($PlanOnly -and -not $isPlaybackCoreLifecycle) {')) {
+    -not $playbackCoreRunnerSource.Contains('if ($PlanOnly -and -not $isPlaybackCoreLifecycle) {') -or
+    -not $playbackCoreRunnerSource.Contains('-CandidateLockSha256 $candidate.cargo_lock_sha256')) {
     throw 'PlaybackCoreLifecycle PlanOnly and native execution must share final parameter, manifest, and pair-lineage preflight before either no-send return or native case entry'
 }
 $pclV3ZeroMarginRejected = $false
@@ -1897,6 +1898,7 @@ $pclV3LineageRemoteTip = $pclV3CandidateRevision
 $pclV3PairLineageAccepted = Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
     -ProfileVersion 3 -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision $pclV3LineageRemoteTip `
     -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+    -CandidateLockSha256 $pclV3Profile.BaselineSuccessorLockSha256 `
     -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256
 if (-not $pclV3PairLineageAccepted) { throw 'PlaybackCoreLifecycleV3 rejected its pinned B1 sibling and exact remote candidate pair' }
 $pclV3WrongB1Rejected = $false
@@ -1904,6 +1906,7 @@ try {
     [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
         -ProfileVersion 3 -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision $pclV3LineageRemoteTip `
         -ControlRevision $pclV3Profile.LineageAnchorRevision -ControlTree $pclV3Profile.BaselineSuccessorParentRevision `
+        -CandidateLockSha256 $pclV3Profile.BaselineSuccessorLockSha256 `
         -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
 } catch { $pclV3WrongB1Rejected = $true }
 if (-not $pclV3WrongB1Rejected) { throw 'PlaybackCoreLifecycleV3 pair lineage accepted a control other than its exact pinned B1 revision/tree' }
@@ -1913,6 +1916,7 @@ try {
         -ProfileVersion 3 -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
         -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
         -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+        -CandidateLockSha256 $pclV3Profile.BaselineSuccessorLockSha256 `
         -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
 } catch { $pclV3PairWrongAnchorRejected = $true }
 if (-not $pclV3PairWrongAnchorRejected) { throw 'PlaybackCoreLifecycleV3 pair lineage accepted a candidate outside the immutable V2 anchor lineage' }
@@ -1921,15 +1925,30 @@ try {
     [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
         -ProfileVersion 3 -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision ('0' * 40) `
         -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+        -CandidateLockSha256 $pclV3Profile.BaselineSuccessorLockSha256 `
         -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
 } catch { $pclV3PairStaleRemoteRejected = $true }
 if (-not $pclV3PairStaleRemoteRejected) { throw 'PlaybackCoreLifecycleV3 pair lineage accepted a stale remote branch tip' }
+$pclV1V2LockMismatchRejected = @{}
+foreach ($version in @(1, 2)) {
+    $profile = Get-PlaybackCoreLifecycleProfile -Version $version
+    $rejected = $false
+    try {
+        [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
+            -ProfileVersion $version -CandidateRevision $pclV3CandidateRevision -RemoteTipRevision $pclV3CandidateRevision `
+            -ControlRevision $profile.BaselineRevision -ControlTree $profile.BaselineTree `
+            -CandidateLockSha256 ('a' * 64) -ControlLockSha256 ('b' * 64))
+    } catch { $rejected = $_.Exception.Message.Contains('Cargo.lock SHA-256') }
+    if (-not $rejected) { throw ('PlaybackCoreLifecycleV' + $version + ' accepted a pair with different Cargo.lock SHA-256 values before case entry') }
+    $pclV1V2LockMismatchRejected[$version] = $true
+}
 $pclV3LegacyNonAncestorRejected = $false
 try {
     [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $playbackCoreRepoRoot `
         -ProfileVersion 2 -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
         -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' `
-        -ControlRevision $pclV2Profile.BaselineRevision -ControlTree $pclV2Profile.BaselineTree)
+        -ControlRevision $pclV2Profile.BaselineRevision -ControlTree $pclV2Profile.BaselineTree `
+        -CandidateLockSha256 ('a' * 64) -ControlLockSha256 ('a' * 64))
 } catch { $pclV3LegacyNonAncestorRejected = $true }
 if (-not $pclV3LegacyNonAncestorRejected) { throw 'legacy PlaybackCoreLifecycle pair lineage no longer rejects a non-ancestor control' }
 $pclV3GitFailureRejected = $false
@@ -1982,6 +2001,7 @@ try {
         [void](Assert-PlaybackCoreLifecyclePairLineage -RepositoryRoot $pclV3LineageRepoRoot `
             -ProfileVersion 3 -CandidateRevision $pclV3MergedB1Revision -RemoteTipRevision $pclV3MergedB1Revision `
             -ControlRevision $pclV3Profile.BaselineSuccessorRevision -ControlTree $pclV3Profile.BaselineSuccessorTree `
+            -CandidateLockSha256 $pclV3Profile.BaselineSuccessorLockSha256 `
             -ControlLockSha256 $pclV3Profile.BaselineSuccessorLockSha256)
     } catch { $pclV3MergedB1Rejected = $_.Exception.Message.Contains('must remain a sibling') }
     if (-not $pclV3MergedB1Rejected) { throw 'PlaybackCoreLifecycleV3 accepted a candidate that had merged its pinned B1 control' }
@@ -2700,4 +2720,5 @@ if ($pclIncompleteReport.status -ne 'INCOMPLETE' -or $pclIncompleteReport.stop_t
 
 Write-Output ('PASS: DispatchCleanupM3 contract positives plus ' + $m3NegativeContractCount + ' negative cases; DispatchSessionRedesignM3 schema-v2 provenance inventory, mapping, timing, count, and fail-stop contracts pass; existing Scheduler, FrameSnapshot, DispatchCore, sink, and fail-stop contracts remain passing')
 Write-Output ('PASS: PlaybackCoreLifecycle v1 frozen-baseline semantics remain planned=60 eligible=30 measured=30 unavailable=30 incomplete=30; v2 positive coverage=60/60 COMPLETE (30 candidate→candidate, 30 candidate→baseline); missing/malformed Armed, Join, QPC, source/tree/manifest/binary, machine/boot, chronology, and invalid-successor fixtures set both metric and report INCOMPLETE; v2 stop provenance fixtures exclude binary/machine/boot/QPC/schema/native-session identity failures from both Stop and raw-Up metrics; Stop→release and raw syscall evidence contracts pass')
+Write-Output 'PASS: PlaybackCoreLifecycle V1/V2 shared preflight rejects candidate/control Cargo.lock mismatches before case entry'
 Write-Output 'PASS: PowerShell parser, paired CSV/provenance, Smoke/Final fail-stop, and timestamp provenance contracts'
