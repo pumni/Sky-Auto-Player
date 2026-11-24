@@ -34,9 +34,12 @@ test('production bundle boots the mock shell and supports a representative flow'
   expect([...featureChunks].some((url) => /DiagnosticsView-/.test(url))).toBe(true);
 
   await page.getByRole('button', { name: 'Open settings' }).click();
-  await expect(page.getByRole('dialog', { name: 'Settings' })).toBeVisible();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settings).toBeVisible();
   await expect(page.getByText('500 µs')).toBeVisible();
   expect([...featureChunks].some((url) => /SettingsPanel-/.test(url))).toBe(true);
+  await settings.getByRole('button', { name: 'Close settings' }).click();
+  await expect(settings).toBeHidden();
   await page.getByRole('button', { name: /Open update/ }).click();
   await expect(page.getByRole('dialog', { name: 'Software update' })).toBeVisible();
   expect([...featureChunks].some((url) => /UpdateDialog-/.test(url))).toBe(true);

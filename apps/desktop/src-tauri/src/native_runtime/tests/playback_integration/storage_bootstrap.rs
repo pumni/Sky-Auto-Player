@@ -329,17 +329,26 @@ fn v4_runtime_operates_with_read_only_install_root_and_separate_app_data() {
     paths
         .ensure_mutable_directories()
         .expect("ensure mutable dirs");
+    fs::write(
+        paths.settings_path(),
+        serde_json::json!({
+            "schema_version": sky_app_core::settings::SCHEMA_VERSION,
+            "default_timing_margin_us": 1_200,
+        })
+        .to_string(),
+    )
+    .expect("persist nondefault manual timing margin before bootstrap");
     let retired_cache = paths.cache_root().join("input_latency.json");
     let retired_cache_bytes = b"legacy calibration cache sentinel\n";
     fs::write(&retired_cache, retired_cache_bytes).expect("write retired cache sentinel");
 
     // Place a song sheet in the user songs directory
-    let song_file = paths.user_music_root().join("test_song.json");
+    let song_file = paths.user_music_root().join("manual-margin.json");
     fs::write(
-            &song_file,
-            br#"{"name":"V4 Song","author":"Tester","bpm":120,"pitchLevel":0,"data":[{"time":0,"key":"1Key0"}]}"#,
-        )
-        .expect("write test song");
+        &song_file,
+        br#"{"name":"Manual margin","songNotes":[{"time":0,"key":"Key0"}]}"#,
+    )
+    .expect("write test song");
 
     let runtime = NativeDesktopRuntime::from_paths_with_activity(
         paths.clone(),
@@ -347,6 +356,14 @@ fn v4_runtime_operates_with_read_only_install_root_and_separate_app_data() {
         ActivityCoordinator::default(),
     )
     .expect("start runtime with read-only install root");
+
+    let bootstrap = runtime
+        .dispatch("app.bootstrap", Value::Object(Default::default()))
+        .expect("bootstrap runtime with persisted manual margin");
+    assert_eq!(
+        bootstrap["settings"]["playback_defaults"]["timing_margin_us"],
+        1_200
+    );
 
     // 1. Settings mutation saves into app_data/config.json
     let patch_result = runtime
@@ -369,7 +386,77 @@ fn v4_runtime_operates_with_read_only_install_root_and_separate_app_data() {
     assert!(count >= 1, "catalog must contain at least 1 song");
     assert!(!install_root.join("songs").exists());
 
-    // 3. Retired user cache bytes remain untouched by runtime startup.
+    let generation = catalog_generation(&runtime);
+    let search = runtime
+        .dispatch(
+            "catalog.search",
+            serde_json::json!({
+                "query": "Manual margin",
+                "offset": 0,
+                "limit": 10,
+                "generation": generation,
+            }),
+        )
+        .expect("search fixture song for Prepare");
+    let song_id = search["items"][0]["song_id"]
+        .as_str()
+        .expect("fixture song ID")
+        .to_owned();
+    let settings_before_prepare = runtime
+        .dispatch("settings.get", Value::Object(Default::default()))
+        .expect("settings before Prepare");
+    assert_eq!(
+        settings_before_prepare["playback_defaults"]["timing_margin_us"],
+        1_200
+    );
+    let persisted_settings_before_prepare =
+        fs::read(paths.settings_path()).expect("persisted settings before Prepare");
+    let persisted_settings_value: Value =
+        serde_json::from_slice(&persisted_settings_before_prepare)
+            .expect("parse persisted settings before Prepare");
+    assert_eq!(persisted_settings_value["default_timing_margin_us"], 1_200);
+
+    let prepared = runtime
+        .dispatch(
+            "playback.prepare",
+            serde_json::json!({
+                "songId": song_id,
+                "generation": generation,
+                "config": {
+                    "hold_frames": 1.0,
+                    "timing_margin_us": 1_200,
+                    "tempo_scale": 1.0,
+                    "fps": 60,
+                    "dry_run": true,
+                },
+            }),
+        )
+        .expect("Prepare with the persisted manual timing margin");
+    assert_eq!(prepared["config"]["timing_margin_us"], 1_200);
+    assert_eq!(prepared["admission"], "ready");
+    assert!(prepared["error_code"].is_null());
+    assert!(prepared["error_message"].is_null());
+    let prepared_id = prepared["prepared_id"]
+        .as_str()
+        .expect("ready Prepare publishes an ID");
+    assert_eq!(prepared_id.len(), 32);
+    assert!(
+        prepared_id
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+    );
+
+    let settings_after_prepare = runtime
+        .dispatch("settings.get", Value::Object(Default::default()))
+        .expect("settings after Prepare");
+    assert_eq!(settings_after_prepare, settings_before_prepare);
+    assert_eq!(
+        fs::read(paths.settings_path()).expect("persisted settings after Prepare"),
+        persisted_settings_before_prepare,
+        "Prepare must not mutate the persisted user settings"
+    );
+
+    // 3. Retired user cache bytes remain untouched by bootstrap and Prepare.
     assert_eq!(
         fs::read(&retired_cache).expect("retired cache preserved"),
         retired_cache_bytes

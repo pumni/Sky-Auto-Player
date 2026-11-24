@@ -669,6 +669,10 @@ jobs:
         if: needs.changes.outputs.rust_required == 'true'
         run: |
           $ErrorActionPreference = "Stop"
+          cargo build --manifest-path rust/Cargo.toml --locked -p sky_xtask --bin xtask
+          if ($LASTEXITCODE -ne 0) {
+            throw "Locked xtask build failed with exit code $LASTEXITCODE"
+          }
           $isolatedXtask = Join-Path $env:RUNNER_TEMP ("xtask-rust-check-" + [guid]::NewGuid().ToString("N") + ".exe")
           Copy-Item -LiteralPath "rust/target/debug/xtask.exe" -Destination $isolatedXtask
           try {

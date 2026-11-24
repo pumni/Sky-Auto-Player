@@ -163,6 +163,12 @@ fn updater_e2e_bindings_contract(updater: &str) -> Result<()> {
 }
 
 fn isolated_xtask_rust_runner_step_contract(step: &str) -> Result<()> {
+    let build_position = step
+        .find("cargo build --manifest-path rust/Cargo.toml --locked -p sky_xtask --bin xtask")
+        .ok_or("Rust verification must build the locked xtask executable on a clean runner")?;
+    let build_failure_position = step
+        .find("if ($LASTEXITCODE -ne 0)")
+        .ok_or("Rust verification must fail if the locked xtask build fails")?;
     let copy_position = step
         .find("Copy-Item -LiteralPath \"rust/target/debug/xtask.exe\"")
         .ok_or("Rust verification must copy the built xtask executable to an isolated path")?;
@@ -172,7 +178,9 @@ fn isolated_xtask_rust_runner_step_contract(step: &str) -> Result<()> {
     let cleanup_position = step
         .find("Remove-Item -LiteralPath $isolatedXtask")
         .ok_or("Rust verification must remove its isolated xtask executable")?;
-    if copy_position >= run_position
+    if build_position >= build_failure_position
+        || build_failure_position >= copy_position
+        || copy_position >= run_position
         || run_position >= cleanup_position
         || !step.contains("finally {")
         || step.contains("cargo xtask check rust")
@@ -804,6 +812,18 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
         if !startup_calibration.contains(marker) {
             return Err(format!(
                 "Rust startup calibration evidence projection is missing its contract marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let xtask_main = fs::read_to_string(root.join("rust/xtask/src/main.rs"))?;
+    for marker in [
+        "cargo xtask startup-calibration project-evidence",
+        "\"startup-calibration\" => startup_calibration::run(&args[1..])",
+    ] {
+        if !xtask_main.contains(marker) {
+            return Err(format!(
+                "Rust xtask help/dispatcher does not expose the live startup projection command: {marker}"
             )
             .into());
         }
@@ -2038,6 +2058,8 @@ mod tests {
     #[test]
     fn windows_rust_ci_invokes_an_isolated_xtask_copy() {
         let valid = r#"
+          cargo build --manifest-path rust/Cargo.toml --locked -p sky_xtask --bin xtask
+          if ($LASTEXITCODE -ne 0) { throw "Locked xtask build failed" }
           Copy-Item -LiteralPath "rust/target/debug/xtask.exe" -Destination $isolatedXtask
           try {
             & $isolatedXtask check rust
@@ -2046,7 +2068,16 @@ mod tests {
           }
 "#;
         isolated_xtask_rust_runner_step_contract(valid)
-            .expect("the copied xtask must run and clean up outside Cargo's target path");
+            .expect("the locked xtask must be built, copied, run, and cleaned up outside Cargo's target path");
+
+        let missing_build = valid.replace(
+            "cargo build --manifest-path rust/Cargo.toml --locked -p sky_xtask --bin xtask\n          if ($LASTEXITCODE -ne 0) { throw \"Locked xtask build failed\" }",
+            "# build removed",
+        );
+        assert!(
+            isolated_xtask_rust_runner_step_contract(&missing_build).is_err(),
+            "Rust CI contract must reject copying the xtask without a clean-runner build"
+        );
 
         let missing_copy = valid.replace(
             "Copy-Item -LiteralPath \"rust/target/debug/xtask.exe\" -Destination $isolatedXtask",
