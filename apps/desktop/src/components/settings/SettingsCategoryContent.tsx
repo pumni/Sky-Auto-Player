@@ -19,6 +19,7 @@ import { AutoPlaySwitch } from './AutoPlaySwitch';
 import { DonateSettings } from './DonateSettings';
 import { TimingMarginControl } from './TimingMarginControl';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { Button } from '../ui/button';
 
 export type SettingsCategory =
   | 'playback'
@@ -65,6 +66,7 @@ interface SettingsCategoryContentProps {
   bootstrap: Bootstrap;
   settings: NonNullable<DesktopStore['settings']>;
   useStore: DesktopStoreHook;
+  onUpdateDialogOpen?: () => void;
 }
 
 export function SettingsCategoryContent({
@@ -72,6 +74,7 @@ export function SettingsCategoryContent({
   bootstrap,
   settings,
   useStore,
+  onUpdateDialogOpen,
 }: SettingsCategoryContentProps) {
   const baseHoldId = useId();
   const tempoId = useId();
@@ -524,11 +527,15 @@ export function SettingsCategoryContent({
             </Select>
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-3">
-            <button
+            <Button
+              variant="outline"
               className="h-9 w-auto justify-self-start gap-2 whitespace-nowrap"
               type="button"
               disabled={checkingUpdates}
-              onClick={() => void checkForUpdate('manual')}
+              onClick={() => {
+                onUpdateDialogOpen?.();
+                void checkForUpdate('manual');
+              }}
             >
               <RefreshCw
                 size={14}
@@ -536,7 +543,7 @@ export function SettingsCategoryContent({
                 aria-hidden="true"
               />
               {checkingUpdates ? 'Checking…' : 'Check for updates'}
-            </button>
+            </Button>
             <span className="text-xs tabular-nums text-text-tertiary">
               Current version · {bootstrap.app_version}
             </span>

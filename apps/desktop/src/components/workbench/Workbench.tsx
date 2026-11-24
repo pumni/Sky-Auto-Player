@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
@@ -6,6 +7,7 @@ import {
   useState,
   type CSSProperties,
   type RefObject,
+  type TransitionEventHandler,
 } from 'react';
 import type { DesktopStoreHook } from '../../state/store';
 import { LibraryNavigator } from '../library/LibraryNavigator';
@@ -100,10 +102,48 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const utility = useStore((store) => store.utility);
   const presentationMode = getUtilityPresentationMode(viewportWidth, utility.open);
   const utilityDocked = presentationMode === 'docked';
+  const [utilityMounted, setUtilityMounted] = useState(utility.open);
+  const [utilityOverlayMounted, setUtilityOverlayMounted] = useState(
+    utility.open && presentationMode === 'overlay',
+  );
+  useEffect(() => {
+    return useStore.subscribe((state, previous) => {
+      if (!previous.utility.open && state.utility.open) {
+        setUtilityMounted(true);
+        setUtilityOverlayMounted(false);
+        return;
+      }
+      if (previous.utility.open && !state.utility.open) {
+        const shouldAnimateExit =
+          presentationMode === 'overlay' &&
+          !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        setUtilityMounted(shouldAnimateExit);
+        setUtilityOverlayMounted(shouldAnimateExit);
+      }
+    });
+  }, [presentationMode, useStore]);
+  const utilityOverlayPresented =
+    presentationMode === 'overlay' || (!utility.open && utilityOverlayMounted);
+  const shouldRenderUtility =
+    utility.open || (utilityMounted && utilityOverlayPresented && utilityOverlayMounted);
   const utilityOverlayWidth = getUtilityOverlayWidth(viewportWidth);
   const layout = useWorkbenchLayout(viewportWidth, utilityDocked, viewport.revision);
   const previousUtilityOpenRef = useRef(utility.open);
   const liveResizeRef = useRef<LiveResizeSession | null>(null);
+
+  const finishUtilityExit = useCallback(() => {
+    if (useStore.getState().utility.open || !utilityOverlayMounted) return;
+    setUtilityMounted(false);
+    setUtilityOverlayMounted(false);
+  }, [utilityOverlayMounted, useStore]);
+  const handleUtilityTransitionEnd: TransitionEventHandler<HTMLDivElement> = (event) => {
+    if (event.target !== event.currentTarget || event.propertyName !== 'opacity') return;
+    finishUtilityExit();
+  };
+  const handleUtilityTransitionCancel: TransitionEventHandler<HTMLDivElement> = (event) => {
+    if (event.target !== event.currentTarget) return;
+    finishUtilityExit();
+  };
 
   const applyLiveRawDrag = (
     pane: 'navigator' | 'utility',
@@ -140,7 +180,6 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
 
       if (rebase || live.navigator !== resolved.width) {
         live.navigator = resolved.width;
-        shell.style.setProperty('--navigator-pane-width', `${resolved.width}px`);
         shell
           .querySelector<HTMLElement>('[data-pane="navigator"]')
           ?.style.setProperty('--navigator-pane-width', `${resolved.width}px`);
@@ -183,11 +222,9 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
     if (rebase || live.utility !== resolved.width || live.navigator !== navigatorWidth) {
       live.utility = resolved.width;
       live.navigator = navigatorWidth;
-      shell.style.setProperty('--utility-pane-width', `${resolved.width}px`);
       shell
         .querySelector<HTMLElement>('[data-pane="inspector"]')
         ?.style.setProperty('--utility-pane-width', `${resolved.width}px`);
-      shell.style.setProperty('--navigator-pane-width', `${navigatorWidth}px`);
       shell
         .querySelector<HTMLElement>('[data-pane="navigator"]')
         ?.style.setProperty('--navigator-pane-width', `${navigatorWidth}px`);
@@ -263,11 +300,13 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
     if (!live) return;
     if (live.pane === 'utility' && !utilityDocked) {
       liveResizeRef.current = null;
-      workbenchRef.current?.style.setProperty(
-        '--navigator-pane-width',
-        `${layout.navigatorWidth}px`,
-      );
-      workbenchRef.current?.style.setProperty('--utility-pane-width', `${layout.utilityWidth}px`);
+      const workbench = workbenchRef.current;
+      workbench
+        ?.querySelector<HTMLElement>('[data-pane="navigator"]')
+        ?.style.setProperty('--navigator-pane-width', `${layout.navigatorWidth}px`);
+      workbench
+        ?.querySelector<HTMLElement>('[data-pane="inspector"]')
+        ?.style.setProperty('--utility-pane-width', `${layout.utilityWidth}px`);
       navigatorSeparatorRef.current?.setAttribute('aria-valuenow', String(layout.navigatorWidth));
       return;
     }
@@ -325,8 +364,6 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       data-workbench-width={viewportWidth}
       style={
         {
-          '--navigator-pane-width': `${layout.navigatorWidth}px`,
-          '--utility-pane-width': `${layout.utilityWidth}px`,
           '--min-track-browser-width': `${MIN_TRACK_BROWSER_WIDTH}px`,
         } as CSSProperties
       }
@@ -387,7 +424,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       >
         <TrackBrowser useStore={useStore} />
       </WorkbenchPane>
-      {utility.open && (
+      {shouldRenderUtility && (
         <>
           {utilityDocked && (
             <ResizableSeparator
@@ -426,17 +463,20 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
           )}
           <WorkbenchPane
             pane="inspector"
-            collapsed={layout.utilityCollapsed}
-            presentationMode={presentationMode}
+            collapsed={utilityDocked && layout.utilityCollapsed}
+            presentationMode={utilityOverlayPresented ? 'overlay' : 'docked'}
+            ariaHidden={!utility.open}
+            inert={!utility.open}
+            open={utility.open}
+            onTransitionEnd={handleUtilityTransitionEnd}
+            onTransitionCancel={handleUtilityTransitionCancel}
             className={`shrink-0 bg-card [container-name:utility] [container-type:inline-size] ${
-              presentationMode === 'overlay'
-                ? 'absolute top-0 right-1 bottom-1 z-20 max-w-[calc(100%-8px)] rounded-dialog border-border shadow-xl [contain:none]'
-                : layout.utilityCollapsed
-                  ? ''
-                  : ''
+              utilityOverlayPresented
+                ? 'absolute top-0 right-1 bottom-1 z-20 max-w-[calc(100%-8px)] rounded-dialog border-border shadow-xl transition-[opacity,translate] duration-[220ms] ease-enter data-[open=false]:pointer-events-none data-[open=false]:translate-x-4 data-[open=false]:opacity-0 data-[open=false]:duration-[160ms] data-[open=false]:ease-exit motion-reduce:transition-none [contain:none]'
+                : ''
             }`}
             style={
-              presentationMode === 'overlay'
+              utilityOverlayPresented
                 ? ({
                     '--utility-pane-width': `${layout.utilityWidth}px`,
                     width: utilityOverlayWidth,
@@ -448,7 +488,8 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
             }
           >
             <UtilityPane
-              presentationMode={utilityDocked ? 'docked' : 'overlay'}
+              presentationMode={utilityOverlayPresented ? 'overlay' : 'docked'}
+              isExiting={!utility.open && utilityOverlayPresented}
               collapsed={utilityDocked && layout.utilityCollapsed}
               onToggleCollapsed={() =>
                 layout.setUtilityPreference(

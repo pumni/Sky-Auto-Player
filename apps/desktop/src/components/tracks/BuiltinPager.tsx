@@ -10,6 +10,7 @@ import {
 } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { LIBRARY_PAGE_SIZE } from '../../state/store';
+import { Button } from '../ui/button';
 
 interface BuiltinPagerNavigationProps {
   page: number;
@@ -186,8 +187,10 @@ function BuiltinPagerNavigation({
             >
               / {pageCount}
             </span>
-            <button
-              className="inline-flex size-8 items-center justify-center rounded-control border-0 bg-transparent p-0 text-text-secondary hover:bg-control-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="size-8 p-0 text-text-secondary hover:bg-control-hover hover:text-foreground"
               type="button"
               aria-label="Confirm page change"
               data-slot="builtin-pager-confirm"
@@ -196,7 +199,7 @@ function BuiltinPagerNavigation({
               onClick={() => void commitEditing()}
             >
               <Check size={14} aria-hidden="true" />
-            </button>
+            </Button>
             <span id={pageInstructionsId} className="sr-only">
               Enter a whole page number from 1 to {pageCount}. Press Enter to navigate or Escape to
               cancel.
@@ -214,8 +217,10 @@ function BuiltinPagerNavigation({
         </div>
       ) : (
         <>
-          <button
-            className="inline-flex size-8 min-h-8 min-w-8 items-center justify-center rounded-control border-0 bg-transparent p-0 text-[11px] tabular-nums text-text-secondary hover:bg-control-hover hover:text-foreground disabled:opacity-50 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-8 p-0 text-[11px] tabular-nums text-text-secondary hover:bg-control-hover hover:text-foreground disabled:hover:!bg-transparent"
             type="button"
             aria-label="Previous page"
             title="Previous page"
@@ -223,14 +228,16 @@ function BuiltinPagerNavigation({
             onClick={() => void navigate(page - 1)}
           >
             <ChevronLeft size={16} aria-hidden="true" />
-          </button>
+          </Button>
           <div
             className="relative grid h-8 min-w-9 place-items-center"
             style={{ width: indicatorWidth }}
           >
-            <button
+            <Button
+              variant="ghost"
+              size="sm"
               ref={triggerRef}
-              className="h-8 w-full min-w-0 rounded-control border border-transparent bg-transparent px-1.5 py-1 text-[11px] tabular-nums text-foreground hover:bg-control-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="h-8 w-full min-w-0 bg-transparent px-1.5 py-1 text-[11px] tabular-nums text-foreground hover:bg-control-hover"
               data-page-jump="true"
               data-slot="builtin-pager-jump-trigger"
               type="button"
@@ -240,10 +247,12 @@ function BuiltinPagerNavigation({
               onClick={beginEditing}
             >
               {page} / {pageCount}
-            </button>
+            </Button>
           </div>
-          <button
-            className="inline-flex size-8 min-h-8 min-w-8 items-center justify-center rounded-control border-0 bg-transparent p-0 text-[11px] tabular-nums text-text-secondary hover:bg-control-hover hover:text-foreground disabled:opacity-50 disabled:hover:bg-transparent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-8 p-0 text-[11px] tabular-nums text-text-secondary hover:bg-control-hover hover:text-foreground disabled:hover:!bg-transparent"
             type="button"
             aria-label="Next page"
             title="Next page"
@@ -251,7 +260,7 @@ function BuiltinPagerNavigation({
             onClick={() => void navigate(page + 1)}
           >
             <ChevronRight size={16} aria-hidden="true" />
-          </button>
+          </Button>
         </>
       )}
     </nav>
@@ -326,8 +335,10 @@ export function BuiltinPager({ useStore, onLocateSelected }: BuiltinPagerProps) 
           {rangeText}
         </span>
         {onLocateSelected && (
-          <button
-            className="grid size-8 flex-none place-items-center rounded-control border-0 bg-transparent p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:opacity-50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-8 flex-none p-0 text-text-secondary hover:bg-control-hover hover:text-foreground"
             type="button"
             aria-label="Locate selected"
             data-slot="builtin-pager-locate"
@@ -336,7 +347,7 @@ export function BuiltinPager({ useStore, onLocateSelected }: BuiltinPagerProps) 
             onClick={onLocateSelected}
           >
             <LocateFixed size={16} aria-hidden="true" />
-          </button>
+          </Button>
         )}
       </div>
       {pageCount > 1 && (

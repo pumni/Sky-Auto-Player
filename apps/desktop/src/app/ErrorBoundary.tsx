@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type PropsWithChildren, type ReactNode } from 'react';
 import { isTauriRuntime } from '../platform/runtime';
 import { revealStartupWindow } from '../platform/startupWindowReveal';
+import { Button } from '../components/ui/button';
 
 interface State {
   error: Error | null;
@@ -39,13 +40,9 @@ export class ErrorBoundary extends Component<PropsWithChildren, State> {
               Close and reopen the full application to recover.
             </p>
           ) : (
-            <button
-              className="h-9 rounded-control bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-              type="button"
-              onClick={() => window.location.reload()}
-            >
+            <Button variant="default" onClick={() => window.location.reload()}>
               Reload window
-            </button>
+            </Button>
           )}
         </main>
       );

@@ -50,7 +50,7 @@ export function TrackActionsMenu({ row, useStore }: TrackActionsMenuProps) {
             ref={triggerRef}
             variant="ghost"
             size="icon-sm"
-            className="size-7 border-0 bg-transparent p-0 text-text-tertiary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:bg-control-hover hover:text-foreground"
+            className="size-7 border-0 bg-transparent p-0 text-text-tertiary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[selected=true]:opacity-100 group-data-[playing=true]:opacity-100 aria-expanded:opacity-100 focus-visible:opacity-100 hover:bg-control-hover hover:text-foreground motion-reduce:transition-none"
             type="button"
             aria-label={`More actions for ${row.title}`}
           />

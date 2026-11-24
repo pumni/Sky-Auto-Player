@@ -4,6 +4,7 @@ import type { SongRow } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
 import { selectNowPlayingSongId, selectRowAtIndex } from '../../state/store';
 import { StatusBadge, type StatusBadgeTone } from '../ui/StatusBadge';
+import { Button } from '../ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { TrackActionsMenu } from './TrackActionsMenu';
 
@@ -79,9 +80,18 @@ export const TrackRow = memo(function TrackRow({
   return (
     <div
       id={`song-row-${row.song_id}`}
-      className={`group absolute inset-x-1.5 grid h-[46px] min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 rounded-control border-l-2 border-l-transparent px-[10px] pr-1.5 text-[13px] font-medium outline-none transition-colors duration-fast hover:bg-control-hover focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/track-browser:right-1 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-1.5 @max-[440px]/track-browser:left-1 @max-[440px]/track-browser:right-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:pl-0.5 ${selected ? 'border-l-accent-ink bg-selection font-semibold text-foreground' : 'text-text-secondary'} ${playing ? (selected ? 'border-l-accent-ink bg-selection' : 'border-l-accent-ink bg-playing') : ''}`}
+      className={`group absolute inset-x-1.5 grid h-[46px] min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 rounded-control border-l-2 px-[10px] pr-1.5 text-[13px] font-medium outline-none transition-colors duration-fast hover:bg-control-hover focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/track-browser:right-1 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-1.5 @max-[440px]/track-browser:left-1 @max-[440px]/track-browser:right-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:pl-0.5 motion-reduce:transition-none ${selected || playing ? 'border-l-accent-ink' : 'border-l-transparent'} ${selected ? 'bg-selection font-semibold text-foreground' : playing ? 'bg-playing text-text-secondary' : 'text-text-secondary'} data-[state=selected]:hover:bg-selection data-[state=selected]:focus-visible:bg-selection data-[state=playing]:hover:bg-playing data-[state=playing]:focus-visible:bg-playing data-[state=selected-playing]:hover:bg-selection data-[state=selected-playing]:focus-visible:bg-selection`}
       data-selected={selected}
       data-playing={playing}
+      data-state={
+        selected && playing
+          ? 'selected-playing'
+          : selected
+            ? 'selected'
+            : playing
+              ? 'playing'
+              : 'idle'
+      }
       data-slot="track-row"
       role="row"
       aria-selected={selected}
@@ -163,8 +173,10 @@ export const TrackRow = memo(function TrackRow({
         </TooltipContent>
       </Tooltip>
       <span className="flex min-w-0 items-center justify-center" role="gridcell">
-        <button
-          className={`grid size-7 place-items-center rounded-full border-0 bg-transparent p-0 text-text-tertiary opacity-0 transition-colors duration-fast group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-control-hover hover:text-accent-ink focus-visible:opacity-100 focus-visible:text-accent-ink ${row.liked ? 'bg-transparent text-accent-ink opacity-100' : ''}`}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={`size-7 rounded-full p-0 text-text-tertiary opacity-0 transition-colors duration-fast group-hover:opacity-100 group-focus-within:opacity-100 group-data-[selected=true]:opacity-100 group-data-[playing=true]:opacity-100 hover:bg-control-hover hover:text-accent-ink focus-visible:opacity-100 focus-visible:text-accent-ink ${row.liked ? 'bg-transparent text-accent-ink opacity-100' : ''}`}
           type="button"
           aria-label={
             row.liked ? `Remove ${row.title} from Liked Songs` : `Add ${row.title} to Liked Songs`
@@ -178,7 +190,7 @@ export const TrackRow = memo(function TrackRow({
           onKeyDown={(event) => event.stopPropagation()}
         >
           <Heart size={16} fill={row.liked ? 'currentColor' : 'none'} aria-hidden="true" />
-        </button>
+        </Button>
       </span>
       <span
         className="min-w-0 text-right tabular-nums text-text-secondary @max-[520px]/track-browser:hidden"

@@ -59,6 +59,7 @@ function UtilityRailItem({ label, active, icon, onSelect }: UtilityRailItemProps
 
 interface UtilityPaneProps {
   presentationMode: 'docked' | 'overlay';
+  isExiting?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   onExpand?: () => void;
@@ -68,6 +69,7 @@ interface UtilityPaneProps {
 
 export function UtilityPane({
   presentationMode,
+  isExiting = false,
   collapsed = false,
   onToggleCollapsed,
   onExpand,
@@ -145,7 +147,7 @@ export function UtilityPane({
     return () => document.removeEventListener('keydown', closeOnEscape);
   }, [close, presentationMode, utility.open]);
 
-  if (!utility.open) return null;
+  if (!utility.open && !isExiting) return null;
 
   const isCollapsedRail = presentationMode === 'docked' && collapsed;
 
@@ -168,16 +170,18 @@ export function UtilityPane({
         }}
       >
         <div className="mb-1 flex min-h-10 w-full items-center justify-center">
-          <button
+          <Button
+            variant="ghost"
+            size="icon-lg"
             ref={expandButtonRef}
-            className="size-10 border-0 bg-transparent p-0 hover:bg-control-hover"
+            className="size-10 p-0 hover:bg-control-hover"
             type="button"
             aria-label="Expand Inspector"
             title="Expand Inspector"
             onClick={handleToggleCollapsed}
           >
             <ChevronLeft size={17} aria-hidden="true" />
-          </button>
+          </Button>
         </div>
         <div className="grid justify-items-center gap-1" role="group" aria-label="Utility views">
           <UtilityRailItem

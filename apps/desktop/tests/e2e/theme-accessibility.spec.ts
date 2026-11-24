@@ -7,6 +7,7 @@ import {
   selectPalette,
   startSelectedSong,
 } from './testHelpers';
+import { collectRenderedTextContrast } from './renderedContrast';
 
 const surfaces = ['--background', '--surface', '--card', '--popover'] as const;
 const bodyTextRoles = [
@@ -33,6 +34,8 @@ const themeRoles = [
   '--danger',
   '--danger-surface',
   '--destructive',
+  '--destructive-hover',
+  '--destructive-pressed',
   '--destructive-foreground',
 ] as const;
 
@@ -77,6 +80,15 @@ function contrast(foreground: string, background: string): number {
   return (Math.max(first, second) + 0.05) / (Math.min(first, second) + 0.05);
 }
 
+async function expectRenderedTextContrast(page: import('@playwright/test').Page, scene: string) {
+  const samples = await page.evaluate(collectRenderedTextContrast);
+  const failures = samples.filter((sample) => !sample.exemption && sample.ratio < sample.minimum);
+  expect(failures, `${scene} rendered text contrast`).toEqual([]);
+  const applicable = samples.filter((sample) => !sample.exemption);
+  expect(applicable.length, `${scene} visible text samples`).toBeGreaterThan(0);
+  return Math.min(...applicable.map((sample) => sample.ratio));
+}
+
 async function resolvedTheme(page: import('@playwright/test').Page) {
   return page.evaluate(
     (roles) => {
@@ -117,6 +129,8 @@ test('all six dark palettes meet semantic text, action, status, and focus contra
       ['--warning', '--warning-surface'],
       ['--danger', '--danger-surface'],
       ['--destructive-foreground', '--destructive'],
+      ['--destructive-foreground', '--destructive-hover'],
+      ['--destructive-foreground', '--destructive-pressed'],
     ] as const) {
       expect(
         contrast(theme[textRole], theme[surfaceRole]),
@@ -135,6 +149,195 @@ test('all six dark palettes meet semantic text, action, status, and focus contra
     expect(theme['--selection']).not.toBe(theme['--playing']);
     await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
   }
+});
+
+test('primary actions use computed rest, hover, and pressed theme colors in every dark palette', async ({
+  page,
+}) => {
+  await page.goto('/');
+  const createPlaylist = page.locator('[data-slot="library-empty-playlists-create"]');
+  await expect(createPlaylist).toBeVisible();
+
+  for (const palette of palettes) {
+    await selectPalette(page, palette);
+    const theme = await resolvedTheme(page);
+    const rest = await createPlaylist.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { background: style.backgroundColor, foreground: style.color };
+    });
+    expect(rest.background, `${palette} primary fill`).toBe(computedRgb(theme['--primary']));
+    expect(rest.foreground, `${palette} primary foreground`).toBe(
+      computedRgb(theme['--primary-foreground']),
+    );
+
+    await createPlaylist.hover();
+    await expect
+      .poll(() => createPlaylist.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .toBe(computedRgb(theme['--primary-hover']));
+
+    await page.mouse.down();
+    await expect
+      .poll(() => createPlaylist.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .toBe(computedRgb(theme['--primary-pressed']));
+    await page.mouse.up();
+    const dialog = page.getByRole('dialog', { name: 'New playlist' });
+    await expect(dialog).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await page.mouse.move(0, 0);
+  }
+});
+
+test('PlayerTransport Play uses the shared primary action states in Dark and Light', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  const play = page
+    .getByRole('contentinfo', { name: 'Player controls' })
+    .getByRole('button', { name: 'Play', exact: true });
+  await expect(play).toBeEnabled();
+
+  const assertPrimaryStates = async (label: string) => {
+    const theme = await resolvedTheme(page);
+    await expect
+      .poll(async () => {
+        const colors = await play.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { background: style.backgroundColor, foreground: style.color };
+        });
+        return colors;
+      })
+      .toEqual({
+        background: computedRgb(theme['--primary']),
+        foreground: computedRgb(theme['--primary-foreground']),
+      });
+
+    await play.hover();
+    await expect
+      .poll(() => play.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .toBe(computedRgb(theme['--primary-hover']));
+
+    const bounds = await play.boundingBox();
+    expect(bounds).not.toBeNull();
+    if (bounds) {
+      await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+      await page.mouse.down();
+      await expect
+        .poll(() => play.evaluate((element) => getComputedStyle(element).backgroundColor))
+        .toBe(computedRgb(theme['--primary-pressed']));
+      await page.mouse.move(0, 0);
+      await page.mouse.up();
+    }
+    await expect(play).toBeVisible();
+    await expect(play).toHaveAccessibleName('Play');
+  };
+
+  for (const palette of palettes) {
+    await selectPalette(page, palette);
+    await assertPrimaryStates(palette);
+  }
+
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+  await assertPrimaryStates('Light');
+});
+
+test('PlayerTransport Pause and Resume retain the filled shared primary role in a dry run', async ({
+  page,
+}) => {
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await player.getByRole('button', { name: 'Configure playback profile' }).click();
+  await page
+    .getByRole('dialog', { name: 'Playback profile' })
+    .getByRole('button', { name: 'Test playback (no input)' })
+    .click();
+  await page.mouse.move(0, 0);
+  const pauseControl = player.getByRole('button', { name: 'Pause', exact: true });
+  expect(await pauseControl.evaluate((element) => element.matches(':hover'))).toBe(false);
+
+  const theme = await resolvedTheme(page);
+  const expectPrimaryState = async (name: 'Pause' | 'Resume') => {
+    await page.mouse.move(0, 0);
+    const action = player.getByRole('button', { name, exact: true });
+    await expect(action).toBeVisible();
+    await expect
+      .poll(() =>
+        action.evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { background: style.backgroundColor, foreground: style.color };
+        }),
+      )
+      .toEqual({
+        background: computedRgb(theme['--primary']),
+        foreground: computedRgb(theme['--primary-foreground']),
+      });
+  };
+
+  await expectPrimaryState('Pause');
+  await player.getByRole('button', { name: 'Pause', exact: true }).click();
+  await expect(player.locator('[data-slot="player-track-status"]')).toHaveText('Paused');
+  await expectPrimaryState('Resume');
+  await player.getByRole('button', { name: 'Resume', exact: true }).click();
+  await expect(player.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
+  await expectPrimaryState('Pause');
+});
+
+test('destructive confirmation uses its rest, hover, and pressed theme colors', async ({
+  page,
+}) => {
+  await page.goto('/');
+  await page.locator('[data-slot="library-add-button"]').click();
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill('Variant check');
+  await createDialog.getByRole('button', { name: 'Create' }).click();
+
+  for (const palette of palettes) {
+    await selectPalette(page, palette);
+    const theme = await resolvedTheme(page);
+    await page.getByRole('button', { name: 'More actions for Variant check' }).click();
+    await page.getByRole('menuitem', { name: 'Delete playlist' }).click();
+    const dialog = page.getByRole('alertdialog', { name: /Delete/ });
+    const remove = dialog.getByRole('button', { name: 'Delete playlist' });
+
+    const expectFill = async (
+      role: '--destructive' | '--destructive-hover' | '--destructive-pressed',
+    ) => {
+      await expect
+        .poll(() => remove.evaluate((element) => getComputedStyle(element).backgroundColor))
+        .toBe(computedRgb(theme[role]));
+    };
+
+    await expectFill('--destructive');
+    await remove.hover();
+    await expectFill('--destructive-hover');
+    const [buttonBounds, titleBounds] = await Promise.all([
+      remove.boundingBox(),
+      dialog.getByRole('heading').boundingBox(),
+    ]);
+    expect(buttonBounds).not.toBeNull();
+    expect(titleBounds).not.toBeNull();
+    if (buttonBounds && titleBounds) {
+      await page.mouse.move(
+        buttonBounds.x + buttonBounds.width / 2,
+        buttonBounds.y + buttonBounds.height / 2,
+      );
+      await page.mouse.down();
+      await expectFill('--destructive-pressed');
+      await page.mouse.move(
+        titleBounds.x + titleBounds.width / 2,
+        titleBounds.y + titleBounds.height / 2,
+      );
+      await page.mouse.up();
+    }
+
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toBeHidden();
+  }
+  await expectNoSeriousAccessibilityViolations(page);
 });
 
 test('Light appearance stays independent of the saved dark palette and fits desktop sizes', async ({
@@ -166,15 +369,106 @@ test('Light appearance stays independent of the saved dark palette and fits desk
 
   for (const viewport of [
     { width: 800, height: 560 },
+    { width: 1024, height: 640 },
+    { width: 1200, height: 760 },
     { width: 1366, height: 768 },
+    { width: 1920, height: 1080 },
+    { width: 640, height: 448 },
   ]) {
     await page.setViewportSize(viewport);
+    await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+      'data-workbench-width',
+      String(viewport.width),
+    );
     await expectWorkbenchWithinBounds(page);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       viewport.width,
     );
   }
 
+  await expectNoSeriousAccessibilityViolations(page);
+});
+
+test('Light rendered text remains readable across library, Settings, Diagnostics, recovery, and Update', async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await page.emulateMedia({ colorScheme: 'light' });
+  await page.goto('/?mockDiagnosticsStatus=degraded');
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+  expect(await expectRenderedTextContrast(page, 'Light library')).toBeGreaterThanOrEqual(4.5);
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  expect(await expectRenderedTextContrast(page, 'Light Settings')).toBeGreaterThanOrEqual(4.5);
+  await expectNoSeriousAccessibilityViolations(page);
+  await settings.getByRole('button', { name: 'Close settings' }).click();
+
+  await page.locator('button[aria-label$="utility panel"]').click();
+  const utility = page.getByRole('region', { name: 'Utility: Song Details' });
+  await expect(utility).toBeVisible();
+  await utility.getByRole('tab', { name: 'Runtime' }).click();
+  const diagnostics = page.getByRole('region', { name: 'Utility: Diagnostics' });
+  await expect(diagnostics).toBeVisible();
+  await diagnostics.getByRole('tab', { name: 'Timing' }).click();
+  await expect(diagnostics).toContainText(
+    /No active playback session|Timing unavailable|Latest sender pre-call max/,
+  );
+  expect(
+    await expectRenderedTextContrast(page, 'Light Runtime Diagnostics'),
+  ).toBeGreaterThanOrEqual(4.5);
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.goto('/?mockStartFailure=target_not_found');
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  const proceed = player.getByRole('button', { name: 'Proceed with current settings' });
+  if (await proceed.isVisible().catch(() => false)) await proceed.click();
+  const recovery = page.getByRole('alert');
+  await expect(recovery).toContainText('Sky window was not found');
+  expect(await expectRenderedTextContrast(page, 'Light playback recovery')).toBeGreaterThanOrEqual(
+    4.5,
+  );
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.goto('/?mockReleaseNotes=short');
+  await page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ }).click();
+  const update = page.getByRole('dialog');
+  await expect(update).toContainText('Version 4.0.0-alpha.2-mock is available');
+  expect(await expectRenderedTextContrast(page, 'Light Update dialog')).toBeGreaterThanOrEqual(4.5);
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.goto('/?mockLibraryState=empty');
+  await expect(page.locator('[data-slot="library-empty-state"]')).toContainText(
+    'No Built-in Songs are available',
+  );
+  expect(await expectRenderedTextContrast(page, 'Light empty library')).toBeGreaterThanOrEqual(4.5);
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.goto('/?mockLibraryState=unavailable');
+  await expect(page.locator('[data-slot="library-empty-state"]')).toContainText(
+    'Built-in Songs are unavailable',
+  );
+  expect(
+    await expectRenderedTextContrast(page, 'Light unavailable catalog'),
+  ).toBeGreaterThanOrEqual(4.5);
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.goto('/?mockNavigationFailures=1');
+  await expect(page.getByRole('alert')).toContainText('Couldn’t check Built-in Songs or playlists');
+  expect(
+    await expectRenderedTextContrast(page, 'Light library navigation error'),
+  ).toBeGreaterThanOrEqual(4.5);
+  await expectNoSeriousAccessibilityViolations(page);
+
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.goto('/?mockLibraryState=empty');
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+  expect(await expectRenderedTextContrast(page, 'Graphite empty library')).toBeGreaterThanOrEqual(
+    4.5,
+  );
   await expectNoSeriousAccessibilityViolations(page);
 });
 
@@ -249,6 +543,41 @@ test('selected and playing rows keep separate accessible surfaces in Dark and Li
       ).toBeGreaterThanOrEqual(4.5);
     }
   }
+});
+
+test('selected and playing row indicators and actions remain visible without hover', async ({
+  page,
+}) => {
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=5');
+  await startSelectedSong(page);
+  const row = page.getByRole('row', { name: /Blue Bird/ });
+  await expect(row).toHaveAttribute('data-state', 'selected-playing');
+  await page.mouse.move(0, 0);
+
+  const theme = await resolvedTheme(page);
+  const state = await row.evaluate((element) => {
+    const style = getComputedStyle(element);
+    const like = element.querySelector<HTMLButtonElement>('button[aria-label*="Liked Songs"]');
+    const actions = element.querySelector<HTMLButtonElement>('button[aria-label^="More actions"]');
+    return {
+      border: style.borderLeftColor,
+      background: style.backgroundColor,
+      likeOpacity: like ? getComputedStyle(like).opacity : null,
+      actionsOpacity: actions ? getComputedStyle(actions).opacity : null,
+      nowPlaying: element.querySelector('svg.lucide-music-2[aria-hidden="true"]') !== null,
+    };
+  });
+  expect(state.border).toBe(computedRgb(theme['--accent-ink']));
+  expect(state.background).toBe(computedRgb(theme['--selection']));
+  expect(state.likeOpacity).toBe('1');
+  expect(state.actionsOpacity).toBe('1');
+  expect(state.nowPlaying).toBe(true);
+
+  await row.hover();
+  await expect
+    .poll(() => row.evaluate((element) => getComputedStyle(element).backgroundColor))
+    .toBe(computedRgb(theme['--selection']));
+  await expectNoSeriousAccessibilityViolations(page);
 });
 
 test('forced colors retain control feedback and reduced motion removes overlay movement', async ({

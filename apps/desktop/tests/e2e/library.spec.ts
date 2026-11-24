@@ -402,6 +402,7 @@ async function readTrackBrowserVisualGeometry(page: Page, includePager = true) {
                 wrap.getBoundingClientRect().bottom -
                 Number.parseFloat(wrapStyle.borderBottomWidth) -
                 previous.getBoundingClientRect().bottom,
+              indicatorBorderWidth: indicatorStyle.borderTopWidth,
               indicatorBorderStyle: indicatorStyle.borderTopStyle,
               indicatorBorderColor: indicatorStyle.borderTopColor,
               indicatorBackgroundColor: indicatorStyle.backgroundColor,
@@ -798,7 +799,7 @@ test('F3.5 two-page Built-in pager spacing stays compact through inline editing 
   await input.press('Escape');
   await expect(indicator).toBeFocused();
   expectBuiltinPagerGeometryStable(before, await readBuiltinPagerGeometry(page));
-  await page.keyboard.press('Space');
+  await indicator.press('Space');
   input = page.getByRole('textbox', { name: 'Page number, from 1 to 2' });
   const confirm = page.getByRole('button', { name: 'Confirm page change' });
   await expect(input).toBeFocused();
@@ -891,6 +892,11 @@ test('F3.6 pager chevrons stay quiet, accessible, and grouped across navigation'
   const initialGeometry = await readBuiltinPagerGeometry(page);
   const previousRest = await readControlSurface(previous);
   const nextRest = await readControlSurface(next);
+  const movePointerOver = async (control: typeof previous) => {
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    if (box) await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  };
   for (const surface of [previousRest, nextRest]) {
     expect(surface.width).toBe(32);
     expect(surface.height).toBe(32);
@@ -900,18 +906,23 @@ test('F3.6 pager chevrons stay quiet, accessible, and grouped across navigation'
   const initialVisual = await readBuiltinPagerGlyphGeometry(page);
   expectBuiltinPagerIndicatorFitsCompactly(initialVisual);
 
-  await previous.hover();
+  await movePointerOver(previous);
   expect((await readControlSurface(previous)).background).toBe('rgba(0, 0, 0, 0)');
   await next.hover();
+  const nextHoverBeforeTransition = await readControlSurface(next);
+  await expect
+    .poll(() => readControlSurface(next).then((surface) => surface.background))
+    .toBe(nextHoverBeforeTransition.hoverColor);
   const nextHover = await readControlSurface(next);
-  expect(nextHover.background).toBe(nextHover.hoverColor);
   expect(nextHover.background).not.toBe('rgba(0, 0, 0, 0)');
   await page.mouse.move(0, 0);
 
-  await next.focus();
+  await page.getByRole('button', { name: builtinPageTriggerName(1, 2) }).focus();
+  await page.keyboard.press('Tab');
+  await expect(next).toBeFocused();
   await expect
-    .poll(() => next.evaluate((button) => getComputedStyle(button).outlineStyle))
-    .toBe('solid');
+    .poll(() => next.evaluate((button) => getComputedStyle(button).boxShadow))
+    .not.toBe('none');
   await page.keyboard.press('Space');
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
   await expect(page.getByRole('row', { name: /Song 101/ })).toHaveAttribute('aria-rowindex', '2');
@@ -919,9 +930,15 @@ test('F3.6 pager chevrons stay quiet, accessible, and grouped across navigation'
   await expect(next).toBeDisabled();
   expectBuiltinPagerGeometryStable(initialGeometry, await readBuiltinPagerGeometry(page));
 
-  await next.hover();
-  expect((await readControlSurface(next)).background).toBe('rgba(0, 0, 0, 0)');
+  await movePointerOver(next);
+  await expect
+    .poll(() => readControlSurface(next).then((surface) => surface.background))
+    .toBe('rgba(0, 0, 0, 0)');
   await previous.hover();
+  const previousHoverBeforeTransition = await readControlSurface(previous);
+  await expect
+    .poll(() => readControlSurface(previous).then((surface) => surface.background))
+    .toBe(previousHoverBeforeTransition.hoverColor);
   const previousHover = await readControlSurface(previous);
   expect(previousHover.background).toBe(previousHover.hoverColor);
   await testInfo.attach('f3.6-pager-control-surfaces.json', {
@@ -1128,7 +1145,10 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
       metrics.separator.verticalAlign === 'baseline',
       'separator uses a non-baseline alignment',
     );
-    check(pager.indicatorBorderColor === 'rgba(0, 0, 0, 0)', 'resting trigger border is accented');
+    check(
+      pager.indicatorBorderWidth === '0px' && pager.indicatorBorderColor === 'rgba(0, 0, 0, 0)',
+      'resting trigger border is visible',
+    );
     check(
       pager.indicatorBackgroundColor === 'rgba(0, 0, 0, 0)',
       'resting trigger surface is accented',
@@ -1192,6 +1212,14 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
       () =>
         new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
     );
+    await page.mouse.move(0, 0);
+    await expect
+      .poll(() =>
+        page
+          .getByRole('button', { name: builtinPageTriggerName(1, 2) })
+          .evaluate((button) => getComputedStyle(button).backgroundColor),
+      )
+      .toBe('rgba(0, 0, 0, 0)');
     await assertVisualContract(viewport.label);
     const pageOneGeometry = await readBuiltinPagerGeometry(page);
     const pageOneGlyphGeometry = await readBuiltinPagerGlyphGeometry(page);
@@ -1207,11 +1235,11 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
     await expect(pageOneTrigger).toBeFocused();
     expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
     const next = page.getByRole('button', { name: 'Next page' });
-    await next.focus();
+    await page.keyboard.press('Tab');
     await expect(next).toBeFocused();
     await expect
-      .poll(() => next.evaluate((button) => getComputedStyle(button).outlineStyle))
-      .toBe('solid');
+      .poll(() => next.evaluate((button) => getComputedStyle(button).boxShadow))
+      .not.toBe('none');
     await page.keyboard.press('Enter');
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
     expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
@@ -1228,14 +1256,19 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
       pageTwo: pageTwoGlyphGeometry,
     });
     const previous = page.getByRole('button', { name: 'Previous page' });
-    await previous.focus();
+    const pageTwoTrigger = page.getByRole('button', { name: builtinPageTriggerName(2, 2) });
+    await pageTwoTrigger.focus();
+    await page.keyboard.press('Shift+Tab');
     await expect(previous).toBeFocused();
     await expect
-      .poll(() => previous.evaluate((button) => getComputedStyle(button).outlineStyle))
-      .toBe('solid');
+      .poll(() => previous.evaluate((button) => getComputedStyle(button).boxShadow))
+      .not.toBe('none');
+    await page.mouse.move(0, 0);
+    await expect
+      .poll(() => pageTwoTrigger.evaluate((button) => getComputedStyle(button).backgroundColor))
+      .toBe('rgba(0, 0, 0, 0)');
     await assertVisualContract(`${viewport.label} page 2 focused`);
     expectBuiltinPagerGeometryStable(pageOneGeometry, await readBuiltinPagerGeometry(page));
-    const pageTwoTrigger = page.getByRole('button', { name: builtinPageTriggerName(2, 2) });
     await pageTwoTrigger.click();
     const pageTwoInput = page.getByRole('textbox', { name: 'Page number, from 1 to 2' });
     await pageTwoInput.fill('1');
@@ -1673,7 +1706,7 @@ test('playlist onboarding exposes create and import actions in expanded and coll
       await expect(page.locator('[data-slot="track-browser-guidance"]')).toHaveCount(0);
     } else {
       await expect(expandedToggle).toBeVisible();
-      await expect(emptyGuidance.locator('p')).toHaveCount(0);
+      await expect(emptyGuidance.locator('p')).toContainText('Create a playlist to collect songs');
       await expect(emptyGuidance.getByRole('button', { name: 'Create playlist' })).toBeVisible();
       await expandedToggle.click();
       await expect(expandToggle).toBeVisible();
@@ -1702,14 +1735,16 @@ test('playlist onboarding exposes create and import actions in expanded and coll
   }
 });
 
-test('empty catalog keeps playlist onboarding while a populated catalog stays uncluttered', async ({
+test('playlist onboarding stays available with either a populated or empty catalog', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
   await expect(page.locator('[data-slot="track-browser-guidance"]')).toHaveCount(0);
-  await expect(page.locator('[data-slot="library-empty-playlists-guidance"]')).toHaveCount(0);
+  await expect(page.locator('[data-slot="library-empty-playlists-guidance"]')).toContainText(
+    'import local sheet files',
+  );
 
   await page.goto('/?mockLibraryState=empty');
   await expect(page.locator('[data-slot="library-empty-state"] strong')).toHaveText(
@@ -1732,7 +1767,9 @@ test('populated library keeps playlist actions available without repeated onboar
   await page.setViewportSize({ width: 640, height: 448 });
   await expect(page.locator('[data-slot="track-browser-guidance"]')).toHaveCount(0);
   await page.setViewportSize({ width: 1366, height: 768 });
-  await expect(navigator.locator('[data-slot="library-empty-playlists-guidance"]')).toHaveCount(0);
+  await expect(navigator.locator('[data-slot="library-empty-playlists-guidance"]')).toContainText(
+    'import local sheet files',
+  );
   await expect(
     navigator
       .locator('[data-slot="library-empty-playlists"]')
@@ -1750,6 +1787,7 @@ test('populated library keeps playlist actions available without repeated onboar
   await expect(page.getByRole('heading', { name: 'Practice' })).toBeVisible();
   await expect(page.getByText('This playlist is empty')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Add songs' })).toBeVisible();
+  await expect(navigator.locator('[data-slot="library-empty-playlists-guidance"]')).toHaveCount(0);
   await page.setViewportSize({ width: 1366, height: 768 });
   await expectNoSeriousAccessibilityViolations(page);
 
@@ -2237,7 +2275,7 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   await page.getByRole('menuitem', { name: 'Browse Built-in Songs…' }).click();
   await expect(page.getByRole('heading', { name: 'Add songs to Practice' })).toBeVisible();
   await expect(page.getByText(/in Built-in Songs/)).toBeVisible();
-  await expect(page.getByPlaceholder('Search Built-in Songs…')).toBeVisible();
+  await expect(page.getByPlaceholder('Search songs…')).toBeVisible();
   await expect(navigator.getByRole('button', { name: 'Practice', exact: true })).toBeVisible();
   const existingSong = page.getByRole('row', { name: /Aurora Landing/ });
   await existingSong.getByRole('button', { name: 'More actions for Aurora Landing' }).click();
@@ -2302,6 +2340,72 @@ test('Add songs keeps local imports inside the selected playlist', async ({ page
   await deleteDialog.getByRole('button', { name: 'Delete playlist' }).click();
   await expect(navigator.getByRole('button', { name: /Practice/ })).toHaveCount(0);
   await expect(page.getByRole('heading', { name: 'Built-in Songs' })).toBeVisible();
+});
+
+test('Add songs menu stays non-modal and supports keyboard exit, Escape, and outside interaction', async ({
+  page,
+}) => {
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.locator('[data-slot="library-add-button"]').click();
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill('Menu focus check');
+  await createDialog.getByRole('button', { name: 'Create' }).click();
+
+  const trigger = page.getByRole('button', { name: 'Add songs' });
+  await expect(trigger).toBeVisible();
+  await trigger.focus();
+  await page.keyboard.press('ArrowDown');
+  const menu = page.getByRole('menu', { name: 'Add songs' });
+  const browse = menu.getByRole('menuitem', { name: 'Browse Built-in Songs…' });
+  await expect(browse).toBeFocused();
+
+  const importFiles = menu.getByRole('menuitem', { name: 'Import files…' });
+  await page.keyboard.press('ArrowDown');
+  await expect(importFiles).toBeFocused();
+  await page.keyboard.press('ArrowUp');
+  await expect(browse).toBeFocused();
+
+  await page.keyboard.press('Shift+Tab');
+  await expect(menu).toBeHidden();
+  expect(
+    await page.evaluate(
+      () => document.activeElement?.closest('[data-base-ui-focus-guard]') === null,
+    ),
+  ).toBe(true);
+
+  await trigger.focus();
+  await page.keyboard.press('Space');
+  await expect(menu).toBeVisible();
+  await expect(browse).toBeFocused();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Tab');
+  await expect(menu).toBeHidden();
+  await expect(browse).toBeHidden();
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+  await expect(trigger).toBeFocused();
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  const heading = page.getByRole('heading', { name: 'Menu focus check' });
+  await heading.click();
+  await expect(menu).toBeHidden();
+  await expect(heading).toBeVisible();
+
+  await trigger.focus();
+  await page.keyboard.press('Space');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Add songs to Menu focus check' })).toBeVisible();
+  await expectNoSeriousAccessibilityViolations(page);
 });
 
 test('long sheet titles remain contained in the Track Browser, Utility, and Player Bar', async ({

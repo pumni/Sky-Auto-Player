@@ -2,6 +2,7 @@ import { Heart, Music2 } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
 import { playbackSessionStatusConcern, selectSongById } from '../../state/store';
 import { StatusBadge } from '../ui/StatusBadge';
+import { Button } from '../ui/button';
 import { playerStateLabel } from './playerFormatting';
 
 interface PlayerTrackInfoProps {
@@ -73,12 +74,12 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
 
   return (
     <div
-      className="col-start-1 row-start-1 flex min-w-0 items-center gap-2.5"
+      className="col-start-1 row-start-1 flex min-w-0 items-center gap-2.5 max-[1100px]:flex-wrap"
       role="group"
       aria-label={`Playback for ${title}`}
     >
       <span
-        className="grid size-[30px] flex-none place-items-center rounded-control text-text-secondary max-[700px]:hidden"
+        className="grid size-[30px] flex-none place-items-center rounded-control text-text-secondary max-[1100px]:hidden"
         aria-hidden="true"
       >
         <Music2 size={17} />
@@ -93,7 +94,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
         <div className="flex min-w-0 items-center gap-1.5">
           <span
             data-slot="player-track-status"
-            className={`block min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-xs ${sessionStatusConcern !== null ? 'text-warning' : active ? 'text-accent-ink' : 'text-muted-foreground'}`}
+            className={`block min-w-0 flex-[0_1_auto] break-words text-xs leading-4 ${baseStatus.length <= 18 ? 'whitespace-nowrap' : 'whitespace-normal'} ${sessionStatusConcern !== null ? 'text-warning' : active ? 'text-accent-ink' : 'text-muted-foreground'}`}
             role="status"
             aria-label={statusAccessibilityLabel}
             aria-live="polite"
@@ -104,7 +105,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           </span>
           {playbackMode === 'test' && (
             <StatusBadge
-              className="shrink-0"
+              className="shrink-0 max-[1100px]:gap-0 max-[1100px]:border-0 max-[1100px]:px-0 max-[1100px]:[&>span:first-child]:hidden"
               appearance="plain"
               aria-label={testModeDescription}
               title={testModeDescription}
@@ -115,8 +116,10 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
         </div>
       </div>
       {likeSongId && (hasCurrentSong || fallbackIdentity) && (
-        <button
-          className={`size-[30px] flex-none border-0 bg-transparent p-0 text-text-tertiary hover:bg-control-hover hover:text-accent-ink focus-visible:text-accent-ink ${liked ? 'text-accent-ink' : ''}`}
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={`size-[30px] flex-none rounded-full p-0 text-text-tertiary hover:bg-control-hover hover:text-accent-ink focus-visible:text-accent-ink ${liked ? 'text-accent-ink' : ''}`}
           type="button"
           aria-label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
           aria-pressed={liked}
@@ -124,7 +127,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           onClick={() => void setSongLiked(likeSongId, !liked)}
         >
           <Heart size={16} fill={liked ? 'currentColor' : 'none'} aria-hidden="true" />
-        </button>
+        </Button>
       )}
       {preparedRisk && ['medium', 'high'].includes(preparedRisk.level) && (
         <StatusBadge

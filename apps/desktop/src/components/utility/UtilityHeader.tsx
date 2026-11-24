@@ -1,6 +1,7 @@
 import { ChevronRight, X } from 'lucide-react';
 import type { RefObject } from 'react';
 import type { UtilityView } from '../../state/store';
+import { Button } from '../ui/button';
 import { TabsList, TabsTrigger } from '../ui/tabs';
 
 interface UtilityHeaderProps {
@@ -28,26 +29,30 @@ export function UtilityHeader({
         <h2 className="m-0 text-sm font-semibold leading-[1.4] text-foreground">Inspector</h2>
       </div>
       {showCollapse ? (
-        <button
+        <Button
+          variant="ghost"
+          size="icon-sm"
           ref={collapseButtonRef}
-          className="col-start-2 row-start-1 size-[30px] justify-self-end border-0 bg-transparent p-0 hover:bg-control-hover"
+          className="col-start-2 row-start-1 size-[30px] justify-self-end p-0 hover:bg-control-hover"
           type="button"
           aria-label="Collapse Inspector"
           title="Collapse Inspector"
           onClick={onCollapse}
         >
           <ChevronRight size={17} aria-hidden="true" />
-        </button>
+        </Button>
       ) : (
-        <button
-          className="col-start-2 row-start-1 size-[30px] justify-self-end border-0 bg-transparent p-0 hover:bg-control-hover"
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="col-start-2 row-start-1 size-[30px] justify-self-end p-0 hover:bg-control-hover"
           type="button"
           aria-label="Close utility"
           title="Close utility"
           onClick={onClose}
         >
           <X size={16} aria-hidden="true" />
-        </button>
+        </Button>
       )}
       <TabsList
         className="col-span-2 row-start-2 w-full justify-start gap-0 border-b border-border p-0"
@@ -56,13 +61,13 @@ export function UtilityHeader({
         activateOnFocus
       >
         <TabsTrigger
-          className="min-h-[34px] flex-none rounded-none border-0 border-b-2 border-b-transparent px-3 text-xs text-text-secondary hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink"
+          className="min-h-[34px] flex-none rounded-none border-0 border-b-2 border-b-transparent px-3 text-xs text-text-secondary duration-tab hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
           value="details"
         >
           <span>Details</span>
         </TabsTrigger>
         <TabsTrigger
-          className="min-h-[34px] flex-none rounded-none border-0 border-b-2 border-b-transparent px-3 text-xs text-text-secondary hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink"
+          className="min-h-[34px] flex-none rounded-none border-0 border-b-2 border-b-transparent px-3 text-xs text-text-secondary duration-tab hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
           value="diagnostics"
         >
           <span>Runtime</span>

@@ -209,7 +209,9 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
           {isBuiltinSearch && failedBuiltinPage !== null && (
             <>
               <span>Couldn’t load page {failedBuiltinPage}.</span>
-              <button
+              <Button
+                variant="outline"
+                size="xs"
                 className="h-7 px-2 text-xs"
                 type="button"
                 onClick={() => {
@@ -229,7 +231,7 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
                 }}
               >
                 Retry page {failedBuiltinPage}
-              </button>
+              </Button>
             </>
           )}
         </div>

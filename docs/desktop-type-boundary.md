@@ -29,6 +29,12 @@ workbench geometry. `@theme inline` maps semantic CSS properties to Tailwind uti
 dark variant follows `html[data-color-mode]`. Feature layout and state styling use utilities and
 shared component variants instead of another feature stylesheet or a large `@apply` recreation.
 
+The shared `Button` component owns primary, outline, secondary, ghost, and destructive action
+states. Tailwind maps `--primary-hover`, `--primary-pressed`, `--destructive-hover`,
+`--destructive-pressed`, and `--scrim` alongside the base color tokens. Production actions should
+use these variants instead of recreating button rest/hover/pressed colors in feature markup; native
+window-caption controls keep their platform-specific behavior.
+
 The Base UI wrappers provide shared behavior and `data-slot` ownership for buttons, dialogs,
 alert dialogs, dropdown menus, inputs, selects, switches, tabs, tooltips, and popovers. Feature
 components compose these wrappers and retain domain-specific state, labels, and actions. Browser
@@ -40,6 +46,13 @@ components own application actions through normal React callbacks (`onClick`, `o
 related typed props). Avoid fixed JavaScript delays to imitate popup exit lifecycle. Preserve
 accessible names, keyboard operation, focus restoration, portal theme inheritance, reduced-motion
 behavior, and forced-colors feedback.
+
+Dropdown Menu roots use non-modal behavior for ordinary action menus. Modal dialogs retain their
+Base UI focus ownership; the compact Inspector is a non-modal workbench pane and applies `inert`
+plus `aria-hidden` immediately on close while its CSS exit completes. All popup transition utilities
+include the animated properties and reduced-motion override. Axe 4.14 currently reports Base UI
+1.9.0's `aria-hidden`/`tabindex="0"` Menu focus guards while an ordinary menu is open; this known
+R5 finding is recorded in the [WP1-R1 coverage migration ledger](ui/wp1-r1-coverage-migration.md).
 
 ## Type and platform boundaries
 
@@ -60,7 +73,8 @@ selection behavior. `src/appearance/graphiteThemeTokens.test.ts` checks the sema
 contract. `tests/e2e/theme-accessibility.spec.ts`, `settings-diagnostics.spec.ts`,
 `playback-confirmation-layout.spec.ts`, `update-modal-geometry.spec.ts`, and the workbench and
 library suites cover rendered tokens, dialogs, selection, focus, responsive geometry, and key
-application states.
+application states. The deleted Graphite and Light suite migration is mapped in the
+[WP1-R1 coverage migration ledger](ui/wp1-r1-coverage-migration.md).
 
 Run from `apps/desktop/` with the pinned Bun version:
 

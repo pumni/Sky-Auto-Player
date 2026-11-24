@@ -1,5 +1,6 @@
 import { LoaderCircle, Pause, Play, Shuffle, SkipBack, SkipForward, Square } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
+import { Button } from '../ui/button';
 import type { DesktopStoreHook } from '../../state/store';
 import {
   nextPlaybackPosition,
@@ -124,8 +125,10 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     >
       <div className="relative h-11 min-w-0" data-testid="player-controls-row">
         <div className="absolute inset-0" data-testid="player-core-controls">
-          <button
-            className={`absolute left-[calc(50%-var(--player-primary-half)-var(--player-control-gap)-var(--player-secondary-target)-var(--player-control-gap)-var(--player-secondary-target))] top-1/2 grid size-[34px] -translate-y-1/2 place-items-center rounded-full border-0 bg-transparent p-0 transition-colors duration-fast hover:bg-control-hover disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:bg-transparent ${playback.shuffleEnabled ? 'text-accent-ink hover:text-accent-ink' : 'text-text-secondary hover:text-foreground'}`}
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="absolute left-[calc(50%-var(--player-primary-half)-var(--player-control-gap)-var(--player-secondary-target)-var(--player-control-gap)-var(--player-secondary-target))] top-1/2 size-[34px] -translate-y-1/2 rounded-full p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:!bg-transparent aria-pressed:text-accent-ink"
             type="button"
             aria-label="Shuffle"
             aria-pressed={playback.shuffleEnabled}
@@ -134,9 +137,11 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             onClick={() => setShuffleEnabled(!playback.shuffleEnabled)}
           >
             <Shuffle size={16} aria-hidden="true" />
-          </button>
-          <button
-            className="absolute left-[calc(50%-var(--player-primary-half)-var(--player-control-gap)-var(--player-secondary-target))] top-1/2 grid size-[34px] -translate-y-1/2 place-items-center rounded-full border-0 bg-transparent p-0 text-text-secondary transition-colors duration-fast hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:bg-transparent"
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="absolute left-[calc(50%-var(--player-primary-half)-var(--player-control-gap)-var(--player-secondary-target))] top-1/2 size-[34px] -translate-y-1/2 rounded-full p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:!bg-transparent"
             type="button"
             aria-label="Previous"
             title="Previous"
@@ -144,48 +149,57 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             onClick={() => void previous()}
           >
             <SkipBack size={16} aria-hidden="true" />
-          </button>
+          </Button>
           <div
             className="absolute left-1/2 top-1/2 grid size-[42px] -translate-x-1/2 -translate-y-1/2 place-items-center"
             data-testid="player-primary-slot"
           >
             {primaryPending ? (
-              <button
+              <Button
                 data-slot="primary-transport"
-                className="size-[42px] animate-spin rounded-full disabled:text-control-disabled disabled:opacity-100 motion-reduce:animate-none"
+                variant="default"
+                size="transport"
+                className="disabled:opacity-100"
                 type="button"
                 aria-label={transportStatus ?? 'Playback transition pending'}
                 title={transportStatus ?? 'Playback transition pending'}
                 disabled
               >
-                <LoaderCircle size={18} aria-hidden="true" />
-              </button>
+                <LoaderCircle
+                  className="animate-spin motion-reduce:animate-none"
+                  size={18}
+                  aria-hidden="true"
+                />
+              </Button>
             ) : active && playback.state === 'playing' ? (
-              <button
+              <Button
                 data-slot="primary-transport"
-                className="size-[42px] rounded-full"
+                variant="default"
+                size="transport"
                 type="button"
                 aria-label="Pause"
                 title="Pause"
                 onClick={() => void pause()}
               >
                 <Pause size={18} aria-hidden="true" />
-              </button>
+              </Button>
             ) : active && playback.state === 'paused' ? (
-              <button
+              <Button
                 data-slot="primary-transport"
-                className="size-[42px] rounded-full"
+                variant="default"
+                size="transport"
                 type="button"
                 aria-label="Resume"
                 title="Resume"
                 onClick={() => void resume()}
               >
                 <Play size={18} aria-hidden="true" />
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
                 data-slot="primary-transport"
-                className="size-[42px] rounded-full"
+                variant="default"
+                size="transport"
                 type="button"
                 aria-label={
                   primaryCanStartPrepared && playback.prepared?.config.dry_run
@@ -212,11 +226,13 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
                 }
               >
                 <Play size={18} aria-hidden="true" />
-              </button>
+              </Button>
             )}
           </div>
-          <button
-            className="absolute left-[calc(50%+var(--player-primary-half)+var(--player-control-gap))] top-1/2 grid size-[34px] -translate-y-1/2 place-items-center rounded-full border-0 bg-transparent p-0 text-text-secondary transition-colors duration-fast hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:bg-transparent"
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="absolute left-[calc(50%+var(--player-primary-half)+var(--player-control-gap))] top-1/2 size-[34px] -translate-y-1/2 rounded-full p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:!bg-transparent"
             type="button"
             aria-label="Next"
             title="Next"
@@ -224,10 +240,12 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             onClick={() => void next()}
           >
             <SkipForward size={16} aria-hidden="true" />
-          </button>
+          </Button>
         </div>
-        <button
-          className="absolute left-[calc(50%+var(--player-primary-half)+var(--player-control-gap)+var(--player-secondary-target)+var(--player-stop-gap))] top-1/2 grid size-[34px] -translate-y-1/2 place-items-center rounded-full border-0 bg-transparent p-0 text-text-secondary transition-colors duration-fast hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:bg-transparent"
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="absolute left-[calc(50%+var(--player-primary-half)+var(--player-control-gap)+var(--player-secondary-target)+var(--player-stop-gap))] top-1/2 size-[34px] -translate-y-1/2 rounded-full p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:!bg-transparent"
           type="button"
           aria-label="Stop"
           title="Stop"
@@ -235,7 +253,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
           onClick={() => void stop()}
         >
           <Square size={14} aria-hidden="true" />
-        </button>
+        </Button>
       </div>
       <PlayerTransportTimeline useStore={useStore} transportStatus={transportStatus} />
     </div>
@@ -292,7 +310,7 @@ function PlayerTransportTimeline({
         )}
       </div>
       <progress
-        className="block h-1 w-full self-center appearance-none overflow-hidden rounded-full border-0 bg-surface accent-primary aria-disabled:bg-surface"
+        className="block h-1 w-full self-center appearance-none overflow-hidden rounded-full border-0 bg-control-hover accent-primary aria-disabled:bg-control-hover"
         value={timelineSongExists ? currentUs : 0}
         max={timelineSongExists ? totalUs || 1 : 1}
         aria-label={progressLabel}

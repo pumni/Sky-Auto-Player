@@ -439,6 +439,19 @@ test('update dialog traps keyboard focus and restores it after Escape and outsid
   await expect(trigger).toBeFocused();
 });
 
+test('lazy update dialog stays mounted through its Base UI exit transition', async ({ page }) => {
+  await page.goto('/?mockReleaseNotes=short');
+  const trigger = page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ });
+  await trigger.click();
+
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole('button', { name: 'Later' }).click();
+  await expect.poll(() => dialog.getAttribute('data-ending-style')).not.toBeNull();
+  await expect(dialog).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
 test('busy update cannot close from Escape, outside click, or the header button', async ({
   page,
 }) => {

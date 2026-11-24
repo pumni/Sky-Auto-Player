@@ -46,7 +46,7 @@ function CollapsedPlaylistTile({
           <Button
             variant="ghost"
             size="icon"
-            className="size-10 rounded-control border-0 bg-transparent p-0 hover:bg-control-hover data-[active=true]:bg-selection"
+            className="relative size-10 rounded-control border-0 bg-transparent p-0 after:absolute after:inset-y-2 after:left-0 after:w-[3px] after:rounded-r-full after:bg-accent-ink after:opacity-0 hover:bg-control-hover data-[active=true]:bg-selection data-[active=true]:hover:bg-selection data-[active=true]:after:opacity-100"
             type="button"
             aria-label={accessibleName}
             {...(active ? { 'aria-current': 'page' as const } : {})}
@@ -198,14 +198,15 @@ export function LibraryNavigator({
             Couldn’t check Built-in Songs or playlists.
             {navigation.lastError ? ` ${navigation.lastError}` : ''}
           </p>
-          <button
+          <Button
+            variant="outline"
             className="h-9 justify-center border-border text-[13px] text-foreground"
             type="button"
             aria-label="Retry library navigation"
             onClick={() => void useStore.getState().loadLibraryNavigation()}
           >
             Retry
-          </button>
+          </Button>
         </div>
       )}
       {!collapsed && navigation.loadState === 'ready' && !navigation.builtinAvailable && (
@@ -298,22 +299,21 @@ export function LibraryNavigator({
             })}
             {navigation.loadState === 'ready' && navigation.playlistOrder.length === 0 && (
               <div data-slot="library-empty-playlists" className="mx-2 mt-2 grid min-w-0 gap-2">
-                {(!navigation.builtinAvailable || navigation.builtinSongCount === 0) && (
-                  <p
-                    data-slot="library-empty-playlists-guidance"
-                    className="m-0 text-xs leading-relaxed text-text-secondary"
-                  >
-                    Create a playlist to collect songs or import local sheet files and folders.
-                  </p>
-                )}
-                <button
+                <p
+                  data-slot="library-empty-playlists-guidance"
+                  className="m-0 text-xs leading-relaxed text-text-secondary"
+                >
+                  Create a playlist to collect songs or import local sheet files and folders.
+                </p>
+                <Button
+                  variant="default"
                   data-slot="library-empty-playlists-create"
-                  className="h-9 justify-center border-border text-[13px] text-foreground"
+                  className="h-9 justify-center text-[13px]"
                   type="button"
                   onClick={() => setCreateOpen(true)}
                 >
                   Create playlist
-                </button>
+                </Button>
               </div>
             )}
           </LibrarySection>

@@ -61,7 +61,7 @@ function SelectContent({
           data-slot="select-content"
           data-align-trigger={alignItemWithTrigger}
           className={cn(
-            'relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-popover border border-border bg-popover text-popover-foreground shadow-xl transition-[opacity,transform] duration-fast ease-enter data-[starting-style]:scale-[0.98] data-[starting-style]:opacity-0 data-[ending-style]:scale-[0.98] data-[ending-style]:opacity-0 motion-reduce:transition-none',
+            'relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-popover border border-border bg-popover text-popover-foreground shadow-xl transition-[opacity,scale,translate] duration-[150ms] ease-enter data-[starting-style]:scale-[0.98] data-[starting-style]:opacity-0 data-[starting-style]:duration-[150ms] data-[ending-style]:scale-[0.98] data-[ending-style]:opacity-0 data-[ending-style]:duration-[100ms] data-[ending-style]:ease-exit motion-reduce:transition-none',
             className,
           )}
           {...props}

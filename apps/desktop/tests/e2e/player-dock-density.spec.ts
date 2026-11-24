@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { expectPlayerBarGeometry, readPlayerBarGeometry } from './testHelpers';
 
 for (const viewport of [
   { width: 1649, height: 927 },
@@ -122,5 +123,156 @@ for (const viewport of [
       expect(popoverBounds.y).toBeGreaterThanOrEqual(0);
       expect(popoverBounds.y + popoverBounds.height).toBeLessThanOrEqual(viewport.height);
     }
+
+    const tempoSelect = profile.getByRole('combobox', { name: 'Tempo' });
+    await tempoSelect.focus();
+    await page.keyboard.press('ArrowDown');
+    await expect(page.getByRole('listbox')).toBeVisible();
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('listbox')).toBeHidden();
   });
 }
+
+test('compact dock preserves title, active status, test mode, progress, and centered transport', async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
+    const dock = page.getByRole('contentinfo', { name: 'Player controls' });
+    await page.getByRole('row', { name: /Blue Bird/ }).click();
+    await dock.getByRole('button', { name: 'Configure playback profile' }).click();
+    const profile = page.getByRole('dialog', { name: 'Playback profile' });
+    await profile.getByRole('button', { name: 'Test playback (no input)' }).click();
+    await expect(dock.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
+
+    const measurements = await page.evaluate(() => {
+      const dock = document.querySelector<HTMLElement>('[data-slot="player-dock"]');
+      const info = dock?.querySelector<HTMLElement>('[role="group"][aria-label^="Playback for"]');
+      const title = info?.querySelector<HTMLElement>('strong');
+      const status = info?.querySelector<HTMLElement>('[data-slot="player-track-status"]');
+      const badge = info?.querySelector<HTMLElement>('[data-slot="status-badge"]');
+      const noteIcon = info?.querySelector<HTMLElement>('span[aria-hidden="true"]');
+      const progress = dock?.querySelector<HTMLElement>('[data-slot="player-timeline"] progress');
+      const bounds = (element: HTMLElement | null | undefined) => {
+        if (!element) return null;
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x, right: rect.right, width: rect.width, height: rect.height };
+      };
+      return {
+        viewportWidth: innerWidth,
+        dock: bounds(dock),
+        title: title ? { ...bounds(title)!, clipped: title.scrollWidth > title.clientWidth } : null,
+        status: status
+          ? {
+              ...bounds(status)!,
+              clipped: status.scrollWidth > status.clientWidth,
+              text: status.textContent?.trim() ?? '',
+            }
+          : null,
+        badge: badge
+          ? {
+              ...bounds(badge)!,
+              text: [...badge.childNodes]
+                .map((node) => {
+                  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? '';
+                  if (node instanceof HTMLElement && getComputedStyle(node).display !== 'none') {
+                    return node.textContent ?? '';
+                  }
+                  return '';
+                })
+                .join('')
+                .trim(),
+            }
+          : null,
+        decorativeNoteIcon: noteIcon ? getComputedStyle(noteIcon).display !== 'none' : false,
+        dockBackground: dock ? getComputedStyle(dock).backgroundColor : null,
+        progressTrack: progress
+          ? getComputedStyle(progress, '::-webkit-progress-bar').backgroundColor
+          : null,
+        documentWidth: document.documentElement.scrollWidth,
+      };
+    });
+    expect(measurements.dock?.height).toBe(92);
+    expect(measurements.title?.clipped).toBe(false);
+    expect(measurements.status?.clipped).toBe(false);
+    expect(measurements.status?.text).toBe('Playing');
+    expect(measurements.badge?.text).toBe('Test');
+    expect(measurements.decorativeNoteIcon).toBe(false);
+    expect(measurements.progressTrack).not.toBe(measurements.dockBackground);
+    expect(measurements.documentWidth).toBeLessThanOrEqual(viewport.width);
+    if (measurements.status && measurements.badge) {
+      expect(measurements.status.right).toBeLessThanOrEqual(measurements.badge.x + 1);
+    }
+
+    const geometry = await readPlayerBarGeometry(page);
+    expectPlayerBarGeometry(geometry);
+    await page.mouse.move(0, 0);
+  }
+});
+
+test('compact dock keeps a prepared risk label and confirmation state visible at 800 and 640', async ({
+  page,
+}) => {
+  for (const viewport of [
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/?mockPlaybackDurationMs=120000');
+    const dock = page.getByRole('contentinfo', { name: 'Player controls' });
+    await page.getByRole('row', { name: /Aurora Landing/ }).click();
+    await dock.getByRole('button', { name: 'Play', exact: true }).click();
+    await expect(page.getByRole('group', { name: 'Playback confirmation' })).toBeVisible();
+    const info = dock.getByRole('group', { name: 'Playback for Aurora Landing' });
+    const title = info.locator('strong');
+    const status = info.locator('[data-slot="player-track-status"]');
+    const risk = info.locator('[data-slot="status-badge"]');
+    await expect(title).toHaveText('Aurora Landing');
+    await expect(status).toBeVisible();
+    await expect(risk).toHaveText('Medium risk');
+
+    const state = await page.evaluate(() => {
+      const dock = document.querySelector<HTMLElement>('[data-slot="player-dock"]');
+      const info = dock?.querySelector<HTMLElement>('[role="group"][aria-label^="Playback for"]');
+      const title = info?.querySelector<HTMLElement>('strong');
+      const status = info?.querySelector<HTMLElement>('[data-slot="player-track-status"]');
+      const risk = info?.querySelector<HTMLElement>('[data-slot="status-badge"]');
+      const rect = (element: HTMLElement | null | undefined) => {
+        if (!element) return null;
+        const box = element.getBoundingClientRect();
+        return { x: box.x, right: box.right, y: box.y, bottom: box.bottom };
+      };
+      return {
+        dock: rect(dock),
+        title: rect(title),
+        titleClipped: title ? title.scrollWidth > title.clientWidth : true,
+        status: rect(status),
+        statusClipped: status ? status.scrollWidth > status.clientWidth : true,
+        risk: rect(risk),
+        riskClipped: risk ? risk.scrollWidth > risk.clientWidth : true,
+        width: document.documentElement.scrollWidth,
+      };
+    });
+    expect(state.dock?.bottom).toBe(viewport.height);
+    expect(state.titleClipped, JSON.stringify(state)).toBe(false);
+    expect(state.statusClipped, JSON.stringify(state)).toBe(false);
+    expect(state.riskClipped, JSON.stringify(state)).toBe(false);
+    expect(state.width).toBeLessThanOrEqual(viewport.width);
+    for (const element of [state.title, state.status, state.risk]) {
+      expect(element).not.toBeNull();
+      if (element && state.dock) {
+        expect(element.x).toBeGreaterThanOrEqual(state.dock.x);
+        expect(element.right).toBeLessThanOrEqual(state.dock.right);
+        expect(element.y).toBeGreaterThanOrEqual(state.dock.y);
+        expect(element.bottom).toBeLessThanOrEqual(state.dock.bottom);
+      }
+    }
+    expectPlayerBarGeometry(await readPlayerBarGeometry(page));
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await expect(page.getByRole('group', { name: 'Playback confirmation' })).toHaveCount(0);
+  }
+});

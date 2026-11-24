@@ -10,6 +10,37 @@ const viewports = [
 const scaleFactors = [1, 1.25, 1.5] as const;
 const longPlaylistName = 'Long playlist scope label for responsive titlebar geometry coverage';
 
+test('titlebar icon actions expose their update, reload, and settings guidance', async ({
+  page,
+}) => {
+  await page.goto('/?mockReleaseNotes=short');
+
+  const update = page.getByRole('button', { name: 'Open update 4.0.0-alpha.2-mock' });
+  await expect(update).toBeVisible();
+  const updateDialog = page.getByRole('dialog', { name: 'Software update' });
+  if (await updateDialog.isVisible()) {
+    await updateDialog.getByRole('button', { name: 'Close update' }).click();
+    await expect(updateDialog).toBeHidden();
+  }
+
+  await update.hover();
+  await expect(
+    page.getByRole('tooltip', {
+      name: 'Update available: 4.0.0-alpha.2-mock. Open update details.',
+    }),
+  ).toHaveText('Update available: 4.0.0-alpha.2-mock. Open update details.');
+  await page.mouse.move(0, 0);
+
+  const reload = page.getByRole('button', { name: 'Reload library' });
+  await reload.hover();
+  await expect(page.getByRole('tooltip', { name: 'Reload library' })).toHaveText('Reload library');
+  await page.mouse.move(0, 0);
+
+  const settings = page.getByRole('button', { name: 'Open settings' });
+  await settings.focus();
+  await expect(page.getByRole('tooltip', { name: 'Open settings' })).toHaveText('Open settings');
+});
+
 async function createLongPlaylistSource(page: Page, updateAvailable: boolean) {
   const updateFixture = updateAvailable ? '' : '&mockUpdateState=current';
   await page.goto(`/?mockPlaybackDurationMs=120000${updateFixture}`);

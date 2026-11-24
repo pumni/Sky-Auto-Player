@@ -4,6 +4,7 @@ import type { DesktopStoreHook } from '../../state/store';
 import { playbackIssuePresentation } from '../../state/store';
 import { admissionDecisionLabel } from './playerFormatting';
 import { TimingAdvisory } from './TimingAdvisory';
+import { Button } from '../ui/button';
 
 interface PlaybackAdmissionProps {
   useStore: DesktopStoreHook;
@@ -89,7 +90,8 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                     data-slot="admission-option"
                     key={decision.decision}
                   >
-                    <button
+                    <Button
+                      variant={isPrimary ? 'default' : 'outline'}
                       className="h-full min-h-12 w-full justify-center whitespace-normal px-2.5 py-1.5 text-center text-xs leading-[1.3]"
                       type="button"
                       disabled={transportOperation !== null}
@@ -103,7 +105,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                       onClick={() => void start(decision.decision)}
                     >
                       {admissionDecisionLabel(decision.decision, decision.label)}
-                    </button>
+                    </Button>
                     <details
                       data-slot="admission-option-estimate"
                       className="min-w-0 text-[11px] text-text-secondary"
@@ -118,7 +120,8 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
               });
             })()}
           </div>
-          <button
+          <Button
+            variant="ghost"
             className="min-h-8 min-w-[100px] justify-self-end"
             type="button"
             title="Dismiss the prepared playback without starting"
@@ -126,7 +129,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
             onClick={cancel}
           >
             Not now
-          </button>
+          </Button>
         </div>
       </section>
     );
@@ -185,7 +188,8 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
       </div>
       <div className="flex flex-none flex-wrap justify-end gap-2 max-[700px]:justify-start">
         {statusRecovery && (
-          <button
+          <Button
+            variant="outline"
             className="inline-flex min-h-8 items-center justify-center whitespace-nowrap px-2.5 text-xs"
             type="button"
             aria-label="Retry status"
@@ -198,37 +202,40 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
               )}
             </span>
             <span>Retry status</span>
-          </button>
+          </Button>
         )}
         {canStop && (
-          <button
+          <Button
+            variant="destructive"
             className="inline-flex min-h-8 items-center justify-center whitespace-nowrap px-2.5 text-xs"
             type="button"
             disabled={transportOperation === 'stopping'}
             onClick={() => void stop()}
           >
             Stop playback
-          </button>
+          </Button>
         )}
         {canTryAgain && (
-          <button
+          <Button
+            variant="default"
             className="inline-flex min-h-8 items-center justify-center whitespace-nowrap px-2.5 text-xs"
             type="button"
             disabled={transportOperation !== null}
             onClick={() => void tryAgain()}
           >
             Try again
-          </button>
+          </Button>
         )}
         {blockedMessage && (
-          <button
+          <Button
+            variant="ghost"
             className="inline-flex min-h-8 items-center justify-center whitespace-nowrap px-2.5 text-xs"
             type="button"
             disabled={transportOperation !== null}
             onClick={cancel}
           >
             Dismiss
-          </button>
+          </Button>
         )}
       </div>
     </section>

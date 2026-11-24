@@ -13,3 +13,6 @@ bun run ui:refresh
 This executes the existing opt-in Playwright visual capture, checks four PNGs, and replaces `current/` plus its manifest. It requires the UI source and tests to be committed first. The images show deterministic browser mock state, **not a native Windows/Tauri qualification**; the 640x448 overlay is browser-only. Native visual or input claims require separate native evidence and should never be inferred from these images.
 
 Historic visual reviews remain available through immutable commit-pinned links in their original evidence reports. Review screenshots, one-off comparison captures, traces, and logs belong in ignored `test-results/` or PR/release artifacts—not a continually expanding set of screenshot folders under `docs/evidence/`.
+
+The WP1-R1 coverage migration and its outstanding Base UI open-menu Axe finding are documented in
+the [coverage migration ledger](wp1-r1-coverage-migration.md).

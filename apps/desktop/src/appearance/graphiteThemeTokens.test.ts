@@ -5,6 +5,7 @@ import { PALETTES } from '../components/settings/SettingsCategoryContent';
 
 const globalsCss = readFileSync(resolve(__dirname, '../styles/globals.css'), 'utf8');
 const startupCss = readFileSync(resolve(__dirname, '../../public/startup.css'), 'utf8');
+const tailwindTheme = block(/@theme inline\s*\{([\s\S]*?)\r?\n\}/);
 
 function block(selector: RegExp, source = globalsCss): Record<string, string> {
   const declarations = source.match(selector)?.[1];
@@ -79,6 +80,18 @@ describe('Sky Graphite 2 semantic theme', () => {
     expect(light['--primary-hover']).toBe('#3248ba');
     expect(light['--primary-pressed']).toBe('#293da3');
     expect(light['--primary-foreground']).toBe('#fff');
+  });
+
+  it('maps hover, pressed, destructive, and scrim tokens into Tailwind utilities', () => {
+    for (const [utility, token] of [
+      ['--color-primary-hover', '--primary-hover'],
+      ['--color-primary-pressed', '--primary-pressed'],
+      ['--color-destructive-hover', '--destructive-hover'],
+      ['--color-destructive-pressed', '--destructive-pressed'],
+      ['--color-scrim', '--scrim'],
+    ] as const) {
+      expect(tailwindTheme[utility], utility).toBe(`var(${token})`);
+    }
   });
 
   it('keeps text and primary action pairs above WCAG AA contrast', () => {

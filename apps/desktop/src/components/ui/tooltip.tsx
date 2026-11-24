@@ -38,7 +38,7 @@ function TooltipContent({
           role="tooltip"
           data-slot="tooltip-content"
           className={cn(
-            'z-50 inline-flex w-fit max-w-xs origin-(--transform-origin) items-center gap-1.5 rounded-control border border-border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg transition-[opacity,transform] duration-fast ease-enter data-[starting-style]:opacity-0 data-[starting-style]:scale-[0.98] data-[ending-style]:opacity-0 data-[ending-style]:scale-[0.98] motion-reduce:transition-none',
+            'z-50 inline-flex w-fit max-w-xs origin-(--transform-origin) items-center gap-1.5 rounded-control border border-border bg-popover px-2.5 py-1.5 text-xs text-popover-foreground shadow-lg transition-[opacity,scale,translate] duration-fast ease-enter data-[starting-style]:opacity-0 data-[starting-style]:scale-[0.98] data-[starting-style]:duration-[100ms] data-[ending-style]:opacity-0 data-[ending-style]:scale-[0.98] data-[ending-style]:duration-[80ms] data-[ending-style]:ease-exit motion-reduce:transition-none',
             className,
           )}
           {...props}

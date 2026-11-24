@@ -3,16 +3,18 @@ import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from 'cn';
 
 const buttonVariants = cva(
-  "group/button inline-flex shrink-0 items-center justify-center rounded-control border border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-colors duration-fast ease-standard outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background active:not-aria-[haspopup]:translate-y-px disabled:pointer-events-none disabled:opacity-50 aria-invalid:ring-2 aria-invalid:ring-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+  "group/button inline-flex shrink-0 items-center justify-center rounded-control border-0 border-transparent bg-clip-padding text-sm font-medium whitespace-nowrap transition-colors duration-fast ease-standard outline-none select-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-invalid:ring-2 aria-invalid:ring-destructive [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 motion-reduce:transition-none",
   {
     variants: {
       variant: {
         default:
           'bg-primary text-primary-foreground hover:bg-primary-hover active:bg-primary-pressed',
-        outline: 'border-border bg-background hover:bg-secondary aria-expanded:bg-secondary',
+        outline:
+          'border border-border bg-background hover:bg-secondary active:bg-control-pressed aria-expanded:bg-secondary',
         secondary:
           'bg-secondary text-secondary-foreground hover:bg-control-hover active:bg-control-pressed',
-        ghost: 'hover:bg-accent hover:text-accent-foreground aria-expanded:bg-accent',
+        ghost:
+          'hover:bg-accent hover:text-accent-foreground active:bg-control-pressed aria-expanded:bg-accent',
         destructive:
           'bg-destructive text-destructive-foreground hover:bg-destructive-hover active:bg-destructive-pressed',
         link: 'text-primary underline-offset-4 hover:underline',
@@ -27,6 +29,7 @@ const buttonVariants = cva(
         'icon-xs': "size-6 rounded-control [&_svg:not([class*='size-'])]:size-3",
         'icon-sm': 'size-8 rounded-control',
         'icon-lg': 'size-10',
+        transport: 'size-[42px] rounded-full',
       },
     },
     defaultVariants: {

@@ -29,10 +29,16 @@ const CATEGORY_ICONS: Record<SettingsCategory, LucideIcon> = {
 interface SettingsPanelProps {
   bootstrap: Bootstrap;
   useStore: DesktopStoreHook;
-  children?: ReactNode;
+  onUpdateDialogOpen?: () => void;
+  updateDialog?: ReactNode;
 }
 
-export function SettingsPanel({ bootstrap, useStore, children }: SettingsPanelProps) {
+export function SettingsPanel({
+  bootstrap,
+  useStore,
+  onUpdateDialogOpen,
+  updateDialog,
+}: SettingsPanelProps) {
   const settings = useStore((store: StoreState) => store.settings);
   const settingsError = useStore((store: StoreState) => store.settingsError);
   const open = useStore((store: StoreState) => store.settingsOpen);
@@ -80,9 +86,11 @@ export function SettingsPanel({ bootstrap, useStore, children }: SettingsPanelPr
               const Icon = CATEGORY_ICONS[item.id];
               const isGroupStart = item.id === 'donate';
               return (
-                <button
+                <Button
+                  variant="ghost"
+                  size="sm"
                   key={item.id}
-                  className={`relative flex min-h-[34px] items-center gap-2 rounded-control border-0 bg-transparent px-3 text-left text-[13px] font-medium text-text-secondary transition-colors duration-fast hover:bg-control-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring after:absolute after:inset-y-[7px] after:left-0.5 after:w-[3px] after:rounded-full after:bg-accent-ink after:opacity-0 data-[active=true]:bg-selection data-[active=true]:text-accent-ink data-[active=true]:after:opacity-100 max-[600px]:flex-none ${isGroupStart ? "mt-2.5 before:absolute before:-top-1.5 before:left-2 before:right-2 before:h-px before:bg-border before:content-[''] max-[600px]:mt-0" : ''}`}
+                  className={`relative flex min-h-[34px] justify-start gap-2 px-3 text-left text-[13px] font-medium text-text-secondary hover:bg-control-hover hover:text-foreground after:absolute after:inset-y-[7px] after:left-0.5 after:w-[3px] after:rounded-full after:bg-accent-ink after:opacity-0 data-[active=true]:bg-selection data-[active=true]:text-accent-ink data-[active=true]:after:opacity-100 motion-reduce:transition-none max-[600px]:flex-none ${isGroupStart ? "mt-2.5 before:absolute before:-top-1.5 before:left-2 before:right-2 before:h-px before:bg-border before:content-[''] max-[600px]:mt-0" : ''}`}
                   type="button"
                   aria-current={category === item.id ? 'page' : undefined}
                   data-active={category === item.id}
@@ -91,7 +99,7 @@ export function SettingsPanel({ bootstrap, useStore, children }: SettingsPanelPr
                 >
                   <Icon size={15} className="shrink-0 opacity-80" aria-hidden="true" />
                   <span>{item.label}</span>
-                </button>
+                </Button>
               );
             })}
           </nav>
@@ -106,6 +114,7 @@ export function SettingsPanel({ bootstrap, useStore, children }: SettingsPanelPr
               bootstrap={bootstrap}
               settings={settings}
               useStore={useStore}
+              {...(onUpdateDialogOpen ? { onUpdateDialogOpen } : {})}
             />
           </div>
         </div>
@@ -124,7 +133,7 @@ export function SettingsPanel({ bootstrap, useStore, children }: SettingsPanelPr
             <span aria-hidden="true" />
           )}
         </div>
-        {children}
+        {updateDialog}
       </DialogContent>
     </Dialog>
   );

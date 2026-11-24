@@ -57,6 +57,7 @@ export function App({ bridge }: AppProps) {
   const updateDialogOpen = useStore((store) => store.update.dialogOpen);
   const windowControls = useMemo(() => createWindowControls(), []);
   const [settingsMounted, setSettingsMounted] = useState(false);
+  const [updateMounted, setUpdateMounted] = useState(false);
   const { mode: systemMode, ready: appearanceReady } = useSystemAppearance();
 
   useEffect(() => {
@@ -117,16 +118,26 @@ export function App({ bridge }: AppProps) {
               searchInputRef={searchInputRef}
               windowControls={windowControls}
               onSettingsOpen={() => setSettingsMounted(true)}
+              onUpdateOpen={() => setUpdateMounted(true)}
             />
             <Workbench useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
             <PlayerBar useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
             <Suspense fallback={null}>
               {(settingsOpen || settingsMounted) && (
-                <SettingsPanel bootstrap={bootstrap} useStore={useStore}>
-                  {settingsOpen && updateDialogOpen && <UpdateDialog useStore={useStore} />}
-                </SettingsPanel>
+                <SettingsPanel
+                  bootstrap={bootstrap}
+                  useStore={useStore}
+                  onUpdateDialogOpen={() => setUpdateMounted(true)}
+                  updateDialog={
+                    settingsOpen && (updateMounted || updateDialogOpen) ? (
+                      <UpdateDialog useStore={useStore} />
+                    ) : null
+                  }
+                />
               )}
-              {updateDialogOpen && !settingsOpen && <UpdateDialog useStore={useStore} />}
+              {!settingsOpen && (updateMounted || updateDialogOpen) && (
+                <UpdateDialog useStore={useStore} />
+              )}
             </Suspense>
           </div>
         )}

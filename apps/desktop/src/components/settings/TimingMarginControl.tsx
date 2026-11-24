@@ -1,4 +1,5 @@
 import { Minus, Plus } from 'lucide-react';
+import { Button } from '../ui/button';
 import { useEffect, useRef, useState } from 'react';
 import type { PlaybackOptionSets } from '../../bridge/DesktopBridge';
 
@@ -122,27 +123,31 @@ export function TimingMarginControl({
         <span className="text-xs font-medium text-text-secondary">Timing Margin</span>
       </div>
       <div className="grid h-8 grid-cols-[32px_minmax(0,1fr)_32px] items-center gap-1 rounded-control border border-border bg-surface px-1">
-        <button
-          className="grid size-7 place-items-center rounded-control border-0 bg-transparent p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:opacity-50"
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="size-7 rounded-control p-0 text-text-secondary hover:bg-control-hover hover:text-foreground"
           type="button"
           aria-label="Decrease Timing Margin"
           disabled={requestedValue <= min}
           onClick={() => requestValue(Math.max(min, requestedValue - step))}
         >
           <Minus size={14} aria-hidden="true" />
-        </button>
+        </Button>
         <output className="text-center text-xs tabular-nums text-foreground" aria-live="polite">
           {requestedValue} µs
         </output>
-        <button
-          className="grid size-7 place-items-center rounded-control border-0 bg-transparent p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:opacity-50"
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="size-7 rounded-control p-0 text-text-secondary hover:bg-control-hover hover:text-foreground"
           type="button"
           aria-label="Increase Timing Margin"
           disabled={requestedValue >= max}
           onClick={() => requestValue(Math.min(max, requestedValue + step))}
         >
           <Plus size={14} aria-hidden="true" />
-        </button>
+        </Button>
       </div>
       {density === 'full' && (
         <span className="col-span-full text-xs text-muted-foreground">

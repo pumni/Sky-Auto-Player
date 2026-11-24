@@ -8,6 +8,7 @@ import { createWindowControls, type WindowControls } from '../../platform/window
 import { GlobalSearch } from './GlobalSearch';
 import { WindowCaptionControls } from './WindowCaptionControls';
 import { Button } from '../ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 
 interface AppTitleBarProps {
   bootstrap: Bootstrap;
@@ -16,6 +17,7 @@ interface AppTitleBarProps {
   settingsTriggerRef?: RefObject<HTMLButtonElement | null>;
   windowControls?: WindowControls;
   onSettingsOpen?: () => void;
+  onUpdateOpen?: () => void;
 }
 
 export function AppTitleBar({
@@ -24,6 +26,7 @@ export function AppTitleBar({
   settingsTriggerRef,
   windowControls,
   onSettingsOpen,
+  onUpdateOpen,
 }: AppTitleBarProps) {
   const controls = useMemo(() => windowControls ?? createWindowControls(), [windowControls]);
   const reload = useStore((store: DesktopStore) => store.reloadLibrary);
@@ -65,6 +68,13 @@ export function AppTitleBar({
             />
             <span className="sr-only">Sky Auto Player</span>
           </div>
+          <span
+            className="ml-2 whitespace-nowrap text-[13px] font-semibold text-foreground max-[1100px]:hidden"
+            data-slot="titlebar-product-name"
+            data-tauri-drag-region="deep"
+          >
+            Sky Auto Player
+          </span>
         </div>
         <div
           className="h-full min-w-6 flex-1"
@@ -92,15 +102,19 @@ export function AppTitleBar({
         >
           <div className="flex min-w-0 items-center gap-1 px-1" data-tauri-drag-region="false">
             {update.state === 'available' && (
-              <span
-                className="relative inline-flex size-[34px] flex-none"
-                title={`Update available: ${updateVersion}. Open update details.`}
-              >
-                <Button
-                  variant="ghost"
-                  className="relative size-[34px]"
-                  aria-label={`Open update ${updateVersion}`}
-                  onClick={() => setUpdateDialogOpen(true)}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      className="relative size-[34px]"
+                      aria-label={`Open update ${updateVersion}`}
+                      onClick={() => {
+                        onUpdateOpen?.();
+                        setUpdateDialogOpen(true);
+                      }}
+                    />
+                  }
                 >
                   <Download size={15} aria-hidden="true" />
                   <span
@@ -109,31 +123,48 @@ export function AppTitleBar({
                     aria-hidden="true"
                   />
                   <span className="sr-only">Update available</span>
-                </Button>
-              </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {`Update available: ${updateVersion}. Open update details.`}
+                </TooltipContent>
+              </Tooltip>
             )}
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              className="size-[34px]"
-              aria-label="Reload library"
-              onClick={() => void reload()}
-            >
-              <RefreshCw size={17} aria-hidden="true" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              ref={settingsTriggerRef}
-              className="size-[34px]"
-              aria-label="Open settings"
-              onClick={() => {
-                onSettingsOpen?.();
-                setSettingsOpen(true);
-              }}
-            >
-              <Settings size={17} aria-hidden="true" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="size-[34px]"
+                    aria-label="Reload library"
+                    onClick={() => void reload()}
+                  />
+                }
+              >
+                <RefreshCw size={17} aria-hidden="true" />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Reload library</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    ref={settingsTriggerRef}
+                    className="size-[34px]"
+                    aria-label="Open settings"
+                    onClick={() => {
+                      onSettingsOpen?.();
+                      setSettingsOpen(true);
+                    }}
+                  />
+                }
+              >
+                <Settings size={17} aria-hidden="true" />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Open settings</TooltipContent>
+            </Tooltip>
           </div>
           <WindowCaptionControls controls={controls} />
         </div>

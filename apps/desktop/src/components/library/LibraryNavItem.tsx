@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { Button } from '../ui/button';
 
 interface LibraryNavItemProps {
   active?: boolean;
@@ -24,8 +25,10 @@ export function LibraryNavItem({
   onSelect,
 }: LibraryNavItemProps) {
   return (
-    <button
-      className={`relative grid grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2 rounded-control border-0 bg-transparent px-2 text-left text-[13px] font-medium text-text-secondary outline-none transition-colors duration-fast hover:bg-control-hover hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:cursor-not-allowed disabled:opacity-60 data-[active=true]:bg-selection data-[active=true]:text-foreground ${collapsed ? 'size-10 min-h-10 grid-cols-1 justify-items-center px-0' : 'min-h-[42px]'}`}
+    <Button
+      variant="ghost"
+      size={collapsed ? 'icon-lg' : 'default'}
+      className={`relative grid w-full grid-cols-[24px_minmax(0,1fr)_auto] items-center gap-2 rounded-control border-0 bg-transparent px-2 text-left text-[13px] font-medium whitespace-normal text-text-secondary outline-none transition-colors duration-fast hover:bg-control-hover hover:text-foreground data-[active=true]:bg-selection data-[active=true]:text-foreground disabled:cursor-not-allowed disabled:opacity-60 motion-reduce:transition-none ${collapsed ? 'size-10 min-h-10 grid-cols-1 justify-items-center px-0' : 'h-[42px] min-h-[42px]'}`}
       data-active={active}
       data-icon-tone={iconTone}
       data-slot="library-nav-item"
@@ -36,6 +39,10 @@ export function LibraryNavItem({
       aria-label={collapsed ? label : undefined}
       title={collapsed || disabled ? label : undefined}
     >
+      <span
+        className={`absolute inset-y-2 left-0 w-[3px] rounded-r-full bg-accent-ink ${active ? 'opacity-100' : 'opacity-0'}`}
+        aria-hidden="true"
+      />
       <span
         data-slot="library-nav-icon"
         className={`grid place-items-center ${iconTone === 'liked' || active ? 'text-accent-ink' : 'text-text-secondary'}`}
@@ -54,6 +61,6 @@ export function LibraryNavItem({
       {!collapsed && count !== undefined && (
         <span className="tabular-nums text-xs text-text-tertiary">{count}</span>
       )}
-    </button>
+    </Button>
   );
 }

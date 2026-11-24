@@ -202,6 +202,9 @@ test('dock and transport toggles show palette-specific active state without layo
     await expect
       .poll(async () => (await measureStyle(button)).color, { timeout: 2_000 })
       .toBe(before.primary);
+    await expect
+      .poll(async () => (await measureStyle(button)).background, { timeout: 2_000 })
+      .toBe(before.controlHover);
     const after = await measureStyle(button);
     expect(after.color).toBe(after.primary);
     expect(after.background).toBe(after.controlHover);

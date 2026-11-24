@@ -104,6 +104,7 @@ async function createLongPlaylistAndOpenMenu(page: Page) {
 
 async function capture(page: Page, name: string) {
   mkdirSync(evidenceDirectory, { recursive: true });
+  await page.mouse.move(0, 0);
   await page.screenshot({
     path: resolve(evidenceDirectory, name),
     animations: 'disabled',
@@ -412,6 +413,22 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   measurements['1366x768'] = await readWorkspaceGeometry(page);
   if (shouldCapture('populated')) await capture(page, 'candidate-populated-1366x768.png');
 
+  await openApp(page, { width: 1200, height: 760 }, 'expanded', true);
+  const mediumPlayer = await startDryRunWithSelection(page);
+  const mediumInspector = await openDetails(page);
+  await expect(mediumInspector.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
+  await expect(mediumPlayer.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
+  measurements['1200x760'] = await readWorkspaceGeometry(page);
+  if (shouldCapture('medium')) await capture(page, 'candidate-populated-1200x760.png');
+
+  await openApp(page, { width: 1920, height: 1080 }, 'expanded', true);
+  const ultrawidePlayer = await startDryRunWithSelection(page);
+  const ultrawideInspector = await openDetails(page);
+  await expect(ultrawideInspector.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
+  await expect(ultrawidePlayer.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
+  measurements['1920x1080'] = await readWorkspaceGeometry(page);
+  if (shouldCapture('ultrawide')) await capture(page, 'candidate-populated-1920x1080.png');
+
   await openApp(page, { width: 800, height: 560 }, 'collapsed');
   await startDryRunWithSelection(page);
   await page.getByRole('row', { name: /Aurora Landing/ }).hover();
@@ -438,6 +455,11 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   await expect(playlistTitle).toHaveAttribute('title', playlistName);
   measurements['playlist-640x448'] = await readWorkspaceGeometry(page);
   if (shouldCapture('playlist')) await capture(page, 'candidate-playlist-add-menu-640x448.png');
+
+  await page.keyboard.press('ArrowDown');
+  await expect(page.getByRole('menuitem', { name: 'Import files…' })).toBeFocused();
+  if (shouldCapture('menu-keyboard'))
+    await capture(page, 'candidate-playlist-menu-keyboard-640x448.png');
 
   await openApp(page, { width: 1366, height: 768 }, 'expanded', true);
   const runtimePlayer = await startDryRunWithSelection(page);

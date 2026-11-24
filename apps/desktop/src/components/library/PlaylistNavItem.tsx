@@ -32,6 +32,7 @@ export function PlaylistNavItem({
     <div
       data-slot="playlist-nav-item"
       className={`group relative grid min-h-[42px] min-w-0 grid-cols-[minmax(0,1fr)_30px] items-center rounded-control ${active ? 'bg-selection' : 'hover:bg-control-hover'}`}
+      data-active={active}
     >
       <LibraryNavItem
         label={playlist.name}
@@ -47,7 +48,7 @@ export function PlaylistNavItem({
             <Button
               variant="ghost"
               size="icon-sm"
-              className="size-[30px] border-0 bg-transparent p-0 text-text-tertiary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-control-hover hover:text-foreground focus-visible:opacity-100"
+              className="size-[30px] border-0 bg-transparent p-0 text-text-tertiary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-data-[active=true]:opacity-100 aria-expanded:opacity-100 hover:bg-control-hover hover:text-foreground focus-visible:opacity-100"
               type="button"
               aria-label={`More actions for ${playlist.name}`}
               disabled={pending}

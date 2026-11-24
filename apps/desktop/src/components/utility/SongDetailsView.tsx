@@ -5,6 +5,7 @@ import { selectSelectedDetail, selectSongById } from '../../state/store';
 import type { SheetConversionMode, SheetPitch, SongRow } from '../../bridge/DesktopBridge';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { Button } from '../ui/button';
 
 interface SongDetailsViewProps {
   useStore: DesktopStoreHook;
@@ -400,13 +401,14 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
                       {proposalSheet.target_pitch ?? 'an unknown'} target pitch, and the selected
                       track mode. Accept the listed losses to prepare it.
                     </p>
-                    <button
-                      className="min-h-[34px] rounded-control border border-warning-border bg-card px-2.5 py-1.5 text-xs font-medium text-foreground hover:bg-control-hover focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                    <Button
+                      variant="default"
+                      className="min-h-[34px] px-2.5 py-1.5 text-xs"
                       type="button"
                       onClick={() => void acknowledgeLoss()}
                     >
                       Accept conversion losses and prepare
-                    </button>
+                    </Button>
                   </div>
                 )}
                 {prepared?.song.song_id === selectedSongId &&
@@ -480,7 +482,8 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
             </dl>
             {hasActionableRecommendation && (
               <div className="mt-3">
-                <button
+                <Button
+                  variant="default"
                   type="button"
                   className="min-h-8 w-full justify-center text-xs"
                   disabled={recommendationMatchesCurrent || isApplying}
@@ -493,7 +496,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
                       : currentError
                         ? 'Retry recommendation'
                         : 'Apply recommendation'}
-                </button>
+                </Button>
                 {currentError && (
                   <p
                     className="mt-2 rounded-control border border-danger-border bg-danger-surface px-2 py-1.5 text-xs text-danger"

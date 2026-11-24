@@ -1058,6 +1058,59 @@ test('compact Runtime retains live metrics, event history, trace export, and ind
   await expect(trigger).toBeFocused();
 });
 
+test('compact Inspector exit is inert, survives a quick reopen, and cleans up after transition end', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 640, height: 448 });
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.goto('/');
+
+  const trigger = page.locator('button[aria-label$="utility panel"]');
+  await trigger.click();
+  const pane = page.locator('[data-pane="inspector"]');
+  await expect(page.getByRole('region', { name: 'Utility: Song Details' })).toBeVisible();
+  const transitionProperties = await pane.evaluate(
+    (element) => getComputedStyle(element).transitionProperty,
+  );
+  expect(transitionProperties).toContain('opacity');
+  expect(transitionProperties).toContain('translate');
+
+  await pane.getByRole('button', { name: 'Close utility' }).click();
+  expect(await pane.count()).toBe(1);
+  await expect(trigger).toHaveAttribute('aria-expanded', 'false');
+  await expect(pane).toHaveAttribute('aria-hidden', 'true');
+  await expect(pane).toHaveAttribute('inert', '');
+  await expect(pane).toHaveAttribute('data-open', 'false');
+  await expect(trigger).toBeFocused();
+
+  await page.evaluate(() => {
+    document.querySelector<HTMLButtonElement>('button[aria-label="Open utility panel"]')?.click();
+  });
+  await expect(trigger).toHaveAttribute('aria-expanded', 'true');
+  await expect(pane).toHaveAttribute('aria-hidden', 'false');
+  await expect(pane).not.toHaveAttribute('inert');
+  await expect(pane).toHaveAttribute('data-open', 'true');
+
+  await pane.getByRole('button', { name: 'Close utility' }).click();
+  await expect(pane).toHaveAttribute('data-open', 'false');
+  await expect(pane).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
+test('compact Inspector skips exit movement when reduced motion is requested', async ({ page }) => {
+  await page.setViewportSize({ width: 640, height: 448 });
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.goto('/');
+
+  const trigger = page.locator('button[aria-label$="utility panel"]');
+  await trigger.click();
+  const pane = page.locator('[data-pane="inspector"]');
+  await expect(pane).toBeVisible();
+  await pane.getByRole('button', { name: 'Close utility' }).click();
+  await expect(pane).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+});
+
 test('Chromium fallback emulation stays usable at DPR 1.25', async ({ browser, page }) => {
   // Playwright's DPR setting is browser emulation, not Windows DPI or native-window evidence.
   const baseUrl = new URL('/', page.url()).toString();

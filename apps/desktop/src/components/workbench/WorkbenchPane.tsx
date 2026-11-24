@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactNode } from 'react';
+import type { CSSProperties, ReactNode, TransitionEventHandler } from 'react';
 import { cn } from '../../lib/utils';
 
 interface WorkbenchPaneProps {
@@ -8,6 +8,11 @@ interface WorkbenchPaneProps {
   collapsed?: boolean;
   presentationMode?: 'closed' | 'docked' | 'overlay';
   style?: CSSProperties;
+  ariaHidden?: boolean;
+  inert?: boolean;
+  open?: boolean;
+  onTransitionEnd?: TransitionEventHandler<HTMLDivElement>;
+  onTransitionCancel?: TransitionEventHandler<HTMLDivElement>;
 }
 
 export function WorkbenchPane({
@@ -17,6 +22,11 @@ export function WorkbenchPane({
   collapsed = false,
   presentationMode,
   style,
+  ariaHidden,
+  inert,
+  open,
+  onTransitionEnd,
+  onTransitionCancel,
 }: WorkbenchPaneProps) {
   return (
     <div
@@ -24,6 +34,11 @@ export function WorkbenchPane({
       data-pane={pane}
       data-collapsed={collapsed}
       {...(presentationMode ? { 'data-presentation-mode': presentationMode } : {})}
+      {...(ariaHidden !== undefined ? { 'aria-hidden': ariaHidden } : {})}
+      inert={inert}
+      {...(open !== undefined ? { 'data-open': open } : {})}
+      onTransitionEnd={onTransitionEnd}
+      onTransitionCancel={onTransitionCancel}
       className={cn(
         'flex min-h-0 min-w-0 overflow-hidden rounded-pane border border-border bg-card [contain:layout_style_paint]',
         className,

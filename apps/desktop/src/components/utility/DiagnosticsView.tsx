@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { DesktopStoreHook } from '../../state/store';
 import { Tabs, TabsList, TabsTrigger } from '../ui/tabs';
+import { Button } from '../ui/button';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import { DiagnosticsEventsPanel } from './DiagnosticsEventsPanel';
 import { DiagnosticsPerformancePanel } from './DiagnosticsPerformancePanel';
@@ -68,15 +69,17 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
       )}
       {diagnostics.enabled && <DiagnosticsPlaybackSummary useStore={useStore} />}
       <div className="mb-2.5 flex flex-wrap items-center gap-2">
-        <button
-          className="min-h-[30px] rounded-control border border-border bg-surface px-2.5 text-xs text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-progress disabled:opacity-70"
+        <Button
+          variant="outline"
+          size="sm"
+          className="min-h-[30px] h-auto bg-surface px-2.5 text-xs text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-progress disabled:opacity-70"
           type="button"
           title="Export the last available session envelope. Raw packet traces are not captured in production."
           disabled={traceExporting}
           onClick={() => void handleExportSenderTrace()}
         >
           {traceExporting ? 'Preparing sender metadata…' : 'Export sender metadata'}
-        </button>
+        </Button>
         <span className="text-xs text-text-tertiary" role="status">
           {visibleTraceExportIdentity
             ? 'Session metadata exported; raw packet trace was not captured in production.'
@@ -98,19 +101,19 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
           activateOnFocus
         >
           <TabsTrigger
-            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink"
+            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
             value="performance"
           >
             Performance
           </TabsTrigger>
           <TabsTrigger
-            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink"
+            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
             value="timing"
           >
             Timing
           </TabsTrigger>
           <TabsTrigger
-            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink"
+            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
             value="events"
           >
             Events

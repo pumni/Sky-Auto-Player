@@ -12,6 +12,8 @@
   --color-popover: var(--popover);
   --color-popover-foreground: var(--popover-foreground);
   --color-primary: var(--primary);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-pressed: var(--primary-pressed);
   --color-primary-foreground: var(--primary-foreground);
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
@@ -22,6 +24,8 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-destructive-hover: var(--destructive-hover);
+  --color-destructive-pressed: var(--destructive-pressed);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
@@ -42,6 +46,7 @@
   --color-control-hover: var(--control-hover);
   --color-control-pressed: var(--control-pressed);
   --color-control-disabled: var(--control-disabled);
+  --color-scrim: var(--scrim);
   --radius-control: 8px;
   --radius-pane: 10px;
   --radius-popover: 12px;
@@ -50,6 +55,7 @@
   --duration-fast: 120ms;
   --duration-standard: 180ms;
   --duration-panel: 240ms;
+  --duration-tab: 150ms;
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
@@ -111,6 +117,7 @@
   --control-hover: #35363a;
   --control-pressed: #404246;
   --control-disabled: #6c6e73;
+  --scrim: #08090c;
   --focus-gap: 2px;
   font-family: 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
   font-synthesis: none;
@@ -191,12 +198,12 @@ body[data-resizing] [data-workbench-pane] {
 progress {
   border: 0;
   border-radius: 9999px;
-  background: var(--surface);
+  background: var(--control-hover);
 }
 
 progress::-webkit-progress-bar {
   border-radius: inherit;
-  background: var(--surface);
+  background: var(--control-hover);
 }
 
 progress::-webkit-progress-value {
@@ -483,6 +490,7 @@ html[data-color-mode='light'] {
     --control-hover: Highlight;
     --control-pressed: Highlight;
     --control-disabled: GrayText;
+    --scrim: CanvasText;
   }
 
   button:focus,

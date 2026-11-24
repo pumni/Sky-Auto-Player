@@ -33,6 +33,21 @@ is the single imported Tailwind CSS v4 entry and semantic token owner. Compositi
 styles use Tailwind utilities and shared component variants. Semantic `data-slot` and ARIA
 attributes provide stable UI ownership and browser-test anchors; CSS classes are not a public API.
 
+Production action controls use the shared `Button` variants: `default` for primary actions,
+`outline` or `secondary` for supporting actions, `ghost` for quiet icon/navigation actions, and
+`destructive` for irreversible confirmations. Native window-caption buttons remain platform
+controls with their existing hit targets. The Player Dock uses a 92 px grid with equal flexible
+side columns around a centered transport column capped at 600 px or 45 vw. At compact widths it
+keeps song title, playback status, Test label, timeline, and centered transport visible while
+removing the decorative note glyph and shortening the Test label. The timeline uses the semantic
+control-hover track color.
+
+Ordinary dropdown menus default to non-modal Base UI behavior so focus can leave the menu and
+outside controls remain usable. Modal Dialog and Alert Dialog backdrops use the neutral semantic
+scrim. Overlay entrances and exits transition opacity/scale/translate through Base UI's lifecycle;
+the custom compact Inspector becomes inert and `aria-hidden` while its exit transition completes.
+Reduced-motion mode removes overlay movement and the Inspector unmounts without a timer.
+
 `apps/desktop/src/components/settings/SettingsPanel.tsx` retains Settings modal, category navigation,
 and focus ownership; `apps/desktop/src/components/settings/SettingsCategoryContent.tsx` renders the
 selected category and palette selector. `apps/desktop/src/components/utility/DiagnosticsView.tsx`
@@ -106,6 +121,8 @@ The geometry contract keeps the Track Browser at least 420 px, track rows at 46 
 Dock at 92 px. The active Workbench layout and CSS variable values are measured by unit and browser
 E2E tests; pane geometry must remain within the viewport, including when a separator reaches its
 clamped bounds.
+The registered Navigator and Inspector width properties use `inherits: false`; live resizing writes
+them directly to their pane elements so nested rows and content do not inherit pane geometry.
 
 Song Details and Runtime Diagnostics retain their own scrollable content. Runtime metrics, timing
 plots, events, and trace export remain available in either presentation. The Inspector ends above
@@ -210,6 +227,9 @@ pixel or prove Windows High Contrast or packaged WebView2 behavior.
   `apps/desktop/tests/e2e/visual-evidence.spec.ts` cover modal accessibility, Diagnostics
   truthfulness, all six palettes, Light and Graphite rendering, focus and semantic color roles,
   forced-colors, reduced motion, update states, and representative visual states.
+- The WP1-R1 migration from removed Graphite/Light suites to current rendered oracles is recorded in
+  [`UI coverage migration ledger`](ui/wp1-r1-coverage-migration.md), including the Base UI open-menu
+  Axe finding that remains unresolved without changing the required focus-guard or Axe policy.
 
 Browser tests use the mock bridge. The 640×448 overlay cases are responsive browser fallbacks,
 not supported native sizes. Packaged WebView2 resize/startup measurements and their baseline

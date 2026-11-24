@@ -198,7 +198,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                 <Button
                   variant="default"
                   size="default"
-                  className="min-h-9 flex-none px-3 text-xs disabled:border-border disabled:bg-card disabled:text-muted-foreground"
+                  className="min-h-9 flex-none px-3 text-xs disabled:border disabled:border-border disabled:bg-card disabled:text-muted-foreground"
                   type="button"
                   disabled={!canPreparePlayback}
                   onClick={() => {
@@ -364,7 +364,7 @@ function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProp
       <details className="group min-w-0 border-t border-border pt-2">
         <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-xs text-text-secondary hover:text-foreground">
           <ChevronRight
-            className="size-3.5 transition-transform duration-fast group-open:rotate-90"
+            className="size-3.5 transition-[rotate] duration-fast group-open:rotate-90 motion-reduce:transition-none"
             size={14}
             aria-hidden="true"
           />

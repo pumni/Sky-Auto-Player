@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
@@ -82,21 +82,24 @@ describe('GlobalSearch', () => {
 
     expect(screen.getByRole('searchbox', { name: 'Search Built-in Songs' })).toHaveAttribute(
       'placeholder',
-      'Search Built-in Songs…',
+      'Search current source…',
     );
+    expect(within(screen.getByRole('search')).getByText('Built-in')).toBeInTheDocument();
 
     await act(async () => store.getState().createPlaylist('Practice'));
     const playlistId = store.getState().library.source.id;
     expect(screen.getByRole('searchbox', { name: 'Search Practice' })).toHaveAttribute(
       'placeholder',
-      'Search Practice…',
+      'Search current source…',
     );
+    expect(within(screen.getByRole('search')).getByText('Practice')).toBeInTheDocument();
 
     await act(async () => store.getState().openPlaylistAdd(playlistId));
     const addSearch = screen.getByRole('searchbox', {
       name: 'Search Built-in Songs to add to Practice',
     });
-    expect(addSearch).toHaveAttribute('placeholder', 'Search Built-in Songs…');
+    expect(addSearch).toHaveAttribute('placeholder', 'Search songs…');
+    expect(within(screen.getByRole('search')).getByText('Built-in')).toBeInTheDocument();
     fireEvent.change(addSearch, { target: { value: 'Moonlit' } });
     await waitFor(() => {
       expect(store.getState().library.query).toBe('Moonlit');
@@ -107,19 +110,20 @@ describe('GlobalSearch', () => {
     await act(async () => store.getState().exitPlaylistAdd());
     expect(screen.getByRole('searchbox', { name: 'Search Practice' })).toHaveAttribute(
       'placeholder',
-      'Search Practice…',
+      'Search current source…',
     );
 
     await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'liked' }));
     expect(screen.getByRole('searchbox', { name: 'Search Liked Songs' })).toHaveAttribute(
       'placeholder',
-      'Search Liked Songs…',
+      'Search current source…',
     );
+    expect(within(screen.getByRole('search')).getByText('Liked')).toBeInTheDocument();
 
     await act(async () => store.getState().selectLibrarySource({ kind: 'smart', id: 'builtin' }));
     expect(screen.getByRole('searchbox', { name: 'Search Built-in Songs' })).toHaveAttribute(
       'placeholder',
-      'Search Built-in Songs…',
+      'Search current source…',
     );
   });
 });
