@@ -153,6 +153,22 @@ Release-specific, updater, signing, SBOM, NSIS, browser, accessibility, and
 artifact-integrity tests remain in their existing jobs. This topology does not
 trade those checks for shared state.
 
+## Local impact inspection
+
+`cargo xtask ci classify --working-tree` is a read-only preview of PR-mode
+lanes for staged, unstaged, and untracked non-ignored paths relative to HEAD.
+It uses the existing classifier, treats renames as deletion plus addition, and
+fails closed on Git errors or malformed paths. It does not include already
+committed branch changes; use the actual PR CI result for those. This is an
+advisory impact hint, not a replacement for the canonical merge gate or a
+behavioral risk assessment.
+
+`cargo xtask check all --json-summary` emits an `[xtask-summary]` JSON record
+with observed check/group outcomes, including explicit supply-chain/browser
+skips and catalog reuse. Unlisted checks are not inferred to have passed; a
+failed command short-circuits as before. Preserve the raw command log, exit
+code, and source identity separately. This summary is not merge authorization.
+
 ## Local command roots
 
 - Run `cargo xtask check all` at the repository root for the canonical

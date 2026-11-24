@@ -31,6 +31,11 @@ Windows 11 Tauri 2/React desktop with Rust-native sheet playback for Sky.
 
 ## Work and verification
 
+- Own the requested outcome through investigation, implementation, relevant
+  verification, and correction of failures caused by the change. Choose planning
+  depth and delegation according to complexity; do not require intermediate
+  approval for reversible local work within scope. Escalate material ambiguity,
+  consequential trade-offs, authorization boundaries, or unavailable required evidence.
 - Evaluate alternatives for substantial refactors; preserve correctness and
   live identifiers, not an exact module layout or old naming scheme.
 - Local edits and disposable tests are within scope. Remote branch, PR,

@@ -44,6 +44,15 @@ bunx playwright install chromium
 bun run test:functional
 ```
 
+## Isolated desktop browser checks
+
+`bun run test:e2e` and `bun run test:e2e:bundle` start their own loopback Vite
+server and pass its actual bound URL to Playwright. Separate worktrees can use
+independent ports without polling or attaching to an unrelated server. Test
+artifacts remain relative to the app checkout. Keep one active run per checkout
+when tests write fixed artifact paths; separate worktrees isolate those paths.
+Browser checks remain mock-shell evidence, not native Windows qualification.
+
 ## Repository checks
 
 Run the canonical pre-review gate from the repository root on Windows:

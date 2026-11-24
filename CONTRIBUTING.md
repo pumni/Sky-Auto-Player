@@ -71,11 +71,19 @@ direct tests, active docs, and repository checks as the evidence system.
 5. Record the exact command, HEAD and relevant input identity, exit code, and coverage. Report only
    checks actually run, and explicitly identify checks that were skipped.
 6. Keep secrets and `.env` out of commits. Do not bypass CI or weaken a security/release gate merely
-   to make a change pass.
+   to make a change pass. Changes to assertions, golden data, skips, or tolerances
+   must have an independent behavioral justification, not just a passing result.
 7. In the PR, report the checks/evidence actually run and any relevant residual risk.
 
 A refactor and a behavior change may live in the same PR when they form one inseparable, reviewable
 outcome and the tests make the behavior change explicit. Avoid unrelated cleanup.
+
+Use the model's own planning and delegation capabilities. Intermediate handoffs
+are useful for consequential decisions or independent review, not mandatory
+milestones. For cross-boundary claims, demonstrate the production entry path or
+state exactly which part is simulated. Preserve reviewer access to the original
+contract and raw evidence. Capture repeatable failures as regression tests or
+improve the owning tool; avoid accumulating duplicate instruction files.
 
 ## Dependency management
 

@@ -904,7 +904,31 @@ fn classify_git_range(root: &Path, mode: DiffMode, base: &str, head: &str) -> Cl
     classify_git_range_with_refs(root, mode, base, head, None)
 }
 
+fn classify_working_tree(root: &Path) -> Result<Classification> {
+    let mut paths = Vec::new();
+    for args in [
+        &["diff", "--cached", "--name-only", "--no-renames", "-z", "HEAD", "--"][..],
+        &["diff", "--name-only", "--no-renames", "-z", "--"][..],
+        &["ls-files", "--others", "--exclude-standard", "-z"][..],
+    ] {
+        let output = git_output(root, args)?;
+        if !output.status.success() {
+            return Err(format!("git {} failed", args.join(" ")).into());
+        }
+        paths.extend(decode_git_paths(&output.stdout)?);
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(classify_git_paths(paths, DiffMode::PullRequest))
+}
+
 fn parse_arguments(args: &[String]) -> Result<Classification> {
+    if args.iter().any(|arg| arg == "--working-tree") {
+        if args.len() != 1 {
+            return Err("--working-tree is a standalone local preview option".into());
+        }
+        return classify_working_tree(&crate::repo::root());
+    }
     let mut full = false;
     let mut base = None;
     let mut head = None;
@@ -1170,6 +1194,30 @@ mod tests {
                 "{lane}"
             );
         }
+    }
+
+    #[test]
+    fn working_tree_includes_staged_unstaged_deleted_and_untracked_paths() {
+        let root = temp_dir("working-tree-classifier");
+        git(&root, &["init"]);
+        git(&root, &["config", "user.name", "Test"]);
+        git(&root, &["config", "user.email", "test@example.invalid"]);
+        fs::create_dir_all(root.join("apps/desktop/src")).unwrap();
+        fs::create_dir_all(root.join("apps/website/src")).unwrap();
+        fs::write(root.join("apps/desktop/src/App.tsx"), "old").unwrap();
+        fs::write(root.join("apps/website/src/page.astro"), "old").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "initial"]);
+        assert_lanes(&classify_working_tree(&root).unwrap(), &[]);
+        fs::write(root.join("apps/desktop/src/App.tsx"), "new").unwrap();
+        git(&root, &["add", "apps/desktop/src/App.tsx"]);
+        fs::remove_file(root.join("apps/website/src/page.astro")).unwrap();
+        let result = classify_working_tree(&root).unwrap();
+        assert!(result.lane("desktop_required"));
+        assert!(result.lane("site_required"));
+        fs::write(root.join("unknown-file"), "new").unwrap();
+        assert_lanes(&classify_working_tree(&root).unwrap(), &LANES);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

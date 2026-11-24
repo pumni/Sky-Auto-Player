@@ -27,6 +27,7 @@ pub(crate) fn should_skip_supply_chain(flag: bool, env_val: Option<&str>) -> boo
 #[derive(Default)]
 struct CheckSession {
     builtin_catalog_verified: bool,
+    outcomes: Vec<(&'static str, &'static str)>,
 }
 
 fn run_once_per_check_session(
@@ -45,6 +46,7 @@ fn verify_builtin_catalog(root: &Path, session: &mut CheckSession) -> Result<()>
     let ran = run_once_per_check_session(&mut session.builtin_catalog_verified, || {
         builtin_catalog::run(root, "verify", &[])
     })?;
+    session.outcomes.push(("builtin-catalog", if ran { "passed" } else { "reused" }));
     if !ran {
         println!("Built-in catalog verification: PASS (reused in this check session)");
     }
@@ -102,8 +104,38 @@ fn check_desktop_native(root: &Path) -> Result<()> {
     bindings::bindings_with_env(&native_env)
 }
 
-pub fn run(group: &str, skip_supply_chain: bool) -> Result<()> {
-    run_with_session(group, skip_supply_chain, &mut CheckSession::default())
+pub fn run(group: &str, skip_supply_chain: bool, json_summary: bool) -> Result<()> {
+    let mut session = CheckSession::default();
+    let result = run_with_session(group, skip_supply_chain, &mut session);
+    if json_summary {
+        let checks = session
+            .outcomes
+            .iter()
+            .map(|(name, status)| serde_json::json!({"name": name, "status": status}))
+            .collect::<Vec<_>>();
+        println!(
+            "[xtask-summary] {}",
+            serde_json::json!({
+                "schema_version": 1,
+                "group": group,
+                "status": if result.is_ok() { "passed" } else { "failed" },
+                "checks": checks,
+                "unlisted_checks": "not-run or outside requested group",
+                "merge_readiness": "not assessed"
+            })
+        );
+    }
+    result
+}
+
+fn record_step(
+    session: &mut CheckSession,
+    name: &'static str,
+    check: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let result = check();
+    session.outcomes.push((name, if result.is_ok() { "passed" } else { "failed" }));
+    result
 }
 
 fn run_with_session(
@@ -111,38 +143,73 @@ fn run_with_session(
     skip_supply_chain: bool,
     session: &mut CheckSession,
 ) -> Result<()> {
+    let result = run_group(group, skip_supply_chain, session);
+    let name = match group {
+        "static" => "group-static",
+        "rust" => "group-rust",
+        "desktop" => "group-desktop",
+        "desktop-native" => "group-desktop-native",
+        "all" => "group-all",
+        _ => "unknown-group",
+    };
+    session.outcomes.push((name, if result.is_ok() { "passed" } else { "failed" }));
+    result
+}
+
+fn run_group(group: &str, skip_supply_chain: bool, session: &mut CheckSession) -> Result<()> {
     let root = repo::root();
     let env_val = std::env::var("SKY_CHECK_SKIP_SUPPLY_CHAIN").ok();
     let skip_supply_chain = should_skip_supply_chain(skip_supply_chain, env_val.as_deref());
     match group {
         "static" => {
-            audits::app_boundaries::run(&root)?;
-            audits::docs_integrity::run(&root)?;
-            audits::architecture::run(&root)?;
-            audits::security::run(&root)?;
-            tauri_metadata::tauri_feature_contract(&root)?;
+            record_step(session, "app-boundaries", || audits::app_boundaries::run(&root))?;
+            record_step(session, "docs-integrity", || audits::docs_integrity::run(&root))?;
+            record_step(session, "architecture", || audits::architecture::run(&root))?;
+            record_step(session, "security", || audits::security::run(&root))?;
+            record_step(session, "tauri-feature-contract", || {
+                tauri_metadata::tauri_feature_contract(&root)
+            })?;
             if !skip_supply_chain {
-                supply_chain::run(None)?;
+                record_step(session, "supply-chain", || supply_chain::run(None))?;
             } else {
+                session.outcomes.push(("supply-chain", "skipped"));
                 println!(
                     "[xtask] cargo-vet supply-chain: SKIP (verified by dedicated supply-chain gate)"
                 );
             }
-            branding::validate(&root)?;
-            tauri_bundle::validate_config(&root)?;
-            tauri_metadata::tauri_build_freshness_contract(&root)?;
+            record_step(session, "branding", || branding::validate(&root))?;
+            record_step(session, "tauri-config", || tauri_bundle::validate_config(&root))?;
+            record_step(session, "tauri-build-freshness", || {
+                tauri_metadata::tauri_build_freshness_contract(&root)
+            })?;
             verify_builtin_catalog(&root, session)?;
-            trust::v4_trust_material_contract(&root)?;
-            bun_pin::bun_pin_contract(&root)?;
-            rust_toolchain::rust_toolchain_contract(&root)?;
-            ci_contracts::ci_control_plane_contract(&root)?;
-            tauri_metadata::release_metadata_contract(&root)?;
-            release_runner::release_runner_contract(&root)?;
-            hosted_signing::hosted_v4_signing_workflow_contract(&root)?;
-            hosted_malware::hosted_malware_proof_contract(&root)?;
-            release_pipeline::v4_release_pipeline_contract(&root)?;
-            ci_contracts::packaged_ci_contract(&root)?;
-            tauri_metadata::v4_legacy_updater_retirement(&root)?;
+            record_step(session, "trust-material", || trust::v4_trust_material_contract(&root))?;
+            record_step(session, "bun-pin", || bun_pin::bun_pin_contract(&root))?;
+            record_step(session, "rust-toolchain", || {
+                rust_toolchain::rust_toolchain_contract(&root)
+            })?;
+            record_step(session, "ci-control-plane", || {
+                ci_contracts::ci_control_plane_contract(&root)
+            })?;
+            record_step(session, "release-metadata", || {
+                tauri_metadata::release_metadata_contract(&root)
+            })?;
+            record_step(session, "release-runner", || {
+                release_runner::release_runner_contract(&root)
+            })?;
+            record_step(session, "hosted-signing", || {
+                hosted_signing::hosted_v4_signing_workflow_contract(&root)
+            })?;
+            record_step(session, "hosted-malware", || {
+                hosted_malware::hosted_malware_proof_contract(&root)
+            })?;
+            record_step(session, "release-pipeline", || {
+                release_pipeline::v4_release_pipeline_contract(&root)
+            })?;
+            record_step(session, "packaged-ci", || ci_contracts::packaged_ci_contract(&root))?;
+            record_step(session, "legacy-updater-retirement", || {
+                tauri_metadata::v4_legacy_updater_retirement(&root)
+            })?;
         }
         "rust" => {
             verify_builtin_catalog(&root, session)?;
@@ -211,16 +278,21 @@ fn run_with_session(
                 &root.join("apps/desktop"),
                 &[],
             )?;
-            process::run("bun", &["run", "check"], &root.join("apps/desktop"), &[])?;
+            record_step(session, "desktop-check", || {
+                process::run("bun", &["run", "check"], &root.join("apps/desktop"), &[])
+            })?;
             if std::env::var_os("SKY_DESKTOP_SKIP_BROWSER").is_none() {
-                process::run("bun", &["run", "test:e2e"], &root.join("apps/desktop"), &[])?;
+                record_step(session, "desktop-e2e", || {
+                process::run("bun", &["run", "test:e2e"], &root.join("apps/desktop"), &[])
+            })?;
             } else {
+                session.outcomes.push(("desktop-e2e", "skipped"));
                 println!("[xtask] desktop browser E2E: SKIP (not required for this validation)");
             }
-            check_desktop_native(&root)?;
+            record_step(session, "desktop-native", || check_desktop_native(&root))?;
         }
         "desktop-native" => {
-            check_desktop_native(&root)?;
+            record_step(session, "desktop-native", || check_desktop_native(&root))?;
         }
         "all" => {
             run_with_session("static", skip_supply_chain, session)?;

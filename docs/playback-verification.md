@@ -12,6 +12,17 @@ window. Experimental B/C process QoS and runtime adaptive spin are not deployed.
 Physical SendInput tests require interactive foreground authorization; in
 unattended CI and automated runs, physical SendInput remains **NOT RUN**.
 
+## Evidence reachability
+
+A test of a helper or hand-constructed state proves only that isolated behavior.
+For claims about production scheduling, admission, dispatch, or retirement,
+exercise the corresponding production entry path with reachable inputs and
+controlled effects, or explicitly bound the claim. Prefer the existing
+`ProductionDispatchTestHarness`, fault injection, and independent golden or
+reference invariants. A passing synthetic state is not proof of a reachable
+production transition. Native timing and physical-input claims still require
+the separate qualification below.
+
 ## Local Windows gates
 
 Run from the repository root. Record the exact command, exit code, test count,
