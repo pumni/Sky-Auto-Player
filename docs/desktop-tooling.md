@@ -58,6 +58,8 @@ Separate worktrees use independent ephemeral ports without polling, attaching to
 - **Concurrent writes:** Concurrent execution within the *same* checkout is unsupported for fixed output paths, including generated IPC bindings (`rust/crates/sky_player/bindings`), staged native resources (`apps/desktop/src-tauri/resources/`), and build distribution outputs.
 - **Environment inheritance:** Inherited environment variables (such as `CARGO_TARGET_DIR`, `TS_RS_EXPORT_DIR`, or `TAURI_CONFIG`) must remain checkout-relative; global overrides break worktree isolation.
 - **Native OS singletons:** Native Windows user application state (e.g. `%APPDATA%/com.pumni.sky-auto-player`) and physical Win32 input sinks (`SendInput`) are global to the user desktop session and are not worktree-isolated.
+- **Process containment & sandbox disposition:** Host sandbox, credential separation, and process containment are not guaranteed by repository tooling or scripts. Multi-tenant or adversarial isolation requires external platform boundaries (such as OS containers, virtual machines, or dedicated user accounts).
+- **Process lifecycle boundaries:** Supported development runners and test commands are assumed to exit cooperatively on normal exit without leaving detached background daemons. On Windows without external job objects, if a parent process exits uncoordinated before teardown, descendant processes dissociate and cannot be discovered by `taskkill /pid <pid> /T /F`; process tree containment under abnormal parent termination is best-effort.
 - **Qualification boundary:** Browser checks qualify web/mock UI integration only; they do not qualify native Windows timing, MMCSS scheduling, or focus tracking.
 
 ## Repository checks

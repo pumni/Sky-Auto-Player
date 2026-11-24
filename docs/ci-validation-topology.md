@@ -165,8 +165,11 @@ behavioral risk assessment.
 
 `cargo xtask check <group> --json-summary` emits an `[xtask-summary]` JSON record
 with monotonic `duration_ms`, observed leaf and group outcomes, bounded failure reasons, not-run steps, explicit supply-chain/browser
-skips and catalog reuse. The summary reports start and finish source identity (`head`, `status`, and `dirty` flag); dirty inputs are explicitly identified as unqualified rather than asserting clean HEAD evidence. Group success does not imply unexecuted children ran;
-ordinary failures still emit the summary while preserving non-zero exit semantics.
+skips and catalog reuse. The summary reports start and finish source observations (`head`, `tree`, and `status`),
+along with `overall_status` (`"clean"` or `"unqualified"`); it records working tree cleanliness at start and finish without
+asserting continuous immutability throughout execution. Dirty or modified inputs are explicitly identified as unqualified rather than
+asserting clean HEAD evidence. Group success does not imply unexecuted children ran; ordinary failures still emit the summary while
+preserving non-zero exit semantics.
 Preserve the raw command log, exit code, and source identity separately. This summary is not merge authorization.
 
 ## Local command roots

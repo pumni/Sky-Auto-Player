@@ -38,8 +38,8 @@ export function isProcessGroupAlive(pgid) {
 }
 
 export async function waitForPidExit(pid, timeoutMs = 2000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
+  const start = performance.now();
+  while (performance.now() - start < timeoutMs) {
     if (!isPidAlive(pid)) return true;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -47,8 +47,8 @@ export async function waitForPidExit(pid, timeoutMs = 2000) {
 }
 
 export async function waitForProcessGroupExit(pgid, timeoutMs = 2000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
+  const start = performance.now();
+  while (performance.now() - start < timeoutMs) {
     if (!isProcessGroupAlive(pgid)) return true;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -98,6 +98,8 @@ export class OwnedProcessSession {
         return;
       }
 
+      // Bounded taskkill timeout. Note: Node's spawnSync timeout parameter is not a guaranteed
+      // hard wall-clock deadline; the OS and runtime may take additional time to finish terminating or close stdio.
       const taskkillTimeoutMs = Math.max(graceTimeoutMs, 3000);
       const result = spawnSync('taskkill', ['/pid', String(this.pid), '/T', '/F'], {
         stdio: 'ignore',
@@ -207,9 +209,26 @@ export function spawnOwnedProcess(executable, args, options = {}) {
 
 /**
  * Runs an owned command to completion with signal trapping and bounded cleanup.
+ *
+ * Operational assumptions & containment boundaries:
+ * - Cooperative normal exit: Supported commands (e.g. test runners, dev scripts) are assumed
+ *   to exit cooperatively upon test completion without intentionally detaching orphan daemons.
+ *   On normal zero or non-zero command exit, the child process is waited on without full-tree teardown.
+ * - Signal-triggered teardown: When outer runner signals (SIGINT / SIGTERM) are received, the session
+ *   initiates and awaits an explicit full-tree teardown before completing.
+ * - Windows containment limitations: On Windows without external job objects, if a parent process exits
+ *   spontaneously before teardown can be executed, child processes dissociate. `taskkill /pid <pid> /T /F`
+ *   cannot find descendants whose parent is already dead. Teardown on Windows is therefore best-effort
+ *   under uncoordinated parent exit, and escaped descendants cannot be guaranteed contained without an
+ *   external supervisor or OS job object.
+ *
+ * @param {string} executable
+ * @param {string[]} args
+ * @param {import('node:child_process').SpawnOptions & { _sessionFactory?: typeof spawnOwnedProcess }} [options]
  */
 export function runOwnedCommand(executable, args, options = {}) {
-  const session = spawnOwnedProcess(executable, args, options);
+  const factory = options._sessionFactory ?? spawnOwnedProcess;
+  const session = factory(executable, args, options);
   const child = session.child;
 
   return new Promise((resolve, reject) => {

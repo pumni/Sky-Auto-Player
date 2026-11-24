@@ -191,65 +191,146 @@ test('runPlaywright rejects on invalid executable and cleans up signal listeners
   assert.equal(process.listenerCount('SIGINT'), initialListeners);
 });
 
-test('runner-interruption regression: grandchild ignores TERM and parent exits, session cleans up group or reports failure', async () => {
-  const script = `
-    const { spawn } = require('node:child_process');
-    const grand = spawn(process.execPath, ['-e', \`
-      process.on('SIGTERM', () => {});
-      console.log('GRANDCHILD_READY:' + process.pid);
-      setInterval(() => {}, 1000);
-    \`], { stdio: ['ignore', 'pipe', 'inherit'] });
-    grand.stdout.on('data', (d) => {
-      process.stdout.write(d);
-      console.log('CHILD_READY');
-      process.exit(0);
-    });
-  `;
-
-  const session = spawnOwnedProcess(process.execPath, ['-e', script], {
-    stdio: ['ignore', 'pipe', 'inherit'],
+test('runner-interruption regression: outer signal during runOwnedCommand cleans up tree with stubborn descendant, leaves sentinel unharmed', async () => {
+  const sentinel = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
   });
 
+  let sessionInstance;
+  let childPid;
   let grandchildPid;
+
   try {
+    assert.ok(sentinel.pid && isPidAlive(sentinel.pid), 'Sentinel process must be alive');
+
+    const script = `
+      const { spawn } = require('node:child_process');
+      const grand = spawn(process.execPath, ['-e', \`
+        process.on('SIGTERM', () => {});
+        console.log('GRANDCHILD_READY:' + process.pid);
+        setInterval(() => {}, 1000);
+      \`], { stdio: ['ignore', 'pipe', 'inherit'] });
+
+      grand.stdout.on('data', (d) => {
+        process.stdout.write(d);
+        console.log('PARENT_READY:' + process.pid);
+      });
+
+      process.on('SIGTERM', () => {
+        process.exit(0);
+      });
+
+      setInterval(() => {}, 1000);
+    `;
+
+    const customFactory = (executable, args, options) => {
+      sessionInstance = spawnOwnedProcess(executable, args, options);
+      return sessionInstance;
+    };
+
+    const commandPromise = runOwnedCommand(
+      process.execPath,
+      ['-e', script],
+      {
+        stdio: ['ignore', 'pipe', 'inherit'],
+        _sessionFactory: customFactory,
+      },
+    );
+
+    childPid = sessionInstance.pid;
+    assert.ok(childPid && isPidAlive(childPid), 'Child process must be alive');
+
     grandchildPid = await new Promise((resolve, reject) => {
       let output = '';
-      const timeout = setTimeout(() => reject(new Error('Grandchild startup timeout')), 5000);
-      session.child.stdout.on('data', (chunk) => {
+      const timeout = setTimeout(() => reject(new Error('Process startup timeout')), 5000);
+      sessionInstance.child.stdout.on('data', (chunk) => {
         output += chunk.toString();
-        const match = output.match(/GRANDCHILD_READY:(\d+)/);
-        if (match && output.includes('CHILD_READY')) {
+        const grandMatch = output.match(/GRANDCHILD_READY:(\d+)/);
+        if (grandMatch && output.includes('PARENT_READY')) {
           clearTimeout(timeout);
-          resolve(Number.parseInt(match[1], 10));
+          resolve(Number.parseInt(grandMatch[1], 10));
         }
       });
-      session.child.once('error', (err) => {
+      sessionInstance.child.once('error', (err) => {
         clearTimeout(timeout);
         reject(err);
       });
     });
 
-    await waitForPidExit(session.pid, 2000);
-    assert.equal(isPidAlive(session.pid), false, 'Parent process must have exited');
+    assert.ok(grandchildPid && isPidAlive(grandchildPid), 'Grandchild process must be alive');
 
-    if (process.platform !== 'win32') {
-      assert.ok(isPidAlive(grandchildPid), 'Grandchild must still be alive before terminate');
-      await session.terminate({ graceTimeoutMs: 100, killTimeoutMs: 1500 });
-      const grandDead = await waitForPidExit(grandchildPid, 2000);
-      assert.ok(grandDead, 'Grandchild must be dead after session.terminate()');
-    }
+    // Simulate outer runner interruption
+    process.emit('SIGTERM');
+
+    const outcome = await commandPromise;
+    assert.equal(outcome.code, 1, 'Interruption outcome code must be 1');
+    assert.equal(outcome.signal, 'SIGTERM', 'Interruption outcome signal must be SIGTERM');
+
+    const childDead = await waitForPidExit(childPid, 2500);
+    const grandDead = await waitForPidExit(grandchildPid, 2500);
+
+    assert.ok(childDead, 'Child process must be dead after interrupt teardown');
+    assert.ok(grandDead, 'Stubborn grandchild must be dead after interrupt teardown');
+
+    assert.ok(isPidAlive(sentinel.pid), 'Sentinel process must remain alive');
   } finally {
+    if (sentinel.pid && isPidAlive(sentinel.pid)) {
+      try { process.kill(sentinel.pid, 'SIGKILL'); } catch {}
+    }
+    if (childPid && isPidAlive(childPid)) {
+      try { process.kill(childPid, 'SIGKILL'); } catch {}
+    }
     if (grandchildPid && isPidAlive(grandchildPid)) {
       try { process.kill(grandchildPid, 'SIGKILL'); } catch {}
     }
   }
 });
 
-test('runOwnedCommand propagates teardown failures without unhandled rejection', async () => {
+test('runOwnedCommand propagates teardown failure through test seam without unhandled rejection', async () => {
+  const initialListeners = process.listenerCount('SIGTERM');
+
+  let sessionInstance;
+  const customFactory = (executable, args, options) => {
+    sessionInstance = spawnOwnedProcess(executable, args, options);
+    sessionInstance.terminate = async () => {
+      throw new Error('synthetic teardown failure');
+    };
+    return sessionInstance;
+  };
+
+  const commandPromise = runOwnedCommand(
+    process.execPath,
+    ['-e', 'setInterval(() => {}, 1000)'],
+    {
+      stdio: 'ignore',
+      _sessionFactory: customFactory,
+    },
+  );
+
+  try {
+    // Trigger signal to cause teardown
+    process.emit('SIGTERM');
+
+    await assert.rejects(
+      commandPromise,
+      /synthetic teardown failure/,
+    );
+  } finally {
+    if (sessionInstance?.pid && isPidAlive(sessionInstance.pid)) {
+      try { process.kill(sessionInstance.pid, 'SIGKILL'); } catch {}
+    }
+  }
+
+  assert.equal(process.listenerCount('SIGTERM'), initialListeners);
+});
+
+test('runOwnedCommand propagates startup failure on invalid executable and cleans up signal listeners', async () => {
+  const initialListeners = process.listenerCount('SIGINT');
   await assert.rejects(
     async () => {
-      await runOwnedCommand('__non_existent_binary_xyz_123__', []);
+      await runOwnedCommand('__non_existent_binary_xyz_123__', [], { stdio: 'ignore' });
     },
     (err) => Boolean(err),
   );
+  assert.equal(process.listenerCount('SIGINT'), initialListeners);
 });
