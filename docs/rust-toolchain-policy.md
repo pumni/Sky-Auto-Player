@@ -25,12 +25,37 @@ its parents. It does not search child directories. Commands started inside `rust
 `RUSTUP_TOOLCHAIN` for root-level Cargo commands. The `setup-rust-pinned` composite action
 uses the same source for CI installation and exports that value to later steps.
 
+## Rust lint policy
+
+The required Rust validation has two complementary lanes. The existing
+workspace Clippy pass uses all targets and all features with `-D warnings`.
+It protects test and qualification code but does not establish production
+lint cleanliness: enabling `test-support` can hide unused production items.
+
+The production lint pass in `cargo xtask check rust` checks each first-party
+library independently with no default features, library targets only, the
+`dist` profile, locked dependencies and `-D warnings`. It also checks the
+standalone xtask binary. `cargo xtask check desktop-native` checks the desktop
+library and binary independently of test features in both desktop-runtime
+and packaged production configurations, with `-D warnings`. The packaged
+lint uses the `dist` profile with the existing no-frontend-assets check
+configuration; the actual packaged artifact is still built and verified by
+the existing package lane. Neither lint lane replaces the other.
+
+Fix unused production items at their ownership boundary: delete genuinely
+unused code or restrict test-only items and their imports to the features
+that consume them. Do not add blanket `allow(dead_code)`, `allow(unused)`,
+or warning-level compiler flags simply to pass a gate. Existing justified
+lint exceptions must be reviewed in context; a green gate is not evidence
+that every suppression is justified. Architecture audit advisories are a
+separate policy and are not compiler warnings.
+
 ## Upgrade policy
 
 1. Start from the current `origin/main` and record the exact base commit.
 2. Change the compiler only in `rust/rust-toolchain.toml`; do not run `cargo update`.
-3. Run format, locked check, locked Clippy with `-D warnings`, and locked tests for the
-   complete workspace, all targets, and all features.
+3. Run the complete pinned `cargo xtask check all` gate, including production
+   lint, all-target/all-feature Clippy with `-D warnings`, and locked tests.
 4. Review Windows-specific runtime changes, especially TLS destructor behavior for the
    `sky_dispatch_win32` thread-local waitable timer.
 5. Raise the workspace MSRV only after the compatibility pass succeeds. Do not add a new

@@ -10,7 +10,9 @@ pub const PHYSICAL_INSTRUMENT_SCAN_CODES: [u16; 15] = [
 pub const FULL_INSTRUMENT_MASK: u16 = (1u16 << PHYSICAL_INSTRUMENT_SCAN_CODES.len()) - 1;
 
 // The current instrument allowlist contains no E0/E1 extended scan codes.
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) const MAX_INSTRUMENT_SCAN_CODE: usize = 0x35;
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) const SCAN_CODE_TO_MASK: [u16; MAX_INSTRUMENT_SCAN_CODE + 1] = {
     let mut table = [0u16; MAX_INSTRUMENT_SCAN_CODE + 1];
     table[0x15] = 1 << 0;
@@ -32,6 +34,7 @@ pub(crate) const SCAN_CODE_TO_MASK: [u16; MAX_INSTRUMENT_SCAN_CODE + 1] = {
 };
 
 #[inline]
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn key_mask(scan_code: u16) -> Option<u16> {
     let mask = SCAN_CODE_TO_MASK
         .get(scan_code as usize)

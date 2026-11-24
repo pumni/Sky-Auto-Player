@@ -157,7 +157,10 @@ trade those checks for shared state.
 
 - Run `cargo xtask check all` at the repository root for the canonical
   pre-review static, Rust, and desktop gate. `cargo xtask check desktop-native`
-  runs the native Tauri feature checks and generated binding comparison.
+  runs warning-denying native Tauri production lint, all-feature checking,
+  and generated binding comparison. `cargo xtask check rust` also lints each
+  first-party library separately without test features, in the `dist` profile,
+  plus the standalone xtask binary before the all-feature Clippy/test pass.
 - Run desktop Bun commands from `apps/desktop/`. `bun run dev` starts Vite;
   on Windows, `bun run tauri:dev` starts the native shell around Vite.
 - Run website Bun commands from `apps/website/` with its own frozen lockfile.

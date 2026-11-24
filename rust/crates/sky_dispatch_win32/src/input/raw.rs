@@ -1,5 +1,7 @@
 use super::outcome::TerminalUpTransportResult;
-use crate::clock::{QpcClock, QpcError, QpcTicks};
+#[cfg(any(test, feature = "test-support"))]
+use crate::clock::QpcClock;
+use crate::clock::{QpcError, QpcTicks};
 
 /// The single raw Win32 transport primitive used by musical packets and safety
 /// releases. Callers fully prepare the INPUT slice
@@ -38,6 +40,7 @@ pub(crate) fn send_prepared_inputs_once(event_count: u8) -> (u8, u32) {
     (event_count, 0)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub(crate) fn no_syscall_boundary_with_clock(
     clock: Option<QpcClock>,
 ) -> (QpcTicks, Option<QpcTicks>, Option<QpcError>) {
