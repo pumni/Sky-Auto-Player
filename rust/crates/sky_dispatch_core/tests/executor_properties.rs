@@ -158,10 +158,8 @@ proptest! {
         let mut observed_generations = Vec::new();
         for event in &result.events {
             if event.kind == "down" {
-                for gen_id in &event.generation_ids {
-                    if let Some(id) = gen_id {
-                        observed_generations.push(*id);
-                    }
+                for id in event.generation_ids.iter().flatten() {
+                    observed_generations.push(*id);
                 }
             }
         }

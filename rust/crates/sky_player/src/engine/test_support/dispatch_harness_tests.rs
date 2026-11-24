@@ -995,7 +995,7 @@ fn lifecycle_precision_fixture_lease_config_materializes_qpc_timeout() {
 }
 
 #[test]
-fn admissible_down_fences_when_focus_is_lost() {
+fn admissible_down_fences_when_focus_lost_or_stale_preflight() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     harness.configure_focus_owner_for_test(1, 77);
     let packets = harness.configure_mock_packet_sender_for_test(&[0]);
@@ -1005,6 +1005,7 @@ fn admissible_down_fences_when_focus_is_lost() {
         .expect("stage Down candidate")
         .expect("Down candidate exists");
 
+    // Focus is dropped between staging (preflight) and final admission
     harness.focus_active.store(false, Ordering::Release);
     let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
 
@@ -1014,7 +1015,7 @@ fn admissible_down_fences_when_focus_is_lost() {
     );
     assert!(
         packets.lock().expect("packets lock").is_empty(),
-        "no packets sent when focus is lost"
+        "no packets sent when focus is lost at final admission"
     );
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
     assert_eq!(harness.generation_accounting_for_test().activated, 0);
@@ -1108,7 +1109,7 @@ fn one_shot_terminal_background_budget_is_bounded() {
 }
 
 #[test]
-fn stale_session_rejection_at_final_admission() {
+fn target_owner_proof_invalidation_rejects_at_final_admission() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     let packets = harness.configure_mock_packet_sender_for_test(&[0]);
     let chord = harness.current_executor_chord_for_test();
@@ -1208,35 +1209,6 @@ fn pr671_reachability_with_scheduler_selected_state() {
     assert_eq!(accounting.released, 2);
     assert_eq!(accounting.active, 0);
     assert_eq!(accounting.cancelled, 0);
-}
-
-#[test]
-fn pr677_fresh_final_admission_vs_stale_preflight() {
-    let mut harness = ProductionDispatchTestHarness::new_down_only();
-    harness.configure_focus_owner_for_test(1, 77);
-    let packets = harness.configure_mock_packet_sender_for_test(&[0]);
-    let chord = harness.current_executor_chord_for_test();
-
-    // 1. Preflight staging succeeds while focus is active
-    let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
-        .expect("stage candidate during preflight")
-        .expect("candidate exists");
-
-    // 2. Focus is dropped between staging (preflight) and final admission
-    harness.focus_active.store(false, Ordering::Release);
-
-    // 3. Final admission detects stale preflight and fails closed (Replan)
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-    assert_eq!(
-        outcome,
-        crate::engine::worker::StagedDispatchOutcome::Replan
-    );
-    assert!(
-        packets.lock().expect("packets lock").is_empty(),
-        "Down packet must not be emitted"
-    );
-    assert_eq!(harness.release_obligation_mask_for_test(), 0);
 }
 
 #[test]
