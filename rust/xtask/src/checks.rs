@@ -159,16 +159,34 @@ impl CheckSession {
         }
     }
 
-    pub fn finish_group(&mut self, is_ok: bool) {
+    pub fn finish_group(&mut self, execution_result: Result<()>) -> Result<()> {
         if let Some(mut group) = self.current_group.take() {
-            let has_unexecuted = group.checks.iter().any(|c| c.status == "not-run");
-            group.status = if is_ok && !has_unexecuted {
+            let unexecuted: Vec<&str> = group
+                .checks
+                .iter()
+                .filter(|c| c.status == "not-run")
+                .map(|c| c.name.as_str())
+                .collect();
+
+            if execution_result.is_ok() && !unexecuted.is_empty() {
+                group.status = "failed".to_owned();
+                let err_msg = format!(
+                    "Incomplete check inventory in group '{}': unexecuted leaves: {}",
+                    group.name,
+                    unexecuted.join(", ")
+                );
+                self.groups.push(group);
+                return Err(err_msg.into());
+            }
+
+            group.status = if execution_result.is_ok() {
                 "passed".to_owned()
             } else {
                 "failed".to_owned()
             };
             self.groups.push(group);
         }
+        execution_result
     }
 
     pub fn add_not_run_group(&mut self, name: &'static str, planned_leaves: &[&str]) {
@@ -449,14 +467,20 @@ fn run_with_session(
         "static" => {
             session.start_group("group-static", STATIC_LEAF_CHECKS);
             let res = run_static_group(skip_supply_chain, session);
-            session.finish_group(res.is_ok());
-            res
+            let outcome = session.finish_group(res);
+            if outcome.is_ok() {
+                println!("[xtask] check static: PASS");
+            }
+            outcome
         }
         "rust" => {
             session.start_group("group-rust", RUST_LEAF_CHECKS);
             let res = run_rust_group(session);
-            session.finish_group(res.is_ok());
-            res
+            let outcome = session.finish_group(res);
+            if outcome.is_ok() {
+                println!("[xtask] check rust: PASS");
+            }
+            outcome
         }
         "desktop" => {
             session.start_group("group-desktop", DESKTOP_LEAF_CHECKS);
@@ -488,26 +512,28 @@ fn run_with_session(
                     );
                 }
                 record_step(session, "desktop-native", || check_desktop_native(&root))?;
-                println!("[xtask] check desktop: PASS");
                 Ok(())
             })();
-            session.finish_group(res.is_ok());
-            res
+            let outcome = session.finish_group(res);
+            if outcome.is_ok() {
+                println!("[xtask] check desktop: PASS");
+            }
+            outcome
         }
         "desktop-native" => {
             session.start_group("group-desktop-native", DESKTOP_NATIVE_LEAF_CHECKS);
             let root = repo::root();
             let res = record_step(session, "desktop-native", || check_desktop_native(&root));
-            session.finish_group(res.is_ok());
-            if res.is_ok() {
+            let outcome = session.finish_group(res);
+            if outcome.is_ok() {
                 println!("[xtask] check desktop-native: PASS");
             }
-            res
+            outcome
         }
         "all" => {
             session.start_group("group-static", STATIC_LEAF_CHECKS);
             let static_res = run_static_group(skip_supply_chain, session);
-            session.finish_group(static_res.is_ok());
+            let static_res = session.finish_group(static_res);
             if let Err(e) = static_res {
                 session.add_not_run_group("group-rust", RUST_LEAF_CHECKS);
                 session.add_not_run_group("group-desktop", DESKTOP_LEAF_CHECKS);
@@ -516,7 +542,7 @@ fn run_with_session(
 
             session.start_group("group-rust", RUST_LEAF_CHECKS);
             let rust_res = run_rust_group(session);
-            session.finish_group(rust_res.is_ok());
+            let rust_res = session.finish_group(rust_res);
             if let Err(e) = rust_res {
                 session.add_not_run_group("group-desktop", DESKTOP_LEAF_CHECKS);
                 return Err(e);
@@ -597,7 +623,6 @@ fn run_static_group(skip_supply_chain: bool, session: &mut CheckSession) -> Resu
     record_step(session, "legacy-updater-retirement", || {
         tauri_metadata::v4_legacy_updater_retirement(&root)
     })?;
-    println!("[xtask] check static: PASS");
     Ok(())
 }
 
@@ -750,7 +775,7 @@ mod tests {
         assert!(record_step(&mut session, "step-a", || Ok(())).is_ok());
         let fail = record_step(&mut session, "step-b", || Err("injected error".into()));
         assert!(fail.is_err());
-        session.finish_group(false);
+        let _ = session.finish_group(fail);
 
         let group = &session.groups[0];
         assert_eq!(group.name, "group-test");
@@ -781,7 +806,7 @@ mod tests {
             "skipped",
             Some("supply-chain-skipped".to_owned()),
         );
-        session.finish_group(false);
+        let _ = session.finish_group(Err("sensitive error".into()));
 
         let json = serde_json::to_string(&session.groups).unwrap();
         assert!(!json.contains("Administrator"));
@@ -806,7 +831,7 @@ mod tests {
             Err("corrupted catalog manifest".into())
         });
         assert!(res.is_err());
-        session.finish_group(false);
+        let _ = session.finish_group(res);
 
         let group = &session.groups[0];
         let catalog_check = group
@@ -906,8 +931,12 @@ mod tests {
         let mut session = CheckSession::default();
         session.start_group("group-test", &["step-a", "step-b"]);
         session.record_leaf("step-a", "passed", None);
-        // step-b is left not-run; even if caller passed is_ok = true, group must fail
-        session.finish_group(true);
+        // step-b is left not-run; even if caller passed Ok(()), finish_group must return Err
+        let res = session.finish_group(Ok(()));
+        assert!(
+            res.is_err(),
+            "finish_group must return Err when unexecuted leaves remain"
+        );
         assert_eq!(session.groups[0].status, "failed");
     }
 

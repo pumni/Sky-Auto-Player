@@ -98,10 +98,33 @@ export class OwnedProcessSession {
         return;
       }
 
+      const taskkillTimeoutMs = Math.max(graceTimeoutMs, 3000);
       const result = spawnSync('taskkill', ['/pid', String(this.pid), '/T', '/F'], {
         stdio: 'ignore',
         windowsHide: true,
+        timeout: taskkillTimeoutMs,
       });
+
+      if (result.error) {
+        throw new Error(
+          `Failed to execute taskkill for PID ${this.pid}: ${result.error.message}`,
+        );
+      }
+
+      if (result.status !== 0) {
+        const exited = await waitForPidExit(this.pid, graceTimeoutMs);
+        if (!exited) {
+          try {
+            this.child.kill('SIGKILL');
+          } catch {
+            // child already dead
+          }
+          await waitForPidExit(this.pid, killTimeoutMs);
+        }
+        throw new Error(
+          `Failed to cleanly terminate owned process tree for PID ${this.pid} (taskkill exit=${result.status})`,
+        );
+      }
 
       const exited = await waitForPidExit(this.pid, graceTimeoutMs);
       if (!exited) {
@@ -113,7 +136,7 @@ export class OwnedProcessSession {
         const killed = await waitForPidExit(this.pid, killTimeoutMs);
         if (!killed) {
           throw new Error(
-            `Failed to cleanly terminate owned process tree for PID ${this.pid} (taskkill exit=${result.status})`,
+            `Failed to cleanly terminate owned process tree for PID ${this.pid} within deadline`,
           );
         }
       }
@@ -193,49 +216,59 @@ export function runOwnedCommand(executable, args, options = {}) {
     let finished = false;
     let teardownPromise = null;
 
-    const stop = () => {
-      if (finished) return teardownPromise;
-      if (!teardownPromise) {
-        teardownPromise = session.terminate().catch((err) => {
-          console.error('[process-session] Error during signal termination:', err);
-          throw err;
-        });
-      }
-      return teardownPromise;
+    const cleanupListeners = () => {
+      process.removeListener('SIGINT', handleSignal);
+      process.removeListener('SIGTERM', handleSignal);
     };
 
-    const onSigInt = () => { stop(); };
-    const onSigTerm = () => { stop(); };
-
-    process.once('SIGINT', onSigInt);
-    process.once('SIGTERM', onSigTerm);
-
-    function cleanupListeners() {
-      process.removeListener('SIGINT', onSigInt);
-      process.removeListener('SIGTERM', onSigTerm);
-    }
-
-    child.once('error', async (err) => {
+    const finish = (err, outcome) => {
+      if (finished) return;
       finished = true;
       cleanupListeners();
+      if (err) {
+        reject(err);
+      } else {
+        resolve(outcome);
+      }
+    };
+
+    const handleSignal = async () => {
+      if (finished) return;
       try {
-        await (teardownPromise ?? session.terminate());
+        if (!teardownPromise) {
+          teardownPromise = session.terminate();
+        }
+        await teardownPromise;
+        finish(null, { code: 1, signal: 'SIGTERM' });
+      } catch (err) {
+        finish(err);
+      }
+    };
+
+    process.once('SIGINT', handleSignal);
+    process.once('SIGTERM', handleSignal);
+
+    child.once('error', async (err) => {
+      try {
+        if (!teardownPromise) {
+          teardownPromise = session.terminate();
+        }
+        await teardownPromise;
       } catch {}
-      reject(err);
+      finish(err);
     });
 
     child.once('exit', async (code, signal) => {
-      finished = true;
-      cleanupListeners();
       if (teardownPromise) {
         try {
           await teardownPromise;
+          finish(null, { code: code ?? 1, signal });
         } catch (err) {
-          reject(err);
-          return;
+          finish(err);
         }
+      } else {
+        finish(null, { code: code ?? 1, signal });
       }
-      resolve({ code: code ?? 1, signal });
     });
   });
 }

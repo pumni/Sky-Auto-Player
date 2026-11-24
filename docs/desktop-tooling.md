@@ -49,12 +49,16 @@ bun run test:functional
 `bun run test:e2e` and `bun run test:e2e:bundle` in `apps/desktop/` start their own loopback Vite
 server and pass its actual bound URL to Playwright.
 Similarly, `bun run test:functional` / `test:e2e` in `apps/website/` starts an owned Astro preview
-server on an OS-allocated IPv4 loopback port (`127.0.0.1:0`), completely isolated from external interfaces and other checkouts.
+server on an OS-allocated IPv4 loopback port (`127.0.0.1:0`).
 Local website test runs rebuild the static distribution fresh by default to prevent silent stale validation; CI and explicit invocations reuse prebuilt distributions via `--reuse-existing-build`.
 Separate worktrees use independent ephemeral ports without polling, attaching to unrelated servers, or using broad process kills.
-Test artifacts remain relative to the app checkout. Worktree mutable resources (Cargo target, generated IPC binding export,
-app data, fixtures, browser output, ephemeral ports) are checkout-local.
-Browser checks remain mock-shell evidence, not native Windows qualification.
+
+### Worktree isolation boundaries and limitations
+- **Ephemeral network listeners:** Test servers bind OS-allocated IPv4 loopback ports (`127.0.0.1:0`), avoiding cross-worktree port collisions.
+- **Concurrent writes:** Concurrent execution within the *same* checkout is unsupported for fixed output paths, including generated IPC bindings (`rust/crates/sky_player/bindings`), staged native resources (`apps/desktop/src-tauri/resources/`), and build distribution outputs.
+- **Environment inheritance:** Inherited environment variables (such as `CARGO_TARGET_DIR`, `TS_RS_EXPORT_DIR`, or `TAURI_CONFIG`) must remain checkout-relative; global overrides break worktree isolation.
+- **Native OS singletons:** Native Windows user application state (e.g. `%APPDATA%/com.pumni.sky-auto-player`) and physical Win32 input sinks (`SendInput`) are global to the user desktop session and are not worktree-isolated.
+- **Qualification boundary:** Browser checks qualify web/mock UI integration only; they do not qualify native Windows timing, MMCSS scheduling, or focus tracking.
 
 ## Repository checks
 

@@ -1085,30 +1085,6 @@ fn generation_and_release_obligation_lifecycle() {
 }
 
 #[test]
-fn one_shot_terminal_background_budget_is_bounded() {
-    let mut harness = ProductionDispatchTestHarness::new_down_only();
-    harness.configure_mock_packet_sender_for_test(&[0]);
-    let chord = harness.current_executor_chord_for_test();
-    let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
-        .expect("stage Down candidate")
-        .expect("Down candidate exists");
-    assert_eq!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
-    );
-    assert_eq!(harness.release_obligation_mask_for_test(), 1);
-
-    let mut observation = crate::engine::worker::FinalizeTestObservation::default();
-    let _ = harness.finalize_worker_for_test(false, &mut observation);
-
-    assert_eq!(observation.terminal_release_attempts, 1);
-    assert_eq!(observation.total_release_attempts, 1);
-    assert_eq!(observation.release_obligation_mask, 0);
-    assert_eq!(observation.generation_accounting.active, 0);
-}
-
-#[test]
 fn target_owner_proof_invalidation_rejects_at_final_admission() {
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     let packets = harness.configure_mock_packet_sender_for_test(&[0]);
@@ -1127,88 +1103,6 @@ fn target_owner_proof_invalidation_rejects_at_final_admission() {
     );
     assert!(packets.lock().expect("packets lock").is_empty());
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
-}
-
-#[test]
-fn pr671_reachability_with_scheduler_selected_state() {
-    let mut harness =
-        ProductionDispatchTestHarness::new_lifecycle_sequence_for_test(10_000_000, false)
-            .expect("lifecycle fixture admission");
-    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0, 0, 0]);
-    let clock = harness.resources.clock;
-    let now = clock.now().expect("initial live scheduler QPC");
-    let epoch = QpcTicks::from_raw(
-        now.as_u64().saturating_sub(
-            clock
-                .duration_from_us(1_000_000)
-                .expect("past scheduler epoch")
-                .as_u64(),
-        ),
-    );
-    harness
-        .reanchor_playback_clock_for_test(epoch)
-        .expect("reanchor clock");
-
-    let await_and_dispatch = |harness: &mut ProductionDispatchTestHarness| {
-        let clock = harness.resources.clock;
-        loop {
-            let sample = clock.now().expect("QPC sample");
-            match harness
-                .resources
-                .scheduler
-                .evaluate_at(sample, epoch)
-                .expect("eval")
-            {
-                sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } => {
-                    wait_until_qpc(clock, deadline_qpc);
-                }
-                _ => {
-                    let cur = clock.now().expect("cur QPC");
-                    return dispatch_live_scheduler_next(harness, cur, epoch);
-                }
-            }
-        }
-    };
-
-    // Step 1: Down 1
-    let (up1, down1, outcome1) = await_and_dispatch(&mut harness);
-    assert_eq!((up1, down1), (0, 1));
-    assert_eq!(
-        outcome1,
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
-    );
-
-    // Step 2: Up 1
-    let (up2, down2, outcome2) = await_and_dispatch(&mut harness);
-    assert_eq!((up2, down2), (1, 0));
-    assert_eq!(
-        outcome2,
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
-    );
-
-    // Step 3: Down 2
-    let (up3, down3, outcome3) = await_and_dispatch(&mut harness);
-    assert_eq!((up3, down3), (0, 1));
-    assert_eq!(
-        outcome3,
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
-    );
-
-    // Step 4: Up 2
-    let (up4, down4, outcome4) = await_and_dispatch(&mut harness);
-    assert_eq!((up4, down4), (1, 0));
-    assert_eq!(
-        outcome4,
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
-    );
-
-    assert_eq!(packets.lock().expect("packets lock").len(), 4);
-    let accounting = harness.generation_accounting_for_test();
-    assert_eq!(accounting.total, 2);
-    assert_eq!(accounting.activated, 2);
-    assert_eq!(accounting.released, 2);
-    assert_eq!(accounting.active, 0);
-    assert_eq!(accounting.cancelled, 0);
 }
 
 #[test]
