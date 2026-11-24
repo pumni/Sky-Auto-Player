@@ -1,45 +1,38 @@
 # Technical Documentation — Find by Task
 
-Open only the contract relevant to the change. Code and tests at the checked-out
-SHA describe implementation; active security, timing, and release contracts
-describe intended invariants. This index is a route map, not a reading checklist.
+Use this as a route map, not a reading list. Open the owning contract for the
+changed behavior; follow its source/test references only as needed.
 
-## Current contracts
+| Task | Current owner |
+| --- | --- |
+| Module ownership, IPC/native boundaries | [Architecture](architecture.md) |
+| Native scheduling, admission, timing, cleanup, retirement | [Playback engine](playback-engine.md) |
+| Windows tests, calibration, evidence and authorization | [Playback verification](playback-verification.md) |
+| Desktop behavior, layout and preparation UI | [Workbench](desktop-workbench.md) |
+| React Aria typing and frontend dependencies | [Type boundary](desktop-type-boundary.md) |
+| App commands, browser runners and worktree isolation | [JavaScript tooling](desktop-tooling.md) |
+| Visual UI work | [Visual reference](ui/README.md) (check capture SHA) |
+| Library identity and membership | [Library V1](library-v1-contract.md) |
+| Built-in songs and provenance | [Manifest](../builtin-songs/manifest.json), [curation](song-curation/README.md) |
+| Sheet parsing, source compatibility | [Source decoding](song-source-decoding.md) |
+| Pitch mapping, tempo, schedule and risk | [Song planning](song-planning.md) |
+| Security and forbidden capabilities | [Security policy](../SECURITY.md) |
+| Distribution, update channels and package trust | [Distribution](distribution-and-update.md) |
+| Tauri installer, packaging and package verification | [Tauri packaging](v4-tauri-packaging.md) |
+| Release transaction and promotion authority | [Release authority](v4-release-authority.md) |
+| Hosted execution, runner trust and recovery | [Release execution](v4-release-execution-topology.md) |
+| Updater private-key inventory/custody/rotation | [Updater key custody](v4-updater-key-custody.md) |
+| Authenticode provider and signer seam | [Authenticode](v4-authenticode-provider-seam.md) |
+| CI lanes, local impact preview, verification evidence | [CI topology](ci-validation-topology.md) |
+| Compiler pin, MSRV, production lint | [Rust toolchain policy](rust-toolchain-policy.md) |
+| Contribution and review practice | [Contributing](../CONTRIBUTING.md) |
 
-- **Ownership and module boundaries:** [architecture](architecture.md).
-- **Native playback:** [playback engine](playback-engine.md) is the current
-  scheduling, sender, cleanup, and retirement contract;
-  [verification](playback-verification.md) owns current Windows commands and
-  qualification. Browser mocks are not native timing evidence.
-- **Desktop UI:** [workbench](desktop-workbench.md) for user interactions,
-  [React Aria types](desktop-type-boundary.md), and
-  [JavaScript tooling](desktop-tooling.md). Consult the
-  [current visual reference](ui/README.md) only for visual work; check its capture SHA.
-- **Library and built-in songs:** [library identity/membership](library-v1-contract.md),
-  [bundled manifest](../builtin-songs/manifest.json), and
-  [catalog curation/qualification](song-curation/README.md).
-- **Sheet compatibility:** [source decoding](song-source-decoding.md),
-  [15-key planning](song-planning.md), and the
-  [workbench preparation flow](desktop-workbench.md#sheet-compatibility-and-playback-preparation).
-- **Security:** [security boundary](../SECURITY.md).
-- **Packaging and updates:** [distribution](distribution-and-update.md) and
-  [Tauri packaging](v4-tauri-packaging.md).
-- **Release or signing:** [release authority](v4-release-authority.md),
-  [execution/recovery](v4-release-execution-topology.md),
-  [updater key custody](v4-updater-key-custody.md), and
-  [Authenticode](v4-authenticode-provider-seam.md).
-- **CI and development:** [CI checks](ci-validation-topology.md),
-  [Rust toolchain](rust-toolchain-policy.md), and
-  [contributing](../CONTRIBUTING.md).
+[HISTORY.md](HISTORY.md) links revision-bound decisions and evidence, not live
+work orders or current qualification. Published user-facing notes live in
+[GitHub Releases](https://github.com/pumni/Sky-Auto-Player/releases); unreleased
+candidates require source-tagged `docs/releases/{tag}.md` before preflight per
+the release authority.
 
-## History is not a live contract
-
-- [HISTORY.md](HISTORY.md) links original decisions, snapshots, and evidence
-  at immutable Git SHAs. Use them for provenance, not current qualification.
-- Published user-facing notes live in [GitHub Releases](https://github.com/pumni/Sky-Auto-Player/releases).
-  An unreleased candidate still needs source-tagged `docs/releases/{tag}.md`
-  before preflight; see [release authority](v4-release-authority.md).
-
-If an active contract and the checked-out source disagree, investigate both
-before changing the owning source, tests, or contract. Report uncertainty
-rather than silently treating old implementation details as permanent.
+When code/tests and an owning contract disagree, investigate both and report
+uncertainty; neither old implementation nor historical instructions override
+current safety and release requirements.

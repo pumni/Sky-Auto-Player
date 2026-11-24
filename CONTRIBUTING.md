@@ -1,108 +1,77 @@
 # Contributing to Sky Auto Player
 
-Thanks for considering a contribution. The repository favors small, evidence-backed changes and
-keeps process proportional to the risk of the boundary being changed.
+Keep contributions focused on one reviewable outcome, with evidence proportional
+to its risk. [AGENTS.md](AGENTS.md) gives repository working agreements;
+[SECURITY.md](SECURITY.md) owns security and trust boundaries.
 
-## Start with the relevant evidence
+## Find the owning code and contract
 
-- Read [`SECURITY.md`](SECURITY.md) for the non-negotiable security boundary.
-- Use [`docs/INDEX.md`](docs/INDEX.md) to route to the smallest active document set relevant to your
-  change.
-- Inspect the production source and direct tests for the behavior you are changing.
-- [`AGENTS.md`](AGENTS.md) is a concise repository/agent guide; it is not a replacement for source,
-  tests, or task-specific investigation.
+Use the actual source, direct tests and configuration at the checkout's revision.
+[docs/INDEX.md](docs/INDEX.md) routes to current contracts by task; historical
+records are provenance rather than current qualification. Update the owning
+contract with behavior changes, not a second instruction or summary layer.
 
-Use [`docs/INDEX.md`](docs/INDEX.md) for relevant active contracts; don't preload historical
-records. Update the owning contract when behavior changes and preserve earlier evidence at its
-recorded revision. For playback contracts, see [`docs/playback-engine.md`](docs/playback-engine.md)
-and [`docs/playback-verification.md`](docs/playback-verification.md).
+Prefer names that describe current responsibility. Old phase, sprint and
+work-order labels are historical; retain real version/schema identifiers and
+immutable external identifiers with live consumers. Migrate callers and remove
+replaced private paths. A refactor and behavior change may share a PR when they
+form one inseparable, reviewable outcome. Avoid unrelated rewrites.
 
-## Names and historical identifiers
+## Scope
 
-Prefer names that describe current behavior or responsibility. Treat old phase, sprint, work-order,
-and optimization-wave labels as historical context rather than a naming scheme for new work. Keep
-genuine version/schema identifiers and immutable external identifiers stable when they have live
-consumers. Review names in context; no automated historical-vocabulary rule replaces that judgment.
+Contributions welcome: regression-backed bug fixes, measured performance work,
+supported sheet-format improvements, documentation, Windows/native improvements
+within the security contract, and site translations in
+`apps/website/src/content/` and `apps/website/src/data/`.
 
-## Contributions we welcome
+The current product scope is Windows; macOS/Linux ports and input mechanisms
+outside the [security boundary](SECURITY.md) are out of scope. Keep domain and
+orchestration independent of direct Win32/input effects. Architecture changes
+require the corresponding executable boundary checks and owning documentation.
 
-- Bug fixes with direct regression coverage.
-- Performance work backed by measurements on a comparable environment.
-- New or improved supported sheet-format handling.
-- Documentation improvements that make current behavior easier to navigate.
-- Windows/native improvements that preserve the documented security and platform boundaries.
-- Translation improvements for the site source under `apps/website/src/content/` and `apps/website/src/data/`.
+## Toolchains and commands
 
-## Out of scope
+Use repository pins, not versions copied into instructions. The
+[Rust toolchain policy](docs/rust-toolchain-policy.md) owns the compiler,
+locked dependencies and production lint rules. At the repository root use:
 
-- Game/process tampering, memory reads/writes, hooks, injection, debugger attach, anti-cheat evasion,
-  or a gameplay-input mechanism other than Windows `SendInput`.
-- Dependencies such as `python-keyboard`, `pynput`, `SetWindowsHookEx`, or another keyboard-injection
-  mechanism. `cargo xtask check static` enforces this boundary.
-- macOS/Linux ports in the current product scope.
-- Broad unrelated rewrites without evidence that they are necessary for the stated outcome.
+```powershell
+node scripts/toolchain-pin.mjs exec -- cargo xtask check all
+```
 
-## Architecture
+The root `.bun-version` is the Bun pin. Desktop and site retain independent
+manifests and lockfiles; install from the matching app with
+`bun install --frozen-lockfile`. See [desktop tooling](docs/desktop-tooling.md)
+for app checks and the blocking ESLint policy. Rust and Bun are the canonical
+product/development toolchains; the hosted Python ClamAV release adapter is the
+narrow exception described in [release authority](docs/v4-release-authority.md).
 
-The current architecture is documented in `docs/architecture.md` and
-`docs/playback-engine.md`. In particular, keep domain/orchestration independent from direct
-Win32/input effects unless the contribution explicitly changes the architecture and updates the
-corresponding executable boundary checks and documentation.
+## Review and evidence
 
-Do not copy architecture rules into a new contribution-specific instruction layer. Prefer source,
-direct tests, active docs, and repository checks as the evidence system.
+1. Branch from main or use the authorized existing branch; an issue or
+   intermediate handoff is useful for material decisions, not required ceremony.
+2. Iterate with focused tests and relevant format/lint. Demonstrate the
+   production path for production behavior claims; explicitly bound simulation,
+   browser and native evidence. See [playback verification](docs/playback-verification.md).
+3. Before claiming merge readiness, run the pinned canonical check on final
+   relevant source and verify required CI at exact PR HEAD. The
+   [CI contract](docs/ci-validation-topology.md) owns lane scope and the
+   merge gate. Do not run each broad subgroup and then repeat the same checks
+   through `check all` unless inputs or coverage changed.
+4. Run specialized package, updater, release, Windows timing or benchmark
+   evidence when the changed boundary warrants it and authorization permits.
+   Avoid repeating full cold/warm baselines or native acceptance without a
+   relevant change.
+5. Report exact commands, source/input identity, exit status, coverage, skips
+   and residual risk. Preserve raw evidence access. Passing a command does not
+   establish a gate or capability it did not exercise.
+6. Keep secrets and `.env` out of commits. Never bypass required CI or weaken
+   security/release checks. Changes to assertions, goldens, skips and tolerances
+   require independent behavioral justification. Turn repeatable failures into
+   regression tests or improvements to the owning tool.
 
-## Workflow
+## Commits and license
 
-1. Branch from `main` and keep the change focused on one outcome. An issue is useful for product
-   discussion or genuinely ambiguous semantics, but it is not mandatory ceremony for ordinary
-   implementation work.
-2. During editing, run focused tests for the changed boundary. Avoid running every broad group after
-   each edit.
-3. Before each intermediate review, run focused checks for the changed boundary and report them.
-   Before final merge readiness, run `cargo xtask check all` once against the final relevant source
-   state and ensure applicable required CI has passed at the exact PR HEAD. It includes the static,
-   Rust, desktop, and native desktop groups; do not automatically run those groups individually and
-   then repeat them through `check all`. Repeat a passed gate only if a later change invalidates its
-   inputs or coverage.
-4. Do not repeat full cold/warm performance baselines or native acceptance without a new behavior or
-   performance change. Run specialized package, updater, release, Windows timing, or benchmark
-   evidence when the changed boundary requires it.
-5. Record the exact command, HEAD and relevant input identity, exit code, and coverage. Report only
-   checks actually run, and explicitly identify checks that were skipped.
-6. Keep secrets and `.env` out of commits. Do not bypass CI or weaken a security/release gate merely
-   to make a change pass. Changes to assertions, golden data, skips, or tolerances
-   must have an independent behavioral justification, not just a passing result.
-7. In the PR, report the checks/evidence actually run and any relevant residual risk.
-
-A refactor and a behavior change may live in the same PR when they form one inseparable, reviewable
-outcome and the tests make the behavior change explicit. Avoid unrelated cleanup.
-
-Use the model's own planning and delegation capabilities. Intermediate handoffs
-are useful for consequential decisions or independent review, not mandatory
-milestones. For cross-boundary claims, demonstrate the production entry path or
-state exactly which part is simulated. Preserve reviewer access to the original
-contract and raw evidence. Capture repeatable failures as regression tests or
-improve the owning tool; avoid accumulating duplicate instruction files.
-
-## Dependency management
-
-Use the pinned Rust toolchain and Bun 1.4.4 from the repository-root `.bun-version` for canonical
-product checks. Desktop and site keep independent `bun.lock` files; install dependencies from the
-matching app directory with `bun install --frozen-lockfile`. Rust and Bun are the canonical
-product/development toolchains; do not introduce a Python product runtime or
-general-purpose repository toolchain. The existing hosted Python ClamAV scanner is a narrowly
-scoped release qualification adapter, governed by [release authority](docs/v4-release-authority.md).
-Desktop formatting and lint commands, including the blocking ESLint policy gate, are documented in
-[desktop tooling](docs/desktop-tooling.md).
-
-## Commit messages
-
-Conventional commit subjects are preferred: `type(scope): summary` (for example `fix(ui): ...` or
-`refactor(dispatch): ...`). Optimize for a reviewable history rather than forcing implementation
-work into a predetermined phase choreography.
-
-## Licensing
-
-By contributing you agree that your contributions are licensed under the GNU GPL v3.0, the same
-license as the rest of the repository.
+Prefer conventional commit subjects (`type(scope): summary`) and reviewable
+history rather than predetermined phase choreography. By contributing you
+agree that contributions are licensed under GNU GPL v3.0.

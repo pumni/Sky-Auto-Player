@@ -1,5 +1,7 @@
 # Historical source snapshots
 
+The completed PR #679 release-gap removal work order is archived at [main merge b69e4ad](https://github.com/pumni/Sky-Auto-Player/blob/b69e4ad219689049df8fb97e9a50ef11a751397f/docs/playback-remove-release-gap-plan.md). It is provenance, not current authorization or a live plan. Current contracts are [playback engine](playback-engine.md), [song planning](song-planning.md), and [playback verification](playback-verification.md).
+
 The executed playback-core redesign plan is retained only at its immutable
 source revision: [plan at
 d275398ee97b73cbbead1d47b0e825774160fa6e](https://github.com/pumni/Sky-Auto-Player/blob/d275398ee97b73cbbead1d47b0e825774160fa6e/docs/playback-core-redesign-plan.md).
