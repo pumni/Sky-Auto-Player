@@ -16,7 +16,6 @@
     --gold-1: #efca78;
     --gold-2: #f7dda2;
     --sky-1: #b8ccd6;
-    --coral-1: #efb5a9;
 
     --color-page: var(--night-0);
     --color-surface-quiet: var(--night-1);
@@ -29,7 +28,6 @@
     --color-action: var(--gold-1);
     --color-action-hover: var(--gold-2);
     --color-info: var(--sky-1);
-    --color-warning: var(--coral-1);
     --color-text-on-action: var(--color-page);
     --color-focus: var(--color-info);
     --color-interactive-border: var(--color-text-tertiary);
@@ -79,16 +77,13 @@
     --radius-xs: 0.25rem;
     --radius-sm: 0.45rem;
     --radius-md: 0.75rem;
-    --radius-lg: 1rem;
     --container-max: 84rem;
     --content-max: 44rem;
     --gutter: clamp(0.75rem, 3.2vw, 3.5rem);
-    --grid-gap: clamp(1rem, 2vw, 2rem);
     --duration-press: 110ms;
     --duration-fast: 150ms;
     --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);
     --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-    --shadow-stage: inset 0 1px 0 rgb(255 255 255 / 6%), 0 44px 110px rgb(0 0 0 / 34%);
   }
 }
 
@@ -106,7 +101,6 @@
       --gold-1: oklch(84% 0.105 84);
       --gold-2: oklch(90% 0.075 86);
       --sky-1: oklch(80% 0.045 224);
-      --coral-1: oklch(77% 0.085 30);
       --line-faint: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
       --line-default: color-mix(in oklch, var(--color-text-primary) 15%, transparent);
       --line-accent: color-mix(in oklch, var(--color-action) 42%, transparent);

@@ -1,331 +1,128 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import { SITE } from '../../data/site';
-import { withBase } from '../../utils/urls';
 
 interface Props {
   data: HomeContent['hero'];
+  downloadCta: string;
   locale: 'en' | 'vi';
 }
 
-const { data, locale } = Astro.props;
+const { data, downloadCta, locale } = Astro.props;
 ---
 
 <section
   id="top"
-  data-home-section="hero"
-  class="hero section-shell section-shell--feature section-shell--intro section-shell--after-header"
+  class:list={['hero', locale === 'vi' && 'hero--vi']}
   aria-labelledby="hero-title"
+  data-home-section="hero"
 >
-  <div class="container hero__layout">
-    <div class="hero__copy">
-      <p class="hero__kicker">{data.kicker}</p>
-      <h1 id="hero-title">
-        <span>{data.titleLines[0]}</span>{' '}
-        <span class="hero__title-second">{data.titleLines[1]}</span>
-      </h1>
-      <p class="hero__description">{data.description}</p>
-      <div class="hero__actions">
-        <a class="button button--primary hero__primary" href={SITE.releaseUrl}>
-          <span>{data.primaryCta}</span>
-          <span class="hero__destination">{data.primaryCtaDestination}</span>
-        </a>
-        <a
-          class="button button--secondary hero__secondary"
-          href={withBase(locale === 'vi' ? '/vi/#product' : '/#product')}
-        >
-          {data.secondaryCta}
-          <span aria-hidden="true"> ↓</span>
-        </a>
-      </div>
-      <p class="hero__disclaimer">{data.affiliationDisclaimer}</p>
-    </div>
-
-    <div class="hero__art" aria-hidden="true">
-      <div class="hero__art-label">
-        <span>{locale === 'vi' ? 'MỘT GIAI ĐIỆU CỦA RIÊNG BẠN' : 'A SONG OF YOUR OWN'}</span>
-        <span>♪</span>
-      </div>
-      <svg class="hero__score" viewBox="0 0 760 420" fill="none" xmlns="http://www.w3.org/2000/svg">
-        <path class="hero__staff" d="M40 124H720M40 158H720M40 192H720M40 226H720M40 260H720" />
-        <path class="hero__bar" d="M254 124V260M484 124V260M700 124V260" />
-        <path class="hero__stem" d="M145 260V128M300 226V94M348 226V94M535 192V60M622 226V94" />
-        <path class="hero__beam" d="M300 94L348 94M535 60L622 94" />
-        <ellipse
-          class="hero__note"
-          cx="128"
-          cy="260"
-          rx="21"
-          ry="13"
-          transform="rotate(-17 128 260)"
-        />
-        <ellipse
-          class="hero__note hero__note--accent"
-          cx="280"
-          cy="226"
-          rx="21"
-          ry="13"
-          transform="rotate(-17 280 226)"
-        />
-        <ellipse
-          class="hero__note hero__note--accent"
-          cx="328"
-          cy="192"
-          rx="21"
-          ry="13"
-          transform="rotate(-17 328 192)"
-        />
-        <ellipse
-          class="hero__note"
-          cx="515"
-          cy="192"
-          rx="21"
-          ry="13"
-          transform="rotate(-17 515 192)"
-        />
-        <ellipse
-          class="hero__note"
-          cx="602"
-          cy="226"
-          rx="21"
-          ry="13"
-          transform="rotate(-17 602 226)"
-        />
-        <path class="hero__score-tail" d="M40 316H720" />
-        <circle class="hero__score-dot" cx="40" cy="316" r="4" />
-        <circle class="hero__score-dot" cx="720" cy="316" r="4" />
-      </svg>
-      <p class="hero__art-caption">
-        {locale === 'vi' ? 'Sheet của bạn. Nhịp điệu của bạn.' : 'Your sheet. Your own rhythm.'}
-      </p>
-    </div>
+  <h1 id="hero-title">{data.title}</h1>
+  <p class="hero__description">{data.description}</p>
+  <div class="hero__actions">
+    <a class="button button--primary hero__primary" href={SITE.releaseUrl}>
+      {downloadCta}
+    </a>
+    <a class="hero__secondary" href="#product">
+      {data.secondaryCta}
+    </a>
   </div>
+  <p class="hero__meta">{data.meta}</p>
+  <p class="hero__risk">{data.riskNote}</p>
 </section>
 
 <style>
   @layer components {
     .hero {
-      position: relative;
-      overflow: clip;
-      border-top: 0;
-      background:
-        radial-gradient(ellipse at 78% 36%, rgb(239 202 120 / 7%), transparent 35%),
-        var(--color-page);
-    }
-
-    .hero__layout {
-      display: grid;
-      gap: clamp(var(--space-7), 8vw, var(--space-10));
-      align-items: center;
-    }
-
-    .hero__copy {
-      position: relative;
-      z-index: 1;
-      max-inline-size: 43rem;
-    }
-
-    .hero__kicker {
-      max-inline-size: 42ch;
-      margin-block-end: var(--space-5);
-      color: var(--color-action);
-      font-size: var(--type-label);
-      font-weight: 650;
-      letter-spacing: 0.06em;
-    }
-
-    :lang(vi) .hero__kicker {
-      letter-spacing: 0;
+      min-inline-size: 0;
+      align-self: center;
+      padding-block: 1rem;
     }
 
     .hero h1 {
-      max-inline-size: 9ch;
-      margin-block-end: var(--space-5);
-      font-size: clamp(3.25rem, 8.5vw, 7rem);
-      letter-spacing: -0.055em;
-      line-height: 0.98;
+      margin-block-end: 1.25rem;
+      font-size: 4rem;
+      letter-spacing: -0.025em;
+      line-height: 1.06;
+      text-wrap: balance;
     }
 
-    .hero h1 span {
-      display: block;
-    }
-
-    .hero__title-second {
-      color: var(--color-text-secondary);
-      font-style: italic;
-      font-weight: 500;
+    .hero--vi h1 {
+      letter-spacing: 0;
+      line-height: 1.15;
     }
 
     .hero__description {
-      max-inline-size: 54ch;
-      margin-block-end: var(--space-6);
+      max-inline-size: 42ch;
+      margin-block-end: 1.5rem;
       color: var(--color-text-secondary);
       font-size: var(--type-lead);
-      line-height: var(--leading-lead);
+      line-height: 1.5;
     }
 
     .hero__actions {
       display: flex;
       flex-wrap: wrap;
-      gap: var(--space-3);
+      align-items: center;
+      gap: 1.25rem;
     }
 
     .hero__primary {
-      display: inline-flex;
-      min-block-size: 3.75rem;
-      flex-direction: column;
-      align-items: flex-start;
-      justify-content: center;
-      gap: 0.125rem;
-      padding-block: var(--space-2);
-    }
-
-    .hero__destination {
-      color: color-mix(in oklch, var(--color-text-on-action) 78%, transparent);
-      font-size: var(--type-micro);
-      font-weight: 500;
-      line-height: 1.2;
+      min-block-size: 3rem;
+      padding-inline: 1.25rem;
+      border-radius: var(--radius-sm);
     }
 
     .hero__secondary {
-      min-block-size: 3.75rem;
+      display: inline-flex;
+      min-block-size: 44px;
+      align-items: center;
+      color: var(--color-text-secondary);
+      text-decoration: underline;
+      text-decoration-color: var(--line-default);
+      text-underline-offset: 0.25em;
     }
 
-    .hero__disclaimer {
-      max-inline-size: 55ch;
-      margin-block-start: var(--space-5);
+    .hero__secondary:hover {
+      color: var(--color-text-primary);
+      text-decoration-color: var(--color-focus);
+    }
+
+    .hero__meta {
+      margin-block-start: 0.875rem;
       color: var(--color-text-tertiary);
       font-size: var(--type-small);
     }
 
-    .hero__art {
-      position: relative;
-      min-inline-size: 0;
-      padding: clamp(var(--space-4), 4vw, var(--space-7));
-      border: 1px solid var(--line-default);
-      background:
-        linear-gradient(135deg, rgb(255 255 255 / 2.5%), transparent 45%),
-        var(--color-surface-quiet);
-      box-shadow: var(--shadow-stage);
+    .hero__risk {
+      max-inline-size: 48ch;
+      margin-block-start: 1.25rem;
+      color: var(--color-text-secondary);
+      font-size: var(--type-small);
+      line-height: 1.5;
     }
 
-    .hero__art::before,
-    .hero__art::after {
-      position: absolute;
-      inline-size: 1.4rem;
-      block-size: 1.4rem;
-      border-color: var(--color-action);
-      border-style: solid;
-      content: '';
-      opacity: 0.7;
-    }
-
-    .hero__art::before {
-      inset: 0 auto auto 0;
-      border-width: 1px 0 0 1px;
-    }
-
-    .hero__art::after {
-      inset: auto 0 0 auto;
-      border-width: 0 1px 1px 0;
-    }
-
-    .hero__art-label,
-    .hero__art-caption {
-      display: flex;
-      justify-content: space-between;
-      gap: var(--space-3);
-      color: var(--color-text-tertiary);
-      font-family: var(--font-mono);
-      font-size: var(--type-micro);
-      letter-spacing: 0.07em;
-    }
-
-    :lang(vi) .hero__art-label,
-    :lang(vi) .hero__art-caption {
-      letter-spacing: 0;
-    }
-
-    .hero__art-label span:last-child {
-      color: var(--color-action);
-      font-size: 1.25rem;
-    }
-
-    .hero__score {
-      display: block;
-      inline-size: 100%;
-      margin-block: clamp(2rem, 5vw, 4rem);
-      overflow: visible;
-    }
-
-    .hero__staff {
-      stroke: var(--line-default);
-      stroke-width: 1.2;
-    }
-
-    .hero__bar {
-      stroke: var(--line-faint);
-      stroke-width: 1;
-    }
-
-    .hero__stem,
-    .hero__beam {
-      stroke: var(--color-text-secondary);
-      stroke-linecap: round;
-      stroke-width: 4;
-    }
-
-    .hero__note {
-      fill: var(--color-text-secondary);
-    }
-
-    .hero__note--accent {
-      fill: var(--color-action);
-    }
-
-    .hero__score-tail {
-      stroke: var(--line-accent);
-      stroke-width: 1;
-    }
-
-    .hero__score-dot {
-      fill: var(--color-action);
-    }
-
-    .hero__art-caption {
-      justify-content: flex-end;
-      text-align: end;
-    }
-
-    @media (min-width: 64rem) {
-      .hero__layout {
-        grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
-        gap: clamp(3rem, 7vw, 7rem);
-      }
-
-      .hero__art {
-        margin-inline-end: calc(-1 * var(--space-6));
+    @media (max-width: 71.99rem) {
+      .hero h1 {
+        font-size: clamp(3rem, 6vw, 3.75rem);
       }
     }
 
     @media (max-width: 39.99rem) {
+      .hero h1 {
+        font-size: clamp(2.25rem, 7vw, 2.75rem);
+      }
+
+      .hero {
+        padding-block: 0;
+      }
+
       .hero__actions {
-        flex-direction: column;
-        align-items: stretch;
+        gap: 0.75rem 1rem;
       }
 
-      .hero__primary,
-      .hero__secondary {
-        inline-size: 100%;
-      }
-
-      .hero__art {
-        padding-inline: var(--space-3);
-      }
-
-      .hero__art-label,
-      .hero__art-caption {
-        font-size: var(--type-micro);
+      .hero__risk {
+        margin-block-start: 1rem;
       }
     }
   }

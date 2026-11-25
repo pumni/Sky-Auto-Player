@@ -1,7 +1,6 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import { withBase } from '../../utils/urls';
-import SectionIntro from '../ui/SectionIntro.astro';
 
 interface Props {
   data: HomeContent['product'];
@@ -13,253 +12,150 @@ const defaultView = data.views[0];
 
 <section
   id="product"
-  class="product-showcase section-shell section-shell--product section-shell--bordered"
-  aria-labelledby="product-title"
+  class="product-showcase"
+  aria-label={data.sectionLabel}
   data-home-section="product"
   data-product-showcase
 >
-  <div class="container product-showcase__layout">
-    <div class="product-showcase__copy">
-      <SectionIntro
-        kicker={data.kicker}
-        title={data.title}
-        description={data.description}
-        titleId="product-title"
-      />
-      <div class="product-selector" role="group" aria-label={data.selectorLabel} hidden>
-        {data.views.map((view, index) => (
-          <button
-            class="product-selector__button"
-            type="button"
-            aria-pressed={index === 0 ? 'true' : 'false'}
-            data-product-view
-            data-src={withBase(view.src)}
-            data-alt={view.alt}
-            data-caption={view.caption}
-            data-full-size-label={data.openImageLabel}
-          >
-            {view.label}
-          </button>
-        ))}
-      </div>
-      <ul class="product-view__fallback" aria-label={data.fallbackLabel}>
-        {data.views.map((view) => (
-          <li>
-            <a href={withBase(view.src)} target="_blank" rel="noreferrer">
-              {view.label}
-              <span aria-hidden="true"> ↗</span>
-            </a>
-          </li>
-        ))}
-      </ul>
-    </div>
-
-    <figure class="screenshot-frame">
-      <div class="screenshot-frame__bar">
-        <span>
-          SKY AUTO PLAYER <span aria-hidden="true">/</span> DESKTOP
-        </span>
-        <span>{data.captureLabel}</span>
-      </div>
-      <a
-        class="screenshot-frame__link"
-        href={withBase(defaultView.src)}
-        target="_blank"
-        rel="noreferrer"
-        aria-label={data.openImageLabel}
-        data-product-image-link
+  <div class="product-selector" role="group" aria-label={data.selectorLabel} hidden>
+    {data.views.map((view, index) => (
+      <button
+        class="product-selector__button"
+        type="button"
+        aria-pressed={index === 0 ? 'true' : 'false'}
+        data-product-view
+        data-src={withBase(view.src)}
+        data-alt={view.alt}
+        data-caption={view.caption}
       >
-        <img
-          class="screenshot-frame__image"
-          src={withBase(defaultView.src)}
-          alt={defaultView.alt}
-          width="1214"
-          height="798"
-          loading="lazy"
-          decoding="async"
-          data-product-image
-        />
-      </a>
-      <figcaption>
-        <span class="screenshot-frame__caption-copy" aria-live="polite" data-product-caption>
-          {defaultView.caption}
-        </span>
-        <span class="screenshot-frame__caption-kind">{data.captureLabel}</span>
-      </figcaption>
-    </figure>
+        {view.label}
+      </button>
+    ))}
   </div>
+
+  <figure class="product-showcase__figure">
+    <img
+      class="product-showcase__image"
+      src={withBase(defaultView.src)}
+      alt={defaultView.alt}
+      width="1214"
+      height="798"
+      loading="eager"
+      fetchpriority="high"
+      decoding="async"
+      data-product-image
+    />
+    <figcaption class="product-showcase__caption">
+      <span data-product-caption>{defaultView.caption}</span>
+      <a href={withBase(defaultView.src)} target="_blank" rel="noreferrer" data-product-full-size>
+        {data.fullSizeLabel}
+        <span aria-hidden="true"> ↗</span>
+      </a>
+    </figcaption>
+  </figure>
+
+  <ul class="product-showcase__fallback" aria-label={data.fallbackLabel}>
+    {data.views.map((view) => (
+      <li>
+        <a href={withBase(view.src)} target="_blank" rel="noreferrer">
+          {view.label}
+        </a>
+      </li>
+    ))}
+  </ul>
 </section>
 
 <style>
   @layer components {
     .product-showcase {
-      position: relative;
-      overflow: clip;
-      background:
-        radial-gradient(ellipse at 42% 54%, rgb(184 204 214 / 5%), transparent 48%),
-        var(--color-surface-quiet);
-    }
-
-    .product-showcase__layout {
-      display: grid;
-      gap: var(--space-7);
-      align-items: center;
-    }
-
-    .product-showcase__copy,
-    .screenshot-frame {
       min-inline-size: 0;
+      align-self: center;
     }
 
     .product-selector[hidden],
-    .product-view__fallback[hidden] {
+    .product-showcase__fallback[hidden] {
       display: none;
     }
 
     .product-selector {
       display: flex;
       flex-wrap: wrap;
-      gap: var(--space-2);
-      margin-block-start: var(--space-5);
+      gap: 0.25rem;
+      margin-block-end: 0.75rem;
     }
 
     .product-selector__button {
-      display: inline-flex;
-      min-block-size: 44px;
-      align-items: center;
-      padding: 0.5rem 0.9rem;
-      border: 1px solid var(--line-default);
-      border-radius: 999px;
+      min-block-size: 40px;
+      padding: 0.4rem 0.7rem;
+      border: 0;
+      border-radius: var(--radius-sm);
       background: transparent;
       color: var(--color-text-secondary);
       cursor: pointer;
       font-size: var(--type-small);
-      font-weight: 600;
-      transition:
-        background-color var(--duration-fast) var(--ease-standard),
-        border-color var(--duration-fast) var(--ease-standard),
-        color var(--duration-fast) var(--ease-standard);
     }
 
     .product-selector__button:hover {
-      border-color: var(--color-interactive-border);
       color: var(--color-text-primary);
     }
 
     .product-selector__button[aria-pressed='true'] {
-      border-color: var(--color-action);
-      background: color-mix(in oklch, var(--color-action) 12%, var(--color-page));
+      background: var(--color-surface-quiet);
       color: var(--color-text-primary);
     }
 
-    .product-view__fallback {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-2) var(--space-4);
-      margin: var(--space-4) 0 0;
-      padding: 0;
-      list-style: none;
-    }
-
-    .product-view__fallback a {
-      display: inline-flex;
-      min-block-size: 44px;
-      align-items: center;
-      color: var(--color-action);
-      font-size: var(--type-small);
-    }
-
-    .screenshot-frame {
+    .product-showcase__figure {
       margin: 0;
-      padding: clamp(var(--space-2), 1.5vw, var(--space-4));
-      border: 1px solid var(--line-default);
-      border-radius: var(--radius-lg);
-      background: var(--color-page);
-      box-shadow: var(--shadow-stage);
     }
 
-    .screenshot-frame__bar,
-    .screenshot-frame figcaption {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      justify-content: space-between;
-      gap: var(--space-2) var(--space-4);
-      color: var(--color-text-tertiary);
-      font-family: var(--font-mono);
-      font-size: var(--type-micro);
-      letter-spacing: 0.04em;
-    }
-
-    :lang(vi) .screenshot-frame__bar,
-    :lang(vi) .screenshot-frame figcaption {
-      letter-spacing: 0;
-    }
-
-    .screenshot-frame__bar {
-      min-block-size: 2.5rem;
-      padding-inline: var(--space-2);
-    }
-
-    .screenshot-frame__bar span:first-child {
-      color: var(--color-text-secondary);
-    }
-
-    .screenshot-frame__link {
+    .product-showcase__image {
       display: block;
       overflow: hidden;
-      border: 1px solid var(--line-faint);
-      border-radius: var(--radius-sm);
+      border-radius: var(--radius-md);
       background: var(--color-surface-quiet);
-    }
-
-    .screenshot-frame__image {
-      display: block;
       inline-size: 100%;
       block-size: auto;
       aspect-ratio: 1214 / 798;
       object-fit: contain;
-      transition: opacity 200ms var(--ease-standard);
     }
 
-    .screenshot-frame__link:hover .screenshot-frame__image,
-    .screenshot-frame__link:focus-visible .screenshot-frame__image {
-      opacity: 0.88;
-    }
-
-    .screenshot-frame__link .screenshot-frame__image[data-switching] {
-      opacity: 0;
-    }
-
-    .screenshot-frame figcaption {
-      padding: var(--space-3) var(--space-2) var(--space-1);
-    }
-
-    .screenshot-frame__caption-copy {
+    .product-showcase__caption {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.25rem 1rem;
+      padding-block-start: 0.75rem;
       color: var(--color-text-secondary);
+      font-size: var(--type-small);
     }
 
-    @media (min-width: 64rem) {
-      .product-showcase__layout {
-        grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
-        gap: var(--grid-gap);
-      }
-
-      .screenshot-frame {
-        grid-column: 2;
-        grid-row: 1;
-      }
-
-      .product-showcase__copy {
-        grid-column: 1;
-      }
+    .product-showcase__caption a {
+      color: var(--color-text-tertiary);
+      text-decoration: underline;
+      text-decoration-color: var(--line-default);
+      text-underline-offset: 0.2em;
     }
 
-    @media (prefers-reduced-motion: reduce) {
-      .product-selector__button,
-      .screenshot-frame__image {
-        transition: none;
-      }
+    .product-showcase__caption a:hover {
+      color: var(--color-text-primary);
+      text-decoration-color: var(--color-focus);
+    }
+
+    .product-showcase__fallback {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem 1rem;
+      margin: 0.75rem 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .product-showcase__fallback a {
+      display: inline-flex;
+      min-block-size: 40px;
+      align-items: center;
+      color: var(--color-action);
     }
 
     @media (forced-colors: active) {
@@ -275,48 +171,43 @@ const defaultView = data.views[0];
 
   if (showcase) {
     const controls = showcase.querySelector<HTMLElement>('.product-selector');
-    const fallback = showcase.querySelector<HTMLElement>('.product-view__fallback');
+    const fallback = showcase.querySelector<HTMLElement>('.product-showcase__fallback');
     const image = showcase.querySelector<HTMLImageElement>('[data-product-image]');
-    const imageLink = showcase.querySelector<HTMLAnchorElement>('[data-product-image-link]');
+    const fullSizeLink = showcase.querySelector<HTMLAnchorElement>('[data-product-full-size]');
     const caption = showcase.querySelector<HTMLElement>('[data-product-caption]');
     const buttons = Array.from(showcase.querySelectorAll<HTMLButtonElement>('[data-product-view]'));
 
-    if (controls && fallback && image && imageLink && caption && buttons.length > 0) {
+    if (controls && fallback && image && fullSizeLink && caption && buttons.length) {
       controls.hidden = false;
       fallback.hidden = true;
+      let selectionIntent = 0;
 
       for (const button of buttons) {
         button.addEventListener('click', () => {
-          const { src, alt, caption: nextCaption, fullSizeLabel } = button.dataset;
-          if (
-            !src ||
-            !alt ||
-            !nextCaption ||
-            !fullSizeLabel ||
-            button.getAttribute('aria-pressed') === 'true'
-          ) {
-            return;
-          }
+          const { src, alt, caption: nextCaption } = button.dataset;
+          if (!src || !alt || !nextCaption) return;
+          const intent = ++selectionIntent;
+          if (button.getAttribute('aria-pressed') === 'true') return;
 
           const nextImage = new Image();
+          const commitSelection = () => {
+            if (intent !== selectionIntent) return;
+            image.src = src;
+            image.alt = alt;
+            fullSizeLink.href = src;
+            caption.textContent = nextCaption;
+            for (const candidate of buttons) {
+              candidate.setAttribute('aria-pressed', String(candidate === button));
+            }
+          };
+          const revealFallback = () => {
+            if (intent === selectionIntent) fallback.hidden = false;
+          };
+
+          nextImage.addEventListener('load', commitSelection, { once: true });
+          nextImage.addEventListener('error', revealFallback, { once: true });
           nextImage.src = src;
-          void nextImage
-            .decode()
-            .then(() => {
-              image.dataset.switching = 'true';
-              requestAnimationFrame(() => {
-                image.src = src;
-                image.alt = alt;
-                imageLink.href = src;
-                imageLink.setAttribute('aria-label', fullSizeLabel);
-                caption.textContent = nextCaption;
-                for (const candidate of buttons) {
-                  candidate.setAttribute('aria-pressed', String(candidate === button));
-                }
-                requestAnimationFrame(() => image.removeAttribute('data-switching'));
-              });
-            })
-            .catch(() => undefined);
+          if (nextImage.complete && nextImage.naturalWidth > 0) commitSelection();
         });
       }
     }

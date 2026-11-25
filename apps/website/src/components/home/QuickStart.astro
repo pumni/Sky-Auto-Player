@@ -1,7 +1,6 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import { withBase } from '../../utils/urls';
-import SectionIntro from '../ui/SectionIntro.astro';
 
 interface Props {
   data: HomeContent['quickStart'];
@@ -12,12 +11,12 @@ const { data } = Astro.props;
 
 <section
   id="how-it-works"
-  class="quick-start section-shell section-shell--feature"
+  class="home-chapter quick-start"
   aria-labelledby="quick-start-title"
   data-home-section="quick-start"
 >
-  <div class="container quick-start__layout">
-    <SectionIntro kicker={data.kicker} title={data.title} titleId="quick-start-title" />
+  <div class="home-container quick-start__layout">
+    <h2 id="quick-start-title">{data.title}</h2>
     <ol class="quick-start__steps">
       {data.items.map((item, index) => (
         <li class="quick-start__step">
@@ -27,14 +26,24 @@ const { data } = Astro.props;
           <div>
             <h3>{item.title}</h3>
             <p>{item.description}</p>
-            <a class="quick-start__link" href={withBase(item.href)}>
-              {item.linkLabel}
-              <span aria-hidden="true"> ↗</span>
-            </a>
           </div>
         </li>
       ))}
     </ol>
+    <div class="quick-start__links">
+      <a href={withBase(data.setupGuideHref)}>
+        {data.setupGuideLabel}
+        <span aria-hidden="true"> ↗</span>
+      </a>
+    </div>
+    <p class="quick-start__formats" id="formats">
+      <span>{data.formatsLabel}</span>
+      <span>{data.formatsValue}</span>
+      <a href={withBase(data.formatsHref)}>
+        {data.formatsLinkLabel}
+        <span aria-hidden="true"> ↗</span>
+      </a>
+    </p>
   </div>
 </section>
 
@@ -42,73 +51,88 @@ const { data } = Astro.props;
   @layer components {
     .quick-start__layout {
       display: grid;
-      gap: var(--space-7);
+      gap: 1.5rem;
+    }
+
+    .quick-start h2 {
+      max-inline-size: 24ch;
+      margin: 0;
+      font-size: var(--type-h2);
+      line-height: var(--leading-heading);
     }
 
     .quick-start__steps {
       display: grid;
-      gap: 0;
+      gap: 1.25rem;
       margin: 0;
       padding: 0;
-      border-block-start: 1px solid var(--line-default);
       list-style: none;
-      counter-reset: quick-start;
     }
 
     .quick-start__step {
       display: grid;
-      grid-template-columns: 2.5rem minmax(0, 1fr);
-      gap: var(--space-4);
-      padding-block: var(--space-5);
-      border-block-end: 1px solid var(--line-faint);
-      counter-increment: quick-start;
+      grid-template-columns: 2rem minmax(0, 1fr);
+      gap: 0.875rem;
     }
 
     .quick-start__number {
       padding-block-start: 0.2rem;
       color: var(--color-action);
-      font-family: var(--font-mono);
       font-size: var(--type-small);
+      font-variant-numeric: tabular-nums;
     }
 
     .quick-start__step h3 {
-      margin-block-end: var(--space-2);
+      margin-block-end: 0.3rem;
+      font-size: var(--type-body);
+      line-height: 1.35;
     }
 
     .quick-start__step p {
-      max-inline-size: 62ch;
-      margin-block-end: var(--space-3);
+      max-inline-size: 38ch;
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--type-small);
+      line-height: 1.55;
+    }
+
+    .quick-start__links a,
+    .quick-start__formats a {
+      color: var(--color-action);
+      text-decoration: underline;
+      text-decoration-color: var(--line-accent);
+      text-underline-offset: 0.22em;
+    }
+
+    .quick-start__formats {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 0.35rem 0.75rem;
+      margin: 0;
+      padding-block-start: 1rem;
+      border-block-start: 1px solid var(--line-faint);
       color: var(--color-text-secondary);
       font-size: var(--type-small);
     }
 
-    .quick-start__link {
-      display: inline-flex;
-      min-block-size: 44px;
-      align-items: center;
-      color: var(--color-action);
-      font-size: var(--type-small);
-      font-weight: 650;
-      text-decoration: underline;
-      text-decoration-color: var(--line-accent);
-      text-underline-offset: 0.24em;
+    .quick-start__formats > span:first-child {
+      color: var(--color-text-tertiary);
     }
 
-    @media (min-width: 64rem) {
-      .quick-start__layout {
-        grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
-        gap: var(--grid-gap);
-        align-items: start;
+    @media (min-width: 72rem) {
+      .quick-start__steps {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 2rem;
       }
 
       .quick-start__step {
-        grid-template-columns: 3rem minmax(0, 1fr);
-        gap: var(--space-5);
-        padding-block: var(--space-6);
+        grid-template-columns: 1.75rem minmax(0, 1fr);
+        gap: 0.75rem;
       }
 
-      .quick-start__number {
-        font-size: var(--type-label);
+      .quick-start__formats {
+        gap-inline: 1rem;
       }
     }
   }

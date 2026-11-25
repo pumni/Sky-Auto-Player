@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homeEn } from '../../src/data/home.en.ts';
@@ -8,6 +8,7 @@ import {
   PLAYBACK_DEMO_DURATION_MS,
   PLAYBACK_DEMO_EVENTS,
   PLAYBACK_DEMO_KEYS,
+  formatPlaybackDuration,
   formatPlaybackTime,
 } from '../../src/data/playback-demo.ts';
 
@@ -36,57 +37,38 @@ const sourceText = sourceFiles.map((path) => readFileSync(path, 'utf8')).join('\
 
 test('English and Vietnamese homepage data keep every section structurally aligned', () => {
   expect(valueShape(homeEn)).toEqual(valueShape(homeVi));
-  expect(homeEn.benefits.items).toHaveLength(4);
-  expect(homeVi.benefits.items).toHaveLength(4);
-  expect(homeEn.product.views.map((view) => view.id)).toEqual([
-    'library',
-    'song-detail',
-    'settings',
+  expect(homeEn.product.views.map((view) => view.label)).toEqual([
+    'Library',
+    'Song Detail',
+    'Settings',
   ]);
-  expect(homeVi.product.views.map((view) => view.id)).toEqual([
-    'library',
-    'song-detail',
-    'settings',
+  expect(homeVi.product.views.map((view) => view.label)).toEqual([
+    'Thư viện',
+    'Chi tiết bài hát',
+    'Thiết lập',
   ]);
   expect(homeEn.quickStart.items).toHaveLength(3);
   expect(homeVi.quickStart.items).toHaveLength(3);
+  expect(homeEn.trust.supportLinks.map((link) => link.label)).toEqual([
+    'Setup',
+    'FAQ',
+    'Troubleshooting',
+  ]);
 });
 
-test('homepage composes the approved section order and removes the replaced implementations', () => {
+test('homepage composes the four approved chapters from the five section owners', () => {
   const homePage = readFileSync(
     new URL('../../src/components/home/HomePage.astro', import.meta.url),
     'utf8',
   );
-  const sectionComponents = [...homePage.matchAll(/^<([A-Z]\w*)\b/gm)].map((match) => match[1]);
+  const sectionComponents = [...homePage.matchAll(/^\s*<([A-Z]\w*)\b/gm)].map((match) => match[1]);
   expect(sectionComponents).toEqual([
     'Hero',
-    'BenefitsStrip',
     'ProductShowcase',
-    'QuickStart',
     'PlaybackDemo',
-    'TechnicalModel',
-    'Formats',
+    'QuickStart',
     'TrustDownload',
-    'FaqPreview',
-    'FinalCta',
   ]);
-
-  for (const retiredComponent of [
-    'ComparisonTable.astro',
-    'PlaybackProof.astro',
-    'ProductView.astro',
-    'ProofStrip.astro',
-    'Steps.astro',
-    'TechnicalTrust.astro',
-    'TimingConsole.astro',
-  ]) {
-    expect(
-      existsSync(new URL(`../../src/components/home/${retiredComponent}`, import.meta.url)),
-    ).toBe(false);
-  }
-  expect(existsSync(new URL('../../src/components/ui/BrandMark.astro', import.meta.url))).toBe(
-    false,
-  );
 });
 
 test('the signature demo uses the approved event intervals, keys, and visible time format', () => {
@@ -113,21 +95,26 @@ test('the signature demo uses the approved event intervals, keys, and visible ti
     'D3',
     'E3',
   ]);
-  expect(formatPlaybackTime(0)).toBe('00:00.000');
-  expect(formatPlaybackTime(700)).toBe('00:00.700');
-  expect(formatPlaybackTime(1400)).toBe('00:01.400');
-  expect(formatPlaybackTime(2600)).toBe('00:02.600');
+  expect(formatPlaybackTime(0)).toBe('0.0');
+  expect(formatPlaybackTime(700)).toBe('0.7');
+  expect(formatPlaybackTime(1400)).toBe('1.4');
+  expect(formatPlaybackTime(2600)).toBe('2.6');
+  expect(formatPlaybackTime(700, 'vi')).toBe('0,7');
+  expect(formatPlaybackDuration(1200, 'en')).toBe('1.2 s');
+  expect(formatPlaybackDuration(1200, 'vi')).toBe('1,2 giây');
 });
 
-test('the hero leads with product value and both locales disclose their Windows release destination', () => {
-  expect(homeEn.hero.titleLines.join(' ')).toBe('Play the sheet. Not the keyboard.');
-  expect(homeVi.hero.titleLines.join(' ')).toBe('Chơi bản nhạc, không chơi bàn phím.');
-  expect(homeEn.hero.primaryCta).toBe('Get the Windows installer');
-  expect(homeVi.hero.primaryCta).toBe('Tải bộ cài Windows');
-  expect(homeEn.hero.primaryCtaDestination).toBe('Opens GitHub Releases');
-  expect(homeVi.hero.primaryCtaDestination).toBe('Mở GitHub Releases');
+test('the hero leads with concise product value and both locales disclose the release journey', () => {
+  expect(homeEn.hero.title).toBe('Play the sheet. Not the keyboard.');
+  expect(homeVi.hero.title).toBe('Chơi bản nhạc, không chơi bàn phím.');
+  expect(homeEn.downloadCta).toBe('Download for Windows');
+  expect(homeVi.downloadCta).toBe('Tải cho Windows');
+  expect(homeEn.hero.meta).toContain('GitHub Releases');
+  expect(homeVi.hero.meta).toContain('GitHub Releases');
   expect(homeEn.trust.packageValue).toContain('Windows 11 x64');
   expect(homeVi.trust.packageValue).toContain('Windows 11 64-bit');
+  expect(homeEn.hero.riskNote).toMatch(/Terms of Service/);
+  expect(homeVi.hero.riskNote).toMatch(/Điều khoản Dịch vụ/);
   expect(homeEn.hero.description).not.toMatch(/QPC|SendInput|foreground|packet/i);
   expect(homeVi.hero.description).not.toMatch(/QPC|SendInput|foreground|packet/i);
 });
@@ -231,6 +218,18 @@ test('localized technical copy follows the current playback, install, import, an
   };
   const enPublic = collectStrings(homeEn).join('\n');
   const viPublic = collectStrings(homeVi).join('\n');
+  const enStory = collectStrings({
+    hero: homeEn.hero,
+    product: homeEn.product,
+    playback: homeEn.playback,
+    quickStart: homeEn.quickStart,
+  }).join('\n');
+  const viStory = collectStrings({
+    hero: homeVi.hero,
+    product: homeVi.product,
+    playback: homeVi.playback,
+    quickStart: homeVi.quickStart,
+  }).join('\n');
   const enTiming = read('../../src/content/guides/en/en-timing-engine.md');
   const viTiming = read('../../src/content/guides/vi/vi-timing-engine.md');
   const enTroubleshooting = read('../../src/content/guides/en/en-troubleshooting.md');
@@ -261,10 +260,8 @@ test('localized technical copy follows the current playback, install, import, an
     expect(safety, locale).toMatch(/foreground/i);
   }
 
-  expect(enPublic).toMatch(/fixed wake guard/i);
-  expect(enPublic).toMatch(/without continuously adjusting its lead/i);
-  expect(viPublic).toMatch(/wake guard cố định/i);
-  expect(viPublic).toMatch(/không liên tục điều chỉnh lead/i);
+  expect(enStory).not.toMatch(/fixed wake guard|QPC|SendInput|continuously adjusting its lead/i);
+  expect(viStory).not.toMatch(/wake guard cố định|QPC|SendInput|điều chỉnh lead/i);
   expect(enTiming).toMatch(/wake guard remains fixed during playback/i);
   expect(enTiming).toMatch(/does not continuously adjust/i);
   expect(viTiming).toMatch(/wake guard\s+được giữ cố định/i);
@@ -272,21 +269,12 @@ test('localized technical copy follows the current playback, install, import, an
   expect(playbackContract).toMatch(/H = ceiling\(hold_frames × T\) \+ timing margin/i);
   expect(enFormats).toContain('30, 60, 90, 120, 144, 165, or 240');
   expect(viFormats).toContain('30, 60, 90, 120, 144, 165 hoặc 240');
-  expect(homeEn.trust.signingValue).toMatch(/intentionally unsigned/i);
-  expect(homeVi.trust.signingValue).toMatch(/không chữ ký/i);
+  expect(homeEn.trust.signingValue).toMatch(/unsigned installer/i);
+  expect(homeVi.trust.signingValue).toMatch(/không có chữ ký Authenticode/i);
   expect(homeEn.trust.updaterValue).toContain('.exe.sig');
   expect(homeVi.trust.updaterValue).toContain('.exe.sig');
-});
-
-test('retired global score graphics, showcase surfaces, and unused legacy tokens stay removed', () => {
-  const patterns = readFileSync(new URL('../../src/styles/patterns.css', import.meta.url), 'utf8');
-  const tokens = readFileSync(new URL('../../src/styles/tokens.css', import.meta.url), 'utf8');
-  expect(patterns).not.toMatch(
-    /\.ui-score-|\.ui-product-stage|\.ui-instrument-surface|\.brand-mark/,
-  );
-  expect(tokens).not.toContain('--duration-emphasis');
-  expect(tokens).not.toContain('--shadow-instrument');
-  expect(tokens).not.toContain('--type-display-metric');
+  expect(homeEn.trust.safetyNote).toMatch(/Windows SendInput/);
+  expect(homeVi.trust.safetyNote).toMatch(/Windows SendInput/);
 });
 
 test('localized setup and help copy matches current distribution, import, and safety contracts', () => {

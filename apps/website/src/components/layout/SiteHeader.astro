@@ -338,7 +338,12 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 
       .brand {
         gap: var(--space-1);
+        flex-shrink: 0;
         font-size: var(--type-micro);
+      }
+
+      .brand > span:last-child {
+        flex-shrink: 0;
       }
 
       .site-actions {
@@ -347,6 +352,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 
       .header-download {
         padding-inline: 0.65rem;
+        font-size: var(--type-micro);
       }
     }
 

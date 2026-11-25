@@ -4,6 +4,43 @@
     margin-inline: auto;
   }
 
+  .home-container,
+  .page-layout--home .site-footer__layout {
+    inline-size: min(calc(100% - 2 * clamp(1rem, 2.8vw, 2.5rem)), 75rem);
+    margin-inline: auto;
+  }
+
+  .home-opening {
+    display: grid;
+    align-items: center;
+    gap: clamp(2rem, 3vw, 3rem);
+    padding-block-start: clamp(1.5rem, 3vw, 2.5rem);
+  }
+
+  .home-chapter {
+    margin-block-start: clamp(2rem, 4vw, 3rem);
+    scroll-margin-top: 6rem;
+  }
+
+  @media (min-width: 72rem) {
+    .home-opening {
+      grid-template-columns: minmax(0, 6fr) minmax(0, 7fr);
+    }
+
+    .home-chapter {
+      margin-block-start: clamp(3rem, 5vw, 5rem);
+    }
+  }
+
+  @media (min-width: 64rem) {
+    .home-opening > [id],
+    #formats,
+    #faq-preview,
+    #timing-model {
+      scroll-margin-top: 6rem;
+    }
+  }
+
   .section-shell {
     padding-block: var(--section-default);
     scroll-margin-top: 6rem;

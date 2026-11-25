@@ -2,18 +2,7 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 const routes = ['/', '/faq/', '/vi/', '/vi/faq/'];
-const homepageSections = [
-  'hero',
-  'benefits',
-  'product',
-  'quick-start',
-  'playback',
-  'technical-model',
-  'formats',
-  'trust-download',
-  'faq-preview',
-  'closing-cta',
-];
+const homepageSections = ['hero', 'product', 'playback', 'quick-start', 'trust-download'];
 const releaseUrl = 'https://github.com/pumni/Sky-Auto-Player/releases';
 
 test.describe('accessibility and responsive contracts', () => {
@@ -26,10 +15,10 @@ test.describe('accessibility and responsive contracts', () => {
   }
 
   for (const locale of [
-    { route: '/', heading: 'Play the sheet. Not the keyboard.', cta: 'Get the Windows installer' },
-    { route: '/vi/', heading: 'Chơi bản nhạc, không chơi bàn phím.', cta: 'Tải bộ cài Windows' },
+    { route: '/', heading: 'Play the sheet. Not the keyboard.', cta: 'Download for Windows' },
+    { route: '/vi/', heading: 'Chơi bản nhạc, không chơi bàn phím.', cta: 'Tải cho Windows' },
   ]) {
-    test(`${locale.route} keeps the approved narrative, section order, and release journey`, async ({
+    test(`${locale.route} keeps the four-chapter narrative, anchors, and release journey`, async ({
       page,
     }) => {
       await page.goto(`/Sky-Auto-Player${locale.route}`);
@@ -48,14 +37,58 @@ test.describe('accessibility and responsive contracts', () => {
         )
         .toEqual(homepageSections);
       await expect(page.locator('.hero__primary')).toContainText(locale.cta);
-      await expect(page.locator('.hero__primary')).toContainText(/GitHub Releases/);
       await expect(page.locator('.hero__primary')).toHaveAttribute('href', releaseUrl);
-      await expect(page.locator('.hero__secondary')).toHaveAttribute('href', /#product$/);
+      await expect(page.locator('.hero__secondary')).toHaveAttribute('href', '#product');
       await expect(page.locator('.hero__description')).not.toContainText(
         /QPC|SendInput|foreground/i,
       );
+      await expect(page.locator('.hero__meta')).toContainText('GitHub Releases');
+      await expect(page.locator('.hero__risk')).toContainText(
+        /Terms of Service|Điều khoản Dịch vụ/,
+      );
+      for (const anchor of [
+        'top',
+        'product',
+        'playback',
+        'how-it-works',
+        'formats',
+        'technical',
+        'timing-model',
+        'faq-preview',
+      ]) {
+        await expect(page.locator(`#${anchor}`)).toBeVisible();
+      }
     });
   }
+
+  test('public homepage anchors clear the sticky header at desktop widths', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await page.goto('/Sky-Auto-Player/');
+    await page.addStyleTag({ content: 'html { scroll-behavior: auto !important; }' });
+
+    for (const anchor of [
+      'top',
+      'product',
+      'playback',
+      'how-it-works',
+      'formats',
+      'technical',
+      'timing-model',
+      'faq-preview',
+    ]) {
+      await page.evaluate((id) => {
+        document.getElementById(id)?.scrollIntoView({ block: 'start' });
+      }, anchor);
+      const offset = await page.evaluate(
+        (id) => ({
+          target: document.getElementById(id)!.getBoundingClientRect().top,
+          header: document.querySelector('.site-header')!.getBoundingClientRect().bottom,
+        }),
+        anchor,
+      );
+      expect(offset.target, anchor).toBeGreaterThanOrEqual(offset.header - 1);
+    }
+  });
 
   for (const route of ['/', '/vi/']) {
     for (const width of [320, 390, 768, 1024, 1152, 1440, 1920]) {
@@ -71,19 +104,32 @@ test.describe('accessibility and responsive contracts', () => {
         expect(metrics.document).toBeLessThanOrEqual(metrics.viewport + 1);
       });
     }
+
+    test(`${route} keeps the 320px brand and release action visually separate`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 320, height: 844 });
+      await page.goto(`/Sky-Auto-Player${route}`);
+      const rightEdge = await page.evaluate(() => {
+        const brandText = document.querySelector('.brand > span:last-child')!;
+        const releaseAction = document.querySelector('.site-actions')!;
+        return {
+          brandText: brandText.getBoundingClientRect().right,
+          releaseAction: releaseAction.getBoundingClientRect().left,
+        };
+      });
+      expect(rightEdge.brandText).toBeLessThanOrEqual(rightEdge.releaseAction);
+    });
   }
 
-  test('semantic section spacing roles hold at narrow, fluid, and wide widths', async ({
+  test('homepage container, chapter rhythm, and shared FAQ spacing hold at responsive widths', async ({
     page,
   }) => {
     const widths = [320, 1280, 1920];
     const expected = {
-      compact: [32, 51.2, 64],
       default: [48, 76.8, 96],
-      feature: [64, 89.6, 128],
-      transition: [40, 51.2, 64],
-      product: [80, 102.4, 144],
-      introTop: [20, 32, 40],
+      chapter: [32, 64, 80],
+      openingTop: [24, 38.4, 40],
     };
 
     await page.setViewportSize({ width: widths[0], height: 900 });
@@ -96,32 +142,32 @@ test.describe('accessibility and responsive contracts', () => {
           const element = document.querySelector<HTMLElement>(selector);
           if (!element) throw new Error(`Missing spacing probe ${selector}`);
           const style = getComputedStyle(element);
+          const box = element.getBoundingClientRect();
           return {
             top: Number.parseFloat(style.paddingTop),
             bottom: Number.parseFloat(style.paddingBottom),
+            marginTop: Number.parseFloat(style.marginTop),
+            width: box.width,
           };
         };
         return {
-          compact: measure('.formats-section'),
-          feature: measure('.final-cta'),
-          transition: measure('.benefits'),
-          product: measure('.product-showcase'),
-          intro: measure('.hero'),
+          chapter: measure('.home-chapter'),
+          opening: measure('.home-opening'),
+          container: measure('.home-opening'),
+          footer: measure('.site-footer__layout'),
+          viewport: document.documentElement.clientWidth,
         };
       });
 
-      for (const role of ['compact', 'feature', 'transition', 'product'] as const) {
-        expect(
-          Math.abs(spacing[role].top - expected[role][index]),
-          `${role} at ${width}px`,
-        ).toBeLessThan(0.2);
-        expect(spacing[role].bottom).toBe(spacing[role].top);
-      }
-      expect(
-        Math.abs(spacing.intro.top - expected.introTop[index]),
-        `intro at ${width}px`,
-      ).toBeLessThan(0.2);
-      expect(spacing.intro.bottom).toBe(spacing.feature.bottom);
+      expect(Math.abs(spacing.chapter.marginTop - expected.chapter[index])).toBeLessThan(0.2);
+      expect(spacing.chapter.top).toBe(0);
+      expect(spacing.chapter.bottom).toBe(0);
+      expect(Math.abs(spacing.opening.top - expected.openingTop[index])).toBeLessThan(0.2);
+      expect(spacing.container.width).toBeLessThanOrEqual(1200.5);
+      const leftGutter = (spacing.viewport - spacing.container.width) / 2;
+      expect(leftGutter).toBeGreaterThanOrEqual(16);
+      expect(Math.abs(leftGutter * 2 + spacing.container.width - spacing.viewport)).toBeLessThan(1);
+      expect(Math.abs(spacing.footer.width - spacing.container.width)).toBeLessThan(1);
     }
 
     await page.goto('/Sky-Auto-Player/faq/');
@@ -131,6 +177,42 @@ test.describe('accessibility and responsive contracts', () => {
         .locator('.faq-layout')
         .evaluate((element) => Number.parseFloat(getComputedStyle(element).marginBottom));
       expect(Math.abs(defaultSpacing - expected.default[index])).toBeLessThan(0.2);
+    }
+  });
+
+  test('opening composition puts product first at desktop and keeps the mobile action ahead of the screenshot', async ({
+    page,
+  }) => {
+    for (const route of ['/', '/vi/']) {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await page.goto(`/Sky-Auto-Player${route}`);
+      const desktop = await page.evaluate(() => {
+        const hero = document.querySelector('.hero')!.getBoundingClientRect();
+        const image = document.querySelector('.product-showcase__image')!.getBoundingClientRect();
+        const action = document.querySelector('.hero__primary')!.getBoundingClientRect();
+        return {
+          sideBySide: image.left > hero.left && image.left >= hero.right,
+          imageBottom: image.bottom,
+          actionBottom: action.bottom,
+          screenshotWidth: image.width,
+        };
+      });
+      expect(desktop.sideBySide).toBe(true);
+      expect(desktop.screenshotWidth).toBeGreaterThan(600);
+      expect(desktop.imageBottom).toBeLessThan(900);
+      expect(desktop.actionBottom).toBeLessThan(900);
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`/Sky-Auto-Player${route}`);
+      await expect(page.locator('main h1')).toBeVisible();
+      await expect(page.locator('.hero__primary')).toBeInViewport();
+      const mobile = await page.evaluate(() => {
+        const hero = document.querySelector('.hero')!.getBoundingClientRect();
+        const image = document.querySelector('.product-showcase__image')!.getBoundingClientRect();
+        return { stacked: image.top >= hero.bottom, imageRight: image.right };
+      });
+      expect(mobile.stacked).toBe(true);
+      expect(mobile.imageRight).toBeLessThanOrEqual(391);
     }
   });
 
@@ -154,10 +236,14 @@ test.describe('accessibility and responsive contracts', () => {
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
+    await page.route('**/detail-real-tauri.png', async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await route.continue();
+    });
     await page.goto('/Sky-Auto-Player/');
     const group = page.getByRole('group', { name: 'Choose a player view' });
     const image = page.locator('[data-product-image]');
-    const imageLink = page.locator('[data-product-image-link]');
+    const fullSize = page.locator('[data-product-full-size]');
     await expect(group).toBeVisible();
     await expect(group.getByRole('button')).toHaveCount(3);
     await expect(group.getByRole('button', { name: 'Library' })).toHaveAttribute(
@@ -166,8 +252,19 @@ test.describe('accessibility and responsive contracts', () => {
     );
     await expect(image).toHaveAttribute('src', /library-real-tauri\.png/);
     await expect(image).toHaveAttribute('alt', /song library and playlists/);
-    await expect(imageLink).toHaveAttribute('href', /library-real-tauri\.png/);
-    await expect(image).toHaveCSS('transition-duration', '0.2s');
+    await expect(fullSize).toHaveAttribute('href', /library-real-tauri\.png/);
+
+    await group.getByRole('button', { name: 'Song Detail' }).click();
+    await group.getByRole('button', { name: 'Library' }).click();
+    await expect(group.getByRole('button', { name: 'Library' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await page.waitForTimeout(350);
+    await expect(image).toHaveAttribute('src', /library-real-tauri\.png/);
+    await expect(page.locator('[data-product-caption]')).toHaveText(
+      'Browse songs, favorites, and playlists.',
+    );
 
     await group.getByRole('button', { name: 'Song Detail' }).click();
     await expect(group.getByRole('button', { name: 'Song Detail' })).toHaveAttribute(
@@ -183,26 +280,46 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('[data-product-caption]')).toHaveText(
       'Review a song before you play it.',
     );
-    await expect(imageLink).toHaveAttribute('href', /detail-real-tauri\.png/);
+    await expect(fullSize).toHaveAttribute('href', /detail-real-tauri\.png/);
     await expect
       .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth))
       .toBeGreaterThan(0);
-    await expect
-      .poll(() => image.evaluate((element) => element.hasAttribute('data-switching')))
-      .toBe(false);
-
     const settings = group.getByRole('button', { name: 'Settings' });
     await settings.focus();
     await page.keyboard.press('Enter');
     await expect(settings).toHaveAttribute('aria-pressed', 'true');
     await expect(image).toHaveAttribute('src', /settings-real-tauri\.png/);
-    await expect(imageLink).toHaveAttribute('href', /settings-real-tauri\.png/);
-    await expect
-      .poll(() => image.evaluate((element) => element.hasAttribute('data-switching')))
-      .toBe(false);
-    await expect(page.locator('.screenshot-frame__caption-kind')).toHaveText(
-      'Desktop interface capture',
+    await expect(fullSize).toHaveAttribute('href', /settings-real-tauri\.png/);
+    await expect(page.locator('[data-product-caption]')).toHaveText(
+      'Choose playback options for your setup.',
     );
+  });
+
+  test('failed capture selection preserves the current image and accessible selection', async ({
+    page,
+  }) => {
+    await page.route('**/settings-real-tauri.png', (route) => route.abort());
+    await page.goto('/Sky-Auto-Player/');
+    const group = page.getByRole('group', { name: 'Choose a player view' });
+    const image = page.locator('[data-product-image]');
+    await group.getByRole('button', { name: 'Settings' }).click();
+    await expect(group.getByRole('button', { name: 'Library' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(image).toHaveAttribute('src', /library-real-tauri\.png/);
+    await expect(image).toHaveAttribute('alt', /song library and playlists/);
+    await expect(page.locator('[data-product-full-size]')).toHaveAttribute(
+      'href',
+      /library-real-tauri\.png/,
+    );
+    await expect(page.locator('[data-product-caption]')).toHaveText(
+      'Browse songs, favorites, and playlists.',
+    );
+    await expect(page.locator('.product-showcase__fallback')).toBeVisible();
+    await expect(
+      page.locator('.product-showcase__fallback').getByRole('link', { name: 'Settings' }),
+    ).toHaveAttribute('href', /settings-real-tauri\.png/);
   });
 
   test('Vietnamese player view selector has localized labels, descriptions, and captions', async ({
@@ -222,8 +339,9 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('[data-product-caption]')).toHaveText(
       'Xem lại bài hát trước khi phát.',
     );
-    await expect(page.locator('.screenshot-frame__caption-kind')).toHaveText(
-      'Ảnh chụp giao diện desktop',
+    await expect(page.locator('[data-product-full-size]')).toHaveAttribute(
+      'href',
+      /detail-real-tauri\.png/,
     );
   });
 
@@ -237,7 +355,7 @@ test.describe('accessibility and responsive contracts', () => {
     const metrics = await image.evaluate((element) => {
       const imageElement = element as HTMLImageElement;
       const box = imageElement.getBoundingClientRect();
-      const frame = imageElement.closest('.screenshot-frame')!.getBoundingClientRect();
+      const frame = imageElement.closest('.product-showcase')!.getBoundingClientRect();
       return {
         naturalWidth: imageElement.naturalWidth,
         naturalHeight: imageElement.naturalHeight,
@@ -257,7 +375,7 @@ test.describe('accessibility and responsive contracts', () => {
     );
   });
 
-  test('playback events, timestamp, key state, duration, and completion stay synchronized', async ({
+  test('one playback timeline synchronizes its event, timestamp, keys, and accessible progress', async ({
     page,
   }) => {
     await page.goto('/Sky-Auto-Player/');
@@ -266,47 +384,66 @@ test.describe('accessibility and responsive contracts', () => {
     const keys = demo.locator('[data-demo-key]');
     const progress = demo.locator('[data-demo-progress]');
     const elapsed = demo.locator('[data-elapsed]');
-    const mainControl = demo.locator('[data-action="play"]');
+    const main = demo.locator('[data-action="play"]');
+    const status = demo.locator('[data-demo-status]');
 
+    await expect(demo.locator('[role="progressbar"]')).toHaveCount(1);
     await expect(events).toHaveCount(3);
     await expect(keys).toHaveCount(15);
     await expect(events.nth(0)).toHaveAttribute('aria-current', 'step');
-    await expect(demo.locator('.instrument-key.is-active')).toHaveCount(3);
-    await expect(events.nth(2).locator('.event-row__duration')).toHaveText('1200 ms');
+    await expect(demo.locator('.playback-key.is-active')).toHaveCount(3);
+    await expect(events.nth(2).locator('time')).toHaveText('1.2 s');
     await expect(progress).toHaveAttribute('aria-valuenow', '0');
-    await mainControl.click();
-    await expect(demo.locator('[data-action="cancel"]')).toBeVisible();
+    await expect(progress).not.toHaveAttribute('aria-valuetext');
+    await expect(elapsed).toHaveText('0.0');
+
+    await main.click();
+    const initialStatus = await demo.locator('[data-demo-status]').textContent();
+    await page.waitForTimeout(160);
+    const initialProgress = Number(await progress.getAttribute('aria-valuenow'));
+    expect(initialProgress).toBeGreaterThan(0);
+    expect(initialProgress).toBeLessThan(700);
+    await expect(demo.locator('[data-demo-status]')).toHaveText(initialStatus!);
 
     await expect(events.nth(1)).toHaveAttribute('aria-current', 'step', { timeout: 1200 });
-    await expect(events.nth(0)).not.toHaveAttribute('aria-current', 'step');
-    await expect(demo.locator('.instrument-key.is-active')).toHaveCount(1);
-    await expect(demo.locator('[data-demo-key="D2"]')).toHaveClass(/is-active/);
-    const synchronizedTime = await demo.evaluate((element) => {
-      const time = element.querySelector<HTMLOutputElement>('[data-elapsed]')?.textContent;
-      const progressElement = element.querySelector<HTMLElement>('[data-demo-progress]');
+    const eventState = await demo.evaluate((element) => {
+      const activeEvent = element.querySelector<HTMLElement>(
+        '[data-demo-event][aria-current="step"]',
+      );
+      const timeline = element.querySelector<HTMLElement>('[data-demo-progress]');
+      const elapsedTime = element.querySelector<HTMLElement>('[data-elapsed]');
+      const activeKeys = Array.from(
+        element.querySelectorAll<HTMLElement>('.playback-key.is-active'),
+      );
+      const statusRegion = element.querySelector<HTMLElement>('[data-demo-status]');
+
       return {
-        time,
-        value: progressElement?.getAttribute('aria-valuenow'),
-        valueText: progressElement?.getAttribute('aria-valuetext'),
+        eventIndex: activeEvent?.dataset.demoEvent,
+        progress: Number(timeline?.getAttribute('aria-valuenow')),
+        elapsed: elapsedTime?.textContent?.trim(),
+        keys: activeKeys.map((key) => key.dataset.demoKey),
+        status: statusRegion?.textContent,
       };
     });
-    expect(Number(synchronizedTime.value)).toBeGreaterThanOrEqual(700);
-    expect(Number(synchronizedTime.value)).toBeLessThan(1000);
-    expect(synchronizedTime.time).toBe('00:00.' + String(synchronizedTime.value).padStart(3, '0'));
-    expect(synchronizedTime.valueText).toBe(`${synchronizedTime.time} / 00:02.600`);
+    expect(eventState.eventIndex).toBe('1');
+    expect(eventState.keys).toEqual(['D2']);
+    expect(eventState.status).toContain('Note: D2');
+    const eventProgress = eventState.progress;
+    expect(eventProgress).toBeGreaterThanOrEqual(700);
+    expect(eventProgress).toBeLessThan(1400);
+    expect(eventState.elapsed).toBe((Math.floor(eventProgress / 100) / 10).toFixed(1));
 
-    await expect(demo.locator('[data-demo-status]')).toHaveText(
-      'Demonstration complete. No keys are active.',
-      { timeout: 3200 },
-    );
+    await expect(status).toContainText('Phrase complete', {
+      timeout: 2600,
+    });
     await expect(demo.locator('[data-demo-event][aria-current="step"]')).toHaveCount(0);
-    await expect(demo.locator('.instrument-key.is-active')).toHaveCount(0);
+    await expect(demo.locator('.playback-key.is-active')).toHaveCount(0);
     await expect(progress).toHaveAttribute('aria-valuenow', '2600');
-    await expect(elapsed).toHaveText('00:02.600');
-    await expect(mainControl).toHaveText('Replay demonstration');
+    await expect(elapsed).toHaveText('2.6');
+    await expect(main).toHaveText('Replay phrase');
   });
 
-  test('manual event stepping is boundary-safe, cancels playback, and reaches the complete state', async ({
+  test('manual stepping respects boundaries and pauses playback without a cancel control', async ({
     page,
   }) => {
     await page.goto('/Sky-Auto-Player/');
@@ -316,78 +453,114 @@ test.describe('accessibility and responsive contracts', () => {
     const main = demo.locator('[data-action="play"]');
     const progress = demo.locator('[data-demo-progress]');
 
-    await expect(previous).toBeDisabled();
+    await expect(demo.locator('[data-action="cancel"]')).toHaveCount(0);
+    await expect(previous).toHaveAttribute('aria-disabled', 'true');
+    await previous.focus();
+    await expect(previous).toBeFocused();
+    await previous.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(demo.locator('[data-demo-event="0"]')).toHaveAttribute('aria-current', 'step');
+
     await next.click();
     await expect(demo.locator('[data-demo-event="1"]')).toHaveAttribute('aria-current', 'step');
     await expect(progress).toHaveAttribute('aria-valuenow', '700');
+    await expect(demo.locator('.playback-key.is-active')).toHaveCount(1);
     await previous.click();
     await expect(demo.locator('[data-demo-event="0"]')).toHaveAttribute('aria-current', 'step');
     await expect(progress).toHaveAttribute('aria-valuenow', '0');
+
     await main.click();
-    await expect(demo.locator('[data-action="cancel"]')).toBeVisible();
     await next.click();
-    await expect(demo.locator('[data-action="cancel"]')).toBeHidden();
     await expect(demo.locator('[data-demo-event="1"]')).toHaveAttribute('aria-current', 'step');
+    await expect(main).toHaveText('Continue phrase');
     await next.click();
     await expect(demo.locator('[data-demo-event="2"]')).toHaveAttribute('aria-current', 'step');
     await expect(progress).toHaveAttribute('aria-valuenow', '1400');
+    await expect(demo.locator('[data-demo-key="E3"]')).toHaveClass(/is-active/);
     await next.click();
     await expect(progress).toHaveAttribute('aria-valuenow', '2600');
-    await expect(demo.locator('.instrument-key.is-active')).toHaveCount(0);
-    await expect(next).toBeDisabled();
+    await expect(demo.locator('.playback-key.is-active')).toHaveCount(0);
+    await expect(next).toHaveAttribute('aria-disabled', 'true');
+    await next.focus();
+    await expect(next).toBeFocused();
     await previous.click();
     await expect(demo.locator('[data-demo-event="2"]')).toHaveAttribute('aria-current', 'step');
-    await expect(demo.locator('.instrument-key.is-active')).toHaveCount(1);
-    await expect(previous).toBeEnabled();
+    await expect(demo.locator('.playback-key.is-active')).toHaveCount(1);
+    await expect(previous).toHaveAttribute('aria-disabled', 'false');
   });
 
-  test('pause, cancel, resume, and replay preserve one playback timeline', async ({ page }) => {
+  test('pause, resume, and replay use the same timeline', async ({ page }) => {
+    await page.clock.install();
     await page.goto('/Sky-Auto-Player/');
     const demo = page.locator('[data-playback-demo]');
     const main = demo.locator('[data-action="play"]');
     const progress = demo.locator('[data-demo-progress]');
-
     await main.click();
-    await expect
-      .poll(async () => Number(await progress.getAttribute('aria-valuenow')))
-      .toBeGreaterThan(0);
-    await demo.locator('[data-action="cancel"]').click();
+    await page.clock.runFor(720);
+    const firstPauseAt = Number(await progress.getAttribute('aria-valuenow'));
+    expect(firstPauseAt).toBeGreaterThanOrEqual(700);
+    expect(firstPauseAt).toBeLessThan(1400);
+    await expect(demo.locator('[data-demo-event="1"]')).toHaveAttribute('aria-current', 'step');
+    await main.click();
     const pausedAt = await progress.getAttribute('aria-valuenow');
-    await expect(demo.locator('[data-action="cancel"]')).toBeHidden();
-    await expect(main).toHaveText('Continue demonstration');
-    await page.waitForTimeout(100);
+    await expect(main).toHaveText('Continue phrase');
+    await page.clock.runFor(120);
     await expect(progress).toHaveAttribute('aria-valuenow', pausedAt!);
     await main.click();
-    await expect(main).toHaveText('Replay demonstration', { timeout: 3500 });
+    await page.clock.runFor(2200);
+    await expect(main).toHaveText('Replay phrase', { timeout: 2600 });
     await expect(progress).toHaveAttribute('aria-valuenow', '2600');
+
     await main.click();
-    await expect(main).toHaveText('Pause demonstration');
-    await expect
-      .poll(async () => Number(await progress.getAttribute('aria-valuenow')))
-      .toBeLessThan(400);
-    await expect(demo.locator('[data-action="cancel"]')).toBeVisible();
+    await expect(main).toHaveText('Pause phrase');
+    await page.clock.runFor(120);
+    const replayProgress = Number(await progress.getAttribute('aria-valuenow'));
+    expect(replayProgress).toBeGreaterThan(0);
+    expect(replayProgress).toBeLessThan(700);
     await main.click();
+    await expect(main).toHaveText('Continue phrase');
     const replayPausedAt = await progress.getAttribute('aria-valuenow');
-    await expect(main).toHaveText('Continue demonstration');
-    await page.waitForTimeout(100);
+    await page.clock.runFor(120);
     await expect(progress).toHaveAttribute('aria-valuenow', replayPausedAt!);
   });
 
-  test('reduced motion removes animated playback but preserves manual stepping', async ({
+  test('reduced motion preserves manual steps and moves focus when Play disappears in idle and complete states', async ({
     page,
   }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await page.goto('/Sky-Auto-Player/');
     const demo = page.locator('[data-playback-demo]');
-    await expect(demo.locator('[data-action="play"]')).toBeHidden();
+    const main = demo.locator('[data-action="play"]');
+    const previous = demo.locator('[data-action="previous"]');
+    const next = demo.locator('[data-action="next"]');
+    await expect(main).toBeHidden();
     await expect(demo.locator('[data-motion-note]')).toBeVisible();
-    await demo.locator('[data-action="next"]').click();
+    await next.click();
     await expect(demo.locator('[data-demo-event="1"]')).toHaveAttribute('aria-current', 'step');
     await expect(demo.locator('[data-demo-progress]')).toHaveAttribute('aria-valuenow', '700');
-    await expect(demo.locator('[data-action="previous"]')).toBeEnabled();
+
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    expect(
+      await page.evaluate(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches),
+    ).toBe(false);
+    await expect(main).toBeVisible();
+    await main.focus();
+    await expect(main).toBeFocused();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(main).toBeHidden();
+    await expect(next).toBeFocused();
+
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await expect(main).toBeVisible();
+    await next.click();
+    await next.click();
+    await expect(demo.locator('[data-demo-progress]')).toHaveAttribute('aria-valuenow', '2600');
+    await main.focus();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(main).toBeHidden();
+    await expect(previous).toBeFocused();
   });
 
-  test('switching to reduced motion and hiding the page settles playback without auto-resume', async ({
+  test('visibility changes and persisted pagehide pause playback without losing controls or auto-resuming', async ({
     page,
   }) => {
     await page.goto('/Sky-Auto-Player/');
@@ -395,27 +568,28 @@ test.describe('accessibility and responsive contracts', () => {
     const main = demo.locator('[data-action="play"]');
     const progress = demo.locator('[data-demo-progress]');
     await main.click();
-    await expect(demo.locator('[data-action="cancel"]')).toBeVisible();
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    await expect(main).toBeHidden();
-    await expect(demo.locator('[data-action="cancel"]')).toBeHidden();
-    await expect(demo.locator('[data-action="next"]')).toBeFocused();
-    const reducedAt = await progress.getAttribute('aria-valuenow');
-    await page.waitForTimeout(100);
-    await expect(progress).toHaveAttribute('aria-valuenow', reducedAt!);
-
-    await page.emulateMedia({ reducedMotion: 'no-preference' });
-    await expect(main).toBeVisible();
-    await main.click();
-    await expect(demo.locator('[data-action="cancel"]')).toBeVisible();
     await page.evaluate(() => {
       Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
       document.dispatchEvent(new Event('visibilitychange'));
     });
+    await expect(main).toHaveText('Continue phrase');
     const hiddenAt = await progress.getAttribute('aria-valuenow');
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(120);
     await expect(progress).toHaveAttribute('aria-valuenow', hiddenAt!);
-    await expect(main).toHaveText('Continue demonstration');
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+    });
+    await main.click();
+    await page.evaluate(() =>
+      window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })),
+    );
+    await expect(main).toHaveText('Continue phrase');
+    await main.click();
+    await page.evaluate(() =>
+      window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })),
+    );
+    await expect(main).toHaveText('Continue phrase');
   });
 
   test('static fallback keeps the product capture, event explanation, and navigation usable without JavaScript', async ({
@@ -433,7 +607,7 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('.menu-toggle')).toBeHidden();
     await expect(page.locator('.site-nav')).toHaveCSS('position', 'static');
     await expect(page.locator('.product-selector')).toBeHidden();
-    await expect(page.locator('.product-view__fallback a')).toHaveCount(3);
+    await expect(page.locator('.product-showcase__fallback a')).toHaveCount(3);
     await expect(page.locator('[data-product-image]')).toHaveAttribute(
       'src',
       /library-real-tauri\.png/,
@@ -441,8 +615,12 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('[data-demo-controls]')).toBeHidden();
     await expect(page.locator('[data-demo-event]')).toHaveCount(3);
     await expect(page.locator('[data-demo-event="0"]')).toHaveAttribute('aria-current', 'step');
-    await expect(page.locator('[data-demo-status]')).toContainText('Static example');
-    await expect(page.locator('.instrument-key')).toHaveCount(15);
+    await expect(page.locator('[data-demo-status]')).toContainText('Ready');
+    await expect(page.locator('[data-demo-event="0"]')).toContainText('A1 + B2 + C3');
+    await expect(page.locator('[data-demo-event="1"]')).toContainText('0.7 s');
+    await expect(page.locator('[data-demo-event="2"]')).toContainText('1.2 s');
+    await expect(page.locator('.playback-key')).toHaveCount(15);
+    await expect(page.locator('#timing-model')).toBeVisible();
     await context.close();
   });
 
@@ -473,12 +651,11 @@ test.describe('accessibility and responsive contracts', () => {
     const sizes = await page
       .locator(
         [
-          '.hero__kicker',
-          '.hero__destination',
-          '.screenshot-frame figcaption',
-          '.event-row__start',
-          '.release-details dt',
-          '.final-cta__eyebrow',
+          '.hero__meta',
+          '.hero__risk',
+          '.product-showcase__caption',
+          '.playback-timeline__legend li',
+          '.trust-download__package',
         ].join(','),
       )
       .evaluateAll((elements) =>
@@ -529,7 +706,7 @@ test.describe('accessibility and responsive contracts', () => {
       await expect(page.locator('#technical a[href*="account-safety"]')).toBeVisible();
       await expect(page.locator('#technical')).not.toContainText('100% safe');
     }
-    await expect(page.locator('.final-cta__actions a')).toHaveCount(2);
+    await expect(page.locator('#faq-preview a')).toHaveCount(3);
     await expect(page.locator('.site-footer__brand img')).toHaveAttribute('src', /favicon\.svg/);
   });
 

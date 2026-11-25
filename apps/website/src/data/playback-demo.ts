@@ -24,12 +24,12 @@ export const PLAYBACK_DEMO_KEYS = [
   'E3',
 ] as const;
 
-export type PlaybackDemoEvent = (typeof PLAYBACK_DEMO_EVENTS)[number];
+export function formatPlaybackTime(milliseconds: number, locale: 'en' | 'vi' = 'en'): string {
+  const tenths = Math.floor(Math.max(0, milliseconds) / 100) / 10;
+  return tenths.toFixed(1).replace('.', locale === 'vi' ? ',' : '.');
+}
 
-export function formatPlaybackTime(milliseconds: number): string {
-  const elapsed = Math.max(0, Math.floor(milliseconds));
-  const minutes = Math.floor(elapsed / 60_000);
-  const seconds = Math.floor(elapsed / 1_000) % 60;
-  const fraction = elapsed % 1_000;
-  return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}.${String(fraction).padStart(3, '0')}`;
+export function formatPlaybackDuration(milliseconds: number, locale: 'en' | 'vi' = 'en'): string {
+  const value = formatPlaybackTime(milliseconds, locale);
+  return locale === 'vi' ? `${value} giây` : `${value} s`;
 }

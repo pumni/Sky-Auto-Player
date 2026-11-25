@@ -1,15 +1,10 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import Hero from './Hero.astro';
-import BenefitsStrip from './BenefitsStrip.astro';
 import ProductShowcase from './ProductShowcase.astro';
 import QuickStart from './QuickStart.astro';
 import PlaybackDemo from './PlaybackDemo.astro';
-import TechnicalModel from './TechnicalModel.astro';
-import Formats from './Formats.astro';
 import TrustDownload from './TrustDownload.astro';
-import FaqPreview from './FaqPreview.astro';
-import FinalCta from './FinalCta.astro';
 
 interface Props {
   content: HomeContent;
@@ -18,13 +13,10 @@ interface Props {
 const { content } = Astro.props;
 ---
 
-<Hero data={content.hero} locale={content.locale} />
-<BenefitsStrip data={content.benefits} />
-<ProductShowcase data={content.product} />
-<QuickStart data={content.quickStart} />
+<div class="home-opening home-container">
+  <Hero data={content.hero} downloadCta={content.downloadCta} locale={content.locale} />
+  <ProductShowcase data={content.product} />
+</div>
 <PlaybackDemo data={content.playback} locale={content.locale} />
-<TechnicalModel data={content.technical} />
-<Formats data={content.formats} />
-<TrustDownload data={content.trust} locale={content.locale} />
-<FaqPreview data={content.faqPreview} locale={content.locale} />
-<FinalCta data={content.finalCta} />
+<QuickStart data={content.quickStart} />
+<TrustDownload data={content.trust} locale={content.locale} downloadCta={content.downloadCta} />
