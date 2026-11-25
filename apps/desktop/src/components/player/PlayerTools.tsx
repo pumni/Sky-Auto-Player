@@ -15,6 +15,7 @@ import {
   ScrollAreaViewport,
 } from '../ui/scroll-area';
 import {
+  computePlaybackHoldTiming,
   formatFpsFrameHint,
   formatHoldFramesHint,
   formatTempoHint,
@@ -272,9 +273,11 @@ function ProfileFields({
   if (!defaults || !bootstrap) {
     return <span className="text-muted-foreground">Profile unavailable</span>;
   }
-  const frameUs = Math.ceil(1_000_000 / defaults.fps);
-  const frameBaseHoldUs = Math.ceil(defaults.hold_frames * frameUs);
-  const minHoldUs = frameBaseHoldUs + defaults.timing_margin_us;
+  const { frameUs, frameBaseHoldUs, minHoldUs } = computePlaybackHoldTiming(
+    defaults.fps,
+    defaults.hold_frames,
+    defaults.timing_margin_us,
+  );
 
   const holdOptions = bootstrap.option_sets.hold_frames.map((value) => ({
     value: String(value),

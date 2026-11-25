@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { expect, type Page, test } from '@playwright/test';
+import { expect, type Locator, type Page, test } from '@playwright/test';
 import { chooseSelectOption, palettes } from './testHelpers';
 
 const captureStage = process.env.GRAPHITE_WORKSPACE_CAPTURE;
@@ -869,8 +869,47 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
     return dialog;
   };
+  const selectThemeRadio = async (dialog: Locator, mode: 'light' | 'dark') => {
+    await dialog
+      .getByRole('radiogroup', { name: 'Theme' })
+      .getByRole('radio', { name: mode === 'light' ? 'Light' : 'Dark', exact: true })
+      .click();
+  };
+
+  // Capture all six Settings categories in Graphite Dark and Light at matched 1366x768 viewport
+  const pairedCategories = [
+    { id: 'playback', label: 'Playback' },
+    { id: 'appearance', label: 'Appearance' },
+    { id: 'diagnostics', label: 'Diagnostics' },
+    { id: 'updates', label: 'Updates' },
+    { id: 'donate', label: 'Donate' },
+    { id: 'about', label: 'About' },
+  ] as const;
+  const anyPairedSettingsCapture = pairedCategories.some(
+    ({ id }) => shouldCapture(`settings-${id}-dark`) || shouldCapture(`settings-${id}-light`),
+  );
+  if (anyPairedSettingsCapture) {
+    const pairedDialog = await appearanceSettings();
+    await selectThemeRadio(pairedDialog, 'dark');
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+    for (const { id, label } of pairedCategories) {
+      await pairedDialog.getByRole('button', { name: label, exact: true }).click();
+      if (shouldCapture(`settings-${id}-dark`))
+        await capture(page, `candidate-settings-${id}-dark-1366x768.png`);
+    }
+    await pairedDialog.getByRole('button', { name: 'Appearance', exact: true }).click();
+    await selectThemeRadio(pairedDialog, 'light');
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+    for (const { id, label } of pairedCategories) {
+      await pairedDialog.getByRole('button', { name: label, exact: true }).click();
+      if (shouldCapture(`settings-${id}-light`))
+        await capture(page, `candidate-settings-${id}-light-1366x768.png`);
+    }
+    await pairedDialog.getByRole('button', { name: 'Close settings' }).click();
+  }
+
   const lightSettings = await appearanceSettings();
-  await chooseSelectOption(page, lightSettings.getByRole('combobox', { name: 'Theme' }), 'light');
+  await selectThemeRadio(lightSettings, 'light');
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
   if (shouldCapture('appearance-preview-light'))
     await capture(page, 'candidate-appearance-preview-light-1366x768.png');
@@ -878,11 +917,7 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
 
   for (const palette of palettes) {
     const paletteSettings = await appearanceSettings();
-    await chooseSelectOption(
-      page,
-      paletteSettings.getByRole('combobox', { name: 'Theme' }),
-      'dark',
-    );
+    await selectThemeRadio(paletteSettings, 'dark');
     await chooseSelectOption(
       page,
       paletteSettings.getByRole('combobox', { name: 'Dark palette' }),
@@ -908,7 +943,7 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     viewKey: string,
   ) => {
     const dialog = await appearanceSettings();
-    await chooseSelectOption(page, dialog.getByRole('combobox', { name: 'Theme' }), mode);
+    await selectThemeRadio(dialog, mode);
     if (mode === 'dark') {
       await chooseSelectOption(
         page,

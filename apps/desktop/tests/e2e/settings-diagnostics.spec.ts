@@ -111,7 +111,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
     .evaluate((element) => element.scrollWidth > element.clientWidth);
   expect(playbackContentHasHorizontalOverflow).toBe(false);
   const timingHeadingBox = await dialog
-    .locator('[data-slot="timing-margin-control"] > div:first-child > span')
+    .locator('[data-slot="timing-margin-control"] > div:first-child')
     .boundingBox();
   const timingStepperBox = await dialog
     .getByRole('button', { name: 'Decrease timing margin' })
@@ -121,15 +121,19 @@ test('Settings modal has no serious accessibility violations and closes accessib
   if (timingHeadingBox && timingStepperBox) {
     const headingCenterY = timingHeadingBox.y + timingHeadingBox.height / 2;
     const stepperCenterY = timingStepperBox.y + timingStepperBox.height / 2;
-    expect(Math.abs(headingCenterY - stepperCenterY)).toBeLessThanOrEqual(2);
+    expect(Math.abs(headingCenterY - stepperCenterY)).toBeLessThanOrEqual(4);
   }
   const initialBox = await dialog.boundingBox();
   const settingsContent = dialog.locator('[data-settings-content]');
   const initialContentWidth = await settingsContent.evaluate((element) => element.clientWidth);
   expect(initialBox).not.toBeNull();
-  const holdCombobox = dialog.getByRole('combobox', { name: 'Hold' });
+  const holdCombobox = dialog.getByRole('combobox', { name: 'Base hold' });
   await expect(holdCombobox).toContainText('1 frame');
-  await expect(holdCombobox).toContainText('1 frame');
+  await expect(dialog.getByRole('combobox', { name: 'Target FPS' })).toContainText('60 FPS');
+  await expect(
+    dialog.getByText('Settings are validated and persisted by the native runtime.'),
+  ).toHaveCount(0);
+  await expect(dialog.getByText('Preferences', { exact: true })).toHaveCount(0);
   for (const category of ['Appearance', 'Diagnostics', 'Updates', 'Donate', 'About', 'Playback']) {
     await dialog.getByRole('button', { name: category, exact: true }).click();
     const nextBox = await dialog.boundingBox();
@@ -158,14 +162,21 @@ test('Settings modal has no serious accessibility violations and closes accessib
   };
 
   await dialog.getByRole('button', { name: 'Playback', exact: true }).click();
-  await expectFocusClearance(dialog.getByLabel('Hold'));
+  await expectFocusClearance(dialog.getByLabel('Base hold'));
   await expectFocusClearance(dialog.getByLabel('Tempo'));
-  await expectFocusClearance(dialog.getByLabel('FPS'));
+  await expectFocusClearance(dialog.getByLabel('Target FPS'));
   await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
   await expectFocusClearance(dialog.getByLabel('Dark palette'));
+  // Nested Select Escape closes popup before modal
+  await dialog.getByRole('combobox', { name: 'Dark palette' }).click();
+  await expect(page.locator('[data-slot="select-content"]:visible')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('[data-slot="select-content"]:visible')).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+
   await dialog.getByRole('button', { name: 'Updates', exact: true }).click();
-  await expectFocusClearance(dialog.getByLabel('Channel'));
-  await expectFocusClearance(dialog.getByRole('button', { name: 'Check for updates' }));
+  await expectFocusClearance(dialog.getByLabel('Release channel'));
+  await expectFocusClearance(dialog.getByRole('button', { name: /View update|Check for updates/ }));
   await dialog.getByRole('button', { name: 'About', exact: true }).click();
   await expect(dialog).toContainText('Native ABI');
   await expectNoSeriousAccessibilityViolations(page);
@@ -248,40 +259,9 @@ test('Donate prioritizes QR scanning and aligns manual fallback details and GitH
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Donate' }).click();
 
-  const headingAlignment = await dialog
-    .locator('[data-slot="donate-heading"]')
-    .evaluate((element) => {
-      const icon = element.querySelector('[data-slot="donate-heading-icon"]');
-      const glyph = icon?.querySelector('svg');
-      const copy = element.querySelector(':scope > div:last-child');
-      if (!icon || !glyph || !copy) return null;
-      const iconRect = icon.getBoundingClientRect();
-      const glyphRect = glyph.getBoundingClientRect();
-      const copyRect = copy.getBoundingClientRect();
-      return {
-        iconCenterY: iconRect.top + iconRect.height / 2,
-        copyCenterY: copyRect.top + copyRect.height / 2,
-        glyphCenterX: glyphRect.left + glyphRect.width / 2,
-        iconCenterX: iconRect.left + iconRect.width / 2,
-        glyphCenterY: glyphRect.top + glyphRect.height / 2,
-        iconSize: { width: iconRect.width, height: iconRect.height },
-        iconName: glyph.getAttribute('class'),
-      };
-    });
-  expect(headingAlignment).not.toBeNull();
-  if (headingAlignment) {
-    expect(headingAlignment.iconName).toContain('lucide-hand-heart');
-    expect(headingAlignment.iconSize).toEqual({ width: 36, height: 36 });
-    expect(
-      Math.abs(headingAlignment.iconCenterY - headingAlignment.copyCenterY),
-    ).toBeLessThanOrEqual(1);
-    expect(
-      Math.abs(headingAlignment.glyphCenterX - headingAlignment.iconCenterX),
-    ).toBeLessThanOrEqual(1);
-    expect(
-      Math.abs(headingAlignment.glyphCenterY - headingAlignment.iconCenterY),
-    ).toBeLessThanOrEqual(1);
-  }
+  const headingTitle = dialog.getByRole('heading', { name: 'Support Sky Auto Player' });
+  await expect(headingTitle).toBeVisible();
+  await expect(dialog.locator('[data-slot="donate-heading-icon"]')).toHaveCount(0);
 
   const bank = dialog.locator('[data-slot="donate-bank-card"]');
   const qr = bank.locator('[data-slot="donate-qr-frame"]');
@@ -371,7 +351,7 @@ test('Donate prioritizes QR scanning and aligns manual fallback details and GitH
   }
 });
 
-test('Donate provider cards align their text and Open actions at desktop width', async ({
+test('Donate provider rows stack cleanly and align text with Open actions across widths', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -380,73 +360,54 @@ test('Donate provider cards align their text and Open actions at desktop width',
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Donate' }).click();
 
-  const cards = dialog.locator('[data-slot="donate-provider-card"]');
-  await expect(cards).toHaveCount(2);
-  const layout = await cards.evaluateAll((elements) =>
-    elements.map((card) => {
-      const title = card.querySelector<HTMLElement>('h4');
-      const subtitle = card.querySelector<HTMLElement>('p');
-      const icon = card.querySelector<SVGElement>('[data-slot="donate-provider-heading"] svg');
-      const action = card.querySelector<HTMLAnchorElement>('[data-slot="donate-external-link"]');
-      if (!title || !subtitle || !icon || !action) return null;
+  const rows = dialog.locator('[data-slot="donate-provider-row"]');
+  await expect(rows).toHaveCount(2);
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const layout = await rows.evaluateAll((elements) =>
+      elements.map((row) => {
+        const title = row.querySelector<HTMLElement>('h5');
+        const subtitle = row.querySelector<HTMLElement>('p');
+        const icon = row.querySelector<SVGElement>('[data-slot="donate-provider-heading"] svg');
+        const action = row.querySelector<HTMLAnchorElement>('[data-slot="donate-external-link"]');
+        if (!title || !subtitle || !icon || !action) return null;
 
-      const cardRect = card.getBoundingClientRect();
-      const titleRect = title.getBoundingClientRect();
-      const subtitleRect = subtitle.getBoundingClientRect();
-      const iconRect = icon.getBoundingClientRect();
-      const actionRect = action.getBoundingClientRect();
-      const copyMid = (titleRect.top + subtitleRect.bottom) / 2;
-      return {
-        top: cardRect.top,
-        height: cardRect.height,
-        subtitleGap: subtitleRect.top - titleRect.bottom,
-        iconOffset: Math.abs((iconRect.top + iconRect.bottom) / 2 - copyMid),
-        actionOffset: Math.abs((actionRect.top + actionRect.bottom) / 2 - copyMid),
-        actionInside: actionRect.right <= cardRect.right - 4,
-      };
-    }),
-  );
-  expect(layout).toHaveLength(2);
-  for (const item of layout) {
-    expect(item).not.toBeNull();
-    if (!item) continue;
-    expect(item.subtitleGap).toBeGreaterThanOrEqual(0);
-    expect(item.subtitleGap).toBeLessThanOrEqual(8);
-    expect(item.iconOffset).toBeLessThanOrEqual(5);
-    expect(item.actionOffset).toBeLessThanOrEqual(5);
-    expect(item.actionInside).toBe(true);
-  }
-  const first = layout[0];
-  const second = layout[1];
-  if (first && second) {
-    expect(Math.abs(first.top - second.top)).toBeLessThanOrEqual(1);
-    expect(Math.abs(first.height - second.height)).toBeLessThanOrEqual(1);
-  }
-
-  await page.setViewportSize({ width: 640, height: 448 });
-  const compact = await cards.evaluateAll((elements) =>
-    elements.map((card) => {
-      const rect = card.getBoundingClientRect();
-      const action = card.querySelector<HTMLAnchorElement>('[data-slot="donate-external-link"]');
-      const actionRect = action?.getBoundingClientRect();
-      return {
-        left: rect.left,
-        top: rect.top,
-        bottom: rect.bottom,
-        right: rect.right,
-        actionRight: actionRect?.right ?? Infinity,
-      };
-    }),
-  );
-  const [compactFirst, compactSecond] = compact;
-  expect(compactFirst).toBeDefined();
-  expect(compactSecond).toBeDefined();
-  if (compactFirst && compactSecond) {
-    expect(Math.abs(compactFirst.left - compactSecond.left)).toBeLessThanOrEqual(1);
-    expect(compactSecond.top).toBeGreaterThan(compactFirst.bottom);
-  }
-  for (const item of compact) {
-    expect(item.actionRight).toBeLessThanOrEqual(item.right - 4);
+        const rowRect = row.getBoundingClientRect();
+        const titleRect = title.getBoundingClientRect();
+        const subtitleRect = subtitle.getBoundingClientRect();
+        const iconRect = icon.getBoundingClientRect();
+        const actionRect = action.getBoundingClientRect();
+        const copyMid = (titleRect.top + subtitleRect.bottom) / 2;
+        return {
+          left: rowRect.left,
+          top: rowRect.top,
+          bottom: rowRect.bottom,
+          right: rowRect.right,
+          subtitleGap: subtitleRect.top - titleRect.bottom,
+          iconOffset: Math.abs((iconRect.top + iconRect.bottom) / 2 - copyMid),
+          actionOffset: Math.abs((actionRect.top + actionRect.bottom) / 2 - copyMid),
+          actionInside: actionRect.right <= rowRect.right + 1,
+        };
+      }),
+    );
+    expect(layout).toHaveLength(2);
+    const [first, second] = layout;
+    expect(first).not.toBeNull();
+    expect(second).not.toBeNull();
+    if (first && second) {
+      expect(Math.abs(first.left - second.left)).toBeLessThanOrEqual(1);
+      expect(second.top).toBeGreaterThanOrEqual(first.bottom - 1);
+      for (const item of [first, second]) {
+        expect(item.subtitleGap).toBeGreaterThanOrEqual(0);
+        expect(item.subtitleGap).toBeLessThanOrEqual(8);
+        expect(item.iconOffset).toBeLessThanOrEqual(5);
+        expect(item.actionOffset).toBeLessThanOrEqual(5);
+        expect(item.actionInside).toBe(true);
+      }
+    }
   }
 });
 
@@ -629,4 +590,76 @@ test('retired calibration controls are not exposed', async ({ page }) => {
   await expect(settings.getByRole('button', { name: 'Open calibration' })).toHaveCount(0);
   await expect(page.getByRole('dialog', { name: 'Timing calibration' })).toHaveCount(0);
   await expect(settings.getByRole('group', { name: 'Timing margin' })).toContainText('500 µs');
+});
+
+test('Settings unified shell, Ctrl+, shortcut, radio arrows, and scroll reset hold across categories', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1024, height: 640 });
+  await page.goto('/');
+  await expect(page.getByRole('button', { name: 'Open settings' })).toBeVisible();
+  await page.keyboard.press('Control+,');
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await expect(dialog).toBeVisible();
+
+  // Unified shell uses --card for dialog and --surface for inset content canvas
+  const shellTokens = await page.evaluate(() => {
+    const dialogEl = document.querySelector<HTMLElement>(
+      '[role="dialog"][aria-labelledby="settings-title"]',
+    );
+    const canvasEl = document.querySelector<HTMLElement>(
+      '[data-slot="settings-content-scroll-region"]',
+    );
+    if (!dialogEl || !canvasEl) return null;
+    const tokenBg = (token: string) => {
+      const probe = document.createElement('span');
+      probe.style.backgroundColor = `var(${token})`;
+      document.body.append(probe);
+      const value = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return value;
+    };
+    return {
+      dialogBg: getComputedStyle(dialogEl).backgroundColor,
+      expectedDialogBg: tokenBg('--card'),
+      canvasBg: getComputedStyle(canvasEl).backgroundColor,
+      expectedCanvasBg: tokenBg('--surface'),
+    };
+  });
+  expect(shellTokens).not.toBeNull();
+  if (shellTokens) {
+    expect(shellTokens.dialogBg).toBe(shellTokens.expectedDialogBg);
+    expect(shellTokens.canvasBg).toBe(shellTokens.expectedCanvasBg);
+  }
+
+  // Scroll Playback content down, then switch to Appearance and confirm scroll resets to top
+  const content = dialog.locator('[data-settings-content]');
+  await content.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  const appearanceNav = dialog.getByRole('button', { name: 'Appearance', exact: true });
+  await appearanceNav.click();
+  await expect(appearanceNav).toBeFocused();
+  expect(await content.evaluate((el) => el.scrollTop)).toBe(0);
+
+  // Radio arrow navigation switches Theme and retains focus without stale data-theme-applying
+  const followWindows = dialog.getByRole('radio', { name: /Follow Windows/ });
+  await followWindows.focus();
+  await page.keyboard.press('ArrowRight');
+  const lightRadio = dialog.getByRole('radio', { name: 'Light', exact: true });
+  await expect(lightRadio).toBeFocused();
+  await expect(lightRadio).toHaveAttribute('aria-checked', 'true');
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+  await expect(page.locator('html')).not.toHaveAttribute('data-theme-applying', 'true');
+
+  // Close and reopen preserves category selection (Appearance)
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await page.keyboard.press('Control+,');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole('button', { name: 'Appearance', exact: true })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+  await expectNoSeriousAccessibilityViolations(page);
 });

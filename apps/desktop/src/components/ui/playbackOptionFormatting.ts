@@ -1,8 +1,24 @@
+export interface PlaybackHoldTiming {
+  frameUs: number;
+  frameBaseHoldUs: number;
+  minHoldUs: number;
+}
+
+export function computePlaybackHoldTiming(
+  fps: number,
+  holdFrames: number,
+  timingMarginUs: number,
+): PlaybackHoldTiming {
+  const frameUs = Math.ceil(1_000_000 / fps);
+  const frameBaseHoldUs = Math.ceil(holdFrames * frameUs);
+  const minHoldUs = frameBaseHoldUs + timingMarginUs;
+  return { frameUs, frameBaseHoldUs, minHoldUs };
+}
+
 export function formatHoldFramesHint(holdFrames: number, fps: number): string {
   if (!Number.isFinite(holdFrames) || !Number.isFinite(fps) || fps <= 0) return '';
-  const frameUs = Math.ceil(1_000_000 / fps);
-  const holdMs = Math.ceil(holdFrames * frameUs) / 1_000;
-  return `${holdMs.toFixed(1)} ms`;
+  const { frameBaseHoldUs } = computePlaybackHoldTiming(fps, holdFrames, 0);
+  return `${(frameBaseHoldUs / 1_000).toFixed(1)} ms`;
 }
 
 export function formatFpsFrameHint(fps: number): string {

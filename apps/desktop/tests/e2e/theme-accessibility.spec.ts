@@ -1239,16 +1239,22 @@ test('rendered control contrast, Switch visual cues, M15 child instant switch, a
     await page.keyboard.press('Escape');
     await expect(createDialog).toBeHidden();
 
-    // Settings elevated surface, Switch track/thumb visual cues (checked & unchecked), and Select border
+    // Settings unified shell (--card), inset canvas (--surface), Switch visual cues, and Select border
     await page.getByRole('button', { name: 'Open settings' }).click();
     const settings = page.getByRole('dialog', { name: 'Settings' });
     await expect(settings).toBeVisible();
     const settingsSurface = await settings.evaluate((el) => {
       const s = getComputedStyle(el);
-      return { bg: s.backgroundColor, border: s.borderTopColor };
+      const canvas = el.querySelector<HTMLElement>('[data-slot="settings-content-scroll-region"]');
+      return {
+        bg: s.backgroundColor,
+        border: s.borderTopColor,
+        canvasBg: canvas ? getComputedStyle(canvas).backgroundColor : null,
+      };
     });
-    expect(settingsSurface.bg).toBe(theme['--popover']);
+    expect(settingsSurface.bg).toBe(theme['--card']);
     expect(settingsSurface.border).toBe(theme['--overlay-border']);
+    expect(settingsSurface.canvasBg).toBe(theme['--surface']);
 
     const switchEl = settings.locator('[data-slot="switch"]');
     const switchThumb = switchEl.locator('[data-slot="switch-thumb"]');
@@ -1288,7 +1294,7 @@ test('rendered control contrast, Switch visual cues, M15 child instant switch, a
       await page.evaluate(() => document.documentElement.hasAttribute('data-theme-applying')),
     ).toBe(false);
     expect(await settings.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(
-      oppositeTheme['--popover'],
+      oppositeTheme['--card'],
     );
     await page.emulateMedia({ colorScheme: mode });
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);

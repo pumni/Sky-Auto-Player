@@ -35,7 +35,7 @@ describe('TimingMarginControl', () => {
 
     expect(changes).toEqual([900]);
     expect(screen.getByText('900 µs')).toBeInTheDocument();
-    expect(screen.getByText('Applies to the minimum key hold')).toBeInTheDocument();
+    expect(screen.getByText('Extra time added to the minimum key hold.')).toBeInTheDocument();
   });
 
   it('keeps the compact variant focused on the manual value', () => {
@@ -50,7 +50,7 @@ describe('TimingMarginControl', () => {
 
     expect(screen.getByText('800 µs')).toBeInTheDocument();
     expect(screen.queryByText(/Source:/)).not.toBeInTheDocument();
-    expect(screen.queryByText('Applies to the minimum key hold')).not.toBeInTheDocument();
+    expect(screen.queryByText('Extra time added to the minimum key hold.')).not.toBeInTheDocument();
   });
 
   it('disables steps at the configured endpoints', () => {

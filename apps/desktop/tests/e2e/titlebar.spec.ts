@@ -62,7 +62,7 @@ test('update dialog owns focus standalone and when opened from Settings', async 
   const settingsDialog = page.getByRole('dialog', { name: 'Settings' });
   await expect(settingsDialog).toBeVisible();
   await settingsDialog.getByRole('button', { name: 'Updates', exact: true }).click();
-  await settingsDialog.getByRole('button', { name: 'Check for updates' }).click();
+  await settingsDialog.getByRole('button', { name: 'View update', exact: true }).click();
   await expect(updateDialog).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(1);
   await updateDialog.getByRole('button', { name: 'Close update' }).click();

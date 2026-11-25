@@ -24,6 +24,8 @@ describe('DonateSettings', () => {
     );
 
     expect(screen.getByRole('heading', { name: 'PayPal' })).toBeVisible();
+    expect(document.querySelectorAll('[data-slot="donate-provider-row"]')).toHaveLength(2);
+    expect(document.querySelector('[data-slot="donate-heading-icon"]')).toBeNull();
 
     expect(screen.getByRole('heading', { name: 'Bank transfer · VietQR' })).toBeInTheDocument();
     expect(screen.getAllByText(DONATION_CONFIG.bankName)).toHaveLength(1);

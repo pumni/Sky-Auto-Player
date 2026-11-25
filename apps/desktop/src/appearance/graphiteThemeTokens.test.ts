@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PALETTES } from '../components/settings/SettingsCategoryContent';
+import { PALETTES } from '../components/settings/paletteMetadata';
 
 const globalsCss = readFileSync(resolve(__dirname, '../styles/globals.css'), 'utf8');
 const startupCss = readFileSync(resolve(__dirname, '../../public/startup.css'), 'utf8');

@@ -4,10 +4,10 @@ import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
 import { SettingsPanel } from './SettingsPanel';
 
-describe('SettingsPanel playback timing', () => {
+describe('SettingsPanel', () => {
   afterEach(() => cleanup());
 
-  it('preserves the manual timing control and timing summary', async () => {
+  it('preserves the manual timing control, timing readout, and unified shell without permanent footer', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const bootstrap = store.getState().bootstrap;
@@ -16,7 +16,12 @@ describe('SettingsPanel playback timing', () => {
 
     render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
 
+    expect(screen.queryByText('Preferences')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Settings are validated and persisted by the native runtime.'),
+    ).not.toBeInTheDocument();
     expect(screen.getByLabelText('Base hold')).toBeInTheDocument();
+    expect(screen.getByLabelText('Target FPS')).toHaveTextContent('60 FPS');
     const settingsContent = document.querySelector<HTMLElement>('[data-settings-content]');
     expect(settingsContent).toBeInTheDocument();
     if (!settingsContent) throw new Error('settings content should be available');
@@ -53,7 +58,7 @@ describe('SettingsPanel playback timing', () => {
     expect(screen.queryByText(/sender evidence, not proof/)).not.toBeInTheDocument();
   });
 
-  it('shows Donate without claiming the page is a persisted native setting', async () => {
+  it('resets content scroll to top on category switch and omits permanent persistence footer on all categories', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const bootstrap = store.getState().bootstrap;
@@ -61,25 +66,33 @@ describe('SettingsPanel playback timing', () => {
     act(() => store.getState().setSettingsOpen(true));
 
     render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
-    const nativeNote = 'Settings are validated and persisted by the native runtime.';
-    expect(screen.getByText(nativeNote)).toBeInTheDocument();
+    const content = document.querySelector<HTMLElement>('[data-settings-content]');
+    if (!content) throw new Error('settings content should be available');
+    content.scrollTop = 180;
 
-    fireEvent.click(screen.getByRole('button', { name: 'Donate' }));
+    const donateNav = screen.getByRole('button', { name: 'Donate' });
+    donateNav.focus();
+    fireEvent.click(donateNav);
+    expect(content.scrollTop).toBe(0);
+    expect(donateNav).toHaveFocus();
     expect(screen.getByRole('region', { name: 'Support Sky Auto Player' })).toBeInTheDocument();
-    expect(screen.queryByText(nativeNote)).not.toBeInTheDocument();
     expect(screen.getByText('0857288363')).toBeInTheDocument();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Playback' }));
-    expect(screen.getByText(nativeNote)).toBeInTheDocument();
+    expect(document.querySelector('[data-slot="settings-status-region"]')).toBeNull();
   });
 
-  it('keeps the dialog usable after a failed settings mutation', async () => {
+  it('shows pending status while saving and keeps save errors visible across categories until resolved', async () => {
     const bridge = createMockBridge();
     const originalPatch = bridge.patchSettings;
     let attempts = 0;
+    let releaseFirstPatch: (() => void) | null = null;
     bridge.patchSettings = async (patch) => {
       attempts += 1;
-      if (attempts === 1) throw new Error('settings validation failed');
+      if (attempts === 1) {
+        await new Promise<void>((resolve) => {
+          releaseFirstPatch = resolve;
+        });
+        throw new Error('settings validation failed');
+      }
       return originalPatch(patch);
     };
     const store = createDesktopStore(bridge);
@@ -100,6 +113,11 @@ describe('SettingsPanel playback timing', () => {
     await act(async () => {
       fireEvent.keyDown(screen.getByRole('option', { name: 'Slate' }), { key: 'Enter' });
     });
+    await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Saving…'));
+
+    await act(async () => {
+      releaseFirstPatch?.();
+    });
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent('Could not save settings.'),
     );
@@ -107,8 +125,16 @@ describe('SettingsPanel playback timing', () => {
     expect(store.getState().settings?.palette).toBe('graphite');
     expect(palette).toHaveTextContent('Graphite (Default)');
 
+    // Outstanding error remains visible even when switching to Donate or About
+    fireEvent.click(screen.getByRole('button', { name: 'Donate' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not save settings.');
+    fireEvent.click(screen.getByRole('button', { name: 'About' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not save settings.');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
+    const paletteRetry = screen.getByLabelText('Dark palette');
     await act(async () => {
-      fireEvent.click(palette);
+      fireEvent.click(paletteRetry);
     });
     await act(async () => {
       fireEvent.keyDown(screen.getByRole('option', { name: 'Classic' }), { key: 'Enter' });

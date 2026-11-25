@@ -13,17 +13,22 @@ test('fresh System mode follows the OS while manual mode and dark palette stay i
   await page.getByRole('button', { name: 'Open settings' }).click();
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
-  const theme = settings.getByLabel('Theme');
+  const themeGroup = settings.getByRole('radiogroup', { name: 'Theme' });
+  const followWindowsRadio = themeGroup.getByRole('radio', { name: /Follow Windows/ });
+  const darkRadio = themeGroup.getByRole('radio', { name: 'Dark' });
   const palette = settings.getByRole('combobox', { name: 'Dark palette' });
   const appearanceSummary = settings.locator('[data-slot="appearance-active-summary"]');
   const preview = settings.locator('[data-slot="appearance-preview"]');
   const assertPreviewUsesRuntimeTokens = async () => {
     const colors = await page.evaluate(() => {
-      const preview = document.querySelector<HTMLElement>('[data-slot="appearance-preview"]');
-      const action = document.querySelector<HTMLElement>(
+      const previewEl = document.querySelector<HTMLElement>('[data-slot="appearance-preview"]');
+      const canvasEl = document.querySelector<HTMLElement>(
+        '[data-slot="appearance-preview-canvas"]',
+      );
+      const actionEl = document.querySelector<HTMLElement>(
         '[data-slot="appearance-preview-primary-action"]',
       );
-      if (!preview || !action) return null;
+      if (!previewEl || !canvasEl || !actionEl) return null;
       const tokenColor = (property: string, token: string) => {
         const probe = document.createElement('span');
         probe.style.setProperty(property, `var(${token})`);
@@ -32,24 +37,30 @@ test('fresh System mode follows the OS while manual mode and dark palette stay i
         probe.remove();
         return value;
       };
+      const isUnified =
+        document.documentElement.dataset.colorMode === 'light' ||
+        document.documentElement.dataset.palette === 'graphite';
       return {
-        background: getComputedStyle(preview).backgroundColor,
-        expectedBackground: tokenColor('background-color', '--background'),
-        action: getComputedStyle(action).backgroundColor,
+        shell: getComputedStyle(previewEl).backgroundColor,
+        expectedShell: tokenColor('background-color', isUnified ? '--card' : '--background'),
+        canvas: getComputedStyle(canvasEl).backgroundColor,
+        expectedCanvas: tokenColor('background-color', '--surface'),
+        action: getComputedStyle(actionEl).backgroundColor,
         expectedAction: tokenColor('background-color', '--primary'),
-        actionText: getComputedStyle(action).color,
+        actionText: getComputedStyle(actionEl).color,
         expectedActionText: tokenColor('color', '--primary-foreground'),
       };
     });
     expect(colors).not.toBeNull();
     if (colors) {
-      expect(colors.background).toBe(colors.expectedBackground);
+      expect(colors.shell).toBe(colors.expectedShell);
+      expect(colors.canvas).toBe(colors.expectedCanvas);
       expect(colors.action).toBe(colors.expectedAction);
       expect(colors.actionText).toBe(colors.expectedActionText);
     }
   };
 
-  await expect(theme).toContainText('Follow Windows (recommended)');
+  await expect(followWindowsRadio).toHaveAttribute('aria-checked', 'true');
   await expect(palette).toContainText('Graphite (Default)');
   await expect(appearanceSummary).toHaveText(
     'Active: Dark. Saved dark palette: Graphite (Default).',
@@ -73,9 +84,9 @@ test('fresh System mode follows the OS while manual mode and dark palette stay i
   await expect(preview).toHaveAttribute('data-effective-mode', 'light');
   await assertPreviewUsesRuntimeTokens();
 
-  await theme.click();
-  await page.locator('[data-slot="select-item"][data-value="dark"]').click();
+  await darkRadio.click();
   await expect(root).toHaveAttribute('data-color-mode', 'dark');
+  await expect(root).not.toHaveAttribute('data-theme-applying', 'true');
   await expect(appearanceSummary).toHaveText('Active: Dark. Saved dark palette: Slate.');
   await expect(preview).toHaveAttribute('data-effective-mode', 'dark');
   await assertPreviewUsesRuntimeTokens();
@@ -83,8 +94,7 @@ test('fresh System mode follows the OS while manual mode and dark palette stay i
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(root).toHaveAttribute('data-color-mode', 'dark');
 
-  await theme.click();
-  await page.locator('[data-slot="select-item"][data-value="system"]').click();
+  await followWindowsRadio.click();
   await expect(root).toHaveAttribute('data-color-mode', 'light');
   await expect(appearanceSummary).toHaveText('Active: Light. Saved dark palette: Slate.');
   expect(

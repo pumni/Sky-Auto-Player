@@ -114,15 +114,28 @@ export function TimingMarginControl({
 
   return (
     <div
-      className={`grid min-w-0 ${density === 'compact' ? 'grid-cols-1 content-start gap-1' : 'grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1'}`}
+      className={`grid min-w-0 ${density === 'compact' ? 'grid-cols-1 content-start gap-1' : 'grid-cols-1 items-center gap-x-3 gap-y-1.5 @min-[340px]/settings-content:grid-cols-[minmax(0,1fr)_auto]'}`}
       role="group"
       aria-label="Timing margin"
       data-slot="timing-margin-control"
     >
-      <div className="flex min-w-0 items-center justify-between">
-        <span className="text-xs font-medium text-text-secondary">Timing margin</span>
+      <div className="grid min-w-0 gap-0.5">
+        <span
+          className={
+            density === 'compact'
+              ? 'text-xs font-medium text-text-secondary'
+              : 'text-[13px] font-medium leading-5 text-foreground'
+          }
+        >
+          Timing margin
+        </span>
+        {density === 'full' && (
+          <span className="text-xs leading-[18px] text-text-secondary">
+            Extra time added to the minimum key hold.
+          </span>
+        )}
       </div>
-      <div className="grid h-8 grid-cols-[32px_minmax(0,1fr)_32px] items-center gap-1 rounded-control border border-border bg-surface px-1">
+      <div className="grid h-8 w-fit grid-cols-[32px_minmax(64px,1fr)_32px] items-center gap-1 rounded-control border border-border bg-surface px-1">
         <Button
           variant="ghost"
           size="icon-xs"
@@ -149,11 +162,6 @@ export function TimingMarginControl({
           <Plus size={14} aria-hidden="true" />
         </Button>
       </div>
-      {density === 'full' && (
-        <span className="col-span-full text-xs text-muted-foreground">
-          Applies to the minimum key hold
-        </span>
-      )}
     </div>
   );
 }
