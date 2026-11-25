@@ -62,7 +62,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           ? 'Prepared'
           : hasCurrentSong
             ? 'Last played'
-            : 'Ready to play');
+            : 'Selected');
   const statusAccessibilityLabel =
     `${title}: ${baseStatus}` +
     (playbackMode === 'test'
@@ -121,8 +121,9 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           </span>
           {playbackMode === 'test' && (
             <StatusBadge
-              className="shrink-0 max-[1100px]:gap-0 max-[1100px]:border-0 max-[1100px]:px-0 max-[1100px]:[&>span:first-child]:hidden"
+              className="shrink-0"
               appearance="plain"
+              indicator={false}
               aria-label={testModeDescription}
               title={testModeDescription}
             >

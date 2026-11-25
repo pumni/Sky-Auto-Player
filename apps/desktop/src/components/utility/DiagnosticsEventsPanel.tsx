@@ -25,21 +25,23 @@ export function DiagnosticsEventsPanel({ useStore }: { useStore: DesktopStoreHoo
               <ol className="m-0 grid list-none gap-1.5 p-0">
                 {reversedEvents.map((line) => (
                   <li
-                    className="grid min-w-0 grid-cols-[72px_124px_minmax(0,1fr)] items-baseline gap-1.5 text-xs text-text-secondary @max-[360px]/utility:grid-cols-[72px_96px_minmax(0,1fr)] @max-[360px]/utility:gap-1"
+                    className="grid min-w-0 gap-1.5 border-b border-border/70 pb-2 text-xs text-text-secondary last:border-b-0"
                     key={line.seq}
                   >
-                    <time
-                      className="font-mono tabular-nums text-text-tertiary"
-                      dateTime={new Date(line.timestamp).toISOString()}
-                    >
-                      {formatEventTime(line.timestamp)}
-                    </time>
-                    <strong className="overflow-hidden text-ellipsis whitespace-nowrap font-mono text-[11px] font-semibold text-text-secondary">
-                      {line.name}
-                    </strong>
-                    <em className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap not-italic">
+                    <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)] items-baseline gap-2">
+                      <time
+                        className="whitespace-nowrap font-mono tabular-nums text-text-tertiary"
+                        dateTime={new Date(line.timestamp).toISOString()}
+                      >
+                        {formatEventTime(line.timestamp)}
+                      </time>
+                      <strong className="min-w-0 break-words font-mono text-[11px] font-semibold leading-4 text-text-secondary [overflow-wrap:anywhere]">
+                        {line.name}
+                      </strong>
+                    </div>
+                    <p className="m-0 min-w-0 break-words leading-[1.45] text-text-secondary [overflow-wrap:anywhere]">
                       {line.detail}
-                    </em>
+                    </p>
                   </li>
                 ))}
               </ol>

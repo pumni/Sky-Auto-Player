@@ -140,8 +140,12 @@ Ordinary overflowing panels use the source-owned `components/ui/scroll-area.tsx`
 Base UI's native scroll viewport and custom scrollbar parts. Each active content panel has one
 scroll viewport; the Details and Runtime tabs own independent viewports, and Runtime's
 Performance, Timing, and Events tabs each own one viewport beneath their fixed tab list. The
-library and Settings navigation/content panes use the same component. Its thumb uses Base UI's
-overflow, hover, and scrolling state; there is no app-wide native scrollbar override or
+library and Settings navigation/content panes use the same component. Ordinary scrollbars stay
+transparent and non-interactive until Base UI reports actual scrolling or the thumb is being
+dragged; hover and focus alone do not reveal them. They fade in over 80 ms and fade out over 180 ms
+after scrolling settles, with transitions removed for reduced motion. Forced-colors mode keeps an
+overflow scrollbar visible so the scroll position remains discoverable. Thumb colors use neutral
+theme-derived roles, not foreground text colors. There is no app-wide native scrollbar override or
 per-region scroll timer. The Track Browser gives TanStack Virtual the actual Base UI viewport
 element as its scroll element, preserving row height, keyboard navigation, page reset, and
 scroll-to-index behavior. Select and menu popups keep their own library-managed scrolling.

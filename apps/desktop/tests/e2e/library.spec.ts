@@ -2059,7 +2059,7 @@ test('idle Graphite selection stays distinct from native Now Playing', async ({ 
   await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
     'Blue Bird',
   );
-  await expect(player.locator('[data-slot="player-track-status"]')).toHaveText('Ready to play');
+  await expect(player.locator('[data-slot="player-track-status"]')).toHaveText('Selected');
   await expect(player.locator('[data-slot="player-track-status"]')).toHaveCount(1);
 
   await page.getByRole('button', { name: 'Open utility panel' }).click();

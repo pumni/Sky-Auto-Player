@@ -40,14 +40,42 @@ function ScrollAreaContent({ className, style, ...props }: ScrollAreaPrimitive.C
   );
 }
 
-function ScrollAreaScrollbar({ className, ...props }: ScrollAreaPrimitive.Scrollbar.Props) {
+function ScrollAreaScrollbar({
+  className,
+  onPointerDownCapture,
+  onPointerUpCapture,
+  onPointerCancelCapture,
+  ...props
+}: ScrollAreaPrimitive.Scrollbar.Props) {
+  const beginDrag: NonNullable<ScrollAreaPrimitive.Scrollbar.Props['onPointerDownCapture']> = (
+    event,
+  ) => {
+    onPointerDownCapture?.(event);
+    event.currentTarget.dataset.dragging = 'true';
+  };
+  const endDrag: NonNullable<ScrollAreaPrimitive.Scrollbar.Props['onPointerUpCapture']> = (
+    event,
+  ) => {
+    onPointerUpCapture?.(event);
+    delete event.currentTarget.dataset.dragging;
+  };
+  const cancelDrag: NonNullable<ScrollAreaPrimitive.Scrollbar.Props['onPointerCancelCapture']> = (
+    event,
+  ) => {
+    onPointerCancelCapture?.(event);
+    delete event.currentTarget.dataset.dragging;
+  };
+
   return (
     <ScrollAreaPrimitive.Scrollbar
       data-slot="scroll-area-scrollbar"
       className={cn(
-        'z-10 flex touch-none select-none bg-transparent p-[2px] opacity-75 transition-opacity duration-[120ms] ease-standard data-[hovering]:opacity-100 data-[scrolling]:opacity-100 group-focus-within/scroll-area:opacity-100 data-[orientation=vertical]:w-[10px] data-[orientation=vertical]:flex-col data-[orientation=horizontal]:h-[10px] data-[orientation=horizontal]:flex-row',
+        'z-10 flex touch-none select-none bg-transparent p-[2px] opacity-0 pointer-events-none transition-opacity duration-[180ms] ease-standard data-[scrolling]:opacity-100 data-[scrolling]:pointer-events-auto data-[scrolling]:duration-[80ms] data-[dragging=true]:opacity-100 data-[dragging=true]:pointer-events-auto data-[dragging=true]:duration-[80ms] forced-colors:opacity-100 forced-colors:pointer-events-auto motion-reduce:transition-none data-[orientation=vertical]:w-[10px] data-[orientation=vertical]:flex-col data-[orientation=horizontal]:h-[10px] data-[orientation=horizontal]:flex-row',
         className,
       )}
+      onPointerDownCapture={beginDrag}
+      onPointerUpCapture={endDrag}
+      onPointerCancelCapture={cancelDrag}
       {...props}
     />
   );
@@ -58,7 +86,7 @@ function ScrollAreaThumb({ className, ...props }: ScrollAreaPrimitive.Thumb.Prop
     <ScrollAreaPrimitive.Thumb
       data-slot="scroll-area-thumb"
       className={cn(
-        'relative rounded-full bg-muted-foreground transition-colors duration-[120ms] hover:bg-foreground data-[scrolling]:bg-foreground',
+        'relative rounded-full bg-scrollbar-thumb transition-colors duration-[120ms] hover:bg-scrollbar-thumb-active data-[scrolling]:bg-scrollbar-thumb-active motion-reduce:transition-none',
         className,
       )}
       {...props}

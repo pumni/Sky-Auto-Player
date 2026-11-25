@@ -97,7 +97,7 @@ describe('PlayerTrackInfo', () => {
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
     expect(store.getState().library.selectedSongSummary?.song_id).toBe(row.song_id);
-    expect(screen.getByText('Ready to play')).toBeInTheDocument();
+    expect(screen.getByText('Selected')).toBeInTheDocument();
     expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Add to Liked Songs' })).toBeInTheDocument();
   });
@@ -119,7 +119,7 @@ describe('PlayerTrackInfo', () => {
 
     render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
-    expect(screen.getByText('Ready to play', { selector: '[role="status"]' })).toBeInTheDocument();
+    expect(screen.getByText('Selected', { selector: '[role="status"]' })).toBeInTheDocument();
     expect(document.querySelectorAll('[role="status"]')).toHaveLength(1);
     expect(screen.queryByText(/TXT ·/)).not.toBeInTheDocument();
     expect(screen.queryByText('Playback error')).not.toBeInTheDocument();

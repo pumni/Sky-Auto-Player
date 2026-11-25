@@ -88,6 +88,9 @@ describe('Sky Graphite 2 semantic theme', () => {
       ['--color-primary-pressed', '--primary-pressed'],
       ['--color-destructive-hover', '--destructive-hover'],
       ['--color-destructive-pressed', '--destructive-pressed'],
+      ['--color-control-active', '--control-active'],
+      ['--color-scrollbar-thumb', '--scrollbar-thumb'],
+      ['--color-scrollbar-thumb-active', '--scrollbar-thumb-active'],
       ['--color-scrim', '--scrim'],
     ] as const) {
       expect(tailwindTheme[utility], utility).toBe(`var(${token})`);

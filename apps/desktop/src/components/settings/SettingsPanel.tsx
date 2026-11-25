@@ -15,7 +15,6 @@ import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
 import {
   ScrollAreaContent,
-  ScrollAreaCorner,
   ScrollAreaRoot,
   ScrollAreaScrollbar,
   ScrollAreaThumb,
@@ -77,14 +76,14 @@ export function SettingsPanel({ bootstrap, useStore, onUpdateDialogOpen }: Setti
           </Button>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[164px_minmax(0,1fr)] border-y border-border max-[600px]:grid-cols-1">
-          <ScrollAreaRoot className="min-h-0 min-w-0 border-r border-border max-[600px]:border-b max-[600px]:border-r-0">
+        <div className="grid min-h-0 flex-1 grid-cols-[164px_minmax(0,1fr)] border-y border-border">
+          <ScrollAreaRoot className="min-h-0 min-w-0 border-r border-border">
             <ScrollAreaViewport
               className="size-full"
               role="navigation"
               aria-label="Settings categories"
             >
-              <ScrollAreaContent className="grid min-w-0 content-start gap-0.5 py-3 pr-3 max-[600px]:flex max-[600px]:w-max max-[600px]:items-center max-[600px]:gap-1 max-[600px]:py-2 max-[600px]:pr-0">
+              <ScrollAreaContent className="grid min-w-0 content-start gap-1 px-2 py-3">
                 {SETTINGS_CATEGORIES.map((item) => {
                   const Icon = CATEGORY_ICONS[item.id];
                   const isGroupStart = item.id === 'donate';
@@ -93,14 +92,14 @@ export function SettingsPanel({ bootstrap, useStore, onUpdateDialogOpen }: Setti
                       variant="ghost"
                       size="sm"
                       key={item.id}
-                      className={`relative flex min-h-[34px] justify-start gap-2 px-3 text-left text-[13px] font-medium text-text-secondary hover:bg-control-hover hover:text-foreground after:absolute after:inset-y-[7px] after:left-0.5 after:w-[3px] after:rounded-full after:bg-accent-ink after:opacity-0 data-[active=true]:bg-selection data-[active=true]:text-accent-ink data-[active=true]:after:opacity-100 motion-reduce:transition-none max-[600px]:flex-none ${isGroupStart ? "mt-2.5 before:absolute before:-top-1.5 before:left-2 before:right-2 before:h-px before:bg-border before:content-[''] max-[600px]:mt-0" : ''}`}
+                      className={`relative flex min-h-[34px] justify-start gap-2 px-2.5 text-left text-[13px] font-medium text-text-secondary hover:bg-control-hover hover:text-foreground after:absolute after:inset-y-[7px] after:left-0 after:w-[3px] after:rounded-full after:bg-accent-ink after:opacity-0 data-[active=true]:bg-selection data-[active=true]:text-accent-ink data-[active=true]:after:opacity-100 motion-reduce:transition-none ${isGroupStart ? "mt-2.5 before:absolute before:-top-1.5 before:left-2 before:right-2 before:h-px before:bg-border before:content-['']" : ''}`}
                       type="button"
                       aria-current={category === item.id ? 'page' : undefined}
                       data-active={category === item.id}
                       data-slot="settings-nav-item"
                       onClick={() => setCategory(item.id)}
                     >
-                      <Icon size={15} className="shrink-0 opacity-80" aria-hidden="true" />
+                      <Icon size={16} className="shrink-0 opacity-80" aria-hidden="true" />
                       <span>{item.label}</span>
                     </Button>
                   );
@@ -110,16 +109,15 @@ export function SettingsPanel({ bootstrap, useStore, onUpdateDialogOpen }: Setti
             <ScrollAreaScrollbar orientation="vertical">
               <ScrollAreaThumb />
             </ScrollAreaScrollbar>
-            <ScrollAreaScrollbar orientation="horizontal">
-              <ScrollAreaThumb />
-            </ScrollAreaScrollbar>
-            <ScrollAreaCorner />
           </ScrollAreaRoot>
 
           <div data-slot="settings-content-scroll-region" className="min-h-0 min-w-0">
             <ScrollAreaRoot className="size-full">
-              <ScrollAreaViewport data-settings-content className="size-full">
-                <ScrollAreaContent className="min-w-0 pl-5 pr-6 max-[600px]:pl-3">
+              <ScrollAreaViewport
+                data-settings-content
+                className="size-full @container/settings-content"
+              >
+                <ScrollAreaContent className="min-w-0 pl-4 pr-5">
                   <SettingsCategoryContent
                     category={category}
                     bootstrap={bootstrap}

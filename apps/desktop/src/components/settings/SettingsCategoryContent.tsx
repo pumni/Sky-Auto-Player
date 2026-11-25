@@ -116,13 +116,13 @@ export function SettingsCategoryContent({
           aria-labelledby="playback-settings-title"
         >
           <h3
-            className="m-0 text-[15px] font-semibold tracking-tight text-foreground"
+            className="m-0 text-lg font-semibold leading-6 tracking-tight text-foreground"
             id="playback-settings-title"
           >
             Playback
           </h3>
           <div className="grid gap-2 border-t border-border pt-2.5">
-            <h4 className="m-0 text-xs font-semibold text-text-secondary">Behavior</h4>
+            <h4 className="m-0 text-sm font-semibold leading-5 text-text-secondary">Behavior</h4>
             <div className="rounded-control border border-border bg-surface px-3">
               <AutoPlaySwitch
                 checked={settings.auto_play}
@@ -131,8 +131,10 @@ export function SettingsCategoryContent({
             </div>
           </div>
           <div className="grid gap-2 border-t border-border pt-2.5">
-            <h4 className="m-0 text-xs font-semibold text-text-secondary">Playback defaults</h4>
-            <div className="grid grid-cols-3 gap-3 max-[700px]:grid-cols-1">
+            <h4 className="m-0 text-sm font-semibold leading-5 text-text-secondary">
+              Playback defaults
+            </h4>
+            <div className="grid min-w-0 grid-cols-1 gap-3 @min-[420px]/settings-content:grid-cols-2 @min-[560px]/settings-content:grid-cols-3">
               <div className="grid min-w-0 content-start gap-1.5">
                 <label
                   className="cursor-pointer text-[13px] font-medium text-text-secondary"
@@ -229,7 +231,7 @@ export function SettingsCategoryContent({
             </div>
           </div>
           <div className="mt-0 grid gap-2 border-t border-border pt-2.5">
-            <h4 className="m-0 text-xs font-semibold text-text-secondary">Timing</h4>
+            <h4 className="m-0 text-sm font-semibold leading-5 text-text-secondary">Timing</h4>
             <div className="grid gap-2.5 rounded-pane border border-border bg-surface p-3">
               <TimingMarginControl
                 value={defaults.timing_margin_us}
@@ -278,12 +280,12 @@ export function SettingsCategoryContent({
           aria-labelledby="appearance-settings-title"
         >
           <h3
-            className="m-0 text-[15px] font-semibold tracking-tight text-foreground"
+            className="m-0 text-lg font-semibold leading-6 tracking-tight text-foreground"
             id="appearance-settings-title"
           >
             Appearance
           </h3>
-          <div className="grid w-full max-w-[360px] gap-1.5">
+          <div className="grid w-full max-w-[440px] gap-1.5">
             <label className="text-[13px] font-medium text-text-secondary" htmlFor={themeId}>
               Theme
             </label>
@@ -316,7 +318,7 @@ export function SettingsCategoryContent({
               </SelectContent>
             </Select>
           </div>
-          <div className="grid w-full max-w-[360px] gap-1.5">
+          <div className="grid w-full max-w-[440px] gap-1.5">
             <label className="text-[13px] font-medium text-text-secondary" htmlFor={paletteId}>
               Dark palette
             </label>
@@ -358,7 +360,7 @@ export function SettingsCategoryContent({
             data-effective-mode={effectiveAppearance.colorMode}
             role="img"
             aria-label={`${effectiveAppearance.colorMode === 'light' ? 'Light' : 'Dark'} appearance preview using saved palette ${activePaletteMeta.label}`}
-            className="w-full max-w-[360px] overflow-hidden rounded-pane border border-border bg-background text-foreground"
+            className="w-full max-w-[440px] overflow-hidden rounded-pane border border-border bg-background text-foreground"
           >
             <div className="flex h-7 items-center gap-1.5 border-b border-border bg-card px-2">
               <span className="size-2 rounded-full bg-primary" />
@@ -401,7 +403,7 @@ export function SettingsCategoryContent({
           aria-labelledby="diagnostic-settings-title"
         >
           <h3
-            className="m-0 text-[15px] font-semibold tracking-tight text-foreground"
+            className="m-0 text-lg font-semibold leading-6 tracking-tight text-foreground"
             id="diagnostic-settings-title"
           >
             Telemetry and diagnostics
@@ -467,7 +469,7 @@ export function SettingsCategoryContent({
           aria-labelledby="update-settings-title"
         >
           <h3
-            className="m-0 text-[15px] font-semibold tracking-tight text-foreground"
+            className="m-0 text-lg font-semibold leading-6 tracking-tight text-foreground"
             id="update-settings-title"
           >
             Updates
@@ -498,7 +500,7 @@ export function SettingsCategoryContent({
               Check for signed releases in the background when Sky Auto Player starts.
             </p>
           </div>
-          <div className="grid w-full max-w-[360px] gap-1.5">
+          <div className="grid w-full max-w-[440px] gap-1.5">
             <label className="text-[13px] font-medium text-text-secondary" htmlFor={channelId}>
               Channel
             </label>
@@ -568,7 +570,7 @@ export function SettingsCategoryContent({
             />
             <div className="grid min-w-0 gap-1">
               <h3
-                className="m-0 text-[15px] font-semibold text-foreground"
+                className="m-0 text-lg font-semibold leading-6 text-foreground"
                 id="about-settings-title"
               >
                 About Sky Auto Player

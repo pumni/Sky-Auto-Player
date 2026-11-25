@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { expect, type Page, test } from '@playwright/test';
 import { chooseSelectOption, palettes } from './testHelpers';
@@ -116,13 +116,58 @@ async function createLongPlaylistAndOpenMenu(page: Page) {
   return menu;
 }
 
-async function capture(page: Page, name: string) {
+async function capture(page: Page, name: string, movePointer = true) {
   mkdirSync(evidenceDirectory, { recursive: true });
-  await page.mouse.move(0, 0);
+  if (movePointer) await page.mouse.move(0, 0);
   await page.screenshot({
     path: resolve(evidenceDirectory, name),
     animations: 'disabled',
   });
+}
+
+async function capturePaletteContactSheet(page: Page) {
+  const captures = [
+    { label: 'Light', file: 'candidate-appearance-preview-light-1366x768.png' },
+    ...palettes.map((palette) => ({
+      label: palette,
+      file: `candidate-palette-${palette}-1366x768.png`,
+    })),
+  ].map(({ label, file }) => ({
+    label,
+    data: readFileSync(resolve(evidenceDirectory, file)).toString('base64'),
+  }));
+  const png = await page.evaluate(async (tiles) => {
+    const tileWidth = 500;
+    const labelHeight = 28;
+    const tileHeight = 281;
+    const columns = 2;
+    const rows = Math.ceil(tiles.length / columns);
+    const canvas = document.createElement('canvas');
+    canvas.width = tileWidth * columns;
+    canvas.height = (tileHeight + labelHeight) * rows;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not create a canvas for the palette comparison.');
+    context.fillStyle = '#0e0f11';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    for (const [index, tile] of tiles.entries()) {
+      const image = new Image();
+      image.src = `data:image/png;base64,${tile.data}`;
+      await image.decode();
+      const x = (index % columns) * tileWidth;
+      const y = Math.floor(index / columns) * (tileHeight + labelHeight);
+      context.fillStyle = '#0e0f11';
+      context.fillRect(x, y, tileWidth, tileHeight + labelHeight);
+      context.fillStyle = '#f2f3f5';
+      context.font = '600 14px system-ui, sans-serif';
+      context.fillText(tile.label, x + 10, y + 19);
+      context.drawImage(image, x, y + labelHeight, tileWidth, tileHeight);
+    }
+    return canvas.toDataURL('image/png').slice('data:image/png;base64,'.length);
+  }, captures);
+  writeFileSync(
+    resolve(evidenceDirectory, 'candidate-palette-comparison-contact-sheet.png'),
+    Buffer.from(png, 'base64'),
+  );
 }
 
 function shouldCapture(view: string) {
@@ -343,6 +388,10 @@ async function readWorkspaceGeometry(page: Page) {
         scrollbar: verticalScrollbar
           ? {
               visible: getComputedStyle(verticalScrollbar).display !== 'none',
+              opacity: getComputedStyle(verticalScrollbar).opacity,
+              pointerEvents: getComputedStyle(verticalScrollbar).pointerEvents,
+              scrolling: verticalScrollbar.hasAttribute('data-scrolling'),
+              dragging: verticalScrollbar.getAttribute('data-dragging'),
               width: verticalScrollbar.getBoundingClientRect().width,
               height: verticalScrollbar.getBoundingClientRect().height,
               thumbWidth: scrollbarThumb?.getBoundingClientRect().width ?? null,
@@ -401,6 +450,20 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   await expect(widePlayer.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
     'Candle Run',
   );
+  const settingsTooltipTrigger = page.getByRole('button', { name: 'Open settings' });
+  await settingsTooltipTrigger.hover();
+  await expect(page.getByRole('tooltip', { name: 'Settings · Ctrl+,' })).toBeVisible();
+  if (shouldCapture('tooltip'))
+    await capture(page, 'candidate-tooltip-settings-1366x768.png', false);
+  await page.mouse.move(0, 0);
+  if (shouldCapture('transport-playing'))
+    await capture(page, 'candidate-transport-pause-playing-1366x768.png');
+  await widePlayer.getByRole('button', { name: 'Pause', exact: true }).click();
+  await expect(widePlayer.locator('[data-slot="player-track-status"]')).toHaveText('Paused');
+  if (shouldCapture('transport-paused'))
+    await capture(page, 'candidate-transport-resume-paused-1366x768.png');
+  await widePlayer.getByRole('button', { name: 'Resume', exact: true }).click();
+  await expect(widePlayer.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
   await page.getByRole('row', { name: /Aurora Landing/ }).hover();
   const wideGeometry = await readWorkspaceGeometry(page);
   expect(wideGeometry.trackCanvas.scrollportMetrics?.hasVerticalOverflow).toBe(true);
@@ -411,6 +474,8 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   expect(wideGeometry.trackCanvas.scrollbar?.thumbHeight).toBeLessThan(
     wideGeometry.trackCanvas.scrollbar?.height ?? 0,
   );
+  expect(wideGeometry.trackCanvas.scrollbar?.opacity).toBe('0');
+  expect(wideGeometry.trackCanvas.scrollbar?.pointerEvents).toBe('none');
   for (const row of Object.values(wideGeometry.trackCanvas.rows)) {
     if (!row) continue;
     for (const cell of row.cells) {
@@ -419,7 +484,91 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     }
   }
   measurements['1366x768'] = wideGeometry;
+  if (shouldCapture('inspector-details'))
+    await capture(page, 'candidate-inspector-details-1366x768.png');
+  const tableViewport = page.getByRole('grid');
+  const tableScrollbar = page
+    .locator('[data-slot="scroll-area"]:has([role="grid"])')
+    .locator('[data-slot="scroll-area-scrollbar"][data-orientation="vertical"]');
+  await tableViewport.focus();
+  await expect(tableViewport).toBeFocused();
+  await expect
+    .poll(() => tableScrollbar.evaluate((element) => getComputedStyle(element).opacity))
+    .toBe('0');
+  if (shouldCapture('scrollbar-idle'))
+    await capture(page, 'candidate-scrollbar-idle-workbench.png');
   if (shouldCapture('populated')) await capture(page, 'candidate-populated-1366x768.png');
+
+  const scrollTopBeforeWheel = await tableViewport.evaluate((element) => element.scrollTop);
+  await tableViewport.hover();
+  await page.mouse.wheel(0, 320);
+  await expect
+    .poll(() => tableViewport.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(scrollTopBeforeWheel);
+  await expect
+    .poll(() => tableScrollbar.evaluate((element) => element.hasAttribute('data-scrolling')))
+    .toBe(true);
+  await expect
+    .poll(() => tableScrollbar.evaluate((element) => getComputedStyle(element).opacity))
+    .toBe('1');
+  await expect
+    .poll(() => tableScrollbar.evaluate((element) => getComputedStyle(element).pointerEvents))
+    .toBe('auto');
+  if (shouldCapture('scrollbar-scrolling'))
+    await capture(page, 'candidate-scrollbar-scrolling-workbench.png');
+
+  const workbenchThumb = tableScrollbar.locator('[data-slot="scroll-area-thumb"]');
+  const workbenchThumbBounds = await workbenchThumb.boundingBox();
+  expect(workbenchThumbBounds).not.toBeNull();
+  if (!workbenchThumbBounds) throw new Error('The Library scrollbar thumb is not measurable.');
+  await page.mouse.move(
+    workbenchThumbBounds.x + workbenchThumbBounds.width / 2,
+    workbenchThumbBounds.y + workbenchThumbBounds.height / 2,
+  );
+  await page.mouse.down();
+  await page.mouse.move(
+    workbenchThumbBounds.x + workbenchThumbBounds.width / 2,
+    workbenchThumbBounds.y + workbenchThumbBounds.height / 2 + 14,
+  );
+  await expect.poll(() => tableScrollbar.getAttribute('data-dragging')).toBe('true');
+  await expect
+    .poll(() => tableScrollbar.evaluate((element) => element.hasAttribute('data-scrolling')))
+    .toBe(true);
+  await expect
+    .poll(() => tableScrollbar.evaluate((element) => element.hasAttribute('data-scrolling')))
+    .toBe(false);
+  await expect
+    .poll(() => tableScrollbar.evaluate((element) => getComputedStyle(element).opacity))
+    .toBe('1');
+  await expect
+    .poll(() => tableScrollbar.evaluate((element) => getComputedStyle(element).pointerEvents))
+    .toBe('auto');
+  if (shouldCapture('scrollbar-dragging'))
+    await capture(page, 'candidate-scrollbar-dragging-workbench.png', false);
+  await page.mouse.up();
+  await expect.poll(() => tableScrollbar.getAttribute('data-dragging')).toBeNull();
+  await expect
+    .poll(() => tableScrollbar.evaluate((element) => getComputedStyle(element).opacity))
+    .toBe('0');
+
+  await openApp(page, { width: 1366, height: 768 });
+  await page.getByRole('row', { name: /Candle Run/ }).click();
+  const idlePlayer = page.getByRole('contentinfo', { name: 'Player controls' });
+  await expect(idlePlayer.locator('[data-slot="player-track-status"]')).toHaveText('Selected');
+  if (shouldCapture('transport-idle'))
+    await capture(page, 'candidate-transport-play-idle-1366x768.png');
+
+  await openApp(page, { width: 640, height: 448 });
+  const longTitle = 'A sheet with an intentionally long title for layout verification';
+  await page.getByRole('searchbox', { name: 'Search Built-in Songs' }).fill(longTitle);
+  const longTitleRow = page.getByRole('row', { name: /A sheet with an intentionally long title/ });
+  await expect(longTitleRow).toBeVisible();
+  await longTitleRow.click();
+  const longTitlePlayer = page.getByRole('contentinfo', { name: 'Player controls' });
+  await longTitlePlayer.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(page.getByRole('group', { name: 'Playback confirmation' })).toBeVisible();
+  if (shouldCapture('transport-long-title'))
+    await capture(page, 'candidate-transport-long-title-640x448.png');
 
   await openApp(page, { width: 1200, height: 760 }, 'expanded', true);
   const mediumPlayer = await startDryRunWithSelection(page);
@@ -527,6 +676,54 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     };
   });
   if (shouldCapture('runtime')) await capture(page, 'candidate-runtime-diagnostics-1366x768.png');
+  const runtimeTabs = runtime.getByRole('tablist', { name: 'Diagnostics views' });
+  await expect(runtimeTabs.getByRole('tab')).toHaveCount(3);
+  await runtimeTabs.getByRole('tab', { name: 'Timing' }).click();
+  await expect(runtimeTabs.getByRole('tab', { name: 'Timing' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  if (shouldCapture('runtime-timing')) await capture(page, 'candidate-runtime-timing-1366x768.png');
+  await runtimeTabs.getByRole('tab', { name: 'Events' }).click();
+  await expect(runtimeTabs.getByRole('tab', { name: 'Events' })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
+  const eventRegion = page.getByRole('region', { name: 'Diagnostics events' });
+  await expect(eventRegion.locator('li').first()).toBeVisible();
+  const firstEventLayout = await eventRegion
+    .locator('li')
+    .first()
+    .evaluate((row) => {
+      const bounds = (element: Element | null) => {
+        const rect = element?.getBoundingClientRect();
+        return rect
+          ? { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom }
+          : null;
+      };
+      const time = row.querySelector('time');
+      const name = row.querySelector('strong');
+      const detail = row.querySelector('p');
+      return {
+        row: bounds(row),
+        time: bounds(time),
+        name: bounds(name),
+        detail: bounds(detail),
+        timeWhitespace: time ? getComputedStyle(time).whiteSpace : null,
+        nameOverflow: name ? name.scrollWidth - name.clientWidth : null,
+        detailOverflow: detail ? detail.scrollWidth - detail.clientWidth : null,
+      };
+    });
+  expect(firstEventLayout.row).not.toBeNull();
+  expect(firstEventLayout.timeWhitespace).toBe('nowrap');
+  expect(firstEventLayout.nameOverflow).toBeLessThanOrEqual(1);
+  expect(firstEventLayout.detailOverflow).toBeLessThanOrEqual(1);
+  if (firstEventLayout.row && firstEventLayout.name && firstEventLayout.detail) {
+    expect(firstEventLayout.detail.left).toBeLessThanOrEqual(firstEventLayout.name.left + 1);
+    expect(firstEventLayout.detail.top).toBeGreaterThanOrEqual(firstEventLayout.name.top);
+    expect(firstEventLayout.detail.right).toBeLessThanOrEqual(firstEventLayout.row.right + 1);
+  }
+  if (shouldCapture('runtime-events')) await capture(page, 'candidate-runtime-events-1366x768.png');
 
   await openApp(page, { width: 1366, height: 768 });
   await page.getByRole('button', { name: 'Open settings' }).click();
@@ -534,11 +731,61 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   await expect(settings).toBeVisible();
   if (shouldCapture('settings')) await capture(page, 'candidate-settings-1366x768.png');
 
+  await openApp(page, { width: 640, height: 448 });
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const compactSettings = page.getByRole('dialog', { name: 'Settings' });
+  const categoryNavigation = compactSettings.getByRole('navigation', {
+    name: 'Settings categories',
+  });
+  const categoryNames = ['Playback', 'Appearance', 'Diagnostics', 'Updates', 'Donate', 'About'];
+  for (const name of categoryNames) {
+    await expect(categoryNavigation.getByRole('button', { name, exact: true })).toBeInViewport();
+  }
+  if (shouldCapture('settings-nav')) await capture(page, 'candidate-settings-nav-640x448.png');
+
+  await openApp(page, { width: 640, height: 320 });
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const tinySettings = page.getByRole('dialog', { name: 'Settings' });
+  const tinyNavigation = tinySettings.getByRole('navigation', {
+    name: 'Settings categories',
+  });
+  const navigationOverflow = await tinyNavigation.evaluate(
+    (element) => element.scrollHeight > element.clientHeight,
+  );
+  expect(navigationOverflow).toBe(true);
+  await tinyNavigation.hover();
+  await page.mouse.wheel(0, 420);
+  await expect(tinyNavigation.getByRole('button', { name: 'About', exact: true })).toBeInViewport();
+  if (shouldCapture('settings-nav-tiny'))
+    await capture(page, 'candidate-settings-nav-640x320-scrolled.png');
+
+  await openApp(page, { width: 640, height: 320 });
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const tinyAppearance = page.getByRole('dialog', { name: 'Settings' });
+  await tinyAppearance.getByRole('button', { name: 'Appearance', exact: true }).click();
+  await tinyAppearance.getByRole('combobox', { name: 'Dark palette' }).click();
+  await expect(page.locator('[data-slot="select-content"]:visible')).toBeVisible();
+  if (shouldCapture('settings-select'))
+    await capture(page, 'candidate-settings-select-open-640x320.png');
+
   await openApp(page, { width: 1366, height: 768 });
   await page.getByRole('button', { name: 'Configure playback profile' }).click();
   const profile = page.getByRole('dialog', { name: 'Playback profile' });
   await expect(profile).toBeVisible();
   if (shouldCapture('profile')) await capture(page, 'candidate-profile-1366x768.png');
+
+  await openApp(page, { width: 800, height: 560 });
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  await page.getByRole('button', { name: 'Configure playback profile' }).click();
+  const compactProfile = page.getByRole('dialog', { name: 'Playback profile' });
+  await compactProfile.getByText('Advanced timing', { exact: true }).click();
+  await expect(compactProfile.getByLabel('FPS')).toBeVisible();
+  if (shouldCapture('profile-expanded'))
+    await capture(page, 'candidate-profile-expanded-800x560.png');
+  await compactProfile.getByRole('combobox', { name: 'Base Hold' }).click();
+  await expect(page.locator('[data-slot="select-content"]:visible')).toBeVisible();
+  if (shouldCapture('profile-select'))
+    await capture(page, 'candidate-profile-select-open-800x560.png');
 
   await openApp(page, { width: 1366, height: 768 });
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
@@ -623,10 +870,11 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     );
     await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
-    await paletteSettings.getByRole('button', { name: 'Close settings' }).click();
     if (shouldCapture(`palette-${palette}`))
       await capture(page, `candidate-palette-${palette}-1366x768.png`);
+    await paletteSettings.getByRole('button', { name: 'Close settings' }).click();
   }
+  if (shouldCapture('palette-contact-sheet')) await capturePaletteContactSheet(page);
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openApp(page, { width: 640, height: 448 }, 'expanded', true);

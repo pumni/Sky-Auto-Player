@@ -14,26 +14,25 @@ function Tabs({ className, orientation = 'horizontal', ...props }: TabsPrimitive
 }
 
 const tabsListVariants = cva(
-  'group/tabs-list relative inline-flex w-fit items-center justify-center rounded-control p-1 text-muted-foreground group-data-horizontal/tabs:h-9 group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col',
+  'group/tabs-list relative flex h-9 w-full min-w-0 items-center justify-center text-muted-foreground group-data-vertical/tabs:h-fit group-data-vertical/tabs:flex-col',
   {
     variants: {
       variant: {
-        default: 'bg-muted',
-        line: 'gap-1 rounded-none border-b border-border bg-transparent p-0',
-        segmented: 'gap-0.5 rounded-control bg-muted p-1',
+        line: 'gap-0 rounded-none border-b border-border bg-transparent p-0',
+        segmented: 'h-[34px] gap-0.5 rounded-control bg-secondary p-[3px]',
       },
-    },
-    defaultVariants: {
-      variant: 'default',
     },
   },
 );
 
 function TabsList({
   className,
-  variant = 'default',
+  variant,
   ...props
-}: TabsPrimitive.List.Props & VariantProps<typeof tabsListVariants>) {
+}: TabsPrimitive.List.Props &
+  VariantProps<typeof tabsListVariants> & {
+    variant: 'line' | 'segmented';
+  }) {
   return (
     <TabsPrimitive.List
       data-slot="tabs-list"
@@ -44,20 +43,14 @@ function TabsList({
   );
 }
 
-function TabsIndicator({
-  className,
-  variant = 'line',
-  ...props
-}: TabsPrimitive.Indicator.Props & { variant?: 'line' | 'segmented' }) {
+function TabsIndicator({ className, ...props }: TabsPrimitive.Indicator.Props) {
   return (
     <TabsPrimitive.Indicator
       data-slot="tabs-indicator"
-      data-variant={variant}
       className={cn(
         'pointer-events-none absolute left-[var(--active-tab-left)] z-0 w-[var(--active-tab-width)] transition-[left,width,top,bottom,height] duration-tab ease-standard motion-reduce:transition-none',
-        variant === 'line'
-          ? 'bottom-0 h-0.5 bg-accent-ink'
-          : 'inset-y-1 rounded-control border border-border bg-background',
+        'group-data-[variant=line]/tabs-list:bottom-0 group-data-[variant=line]/tabs-list:h-0.5 group-data-[variant=line]/tabs-list:bg-accent-ink',
+        'group-data-[variant=segmented]/tabs-list:top-[var(--active-tab-top)] group-data-[variant=segmented]/tabs-list:h-[var(--active-tab-height)] group-data-[variant=segmented]/tabs-list:rounded-[5px] group-data-[variant=segmented]/tabs-list:border group-data-[variant=segmented]/tabs-list:border-border group-data-[variant=segmented]/tabs-list:bg-control-active group-data-[variant=segmented]/tabs-list:shadow-sm',
         className,
       )}
       {...props}
@@ -70,10 +63,10 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
     <TabsPrimitive.Tab
       data-slot="tabs-trigger"
       className={cn(
-        "relative z-[1] inline-flex min-h-8 flex-1 items-center justify-center gap-1.5 rounded-control border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors duration-tab group-data-vertical/tabs:w-full group-data-vertical/tabs:justify-start hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 motion-reduce:transition-none",
-        'group-data-[variant=line]/tabs-list:rounded-none group-data-[variant=line]/tabs-list:bg-transparent group-data-[variant=line]/tabs-list:data-active:bg-transparent group-data-[variant=line]/tabs-list:data-active:text-accent-ink group-data-[variant=line]/tabs-list:data-active:shadow-none',
-        'group-data-[variant=segmented]/tabs-list:data-active:bg-transparent group-data-[variant=segmented]/tabs-list:data-active:text-accent-ink group-data-[variant=segmented]/tabs-list:data-active:shadow-none',
-        'data-active:bg-background data-active:text-foreground data-active:shadow-sm',
+        "relative z-[1] inline-flex min-h-8 min-w-0 flex-1 items-center justify-center gap-1.5 rounded-control border border-transparent bg-transparent px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors duration-tab hover:bg-transparent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 motion-reduce:transition-none",
+        'group-data-[variant=line]/tabs-list:rounded-none group-data-[variant=line]/tabs-list:px-3',
+        'group-data-[variant=segmented]/tabs-list:min-h-7 group-data-[variant=segmented]/tabs-list:rounded-[5px] group-data-[variant=segmented]/tabs-list:px-1.5',
+        'aria-selected:text-foreground aria-selected:font-semibold aria-selected:bg-transparent aria-selected:shadow-none',
         className,
       )}
       {...props}

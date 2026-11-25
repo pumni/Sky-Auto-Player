@@ -24,7 +24,7 @@ describe('DiagnosticsEventsPanel', () => {
 
     render(
       <Tabs defaultValue="events">
-        <TabsList aria-label="Diagnostics views">
+        <TabsList aria-label="Diagnostics views" variant="line">
           <TabsTrigger value="events">Events</TabsTrigger>
         </TabsList>
         <DiagnosticsEventsPanel useStore={store} />

@@ -25,7 +25,12 @@ const themeRoles = [
   '--primary-foreground',
   '--border',
   '--secondary',
+  '--secondary-foreground',
+  '--control-hover',
   '--control-pressed',
+  '--control-active',
+  '--scrollbar-thumb',
+  '--scrollbar-thumb-active',
   '--ring',
   '--input',
   '--selection',
@@ -126,6 +131,23 @@ test('all six dark palettes meet semantic text, action, status, and focus contra
         `${palette} primary foreground on ${actionRole}`,
       ).toBeGreaterThanOrEqual(4.5);
     }
+
+    for (const surfaceRole of [
+      '--secondary',
+      '--control-hover',
+      '--control-pressed',
+      '--control-active',
+    ] as const) {
+      expect(
+        contrast(theme['--foreground'], theme[surfaceRole]),
+        `${palette} foreground on ${surfaceRole}`,
+      ).toBeGreaterThanOrEqual(4.5);
+    }
+    expect(
+      contrast(theme['--secondary-foreground'], theme['--secondary']),
+      `${palette} secondary foreground on its control track`,
+    ).toBeGreaterThanOrEqual(4.5);
+    expect(theme['--secondary']).not.toBe(theme['--control-active']);
 
     for (const [textRole, surfaceRole] of [
       ['--success', '--success-surface'],

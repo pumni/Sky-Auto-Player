@@ -14,7 +14,7 @@ const buttonVariants = cva(
         secondary:
           'bg-secondary text-secondary-foreground hover:bg-control-hover active:bg-control-pressed',
         ghost:
-          'hover:bg-accent hover:text-accent-foreground active:bg-control-pressed aria-expanded:bg-accent',
+          'hover:bg-control-hover hover:text-accent-foreground active:bg-control-pressed aria-expanded:bg-control-active',
         destructive:
           'bg-destructive text-destructive-foreground hover:bg-destructive-hover active:bg-destructive-pressed',
       },

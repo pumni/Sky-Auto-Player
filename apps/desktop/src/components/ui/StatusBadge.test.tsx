@@ -24,7 +24,7 @@ describe('StatusBadge', () => {
         <StatusBadge tone="danger" aria-label="Playback blocked">
           High risk
         </StatusBadge>
-        <StatusBadge tone="success" appearance="plain" aria-label="Ready to play">
+        <StatusBadge tone="success" appearance="plain" indicator={false} aria-label="Ready to play">
           Ready
         </StatusBadge>
         <StatusBadge appearance="plain">Test · no keys</StatusBadge>
@@ -37,5 +37,9 @@ describe('StatusBadge', () => {
     expect(screen.getByText('Ready')).toHaveAttribute('data-tone', 'success');
     expect(screen.getByText('Ready')).toHaveAttribute('data-appearance', 'plain');
     expect(screen.getByText('Test · no keys')).toHaveAttribute('data-appearance', 'plain');
+    expect(screen.getByText('Ready')).toHaveClass('border-0', 'bg-transparent', 'px-0', 'py-0');
+    expect(screen.getByText('Ready').querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(screen.getByText('Review')).toHaveClass('px-1.5', 'gap-1');
+    expect(screen.getByText('Review').querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 });

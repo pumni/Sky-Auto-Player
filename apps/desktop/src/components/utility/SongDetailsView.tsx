@@ -228,7 +228,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
                 appearance={
                   readiness.state === 'review' || readiness.state === 'blocked' ? 'soft' : 'plain'
                 }
-                className="gap-1.5 px-0 [&>span:first-child]:hidden"
+                indicator={false}
                 data-slot="inspector-readiness-status"
                 data-readiness={readiness.state}
               >

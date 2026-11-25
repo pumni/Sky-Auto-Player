@@ -7,6 +7,7 @@ type StatusBadgeAppearance = 'soft' | 'plain';
 interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
   tone?: StatusBadgeTone;
   appearance?: StatusBadgeAppearance;
+  indicator?: boolean;
 }
 
 /**
@@ -16,27 +17,43 @@ interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
 export function StatusBadge({
   tone = 'neutral',
   appearance = 'soft',
+  indicator = true,
   className,
   children,
   ...props
 }: StatusBadgeProps) {
+  const toneText = {
+    neutral: 'text-secondary-foreground',
+    success: 'text-success',
+    warning: 'text-warning',
+    danger: 'text-danger',
+  }[tone];
+  const surface =
+    appearance === 'plain'
+      ? 'border-0 bg-transparent px-0 py-0'
+      : {
+          neutral: 'border-border bg-secondary px-1.5 py-0.5',
+          success: 'border-success-border bg-success-surface px-1.5 py-0.5',
+          warning: 'border-warning-border bg-warning-surface px-1.5 py-0.5',
+          danger: 'border-danger-border bg-danger-surface px-1.5 py-0.5',
+        }[tone];
+
   return (
     <span
       {...props}
       data-slot="status-badge"
       className={cn(
-        'inline-flex min-h-5 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium leading-4',
-        'border-border bg-secondary text-secondary-foreground',
-        'data-[tone=success]:border-success-border data-[tone=success]:bg-success-surface data-[tone=success]:text-success',
-        'data-[tone=warning]:border-warning-border data-[tone=warning]:bg-warning-surface data-[tone=warning]:text-warning',
-        'data-[tone=danger]:border-danger-border data-[tone=danger]:bg-danger-surface data-[tone=danger]:text-danger',
-        'data-[appearance=plain]:border-transparent data-[appearance=plain]:bg-transparent',
+        'inline-flex min-h-5 items-center justify-center gap-1 rounded-full border text-xs font-medium leading-4',
+        toneText,
+        surface,
         className,
       )}
       data-tone={tone}
       data-appearance={appearance}
     >
-      <span className="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />
+      {indicator && (
+        <span className="size-1.5 shrink-0 rounded-full bg-current" aria-hidden="true" />
+      )}
       {children}
     </span>
   );

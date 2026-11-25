@@ -96,7 +96,7 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
           <TabsTrigger value="performance">Performance</TabsTrigger>
           <TabsTrigger value="timing">Timing</TabsTrigger>
           <TabsTrigger value="events">Events</TabsTrigger>
-          <TabsIndicator variant="segmented" />
+          <TabsIndicator />
         </TabsList>
         <DiagnosticsPerformancePanel useStore={useStore} />
         <DiagnosticsTimingPanel useStore={useStore} />

@@ -152,24 +152,24 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
               side="top"
               align="end"
               sideOffset={8}
-              className={`flex ${profileAdvancedOpen ? 'h-[min(476px,calc(100dvh-32px))]' : 'h-max'} max-h-[min(560px,calc(100dvh-32px))] w-[min(360px,calc(100vw-24px))] min-w-[min(320px,calc(100vw-24px))] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-pane border border-border bg-card p-0 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring`}
+              className="flex h-max max-h-(--available-height) w-[min(360px,calc(100vw-24px))] min-w-[min(320px,calc(100vw-24px))] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-pane border border-border bg-popover p-0 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               role="dialog"
               aria-label="Playback profile"
             >
               <ScrollAreaRoot className="min-h-0 flex-1">
                 <ScrollAreaViewport className="rounded-pane">
-                  <ScrollAreaContent className="grid min-w-0 gap-3 p-4 pr-6">
-                    <header className="grid gap-1">
-                      <h3 className="m-0 text-base font-semibold leading-[22px] text-foreground">
+                  <ScrollAreaContent className="grid min-w-0 gap-2.5 p-4">
+                    <header className="flex min-w-0 items-baseline justify-between gap-2">
+                      <h3 className="m-0 shrink-0 text-sm font-semibold leading-5 text-foreground">
                         Playback profile
                       </h3>
-                      <p className="m-0 text-xs leading-[1.4] text-text-tertiary">
-                        Fine-tune how each song is played.
+                      <p className="m-0 min-w-0 text-right text-xs leading-4 text-text-tertiary">
+                        Fine-tune how songs play.
                       </p>
                     </header>
                     <div
                       data-slot="profile-fields"
-                      className="grid min-w-0 grid-cols-2 gap-x-2.5 gap-y-3"
+                      className="grid min-w-0 grid-cols-2 gap-x-2.5 gap-y-2"
                     >
                       <ProfileFields
                         defaults={defaults}
@@ -179,19 +179,21 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                         onAdvancedTimingOpenChange={setProfileAdvancedOpen}
                       />
                     </div>
-                    <div className="grid min-w-0 gap-2.5 border-t border-border pt-3">
+                    <div className="grid min-w-0 gap-2 border-t border-border pt-2.5">
                       <div className="grid min-w-0 gap-1">
-                        <strong className="text-[13px] font-semibold text-foreground">
-                          Safe preview
-                        </strong>
-                        {selectedSongTitle && (
-                          <span
-                            className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-secondary"
-                            title={selectedSongTitle}
-                          >
-                            {selectedSongTitle}
-                          </span>
-                        )}
+                        <div className="flex min-w-0 items-baseline gap-2">
+                          <strong className="shrink-0 text-[13px] font-semibold text-foreground">
+                            Safe preview
+                          </strong>
+                          {selectedSongTitle && (
+                            <span
+                              className="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-secondary"
+                              title={selectedSongTitle}
+                            >
+                              {selectedSongTitle}
+                            </span>
+                          )}
+                        </div>
                         <p className="m-0 text-xs leading-relaxed text-text-secondary">
                           {canPreparePlayback ? 'No keyboard input is sent.' : previewDescription}
                         </p>
@@ -213,7 +215,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
                     </div>
                   </ScrollAreaContent>
                 </ScrollAreaViewport>
-                <ScrollAreaScrollbar orientation="vertical" aria-hidden="true">
+                <ScrollAreaScrollbar orientation="vertical">
                   <ScrollAreaThumb />
                 </ScrollAreaScrollbar>
               </ScrollAreaRoot>
@@ -293,7 +295,7 @@ function ProfileFields({
 
   return (
     <>
-      <div className="grid min-w-0 gap-1">
+      <div className="grid min-w-0 gap-0.5">
         <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={holdId}>
           Base Hold
         </label>
@@ -318,11 +320,11 @@ function ProfileFields({
             ))}
           </SelectContent>
         </Select>
-        <span className="text-[11px] leading-4 text-text-tertiary">
+        <span className="text-xs leading-4 text-text-tertiary">
           {formatHoldFramesHint(defaults.hold_frames, defaults.fps)}
         </span>
       </div>
-      <div className="grid min-w-0 gap-1">
+      <div className="grid min-w-0 gap-0.5">
         <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={tempoId}>
           Tempo
         </label>
@@ -347,7 +349,7 @@ function ProfileFields({
             ))}
           </SelectContent>
         </Select>
-        <span className="text-[11px] leading-4 text-text-tertiary">
+        <span className="text-xs leading-4 text-text-tertiary">
           {formatTempoHint(defaults.tempo_scale) ?? '\u00a0'}
         </span>
       </div>
@@ -356,7 +358,7 @@ function ProfileFields({
         open={advancedTimingOpen}
         onToggle={(event) => onAdvancedTimingOpenChange(event.currentTarget.open)}
       >
-        <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-[13px] font-medium text-text-secondary hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 py-0.5 text-[13px] font-medium text-text-secondary hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
           <ChevronRight
             className="size-3.5 transition-[rotate] duration-fast group-open:rotate-90 motion-reduce:transition-none"
             size={14}
@@ -364,8 +366,8 @@ function ProfileFields({
           />
           <span>Advanced timing</span>
         </summary>
-        <div className="mt-2 grid min-w-0 grid-cols-2 gap-x-2.5 gap-y-3">
-          <div className="grid min-w-0 gap-1">
+        <div className="mt-1.5 grid min-w-0 grid-cols-2 gap-x-2.5 gap-y-2">
+          <div className="grid min-w-0 gap-0.5">
             <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={fpsId}>
               FPS
             </label>
@@ -399,7 +401,7 @@ function ProfileFields({
               )
             }
           />
-          <dl className="col-span-2 m-0 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 border-t border-border pt-2 text-xs">
+          <dl className="col-span-2 m-0 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 border-t border-border pt-1.5 text-xs">
             <dt className="text-text-tertiary">Frame duration</dt>
             <dd className="m-0 font-mono tabular-nums text-foreground">
               {(frameUs / 1_000).toFixed(3)} ms

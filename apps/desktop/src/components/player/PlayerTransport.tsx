@@ -148,7 +148,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             disabled={!canPrevious || transportOwnsControls}
             onClick={() => void previous()}
           >
-            <SkipBack size={16} aria-hidden="true" />
+            <SkipBack size={18} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
           </Button>
           <div
             className="absolute left-1/2 top-1/2 grid size-[42px] -translate-x-1/2 -translate-y-1/2 place-items-center"
@@ -240,7 +240,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             disabled={!canNext || transportOwnsControls}
             onClick={() => void next()}
           >
-            <SkipForward size={16} aria-hidden="true" />
+            <SkipForward size={18} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
           </Button>
         </div>
         <Button
