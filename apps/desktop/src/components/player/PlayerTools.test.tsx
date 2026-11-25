@@ -73,13 +73,15 @@ describe('PlayerTools playback modes and profile', () => {
 
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
     expect(store.getState().playback.context?.dryRun).toBe(true);
-    await act(async () =>
-      screen.getByRole('button', { name: 'Configure playback profile' }).click(),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Configure playback profile' }));
     const runningDialog = screen.getByRole('dialog', { name: 'Playback profile' });
     expect(
       within(runningDialog).getByRole('button', { name: 'Test playback (no input)' }),
     ).toBeDisabled();
+    await act(async () => {
+      await store.getState().stopPlayback();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
   });
 
   it('does not expose raw profile parameters or a Test button in the player dock', async () => {
