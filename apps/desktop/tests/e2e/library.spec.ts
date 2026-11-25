@@ -2846,7 +2846,8 @@ test('F3.3 collapsed rail directly lists playlists and scrolls only its playlist
   await page.mouse.move(0, 0);
   await expect(page.getByRole('tooltip')).toHaveCount(0);
   await navigator.getByRole('button', { name: 'Expand library navigator' }).focus();
-  for (let tabIndex = 0; tabIndex < names.length + 2; tabIndex += 1) {
+  // The scroll viewport is a focusable stop before the playlist tiles.
+  for (let tabIndex = 0; tabIndex < names.length + 3; tabIndex += 1) {
     await page.keyboard.press('Tab');
   }
   await expect(lastTile).toBeFocused();

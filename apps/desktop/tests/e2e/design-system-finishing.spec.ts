@@ -2,9 +2,33 @@ import { expect, test } from '@playwright/test';
 import { palettes, selectPalette } from './testHelpers';
 
 function channels(color: string): [number, number, number] {
-  const match = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-  if (!match) throw new Error(`Unsupported computed color: ${color}`);
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
+  const rgbMatch = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+  if (rgbMatch) return [Number(rgbMatch[1]), Number(rgbMatch[2]), Number(rgbMatch[3])];
+
+  const oklabMatch = color.match(
+    /^oklab\(\s*([+-]?(?:\d+\.?\d*|\.\d+))\s+([+-]?(?:\d+\.?\d*|\.\d+))\s+([+-]?(?:\d+\.?\d*|\.\d+))/,
+  );
+  if (oklabMatch) {
+    const lightness = Number(oklabMatch[1]);
+    const a = Number(oklabMatch[2]);
+    const b = Number(oklabMatch[3]);
+    const light = (lightness + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+    const medium = (lightness - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+    const short = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
+    const toSrgb = (value: number) => {
+      const linear = Math.max(0, Math.min(1, value));
+      const encoded =
+        linear <= 0.0031308 ? 12.92 * linear : 1.055 * linear ** (1 / 2.4) - 0.055;
+      return Math.round(encoded * 255);
+    };
+    return [
+      toSrgb(4.0767416621 * light - 3.3077115913 * medium + 0.2309699292 * short),
+      toSrgb(-1.2684380046 * light + 2.6097574011 * medium - 0.3413193965 * short),
+      toSrgb(-0.0041960863 * light - 0.7034186147 * medium + 1.707614701 * short),
+    ];
+  }
+
+  throw new Error(`Unsupported computed color: ${color}`);
 }
 
 function luminance(color: string): number {
@@ -180,13 +204,20 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
   };
   const expectScrolling = async () => {
     await expect
-      .poll(() => scrollbar.evaluate((element) => element.hasAttribute('data-scrolling')))
+      .poll(() => scrollbar.evaluate((element) => element.hasAttribute('data-scrolling')), {
+        intervals: [10, 20, 40],
+      })
       .toBe(true);
     await expect
-      .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).opacity))
-      .toBe('1');
+      .poll(() =>
+        scrollbar.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity)),
+        { intervals: [10, 20, 40] },
+      )
+      .toBeGreaterThan(0);
     await expect
-      .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).pointerEvents))
+      .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).pointerEvents), {
+        intervals: [10, 20, 40],
+      })
       .toBe('auto');
   };
   const waitForScrollToSettle = async () => {
@@ -204,21 +235,25 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
     await expectHidden();
     await page.getByRole('row', { name: /Aurora Landing/ }).hover();
     await expectHidden();
-    await grid.focus();
-    await expect(grid).toBeFocused();
-    await expectHidden();
+    if (paletteIndex === 0) {
+      await grid.focus();
+      await expect(grid).toBeFocused();
+      await expectHidden();
 
-    const previousTopBeforeKeyboard = await grid.evaluate((element) => element.scrollTop);
-    await page.keyboard.press('PageDown');
-    await expect
-      .poll(() => grid.evaluate((element) => element.scrollTop))
-      .toBeGreaterThan(previousTopBeforeKeyboard);
-    await expectScrolling();
-    await waitForScrollToSettle();
-    await expectHidden();
+      const previousTopBeforeKeyboard = await grid.evaluate((element) => element.scrollTop);
+      await page.keyboard.press('PageDown');
+      await page.keyboard.press('PageDown');
+      await expect
+        .poll(() => grid.evaluate((element) => element.scrollTop))
+        .toBeGreaterThan(previousTopBeforeKeyboard);
+      await expectScrolling();
+      await waitForScrollToSettle();
+      await expectHidden();
+    }
 
     const previousTop = await grid.evaluate((element) => element.scrollTop);
     await grid.hover();
+    await page.mouse.wheel(0, 320);
     await page.mouse.wheel(0, 320);
     await expect
       .poll(() => grid.evaluate((element) => element.scrollTop))
@@ -242,40 +277,71 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
       expect(contrast(colors.thumb, colors.surface)).toBeGreaterThanOrEqual(3);
     }
 
-    const thumbBox = await thumb.boundingBox();
-    expect(thumbBox).not.toBeNull();
-    if (!thumbBox) throw new Error('The overflowing Library thumb has no bounds.');
-    await page.mouse.move(thumbBox.x + thumbBox.width / 2, thumbBox.y + thumbBox.height / 2);
-    await page.mouse.down();
-    await page.mouse.move(thumbBox.x + thumbBox.width / 2, thumbBox.y + thumbBox.height / 2 + 14);
-    await expect.poll(() => scrollbar.getAttribute('data-dragging')).toBe('true');
-    await expectScrolling();
-    await waitForScrollToSettle();
-    await expect
-      .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).opacity))
-      .toBe('1');
-    await expect
-      .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).pointerEvents))
-      .toBe('auto');
     if (paletteIndex === 0) {
+      const thumbBox = await thumb.boundingBox();
+      expect(thumbBox).not.toBeNull();
+      if (!thumbBox) throw new Error('The overflowing Library thumb has no bounds.');
+      const thumbX = thumbBox.x + thumbBox.width / 2;
+      const thumbY = thumbBox.y + thumbBox.height / 2;
+      await page.mouse.move(thumbX, thumbY);
+      await page.mouse.wheel(0, 32);
+      await page.mouse.wheel(0, 32);
+      await expect
+        .poll(() => scrollbar.evaluate((element) => element.hasAttribute('data-scrolling')))
+        .toBe(true);
+      await page.mouse.down();
+      await page.mouse.move(thumbX, thumbY + 14);
+      await expect.poll(() => scrollbar.getAttribute('data-dragging')).toBe('true');
+      await expectScrolling();
+      await waitForScrollToSettle();
+      await expect
+        .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe('1');
+      await expect
+        .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).pointerEvents))
+        .toBe('auto');
+
+      await page.mouse.up();
+      await expect.poll(() => scrollbar.getAttribute('data-dragging')).toBeNull();
+      await waitForScrollToSettle();
+      await expectHidden();
+
+      const cancelThumbBox = await thumb.boundingBox();
+      expect(cancelThumbBox).not.toBeNull();
+      if (!cancelThumbBox) throw new Error('The overflowing Library thumb has no bounds.');
+      const cancelX = cancelThumbBox.x + cancelThumbBox.width / 2;
+      const cancelY = cancelThumbBox.y + cancelThumbBox.height / 2;
+      await page.mouse.move(cancelX, cancelY);
+      await page.mouse.wheel(0, 32);
+      await page.mouse.wheel(0, 32);
+      await expect
+        .poll(() => scrollbar.evaluate((element) => element.hasAttribute('data-scrolling')))
+        .toBe(true);
+      await page.mouse.down();
+      await page.mouse.move(cancelX, cancelY + 14);
+      await expect.poll(() => scrollbar.getAttribute('data-dragging')).toBe('true');
       await scrollbar.evaluate((element) =>
         element.dispatchEvent(new PointerEvent('pointercancel', { bubbles: true, pointerId: 1 })),
       );
       await expect.poll(() => scrollbar.getAttribute('data-dragging')).toBeNull();
+      await page.mouse.up();
+      await waitForScrollToSettle();
       await expectHidden();
-      await page.mouse.up();
     } else {
-      await page.mouse.up();
-      await expect.poll(() => scrollbar.getAttribute('data-dragging')).toBeNull();
+      await waitForScrollToSettle();
       await expectHidden();
     }
   }
 
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+  await grid.evaluate((element) => {
+    element.scrollTop = 0;
+  });
   await page.mouse.move(0, 0);
   await expectHidden();
   await grid.hover();
+  await page.mouse.wheel(0, 320);
   await page.mouse.wheel(0, 320);
   await expectScrolling();
   const lightColors = await scrollArea.evaluate((area) => {

@@ -117,7 +117,7 @@
   --destructive-hover: #d13a45;
   --destructive-pressed: #9e1f2a;
   --destructive-foreground: #fff;
-  --control-hover: #2b2c2f;
+  --control-hover: #35363a;
   --control-pressed: #404246;
   --control-active: #35363a;
   --control-disabled: #6c6e73;
@@ -235,8 +235,8 @@ html[data-palette='aurora'] {
   --accent-foreground: #e7edf6;
   --selection: #152132;
   --playing: color-mix(in srgb, #9b8cff 8%, #0b1018);
-  --control-hover: #223044;
-  --control-pressed: #2b3c52;
+  --control-hover: #1a2533;
+  --control-pressed: #223044;
   --control-active: #30425a;
   --control-disabled: #718096;
 }
@@ -267,8 +267,8 @@ html[data-palette='minimalist'] {
   --accent-foreground: #f0f2f4;
   --selection: #2d343d;
   --playing: color-mix(in srgb, #a0b8d5 8%, #17191d);
-  --control-hover: #3b424b;
-  --control-pressed: #454e59;
+  --control-hover: #333941;
+  --control-pressed: #3b424b;
   --control-active: #4c5661;
   --control-disabled: #858d97;
 }
@@ -299,8 +299,8 @@ html[data-palette='slate'] {
   --accent-foreground: #e6f0f5;
   --selection: #2a3d4a;
   --playing: color-mix(in srgb, #a8dded 8%, #10171d);
-  --control-hover: #314754;
-  --control-pressed: #3a5261;
+  --control-hover: #273946;
+  --control-pressed: #314754;
   --control-active: #405b6a;
   --control-disabled: #879ca9;
 }
@@ -331,8 +331,8 @@ html[data-palette='cyberpunk'] {
   --accent-foreground: #f7ecfb;
   --selection: #3a274a;
   --playing: color-mix(in srgb, #f4a8e3 8%, #130f1d);
-  --control-hover: #422d54;
-  --control-pressed: #4d3560;
+  --control-hover: #352445;
+  --control-pressed: #422d54;
   --control-active: #553b6a;
   --control-disabled: #ae8fb8;
 }
@@ -363,8 +363,8 @@ html[data-palette='classic'] {
   --accent-foreground: #f2eadc;
   --selection: #352c21;
   --playing: color-mix(in srgb, #e8c17a 8%, #171512);
-  --control-hover: #463b2d;
-  --control-pressed: #51442f;
+  --control-hover: #393126;
+  --control-pressed: #463b2d;
   --control-active: #5a4a32;
   --control-disabled: #a69a87;
 }
@@ -409,8 +409,8 @@ html[data-color-mode='light'] {
   --destructive-hover: #9f1f2a;
   --destructive-pressed: #861a23;
   --destructive-foreground: #fff;
-  --control-hover: #e6ecf3;
-  --control-pressed: #dbe4ef;
+  --control-hover: #eef2f6;
+  --control-pressed: #e2e8f0;
   --control-active: #fff;
   --control-disabled: #8a94a0;
   --scrollbar-thumb: color-mix(in srgb, var(--text-secondary) 74%, var(--background));

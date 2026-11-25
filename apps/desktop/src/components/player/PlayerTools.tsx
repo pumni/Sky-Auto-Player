@@ -108,7 +108,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
             <Button
               variant="ghost"
               size="icon-sm"
-              className="size-8 text-text-tertiary aria-pressed:text-accent-ink focus-visible:ring-2 focus-visible:ring-ring"
+              className="size-8 text-text-tertiary aria-pressed:text-accent-ink hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring"
               aria-label="Auto Play"
               aria-pressed={autoPlayEnabled}
               disabled={!settings}
@@ -152,7 +152,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
               side="top"
               align="end"
               sideOffset={8}
-              className="flex h-max max-h-(--available-height) w-[min(360px,calc(100vw-24px))] min-w-[min(320px,calc(100vw-24px))] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-pane border border-border bg-popover p-0 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="flex h-max max-h-(--available-height) max-[700px]:max-h-[min(360px,var(--available-height))] w-[min(360px,calc(100vw-24px))] min-w-[min(320px,calc(100vw-24px))] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-pane border border-border bg-popover p-0 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               role="dialog"
               aria-label="Playback profile"
             >
