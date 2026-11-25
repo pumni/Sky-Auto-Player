@@ -1,6 +1,6 @@
 # VQC-R2 visual evidence
 
-Captured from desktop source [`9354e8ab0ba7`](https://github.com/pumni/Sky-Auto-Player/commit/9354e8ab0ba79c49ac037f23f38adb8ad19ede63) (desktop tree `25425c22c7e942f83d129b3070106df0e55614ff`) with Playwright Chromium and the deterministic browser mock bridge. These are rendered app states, not native Tauri or gameplay evidence. The Profile captures use 800x560; the compact Settings captures use 640x448 and 640x320.
+Captured from desktop source [`b2d5ec396dc9`](https://github.com/pumni/Sky-Auto-Player/commit/b2d5ec396dc9071e402b1d76aed444b405375cec) (desktop tree `74fc73f96a7b9014288b063db1bc70c8457cbdf0`) with Playwright Chromium and the deterministic browser mock bridge. These are rendered app states, not native Tauri or gameplay evidence. The Profile captures use 800x560; the compact Settings captures use 640x448 and 640x320.
 
 | Capture | Rendered state |
 | --- | --- |
@@ -9,7 +9,8 @@ Captured from desktop source [`9354e8ab0ba7`](https://github.com/pumni/Sky-Auto-
 | [scrollbar-visible-scrolling.png](scrollbar-visible-scrolling.png) | The same Workbench during actual wheel scrolling |
 | [scrollbar-visible-dragged.png](scrollbar-visible-dragged.png) | The same Workbench while the thumb remains actively dragged after scrolling settles |
 | [profile-expanded-800x560.png](profile-expanded-800x560.png) | Playback Profile with Advanced timing expanded at 800x560; all fields fit without scrolling |
-| [profile-select-open-800x560.png](profile-select-open-800x560.png) | Playback Profile Base Hold Select open at 800x560 |
+| [profile-select-open-800x560.png](profile-select-open-800x560.png) | Playback Profile Base Hold Select open at 800x560 (Graphite) |
+| [profile-select-open-light-800x560.png](profile-select-open-light-800x560.png) | Playback Profile Base Hold Select open at 800x560 (Light) |
 | [settings-categories-640x448.png](settings-categories-640x448.png) | All six vertical Settings categories visible at 640x448 |
 | [settings-categories-640x320-scrolled.png](settings-categories-640x320-scrolled.png) | Settings category navigation scrolled at 640x320 |
 | [settings-select-open-640x320.png](settings-select-open-640x320.png) | Settings Dark palette Select open at 640x320 |
@@ -17,8 +18,9 @@ Captured from desktop source [`9354e8ab0ba7`](https://github.com/pumni/Sky-Auto-
 | [inspector-runtime-performance.png](inspector-runtime-performance.png) | Runtime Performance tab in deterministic dry-run browser state |
 | [inspector-runtime-timing.png](inspector-runtime-timing.png) | Runtime Timing tab with the segmented indicator moved to Timing |
 | [inspector-events-tab.png](inspector-events-tab.png) | Runtime Events with full-width detail rows beneath their timestamps and names |
-| [appearance-settings-light.png](appearance-settings-light.png) | Settings Appearance preview with Light active and Graphite saved |
+| [light-workbench.png](light-workbench.png) | 100% undimmed Light Workbench with selected/playing/hovered rows, Runtime indicator, and secondary action |
 | [palette-comparison-contact-sheet.png](palette-comparison-contact-sheet.png) | Rendered Settings Appearance comparison for Light and all six dark palettes |
+| [workbench-palette-contact-sheet.png](workbench-palette-contact-sheet.png) | Undimmed Workbench comparison across Light and all six dark palettes (selected, playing, hovered rows, Runtime indicator, Player, secondary action) |
 | [transport-play-idle.png](transport-play-idle.png) | Idle transport with a selected short title and truthful Selected status |
 | [transport-pause-playing.png](transport-pause-playing.png) | Filled Pause control while browser-mock dry-run playback is active |
 | [transport-resume-paused.png](transport-resume-paused.png) | Filled Resume control while browser-mock dry-run playback is paused |
