@@ -1,0 +1,830 @@
+---
+import type { HomeContent } from '../../data/home.types';
+import {
+  PLAYBACK_DEMO_DURATION_MS,
+  PLAYBACK_DEMO_EVENTS,
+  PLAYBACK_DEMO_KEYS,
+  formatPlaybackTime,
+} from '../../data/playback-demo';
+import SectionIntro from '../ui/SectionIntro.astro';
+
+interface Props {
+  data: HomeContent['playback'];
+  locale: 'en' | 'vi';
+}
+
+const { data, locale } = Astro.props;
+const firstEventKeys = new Set<string>(PLAYBACK_DEMO_EVENTS[0].keys);
+const percent = (value: number) => `${(value / PLAYBACK_DEMO_DURATION_MS) * 100}%`;
+---
+
+<section
+  id="playback"
+  class="playback-demo section-shell section-shell--feature section-shell--bordered"
+  aria-labelledby="playback-title"
+  data-home-section="playback"
+>
+  <div class="container playback-demo__layout">
+    <div class="playback-demo__intro">
+      <SectionIntro
+        kicker={data.kicker}
+        title={data.title}
+        description={data.description}
+        titleId="playback-title"
+      />
+      <p class="playback-demo__note">{data.schematicNote}</p>
+    </div>
+
+    <div
+      class="playback-stage"
+      data-playback-demo
+      data-duration={PLAYBACK_DEMO_DURATION_MS}
+      data-initial-status={data.initialStatus}
+      data-playing-status={data.playingStatus}
+      data-paused-status={data.pausedStatus}
+      data-complete-status={data.completeStatus}
+      data-manual-only={data.manualOnly}
+      data-play-label={data.play}
+      data-resume-label={data.resume}
+      data-pause-label={data.pause}
+      data-replay-label={data.replay}
+      data-cancel-label={data.cancel}
+      data-previous-label={data.previous}
+      data-next-label={data.next}
+      data-progress-label={data.progressLabel}
+    >
+      <div class="playback-stage__topline">
+        <span>{data.timelineLabel}</span>
+        <output class="playback-stage__elapsed" data-elapsed>
+          {formatPlaybackTime(0)}
+        </output>
+      </div>
+
+      <div class="playback-stage__timeline" aria-hidden="true" data-demo-timeline>
+        <div class="playback-stage__track">
+          {PLAYBACK_DEMO_EVENTS.map((event, index) => (
+            <span
+              class="playback-stage__segment"
+              style={`--segment-start: ${percent(event.startMs)}; --segment-width: ${percent(event.endMs - event.startMs)};`}
+              aria-current={index === 0 ? 'step' : undefined}
+              data-demo-segment={index}
+            ></span>
+          ))}
+          <span class="playback-stage__timeline-progress" data-timeline-progress></span>
+        </div>
+        <div class="playback-stage__timeline-labels">
+          <span>{formatPlaybackTime(0)}</span>
+          <span>{formatPlaybackTime(PLAYBACK_DEMO_DURATION_MS)}</span>
+        </div>
+      </div>
+
+      <div class="playback-stage__body">
+        <div class="event-list-panel">
+          <h3>{data.eventListLabel}</h3>
+          <ol class="event-list" data-demo-events>
+            {PLAYBACK_DEMO_EVENTS.map((event, index) => {
+              const duration = event.endMs - event.startMs;
+              const kindLabel = data.eventTypes[event.kind];
+              return (
+                <li
+                  class:list={['event-row', `event-row--${event.kind}`]}
+                  aria-current={index === 0 ? 'step' : undefined}
+                  data-demo-event={index}
+                  data-start={event.startMs}
+                  data-end={event.endMs}
+                  data-kind={kindLabel}
+                  data-keys={event.keys.join(' + ')}
+                >
+                  <div class="event-row__heading">
+                    <time class="event-row__start" datetime={`PT${event.startMs / 1000}S`}>
+                      {formatPlaybackTime(event.startMs)}
+                    </time>
+                    <span class="event-row__kind">{kindLabel}</span>
+                  </div>
+                  <div class="event-row__main">
+                    <span class="event-row__keys">{event.keys.join(' + ')}</span>
+                    <span class="event-row__duration">{duration} ms</span>
+                  </div>
+                  <span class="event-row__duration-track" aria-hidden="true">
+                    <span data-event-progress={index}></span>
+                  </span>
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+
+        <div class="instrument-panel">
+          <p class="instrument-panel__label">{data.keyboardLabel}</p>
+          <div class="instrument-grid" aria-hidden="true" data-demo-keys>
+            {PLAYBACK_DEMO_KEYS.map((key) => (
+              <span
+                class:list={['instrument-key', firstEventKeys.has(key) && 'is-active']}
+                data-demo-key={key}
+              >
+                <span>{key}</span>
+                <i aria-hidden="true"></i>
+              </span>
+            ))}
+          </div>
+          <div
+            class="playback-progress"
+            role="progressbar"
+            aria-label={data.progressLabel}
+            aria-valuemin="0"
+            aria-valuemax={PLAYBACK_DEMO_DURATION_MS}
+            aria-valuenow="0"
+            aria-valuetext={`${formatPlaybackTime(0)} / ${formatPlaybackTime(PLAYBACK_DEMO_DURATION_MS)}`}
+            data-demo-progress
+          >
+            <span class="playback-progress__fill" data-progress-fill></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="playback-stage__footer">
+        <div
+          class="playback-controls"
+          role="group"
+          aria-label={data.controlsLabel}
+          hidden
+          data-demo-controls
+        >
+          <button
+            class="button button--primary playback-control playback-control--main"
+            type="button"
+            data-action="play"
+          >
+            {data.play}
+          </button>
+          <button
+            class="button button--secondary playback-control"
+            type="button"
+            data-action="previous"
+          >
+            <span aria-hidden="true">←</span>
+            <span>{data.previous}</span>
+          </button>
+          <button
+            class="button button--secondary playback-control"
+            type="button"
+            data-action="next"
+          >
+            <span>{data.next}</span>
+            <span aria-hidden="true">→</span>
+          </button>
+          <button
+            class="button button--secondary playback-control playback-control--cancel"
+            type="button"
+            data-action="cancel"
+            hidden
+          >
+            {data.cancel}
+          </button>
+        </div>
+        <p class="playback-stage__motion-note" hidden data-motion-note>
+          {data.manualOnly}
+        </p>
+        <p class="playback-stage__status" lang={locale} aria-live="polite" data-demo-status>
+          {data.staticExplanation}
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<style>
+  @layer components {
+    .playback-demo__layout {
+      display: grid;
+      gap: var(--space-7);
+    }
+
+    .playback-demo__intro {
+      max-inline-size: 52rem;
+    }
+
+    .playback-demo__note {
+      max-inline-size: 62ch;
+      margin-block-start: var(--space-4);
+      color: var(--color-text-tertiary);
+      font-size: var(--type-small);
+    }
+
+    .playback-stage {
+      min-inline-size: 0;
+      padding: clamp(var(--space-4), 3.5vw, var(--space-7));
+      border: 1px solid var(--line-default);
+      border-radius: var(--radius-lg);
+      background:
+        radial-gradient(ellipse at 80% 10%, rgb(239 202 120 / 5%), transparent 36%),
+        var(--color-surface-quiet);
+      box-shadow: var(--shadow-stage);
+    }
+
+    .playback-stage__topline,
+    .playback-stage__timeline-labels {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      color: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+      font-size: var(--type-micro);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    :lang(vi) .playback-stage__topline,
+    :lang(vi) .playback-stage__timeline-labels {
+      letter-spacing: 0;
+      text-transform: none;
+    }
+
+    .playback-stage__elapsed {
+      color: var(--color-action);
+      font-size: var(--type-label);
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+    }
+
+    .playback-stage__timeline {
+      margin-block: var(--space-4) var(--space-6);
+    }
+
+    .playback-stage__track {
+      position: relative;
+      block-size: 0.75rem;
+      overflow: hidden;
+      border: 1px solid var(--line-default);
+      border-radius: 999px;
+      background: var(--color-page);
+    }
+
+    .playback-stage__segment {
+      position: absolute;
+      inset-block: 0;
+      --segment-start: 0%;
+      --segment-width: 0%;
+      left: var(--segment-start);
+      width: var(--segment-width);
+      border-inline-end: 1px solid var(--line-default);
+      background: var(--color-surface-active);
+    }
+
+    .playback-stage__segment[aria-current='step'] {
+      background: color-mix(in oklch, var(--color-action) 18%, var(--color-surface-active));
+    }
+
+    .playback-stage__timeline-progress {
+      position: absolute;
+      inset: 0;
+      transform: scaleX(0);
+      transform-origin: left center;
+      border-inline-end: 2px solid var(--color-action);
+      background: color-mix(in oklch, var(--color-action) 24%, transparent);
+      will-change: transform;
+    }
+
+    .playback-stage__timeline-labels {
+      margin-block-start: var(--space-2);
+      font-size: var(--type-micro);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .playback-stage__body {
+      display: grid;
+      gap: var(--space-6);
+    }
+
+    .event-list-panel,
+    .instrument-panel {
+      min-inline-size: 0;
+    }
+
+    .event-list-panel h3 {
+      margin-block-end: var(--space-3);
+      color: var(--color-text-secondary);
+      font-size: var(--type-small);
+      font-weight: 650;
+    }
+
+    .event-list {
+      display: grid;
+      gap: var(--space-2);
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .event-row {
+      min-inline-size: 0;
+      padding: var(--space-3);
+      border: 1px solid var(--line-faint);
+      border-radius: var(--radius-sm);
+      background: color-mix(in oklch, var(--color-page) 66%, transparent);
+      opacity: 0.72;
+    }
+
+    .event-row[aria-current='step'] {
+      border-color: var(--line-accent);
+      background: color-mix(in oklch, var(--color-action) 7%, var(--color-page));
+      opacity: 1;
+    }
+
+    .event-row__heading,
+    .event-row__main {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: var(--space-1) var(--space-3);
+    }
+
+    .event-row__heading {
+      margin-block-end: var(--space-1);
+    }
+
+    .event-row__start,
+    .event-row__duration {
+      color: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+      font-size: var(--type-micro);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .event-row__kind {
+      color: var(--color-action);
+      font-size: var(--type-micro);
+      font-weight: 650;
+    }
+
+    .event-row__keys {
+      min-inline-size: 0;
+      overflow-wrap: anywhere;
+      color: var(--color-text-primary);
+      font-family: var(--font-mono);
+      font-size: var(--type-small);
+      font-weight: 650;
+    }
+
+    .event-row__duration-track {
+      display: block;
+      block-size: 2px;
+      margin-block-start: var(--space-3);
+      overflow: hidden;
+      background: var(--line-faint);
+    }
+
+    .event-row__duration-track > span {
+      display: block;
+      inline-size: 100%;
+      block-size: 100%;
+      transform: scaleX(0);
+      transform-origin: left center;
+      background: var(--color-action);
+      will-change: transform;
+    }
+
+    .instrument-panel {
+      padding: var(--space-4);
+      border: 1px solid var(--line-faint);
+      border-radius: var(--radius-md);
+      background: var(--color-page);
+    }
+
+    .instrument-panel__label {
+      margin-block-end: var(--space-3);
+      color: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+      font-size: var(--type-micro);
+      letter-spacing: 0.07em;
+    }
+
+    :lang(vi) .instrument-panel__label {
+      letter-spacing: 0;
+    }
+
+    .instrument-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: var(--space-2);
+    }
+
+    .instrument-key {
+      display: flex;
+      min-inline-size: 0;
+      min-block-size: 3.5rem;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: var(--space-1);
+      border: 1px solid var(--line-default);
+      border-block-end-width: 3px;
+      border-radius: var(--radius-xs);
+      background: var(--color-surface-quiet);
+      color: var(--color-text-secondary);
+      font-family: var(--font-mono);
+      font-size: clamp(0.6875rem, 1.6vw, 0.825rem);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .instrument-key i {
+      inline-size: 0.3rem;
+      block-size: 0.3rem;
+      border-radius: 50%;
+      background: transparent;
+    }
+
+    .instrument-key.is-active {
+      border-color: var(--color-action);
+      border-block-end-color: var(--color-action-hover);
+      background: color-mix(in oklch, var(--color-action) 16%, var(--color-surface-quiet));
+      color: var(--color-text-primary);
+      box-shadow: inset 0 1px color-mix(in oklch, var(--color-action) 35%, transparent);
+    }
+
+    .instrument-key.is-active i {
+      background: var(--color-action);
+      box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-action) 18%, transparent);
+    }
+
+    .playback-progress {
+      position: relative;
+      block-size: 0.35rem;
+      margin-block-start: var(--space-5);
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--color-surface-active);
+    }
+
+    .playback-progress__fill {
+      display: block;
+      inline-size: 100%;
+      block-size: 100%;
+      transform: scaleX(0);
+      transform-origin: left center;
+      background: var(--color-action);
+      will-change: transform;
+    }
+
+    .playback-stage__footer {
+      display: grid;
+      gap: var(--space-3);
+      margin-block-start: var(--space-5);
+      padding-block-start: var(--space-4);
+      border-block-start: 1px solid var(--line-faint);
+    }
+
+    .playback-controls[hidden],
+    .playback-control[hidden],
+    .playback-stage__motion-note[hidden] {
+      display: none;
+    }
+
+    .playback-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+    }
+
+    .playback-control {
+      min-block-size: 44px;
+      gap: var(--space-2);
+      padding-inline: var(--space-3);
+    }
+
+    .playback-control--main {
+      min-inline-size: 11rem;
+    }
+
+    .playback-control:disabled {
+      border-color: var(--line-faint);
+      background: transparent;
+      color: var(--color-text-tertiary);
+      cursor: not-allowed;
+    }
+
+    .playback-stage__motion-note,
+    .playback-stage__status {
+      max-inline-size: 72ch;
+      margin: 0;
+      color: var(--color-text-tertiary);
+      font-size: var(--type-small);
+    }
+
+    .playback-stage__motion-note {
+      color: var(--color-text-secondary);
+    }
+
+    .playback-stage__status {
+      min-block-size: 1.6em;
+    }
+
+    @media (min-width: 64rem) {
+      .playback-demo__layout {
+        grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+        gap: var(--grid-gap);
+        align-items: start;
+      }
+
+      .playback-demo__intro {
+        position: sticky;
+        top: 8rem;
+      }
+
+      .playback-stage {
+        grid-column: 2;
+      }
+
+      .playback-stage__body {
+        grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+        gap: var(--space-5);
+      }
+    }
+
+    @media (max-width: 29rem) {
+      .playback-stage {
+        padding-inline: var(--space-3);
+      }
+
+      .instrument-panel {
+        padding: var(--space-2);
+      }
+
+      .instrument-grid {
+        gap: 0.3rem;
+      }
+
+      .instrument-key {
+        min-block-size: 3rem;
+      }
+
+      .playback-controls {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .playback-control--main,
+      .playback-control--cancel {
+        grid-column: 1 / -1;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .playback-stage__timeline-progress,
+      .event-row__duration-track > span,
+      .playback-progress__fill {
+        will-change: auto;
+      }
+    }
+
+    @media (forced-colors: active) {
+      .event-row[aria-current='step'],
+      .instrument-key.is-active {
+        outline: 2px solid Highlight;
+      }
+
+      .playback-stage__timeline-progress,
+      .playback-progress__fill,
+      .event-row__duration-track > span {
+        background: Highlight;
+      }
+    }
+  }
+</style>
+
+<script>
+  import {
+    PLAYBACK_DEMO_DURATION_MS,
+    PLAYBACK_DEMO_EVENTS,
+    formatPlaybackTime,
+  } from '../../data/playback-demo';
+
+  type DemoState = 'idle' | 'playing' | 'paused' | 'stepped' | 'complete';
+
+  const root = document.querySelector<HTMLElement>('[data-playback-demo]');
+
+  if (root) {
+    const controls = root.querySelector<HTMLElement>('[data-demo-controls]');
+    const playButton = root.querySelector<HTMLButtonElement>('[data-action="play"]');
+    const previousButton = root.querySelector<HTMLButtonElement>('[data-action="previous"]');
+    const nextButton = root.querySelector<HTMLButtonElement>('[data-action="next"]');
+    const cancelButton = root.querySelector<HTMLButtonElement>('[data-action="cancel"]');
+    const elapsedOutput = root.querySelector<HTMLOutputElement>('[data-elapsed]');
+    const progress = root.querySelector<HTMLElement>('[data-demo-progress]');
+    const progressFill = root.querySelector<HTMLElement>('[data-progress-fill]');
+    const timelineFill = root.querySelector<HTMLElement>('[data-timeline-progress]');
+    const status = root.querySelector<HTMLElement>('[data-demo-status]');
+    const motionNote = root.querySelector<HTMLElement>('[data-motion-note]');
+    const eventRows = Array.from(root.querySelectorAll<HTMLElement>('[data-demo-event]'));
+    const segments = Array.from(root.querySelectorAll<HTMLElement>('[data-demo-segment]'));
+    const keyNodes = Array.from(root.querySelectorAll<HTMLElement>('[data-demo-key]'));
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const strings = root.dataset;
+
+    if (
+      controls &&
+      playButton &&
+      previousButton &&
+      nextButton &&
+      cancelButton &&
+      elapsedOutput &&
+      progress &&
+      progressFill &&
+      timelineFill &&
+      status &&
+      motionNote &&
+      eventRows.length === PLAYBACK_DEMO_EVENTS.length &&
+      keyNodes.length > 0
+    ) {
+      let state: DemoState = 'idle';
+      let elapsedMs = 0;
+      let startedAt = 0;
+      let frameId = 0;
+      let lastAnnouncement = '';
+
+      const currentEventIndex = () =>
+        PLAYBACK_DEMO_EVENTS.findIndex(
+          (event) => elapsedMs >= event.startMs && elapsedMs < event.endMs,
+        );
+
+      const updateStatus = () => {
+        const index = currentEventIndex();
+        const event = index >= 0 ? PLAYBACK_DEMO_EVENTS[index] : null;
+        const row = index >= 0 ? eventRows[index] : null;
+        const detail = event && row ? `${row.dataset.kind} ${row.dataset.keys}` : '';
+        const time = formatPlaybackTime(elapsedMs);
+        const announcementKey = `${state}:${index}`;
+        if (announcementKey === lastAnnouncement) return;
+        lastAnnouncement = announcementKey;
+
+        if (state === 'complete') {
+          status.textContent = strings.completeStatus || '';
+        } else if (state === 'playing') {
+          status.textContent = [strings.playingStatus, detail, time].filter(Boolean).join(' · ');
+        } else if (state === 'paused') {
+          status.textContent = [strings.pausedStatus, detail, time].filter(Boolean).join(' · ');
+        } else if (state === 'stepped') {
+          status.textContent = [detail, time].filter(Boolean).join(' · ');
+        } else {
+          status.textContent = strings.initialStatus || '';
+        }
+      };
+
+      const render = () => {
+        const ratio = Math.min(1, Math.max(0, elapsedMs / PLAYBACK_DEMO_DURATION_MS));
+        const index = currentEventIndex();
+        const activeKeys = new Set<string>(index < 0 ? [] : PLAYBACK_DEMO_EVENTS[index].keys);
+        elapsedOutput.value = formatPlaybackTime(elapsedMs);
+        elapsedOutput.textContent = formatPlaybackTime(elapsedMs);
+        progress.setAttribute('aria-valuenow', String(Math.floor(elapsedMs)));
+        progress.setAttribute(
+          'aria-valuetext',
+          `${formatPlaybackTime(elapsedMs)} / ${formatPlaybackTime(PLAYBACK_DEMO_DURATION_MS)}`,
+        );
+        progressFill.style.transform = `scaleX(${ratio})`;
+        timelineFill.style.transform = `scaleX(${ratio})`;
+
+        for (let eventIndex = 0; eventIndex < eventRows.length; eventIndex += 1) {
+          const event = PLAYBACK_DEMO_EVENTS[eventIndex];
+          const row = eventRows[eventIndex];
+          const fraction = Math.min(
+            1,
+            Math.max(0, (elapsedMs - event.startMs) / (event.endMs - event.startMs)),
+          );
+          const fill = row.querySelector<HTMLElement>(`[data-event-progress="${eventIndex}"]`);
+          if (eventIndex === index) row.setAttribute('aria-current', 'step');
+          else row.removeAttribute('aria-current');
+          if (fill) fill.style.transform = `scaleX(${fraction})`;
+        }
+
+        for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex += 1) {
+          if (segmentIndex === index) segments[segmentIndex].setAttribute('aria-current', 'step');
+          else segments[segmentIndex].removeAttribute('aria-current');
+        }
+
+        for (const keyNode of keyNodes) {
+          keyNode.classList.toggle('is-active', activeKeys.has(keyNode.dataset.demoKey || ''));
+        }
+
+        const complete = state === 'complete';
+        previousButton.disabled = !complete && index <= 0;
+        nextButton.disabled = complete;
+        cancelButton.hidden = state !== 'playing';
+        playButton.hidden = reducedMotion.matches;
+        playButton.textContent =
+          state === 'playing'
+            ? strings.pauseLabel || ''
+            : complete
+              ? strings.replayLabel || ''
+              : state === 'paused' || state === 'stepped'
+                ? strings.resumeLabel || ''
+                : strings.playLabel || '';
+        motionNote.hidden = !reducedMotion.matches;
+        updateStatus();
+      };
+
+      const cancelFrame = () => {
+        if (frameId !== 0) cancelAnimationFrame(frameId);
+        frameId = 0;
+      };
+
+      const tick = (now: number) => {
+        frameId = 0;
+        if (state !== 'playing') return;
+        elapsedMs = Math.min(PLAYBACK_DEMO_DURATION_MS, Math.max(0, now - startedAt));
+        if (elapsedMs >= PLAYBACK_DEMO_DURATION_MS) {
+          state = 'complete';
+          elapsedMs = PLAYBACK_DEMO_DURATION_MS;
+          render();
+          return;
+        }
+        render();
+        frameId = requestAnimationFrame(tick);
+      };
+
+      const play = () => {
+        if (reducedMotion.matches) return;
+        if (state === 'complete') elapsedMs = 0;
+        state = 'playing';
+        startedAt = performance.now() - elapsedMs;
+        render();
+        cancelFrame();
+        frameId = requestAnimationFrame(tick);
+      };
+
+      const pause = () => {
+        if (state !== 'playing') return;
+        cancelFrame();
+        state = 'paused';
+        render();
+      };
+
+      const stepTo = (eventIndex: number) => {
+        cancelFrame();
+        const event = PLAYBACK_DEMO_EVENTS[eventIndex];
+        elapsedMs = event.startMs;
+        state = 'stepped';
+        render();
+      };
+
+      playButton.addEventListener('click', () => {
+        if (state === 'playing') pause();
+        else play();
+      });
+
+      cancelButton.addEventListener('click', () => {
+        if (state !== 'playing') return;
+        cancelFrame();
+        state = 'paused';
+        render();
+      });
+
+      previousButton.addEventListener('click', () => {
+        const index = currentEventIndex();
+        if (state === 'complete') stepTo(PLAYBACK_DEMO_EVENTS.length - 1);
+        else if (index > 0) stepTo(index - 1);
+      });
+
+      nextButton.addEventListener('click', () => {
+        const index = currentEventIndex();
+        if (index < 0 || state === 'complete') return;
+        if (index === PLAYBACK_DEMO_EVENTS.length - 1) {
+          cancelFrame();
+          elapsedMs = PLAYBACK_DEMO_DURATION_MS;
+          state = 'complete';
+          render();
+        } else {
+          stepTo(index + 1);
+        }
+      });
+
+      const handleReducedMotion = () => {
+        if (reducedMotion.matches && state === 'playing') {
+          cancelFrame();
+          state = 'paused';
+          if (document.activeElement === playButton) {
+            (nextButton.disabled ? previousButton : nextButton).focus();
+          }
+        }
+        render();
+      };
+
+      const settleHiddenPlayback = () => {
+        if (state !== 'playing') return;
+        cancelFrame();
+        state = 'paused';
+        render();
+      };
+
+      controls.hidden = false;
+      reducedMotion.addEventListener('change', handleReducedMotion);
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') settleHiddenPlayback();
+      });
+      window.addEventListener('pagehide', settleHiddenPlayback, { once: true });
+      render();
+    }
+  }
+</script>

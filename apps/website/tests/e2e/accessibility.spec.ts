@@ -2,6 +2,19 @@ import { test, expect } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 const routes = ['/', '/faq/', '/vi/', '/vi/faq/'];
+const homepageSections = [
+  'hero',
+  'benefits',
+  'product',
+  'quick-start',
+  'playback',
+  'technical-model',
+  'formats',
+  'trust-download',
+  'faq-preview',
+  'closing-cta',
+];
+const releaseUrl = 'https://github.com/pumni/Sky-Auto-Player/releases';
 
 test.describe('accessibility and responsive contracts', () => {
   for (const route of routes) {
@@ -12,21 +25,55 @@ test.describe('accessibility and responsive contracts', () => {
     });
   }
 
-  for (const width of [320, 360, 390, 768, 912, 1024, 1280, 1440, 1920]) {
-    test(`homepage has no horizontal overflow at ${width}px`, async ({ page }) => {
-      await page.setViewportSize({ width, height: 900 });
-      await page.goto('/Sky-Auto-Player/');
-      const metrics = await page.evaluate(() => ({
-        body: document.body.scrollWidth,
-        document: document.documentElement.scrollWidth,
-        viewport: window.innerWidth,
-      }));
-      expect(metrics.body).toBeLessThanOrEqual(metrics.viewport + 1);
-      expect(metrics.document).toBeLessThanOrEqual(metrics.viewport + 1);
+  for (const locale of [
+    { route: '/', heading: 'Play the sheet. Not the keyboard.', cta: 'Get the Windows installer' },
+    { route: '/vi/', heading: 'Chơi bản nhạc, không chơi bàn phím.', cta: 'Tải bộ cài Windows' },
+  ]) {
+    test(`${locale.route} keeps the approved narrative, section order, and release journey`, async ({
+      page,
+    }) => {
+      await page.goto(`/Sky-Auto-Player${locale.route}`);
+      await expect(page.locator('main h1')).toHaveText(locale.heading);
+      await expect(page.locator('[data-home-section]').first()).toHaveAttribute(
+        'data-home-section',
+        homepageSections[0],
+      );
+      await expect
+        .poll(() =>
+          page
+            .locator('[data-home-section]')
+            .evaluateAll((sections) =>
+              sections.map((section) => section.getAttribute('data-home-section')),
+            ),
+        )
+        .toEqual(homepageSections);
+      await expect(page.locator('.hero__primary')).toContainText(locale.cta);
+      await expect(page.locator('.hero__primary')).toContainText(/GitHub Releases/);
+      await expect(page.locator('.hero__primary')).toHaveAttribute('href', releaseUrl);
+      await expect(page.locator('.hero__secondary')).toHaveAttribute('href', /#product$/);
+      await expect(page.locator('.hero__description')).not.toContainText(
+        /QPC|SendInput|foreground/i,
+      );
     });
   }
 
-  test('section spacing roles resolve at narrow, fluid and wide viewport sizes', async ({
+  for (const route of ['/', '/vi/']) {
+    for (const width of [320, 390, 768, 1024, 1152, 1440, 1920]) {
+      test(`${route} has no horizontal overflow at ${width}px`, async ({ page }) => {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`/Sky-Auto-Player${route}`);
+        const metrics = await page.evaluate(() => ({
+          body: document.body.scrollWidth,
+          document: document.documentElement.scrollWidth,
+          viewport: window.innerWidth,
+        }));
+        expect(metrics.body).toBeLessThanOrEqual(metrics.viewport + 1);
+        expect(metrics.document).toBeLessThanOrEqual(metrics.viewport + 1);
+      });
+    }
+  }
+
+  test('semantic section spacing roles hold at narrow, fluid, and wide widths', async ({
     page,
   }) => {
     const widths = [320, 1280, 1920];
@@ -41,7 +88,7 @@ test.describe('accessibility and responsive contracts', () => {
 
     await page.setViewportSize({ width: widths[0], height: 900 });
     await page.goto('/Sky-Auto-Player/');
-    for (let index = 0; index < widths.length; index++) {
+    for (let index = 0; index < widths.length; index += 1) {
       const width = widths[index];
       await page.setViewportSize({ width, height: 900 });
       const spacing = await page.evaluate(() => {
@@ -57,41 +104,28 @@ test.describe('accessibility and responsive contracts', () => {
         return {
           compact: measure('.formats-section'),
           feature: measure('.final-cta'),
-          transition: measure('.proof-strip'),
+          transition: measure('.benefits'),
           product: measure('.product-showcase'),
           intro: measure('.hero'),
         };
       });
 
-      expect(
-        Math.abs(spacing.compact.top - expected.compact[index]),
-        `compact at ${width}px`,
-      ).toBeLessThan(0.2);
-      expect(
-        Math.abs(spacing.feature.top - expected.feature[index]),
-        `feature at ${width}px`,
-      ).toBeLessThan(0.2);
-      expect(
-        Math.abs(spacing.transition.top - expected.transition[index]),
-        `transition at ${width}px`,
-      ).toBeLessThan(0.2);
-      expect(
-        Math.abs(spacing.product.top - expected.product[index]),
-        `product at ${width}px`,
-      ).toBeLessThan(0.2);
+      for (const role of ['compact', 'feature', 'transition', 'product'] as const) {
+        expect(
+          Math.abs(spacing[role].top - expected[role][index]),
+          `${role} at ${width}px`,
+        ).toBeLessThan(0.2);
+        expect(spacing[role].bottom).toBe(spacing[role].top);
+      }
       expect(
         Math.abs(spacing.intro.top - expected.introTop[index]),
-        `intro top at ${width}px`,
+        `intro at ${width}px`,
       ).toBeLessThan(0.2);
-      expect(spacing.compact.bottom).toBe(spacing.compact.top);
-      expect(spacing.feature.bottom).toBe(spacing.feature.top);
-      expect(spacing.transition.bottom).toBe(spacing.transition.top);
-      expect(spacing.product.bottom).toBe(spacing.product.top);
       expect(spacing.intro.bottom).toBe(spacing.feature.bottom);
     }
 
     await page.goto('/Sky-Auto-Player/faq/');
-    for (let index = 0; index < widths.length; index++) {
+    for (let index = 0; index < widths.length; index += 1) {
       await page.setViewportSize({ width: widths[index], height: 900 });
       const defaultSpacing = await page
         .locator('.faq-layout')
@@ -100,92 +134,119 @@ test.describe('accessibility and responsive contracts', () => {
     }
   });
 
-  test('mobile CTA, real desktop screenshot and project favicon follow the UI contract', async ({
+  test('short landscape keeps the hero and primary action reachable without overflow', async ({
     page,
   }) => {
-    await page.setViewportSize({ width: 360, height: 900 });
+    await page.setViewportSize({ width: 844, height: 390 });
     await page.goto('/Sky-Auto-Player/');
+    await expect(page.locator('main h1')).toBeVisible();
+    await expect(page.locator('.hero__primary')).toBeVisible();
+    const dimensions = await page.evaluate(() => ({
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      heroBottom: document.querySelector('.hero')!.getBoundingClientRect().bottom,
+    }));
+    expect(dimensions.documentWidth).toBeLessThanOrEqual(dimensions.viewportWidth + 1);
+    expect(dimensions.heroBottom).toBeGreaterThan(0);
+  });
 
-    const heroActions = page.locator('.hero__actions');
-    for (const button of await heroActions.locator('.button').all()) {
-      expect(await button.evaluate((element) => element.getBoundingClientRect().width)).toBe(
-        await heroActions.evaluate((element) => element.getBoundingClientRect().width),
-      );
-    }
-    const releaseAction = page.locator('.header-download');
-    await expect(releaseAction).toBeVisible();
-    await expect(releaseAction).toHaveAttribute(
-      'href',
-      'https://github.com/pumni/Sky-Auto-Player/releases',
+  test('player view selector updates the selected capture, caption, alt text, and full-size link', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/Sky-Auto-Player/');
+    const group = page.getByRole('group', { name: 'Choose a player view' });
+    const image = page.locator('[data-product-image]');
+    const imageLink = page.locator('[data-product-image-link]');
+    await expect(group).toBeVisible();
+    await expect(group.getByRole('button')).toHaveCount(3);
+    await expect(group.getByRole('button', { name: 'Library' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
     );
-    await expect(page.locator('.site-nav')).not.toBeVisible();
-    await page.locator('.menu-toggle').click();
-    await expect(page.locator('.site-nav')).toBeVisible();
-    await expect(page.locator('.menu-toggle')).toHaveAttribute('aria-expanded', 'true');
-    await expect(releaseAction).toBeVisible();
-    await expect(page.locator('.nav-download')).toHaveCount(0);
-    await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
-      'srcset',
-      /minimum-real-tauri\.png/,
+    await expect(image).toHaveAttribute('src', /library-real-tauri\.png/);
+    await expect(image).toHaveAttribute('alt', /song library and playlists/);
+    await expect(imageLink).toHaveAttribute('href', /library-real-tauri\.png/);
+    await expect(image).toHaveCSS('transition-duration', '0.2s');
+
+    await group.getByRole('button', { name: 'Song Detail' }).click();
+    await expect(group.getByRole('button', { name: 'Song Detail' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
     );
-    await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
-      'width',
-      '920',
+    await expect(group.getByRole('button', { name: 'Library' })).toHaveAttribute(
+      'aria-pressed',
+      'false',
     );
-    await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
-      'height',
-      '620',
+    await expect(image).toHaveAttribute('src', /detail-real-tauri\.png/);
+    await expect(image).toHaveAttribute('alt', /selected song and its sheet details/);
+    await expect(page.locator('[data-product-caption]')).toHaveText(
+      'Review a song before you play it.',
     );
-    await expect(page.locator('.screenshot-frame__caption-meta')).toHaveText(
-      'PNG · REAL TAURI WINDOW',
+    await expect(imageLink).toHaveAttribute('href', /detail-real-tauri\.png/);
+    await expect
+      .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth))
+      .toBeGreaterThan(0);
+    await expect
+      .poll(() => image.evaluate((element) => element.hasAttribute('data-switching')))
+      .toBe(false);
+
+    const settings = group.getByRole('button', { name: 'Settings' });
+    await settings.focus();
+    await page.keyboard.press('Enter');
+    await expect(settings).toHaveAttribute('aria-pressed', 'true');
+    await expect(image).toHaveAttribute('src', /settings-real-tauri\.png/);
+    await expect(imageLink).toHaveAttribute('href', /settings-real-tauri\.png/);
+    await expect
+      .poll(() => image.evaluate((element) => element.hasAttribute('data-switching')))
+      .toBe(false);
+    await expect(page.locator('.screenshot-frame__caption-kind')).toHaveText(
+      'Desktop interface capture',
     );
-    await expect(page.locator('.screenshot-frame img')).toHaveAttribute(
+  });
+
+  test('Vietnamese player view selector has localized labels, descriptions, and captions', async ({
+    page,
+  }) => {
+    await page.goto('/Sky-Auto-Player/vi/');
+    const group = page.getByRole('group', { name: 'Chọn giao diện trình phát' });
+    await expect(group.getByRole('button', { name: 'Thư viện' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await group.getByRole('button', { name: 'Chi tiết bài hát' }).click();
+    await expect(page.locator('[data-product-image]')).toHaveAttribute(
       'alt',
-      'Sky Auto Player desktop Library',
+      /bài hát đã chọn và chi tiết sheet/,
     );
-    const screenshot = page.locator('.screenshot-frame img');
-    await expect(screenshot).toHaveJSProperty('complete', true);
-    const imageMetrics = await screenshot.evaluate((element) => {
-      const image = element as HTMLImageElement;
-      const box = image.getBoundingClientRect();
-      const frame = image.closest('.screenshot-frame')!.getBoundingClientRect();
+    await expect(page.locator('[data-product-caption]')).toHaveText(
+      'Xem lại bài hát trước khi phát.',
+    );
+    await expect(page.locator('.screenshot-frame__caption-kind')).toHaveText(
+      'Ảnh chụp giao diện desktop',
+    );
+  });
+
+  test('the desktop capture remains contained and the site favicon contract is visible', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.goto('/Sky-Auto-Player/');
+    const image = page.locator('[data-product-image]');
+    await expect(image).toHaveJSProperty('complete', true);
+    const metrics = await image.evaluate((element) => {
+      const imageElement = element as HTMLImageElement;
+      const box = imageElement.getBoundingClientRect();
+      const frame = imageElement.closest('.screenshot-frame')!.getBoundingClientRect();
       return {
-        naturalWidth: image.naturalWidth,
-        naturalHeight: image.naturalHeight,
-        renderedWidth: box.width,
-        renderedHeight: box.height,
+        naturalWidth: imageElement.naturalWidth,
+        naturalHeight: imageElement.naturalHeight,
         insideFrame: box.left >= frame.left && box.right <= frame.right + 1,
       };
     });
-    expect(imageMetrics.naturalWidth).toBeGreaterThan(0);
-    expect(imageMetrics.naturalHeight).toBeGreaterThan(0);
-    expect(imageMetrics.renderedWidth).toBeGreaterThan(200);
-    expect(imageMetrics.renderedHeight).toBeGreaterThan(100);
-    expect(imageMetrics.insideFrame).toBe(true);
-    const pixelMetrics = await screenshot.evaluate((element) => {
-      const image = element as HTMLImageElement;
-      const canvas = document.createElement('canvas');
-      canvas.width = image.naturalWidth;
-      canvas.height = image.naturalHeight;
-      const context = canvas.getContext('2d');
-      if (!context) throw new Error('Canvas 2D context unavailable');
-      context.drawImage(image, 0, 0);
-      const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-      let nonBlack = 0;
-      const colors = new Set<string>();
-      for (let index = 0; index < pixels.length; index += 4) {
-        const red = pixels[index];
-        const green = pixels[index + 1];
-        const blue = pixels[index + 2];
-        if (red + green + blue > 24) nonBlack += 1;
-        if (colors.size < 128) colors.add(`${red},${green},${blue}`);
-      }
-      return { nonBlack, colors: colors.size };
-    });
-    expect(pixelMetrics.nonBlack).toBeGreaterThan(1000);
-    expect(pixelMetrics.colors).toBeGreaterThan(32);
-    const renderedEvidence = await page.locator('.screenshot-frame').screenshot();
-    expect(renderedEvidence.byteLength).toBeGreaterThan(10_000);
+    expect(metrics.naturalWidth).toBe(1214);
+    expect(metrics.naturalHeight).toBe(798);
+    expect(metrics.insideFrame).toBe(true);
     await expect(page.locator('link[rel="icon"][type="image/png"][sizes="16x16"]')).toHaveAttribute(
       'href',
       /favicon-16x16\.png/,
@@ -194,6 +255,195 @@ test.describe('accessibility and responsive contracts', () => {
       'href',
       /favicon-32x32\.png/,
     );
+  });
+
+  test('playback events, timestamp, key state, duration, and completion stay synchronized', async ({
+    page,
+  }) => {
+    await page.goto('/Sky-Auto-Player/');
+    const demo = page.locator('[data-playback-demo]');
+    const events = demo.locator('[data-demo-event]');
+    const keys = demo.locator('[data-demo-key]');
+    const progress = demo.locator('[data-demo-progress]');
+    const elapsed = demo.locator('[data-elapsed]');
+    const mainControl = demo.locator('[data-action="play"]');
+
+    await expect(events).toHaveCount(3);
+    await expect(keys).toHaveCount(15);
+    await expect(events.nth(0)).toHaveAttribute('aria-current', 'step');
+    await expect(demo.locator('.instrument-key.is-active')).toHaveCount(3);
+    await expect(events.nth(2).locator('.event-row__duration')).toHaveText('1200 ms');
+    await expect(progress).toHaveAttribute('aria-valuenow', '0');
+    await mainControl.click();
+    await expect(demo.locator('[data-action="cancel"]')).toBeVisible();
+
+    await expect(events.nth(1)).toHaveAttribute('aria-current', 'step', { timeout: 1200 });
+    await expect(events.nth(0)).not.toHaveAttribute('aria-current', 'step');
+    await expect(demo.locator('.instrument-key.is-active')).toHaveCount(1);
+    await expect(demo.locator('[data-demo-key="D2"]')).toHaveClass(/is-active/);
+    const synchronizedTime = await demo.evaluate((element) => {
+      const time = element.querySelector<HTMLOutputElement>('[data-elapsed]')?.textContent;
+      const progressElement = element.querySelector<HTMLElement>('[data-demo-progress]');
+      return {
+        time,
+        value: progressElement?.getAttribute('aria-valuenow'),
+        valueText: progressElement?.getAttribute('aria-valuetext'),
+      };
+    });
+    expect(Number(synchronizedTime.value)).toBeGreaterThanOrEqual(700);
+    expect(Number(synchronizedTime.value)).toBeLessThan(1000);
+    expect(synchronizedTime.time).toBe('00:00.' + String(synchronizedTime.value).padStart(3, '0'));
+    expect(synchronizedTime.valueText).toBe(`${synchronizedTime.time} / 00:02.600`);
+
+    await expect(demo.locator('[data-demo-status]')).toHaveText(
+      'Demonstration complete. No keys are active.',
+      { timeout: 3200 },
+    );
+    await expect(demo.locator('[data-demo-event][aria-current="step"]')).toHaveCount(0);
+    await expect(demo.locator('.instrument-key.is-active')).toHaveCount(0);
+    await expect(progress).toHaveAttribute('aria-valuenow', '2600');
+    await expect(elapsed).toHaveText('00:02.600');
+    await expect(mainControl).toHaveText('Replay demonstration');
+  });
+
+  test('manual event stepping is boundary-safe, cancels playback, and reaches the complete state', async ({
+    page,
+  }) => {
+    await page.goto('/Sky-Auto-Player/');
+    const demo = page.locator('[data-playback-demo]');
+    const previous = demo.locator('[data-action="previous"]');
+    const next = demo.locator('[data-action="next"]');
+    const main = demo.locator('[data-action="play"]');
+    const progress = demo.locator('[data-demo-progress]');
+
+    await expect(previous).toBeDisabled();
+    await next.click();
+    await expect(demo.locator('[data-demo-event="1"]')).toHaveAttribute('aria-current', 'step');
+    await expect(progress).toHaveAttribute('aria-valuenow', '700');
+    await previous.click();
+    await expect(demo.locator('[data-demo-event="0"]')).toHaveAttribute('aria-current', 'step');
+    await expect(progress).toHaveAttribute('aria-valuenow', '0');
+    await main.click();
+    await expect(demo.locator('[data-action="cancel"]')).toBeVisible();
+    await next.click();
+    await expect(demo.locator('[data-action="cancel"]')).toBeHidden();
+    await expect(demo.locator('[data-demo-event="1"]')).toHaveAttribute('aria-current', 'step');
+    await next.click();
+    await expect(demo.locator('[data-demo-event="2"]')).toHaveAttribute('aria-current', 'step');
+    await expect(progress).toHaveAttribute('aria-valuenow', '1400');
+    await next.click();
+    await expect(progress).toHaveAttribute('aria-valuenow', '2600');
+    await expect(demo.locator('.instrument-key.is-active')).toHaveCount(0);
+    await expect(next).toBeDisabled();
+    await previous.click();
+    await expect(demo.locator('[data-demo-event="2"]')).toHaveAttribute('aria-current', 'step');
+    await expect(demo.locator('.instrument-key.is-active')).toHaveCount(1);
+    await expect(previous).toBeEnabled();
+  });
+
+  test('pause, cancel, resume, and replay preserve one playback timeline', async ({ page }) => {
+    await page.goto('/Sky-Auto-Player/');
+    const demo = page.locator('[data-playback-demo]');
+    const main = demo.locator('[data-action="play"]');
+    const progress = demo.locator('[data-demo-progress]');
+
+    await main.click();
+    await expect
+      .poll(async () => Number(await progress.getAttribute('aria-valuenow')))
+      .toBeGreaterThan(0);
+    await demo.locator('[data-action="cancel"]').click();
+    const pausedAt = await progress.getAttribute('aria-valuenow');
+    await expect(demo.locator('[data-action="cancel"]')).toBeHidden();
+    await expect(main).toHaveText('Continue demonstration');
+    await page.waitForTimeout(100);
+    await expect(progress).toHaveAttribute('aria-valuenow', pausedAt!);
+    await main.click();
+    await expect(main).toHaveText('Replay demonstration', { timeout: 3500 });
+    await expect(progress).toHaveAttribute('aria-valuenow', '2600');
+    await main.click();
+    await expect(main).toHaveText('Pause demonstration');
+    await expect
+      .poll(async () => Number(await progress.getAttribute('aria-valuenow')))
+      .toBeLessThan(400);
+    await expect(demo.locator('[data-action="cancel"]')).toBeVisible();
+    await main.click();
+    const replayPausedAt = await progress.getAttribute('aria-valuenow');
+    await expect(main).toHaveText('Continue demonstration');
+    await page.waitForTimeout(100);
+    await expect(progress).toHaveAttribute('aria-valuenow', replayPausedAt!);
+  });
+
+  test('reduced motion removes animated playback but preserves manual stepping', async ({
+    page,
+  }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await page.goto('/Sky-Auto-Player/');
+    const demo = page.locator('[data-playback-demo]');
+    await expect(demo.locator('[data-action="play"]')).toBeHidden();
+    await expect(demo.locator('[data-motion-note]')).toBeVisible();
+    await demo.locator('[data-action="next"]').click();
+    await expect(demo.locator('[data-demo-event="1"]')).toHaveAttribute('aria-current', 'step');
+    await expect(demo.locator('[data-demo-progress]')).toHaveAttribute('aria-valuenow', '700');
+    await expect(demo.locator('[data-action="previous"]')).toBeEnabled();
+  });
+
+  test('switching to reduced motion and hiding the page settles playback without auto-resume', async ({
+    page,
+  }) => {
+    await page.goto('/Sky-Auto-Player/');
+    const demo = page.locator('[data-playback-demo]');
+    const main = demo.locator('[data-action="play"]');
+    const progress = demo.locator('[data-demo-progress]');
+    await main.click();
+    await expect(demo.locator('[data-action="cancel"]')).toBeVisible();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await expect(main).toBeHidden();
+    await expect(demo.locator('[data-action="cancel"]')).toBeHidden();
+    await expect(demo.locator('[data-action="next"]')).toBeFocused();
+    const reducedAt = await progress.getAttribute('aria-valuenow');
+    await page.waitForTimeout(100);
+    await expect(progress).toHaveAttribute('aria-valuenow', reducedAt!);
+
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    await expect(main).toBeVisible();
+    await main.click();
+    await expect(demo.locator('[data-action="cancel"]')).toBeVisible();
+    await page.evaluate(() => {
+      Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    const hiddenAt = await progress.getAttribute('aria-valuenow');
+    await page.waitForTimeout(100);
+    await expect(progress).toHaveAttribute('aria-valuenow', hiddenAt!);
+    await expect(main).toHaveText('Continue demonstration');
+  });
+
+  test('static fallback keeps the product capture, event explanation, and navigation usable without JavaScript', async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({
+      javaScriptEnabled: false,
+      viewport: { width: 390, height: 844 },
+    });
+    const page = await context.newPage();
+    await page.goto('/Sky-Auto-Player/');
+    await expect(page.locator('main h1')).toBeVisible();
+    await expect(page.locator('.site-nav')).toBeVisible();
+    await expect(page.locator('.header-download')).toBeVisible();
+    await expect(page.locator('.menu-toggle')).toBeHidden();
+    await expect(page.locator('.site-nav')).toHaveCSS('position', 'static');
+    await expect(page.locator('.product-selector')).toBeHidden();
+    await expect(page.locator('.product-view__fallback a')).toHaveCount(3);
+    await expect(page.locator('[data-product-image]')).toHaveAttribute(
+      'src',
+      /library-real-tauri\.png/,
+    );
+    await expect(page.locator('[data-demo-controls]')).toBeHidden();
+    await expect(page.locator('[data-demo-event]')).toHaveCount(3);
+    await expect(page.locator('[data-demo-event="0"]')).toHaveAttribute('aria-current', 'step');
+    await expect(page.locator('[data-demo-status]')).toContainText('Static example');
+    await expect(page.locator('.instrument-key')).toHaveCount(15);
+    await context.close();
   });
 
   test('header sticky behavior begins with desktop navigation', async ({ page }) => {
@@ -223,11 +473,11 @@ test.describe('accessibility and responsive contracts', () => {
     const sizes = await page
       .locator(
         [
-          '.ui-kicker',
-          '.hero__annotation',
-          '.proof-strip__index',
+          '.hero__kicker',
+          '.hero__destination',
           '.screenshot-frame figcaption',
-          '.ledger-row__state',
+          '.event-row__start',
+          '.release-details dt',
           '.final-cta__eyebrow',
         ].join(','),
       )
@@ -248,7 +498,6 @@ test.describe('accessibility and responsive contracts', () => {
   }) => {
     await page.goto('/Sky-Auto-Player/vi/');
     await expect(page.locator('main h1')).toHaveText('Chơi bản nhạc, không chơi bàn phím.');
-
     const primaryAction = page.locator('.hero__actions .button').first();
     await primaryAction.focus();
     await expect(primaryAction).toBeFocused();
@@ -263,190 +512,25 @@ test.describe('accessibility and responsive contracts', () => {
     expect(focusStyle.outlineWidth).toBeGreaterThanOrEqual(2);
   });
 
-  test('timing stage keeps a complete static state with reduced motion', async ({ page }) => {
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.goto('/Sky-Auto-Player/');
-    await expect(page.locator('.timing-console')).not.toHaveClass(/is-playing/);
-    await expect(page.locator('.timing-event--active')).toHaveAttribute('aria-current', 'step');
-    await page.locator('[data-timing-replay]').click();
-    await expect(page.locator('.timing-console')).not.toHaveClass(/is-playing/);
-    await expect(page.locator('.timing-event[data-event-index="3"]')).toHaveAttribute(
-      'aria-current',
-      'step',
-    );
-  });
-
-  test('timing illustration replays once and keeps event-to-key state legible', async ({
+  test('download and trust section preserves the current install and safety details', async ({
     page,
   }) => {
-    await page.goto('/Sky-Auto-Player/');
-    const console = page.locator('[data-timing-console]');
-    const replay = page.locator('[data-timing-replay]');
-    await expect(replay).toHaveAccessibleName('Replay illustration');
-    await replay.click();
-    await expect(console).toHaveClass(/is-playing/);
-    await expect(console.locator('.timing-event[aria-current="step"]')).toHaveCount(0);
-    await expect(console.locator('.timing-event[data-event-index="1"]')).toHaveAttribute(
-      'aria-current',
-      'step',
-      { timeout: 1500 },
-    );
-    await expect(console).not.toHaveClass(/is-playing/, { timeout: 4000 });
-    await expect(console.locator('.timing-event[data-event-index="3"]')).toHaveAttribute(
-      'aria-current',
-      'step',
-    );
-  });
-
-  test('mobile timing console shows only the relevant key excerpt', async ({ page }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    await page.goto('/Sky-Auto-Player/');
-    await expect(page.locator('.instrument-key:visible')).toHaveCount(5);
-    await expect(page.locator('.timing-console__events > li')).toHaveCount(3);
-  });
-
-  test('proof transition and causal score keep list semantics without nested panels', async ({
-    page,
-  }) => {
-    await page.goto('/Sky-Auto-Player/');
-    await expect(page.locator('.proof-strip__capabilities > li')).toHaveCount(4);
-    await expect(page.locator('.causal-steps > li')).toHaveCount(3);
-    await expect(page.locator('.causal-diagram')).not.toHaveClass(/ui-instrument/);
-  });
-
-  test('desktop product screenshot carries more visual weight than the timing console', async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 1440, height: 900 });
-    await page.goto('/Sky-Auto-Player/');
-    const screenshotWidth = await page
-      .locator('.screenshot-frame img')
-      .evaluate((element) => element.getBoundingClientRect().width);
-    const consoleWidth = await page
-      .locator('.timing-console')
-      .evaluate((element) => element.getBoundingClientRect().width);
-    expect(screenshotWidth).toBeGreaterThan(consoleWidth);
-    expect(screenshotWidth).toBeGreaterThan(850);
-  });
-
-  test('desktop hero copy and timing console keep separate layout bounds', async ({ page }) => {
-    for (const width of [1280, 1440, 1920]) {
-      await page.setViewportSize({ width, height: 900 });
-      await page.goto('/Sky-Auto-Player/');
-      const headerBox = await page.locator('.site-header').boundingBox();
-      const heroBox = await page.locator('.hero').boundingBox();
-      const copyBox = await page.locator('.hero__copy').boundingBox();
-      const consoleBox = await page.locator('.timing-console').boundingBox();
-
-      expect(headerBox).not.toBeNull();
-      expect(heroBox).not.toBeNull();
-      expect(copyBox).not.toBeNull();
-      expect(consoleBox).not.toBeNull();
-      expect(heroBox!.y - (headerBox!.y + headerBox!.height)).toBeLessThanOrEqual(48);
-      expect(
-        consoleBox!.y - (headerBox!.y + headerBox!.height),
-        `timing console offset below header at ${width}px`,
-      ).toBeLessThanOrEqual(80);
-      expect(copyBox!.x + copyBox!.width).toBeLessThan(consoleBox!.x);
-      expect(consoleBox!.height, `timing console height at ${width}px`).toBeLessThan(600);
+    for (const route of ['/', '/vi/']) {
+      await page.goto(`/Sky-Auto-Player${route}`);
+      await expect(page.locator('#technical .trust-download__button')).toHaveAttribute(
+        'href',
+        releaseUrl,
+      );
+      await expect(page.locator('#technical')).toContainText(
+        route === '/' ? 'Windows 11 x64' : 'Windows 11 64-bit',
+      );
+      await expect(page.locator('#technical')).toContainText('NSIS');
+      await expect(page.locator('#technical')).toContainText('.exe.sig');
+      await expect(page.locator('#technical a[href*="account-safety"]')).toBeVisible();
+      await expect(page.locator('#technical')).not.toContainText('100% safe');
     }
-  });
-
-  test('comparison and how-it-works preserve table and ordered-list semantics', async ({
-    page,
-  }) => {
-    await page.goto('/Sky-Auto-Player/');
-    const table = page.locator('.comparison-table');
-    await expect(table.locator('caption')).toHaveCount(1);
-    await expect(table.locator('thead th[scope="col"]')).toHaveCount(2);
-    await expect(table.locator('tbody tr')).toHaveCount(6);
-    await expect(page.locator('ol.steps > li')).toHaveCount(3);
-  });
-
-  test('step and format labels do not collide with their copy', async ({ page }) => {
-    for (const width of [768, 1024, 1280, 1440, 1920]) {
-      await page.setViewportSize({ width, height: 900 });
-      await page.goto('/Sky-Auto-Player/');
-
-      const stepCollisions = await page.locator('.step').evaluateAll((steps) =>
-        steps.map((step) => {
-          const label = step.querySelector('.step__number')!.getBoundingClientRect();
-          const copy = step.querySelector('.step__copy')!.getBoundingClientRect();
-          const overlapsHorizontally = label.left < copy.right && label.right > copy.left;
-          const overlapsVertically = label.top < copy.bottom && label.bottom > copy.top;
-          return overlapsHorizontally && overlapsVertically;
-        }),
-      );
-      expect(stepCollisions, `step collision state at ${width}px`).not.toContain(true);
-
-      const formatCollisions = await page.locator('.format-row').evaluateAll((rows) =>
-        rows.map((row) => {
-          const extension = row.querySelector('.format-row__extension')!;
-          const extensionBox = extension.getBoundingClientRect();
-          const copyBox = row.querySelector('.format-row__copy')!.getBoundingClientRect();
-          const tagsBox = row.querySelector('.format-row__tags')!.getBoundingClientRect();
-          const intersects = (first: DOMRect, second: DOMRect) =>
-            first.left < second.right &&
-            first.right > second.left &&
-            first.top < second.bottom &&
-            first.bottom > second.top;
-          return {
-            extensionCopy: intersects(extensionBox, copyBox),
-            copyTags: intersects(copyBox, tagsBox),
-            extensionOverflow: extension.scrollWidth > extension.clientWidth + 1,
-          };
-        }),
-      );
-      expect(formatCollisions, `format collision state at ${width}px`).not.toContainEqual(
-        expect.objectContaining({
-          extensionCopy: true,
-        }),
-      );
-      expect(formatCollisions, `format tag collision state at ${width}px`).not.toContainEqual(
-        expect.objectContaining({
-          copyTags: true,
-        }),
-      );
-      expect(formatCollisions, `format label overflow state at ${width}px`).not.toContainEqual(
-        expect.objectContaining({
-          extensionOverflow: true,
-        }),
-      );
-    }
-  });
-
-  test('technical boundary exposes explicit states and a visible risk link', async ({ page }) => {
-    await page.goto('/Sky-Auto-Player/');
-    await expect(page.locator('.ledger-row__state--yes')).toHaveCount(1);
-    await expect(page.locator('.ledger-row__state--no')).toHaveCount(3);
-    await expect(page.locator('.notice a')).toHaveAttribute('href', /faq\/#account-safety$/);
-    await expect(page.locator('.technical-section')).not.toContainText('100% safe');
-  });
-
-  test('final measure and footer retain clear actions and brand closure', async ({ page }) => {
-    await page.goto('/Sky-Auto-Player/');
-    await expect(page.locator('.final-cta__measure')).toContainText('M.12 / READY');
     await expect(page.locator('.final-cta__actions a')).toHaveCount(2);
     await expect(page.locator('.site-footer__brand img')).toHaveAttribute('src', /favicon\.svg/);
-  });
-
-  test('mobile core content and navigation stay in document flow without JavaScript', async ({
-    browser,
-  }) => {
-    const context = await browser.newContext({
-      javaScriptEnabled: false,
-      viewport: { width: 390, height: 844 },
-    });
-    const page = await context.newPage();
-    await page.goto('/Sky-Auto-Player/');
-    await expect(page.locator('main h1')).toBeVisible();
-    await expect(page.locator('.timing-event[aria-current="step"]')).toBeVisible();
-    await expect(page.locator('.site-nav')).toBeVisible();
-    await expect(page.locator('.header-download')).toBeVisible();
-    await expect(page.locator('.menu-toggle')).toBeHidden();
-    await expect(page.locator('.site-nav')).toHaveCSS('position', 'static');
-    await context.close();
   });
 
   test('published routes do not emit console or page errors', async ({ page }) => {
@@ -460,6 +544,7 @@ test.describe('accessibility and responsive contracts', () => {
     }
     expect(errors).toEqual([]);
   });
+
   test('FAQ pages expose FAQPage JSON-LD and stable fonts', async ({ page }) => {
     await page.goto('/Sky-Auto-Player/faq/');
     const jsonLd = JSON.parse(
@@ -478,35 +563,26 @@ test.describe('accessibility and responsive contracts', () => {
   ]) {
     test(`${guideRoute} has no axe violations`, async ({ page }) => {
       await page.goto(`/Sky-Auto-Player${guideRoute}`);
-      const results = await new AxeBuilder({ page })
-        // Shiki's github-dark theme uses #6a737d comments on #24292e bg (3.04:1, below 4.5:1).
-        // This is a known third-party theme limitation — exclude code blocks from color-contrast.
-        .exclude('pre.astro-code')
-        .analyze();
+      const results = await new AxeBuilder({ page }).exclude('pre.astro-code').analyze();
       expect(results.violations).toEqual([]);
     });
   }
 
   test('guide page has Article JSON-LD, breadcrumb and evidence section', async ({ page }) => {
     await page.goto('/Sky-Auto-Player/guides/how-it-works/');
-    // BaseLayout emits structuredData array as a single <script> tag containing a JSON array.
-    // Parse each script tag and flatten any arrays to get a flat list of schema objects.
     const scripts = await page.locator('script[type="application/ld+json"]').allTextContents();
     type SchemaObj = Record<string, unknown>;
-    const schemas: SchemaObj[] = scripts.flatMap((s) => {
-      const parsed = JSON.parse(s) as SchemaObj | SchemaObj[];
+    const schemas: SchemaObj[] = scripts.flatMap((script) => {
+      const parsed = JSON.parse(script) as SchemaObj | SchemaObj[];
       return Array.isArray(parsed) ? parsed : [parsed];
     });
-    const article = schemas.find((s) => s['@type'] === 'Article');
+    const article = schemas.find((schema) => schema['@type'] === 'Article');
     expect(article).toBeDefined();
     expect(article?.headline).toBeTruthy();
-    // BreadcrumbList
-    const breadcrumb = schemas.find((s) => s['@type'] === 'BreadcrumbList');
+    const breadcrumb = schemas.find((schema) => schema['@type'] === 'BreadcrumbList');
     expect(breadcrumb).toBeDefined();
     expect((breadcrumb?.itemListElement as unknown[])?.length).toBe(3);
-    // H1 inside article element
     await expect(page.locator('article h1')).toBeVisible();
-    // Evidence section
     await expect(page.locator('.guide-page__evidence')).toBeVisible();
   });
 });

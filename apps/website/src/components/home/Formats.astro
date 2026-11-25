@@ -4,7 +4,6 @@ import SectionIntro from '../ui/SectionIntro.astro';
 
 interface Props {
   data: HomeContent['formats'];
-  locale: 'en' | 'vi';
 }
 
 const { data } = Astro.props;
@@ -14,6 +13,7 @@ const { data } = Astro.props;
   id="formats"
   class="formats-section section-shell section-shell--compact"
   aria-labelledby="formats-title"
+  data-home-section="formats"
 >
   <div class="container formats__layout">
     <SectionIntro kicker={data.kicker} title={data.title} titleId="formats-title" />

@@ -2,74 +2,102 @@
 import type { HomeContent } from '../../data/home.types';
 import { SITE } from '../../data/site';
 import { withBase } from '../../utils/urls';
-import Kicker from '../ui/Kicker.astro';
-import BrandMark from '../ui/BrandMark.astro';
-import TimingConsole from './TimingConsole.astro';
 
 interface Props {
   data: HomeContent['hero'];
   locale: 'en' | 'vi';
 }
+
 const { data, locale } = Astro.props;
 ---
 
 <section
+  id="top"
+  data-home-section="hero"
   class="hero section-shell section-shell--feature section-shell--intro section-shell--after-header"
   aria-labelledby="hero-title"
 >
   <div class="container hero__layout">
-    <span class="hero__timestamp" aria-hidden="true">
-      00:13.066
-    </span>
-    <span class="hero__score-spine ui-score-line" aria-hidden="true">
-      <i class="ui-score-node"></i>
-      <i class="ui-score-node ui-score-node--info"></i>
-      <i class="ui-score-playhead"></i>
-    </span>
     <div class="hero__copy">
-      <Kicker>{data.kicker}</Kicker>
+      <p class="hero__kicker">{data.kicker}</p>
       <h1 id="hero-title">
         <span>{data.titleLines[0]}</span>{' '}
-        <span class="hero__counterline">{data.titleLines[1]}</span>
+        <span class="hero__title-second">{data.titleLines[1]}</span>
       </h1>
       <p class="hero__description">{data.description}</p>
       <div class="hero__actions">
-        <a class="button button--primary hero__release-action" href={SITE.releaseUrl}>
+        <a class="button button--primary hero__primary" href={SITE.releaseUrl}>
           <span>{data.primaryCta}</span>
-          <span class="hero__release-destination">{data.primaryCtaDestination}</span>
+          <span class="hero__destination">{data.primaryCtaDestination}</span>
         </a>
         <a
-          class="button button--secondary"
-          href={withBase(locale === 'vi' ? '/vi/#how-it-works' : '/#how-it-works')}
+          class="button button--secondary hero__secondary"
+          href={withBase(locale === 'vi' ? '/vi/#product' : '/#product')}
         >
           {data.secondaryCta}
+          <span aria-hidden="true"> ↓</span>
         </a>
       </div>
-      <div
-        class="hero__meta"
-        aria-label={
-          locale === 'vi' ? 'Định dạng và thuộc tính đóng gói' : 'Formats and packaging attributes'
-        }
-      >
-        {data.metadata.map((item) => (
-          <span>{item}</span>
-        ))}
-      </div>
-      <p class="risk-note">
-        {data.riskNote}{' '}
-        <a href={withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#account-safety')}>
-          {data.riskNoteLink}
-        </a>
-      </p>
-      <p class="affiliation-note">{data.affiliationDisclaimer}</p>
+      <p class="hero__disclaimer">{data.affiliationDisclaimer}</p>
     </div>
 
-    <div class="hero__visual">
-      <span class="hero__score-lines" aria-hidden="true"></span>
-      <span class="hero__brand-mark" aria-hidden="true">
-        <BrandMark />
-      </span>
-      <TimingConsole locale={locale} />
+    <div class="hero__art" aria-hidden="true">
+      <div class="hero__art-label">
+        <span>{locale === 'vi' ? 'MỘT GIAI ĐIỆU CỦA RIÊNG BẠN' : 'A SONG OF YOUR OWN'}</span>
+        <span>♪</span>
+      </div>
+      <svg class="hero__score" viewBox="0 0 760 420" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <path class="hero__staff" d="M40 124H720M40 158H720M40 192H720M40 226H720M40 260H720" />
+        <path class="hero__bar" d="M254 124V260M484 124V260M700 124V260" />
+        <path class="hero__stem" d="M145 260V128M300 226V94M348 226V94M535 192V60M622 226V94" />
+        <path class="hero__beam" d="M300 94L348 94M535 60L622 94" />
+        <ellipse
+          class="hero__note"
+          cx="128"
+          cy="260"
+          rx="21"
+          ry="13"
+          transform="rotate(-17 128 260)"
+        />
+        <ellipse
+          class="hero__note hero__note--accent"
+          cx="280"
+          cy="226"
+          rx="21"
+          ry="13"
+          transform="rotate(-17 280 226)"
+        />
+        <ellipse
+          class="hero__note hero__note--accent"
+          cx="328"
+          cy="192"
+          rx="21"
+          ry="13"
+          transform="rotate(-17 328 192)"
+        />
+        <ellipse
+          class="hero__note"
+          cx="515"
+          cy="192"
+          rx="21"
+          ry="13"
+          transform="rotate(-17 515 192)"
+        />
+        <ellipse
+          class="hero__note"
+          cx="602"
+          cy="226"
+          rx="21"
+          ry="13"
+          transform="rotate(-17 602 226)"
+        />
+        <path class="hero__score-tail" d="M40 316H720" />
+        <circle class="hero__score-dot" cx="40" cy="316" r="4" />
+        <circle class="hero__score-dot" cx="720" cy="316" r="4" />
+      </svg>
+      <p class="hero__art-caption">
+        {locale === 'vi' ? 'Sheet của bạn. Nhịp điệu của bạn.' : 'Your sheet. Your own rhythm.'}
+      </p>
     </div>
   </div>
 </section>
@@ -77,49 +105,61 @@ const { data, locale } = Astro.props;
 <style>
   @layer components {
     .hero {
-      border-top: 0;
       position: relative;
-      isolation: isolate;
-      overflow-x: clip;
+      overflow: clip;
+      border-top: 0;
+      background:
+        radial-gradient(ellipse at 78% 36%, rgb(239 202 120 / 7%), transparent 35%),
+        var(--color-page);
     }
 
     .hero__layout {
-      position: relative;
       display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      gap: var(--space-6);
-      align-items: start;
-    }
-
-    .hero__copy,
-    .hero__visual {
-      min-width: 0;
+      gap: clamp(var(--space-7), 8vw, var(--space-10));
+      align-items: center;
     }
 
     .hero__copy {
       position: relative;
-      z-index: 2;
-      max-width: 42rem;
+      z-index: 1;
+      max-inline-size: 43rem;
+    }
+
+    .hero__kicker {
+      max-inline-size: 42ch;
+      margin-block-end: var(--space-5);
+      color: var(--color-action);
+      font-size: var(--type-label);
+      font-weight: 650;
+      letter-spacing: 0.06em;
+    }
+
+    :lang(vi) .hero__kicker {
+      letter-spacing: 0;
     }
 
     .hero h1 {
-      max-width: 9.5ch;
-      margin-block: var(--space-4) var(--space-5);
-      font-size: clamp(3rem, 4.7vw, 5.5rem);
+      max-inline-size: 9ch;
+      margin-block-end: var(--space-5);
+      font-size: clamp(3.25rem, 8.5vw, 7rem);
+      letter-spacing: -0.055em;
+      line-height: 0.98;
     }
 
     .hero h1 span {
       display: block;
     }
 
-    .hero__counterline {
+    .hero__title-second {
       color: var(--color-text-secondary);
+      font-style: italic;
+      font-weight: 500;
     }
 
     .hero__description {
-      max-inline-size: 48ch;
-      margin-block: 0 var(--space-5);
-      color: var(--color-text-tertiary);
+      max-inline-size: 54ch;
+      margin-block-end: var(--space-6);
+      color: var(--color-text-secondary);
       font-size: var(--type-lead);
       line-height: var(--leading-lead);
     }
@@ -127,188 +167,165 @@ const { data, locale } = Astro.props;
     .hero__actions {
       display: flex;
       flex-wrap: wrap;
-      gap: var(--space-4);
-      margin-block-end: var(--space-6);
+      gap: var(--space-3);
     }
 
-    .hero__release-action {
+    .hero__primary {
+      display: inline-flex;
+      min-block-size: 3.75rem;
       flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
       gap: 0.125rem;
       padding-block: var(--space-2);
     }
 
-    .hero__release-destination {
+    .hero__destination {
+      color: color-mix(in oklch, var(--color-text-on-action) 78%, transparent);
       font-size: var(--type-micro);
       font-weight: 500;
-      line-height: 1.15;
+      line-height: 1.2;
     }
 
-    .hero__meta {
-      display: flex;
-      flex-wrap: wrap;
-      gap: var(--space-2) var(--space-5);
-      margin-block-end: var(--space-5);
+    .hero__secondary {
+      min-block-size: 3.75rem;
+    }
+
+    .hero__disclaimer {
+      max-inline-size: 55ch;
+      margin-block-start: var(--space-5);
       color: var(--color-text-tertiary);
-      font-family: var(--font-mono);
-      font-size: var(--type-micro);
-      letter-spacing: 0.06em;
-      text-transform: uppercase;
-    }
-
-    .hero__meta span {
-      display: inline-flex;
-      align-items: center;
-      gap: var(--space-2);
-    }
-
-    .hero__meta span::before {
-      width: 0.35rem;
-      height: 0.35rem;
-      border-radius: 50%;
-      background: var(--color-action);
-      content: '';
-    }
-
-    .risk-note {
-      color: var(--color-text-secondary);
       font-size: var(--type-small);
     }
 
-    .risk-note a {
-      color: var(--color-text-primary);
-      text-decoration: underline;
-    }
-
-    .affiliation-note {
-      margin-block-start: var(--space-2);
-      color: var(--color-text-tertiary);
-      font-size: var(--type-micro);
-    }
-
-    .hero__visual {
+    .hero__art {
       position: relative;
-      isolation: isolate;
-      width: min(100%, 46rem);
-      margin-inline: auto;
-      padding-block: var(--space-5);
+      min-inline-size: 0;
+      padding: clamp(var(--space-4), 4vw, var(--space-7));
+      border: 1px solid var(--line-default);
+      background:
+        linear-gradient(135deg, rgb(255 255 255 / 2.5%), transparent 45%),
+        var(--color-surface-quiet);
+      box-shadow: var(--shadow-stage);
     }
 
-    .hero__visual > :not(.hero__score-lines):not(.hero__brand-mark) {
-      position: relative;
-      z-index: 1;
-    }
-
-    .hero__timestamp {
+    .hero__art::before,
+    .hero__art::after {
       position: absolute;
-      top: clamp(6rem, 13vw, 10rem);
-      right: 0;
-      z-index: 0;
+      inline-size: 1.4rem;
+      block-size: 1.4rem;
+      border-color: var(--color-action);
+      border-style: solid;
+      content: '';
+      opacity: 0.7;
+    }
+
+    .hero__art::before {
+      inset: 0 auto auto 0;
+      border-width: 1px 0 0 1px;
+    }
+
+    .hero__art::after {
+      inset: auto 0 0 auto;
+      border-width: 0 1px 1px 0;
+    }
+
+    .hero__art-label,
+    .hero__art-caption {
+      display: flex;
+      justify-content: space-between;
+      gap: var(--space-3);
       color: var(--color-text-tertiary);
       font-family: var(--font-mono);
-      font-size: var(--type-display-metric);
-      font-variant-numeric: tabular-nums;
-      letter-spacing: -0.06em;
-      line-height: 1;
-      pointer-events: none;
-      user-select: none;
+      font-size: var(--type-micro);
+      letter-spacing: 0.07em;
     }
 
-    .hero__score-spine {
-      position: absolute;
-      top: clamp(13.5rem, 25vw, 18rem);
-      right: 2%;
-      left: 38%;
-      z-index: 0;
-      pointer-events: none;
+    :lang(vi) .hero__art-label,
+    :lang(vi) .hero__art-caption {
+      letter-spacing: 0;
     }
 
-    .hero__score-spine .ui-score-node:first-child {
-      left: 4%;
+    .hero__art-label span:last-child {
+      color: var(--color-action);
+      font-size: 1.25rem;
     }
 
-    .hero__score-spine .ui-score-node--info {
-      left: 72%;
+    .hero__score {
+      display: block;
+      inline-size: 100%;
+      margin-block: clamp(2rem, 5vw, 4rem);
+      overflow: visible;
     }
 
-    .hero__score-spine .ui-score-playhead {
-      left: 88%;
+    .hero__staff {
+      stroke: var(--line-default);
+      stroke-width: 1.2;
     }
 
-    .hero__score-lines {
-      position: absolute;
-      inset: 8% -4% auto 0;
-      block-size: 42%;
-      background: repeating-linear-gradient(
-        to bottom,
-        var(--line-faint) 0 1px,
-        transparent 1px 1.1rem
-      );
-      opacity: 0.7;
-      pointer-events: none;
-      mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent);
+    .hero__bar {
+      stroke: var(--line-faint);
+      stroke-width: 1;
     }
 
-    .hero__visual::before {
-      position: absolute;
-      inset: 0 -14% -10% -6%;
-      z-index: -1;
-      border: 1px solid var(--line-faint);
-      background: var(--color-surface-quiet);
-      content: '';
-      clip-path: polygon(3% 0, 100% 0, 100% 90%, 96% 100%, 0 100%, 0 8%);
-      opacity: 0.88;
+    .hero__stem,
+    .hero__beam {
+      stroke: var(--color-text-secondary);
+      stroke-linecap: round;
+      stroke-width: 4;
     }
 
-    .hero__brand-mark {
-      position: absolute;
-      right: -1.5rem;
-      bottom: -1.5rem;
-      width: 8rem;
-      opacity: 0.12;
+    .hero__note {
+      fill: var(--color-text-secondary);
     }
 
-    @media (min-width: 72rem) {
+    .hero__note--accent {
+      fill: var(--color-action);
+    }
+
+    .hero__score-tail {
+      stroke: var(--line-accent);
+      stroke-width: 1;
+    }
+
+    .hero__score-dot {
+      fill: var(--color-action);
+    }
+
+    .hero__art-caption {
+      justify-content: flex-end;
+      text-align: end;
+    }
+
+    @media (min-width: 64rem) {
       .hero__layout {
-        grid-template-columns: repeat(12, minmax(0, 1fr));
-        gap: var(--grid-gap);
-        align-items: start;
+        grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+        gap: clamp(3rem, 7vw, 7rem);
       }
 
-      .hero__copy {
-        grid-column: 1 / span 5;
-        grid-row: 1;
-        padding-block-start: var(--space-4);
-      }
-
-      .hero__visual {
-        grid-column: 7 / -1;
-        grid-row: 1;
-        width: auto;
-        margin-block-start: -2rem;
-        margin-inline: 0;
-        padding-block-start: 0;
+      .hero__art {
+        margin-inline-end: calc(-1 * var(--space-6));
       }
     }
 
-    @media (min-width: 80rem) {
-      .hero__visual::before {
-        inset: -2% -16% -12% -8%;
-      }
-    }
-
-    @media (max-width: 40rem) {
-      .hero__timestamp,
-      .hero__score-spine {
-        display: none;
-      }
-
+    @media (max-width: 39.99rem) {
       .hero__actions {
         flex-direction: column;
         align-items: stretch;
       }
 
-      .hero__actions .button {
-        width: 100%;
+      .hero__primary,
+      .hero__secondary {
+        inline-size: 100%;
+      }
+
+      .hero__art {
+        padding-inline: var(--space-3);
+      }
+
+      .hero__art-label,
+      .hero__art-caption {
+        font-size: var(--type-micro);
       }
     }
   }

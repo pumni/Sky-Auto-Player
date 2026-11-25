@@ -3,9 +3,9 @@ import type { HomeContent } from './home.types';
 export const homeEn: HomeContent = {
   locale: 'en',
   seo: {
-    title: 'Sky Auto Player — Timing-First Music Player for Sky on Windows 11',
+    title: 'Sky Auto Player — Music Sheet Player for Sky on Windows 11',
     description:
-      'Sheet playback for Sky on Windows 11 x64, scheduled against QPC deadlines with sender-side timing measurements and Windows SendInput.',
+      'A free, open-source music sheet player for Sky on Windows 11. Bring your own sheets or choose from the built-in song library.',
   },
   navigation: {
     overview: 'Overview',
@@ -16,174 +16,222 @@ export const homeEn: HomeContent = {
     release: 'Releases',
   },
   hero: {
-    kicker: 'Sky Auto Player for Sky: Children of the Light · Windows 11 x64',
+    kicker: 'A free, open-source music sheet player for Sky on Windows 11',
     titleLines: ['Play the sheet.', 'Not the keyboard.'],
     description:
-      'Load a sheet and choose a song. Sky Auto Player schedules sheet events against QPC deadlines. Each new musical packet is checked against the current foreground window and retained Sky target before Windows SendInput; bounded cleanup for journaled key releases follows a separate path. Sky samples input on its own schedule.',
+      'Choose a song from the built-in library or bring a sheet of your own. Set up a playlist, make the music yours, and let Sky Auto Player handle the notes.',
     primaryCta: 'Get the Windows installer',
     primaryCtaDestination: 'Opens GitHub Releases',
-    secondaryCta: 'See how it works',
-    metadata: ['JSON', 'SKYSHEET', 'TXT', 'FREE · OPEN SOURCE', 'WINDOWS 11 X64', 'TAURI DESKTOP'],
-    riskNote: 'Automated playback may conflict with Sky’s Terms of Service.',
-    riskNoteLink: 'Use responsibly and at your own risk.',
+    secondaryCta: 'See the player',
     affiliationDisclaimer:
       'Unofficial community project. Not affiliated with or endorsed by thatgamecompany.',
   },
-  proofStrip: {
-    kicker: 'Playback model',
-    metric: 'SHEET EVENTS / SENDINPUT',
-    signals: [
-      'A healthy chord is sent in one prepared packet',
-      'A calibrated fixed wake guard; no continuous lead adjustment',
-      'Frame-aware hold and release floors',
-      'HUD reports sender-side measurements, not game-side sampling',
-    ],
-  },
-  playback: {
-    kicker: 'Built around the music',
-    title: 'Timing is the instrument.',
-    description:
-      "Sky Auto Player schedules sheet events against authored QPC deadlines and uses a calibrated fixed wake guard. It measures sender-side completion but does not continuously adjust its lead. Frame-aware hold and release floors shape musical key timing; Windows scheduling and Sky's input sampling still determine when the game registers a key, so the app cannot guarantee in-game sound or frame timing.",
-    points: [
-      'Authored sheet events scheduled against QPC deadlines',
-      'A calibrated fixed wake guard with no continuous lead adjustment',
-      'Frame-aware hold and release floors',
-      'Tempo and Base Hold in the Player Dock playback profile',
-      'Sender-side timing measurements in the HUD',
-      'Dry-run preview',
-    ],
-  },
-  comparison: {
-    kicker: 'From sheet event to input',
-    title: 'Playback follows the sheet.',
-    sequenceHeader: 'Fixed-delay sequence',
-    playerHeader: 'Sky Auto Player',
-    rows: [
-      { sequence: 'A sequence of key presses', player: 'Sheet-based note, chord, and hold events' },
+  benefits: {
+    kicker: 'Made for the way you play',
+    items: [
       {
-        sequence: 'One fixed interval pattern',
-        player: 'Authored events scheduled against QPC deadlines',
-      },
-      { sequence: 'One tempo for every song', player: 'Tempo selected in the Player Dock profile' },
-      { sequence: 'One hold duration', player: 'Base Hold selected in the Player Dock profile' },
-      {
-        sequence: 'No sender feedback',
-        player: 'Fixed wake guard plus sender-side measurements',
+        number: '01',
+        title: 'Play from the sheet',
+        description: 'Notes, chords, and held notes follow the music written in each sheet.',
       },
       {
-        sequence: 'Timing set only by the sequence',
-        player: 'Diagnostics report sender-side timing measurements',
+        number: '02',
+        title: 'Keep your songs together',
+        description: 'Browse the built-in song library, like favorites, and organize playlists.',
+      },
+      {
+        number: '03',
+        title: 'Bring your own sheets',
+        description: 'Import supported files into a playlist while their original files stay put.',
+      },
+      {
+        number: '04',
+        title: 'Open source, free to use',
+        description: 'Inspect the project on GitHub and download the Windows app at no cost.',
       },
     ],
   },
   product: {
-    kicker: 'The actual player',
-    title: 'Your library, timing profile and controls in one place.',
+    kicker: 'Inside the player',
+    title: 'A place for your songs, sheets, and settings.',
     description:
-      'The Windows desktop app includes a built-in song catalog, liked songs, playlists, and diagnostics.',
-    annotations: [
-      'Browse built-in songs and liked songs in the Library.',
-      'Create or select a playlist, then use Add songs to import local files or a folder.',
-      'Imports reference the original files; the app does not move or delete them.',
+      'Move between the library, a song’s details, and playback settings. Select a desktop interface capture to take a closer look.',
+    selectorLabel: 'Choose a player view',
+    openImageLabel: 'Open this desktop interface capture at full size',
+    fallbackLabel: 'Open a desktop interface capture',
+    captureLabel: 'Desktop interface capture',
+    views: [
+      {
+        id: 'library',
+        label: 'Library',
+        alt: 'Desktop interface capture showing the Sky Auto Player song library and playlists.',
+        caption: 'Browse songs, liked tracks, and playlists.',
+        src: '/assets/images/library-real-tauri.png',
+      },
+      {
+        id: 'song-detail',
+        label: 'Song Detail',
+        alt: 'Desktop interface capture showing a selected song and its sheet details.',
+        caption: 'Review a song before you play it.',
+        src: '/assets/images/detail-real-tauri.png',
+      },
+      {
+        id: 'settings',
+        label: 'Settings',
+        alt: 'Desktop interface capture showing playback and application settings.',
+        caption: 'Choose playback options for your setup.',
+        src: '/assets/images/settings-real-tauri.png',
+      },
     ],
   },
-  steps: {
-    kicker: 'Three steps',
-    title: 'Get started with a sheet.',
+  quickStart: {
+    kicker: 'From download to first song',
+    title: 'Three steps to make the music yours.',
     items: [
       {
-        title: 'Download',
+        title: 'Install the player',
         description:
-          'Get the canonical Tauri NSIS installer from the official Sky Auto Player GitHub Releases page and install it for the current user.',
+          'Get the NSIS installer from the official GitHub Releases page. It installs for the current Windows user.',
+        linkLabel: 'Windows setup guide',
+        href: '/guides/windows-setup/',
       },
       {
-        title: 'Add a sheet',
+        title: 'Choose a song or add a sheet',
         description:
-          'Create or select a playlist, then use Add songs to import a JSON, .skysheet or JSON-compatible TXT file or folder. Imported sources stay in their original location.',
+          'Pick a song from the built-in library, or add a JSON, .skysheet, or JSON-compatible TXT file to a playlist.',
+        linkLabel: 'Sheet format guide',
+        href: '/guides/sheet-formats/',
       },
       {
-        title: 'Play',
+        title: 'Play with Sky in focus',
         description:
-          'Choose a song, use Play, and return focus to the selected Sky window. Fresh foreground and target identity checks gate each musical packet.',
+          'Select the Sky window, choose a song, and press Play. The app checks the foreground and retained Sky target before each new musical input packet.',
+        linkLabel: 'How playback works',
+        href: '/guides/how-it-works/',
       },
     ],
-    workflowNote: 'Use / or Ctrl+F to focus search · Esc closes safe overlays',
+  },
+  playback: {
+    kicker: 'A musical moment, step by step',
+    title: 'Watch a phrase move from note to note.',
+    description:
+      'Play this short schematic phrase, step through each event yourself, or replay it. The event list, highlighted keys, elapsed time, and held note stay in sync.',
+    eventListLabel: 'Playback events',
+    eventTypes: { chord: 'Chord', note: 'Note', hold: 'Held note' },
+    controlsLabel: 'Playback demonstration controls',
+    play: 'Play demonstration',
+    resume: 'Continue demonstration',
+    pause: 'Pause demonstration',
+    replay: 'Replay demonstration',
+    cancel: 'Cancel playback',
+    previous: 'Previous event',
+    next: 'Next event',
+    progressLabel: 'Demonstration progress',
+    timelineLabel: 'Illustrative phrase timeline',
+    keyboardLabel: 'ILLUSTRATIVE KEYBOARD',
+    initialStatus: 'Ready. The first chord is shown; start playback or step through the phrase.',
+    staticExplanation:
+      'Static example: the phrase contains a chord, a note, and a held note, in that order.',
+    playingStatus: 'Demonstration playing',
+    pausedStatus: 'Demonstration paused',
+    completeStatus: 'Demonstration complete. No keys are active.',
+    manualOnly:
+      'Motion is reduced on this device. Use the event controls to step through the phrase.',
+    schematicNote:
+      'Schematic 2.6-second example. These intervals illustrate the interface; they are not song timing or a measurement of in-game input.',
   },
   technical: {
-    kicker: 'Technical boundaries',
-    title: 'Clear about what it does—and what it does not do.',
+    kicker: 'Two ways to describe a sequence',
+    title: 'Fixed intervals and sheet events serve different workflows.',
     description:
-      'Sky Auto Player is a separate Windows 11 app. Each new musical packet requires fresh foreground and target identity checks before Windows SendInput. Bounded cleanup for journaled key releases follows a separate path; the public source is available for review.',
-    ledger: [
-      { term: 'Input', definition: 'Windows SendInput', state: 'yes' },
-      { term: 'Process', definition: 'Separate application', state: 'info' },
-      { term: 'Game memory', definition: 'Not inspected', state: 'no' },
-      { term: 'Code injection', definition: 'Not used', state: 'no' },
-      { term: 'Game files', definition: 'Not modified', state: 'no' },
-      { term: 'License', definition: 'GNU GPL v3.0', state: 'info' },
+      'A fixed-delay sequence repeats intervals chosen in advance. Sky Auto Player reads authored note, chord, and hold events from a sheet and schedules them against QPC deadlines with a calibrated fixed wake guard. It measures sender-side completion without continuously adjusting its lead.',
+    fixedDelayTitle: 'Fixed-delay sequence',
+    sheetTitle: 'Sheet-event playback',
+    dimensionHeader: 'Dimension',
+    dimensions: [
       {
-        term: 'Updates',
-        definition: 'Tauri updater verifies the .exe.sig sidecar',
-        state: 'info',
+        label: 'What you prepare',
+        fixedDelay: 'A key sequence and its intervals',
+        sheet: 'A song sheet with musical events',
+      },
+      {
+        label: 'What repeats',
+        fixedDelay: 'The chosen interval pattern',
+        sheet: 'The notes, chords, and holds authored in the sheet',
+      },
+      {
+        label: 'What you can change',
+        fixedDelay: 'The sequence and its delays',
+        sheet: 'The song, tempo, and Base Hold in the playback profile',
       },
     ],
-    notice:
-      'Terms of Service: These technical boundaries do not guarantee account safety. Automated music playback may still conflict with Sky’s Terms of Service. Use the tool responsibly and at your own risk.',
+    boundaryNote:
+      'Windows scheduling and Sky’s own input sampling determine when a key registers in game. Sender-side measurements do not guarantee in-game sound or frame timing.',
   },
   formats: {
-    kicker: 'Supported sheets',
-    title: 'Load the formats the community already uses.',
+    kicker: 'Bring a sheet',
+    title: 'Start with the formats the player supports.',
     items: [
       {
         extension: '.json',
         name: 'JSON',
-        description:
-          'Structured song sheets with musical events and metadata accepted by the player.',
+        description: 'Structured song sheets with supported musical events and metadata.',
         tags: 'NOTE · CHORD · HOLD',
       },
       {
         extension: '.skysheet',
         name: 'Skysheet',
-        description:
-          'JSON-based sheets with the .skysheet extension used by the Sky music editor ecosystem.',
-        tags: 'SHEET EXPORT',
+        description: 'A JSON-based song sheet using the .skysheet file extension.',
+        tags: 'SHEET FILE',
       },
       {
         extension: '.txt',
         name: 'JSON-compatible TXT',
-        description: 'Plain-text files containing a JSON-compatible sheet structure.',
+        description: 'A plain-text file containing a JSON-compatible sheet structure.',
         tags: 'PLAIN TEXT',
       },
     ],
   },
+  trust: {
+    kicker: 'Download with the details in view',
+    title: 'Know what you are installing.',
+    description:
+      'Sky Auto Player is a separate Windows app. Check the release notes and package details on GitHub before installing.',
+    downloadLabel: 'Get the Windows installer',
+    downloadDestination: 'Opens GitHub Releases',
+    releaseLabel: 'Published version',
+    releaseValue: 'v',
+    packageLabel: 'Package',
+    packageValue: 'Windows 11 x64 · NSIS installer · current-user install',
+    signingLabel: 'Authenticode',
+    signingValue:
+      'Installer is intentionally unsigned; Windows may show Unknown Publisher or SmartScreen.',
+    updaterLabel: 'App updates',
+    updaterValue: 'Tauri updater separately verifies the .exe.sig sidecar.',
+    sourceLabel: 'Read the source on GitHub',
+    safetyNote:
+      'The app does not inspect game memory, change game files, inject code, install input hooks, or attach a debugger. These boundaries do not guarantee account safety; automated playback may conflict with Sky’s Terms of Service.',
+    safetyLink: 'Read the safety details',
+  },
   faqPreview: {
-    kicker: 'Before you download',
-    title: 'A few useful answers first.',
+    kicker: 'A few things worth knowing',
+    title: 'Questions before you begin.',
     readMoreLink: 'Read the full FAQ',
     items: [
-      {
-        question: 'Is Sky Auto Player free and open source?',
-        href: '/faq/#free',
-      },
-      {
-        question: 'Which sheet formats are supported?',
-        href: '/faq/#formats',
-      },
-      {
-        question: 'Can this affect my Sky account?',
-        href: '/faq/#account-safety',
-      },
+      { question: 'Is Sky Auto Player free and open source?', href: '/faq/#free' },
+      { question: 'Which sheet formats can I use?', href: '/faq/#formats' },
+      { question: 'Could automated playback affect my account?', href: '/faq/#account-safety' },
     ],
     guideLinks: [
-      { label: 'How Sky Auto Player works', href: '/guides/how-it-works/' },
-      { label: 'Troubleshooting common issues', href: '/guides/troubleshooting/' },
+      { label: 'How playback works', href: '/guides/how-it-works/' },
+      { label: 'Troubleshoot an issue', href: '/guides/troubleshooting/' },
     ],
   },
   finalCta: {
-    title: 'Your next performance is already written.',
-    description:
-      'Browse the official release, add a sheet to a playlist and review the available playback settings.',
-    primaryCta: 'Browse releases',
-    secondaryCta: 'View source on GitHub',
+    title: 'Bring a song to Sky.',
+    description: 'Explore the player, choose a sheet, and start with the official Windows release.',
+    primaryCta: 'Get the Windows installer',
+    primaryDestination: 'Opens GitHub Releases',
+    secondaryCta: 'Explore the source',
   },
 };

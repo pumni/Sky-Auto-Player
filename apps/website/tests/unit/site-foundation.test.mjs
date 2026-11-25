@@ -1,9 +1,15 @@
 import { expect, test } from 'bun:test';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { homeEn } from '../../src/data/home.en.ts';
 import { homeVi } from '../../src/data/home.vi.ts';
+import {
+  PLAYBACK_DEMO_DURATION_MS,
+  PLAYBACK_DEMO_EVENTS,
+  PLAYBACK_DEMO_KEYS,
+  formatPlaybackTime,
+} from '../../src/data/playback-demo.ts';
 
 const sourcePath = fileURLToPath(new URL('../../src/', import.meta.url));
 
@@ -15,46 +21,118 @@ function filesBelow(directory, extensions) {
   });
 }
 
-const sourceFiles = filesBelow(sourcePath, /\.(?:astro|css|js|mjs|ts)$/);
+function valueShape(value) {
+  if (Array.isArray(value)) return value.map(valueShape);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, child]) => [key, valueShape(child)]),
+    );
+  }
+  return typeof value;
+}
+
+const sourceFiles = filesBelow(sourcePath, /.(?:astro|css|js|mjs|ts)$/);
 const sourceText = sourceFiles.map((path) => readFileSync(path, 'utf8')).join('\n');
 
-test('localized home data keeps the shared navigation and content shape aligned', () => {
-  expect(Object.keys(homeEn.navigation)).toEqual(Object.keys(homeVi.navigation));
-  expect(Object.keys(homeEn.hero)).toEqual(Object.keys(homeVi.hero));
-  expect(Object.keys(homeEn.comparison)).toEqual(Object.keys(homeVi.comparison));
-  expect(homeEn.comparison.rows).toHaveLength(6);
-  expect(homeVi.comparison.rows).toHaveLength(6);
-  expect(homeEn.steps.items).toHaveLength(3);
-  expect(homeVi.steps.items).toHaveLength(3);
+test('English and Vietnamese homepage data keep every section structurally aligned', () => {
+  expect(valueShape(homeEn)).toEqual(valueShape(homeVi));
+  expect(homeEn.benefits.items).toHaveLength(4);
+  expect(homeVi.benefits.items).toHaveLength(4);
+  expect(homeEn.product.views.map((view) => view.id)).toEqual([
+    'library',
+    'song-detail',
+    'settings',
+  ]);
+  expect(homeVi.product.views.map((view) => view.id)).toEqual([
+    'library',
+    'song-detail',
+    'settings',
+  ]);
+  expect(homeEn.quickStart.items).toHaveLength(3);
+  expect(homeVi.quickStart.items).toHaveLength(3);
 });
 
-test('public home content states the supported OS and sender-side timing boundary', () => {
-  expect(homeEn.hero.kicker).toContain('Windows 11 x64');
-  expect(homeVi.hero.kicker).toContain('Windows 11 64-bit');
-  expect(homeEn.hero.primaryCta).toBe('Get the Windows installer');
-  expect(homeEn.hero.primaryCtaDestination).toContain('GitHub Releases');
-  expect(homeEn.hero.metadata).toContain('FREE · OPEN SOURCE');
-  expect(homeVi.hero.primaryCta).toBe('Tải bộ cài Windows');
-  expect(homeVi.hero.primaryCtaDestination).toContain('GitHub Releases');
-  expect(homeVi.hero.metadata).toContain('MIỄN PHÍ · MÃ NGUỒN MỞ');
-  expect(homeEn.playback.description).toContain('cannot guarantee in-game sound or frame timing');
-  expect(homeVi.playback.description).toContain('không thể bảo đảm thời điểm phát âm thanh');
-  expect(homeEn.playback.description).toContain('authored QPC deadlines');
-  expect(homeEn.playback.description).toContain('calibrated fixed wake guard');
-  expect(homeEn.playback.description).toContain('does not continuously adjust its lead');
-  expect(homeVi.playback.description).toContain('deadline QPC');
-  expect(homeVi.playback.description).toContain('không liên tục điều chỉnh lead');
-  expect(homeEn.hero.affiliationDisclaimer).toContain('Unofficial community project');
-  expect(homeVi.hero.affiliationDisclaimer).toContain('không chính thức');
-  const finalCta = readFileSync(
-    new URL('../../src/components/home/FinalCta.astro', import.meta.url),
+test('homepage composes the approved section order and removes the replaced implementations', () => {
+  const homePage = readFileSync(
+    new URL('../../src/components/home/HomePage.astro', import.meta.url),
     'utf8',
   );
-  expect(finalCta).toContain('WINDOWS 11 X64');
-  expect(finalCta).not.toContain('WINDOWS 10–11');
+  const sectionComponents = [...homePage.matchAll(/^<([A-Z]\w*)\b/gm)].map((match) => match[1]);
+  expect(sectionComponents).toEqual([
+    'Hero',
+    'BenefitsStrip',
+    'ProductShowcase',
+    'QuickStart',
+    'PlaybackDemo',
+    'TechnicalModel',
+    'Formats',
+    'TrustDownload',
+    'FaqPreview',
+    'FinalCta',
+  ]);
+
+  for (const retiredComponent of [
+    'ComparisonTable.astro',
+    'PlaybackProof.astro',
+    'ProductView.astro',
+    'ProofStrip.astro',
+    'Steps.astro',
+    'TechnicalTrust.astro',
+    'TimingConsole.astro',
+  ]) {
+    expect(
+      existsSync(new URL(`../../src/components/home/${retiredComponent}`, import.meta.url)),
+    ).toBe(false);
+  }
+  expect(existsSync(new URL('../../src/components/ui/BrandMark.astro', import.meta.url))).toBe(
+    false,
+  );
 });
 
-test('website content contains no retired product instructions or unsupported guarantees', () => {
+test('the signature demo uses the approved event intervals, keys, and visible time format', () => {
+  expect(PLAYBACK_DEMO_DURATION_MS).toBe(2600);
+  expect(PLAYBACK_DEMO_EVENTS).toEqual([
+    { startMs: 0, endMs: 700, kind: 'chord', keys: ['A1', 'B2', 'C3'] },
+    { startMs: 700, endMs: 1400, kind: 'note', keys: ['D2'] },
+    { startMs: 1400, endMs: 2600, kind: 'hold', keys: ['E3'] },
+  ]);
+  expect(PLAYBACK_DEMO_KEYS).toEqual([
+    'A1',
+    'B1',
+    'C1',
+    'D1',
+    'E1',
+    'A2',
+    'B2',
+    'C2',
+    'D2',
+    'E2',
+    'A3',
+    'B3',
+    'C3',
+    'D3',
+    'E3',
+  ]);
+  expect(formatPlaybackTime(0)).toBe('00:00.000');
+  expect(formatPlaybackTime(700)).toBe('00:00.700');
+  expect(formatPlaybackTime(1400)).toBe('00:01.400');
+  expect(formatPlaybackTime(2600)).toBe('00:02.600');
+});
+
+test('the hero leads with product value and both locales disclose their Windows release destination', () => {
+  expect(homeEn.hero.titleLines.join(' ')).toBe('Play the sheet. Not the keyboard.');
+  expect(homeVi.hero.titleLines.join(' ')).toBe('Chơi bản nhạc, không chơi bàn phím.');
+  expect(homeEn.hero.primaryCta).toBe('Get the Windows installer');
+  expect(homeVi.hero.primaryCta).toBe('Tải bộ cài Windows');
+  expect(homeEn.hero.primaryCtaDestination).toBe('Opens GitHub Releases');
+  expect(homeVi.hero.primaryCtaDestination).toBe('Mở GitHub Releases');
+  expect(homeEn.trust.packageValue).toContain('Windows 11 x64');
+  expect(homeVi.trust.packageValue).toContain('Windows 11 64-bit');
+  expect(homeEn.hero.description).not.toMatch(/QPC|SendInput|foreground|packet/i);
+  expect(homeVi.hero.description).not.toMatch(/QPC|SendInput|foreground|packet/i);
+});
+
+test('website copy contains no retired instructions, adaptive-lead claims, or unsupported guarantees', () => {
   const contentFiles = filesBelow(
     fileURLToPath(new URL('../../src/content/', import.meta.url)),
     /\.md$/,
@@ -67,6 +145,7 @@ test('website content contains no retired product instructions or unsupported gu
   ]
     .map((path) => readFileSync(path, 'utf8'))
     .join('\n');
+
   for (const retiredClaim of [
     'Authenticode-qualified',
     'Reload songs',
@@ -80,6 +159,8 @@ test('website content contains no retired product instructions or unsupported gu
     'Use the Library refresh control',
     'Dùng nút refresh của Library',
     'được xác minh Authenticode',
+    'adaptive lead',
+    'lead thích ứng',
   ]) {
     expect(publicContent).not.toContain(retiredClaim);
   }
@@ -97,48 +178,6 @@ test('every CSS custom property reference resolves to a declared or inline prope
     .map((match) => match[1])
     .filter((property) => !declared.has(property));
   expect([...new Set(unresolved)]).toEqual([]);
-});
-
-test('obsolete compatibility tokens are absent after caller migration', () => {
-  for (const retiredToken of [
-    '--color-bg',
-    '--color-surface-1',
-    '--color-surface-2',
-    '--color-text-muted',
-    '--color-text-subtle',
-    '--color-accent',
-    '--color-accent-strong',
-    '--color-sky',
-    '--color-danger',
-    '--border-faint',
-    '--border-default',
-    '--border-accent',
-    '--font-size-xs',
-    '--font-size-sm',
-    '--font-size-md',
-    '--font-size-lg',
-    '--space-12',
-    '--space-16',
-    '--space-9',
-    '--space-11',
-    '--color-action-soft',
-    '--section-xs',
-    '--section-sm',
-    '--section-md',
-    '--section-lg',
-    '--section-xl',
-    '--section-space-compact',
-    '--section-space-default',
-    '--section-space-feature',
-    '--section-space-opening',
-    '--section-space-transition',
-    '--section-space-explanation',
-    '--section-space-product',
-    '--section-space-utility',
-    '--section-space-closure',
-  ]) {
-    expect(sourceText).not.toContain(retiredToken);
-  }
 });
 
 test('every shared foundation token is reachable from a live consumer', () => {
@@ -167,10 +206,10 @@ test('every shared foundation token is reachable from a live consumer', () => {
     }
   }
 
-  const unused = [...dependencies.keys()].filter((property) => !reachable.has(property));
-  expect(unused).toEqual([]);
+  expect([...dependencies.keys()].filter((property) => !reachable.has(property))).toEqual([]);
 });
-test('fallback tokens and cascade order remain available before optional OKLCH overrides', () => {
+
+test('fallback colors and the declared cascade remain available before optional OKLCH overrides', () => {
   const tokens = readFileSync(new URL('../../src/styles/tokens.css', import.meta.url), 'utf8');
   expect(tokens).toMatch(
     /@layer reset, tokens, theme, base, layout, patterns, components, utilities;/,
@@ -181,7 +220,7 @@ test('fallback tokens and cascade order remain available before optional OKLCH o
   expect(tokens).toContain('@supports (color: oklch(50% 0.1 100))');
 });
 
-test('localized public timing and safety copy matches current playback and desktop contracts', () => {
+test('localized technical copy follows the current playback, install, import, and safety contracts', () => {
   const read = (relativePath) => readFileSync(new URL(relativePath, import.meta.url), 'utf8');
   const collectStrings = (value) => {
     if (typeof value === 'string') return [value];
@@ -203,14 +242,12 @@ test('localized public timing and safety copy matches current playback and deskt
   const enSafety = read('../../src/content/faq/en/account-safety.md');
   const viSafety = read('../../src/content/faq/vi/account-safety.md');
   const playbackContract = read('../../../../docs/playback-engine.md');
-  const nativeOptions = read('../../../../apps/desktop/src-tauri/src/native_runtime.rs');
-  const settings = read('../../../../rust/crates/sky_app_core/src/settings.rs');
 
   for (const [locale, home, troubleshooting, formats, setup, safety] of [
     ['en', enPublic, enTroubleshooting, enFormats, enSetup, enSafety],
     ['vi', viPublic, viTroubleshooting, viFormats, viSetup, viSafety],
   ]) {
-    expect(home, locale).not.toMatch(/adaptive lead/i);
+    expect(home, locale).not.toMatch(/adaptive lead|lead thích ứng/i);
     expect(troubleshooting, locale).not.toMatch(
       /adaptive lead|per-song settings|command palette|play hotkey|30 or 60|30 hoặc 60/i,
     );
@@ -224,64 +261,32 @@ test('localized public timing and safety copy matches current playback and deskt
     expect(safety, locale).toMatch(/foreground/i);
   }
 
+  expect(enPublic).toMatch(/fixed wake guard/i);
+  expect(enPublic).toMatch(/without continuously adjusting its lead/i);
+  expect(viPublic).toMatch(/wake guard cố định/i);
+  expect(viPublic).toMatch(/không liên tục điều chỉnh lead/i);
   expect(enTiming).toMatch(/wake guard remains fixed during playback/i);
   expect(enTiming).toMatch(/does not continuously adjust/i);
   expect(viTiming).toMatch(/wake guard\s+được giữ cố định/i);
   expect(playbackContract).toMatch(/Cleanup safety Up is a separate,\s+journal-limited path/i);
   expect(playbackContract).toMatch(/H = ceiling\(hold_frames × T\) \+ timing margin/i);
-
-  expect(nativeOptions).toContain('hold_frames: vec![1.0, 1.25, 1.5]');
-  expect(nativeOptions).toContain('tempo_scales: vec![0.90, 0.95, 1.0, 1.05, 1.10]');
-  expect(settings).toContain('VALID_FPS: [u16; 7] = [30, 60, 90, 120, 144, 165, 240]');
-  expect(settings).toContain('TIMING_MARGIN_STEP_US: u64 = 100');
   expect(enFormats).toContain('30, 60, 90, 120, 144, 165, or 240');
   expect(viFormats).toContain('30, 60, 90, 120, 144, 165 hoặc 240');
+  expect(homeEn.trust.signingValue).toMatch(/intentionally unsigned/i);
+  expect(homeVi.trust.signingValue).toMatch(/không chữ ký/i);
+  expect(homeEn.trust.updaterValue).toContain('.exe.sig');
+  expect(homeVi.trust.updaterValue).toContain('.exe.sig');
 });
 
-test('replaced header and pattern mechanisms have no remaining source implementation', () => {
-  const read = (relativePath) => readFileSync(new URL(relativePath, import.meta.url), 'utf8');
-  const header = read('../../src/components/layout/SiteHeader.astro');
-  const patterns = read('../../src/styles/patterns.css');
-  const controls = read('../../src/styles/components.css');
-  const hero = read('../../src/components/home/Hero.astro');
-  const layout = read('../../src/styles/layout.css');
-  const intro = read('../../src/components/ui/SectionIntro.astro');
-
-  for (const retiredRule of [
-    '.ui-editorial-rule',
-    '.ui-data-ledger',
-    '.ui-instrument-panel',
-    '.ui-instrument-panel--active',
-    '.ui-instrument-panel--product',
-    '.ui-timing-rail',
-    '.ui-timing-rail__node',
-    '.ui-action-link',
-    '.ui-data-row',
-    '.ui-data-ledger',
-    '.ui-section-intro--narrow',
-    '.ui-section-intro--wide',
-    '.ui-section-intro--center',
-  ]) {
-    expect(patterns).not.toContain(retiredRule);
-  }
-  for (const retiredMechanism of [
-    'closeTimer',
-    'openFrame',
-    'clearPendingMotion',
-    'reducedMotionQuery',
-    "data-state='opening'",
-    "data-state='closing'",
-    'nav.dataset.state',
-  ]) {
-    expect(header).not.toContain(retiredMechanism);
-  }
-  expect(header).toContain(".menu-toggle[aria-expanded='true']");
-  expect(controls).not.toMatch(/\.button:is\(\s*:disabled/);
-  expect(hero).not.toMatch(/\.hero__(?:stage-meta|rail|rail-label)/);
-  expect(layout).not.toMatch(/section-shell--(?:opening|utility|open|peak|closure|proof)/);
-  expect(intro).not.toContain('align?:');
-  expect(intro).not.toContain('measure?:');
-  expect(intro).not.toContain('wide');
+test('retired global score graphics, showcase surfaces, and unused legacy tokens stay removed', () => {
+  const patterns = readFileSync(new URL('../../src/styles/patterns.css', import.meta.url), 'utf8');
+  const tokens = readFileSync(new URL('../../src/styles/tokens.css', import.meta.url), 'utf8');
+  expect(patterns).not.toMatch(
+    /\.ui-score-|\.ui-product-stage|\.ui-instrument-surface|\.brand-mark/,
+  );
+  expect(tokens).not.toContain('--duration-emphasis');
+  expect(tokens).not.toContain('--shadow-instrument');
+  expect(tokens).not.toContain('--type-display-metric');
 });
 
 test('localized setup and help copy matches current distribution, import, and safety contracts', () => {

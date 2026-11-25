@@ -66,24 +66,27 @@ test.describe('published route and asset contracts', () => {
         path: '/',
         required: [
           'Windows 11 x64',
-          'FREE · OPEN SOURCE',
+          'free, open-source music sheet player',
           'Get the Windows installer',
           'Opens GitHub Releases',
-          'the canonical Tauri NSIS installer',
-          'current user',
+          'NSIS installer',
+          'current-user install',
           'playlist',
-          'does not move or delete',
+          'does not inspect game memory',
+          '.exe.sig',
         ],
       },
       {
         path: '/vi/',
         required: [
-          'WINDOWS 11 64-BIT',
-          'MIỄN PHÍ · MÃ NGUỒN MỞ',
+          'Windows 11 64-bit',
+          'miễn phí, mã nguồn mở',
           'Tải bộ cài Windows',
           'Mở GitHub Releases',
           'playlist',
-          'không di chuyển hay xóa',
+          'không kiểm tra bộ nhớ game',
+          'file gốc vẫn ở vị trí ban đầu',
+          '.exe.sig',
         ],
       },
       {
@@ -126,7 +129,7 @@ test.describe('published route and asset contracts', () => {
       const html = await response.text();
       for (const phrase of entry.required) expect(html, entry.path).toContain(phrase);
       if (entry.path === '/' || entry.path === '/vi/') {
-        expect(html, entry.path).toContain('WINDOWS 11 X64');
+        expect(html, entry.path).toMatch(/Windows 11 (?:x64|64-bit)/i);
         expect(html, entry.path).not.toContain('WINDOWS 10–11');
       }
       expect(html, entry.path).not.toContain('Reload songs');
@@ -221,7 +224,7 @@ test.describe('published route and asset contracts', () => {
 
     const home = await request.get(origin + '/');
     const html = await home.text();
-    expect(html).toContain('Canonical desktop interface');
+    expect(html).toContain('Desktop interface capture');
     expect(html).toContain('/assets/images/library-real-tauri.png');
     expect(html).not.toContain('terminal picker');
     const localUrls = Array.from(

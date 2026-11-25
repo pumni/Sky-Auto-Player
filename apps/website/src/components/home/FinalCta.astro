@@ -1,44 +1,34 @@
 ---
 import type { HomeContent } from '../../data/home.types';
 import { SITE } from '../../data/site';
-import BrandMark from '../ui/BrandMark.astro';
 
 interface Props {
   data: HomeContent['finalCta'];
-  locale: 'en' | 'vi';
 }
 
-const { data, locale } = Astro.props;
+const { data } = Astro.props;
 ---
 
-<section class="final-cta section-shell section-shell--feature" aria-labelledby="final-title">
+<section
+  class="final-cta section-shell section-shell--feature"
+  aria-labelledby="final-title"
+  data-home-section="closing-cta"
+>
   <div class="container final-cta__layout">
-    <div class="final-cta__measure" aria-hidden="true">
-      <span>M.12 / READY</span>
-      <span class="final-cta__score ui-score-line">
-        <i class="ui-score-node ui-score-node--complete"></i>
-        <i class="ui-score-playhead"></i>
-      </span>
-    </div>
     <div class="final-cta__copy">
-      <p class="final-cta__eyebrow">
-        {locale === 'vi' ? 'SẴN SÀNG CHO MÀN TRÌNH DIỄN' : 'READY FOR THE PERFORMANCE'}
-      </p>
+      <p class="final-cta__eyebrow">Sky Auto Player · Windows 11</p>
       <h2 id="final-title">{data.title}</h2>
       <p class="final-cta__description">{data.description}</p>
     </div>
     <div class="final-cta__actions">
-      <a class="button button--primary" href={SITE.releaseUrl}>
-        {data.primaryCta}
+      <a class="button button--primary final-cta__primary" href={SITE.releaseUrl}>
+        <span>{data.primaryCta}</span>
+        <span class="final-cta__destination">{data.primaryDestination}</span>
       </a>
       <a class="button button--secondary" href={SITE.repositoryUrl}>
         {data.secondaryCta}
       </a>
-      <span class="final-cta__metric">JSON · SKYSHEET · TXT / WINDOWS 11 X64</span>
     </div>
-    <span class="final-cta__mark" aria-hidden="true">
-      <BrandMark />
-    </span>
   </div>
 </section>
 
@@ -46,66 +36,45 @@ const { data, locale } = Astro.props;
   @layer components {
     .final-cta {
       position: relative;
-      overflow: hidden;
+      overflow: clip;
       border-block: 1px solid var(--line-default);
-      background: var(--color-surface-quiet);
+      background:
+        radial-gradient(ellipse at 96% 90%, rgb(239 202 120 / 10%), transparent 43%),
+        var(--color-surface-quiet);
     }
 
     .final-cta__layout {
-      position: relative;
       display: grid;
-      gap: var(--space-7);
+      gap: var(--space-6);
+      align-items: end;
     }
 
     .final-cta__copy,
-    .final-cta__actions,
-    .final-cta__measure {
+    .final-cta__actions {
       position: relative;
       z-index: 1;
     }
 
-    .final-cta__measure {
-      display: grid;
-      grid-template-columns: auto minmax(5rem, 1fr);
-      grid-column: 1 / -1;
-      gap: var(--space-5);
-      align-items: center;
-      max-width: 36rem;
-      color: var(--color-success);
+    .final-cta__eyebrow {
+      margin-block-end: var(--space-3);
+      color: var(--color-action);
       font-family: var(--font-mono);
       font-size: var(--type-micro);
-      letter-spacing: 0.08em;
-    }
-
-    .final-cta__score .ui-score-node {
-      left: 22%;
-    }
-
-    .final-cta__score .ui-score-playhead {
-      left: 76%;
-    }
-
-    .final-cta__eyebrow,
-    .final-cta__metric {
-      font-family: var(--font-mono);
-      font-size: var(--type-micro);
-      letter-spacing: 0.08em;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
     }
 
-    .final-cta__eyebrow {
-      margin-block-end: var(--space-3);
-      color: var(--color-text-secondary);
-    }
-
     .final-cta h2 {
-      max-width: 10ch;
+      max-inline-size: 13ch;
       margin-block-end: var(--space-4);
-      font-size: var(--type-h2);
+      font-size: clamp(2.5rem, 5vw, 5rem);
+      letter-spacing: -0.045em;
     }
 
     .final-cta__description {
+      max-inline-size: 54ch;
       color: var(--color-text-secondary);
+      font-size: var(--type-lead);
     }
 
     .final-cta__actions {
@@ -115,50 +84,42 @@ const { data, locale } = Astro.props;
       gap: var(--space-3);
     }
 
-    .final-cta__metric {
-      flex-basis: 100%;
-      color: var(--color-text-tertiary);
+    .final-cta__primary {
+      display: inline-flex;
+      min-block-size: 3.75rem;
+      flex-direction: column;
+      align-items: flex-start;
+      justify-content: center;
+      gap: 0.125rem;
+      padding-block: var(--space-2);
     }
 
-    .final-cta__mark {
-      position: absolute;
-      left: -2rem;
-      bottom: -2rem;
-      opacity: 0.1;
-      transform: scale(2.5);
-      transform-origin: left bottom;
+    .final-cta__destination {
+      color: color-mix(in oklch, var(--color-text-on-action) 78%, transparent);
+      font-size: var(--type-micro);
+      font-weight: 500;
+      line-height: 1.2;
     }
 
     @media (min-width: 64rem) {
       .final-cta__layout {
-        grid-template-columns: repeat(12, minmax(0, 1fr));
+        grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
         gap: var(--grid-gap);
-        align-items: center;
-      }
-
-      .final-cta__copy {
-        grid-column: 1 / span 7;
       }
 
       .final-cta__actions {
-        grid-column: 8 / -1;
         justify-content: flex-start;
       }
     }
 
-    @media (max-width: 40rem) {
-      .final-cta__measure {
-        grid-template-columns: 1fr;
-        gap: var(--space-2);
-      }
-
+    @media (max-width: 39.99rem) {
       .final-cta__actions {
         flex-direction: column;
         align-items: stretch;
       }
 
-      .final-cta__metric {
-        margin-block-start: var(--space-2);
+      .final-cta__actions .button {
+        width: 100%;
       }
     }
   }
