@@ -358,7 +358,7 @@ test('long update errors scroll without hiding retry or dismissal controls', asy
   await page.goto('/?mockUpdateState=error-long');
   await page.getByRole('button', { name: 'Open settings' }).click();
   await page.getByRole('button', { name: 'Updates', exact: true }).click();
-  const checkButton = page.getByRole('button', { name: 'Check for updates', exact: true });
+  const checkButton = page.getByRole('button', { name: 'Check again', exact: true });
   await checkButton.click();
 
   const dialog = page.getByRole('dialog');

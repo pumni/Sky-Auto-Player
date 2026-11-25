@@ -829,7 +829,7 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
 
   const playbackStatus = player.locator('[data-slot="player-track-status"]');
   await expect(playbackStatus).toHaveText('Playing');
-  await expect(playbackStatus).toHaveAttribute('aria-label', /no physical input is sent/i);
+  await expect(playbackStatus).toHaveAttribute('aria-label', /no keyboard input is sent/i);
   await expect(playbackStatus).toHaveCount(1);
   const playbackStatusLayout = await playbackStatus.evaluate((element) => {
     const rect = element.getBoundingClientRect();
@@ -899,7 +899,7 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
   await expect(diagnostics.getByText('Playback status: Playing', { exact: true })).toBeVisible();
   await expect(diagnostics.getByText('Now Playing: Candle Run', { exact: true })).toBeVisible();
   await expect(
-    diagnostics.getByText('Mode: Dry run · no physical input sent', { exact: true }),
+    diagnostics.getByText('Mode: Test mode (dry run) · no physical input sent', { exact: true }),
   ).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
 

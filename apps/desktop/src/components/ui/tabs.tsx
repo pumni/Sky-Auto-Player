@@ -51,7 +51,7 @@ function TabsIndicator({ className, ...props }: TabsPrimitive.Indicator.Props) {
       className={cn(
         'pointer-events-none absolute left-[var(--active-tab-left)] z-0 w-[var(--active-tab-width)] transition-[left,width,top,bottom,height] duration-tab ease-standard motion-reduce:transition-none',
         'group-data-[variant=line]/tabs-list:bottom-0 group-data-[variant=line]/tabs-list:h-0.5 group-data-[variant=line]/tabs-list:bg-accent-ink',
-        'group-data-[variant=segmented]/tabs-list:top-[var(--active-tab-top)] group-data-[variant=segmented]/tabs-list:h-[var(--active-tab-height)] group-data-[variant=segmented]/tabs-list:rounded-[5px] group-data-[variant=segmented]/tabs-list:border group-data-[variant=segmented]/tabs-list:border-input dark:group-data-[variant=segmented]/tabs-list:border-border group-data-[variant=segmented]/tabs-list:bg-control-active group-data-[variant=segmented]/tabs-list:shadow-sm',
+        'group-data-[variant=segmented]/tabs-list:top-[var(--active-tab-top)] group-data-[variant=segmented]/tabs-list:h-[var(--active-tab-height)] group-data-[variant=segmented]/tabs-list:rounded-[4px] group-data-[variant=segmented]/tabs-list:border group-data-[variant=segmented]/tabs-list:border-input dark:group-data-[variant=segmented]/tabs-list:border-border group-data-[variant=segmented]/tabs-list:bg-control-active group-data-[variant=segmented]/tabs-list:shadow-sm',
         className,
       )}
       {...props}
@@ -66,7 +66,7 @@ function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
       className={cn(
         "relative z-[1] inline-flex min-h-8 min-w-0 flex-none items-center justify-center gap-1.5 rounded-control border border-transparent bg-transparent px-2 py-1 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors duration-tab hover:bg-transparent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 motion-reduce:transition-none",
         'group-data-[variant=line]/tabs-list:h-full group-data-[variant=line]/tabs-list:rounded-none group-data-[variant=line]/tabs-list:px-3 group-data-[variant=line]/tabs-list:text-sm',
-        'group-data-[variant=segmented]/tabs-list:min-h-7 group-data-[variant=segmented]/tabs-list:flex-1 group-data-[variant=segmented]/tabs-list:rounded-[5px] group-data-[variant=segmented]/tabs-list:px-1.5',
+        'group-data-[variant=segmented]/tabs-list:min-h-7 group-data-[variant=segmented]/tabs-list:flex-1 group-data-[variant=segmented]/tabs-list:rounded-[4px] group-data-[variant=segmented]/tabs-list:px-1.5',
         'aria-selected:font-semibold aria-selected:bg-transparent aria-selected:shadow-none',
         'group-data-[variant=line]/tabs-list:aria-selected:text-accent-ink group-data-[variant=segmented]/tabs-list:aria-selected:text-foreground group-data-[variant=segmented]/tabs-list:aria-selected:forced-colors:text-[HighlightText]',
         className,

@@ -18,7 +18,7 @@ import {
   selectNowPlayingSongId,
   selectRowAtIndex,
 } from '../../state/store';
-import { VirtualTrackRow } from './TrackRow';
+import { TRACK_ROW_HEIGHT_PX, VirtualTrackRow } from './TrackRow';
 import { TrackTableHeader } from './TrackTableHeader';
 import {
   ScrollAreaContent,
@@ -150,7 +150,7 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
   const virtualizer = useVirtualizer({
     count: rowCount,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => 46,
+    estimateSize: () => TRACK_ROW_HEIGHT_PX,
     overscan: 10,
     observeElementRect: observeDimensions,
   });
@@ -210,10 +210,10 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
         : [
             ...Array.from({ length: Math.min(rowCount, 20) }, (_, index) => ({
               index,
-              start: index * 46,
+              start: index * TRACK_ROW_HEIGHT_PX,
             })),
             ...(keyboardIndex !== null && keyboardIndex >= 20 && keyboardIndex < rowCount
-              ? [{ index: keyboardIndex, start: keyboardIndex * 46 }]
+              ? [{ index: keyboardIndex, start: keyboardIndex * TRACK_ROW_HEIGHT_PX }]
               : []),
           ],
     [keyboardIndex, rowCount, virtualItems],

@@ -39,9 +39,16 @@ Production action controls use the shared `Button` variants: `default` for prima
 controls with their existing hit targets. The Player Dock uses a 92 px grid with equal flexible
 side columns around a centered transport column capped at 600 px or 45 vw. At compact widths it
 keeps song title, playback status, test-mode label, timeline, and centered transport visible while
-removing the decorative note glyph. The test-mode label keeps “Test · no keys” when its player
-column can fit it and uses “Dry run” when it cannot; its accessible label always says that no
-physical keyboard input is sent. The timeline uses the semantic control-hover track color.
+removing the decorative note glyph. The test-mode label uses “Test mode” in both wide and compact layouts; confirmed active sessions
+announce “Test mode: no keyboard input is sent.” while prepared dry-run intent announces
+“Prepared for Test mode: no keyboard input will be sent.” The timeline uses the semantic
+control-hover track color.
+
+Playback confirmation (`PlaybackAdmission.tsx`) preserves native decision order, primary CTA
+(`use_recommended` when offered, otherwise `proceed`), initial focus, and `Not now` cancellation,
+using neutral note-registration warning copy and `aria-describedby`-linked per-option descriptions.
+Graphite 2.0 defines dual Dark and Light semantic tokens in `globals.css`, applying mode switches
+instantly (`0ms`) via a transient `data-theme-applying` attribute in `applyAppearance.ts`.
 
 The Library's empty Playlists action uses an outline while Built-in Songs are available and a filled
 primary style when that source is unavailable. Its help text stays short and explains the playlist's
@@ -60,17 +67,31 @@ Reduced-motion mode removes overlay movement and the Inspector unmounts without 
 `Ctrl+I` toggles the Inspector and `Ctrl+,` opens Settings when no modal is active and focus is
 outside editable controls. Both shortcuts are also shown in their corresponding control tooltips.
 
-`apps/desktop/src/components/settings/SettingsPanel.tsx` retains Settings modal, category navigation,
-and focus ownership; `apps/desktop/src/components/settings/SettingsCategoryContent.tsx` renders the
-selected category and palette selector. `apps/desktop/src/components/utility/DiagnosticsView.tsx`
+`apps/desktop/src/components/settings/SettingsPanel.tsx` owns the unified Settings modal (`--card`
+shell, `--surface` inset content canvas, 164 px category navigation, focus management, content
+scroll reset on category switch, and conditional pending/error status region without a permanent
+persistence footer). `apps/desktop/src/components/settings/SettingsCategoryContent.tsx` routes to
+the six cohesive category owners (`PlaybackSettings.tsx`, `AppearanceSettings.tsx`,
+`DiagnosticsSettings.tsx`, `UpdateSettings.tsx`, `DonateSettings.tsx`, and `AboutSettings.tsx`),
+sharing `SettingsLayout.tsx`, `paletteMetadata.ts`, `AutoPlaySwitch.tsx`, and
+`TimingMarginControl.tsx`. Playback uses a shared `computePlaybackHoldTiming` helper with
+`PlayerTools.tsx`, Appearance uses a controlled `RadioGroup` of compact 40 px icon tiles for Theme
+(`System`, `Light`, `Dark`) with a single shared Windows-appearance note plus the existing `Dark
+palette` Select and an active-token mini-workbench preview, Diagnostics presents flat switches
+(`Playback telemetry`, `Verbose diagnostics`) linked to one shared truthful note, Updates shares
+`deriveUpdatePresentation` with `UpdateDialog` to separate pending handoff (`Preparing update…`)
+from confirmed native updater states and opens `UpdateDialog` without duplicate checks, and About
+presents build metadata in a responsive definition list.
+`apps/desktop/src/components/utility/DiagnosticsView.tsx`
 composes Diagnostics, with `apps/desktop/src/components/utility/diagnosticsPresentation.ts` and the
 focused playback, readout, event, timing, and performance components owning presentation of their
 respective data. These UI splits do not change the canonical Zustand store, typed bridge, native
 settings schema, or native diagnostics authority.
 
-The Donate Settings category is informational and intentionally omits the native settings
-persistence footer. Ko-fi, PayPal, and GitHub links open in the system browser via the
-scope-limited Tauri opener capability.
+The Donate Settings category stacks Ko-fi and PayPal support rows on all widths and places the
+VietQR code beside bank transfer details at content widths of 440 px and above via container query.
+Ko-fi, PayPal, and GitHub links open in the system browser via the scope-limited Tauri opener
+capability.
 
 The MBBank VietQR is an offline PNG at
 `apps/desktop/public/donate-vietqr-mbbank.png`, generated with NAPAS QRIBFTTA account-transfer
@@ -212,15 +233,24 @@ mode separately from the saved dark palette; the preview does not duplicate a ha
 
 The Sky Graphite 2 default uses `--accent-ink` and `--ring` `#9AA8FF`; primary action fill,
 hover, and pressed colors are `#8E9DFF`, `#A3B0FF`, and `#7888F0`, with `#11131A` as the primary
-foreground. Its selected and playing surfaces remain distinct (`#222534` and `#1A1D28`). The
-semantic graph separates surface, text, action, focus, input boundary, selection, playing, control
-state, and success/warning/danger roles. Tailwind's `@theme inline` maps utilities to those CSS
-properties; its `dark` variant follows `data-color-mode`. There are no `--workbench-*` color aliases.
+foreground. Its neutral content canvas (`--surface` `#121314`) sits slightly darker than surrounding
+chrome (`--card` `#191A1B`), and its selected and playing surfaces remain distinct (`#303132` and
+`#202326`). The semantic graph separates surface, text, action, focus, input boundary, selection,
+playing, control state, and success/warning/danger roles. Tailwind's `@theme inline` maps utilities
+to those CSS properties; its `dark` variant follows `data-color-mode`. There are no `--workbench-*`
+color aliases.
+
+Graphite Dark and shared Light use `--card` for the app-shell backdrop and workbench gutters.
+The 40 px Title Bar is transparent without a full-width bottom border in these appearances,
+so the chrome reads as one surface. Pane borders, content canvas, caption controls and the
+Player Dock separator remain unchanged. Other dark palettes and forced-colors mode retain
+their existing shell and Title Bar styling.
 
 Light keeps the saved dark palette while resolving its own tokens. Its action fill, hover, and
-pressed colors are `#3C54CF`, `#3248BA`, and `#293DA3`, with white primary foreground; its
-background, text, separators, and selected surface use the Light overrides in `globals.css`. The
-six dark palettes and Light appearance are checked against the semantic role pairs in
+pressed colors are `#3C54CF`, `#3248BA`, and `#293DA3`, with white primary foreground; its white
+content canvas (`--surface` `#FFFFFF`) sits lighter than surrounding chrome (`--card` `#F7F7F8`),
+and its neutral selected (`#E4E5E7`) and playing (`#EDF0F4`) surfaces remain distinct. The six dark
+palettes and Light appearance are checked against the semantic role pairs in
 `apps/desktop/tests/e2e/theme-accessibility.spec.ts`.
 
 Text contrast checks use 4.5:1 and essential non-text/focus checks use 3:1. The browser tests also

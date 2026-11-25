@@ -3,7 +3,7 @@ import { Heart } from 'lucide-react';
 export function TrackTableHeader() {
   return (
     <div
-      className="sticky top-0 z-[1] grid h-8 min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 bg-surface px-[18px] text-[11px] font-semibold uppercase text-text-tertiary after:absolute after:bottom-0 after:left-[18px] after:right-[18px] after:h-px after:bg-border after:content-[''] @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-3 @max-[520px]/track-browser:after:left-3 @max-[520px]/track-browser:after:right-3 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:px-2 @max-[440px]/track-browser:after:left-2 @max-[440px]/track-browser:after:right-2"
+      className="sticky top-0 z-[1] grid h-8 min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 bg-surface px-[18px] text-[11px] font-semibold leading-4 text-text-tertiary after:absolute after:bottom-0 after:left-[18px] after:right-[18px] after:h-px after:bg-border after:content-[''] @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-3 @max-[520px]/track-browser:after:left-3 @max-[520px]/track-browser:after:right-3 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:px-2 @max-[440px]/track-browser:after:left-2 @max-[440px]/track-browser:after:right-2"
       role="row"
       aria-rowindex={1}
     >

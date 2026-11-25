@@ -13,7 +13,7 @@ export function LibrarySection({ label, children, showWhenEmpty = false }: Libra
       <h3
         data-slot="library-section-heading"
         id={`library-section-${label.toLowerCase()}`}
-        className="mb-1.5 ml-2 mr-2 mt-0 text-[11px] font-semibold uppercase tracking-wide text-text-tertiary"
+        className="mb-1.5 ml-2 mr-2 mt-0 text-xs font-semibold leading-4 text-text-tertiary"
       >
         {label}
       </h3>

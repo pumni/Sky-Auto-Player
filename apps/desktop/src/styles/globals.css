@@ -52,18 +52,36 @@
   --color-scrollbar-thumb: var(--scrollbar-thumb);
   --color-scrollbar-thumb-active: var(--scrollbar-thumb-active);
   --color-scrim: var(--scrim);
-  --radius-control: 8px;
-  --radius-pane: 10px;
-  --radius-popover: 12px;
-  --radius-dialog: 14px;
+  --radius-control: 6px;
+  --radius-pane: 8px;
+  --radius-popover: 10px;
+  --radius-dialog: 12px;
   --duration-micro: 80ms;
   --duration-fast: 120ms;
   --duration-standard: 180ms;
   --duration-panel: 240ms;
   --duration-tab: 150ms;
+  --duration-transport-icon: 100ms;
+  --duration-admission-enter: var(--duration-fast);
+  --duration-tooltip-enter: 100ms;
+  --duration-tooltip-exit: var(--duration-micro);
+  --duration-menu-enter: var(--duration-tab);
+  --duration-menu-exit: 100ms;
+  --duration-popover-enter: var(--duration-standard);
+  --duration-popover-exit: var(--duration-fast);
+  --duration-dialog-enter: 200ms;
+  --duration-dialog-exit: 140ms;
+  --duration-overlay-enter: 220ms;
+  --duration-overlay-exit: 160ms;
+  --duration-scrollbar-enter: var(--duration-micro);
+  --duration-scrollbar-exit: var(--duration-standard);
   --ease-standard: cubic-bezier(0.2, 0, 0, 1);
   --ease-enter: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+}
+
+@utility duration-* {
+  transition-duration: --value(--duration-*);
 }
 
 /* Workbench width interpolation stays on the two pane boundaries while resizing. */
@@ -82,31 +100,31 @@
 :root {
   color-scheme: dark;
   --background: #121314;
-  --surface: #151618;
+  --surface: #121314;
   --card: #191a1b;
   --card-foreground: #e2e4e8;
-  --popover: #242526;
+  --popover: #202122;
   --popover-foreground: #e2e4e8;
   --foreground: #e2e4e8;
-  --secondary: #222324;
+  --secondary: #242526;
   --secondary-foreground: #e2e4e8;
   --muted: #242526;
-  --muted-foreground: #94979e;
-  --text-secondary: #a6a8ad;
-  --text-tertiary: #94979e;
+  --muted-foreground: #a4a6aa;
+  --text-secondary: #b3b5b8;
+  --text-tertiary: #a4a6aa;
   --border: #2a2b2c;
-  --overlay-border: #454851;
-  --input: #72777d;
+  --overlay-border: #454749;
+  --input: #898c90;
   --primary: #8e9dff;
   --primary-hover: #a3b0ff;
   --primary-pressed: #7888f0;
   --primary-foreground: #11131a;
   --accent-ink: #9aa8ff;
   --ring: #9aa8ff;
-  --accent: #222324;
+  --accent: #303132;
   --accent-foreground: #e2e4e8;
-  --selection: #222534;
-  --playing: #1a1d28;
+  --selection: #303132;
+  --playing: #202326;
   --success: #64c496;
   --success-surface: #143326;
   --success-border: #489e74;
@@ -120,10 +138,10 @@
   --destructive-hover: #d13a45;
   --destructive-pressed: #9e1f2a;
   --destructive-foreground: #fff;
-  --control-hover: #35363a;
-  --row-hover: #292b30;
-  --control-pressed: #404246;
-  --control-active: #35363a;
+  --control-hover: #303132;
+  --row-hover: #242526;
+  --control-pressed: #393a3c;
+  --control-active: #303132;
   --control-disabled: #6c6e73;
   --scrollbar-thumb: color-mix(in srgb, var(--text-secondary) 70%, var(--background));
   --scrollbar-thumb-active: var(--text-secondary);
@@ -206,10 +224,22 @@ progress[aria-disabled='true']::-moz-progress-bar {
   }
 }
 
+html[data-theme-applying],
+html[data-theme-applying] *,
+html[data-theme-applying] *::before,
+html[data-theme-applying] *::after {
+  transition-duration: 0ms !important;
+}
+
 @starting-style {
   [data-workbench-pane][data-pane='inspector'][data-presentation-mode='overlay'][data-open='true'] {
     opacity: 0;
-    translate: 1rem 0;
+    translate: 10px 0;
+  }
+
+  [data-slot='playback-admission'],
+  [data-slot='playback-recovery'] {
+    opacity: 0;
   }
 }
 
@@ -383,34 +413,39 @@ html[data-palette='classic'] {
   --control-disabled: #a69a87;
 }
 
+html[data-palette='graphite'] {
+  --scrollbar-thumb: #777a7e;
+  --scrollbar-thumb-active: #a4a6aa;
+}
+
 html[data-color-mode='light'] {
   color-scheme: light;
   --background: #fff;
-  --surface: #f4f6f9;
-  --card: #f7f8fa;
+  --surface: #fff;
+  --card: #f7f7f8;
   --popover: #fff;
-  --card-foreground: #252a31;
-  --popover-foreground: #252a31;
-  --foreground: #252a31;
-  --secondary: #eef2f6;
-  --secondary-foreground: #252a31;
-  --muted: #f4f6f9;
-  --muted-foreground: #5d6976;
-  --text-secondary: #535f6c;
-  --text-tertiary: #5d6976;
-  --border: #dfe4eb;
-  --overlay-border: #c2cbd6;
-  --input: #808a96;
+  --card-foreground: #25272a;
+  --popover-foreground: #25272a;
+  --foreground: #25272a;
+  --secondary: #edeef0;
+  --secondary-foreground: #25272a;
+  --muted: #f0f1f2;
+  --muted-foreground: #5d6066;
+  --text-secondary: #505359;
+  --text-tertiary: #5d6066;
+  --border: #dcdde0;
+  --overlay-border: #c4c6ca;
+  --input: #75787e;
   --primary: #3c54cf;
   --primary-hover: #3248ba;
   --primary-pressed: #293da3;
   --primary-foreground: #fff;
   --accent-ink: #3449b5;
   --ring: #3449b5;
-  --accent: #eef2f6;
-  --accent-foreground: #252a31;
-  --selection: #dfe7fc;
-  --playing: #ebf0fe;
+  --accent: #e4e5e7;
+  --accent-foreground: #25272a;
+  --selection: #e4e5e7;
+  --playing: #edf0f4;
   --success: #1f7a47;
   --success-surface: #e9f5ed;
   --success-border: #1f7a47;
@@ -424,13 +459,28 @@ html[data-color-mode='light'] {
   --destructive-hover: #9f1f2a;
   --destructive-pressed: #861a23;
   --destructive-foreground: #fff;
-  --control-hover: #e5eaf1;
-  --row-hover: #e5eaf1;
-  --control-pressed: #e2e8f0;
-  --control-active: #fff;
-  --control-disabled: #8a94a0;
-  --scrollbar-thumb: color-mix(in srgb, var(--text-secondary) 74%, var(--background));
-  --scrollbar-thumb-active: var(--text-secondary);
+  --control-hover: #edeef0;
+  --row-hover: #f0f1f2;
+  --control-pressed: #e0e2e5;
+  --control-active: #e4e5e7;
+  --control-disabled: #8a8d94;
+  --scrollbar-thumb: #85888e;
+  --scrollbar-thumb-active: #5d6066;
+  --scrim: #16181b;
+}
+
+/* Graphite chrome continues through the shell gutters instead of a separate titlebar strip. */
+@media (forced-colors: none) {
+  html:is([data-palette='graphite'], [data-color-mode='light']) [data-app-shell] {
+    background-color: var(--card);
+  }
+
+  html:is([data-palette='graphite'], [data-color-mode='light'])
+    [data-app-shell]
+    > [data-slot='titlebar'] {
+    background-color: transparent;
+    border-bottom-width: 0;
+  }
 }
 
 @layer base {
@@ -505,7 +555,7 @@ html[data-color-mode='light'] {
   }
 
   [data-slot='track-row'][data-state='idle'] {
-    border-left-color: var(--card) !important;
+    border-left-color: var(--surface) !important;
   }
 
   ::selection {

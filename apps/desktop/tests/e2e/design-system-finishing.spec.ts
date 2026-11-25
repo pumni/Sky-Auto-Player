@@ -516,7 +516,7 @@ test('expanded Playback Profile fits at 800 by 560 and keeps Select inside the v
 
   await page.setViewportSize({ width: 800, height: 560 });
 
-  const baseHold = profile.getByRole('combobox', { name: 'Base Hold' });
+  const baseHold = profile.getByRole('combobox', { name: 'Base hold' });
   await baseHold.click();
   const select = page.locator('[data-slot="select-content"]:visible');
   await expect(select).toBeVisible();

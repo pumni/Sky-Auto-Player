@@ -77,7 +77,7 @@ function ScrollAreaScrollbar({
     <ScrollAreaPrimitive.Scrollbar
       data-slot="scroll-area-scrollbar"
       className={cn(
-        'z-10 flex touch-none select-none bg-transparent p-[2px] opacity-0 pointer-events-none transition-opacity duration-[180ms] ease-standard data-[scrolling]:opacity-100 data-[scrolling]:pointer-events-auto data-[scrolling]:duration-[80ms] data-[dragging=true]:opacity-100 data-[dragging=true]:pointer-events-auto data-[dragging=true]:duration-[80ms] forced-colors:opacity-100 forced-colors:pointer-events-auto motion-reduce:transition-none data-[orientation=vertical]:w-[10px] data-[orientation=vertical]:flex-col data-[orientation=horizontal]:h-[10px] data-[orientation=horizontal]:flex-row',
+        'z-10 flex touch-none select-none bg-transparent p-[2px] opacity-0 pointer-events-none transition-opacity duration-scrollbar-exit ease-standard data-[scrolling]:opacity-100 data-[scrolling]:pointer-events-auto data-[scrolling]:duration-scrollbar-enter data-[dragging=true]:opacity-100 data-[dragging=true]:pointer-events-auto data-[dragging=true]:duration-scrollbar-enter forced-colors:opacity-100 forced-colors:pointer-events-auto motion-reduce:transition-none data-[orientation=vertical]:w-[10px] data-[orientation=vertical]:flex-col data-[orientation=horizontal]:h-[10px] data-[orientation=horizontal]:flex-row',
         className,
       )}
       onPointerDownCapture={beginDrag}
@@ -94,7 +94,7 @@ function ScrollAreaThumb({ className, ...props }: ScrollAreaPrimitive.Thumb.Prop
     <ScrollAreaPrimitive.Thumb
       data-slot="scroll-area-thumb"
       className={cn(
-        'relative rounded-full bg-scrollbar-thumb transition-colors duration-[120ms] hover:bg-scrollbar-thumb-active data-[scrolling]:bg-scrollbar-thumb-active motion-reduce:transition-none',
+        'relative rounded-full bg-scrollbar-thumb transition-colors duration-fast hover:bg-scrollbar-thumb-active data-[scrolling]:bg-scrollbar-thumb-active motion-reduce:transition-none',
         className,
       )}
       {...props}

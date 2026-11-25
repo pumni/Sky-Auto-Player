@@ -1,5 +1,30 @@
 # Historical source snapshots
 
+## Graphite 2.0 desktop workbench redesign records
+
+The completed Graphite 2.0 design specification and execution plan were removed from the active
+docs tree during final closeout of PR #684. Their immutable source is the reviewed integrated
+B-R1 + Wave C commit
+[`4a87b7d18b2892815e67274bb51bb928053a1447`](https://github.com/pumni/Sky-Auto-Player/tree/4a87b7d18b2892815e67274bb51bb928053a1447).
+Active workbench appearance, layout, motion, admission, and regression contracts live in
+[desktop-workbench.md](desktop-workbench.md), and current visual captures live in
+[docs/ui/current/manifest.json](ui/current/manifest.json). PR #684 retains the wave review
+decisions, D07 admission dossier, and final closeout handoff.
+
+| Archived file at `4a87b7d1` source | Bytes | SHA-256 |
+| --- | ---: | --- |
+| [Graphite 2.0 design specification](https://github.com/pumni/Sky-Auto-Player/blob/4a87b7d18b2892815e67274bb51bb928053a1447/docs/ui/graphite-2.0-design-spec.md) | 41,554 | `064C2B4B21F6F3CED98C80165F87F7EB71DBCF0CD5A739C1665C32A3A4991580` |
+| [Graphite 2.0 execution plan](https://github.com/pumni/Sky-Auto-Player/blob/4a87b7d18b2892815e67274bb51bb928053a1447/docs/ui/graphite-2.0-execution-plan.md) | 23,174 | `3261388EF95D3CCBA68BCDA9C0603B31F95AA54D98DED3034658053C5C7F6FDD` |
+
+The completed Graphite Settings refinement specification (S01–S08 + S-R1) was archived during final
+closure of PR #684 after Agent Leader acceptance ([S-R1 work order](https://github.com/pumni/Sky-Auto-Player/pull/684#issuecomment-7173914339),
+[S-R1 acceptance](https://github.com/pumni/Sky-Auto-Player/pull/684#issuecomment-7174620620)). Active
+Settings contracts remain in [desktop-workbench.md](desktop-workbench.md).
+
+| Archived file at `cc0f7082` source | Bytes | SHA-256 |
+| --- | ---: | --- |
+| [Graphite Settings — Clean Preferences v1.0](https://github.com/pumni/Sky-Auto-Player/blob/cc0f7082cf5484b77ac40a0c11f9d28ee0bf01d0/docs/ui/graphite-settings-spec.md) | 20,456 | `5F589236A9523CC17D330E728ECA5199F4F013EAC04351DCEAED30397EC547D7` |
+
 ## Desktop UI modernization WP1/WP2 records
 
 The completed campaign work order, migration ledger, WP2 report, and large evidence captures were

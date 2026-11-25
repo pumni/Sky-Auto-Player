@@ -26,6 +26,17 @@ const vqcScreenshots = {
   'settings-categories-640x448.png': 'candidate-settings-nav-640x448.png',
   'settings-categories-640x320-scrolled.png': 'candidate-settings-nav-640x320-scrolled.png',
   'settings-select-open-640x320.png': 'candidate-settings-select-open-640x320.png',
+  'settings-playback-dark.png': 'candidate-settings-playback-dark-1366x768.png',
+  'settings-playback-light.png': 'candidate-settings-playback-light-1366x768.png',
+  'settings-appearance-dark.png': 'candidate-settings-appearance-dark-1366x768.png',
+  'settings-diagnostics-dark.png': 'candidate-settings-diagnostics-dark-1366x768.png',
+  'settings-diagnostics-light.png': 'candidate-settings-diagnostics-light-1366x768.png',
+  'settings-updates-dark.png': 'candidate-settings-updates-dark-1366x768.png',
+  'settings-updates-light.png': 'candidate-settings-updates-light-1366x768.png',
+  'settings-donate-dark.png': 'candidate-settings-donate-dark-1366x768.png',
+  'settings-donate-light.png': 'candidate-settings-donate-light-1366x768.png',
+  'settings-about-dark.png': 'candidate-settings-about-dark-1366x768.png',
+  'settings-about-light.png': 'candidate-settings-about-light-1366x768.png',
   'inspector-details-tab.png': 'candidate-inspector-details-1366x768.png',
   'inspector-runtime-performance.png': 'candidate-runtime-diagnostics-1366x768.png',
   'inspector-runtime-timing.png': 'candidate-runtime-timing-1366x768.png',
@@ -37,6 +48,11 @@ const vqcScreenshots = {
   'transport-pause-playing.png': 'candidate-transport-pause-playing-1366x768.png',
   'transport-resume-paused.png': 'candidate-transport-resume-paused-1366x768.png',
   'transport-long-title-compact.png': 'candidate-transport-long-title-640x448.png',
+  'admission-light-640x448.png': 'candidate-admission-light-640x448.png',
+  'recovery-dark-800x560.png': 'candidate-recovery-dark-800x560.png',
+  'recovery-light-800x560.png': 'candidate-recovery-light-800x560.png',
+  'update-dark-800x560.png': 'candidate-update-dark-800x560.png',
+  'update-light-800x560.png': 'candidate-update-light-800x560.png',
 };
 
 function git(args) {
@@ -97,10 +113,20 @@ const run = spawnSync(
         'settings-nav',
         'settings-nav-tiny',
         'settings-select',
+        ...['playback', 'diagnostics', 'updates', 'donate', 'about'].flatMap((category) => [
+          `settings-${category}-dark`,
+          `settings-${category}-light`,
+        ]),
+        'settings-appearance-dark',
         'transport-idle',
         'transport-playing',
         'transport-paused',
         'transport-long-title',
+        'admission-light',
+        'recovery-dark',
+        'recovery-light',
+        'update-dark',
+        'update-light',
         'light',
         ...['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'].flatMap(
           (palette) => [`palette-${palette}`, `workbench-${palette}`],
@@ -147,6 +173,18 @@ const vqcRows = {
   'settings-categories-640x448.png': 'All six vertical Settings categories visible at 640x448',
   'settings-categories-640x320-scrolled.png': 'Settings category navigation scrolled at 640x320',
   'settings-select-open-640x320.png': 'Settings Dark palette Select open at 640x320',
+  'settings-playback-dark.png': 'Settings Playback category in Graphite Dark at 1366x768',
+  'settings-playback-light.png': 'Settings Playback category in Graphite Light at 1366x768',
+  'settings-appearance-dark.png':
+    'Settings Appearance category in Graphite Dark at 1366x768 (paired with canonical ../appearance-settings-light.png)',
+  'settings-diagnostics-dark.png': 'Settings Diagnostics category in Graphite Dark at 1366x768',
+  'settings-diagnostics-light.png': 'Settings Diagnostics category in Graphite Light at 1366x768',
+  'settings-updates-dark.png': 'Settings Updates category in Graphite Dark at 1366x768',
+  'settings-updates-light.png': 'Settings Updates category in Graphite Light at 1366x768',
+  'settings-donate-dark.png': 'Settings Donate category in Graphite Dark at 1366x768',
+  'settings-donate-light.png': 'Settings Donate category in Graphite Light at 1366x768',
+  'settings-about-dark.png': 'Settings About category in Graphite Dark at 1366x768',
+  'settings-about-light.png': 'Settings About category in Graphite Light at 1366x768',
   'inspector-details-tab.png': 'Inspector Details selected with the Readiness state visible',
   'inspector-runtime-performance.png':
     'Runtime Performance tab in deterministic dry-run browser state',
@@ -167,6 +205,14 @@ const vqcRows = {
     'Filled Resume control while browser-mock dry-run playback is paused',
   'transport-long-title-compact.png':
     'Compact Player Dock with a long title and readable selected/prepared status',
+  'admission-light-640x448.png':
+    'Compact 640x448 timing-risk confirmation in Light mode (paired with canonical Dark compact-admission.png)',
+  'recovery-dark-800x560.png':
+    'Actionable target_not_found playback recovery alert in Graphite Dark at 800x560',
+  'recovery-light-800x560.png':
+    'Actionable target_not_found playback recovery alert in Graphite Light at 800x560',
+  'update-dark-800x560.png': 'Update dialog with release notes in Graphite Dark at 800x560',
+  'update-light-800x560.png': 'Update dialog with release notes in Graphite Light at 800x560',
 };
 const vqcReadme = [
   '# VQC-R2 visual evidence',

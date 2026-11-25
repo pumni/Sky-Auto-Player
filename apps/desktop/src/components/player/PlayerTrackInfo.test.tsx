@@ -279,16 +279,41 @@ describe('PlayerTrackInfo', () => {
     expect(status).toHaveTextContent('Playing');
     expect(status).toHaveAttribute(
       'aria-label',
-      `${row.title}: Playing. Dry run; no physical input is sent.`,
+      `${row.title}: Playing. Test mode: no keyboard input is sent.`,
     );
     const testMode = container.querySelector<HTMLElement>(
       '[data-slot="status-badge"][data-appearance="plain"]',
     );
-    expect(testMode).toHaveTextContent('Test · no keys');
+    expect(testMode).toHaveTextContent('Test mode');
     expect(testMode).toHaveAttribute('data-slot', 'status-badge');
     expect(testMode).toHaveAttribute('data-appearance', 'plain');
-    expect(testMode).toHaveAttribute('aria-label', 'Dry run: no physical keyboard input is sent.');
+    expect(testMode).toHaveAttribute('aria-label', 'Test mode: no keyboard input is sent.');
     expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+  });
+
+  it('distinguishes prepared dry-run intent from a confirmed active Test mode session', async () => {
+    const store = createDesktopStore(createMockBridge({ startDelayMs: 5 }));
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 0);
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback({ dry_run: true }));
+
+    const { container } = render(<PlayerTrackInfo useStore={store} />);
+    const status = container.querySelector<HTMLElement>('[role="status"]');
+    expect(status).toHaveTextContent('Prepared');
+    expect(status).toHaveAttribute(
+      'aria-label',
+      `${row.title}: Prepared. Prepared for Test mode: no keyboard input will be sent.`,
+    );
+    const testMode = container.querySelector<HTMLElement>(
+      '[data-slot="status-badge"][data-appearance="plain"]',
+    );
+    expect(testMode).toHaveTextContent('Test mode');
+    expect(testMode).toHaveAttribute(
+      'aria-label',
+      'Prepared for Test mode: no keyboard input will be sent.',
+    );
   });
 
   it('keeps dry-run truth when native status confirmation is uncertain', async () => {
@@ -314,10 +339,10 @@ describe('PlayerTrackInfo', () => {
     expect(status).toHaveTextContent('Playback status uncertain');
     expect(
       container.querySelector('[data-slot="status-badge"][data-appearance="plain"]'),
-    ).toHaveTextContent('Test · no keys');
+    ).toHaveTextContent('Test mode');
     expect(status).toHaveAttribute(
       'aria-label',
-      expect.stringContaining('no physical input is sent.'),
+      expect.stringContaining('no keyboard input is sent.'),
     );
     expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });

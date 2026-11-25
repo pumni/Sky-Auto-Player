@@ -46,15 +46,13 @@ export function PlaylistRenameDialog({
       }}
     >
       <DialogContent
-        className="w-[min(420px,calc(100vw-32px))] gap-0 rounded-dialog border-border bg-card p-5"
+        className="w-[min(420px,calc(100vw-32px))] gap-0 p-5"
         aria-labelledby="playlist-rename-title"
         showCloseButton={false}
       >
         <div className="mb-4 flex items-start justify-between gap-4">
           <div className="grid gap-px">
-            <p className="m-0 text-[11px] font-semibold tracking-wide text-text-tertiary">
-              PLAYLIST
-            </p>
+            <p className="m-0 text-xs font-semibold leading-4 text-text-tertiary">Playlist</p>
             <DialogTitle
               className="m-0 text-2xl font-semibold leading-8"
               id="playlist-rename-title"

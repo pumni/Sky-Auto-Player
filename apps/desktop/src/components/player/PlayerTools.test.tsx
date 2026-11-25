@@ -46,7 +46,12 @@ describe('PlayerTools playback modes and profile', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
     expect(within(dialog).getByRole('heading', { name: 'Playback profile' })).toBeVisible();
-    expect(within(dialog).getByLabelText('Base Hold')).toBeInTheDocument();
+    const baseHold = within(dialog).getByLabelText('Base hold');
+    expect(baseHold).toBeInTheDocument();
+    expect(baseHold.getAttribute('aria-describedby')).toBeTruthy();
+    expect(
+      document.getElementById(baseHold.getAttribute('aria-describedby') ?? ''),
+    ).toHaveTextContent(/ms/);
     expect(within(dialog).queryByRole('switch', { name: 'Auto Play' })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Auto Play' })).not.toBeInTheDocument();
   });
@@ -88,7 +93,7 @@ describe('PlayerTools playback modes and profile', () => {
     render(<PlayerTools useStore={store} />);
 
     expect(screen.queryByRole('button', { name: 'Test playback (no input)' })).toBeNull();
-    expect(screen.queryByLabelText('Base Hold')).toBeNull();
+    expect(screen.queryByLabelText('Base hold')).toBeNull();
     await act(async () =>
       screen.getByRole('button', { name: 'Configure playback profile' }).click(),
     );
@@ -97,7 +102,12 @@ describe('PlayerTools playback modes and profile', () => {
     expect(advancedTiming.closest('details')).not.toHaveAttribute('open');
     expect(within(dialog).getByLabelText('FPS')).not.toBeVisible();
     await act(async () => advancedTiming.closest('summary')?.click());
-    expect(within(dialog).getByLabelText('FPS')).toBeVisible();
+    const fpsTrigger = within(dialog).getByLabelText('FPS');
+    expect(fpsTrigger).toBeVisible();
+    expect(fpsTrigger.getAttribute('aria-describedby')).toBeTruthy();
+    expect(
+      document.getElementById(fpsTrigger.getAttribute('aria-describedby') ?? ''),
+    ).toHaveTextContent(/ms\/f/);
     expect(within(dialog).getByText('Effective target hold')).toBeVisible();
     expect(within(dialog).getByText('Frame duration')).toBeVisible();
     expect(within(dialog).getByText('Safe preview')).toBeVisible();

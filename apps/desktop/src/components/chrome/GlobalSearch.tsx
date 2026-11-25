@@ -144,7 +144,7 @@ function SearchInput({
     <div
       role="search"
       data-slot="global-search"
-      className="flex h-8 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-card px-[9px] text-muted-foreground focus-within:border-ring focus-within:outline focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-ring"
+      className="flex h-8 w-full min-w-0 items-center gap-2 rounded-control border border-input bg-surface px-[9px] text-muted-foreground focus-within:border-ring focus-within:outline focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-ring"
       data-tauri-drag-region="false"
     >
       <Search size={16} className="shrink-0" aria-hidden="true" />
@@ -156,7 +156,7 @@ function SearchInput({
       </span>
       <Input
         ref={inputRef}
-        className="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-[13px] text-foreground shadow-none placeholder:text-text-tertiary outline-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
+        className="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-[13px] text-foreground shadow-none placeholder:text-text-tertiary outline-none focus-visible:border-0 focus-visible:ring-0"
         value={inputValue}
         onChange={(event) => handleChange(event.target.value)}
         placeholder={placeholder}

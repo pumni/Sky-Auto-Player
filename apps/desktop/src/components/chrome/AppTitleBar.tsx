@@ -37,7 +37,7 @@ export function AppTitleBar({
 
   return (
     <header
-      className="relative z-10 grid h-10 min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,min(480px,42vw))_minmax(0,1fr)] items-center bg-background max-[1023px]:grid-cols-[minmax(0,1fr)_minmax(260px,min(480px,42vw))_auto]"
+      className="relative z-10 grid h-10 min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,min(480px,42vw))_minmax(0,1fr)] items-center border-b border-border bg-card max-[1023px]:grid-cols-[minmax(0,1fr)_minmax(260px,min(480px,42vw))_auto]"
       aria-label="Sky Auto Player"
       data-tauri-drag-region="deep"
       data-slot="titlebar"
@@ -119,7 +119,7 @@ export function AppTitleBar({
                   <Download size={15} aria-hidden="true" />
                   <span
                     data-update-indicator
-                    className="pointer-events-none absolute right-[5px] top-[5px] size-1.5 rounded-full bg-accent-ink ring-2 ring-background"
+                    className="pointer-events-none absolute right-[5px] top-[5px] size-1.5 rounded-full bg-accent-ink ring-2 ring-card"
                     aria-hidden="true"
                   />
                   <span className="sr-only">Update available</span>

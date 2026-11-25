@@ -1,5 +1,5 @@
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
 import type { SettingsCategory } from './SettingsCategoryContent';
@@ -8,12 +8,13 @@ import { SETTINGS_CATEGORIES, SettingsCategoryContent } from './SettingsCategory
 afterEach(cleanup);
 
 async function initializedStore() {
-  const store = createDesktopStore(createMockBridge());
+  const bridge = createMockBridge();
+  const store = createDesktopStore(bridge);
   await act(async () => store.getState().initialize());
   const bootstrap = store.getState().bootstrap;
   const settings = store.getState().settings;
   if (!bootstrap || !settings) throw new Error('settings store should be initialized');
-  return { store, bootstrap, settings };
+  return { bridge, store, bootstrap, settings };
 }
 
 describe('SettingsCategoryContent', () => {
@@ -31,7 +32,7 @@ describe('SettingsCategoryContent', () => {
   it.each([
     ['playback', 'Playback'],
     ['appearance', 'Appearance'],
-    ['diagnostics', 'Telemetry and diagnostics'],
+    ['diagnostics', 'Diagnostics'],
     ['updates', 'Updates'],
     ['donate', 'Support Sky Auto Player'],
     ['about', 'About Sky Auto Player'],
@@ -80,7 +81,7 @@ describe('SettingsCategoryContent', () => {
     expect(store.getState().settings?.appearance_mode).toBe('system');
   });
 
-  it('previews the saved dark palette and labels the effective color mode', async () => {
+  it('previews the active appearance separately from the saved dark palette', async () => {
     const { store, bootstrap, settings } = await initializedStore();
     const { rerender, container } = render(
       <SettingsCategoryContent
@@ -92,7 +93,7 @@ describe('SettingsCategoryContent', () => {
     );
 
     const darkPreview = screen.getByRole('img', {
-      name: 'Dark appearance preview using saved palette Graphite (Default)',
+      name: 'Dark appearance preview (Graphite (Default) palette)',
     });
     const appearanceSummary = container.querySelector('[data-slot="appearance-active-summary"]');
     expect(darkPreview).toHaveAttribute('data-effective-mode', 'dark');
@@ -110,7 +111,7 @@ describe('SettingsCategoryContent', () => {
     );
     expect(
       screen.getByRole('img', {
-        name: 'Light appearance preview using saved palette Graphite (Default)',
+        name: 'Light appearance preview (saved dark palette: Graphite (Default))',
       }),
     ).toHaveAttribute('data-effective-mode', 'light');
     expect(appearanceSummary).toHaveTextContent(
@@ -118,9 +119,9 @@ describe('SettingsCategoryContent', () => {
     );
   });
 
-  it('keeps theme choice independent from the saved dark palette', async () => {
+  it('uses compact System/Light/Dark radio tiles and keeps Dark palette independent', async () => {
     const { store, bootstrap, settings } = await initializedStore();
-    render(
+    const { rerender } = render(
       <SettingsCategoryContent
         category="appearance"
         bootstrap={bootstrap}
@@ -129,29 +130,38 @@ describe('SettingsCategoryContent', () => {
       />,
     );
 
-    const theme = screen.getByRole('combobox', { name: 'Theme' });
-    expect(theme).toHaveTextContent('Follow Windows (recommended)');
-    await act(async () => theme.click());
+    const themeGroup = screen.getByRole('radiogroup', { name: 'Theme' });
+    expect(themeGroup).toHaveAccessibleDescription('System follows Windows appearance.');
+    const system = screen.getByRole('radio', { name: 'System' });
+    const light = screen.getByRole('radio', { name: 'Light' });
+    const dark = screen.getByRole('radio', { name: 'Dark' });
+    expect(system).toHaveAttribute('aria-checked', 'true');
+    expect(light).toHaveAttribute('aria-checked', 'false');
+    expect(dark).toHaveAttribute('aria-checked', 'false');
 
-    const themeOptions = screen.getAllByRole('option');
-    expect(themeOptions.map((option) => option.textContent?.trim())).toEqual([
-      'Follow Windows (recommended)Auto',
-      'Light',
-      'Dark',
-    ]);
-
-    await act(async () => screen.getByRole('option', { name: 'Light' }).click());
+    await act(async () => {
+      fireEvent.click(light);
+    });
     await waitFor(() => expect(store.getState().settings?.appearance_mode).toBe('light'));
     expect(store.getState().settings?.palette).toBe('graphite');
 
+    rerender(
+      <SettingsCategoryContent
+        category="appearance"
+        bootstrap={bootstrap}
+        settings={store.getState().settings ?? settings}
+        useStore={store}
+      />,
+    );
     const palette = screen.getByRole('combobox', { name: 'Dark palette' });
+    expect(palette).toBeEnabled();
     await act(async () => palette.click());
     await act(async () => screen.getByRole('option', { name: 'Slate' }).click());
     await waitFor(() => expect(store.getState().settings?.palette).toBe('slate'));
     expect(store.getState().settings?.appearance_mode).toBe('light');
   });
 
-  it('keeps exact accessible checkbox labels in Diagnostics and Updates', async () => {
+  it('uses concise Diagnostics switches linked to one shared truthful note', async () => {
     const { store, bootstrap, settings } = await initializedStore();
     const { rerender } = render(
       <SettingsCategoryContent
@@ -161,19 +171,188 @@ describe('SettingsCategoryContent', () => {
         useStore={store}
       />,
     );
-    expect(screen.getByRole('checkbox', { name: 'Allow anonymous telemetry' })).toBeInTheDocument();
-    expect(screen.getByRole('checkbox', { name: 'Verbose playback HUD' })).toBeInTheDocument();
+
+    const sharedNote =
+      'These preferences are saved. This build has no confirmed data-sharing or additional diagnostics display effect.';
+    const telemetrySwitch = screen.getByRole('switch', { name: 'Playback telemetry' });
+    const verboseSwitch = screen.getByRole('switch', { name: 'Verbose diagnostics' });
+    expect(telemetrySwitch).toHaveAccessibleDescription(sharedNote);
+    expect(verboseSwitch).toHaveAccessibleDescription(sharedNote);
+    expect(screen.queryByRole('heading', { name: 'Diagnostics preferences' })).toBeNull();
+
+    await act(async () => {
+      telemetrySwitch.click();
+    });
+    await waitFor(() => expect(store.getState().settings?.telemetry_enabled).toBe(false));
 
     rerender(
+      <SettingsCategoryContent
+        category="diagnostics"
+        bootstrap={bootstrap}
+        settings={store.getState().settings ?? settings}
+        useStore={store}
+      />,
+    );
+    await act(async () => {
+      screen.getByRole('switch', { name: 'Verbose diagnostics' }).click();
+    });
+    await waitFor(() => expect(store.getState().settings?.verbose_hud).toBe(true));
+  });
+
+  it('renders truthful Updates states, pending handoff, errors, and triggers manual check once', async () => {
+    const { bridge, store, bootstrap, settings } = await initializedStore();
+    const checkSpy = vi.spyOn(bridge, 'checkForUpdate');
+    const onUpdateDialogOpen = vi.fn();
+
+    // 1. Available state (default mock after initialize) -> View update opens dialog without check
+    render(
       <SettingsCategoryContent
         category="updates"
         bootstrap={bootstrap}
         settings={settings}
         useStore={store}
+        onUpdateDialogOpen={onUpdateDialogOpen}
       />,
     );
     expect(
-      screen.getByRole('checkbox', { name: 'Check for updates automatically' }),
+      screen.getByRole('switch', { name: 'Check for updates automatically' }),
     ).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: 'Release channel' })).toHaveTextContent('Stable');
+    expect(screen.getByText(/Update available:/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'View update' }));
+    expect(onUpdateDialogOpen).toHaveBeenCalledTimes(1);
+    expect(store.getState().update.dialogOpen).toBe(true);
+    expect(checkSpy).not.toHaveBeenCalled();
+
+    // 2. Idle state -> clicking Check for updates triggers manual check once
+    act(() => {
+      store.setState((prev) => ({
+        update: { ...prev.update, state: 'idle', availableVersion: null, dialogOpen: false },
+      }));
+    });
+    expect(screen.queryByText("You're up to date")).not.toBeInTheDocument();
+    const checkBtn = screen.getByRole('button', { name: 'Check for updates' });
+    expect(checkBtn).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(checkBtn);
+    });
+    expect(checkSpy).toHaveBeenCalledTimes(1);
+    expect(checkSpy).toHaveBeenCalledWith({ origin: 'manual' });
+
+    // 3. Current state -> You're up to date
+    act(() => {
+      store.setState((prev) => ({
+        update: {
+          ...prev.update,
+          state: 'current',
+          availableVersion: null,
+          checkRequestPending: false,
+        },
+      }));
+    });
+    expect(screen.getByText("You're up to date")).toBeInTheDocument();
+
+    // 4. Checking state -> disabled Checking for updates…
+    act(() => {
+      store.setState((prev) => ({
+        update: { ...prev.update, state: 'checking', checkRequestPending: true },
+      }));
+    });
+    expect(screen.getByRole('button', { name: 'Checking for updates…' })).toBeDisabled();
+
+    // 5. Pending-only handoff (state: available + installRequestPending: true) -> Preparing update…
+    act(() => {
+      store.setState((prev) => ({
+        update: {
+          ...prev.update,
+          state: 'available',
+          availableVersion: '4.2.0',
+          checkRequestPending: false,
+          installRequestPending: true,
+        },
+      }));
+    });
+    expect(screen.getByText('Preparing update…')).toBeInTheDocument();
+    expect(screen.queryByText('Installing update…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View update' })).toBeEnabled();
+
+    // 6. Native busy states: downloading, ready, installing
+    for (const [nativeState, expectedText] of [
+      ['downloading', 'Downloading update…'],
+      ['ready', 'Update ready to install'],
+      ['installing', 'Installing update…'],
+    ] as const) {
+      act(() => {
+        store.setState((prev) => ({
+          update: { ...prev.update, state: nativeState, installRequestPending: false },
+        }));
+      });
+      expect(screen.getByText(expectedText)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'View update' })).toBeEnabled();
+    }
+
+    // 7. Error state with retryAction: 'check' -> Check again + View details
+    act(() => {
+      store.setState((prev) => ({
+        update: {
+          ...prev.update,
+          state: 'error',
+          errorCode: 'check_failed',
+          retryAction: 'check',
+          transportError: null,
+          transportErrorAction: null,
+        },
+      }));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not check for updates.');
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'View details' })).toBeEnabled();
+
+    // 8. Error state with retryAction: 'none' -> View details only
+    act(() => {
+      store.setState((prev) => ({
+        update: {
+          ...prev.update,
+          state: 'error',
+          errorCode: 'unknown',
+          retryAction: 'none',
+        },
+      }));
+    });
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View details' })).toBeEnabled();
+
+    // 9. Transport check error takes precedence over available state -> Check again + View details
+    act(() => {
+      store.setState((prev) => ({
+        update: {
+          ...prev.update,
+          state: 'available',
+          availableVersion: '4.2.0',
+          errorCode: null,
+          transportError: 'IPC check timed out',
+          transportErrorAction: 'check',
+        },
+      }));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('IPC check timed out');
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'View details' })).toBeEnabled();
+
+    // 10. Transport install error -> View details only (no Check again)
+    act(() => {
+      store.setState((prev) => ({
+        update: {
+          ...prev.update,
+          state: 'available',
+          availableVersion: '4.2.0',
+          transportError: 'IPC handoff rejected',
+          transportErrorAction: 'install',
+        },
+      }));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('IPC handoff rejected');
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View details' })).toBeEnabled();
   });
 });

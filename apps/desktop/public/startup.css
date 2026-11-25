@@ -2,7 +2,7 @@
   color-scheme: light dark;
   --startup-background: #121314;
   --startup-foreground: #e2e4e8;
-  --startup-secondary: #a6a8ad;
+  --startup-secondary: #b3b5b8;
   --startup-accent: #9aa8ff;
 }
 
@@ -10,8 +10,8 @@
   :root {
     color-scheme: light;
     --startup-background: #fff;
-    --startup-foreground: #252a31;
-    --startup-secondary: #535f6c;
+    --startup-foreground: #25272a;
+    --startup-secondary: #505359;
     --startup-accent: #3449b5;
   }
 }
@@ -20,15 +20,15 @@ html[data-color-mode='dark'] {
   color-scheme: dark;
   --startup-background: #121314;
   --startup-foreground: #e2e4e8;
-  --startup-secondary: #a6a8ad;
+  --startup-secondary: #b3b5b8;
   --startup-accent: #9aa8ff;
 }
 
 html[data-color-mode='light'] {
   color-scheme: light;
   --startup-background: #fff;
-  --startup-foreground: #252a31;
-  --startup-secondary: #535f6c;
+  --startup-foreground: #25272a;
+  --startup-secondary: #505359;
   --startup-accent: #3449b5;
 }
 

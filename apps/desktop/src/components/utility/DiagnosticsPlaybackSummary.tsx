@@ -1,5 +1,9 @@
 import type { DesktopStoreHook } from '../../state/store';
 import { playbackSessionStatusConcern } from '../../state/store';
+import {
+  TEST_MODE_DIAGNOSTICS_LABEL,
+  TEST_MODE_PREPARED_DIAGNOSTICS_LABEL,
+} from '../player/playerFormatting';
 import { playbackStatusLabel } from './diagnosticsPresentation';
 
 export function DiagnosticsPlaybackSummary({ useStore }: { useStore: DesktopStoreHook }) {
@@ -13,8 +17,10 @@ export function DiagnosticsPlaybackSummary({ useStore }: { useStore: DesktopStor
   const currentSongId = useStore((store) => store.playback.currentSong?.songId ?? null);
   const currentSongTitle = useStore((store) => store.playback.currentSong?.title);
   const hasCurrentSong = useStore((store) => store.playback.currentSong !== null);
-  const dryRun = useStore(
-    (store) => store.playback.context?.dryRun ?? store.playback.prepared?.config.dry_run ?? null,
+  const confirmedDryRun = useStore((store) => store.playback.context?.dryRun ?? null);
+  const preparedDryRun = useStore(
+    (store) =>
+      store.playback.preparedContext?.dryRun ?? store.playback.prepared?.config.dry_run ?? null,
   );
   const playback = {
     error,
@@ -28,6 +34,18 @@ export function DiagnosticsPlaybackSummary({ useStore }: { useStore: DesktopStor
   const status = playbackStatusLabel(playback);
   const isActive = ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
   const sessionStatusConcern = playbackSessionStatusConcern(playback);
+  const modeSummary =
+    (isActive || sessionStatusConcern !== null) && confirmedDryRun !== null
+      ? {
+          label: 'Mode',
+          value: confirmedDryRun ? TEST_MODE_DIAGNOSTICS_LABEL : 'Physical input',
+        }
+      : preparedDryRun !== null && (isActive || playback.prepared !== null)
+        ? {
+            label: 'Prepared mode',
+            value: preparedDryRun ? TEST_MODE_PREPARED_DIAGNOSTICS_LABEL : 'Physical input',
+          }
+        : null;
   const hasPlaybackContext =
     playback.state !== 'idle' ||
     playback.transportOperation !== null ||
@@ -62,9 +80,9 @@ export function DiagnosticsPlaybackSummary({ useStore }: { useStore: DesktopStor
           Prepared: {playback.prepared.song.title}
         </span>
       )}
-      {dryRun !== null && (isActive || playback.prepared) && (
+      {modeSummary && (
         <span className="break-words text-xs text-text-secondary">
-          Mode: {dryRun ? 'Dry run · no physical input sent' : 'Physical input'}
+          {modeSummary.label}: {modeSummary.value}
         </span>
       )}
     </section>

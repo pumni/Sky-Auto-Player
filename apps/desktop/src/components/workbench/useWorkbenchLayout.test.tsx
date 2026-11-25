@@ -219,13 +219,21 @@ describe('shared palette geometry boundary', () => {
       resolve(process.cwd(), 'src/components/workbench/Workbench.tsx'),
       'utf8',
     );
-    expect(workbench).toContain('style={{ minWidth: MIN_TRACK_BROWSER_WIDTH }}');
-    expect(workbench).not.toMatch(/minWidth:\s*420/);
+    expect(workbench).toMatch(/'--min-track-browser-width': `\$\{MIN_TRACK_BROWSER_WIDTH\}px`/);
+    expect(workbench).toContain('min-w-(--min-track-browser-width)');
+    expect(workbench).not.toMatch(/minWidth:\s*420|min-w-\[420px\]/);
 
     const themes = readFileSync(resolve(process.cwd(), 'src/styles/globals.css'), 'utf8');
     const paletteRules = [...themes.matchAll(/([^{}]*data-palette[^{}]*)\{([^{}]*)\}/g)];
-    expect(paletteRules).toHaveLength(5);
-    for (const paletteRule of paletteRules) {
+    const tokenRules = paletteRules.filter(
+      (rule) => !(rule[1]?.includes('[data-app-shell]') ?? false),
+    );
+    const shellChromeRules = paletteRules.filter(
+      (rule) => rule[1]?.includes('[data-app-shell]') ?? false,
+    );
+    expect(tokenRules).toHaveLength(6);
+    expect(shellChromeRules).toHaveLength(2);
+    for (const paletteRule of tokenRules) {
       const selector = paletteRule[1];
       const declarations = paletteRule[2];
       if (selector === undefined || declarations === undefined) {
@@ -242,6 +250,22 @@ describe('shared palette geometry boundary', () => {
         expect(declaration).not.toMatch(
           /(?:min|max)?(?:width|height)|gap|padding|margin|radius|font|transition/i,
         );
+      }
+    }
+    for (const chromeRule of shellChromeRules) {
+      const selector = chromeRule[1]?.replace(/\s+/g, ' ').trim();
+      const declarations = chromeRule[2];
+      if (selector === undefined || declarations === undefined) {
+        throw new Error('Shell chrome rule is missing its selector or declarations');
+      }
+      expect(selector).toMatch(
+        /^html:is\(\[data-palette='graphite'\], \[data-color-mode='light'\]\) \[data-app-shell\](?: > \[data-slot='titlebar'\])?$/,
+      );
+      for (const declaration of declarations
+        .split(';')
+        .map((part) => part.trim())
+        .filter(Boolean)) {
+        expect(declaration).toMatch(/^(?:background-color:\s*[^{}]+|border-bottom-width:\s*0)$/);
       }
     }
   });

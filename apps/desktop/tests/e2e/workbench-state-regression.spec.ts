@@ -85,10 +85,12 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   await startDryRunWithSelection(page);
   const runtimeInspector = await openInspector(page, 'Runtime');
   await expect(
-    runtimeInspector.getByText('Mode: Dry run · no physical input sent', { exact: true }),
+    runtimeInspector.getByText('Mode: Test mode (dry run) · no physical input sent', {
+      exact: true,
+    }),
   ).toBeVisible();
   await expect(
-    runtimeInspector.getByText('Dry run · sender timing not measured', { exact: true }),
+    runtimeInspector.getByText('Test mode (dry run) · sender timing not measured', { exact: true }),
   ).toBeVisible();
   await expect(runtimeInspector.getByText('Sender samples', { exact: true })).toHaveCount(0);
   await expect(runtimeInspector.getByRole('tab', { name: 'Runtime' })).toBeVisible();

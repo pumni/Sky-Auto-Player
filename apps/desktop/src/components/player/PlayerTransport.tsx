@@ -212,19 +212,19 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             >
               <span className="grid size-[18px] place-items-center" aria-hidden="true">
                 <Play
-                  className={`col-start-1 row-start-1 size-4 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${!primaryPending && !primaryIsPlaying ? 'opacity-100' : 'opacity-0'}`}
+                  className={`col-start-1 row-start-1 size-4 transition-opacity duration-transport-icon ease-standard motion-reduce:transition-none ${!primaryPending && !primaryIsPlaying ? 'opacity-100' : 'opacity-0'}`}
                   size={16}
                   fill="currentColor"
                   strokeWidth={1.5}
                 />
                 <Pause
-                  className={`col-start-1 row-start-1 size-4 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${!primaryPending && primaryIsPlaying ? 'opacity-100' : 'opacity-0'}`}
+                  className={`col-start-1 row-start-1 size-4 transition-opacity duration-transport-icon ease-standard motion-reduce:transition-none ${!primaryPending && primaryIsPlaying ? 'opacity-100' : 'opacity-0'}`}
                   size={16}
                   fill="currentColor"
                   strokeWidth={1.5}
                 />
                 <LoaderCircle
-                  className={`col-start-1 row-start-1 size-4 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${primaryPending ? 'animate-spin opacity-100 motion-reduce:animate-none' : 'opacity-0'}`}
+                  className={`col-start-1 row-start-1 size-4 transition-opacity duration-transport-icon ease-standard motion-reduce:transition-none ${primaryPending ? 'animate-spin opacity-100 motion-reduce:animate-none' : 'opacity-0'}`}
                   size={16}
                 />
               </span>
