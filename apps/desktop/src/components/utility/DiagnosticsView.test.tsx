@@ -97,6 +97,26 @@ describe('DiagnosticsView', () => {
     expect(screen.queryByText('Completion p50')).toBeNull();
   });
 
+  it('distinguishes prepared dry-run intent from a confirmed active session mode', async () => {
+    const store = createDesktopStore(createMockBridge());
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 1);
+    if (!row) throw new Error('mock Library is too small');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback({ dry_run: true }));
+    store.setState({
+      diagnostics: { ...store.getState().diagnostics, enabled: true },
+    });
+
+    render(<DiagnosticsView useStore={store} />);
+    expect(
+      screen.getByText('Prepared mode: Test mode (dry run) · no physical input sent'),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText('Mode: Test mode (dry run) · no physical input sent'),
+    ).not.toBeInTheDocument();
+  });
+
   it('reports an active native session while waiting for its matching snapshot', () => {
     const store = createDesktopStore(createMockBridge());
     store.setState({

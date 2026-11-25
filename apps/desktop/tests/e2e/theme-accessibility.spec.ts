@@ -1147,9 +1147,19 @@ test('rendered control contrast, Switch visual cues, M15 child instant switch, a
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
     const theme = await resolvedComputedTheme(page);
 
-    // M15 guarantees immediate child update on mode switch (no mid-transition wait needed).
+    // M15 guarantees immediate child update on mode switch, no stuck data-theme-applying,
+    // and immediate restoration of normal child transition durations afterward.
+    expect(
+      await page.evaluate(() => document.documentElement.hasAttribute('data-theme-applying')),
+    ).toBe(false);
     const firstRow = page.locator('[data-slot="track-row"]').first();
     expect(await firstRow.evaluate((el) => getComputedStyle(el).color)).toBe(theme['--foreground']);
+    expect(await firstRow.evaluate((el) => getComputedStyle(el).transitionDuration)).toBe('0.12s');
+    expect(
+      await page
+        .locator('[data-slot="library-empty-playlists-create"]')
+        .evaluate((el) => getComputedStyle(el).transitionDuration),
+    ).toBe('0.12s');
     expect(
       await page
         .locator('[data-slot="library-nav-item"][data-active="true"]')
@@ -1246,6 +1256,21 @@ test('rendered control contrast, Switch visual cues, M15 child instant switch, a
     expect(
       await expectRenderedTextContrast(page, `${mode} settings playback`),
     ).toBeGreaterThanOrEqual(4.5);
+
+    // M15 lifecycle while Settings dialog is open: switching color scheme updates dialog
+    // surface immediately, never leaves data-theme-applying stuck, and keeps dialog usable.
+    const oppositeMode = mode === 'dark' ? 'light' : 'dark';
+    await page.emulateMedia({ colorScheme: oppositeMode });
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', oppositeMode);
+    const oppositeTheme = await resolvedComputedTheme(page);
+    expect(
+      await page.evaluate(() => document.documentElement.hasAttribute('data-theme-applying')),
+    ).toBe(false);
+    expect(await settings.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(
+      oppositeTheme['--popover'],
+    );
+    await page.emulateMedia({ colorScheme: mode });
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
     await page.keyboard.press('Escape');
     await expect(settings).toBeHidden();
   }
@@ -1258,10 +1283,16 @@ test('shared primitive motion durations, normal-motion overlay interruption, and
   await page.goto('/');
   await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'no-preference' });
 
-  // M01 Button (120ms rest/hover), M04 Transport icon (100ms), M13 Scrollbar (180ms idle)
+  // M01 Button (120ms), M02 TrackRow (120ms), M04 Transport icon (100ms), M13 Scrollbar (180ms)
   expect(
     await page
       .locator('[data-slot="library-empty-playlists-create"]')
+      .evaluate((el) => getComputedStyle(el).transitionDuration),
+  ).toBe('0.12s');
+  expect(
+    await page
+      .locator('[data-slot="track-row"]')
+      .first()
       .evaluate((el) => getComputedStyle(el).transitionDuration),
   ).toBe('0.12s');
   expect(
@@ -1279,6 +1310,18 @@ test('shared primitive motion durations, normal-motion overlay interruption, and
         return { prop: s.transitionProperty, dur: s.transitionDuration };
       }),
   ).toEqual({ prop: 'opacity', dur: '0.18s' });
+
+  // M06 Tooltip (100ms enter)
+  await page.getByRole('button', { name: 'Open settings' }).hover();
+  const tooltip = page.locator('[data-slot="tooltip-content"]:visible');
+  await expect(tooltip).toBeVisible();
+  expect(
+    await tooltip.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { prop: s.transitionProperty, dur: s.transitionDuration };
+    }),
+  ).toEqual({ prop: 'opacity', dur: '0.1s' });
+  await page.mouse.move(0, 0);
 
   // M05 TabsIndicator (150ms)
   const utilityToggle = page.locator('button[aria-label$="utility panel"]');
@@ -1330,8 +1373,25 @@ test('shared primitive motion durations, normal-motion overlay interruption, and
   await page.keyboard.press('Escape');
   await expect(popover).toBeHidden();
 
-  // M10 Normal-motion interrupted close/reopen on overlay Inspector (220ms enter, no stuck inert)
+  // M14 Admission entrance (120ms opacity) + 640x448 cancel reachability
   await page.setViewportSize({ width: 640, height: 448 });
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
+  await player.getByRole('button', { name: 'Play', exact: true }).click();
+  const admission = page.locator('[data-slot="playback-admission"]');
+  await expect(admission).toBeVisible();
+  expect(
+    await admission.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { prop: s.transitionProperty, dur: s.transitionDuration };
+    }),
+  ).toEqual({ prop: 'opacity', dur: '0.12s' });
+  const notNow = admission.getByRole('button', { name: 'Not now' });
+  await notNow.scrollIntoViewIfNeeded();
+  await expect(notNow).toBeInViewport();
+  await notNow.click();
+  await expect(admission).toBeHidden();
+
+  // M10 Normal-motion interrupted close/reopen on overlay Inspector (220ms enter, no stuck inert)
   await utilityToggle.click();
   const overlayPane = page.locator('[data-pane="inspector"][data-presentation-mode="overlay"]');
   await expect(overlayPane).toBeVisible();
@@ -1342,12 +1402,19 @@ test('shared primitive motion durations, normal-motion overlay interruption, and
   expect(overlayMotion.prop).toContain('opacity');
   expect(overlayMotion.prop).toContain('translate');
   expect(overlayMotion.dur).toContain('0.22s');
-  // Interrupt normal-motion exit immediately by reopening before exit finishes
-  await page.keyboard.press('Escape');
-  await utilityToggle.click();
+  // Trigger exit via Close utility, confirm exit actually started (data-open=false, inert, 160ms exit),
+  // then interrupt mid-exit by reopening before transitionend unmounts the pane.
+  await overlayPane.getByRole('button', { name: 'Close utility' }).click();
+  await expect(overlayPane).toHaveAttribute('data-open', 'false');
+  await expect(overlayPane).toHaveAttribute('inert', '');
+  const exitDuration = await overlayPane.evaluate((el) => getComputedStyle(el).transitionDuration);
+  expect(exitDuration).toContain('0.16s');
+  await page.evaluate(() => {
+    document.querySelector<HTMLButtonElement>('button[aria-label="Open utility panel"]')?.click();
+  });
   await expect(overlayPane).toBeVisible();
   await expect(overlayPane).toHaveAttribute('data-open', 'true');
-  expect(await overlayPane.evaluate((el) => (el as HTMLElement).inert)).toBe(false);
+  await expect(overlayPane).not.toHaveAttribute('inert');
   await page.keyboard.press('Escape');
   await expect(overlayPane).toBeHidden();
   await expect(utilityToggle).toBeFocused();

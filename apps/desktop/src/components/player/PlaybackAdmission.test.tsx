@@ -43,14 +43,16 @@ describe('PlaybackAdmission recovery actions', () => {
       reason?.textContent?.match(/2 feasible same-key repeats have an authored Up-to-Down gap/g),
     ).toHaveLength(1);
     expect(consequence).toHaveTextContent(
-      'Timing risk affects note detection in-game, not your account. Choose an option below or cancel without starting.',
+      'This warning estimates how accurately the game may register notes. Choose an option below or cancel without starting.',
     );
-    expect(
-      screen.getByText('Uses your current hold and tempo settings unchanged.'),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText('Runs in Test mode without sending keyboard input.'),
-    ).toBeInTheDocument();
+    expect(screen.getByText('Uses your current timing settings unchanged.')).toHaveAttribute(
+      'id',
+      'playback-decision-description-proceed',
+    );
+    expect(screen.getByText('Runs in Test mode without sending keyboard input.')).toHaveAttribute(
+      'id',
+      'playback-decision-description-dry_run',
+    );
     expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
     const estimates = screen.getAllByText('Short same-key Up gap risk', { selector: 'summary' });
     expect(estimates).toHaveLength(2);
@@ -65,9 +67,19 @@ describe('PlaybackAdmission recovery actions', () => {
       'Bounds: 50000 generations, 3000000 key visits, and 64 MiB working memory.',
     );
     expect(screen.getAllByRole('button')).toHaveLength(3);
-    expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toBeEnabled();
+    const proceedButton = screen.getByRole('button', { name: 'Proceed with current settings' });
+    const dryRunButton = screen.getByRole('button', { name: 'Test playback (no input)' });
+    expect(proceedButton).toBeEnabled();
+    expect(proceedButton).toHaveAttribute(
+      'aria-describedby',
+      'playback-decision-description-proceed',
+    );
     expect(screen.queryByRole('button', { name: /Use recommended/i })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Test playback (no input)' })).toBeEnabled();
+    expect(dryRunButton).toBeEnabled();
+    expect(dryRunButton).toHaveAttribute(
+      'aria-describedby',
+      'playback-decision-description-dry_run',
+    );
   });
 
   it('keeps Proceed and Dry Run decisions compact and lets Not now dismiss them', async () => {
@@ -161,13 +173,90 @@ describe('PlaybackAdmission recovery actions', () => {
 
     render(<PlaybackAdmission useStore={store} />);
     expect(screen.getByText('Dense transitions may need a slower tempo.')).toBeVisible();
-    await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Use recommended settings' })).toHaveFocus(),
+    const recommendedButton = screen.getByRole('button', { name: 'Use recommended settings' });
+    await waitFor(() => expect(recommendedButton).toHaveFocus());
+    expect(recommendedButton).toHaveAttribute(
+      'aria-describedby',
+      'playback-decision-description-use_recommended',
     );
+    expect(
+      screen.getByText('Applies the timing settings recommended for this session.'),
+    ).toHaveAttribute('id', 'playback-decision-description-use_recommended');
     expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toBeEnabled();
     expect(
       screen.queryByRole('button', { name: 'Test playback (no input)' }),
     ).not.toBeInTheDocument();
+  });
+
+  it('preserves native 3-option order, recommended primary/focus, descriptions, and command dispatch', async () => {
+    const bridge = createMockBridge({ startDelayMs: 5 });
+    const startedDecisions: string[] = [];
+    const originalStart = bridge.startPlayback;
+    bridge.startPlayback = async (request) => {
+      startedDecisions.push(...request.decisions.map((item) => item.decision));
+      return originalStart(request);
+    };
+    const store = createDesktopStore(bridge);
+    await act(async () => store.getState().initialize());
+    const row = selectRowAtIndex(store.getState().library, 0);
+    if (!row) throw new Error('mock Library is empty');
+    await act(async () => store.getState().selectSong(row.song_id));
+    await act(async () => store.getState().prepareSelectedPlayback());
+    const prepared = store.getState().playback.prepared;
+    if (!prepared) throw new Error('expected a prepared playback');
+    const proceedVariant = prepared.variants.find((variant) => variant.decision === 'proceed');
+    const dryRunVariant = prepared.variants.find((variant) => variant.decision === 'dry_run');
+    if (!proceedVariant || !dryRunVariant) throw new Error('expected proceed and dry_run variants');
+
+    store.setState((state) => ({
+      ...state,
+      playback: {
+        ...state.playback,
+        prepared: {
+          ...prepared,
+          decisions: [
+            { decision: 'proceed', label: 'Proceed with current settings' },
+            { decision: 'use_recommended', label: 'Use recommended settings' },
+            { decision: 'dry_run', label: 'Run a dry-run first' },
+          ],
+          variants: [
+            proceedVariant,
+            {
+              ...proceedVariant,
+              decision: 'use_recommended',
+              plan_fingerprint: 'mock-recommended-physical',
+            },
+            dryRunVariant,
+          ],
+        },
+      },
+    }));
+
+    const { container } = render(<PlaybackAdmission useStore={store} />);
+    const optionButtons = Array.from(
+      container.querySelectorAll<HTMLButtonElement>('[data-slot="admission-option"] button'),
+    );
+    expect(optionButtons.map((button) => button.textContent)).toEqual([
+      'Proceed with current settings',
+      'Use recommended settings',
+      'Test playback (no input)',
+    ]);
+    await waitFor(() => expect(optionButtons[1]).toHaveFocus());
+    expect(optionButtons[0]).toHaveAttribute(
+      'aria-describedby',
+      'playback-decision-description-proceed',
+    );
+    expect(optionButtons[1]).toHaveAttribute(
+      'aria-describedby',
+      'playback-decision-description-use_recommended',
+    );
+    expect(optionButtons[2]).toHaveAttribute(
+      'aria-describedby',
+      'playback-decision-description-dry_run',
+    );
+
+    fireEvent.click(optionButtons[1]!);
+    await waitFor(() => expect(startedDecisions).toEqual(['use_recommended']));
   });
 
   it('keeps ready-plan timing data without flashing an advisory before Play', async () => {

@@ -974,6 +974,52 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   if (shouldCapture('workbench-palette-contact-sheet'))
     await captureWorkbenchPaletteContactSheet(page);
 
+  // Paired Wave B captures: Light admission, Dark/Light playback recovery, Dark/Light Update dialog
+  if (shouldCapture('admission-light')) {
+    await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
+    await openApp(page, { width: 640, height: 448 }, 'expanded', true);
+    await page.getByRole('row', { name: /Aurora Landing/ }).click();
+    await page
+      .getByRole('contentinfo', { name: 'Player controls' })
+      .getByRole('button', { name: 'Play', exact: true })
+      .click();
+    const lightAdmission = page.locator('[data-slot="playback-admission"]');
+    await expect(lightAdmission).toBeVisible();
+    await expect
+      .poll(() => lightAdmission.evaluate((el) => getComputedStyle(el).opacity))
+      .toBe('1');
+    await capture(page, 'candidate-admission-light-640x448.png');
+  }
+
+  for (const mode of ['dark', 'light'] as const) {
+    if (shouldCapture(`recovery-${mode}`)) {
+      await page.emulateMedia({ colorScheme: mode, reducedMotion: 'no-preference' });
+      await page.setViewportSize({ width: 800, height: 560 });
+      await page.goto('/?mockStartFailure=target_not_found');
+      await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
+      await page.getByRole('row', { name: /Blue Bird/ }).click();
+      const recPlayer = page.getByRole('contentinfo', { name: 'Player controls' });
+      await recPlayer.getByRole('button', { name: 'Play', exact: true }).click();
+      const proceed = recPlayer.getByRole('button', { name: 'Proceed with current settings' });
+      if (await proceed.isVisible().catch(() => false)) await proceed.click();
+      const recovery = page.getByRole('alert');
+      await expect(recovery).toContainText('Sky window was not found');
+      await expect.poll(() => recovery.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+      await capture(page, `candidate-recovery-${mode}-800x560.png`);
+    }
+    if (shouldCapture(`update-${mode}`)) {
+      await page.emulateMedia({ colorScheme: mode, reducedMotion: 'no-preference' });
+      await page.setViewportSize({ width: 800, height: 560 });
+      await page.goto('/?mockReleaseNotes=short');
+      await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
+      await page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ }).click();
+      const updateDialog = page.getByRole('dialog');
+      await expect(updateDialog).toContainText('Version 4.0.0-alpha.2-mock is available');
+      await capture(page, `candidate-update-${mode}-800x560.png`);
+    }
+  }
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'no-preference' });
+
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openApp(page, { width: 640, height: 448 }, 'expanded', true);
   const reducedMotionInspector = await openDetails(page);

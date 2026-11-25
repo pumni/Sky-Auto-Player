@@ -37,6 +37,11 @@ const vqcScreenshots = {
   'transport-pause-playing.png': 'candidate-transport-pause-playing-1366x768.png',
   'transport-resume-paused.png': 'candidate-transport-resume-paused-1366x768.png',
   'transport-long-title-compact.png': 'candidate-transport-long-title-640x448.png',
+  'admission-light-640x448.png': 'candidate-admission-light-640x448.png',
+  'recovery-dark-800x560.png': 'candidate-recovery-dark-800x560.png',
+  'recovery-light-800x560.png': 'candidate-recovery-light-800x560.png',
+  'update-dark-800x560.png': 'candidate-update-dark-800x560.png',
+  'update-light-800x560.png': 'candidate-update-light-800x560.png',
 };
 
 function git(args) {
@@ -101,6 +106,11 @@ const run = spawnSync(
         'transport-playing',
         'transport-paused',
         'transport-long-title',
+        'admission-light',
+        'recovery-dark',
+        'recovery-light',
+        'update-dark',
+        'update-light',
         'light',
         ...['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'].flatMap(
           (palette) => [`palette-${palette}`, `workbench-${palette}`],
@@ -167,6 +177,14 @@ const vqcRows = {
     'Filled Resume control while browser-mock dry-run playback is paused',
   'transport-long-title-compact.png':
     'Compact Player Dock with a long title and readable selected/prepared status',
+  'admission-light-640x448.png':
+    'Compact 640x448 timing-risk confirmation in Light mode (paired with canonical Dark compact-admission.png)',
+  'recovery-dark-800x560.png':
+    'Actionable target_not_found playback recovery alert in Graphite Dark at 800x560',
+  'recovery-light-800x560.png':
+    'Actionable target_not_found playback recovery alert in Graphite Light at 800x560',
+  'update-dark-800x560.png': 'Update dialog with release notes in Graphite Dark at 800x560',
+  'update-light-800x560.png': 'Update dialog with release notes in Graphite Light at 800x560',
 };
 const vqcReadme = [
   '# VQC-R2 visual evidence',
