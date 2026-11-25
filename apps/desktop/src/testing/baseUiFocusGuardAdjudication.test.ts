@@ -252,6 +252,13 @@ describe('Base UI focus guard Axe adjudication', () => {
         },
       }),
     ).toMatchObject({ adjudicated: false });
+    expect(
+      classify({
+        finding: {
+          nodes: [...violation().nodes, { target: [REVIEWED_ADD_SONGS_GUARDS[0]!.selector] }],
+        },
+      }),
+    ).toMatchObject({ adjudicated: false });
   });
 
   it.each([

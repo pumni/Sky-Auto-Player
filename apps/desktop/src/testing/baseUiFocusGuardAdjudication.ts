@@ -283,12 +283,14 @@ export function classifyBaseUiFocusGuardFinding(
   const uniqueSelectors = new Set(selectors);
   const reviewedSelectors = new Set(REVIEWED_ADD_SONGS_GUARDS.map(({ selector }) => selector));
   if (
+    selectors.length !== reviewedSelectors.size ||
     uniqueSelectors.size !== reviewedSelectors.size ||
     [...reviewedSelectors].some((selector) => !uniqueSelectors.has(selector))
   ) {
     return {
       adjudicated: false,
-      reason: 'The full finding must match the six reviewed Add songs focus-guard selectors.',
+      reason:
+        'The full finding must contain exactly the six reviewed Add songs focus-guard selectors.',
     };
   }
   // Each real keyboard traversal and the open-menu Axe scan gets its own DOM snapshot.
