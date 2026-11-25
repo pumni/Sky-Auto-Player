@@ -212,15 +212,18 @@ mode separately from the saved dark palette; the preview does not duplicate a ha
 
 The Sky Graphite 2 default uses `--accent-ink` and `--ring` `#9AA8FF`; primary action fill,
 hover, and pressed colors are `#8E9DFF`, `#A3B0FF`, and `#7888F0`, with `#11131A` as the primary
-foreground. Its selected and playing surfaces remain distinct (`#222534` and `#1A1D28`). The
-semantic graph separates surface, text, action, focus, input boundary, selection, playing, control
-state, and success/warning/danger roles. Tailwind's `@theme inline` maps utilities to those CSS
-properties; its `dark` variant follows `data-color-mode`. There are no `--workbench-*` color aliases.
+foreground. Its neutral content canvas (`--surface` `#121314`) sits slightly darker than surrounding
+chrome (`--card` `#191A1B`), and its selected and playing surfaces remain distinct (`#303132` and
+`#202326`). The semantic graph separates surface, text, action, focus, input boundary, selection,
+playing, control state, and success/warning/danger roles. Tailwind's `@theme inline` maps utilities
+to those CSS properties; its `dark` variant follows `data-color-mode`. There are no `--workbench-*`
+color aliases.
 
 Light keeps the saved dark palette while resolving its own tokens. Its action fill, hover, and
-pressed colors are `#3C54CF`, `#3248BA`, and `#293DA3`, with white primary foreground; its
-background, text, separators, and selected surface use the Light overrides in `globals.css`. The
-six dark palettes and Light appearance are checked against the semantic role pairs in
+pressed colors are `#3C54CF`, `#3248BA`, and `#293DA3`, with white primary foreground; its white
+content canvas (`--surface` `#FFFFFF`) sits lighter than surrounding chrome (`--card` `#F7F7F8`),
+and its neutral selected (`#E4E5E7`) and playing (`#EDF0F4`) surfaces remain distinct. The six dark
+palettes and Light appearance are checked against the semantic role pairs in
 `apps/desktop/tests/e2e/theme-accessibility.spec.ts`.
 
 Text contrast checks use 4.5:1 and essential non-text/focus checks use 3:1. The browser tests also
