@@ -236,6 +236,73 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
       .toBe(false);
   };
 
+  const beginScrollRevealObservation = async () => {
+    await scrollbar.evaluate((element) => {
+      const state = {
+        sawDataScrolling: element.hasAttribute('data-scrolling'),
+        sawPointerAuto: getComputedStyle(element).pointerEvents === 'auto',
+        maxOpacity: Number.parseFloat(getComputedStyle(element).opacity),
+      };
+      const record = () => {
+        if (element.hasAttribute('data-scrolling')) state.sawDataScrolling = true;
+        const style = getComputedStyle(element);
+        if (style.pointerEvents === 'auto') state.sawPointerAuto = true;
+        const opacity = Number.parseFloat(style.opacity);
+        if (opacity > state.maxOpacity) state.maxOpacity = opacity;
+      };
+      const observer = new MutationObserver(() => {
+        record();
+        if (element.hasAttribute('data-scrolling')) {
+          const sample = () => {
+            record();
+            if (element.hasAttribute('data-scrolling')) requestAnimationFrame(sample);
+          };
+          requestAnimationFrame(sample);
+        }
+      });
+      observer.observe(element, { attributes: true, attributeFilter: ['data-scrolling'] });
+      (
+        window as unknown as {
+          __scrollRevealObservation?: { state: typeof state; stop: () => void };
+        }
+      ).__scrollRevealObservation = {
+        state,
+        stop: () => observer.disconnect(),
+      };
+    });
+  };
+  const expectScrollRevealObserved = async () => {
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const obs = (
+              window as unknown as {
+                __scrollRevealObservation?: {
+                  state: {
+                    sawDataScrolling: boolean;
+                    sawPointerAuto: boolean;
+                    maxOpacity: number;
+                  };
+                };
+              }
+            ).__scrollRevealObservation;
+            return Boolean(
+              obs?.state.sawDataScrolling && obs.state.sawPointerAuto && obs.state.maxOpacity > 0,
+            );
+          }),
+        { intervals: [10, 20, 40] },
+      )
+      .toBe(true);
+    await page.evaluate(() => {
+      const win = window as unknown as {
+        __scrollRevealObservation?: { stop: () => void };
+      };
+      win.__scrollRevealObservation?.stop();
+      delete win.__scrollRevealObservation;
+    });
+  };
+
   for (const [paletteIndex, palette] of palettes.entries()) {
     await selectPalette(page, palette);
     await grid.evaluate((element) => {
@@ -251,85 +318,26 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
       await expectHidden();
 
       const previousTopBeforeKeyboard = await grid.evaluate((element) => element.scrollTop);
-      await scrollbar.evaluate((element) => {
-        const state = {
-          sawDataScrolling: element.hasAttribute('data-scrolling'),
-          sawPointerAuto: getComputedStyle(element).pointerEvents === 'auto',
-          maxOpacity: Number.parseFloat(getComputedStyle(element).opacity),
-        };
-        const record = () => {
-          if (element.hasAttribute('data-scrolling')) state.sawDataScrolling = true;
-          const style = getComputedStyle(element);
-          if (style.pointerEvents === 'auto') state.sawPointerAuto = true;
-          const opacity = Number.parseFloat(style.opacity);
-          if (opacity > state.maxOpacity) state.maxOpacity = opacity;
-        };
-        const observer = new MutationObserver(() => {
-          record();
-          if (element.hasAttribute('data-scrolling')) {
-            const sample = () => {
-              record();
-              if (element.hasAttribute('data-scrolling')) requestAnimationFrame(sample);
-            };
-            requestAnimationFrame(sample);
-          }
-        });
-        observer.observe(element, { attributes: true, attributeFilter: ['data-scrolling'] });
-        (
-          window as unknown as {
-            __keyboardScrollObservation?: { state: typeof state; stop: () => void };
-          }
-        ).__keyboardScrollObservation = {
-          state,
-          stop: () => observer.disconnect(),
-        };
-      });
+      await beginScrollRevealObservation();
       await page.keyboard.press('PageDown');
       await page.keyboard.press('PageDown');
       await expect
         .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
         .toBeGreaterThan(previousTopBeforeKeyboard);
-      await expect
-        .poll(
-          () =>
-            page.evaluate(() => {
-              const obs = (
-                window as unknown as {
-                  __keyboardScrollObservation?: {
-                    state: {
-                      sawDataScrolling: boolean;
-                      sawPointerAuto: boolean;
-                      maxOpacity: number;
-                    };
-                  };
-                }
-              ).__keyboardScrollObservation;
-              return Boolean(
-                obs?.state.sawDataScrolling && obs.state.sawPointerAuto && obs.state.maxOpacity > 0,
-              );
-            }),
-          { intervals: [10, 20, 40] },
-        )
-        .toBe(true);
-      await page.evaluate(() => {
-        const win = window as unknown as {
-          __keyboardScrollObservation?: { stop: () => void };
-        };
-        win.__keyboardScrollObservation?.stop();
-        delete win.__keyboardScrollObservation;
-      });
+      await expectScrollRevealObserved();
       await waitForScrollToSettle();
       await expectHidden();
     }
 
     const previousTop = await grid.evaluate((element) => element.scrollTop);
     await grid.hover();
+    await beginScrollRevealObservation();
     await page.mouse.wheel(0, 320);
     await page.mouse.wheel(0, 320);
     await expect
       .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
       .toBeGreaterThan(previousTop);
-    await expectActive();
+    await expectScrollRevealObserved();
 
     const colors = await scrollArea.evaluate((area) => {
       const track = area.querySelector<HTMLElement>('[role="grid"]');
