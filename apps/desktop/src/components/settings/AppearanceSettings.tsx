@@ -7,7 +7,7 @@ import { useSystemAppearance } from '../../appearance/useSystemAppearance';
 import type { AppearanceMode, PaletteId, SettingsPatch } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
-import { SettingsCategoryHeader, SettingsSection } from './SettingsLayout';
+import { SettingsCategoryHeader } from './SettingsLayout';
 import { DEFAULT_PALETTE, PALETTES, type PaletteMeta } from './paletteMetadata';
 
 interface ThemeOption {
@@ -81,7 +81,7 @@ export function AppearanceSettings({ settings, useStore }: AppearanceSettingsPro
     <section
       data-settings-category="appearance"
       data-slot="settings-category-content"
-      className="grid content-start gap-5"
+      className="grid content-start gap-4"
       aria-labelledby="appearance-settings-title"
     >
       <SettingsCategoryHeader
@@ -140,10 +140,10 @@ export function AppearanceSettings({ settings, useStore }: AppearanceSettingsPro
         </RadioGroup>
       </div>
 
-      <SettingsSection title="Dark palette" divider>
+      <div className="grid min-w-0 gap-2 border-t border-border pt-4">
         <div className="grid w-full max-w-[440px] gap-1.5">
           <label
-            className="cursor-pointer text-[13px] font-medium leading-5 text-foreground"
+            className="cursor-pointer text-sm font-semibold leading-5 text-foreground"
             htmlFor={paletteId}
           >
             Dark palette
@@ -187,9 +187,10 @@ export function AppearanceSettings({ settings, useStore }: AppearanceSettingsPro
             Your dark palette is saved for when Dark appearance is active.
           </p>
         </div>
-      </SettingsSection>
+      </div>
 
-      <SettingsSection title="Preview" divider>
+      <div className="grid min-w-0 gap-2.5 border-t border-border pt-4">
+        <h4 className="m-0 text-sm font-semibold leading-5 text-foreground">Preview</h4>
         <div
           data-slot="appearance-preview"
           data-effective-mode={effectiveAppearance.colorMode}
@@ -261,7 +262,7 @@ export function AppearanceSettings({ settings, useStore }: AppearanceSettingsPro
           <strong>Active: {effectiveAppearance.colorMode === 'light' ? 'Light' : 'Dark'}.</strong>{' '}
           Saved dark palette: {activePaletteMeta.label}.
         </p>
-      </SettingsSection>
+      </div>
     </section>
   );
 }
