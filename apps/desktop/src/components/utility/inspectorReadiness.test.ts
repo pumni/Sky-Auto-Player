@@ -20,6 +20,16 @@ describe('Inspector readiness summary', () => {
     expect(resolveInspectorReadiness({ ...ready, riskLevel: 'unknown' }).state).toBe('unavailable');
   });
 
+  it('gives a live pending check precedence over an unavailable detail error', () => {
+    expect(
+      resolveInspectorReadiness({ ...ready, pending: true, detailUnavailable: true }),
+    ).toMatchObject({ state: 'pending', label: 'Checking' });
+    expect(resolveInspectorReadiness({ ...ready, detailUnavailable: true })).toMatchObject({
+      state: 'unavailable',
+      label: 'Readiness unavailable',
+    });
+  });
+
   it.each(['malformed', 'unsupported', 'unplayable'] as const)(
     'reports %s sheets as blocked',
     (sheetReadiness) => {

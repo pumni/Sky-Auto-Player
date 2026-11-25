@@ -5,6 +5,7 @@ import {
   expectNoSeriousAccessibilityViolations,
   expectSafeKeyboardFocusDestination,
   finishFocusTraversalTrace,
+  readAddSongsMenuGuardSnapshot,
   startSelectedSong,
 } from './testHelpers';
 
@@ -1912,15 +1913,23 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
   }
 
   const forwardOrigin = await beginFocusTraversalTrace(page);
+  const forwardSnapshot = await readAddSongsMenuGuardSnapshot(page);
   await page.keyboard.press('Tab');
   await expect(menu).toHaveCount(0, { timeout: 1000 });
   await expectSafeKeyboardFocusDestination(page);
-  const forwardTraversal = await finishFocusTraversalTrace(page, 'Tab', forwardOrigin, true);
+  const forwardTraversal = await finishFocusTraversalTrace(
+    page,
+    'Tab',
+    forwardOrigin,
+    true,
+    forwardSnapshot.snapshotId,
+  );
 
   await addButton.click();
   await page.keyboard.press('ArrowDown');
   await expect(firstMenuItem).toBeFocused();
   const backwardOrigin = await beginFocusTraversalTrace(page);
+  const backwardSnapshot = await readAddSongsMenuGuardSnapshot(page);
   await page.keyboard.press('Shift+Tab');
   await expect(menu).toHaveCount(0, { timeout: 1000 });
   await expectSafeKeyboardFocusDestination(page);
@@ -1929,11 +1938,17 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
     'Shift+Tab',
     backwardOrigin,
     true,
+    backwardSnapshot.snapshotId,
   );
   await addButton.click();
   await page.keyboard.press('ArrowDown');
   await expect(firstMenuItem).toBeFocused();
-  await expectAddSongsMenuAccessibility(page, testInfo, [forwardTraversal, backwardTraversal]);
+  await expectAddSongsMenuAccessibility(
+    page,
+    testInfo,
+    [forwardTraversal, backwardTraversal],
+    [forwardSnapshot, backwardSnapshot],
+  );
 
   await page.keyboard.press('Escape');
   await expect(menu).toHaveCount(0);

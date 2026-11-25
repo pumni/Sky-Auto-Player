@@ -84,7 +84,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       >
         <Music2 size={17} />
       </span>
-      <div className="grid min-w-0 gap-0.5">
+      <div className="@container/player-track-info grid min-w-0 flex-1 gap-0.5">
         <strong
           className="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-foreground"
           title={title}
@@ -110,7 +110,8 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
               aria-label={testModeDescription}
               title={testModeDescription}
             >
-              Test<span className="max-[1100px]:hidden"> · no keys</span>
+              <span className="hidden @min-[150px]/player-track-info:inline">Test · no keys</span>
+              <span className="inline @min-[150px]/player-track-info:hidden">Dry run</span>
             </StatusBadge>
           )}
         </div>

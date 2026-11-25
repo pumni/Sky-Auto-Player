@@ -538,14 +538,18 @@ test('selected and playing rows keep separate accessible surfaces in Dark and Li
       return {
         selectedBackground: getComputedStyle(selected).backgroundColor,
         selectedForeground: getComputedStyle(selectedTitle).color,
+        selectedRail: getComputedStyle(selected).borderLeftColor,
         playingBackground: getComputedStyle(playing).backgroundColor,
         playingForeground: getComputedStyle(playingTitle).color,
+        playingRail: getComputedStyle(playing).borderLeftColor,
       };
     });
 
     expect(rowColors).not.toBeNull();
     if (rowColors) {
       expect(rowColors.selectedBackground).not.toBe(rowColors.playingBackground);
+      expect(rowColors.selectedRail).toBe(computedRgb(theme['--accent-ink']));
+      expect(rowColors.playingRail).not.toBe(computedRgb(theme['--accent-ink']));
       expect(
         contrast(rowColors.selectedForeground, rowColors.selectedBackground),
         `${mode} selected row: ${rowColors.selectedForeground} on ${rowColors.selectedBackground}`,

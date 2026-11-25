@@ -303,10 +303,10 @@ export function LibraryNavigator({
                   data-slot="library-empty-playlists-guidance"
                   className="m-0 text-xs leading-relaxed text-text-secondary"
                 >
-                  Create a playlist to collect songs or import local sheet files and folders.
+                  Create a playlist to collect songs or import local sheets.
                 </p>
                 <Button
-                  variant="default"
+                  variant={navigation.builtinAvailable ? 'outline' : 'default'}
                   data-slot="library-empty-playlists-create"
                   className="h-9 justify-center text-[13px]"
                   type="button"

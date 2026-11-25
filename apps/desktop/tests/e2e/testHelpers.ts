@@ -1,12 +1,31 @@
-import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
 import { expect, type Locator, type Page, type TestInfo } from '@playwright/test';
 import {
   classifyBaseUiFocusGuardFinding,
+  REVIEWED_ADD_SONGS_GUARDS,
+  REVIEWED_AXE_VERSION,
+  REVIEWED_BASE_UI_VERSION,
+  type FocusGuardPlacement,
   type FocusGuardSelectorEvidence,
   type FocusTraversalEvidence,
 } from '../../src/testing/baseUiFocusGuardAdjudication';
+
+function installedPackageVersion(...segments: string[]): string {
+  const packageJson = JSON.parse(
+    readFileSync(resolve(process.cwd(), 'node_modules', ...segments, 'package.json'), 'utf8'),
+  ) as { version?: unknown };
+  if (typeof packageJson.version !== 'string') {
+    throw new Error(`Package ${segments.join('/')} has no installed version.`);
+  }
+  return packageJson.version;
+}
+
+const reviewedAxeVersions = {
+  baseUi: installedPackageVersion('@base-ui', 'react'),
+  axe: installedPackageVersion('@axe-core', 'playwright'),
+};
 
 export const palettes = [
   'graphite',
@@ -73,11 +92,14 @@ function selectorsForViolation(violation: AxeViolation): string[] {
 async function readFocusGuardSelectorEvidence(
   page: Page,
   selector: string,
+  snapshotId: string,
 ): Promise<FocusGuardSelectorEvidence> {
   const locator = page.locator(selector);
   const matchCount = await locator.count().catch(() => 0);
-  if (matchCount !== 1) return { selector, matchCount, placement: null, shape: null };
-  const shape = await locator.evaluate((node) => {
+  if (matchCount !== 1) {
+    return { snapshotId, selector, matchCount, placement: null, traceIdentity: null, shape: null };
+  }
+  const measured = await locator.evaluate((node) => {
     const element = node as HTMLElement;
     const rect = element.getBoundingClientRect();
     const style = getComputedStyle(element);
@@ -108,6 +130,19 @@ async function readFocusGuardSelectorEvidence(
         : trigger?.parentElement === element.parentElement
           ? 'add-songs-trigger'
           : null;
+    const traceWindow = window as Window & {
+      __baseUiMenuFocusTrace?: {
+        ids: WeakMap<Element, string>;
+        nextId: number;
+      };
+    };
+    let traceIdentity = traceWindow.__baseUiMenuFocusTrace?.ids.get(element) ?? null;
+    if (!traceIdentity && traceWindow.__baseUiMenuFocusTrace) {
+      // Identity bookkeeping is observational; do not alter the guard DOM or move focus here.
+      traceWindow.__baseUiMenuFocusTrace.nextId += 1;
+      traceIdentity = `focus-${traceWindow.__baseUiMenuFocusTrace.nextId}`;
+      traceWindow.__baseUiMenuFocusTrace.ids.set(element, traceIdentity);
+    }
     const ancestors: string[] = [];
     for (
       let ancestor: HTMLElement | null = element.parentElement;
@@ -121,6 +156,7 @@ async function readFocusGuardSelectorEvidence(
     }
     return {
       placement,
+      traceIdentity,
       context: {
         dataType: element.getAttribute('data-type'),
         sameTriggerParent: trigger?.parentElement === element.parentElement,
@@ -146,12 +182,28 @@ async function readFocusGuardSelectorEvidence(
       hiddenAncestor,
     };
   });
+  const { placement, traceIdentity, ...shape } = measured;
   return {
+    snapshotId,
     selector,
     matchCount,
-    placement: shape.placement as FocusGuardSelectorEvidence['placement'],
+    placement: placement as FocusGuardPlacement | null,
+    traceIdentity,
     shape,
   };
+}
+
+let focusGuardSnapshotSequence = 0;
+
+export async function readAddSongsMenuGuardSnapshot(page: Page) {
+  focusGuardSnapshotSequence += 1;
+  const snapshotId = `menu-snapshot-${focusGuardSnapshotSequence}`;
+  const evidence = await Promise.all(
+    REVIEWED_ADD_SONGS_GUARDS.map(({ selector }) =>
+      readFocusGuardSelectorEvidence(page, selector, snapshotId),
+    ),
+  );
+  return { snapshotId, evidence };
 }
 
 export async function beginFocusTraversalTrace(page: Page): Promise<string> {
@@ -161,9 +213,10 @@ export async function beginFocusTraversalTrace(page: Page): Promise<string> {
       id: string;
       timestamp: number;
       sentinel: boolean;
+      guardPlacement: FocusGuardPlacement | null;
     };
     type TraceWindow = Window & {
-      __wp2FocusTrace?: {
+      __baseUiMenuFocusTrace?: {
         ids: WeakMap<Element, string>;
         nextId: number;
         entries: TraceEntry[];
@@ -171,7 +224,7 @@ export async function beginFocusTraversalTrace(page: Page): Promise<string> {
       };
     };
     const traceWindow = window as TraceWindow;
-    let trace = traceWindow.__wp2FocusTrace;
+    let trace = traceWindow.__baseUiMenuFocusTrace;
     if (!trace) {
       trace = {
         ids: new WeakMap<Element, string>(),
@@ -179,9 +232,9 @@ export async function beginFocusTraversalTrace(page: Page): Promise<string> {
         entries: [],
         startedAt: 0,
       };
-      traceWindow.__wp2FocusTrace = trace;
+      traceWindow.__baseUiMenuFocusTrace = trace;
     }
-    if (!document.documentElement.dataset.wp2FocusTraceInstalled) {
+    if (!document.documentElement.dataset.baseUiMenuFocusTraceInstalled) {
       const record = (event: FocusEvent) => {
         if (!(event.target instanceof Element)) return;
         let id = trace.ids.get(event.target);
@@ -190,16 +243,29 @@ export async function beginFocusTraversalTrace(page: Page): Promise<string> {
           id = `focus-${trace.nextId}`;
           trace.ids.set(event.target, id);
         }
+        const sentinel = event.target.hasAttribute('data-base-ui-focus-guard');
+        const menu = document.querySelector('[role="menu"][aria-label="Add songs"]');
+        const trigger = document.querySelector('[data-slot="playlist-add-songs-button"]');
+        const guardPlacement: FocusGuardPlacement | null = !sentinel
+          ? null
+          : menu?.contains(event.target) ||
+              (menu?.parentElement === event.target.parentElement &&
+                (event.target as HTMLElement).dataset.type === 'inside')
+            ? 'add-songs-menu'
+            : trigger?.parentElement === event.target.parentElement
+              ? 'add-songs-trigger'
+              : null;
         trace.entries.push({
           type: event.type as 'focusin' | 'focusout',
           id,
           timestamp: performance.now(),
-          sentinel: event.target.hasAttribute('data-base-ui-focus-guard'),
+          sentinel,
+          guardPlacement,
         });
       };
       document.addEventListener('focusin', record, true);
       document.addEventListener('focusout', record, true);
-      document.documentElement.dataset.wp2FocusTraceInstalled = 'true';
+      document.documentElement.dataset.baseUiMenuFocusTraceInstalled = 'true';
     }
     trace.entries = [];
     trace.startedAt = performance.now();
@@ -220,28 +286,31 @@ export async function finishFocusTraversalTrace(
   key: 'Tab' | 'Shift+Tab',
   originId: string,
   menuClosed: boolean,
+  snapshotId: string,
 ): Promise<FocusTraversalEvidence> {
   return page.evaluate(
-    ({ key, originId, menuClosed }) => {
+    ({ key, originId, menuClosed, snapshotId }) => {
       type TraceEntry = {
         type: 'focusin' | 'focusout';
         id: string;
         timestamp: number;
         sentinel: boolean;
+        guardPlacement: FocusGuardPlacement | null;
       };
       type TraceWindow = Window & {
-        __wp2FocusTrace?: {
+        __baseUiMenuFocusTrace?: {
           ids: WeakMap<Element, string>;
           nextId: number;
           entries: TraceEntry[];
           startedAt: number;
         };
       };
-      const trace = (window as TraceWindow).__wp2FocusTrace;
+      const trace = (window as TraceWindow).__baseUiMenuFocusTrace;
       const active = document.activeElement;
       if (!trace || !active) {
         return {
           key,
+          snapshotId,
           originId,
           startedAt: 0,
           menuClosed,
@@ -254,6 +323,10 @@ export async function finishFocusTraversalTrace(
             sentinel: false,
             visible: false,
             timestamp: performance.now(),
+            logicalTarget: 'other',
+            role: null,
+            dataSlot: null,
+            accessibleName: '',
           },
         };
       }
@@ -282,8 +355,32 @@ export async function finishFocusTraversalTrace(
       })();
       const rect = element?.getBoundingClientRect();
       const events = trace.entries;
+      const labelledBy = element?.getAttribute('aria-labelledby');
+      const labelledText = labelledBy
+        ?.split(/\s+/)
+        .map((labelId) => document.getElementById(labelId)?.textContent?.trim() ?? '')
+        .filter(Boolean)
+        .join(' ');
+      const accessibleName =
+        element?.getAttribute('aria-label')?.trim() ||
+        labelledText ||
+        (element instanceof HTMLInputElement ? element.labels?.[0]?.textContent?.trim() : '') ||
+        element?.getAttribute('title')?.trim() ||
+        element?.innerText?.replace(/\s+/g, ' ').trim() ||
+        '';
+      const logicalTarget = element?.matches('[role="grid"]')
+        ? 'track-grid'
+        : element?.getAttribute('data-slot') === 'playlist-add-songs-button'
+          ? 'playlist-add-trigger'
+          : accessibleName === 'Browse Built-in Songs…' &&
+              element?.closest('[data-slot="library-empty-state"]')
+            ? 'empty-playlist-browse'
+            : element?.closest('[data-slot="library-navigator"]')
+              ? 'library-navigation'
+              : 'other';
       return {
         key,
+        snapshotId,
         originId,
         startedAt: trace.startedAt,
         menuClosed,
@@ -309,10 +406,16 @@ export async function finishFocusTraversalTrace(
             rect.width > 0 &&
             rect.height > 0,
           timestamp: performance.now(),
+          logicalTarget,
+          role:
+            element?.getAttribute('role') ??
+            (element instanceof HTMLButtonElement ? 'button' : null),
+          dataSlot: element?.dataset.slot ?? null,
+          accessibleName,
         },
       };
     },
-    { key, originId, menuClosed },
+    { key, originId, menuClosed, snapshotId },
   );
 }
 
@@ -374,7 +477,10 @@ export async function expectAddSongsMenuAccessibility(
   page: Page,
   testInfo: TestInfo,
   traversals: FocusTraversalEvidence[],
+  guardSnapshots: Array<{ snapshotId: string; evidence: FocusGuardSelectorEvidence[] }>,
 ) {
+  expect(reviewedAxeVersions.baseUi).toBe(REVIEWED_BASE_UI_VERSION);
+  expect(reviewedAxeVersions.axe).toBe(REVIEWED_AXE_VERSION);
   // This is deliberately a full, unfiltered Axe run. The raw result is attached before review.
   const results = await new AxeBuilder({ page }).analyze();
   const rawReport = JSON.stringify(results, null, 2);
@@ -396,12 +502,27 @@ export async function expectAddSongsMenuAccessibility(
     evidence: FocusGuardSelectorEvidence[];
     result: { adjudicated: boolean; reason: string };
   }> = [];
+  focusGuardSnapshotSequence += 1;
+  const axeSnapshotId = `axe-snapshot-${focusGuardSnapshotSequence}`;
   for (const violation of serious) {
     const selectors = selectorsForViolation(violation);
-    const evidence = await Promise.all(
-      selectors.map((selector) => readFocusGuardSelectorEvidence(page, selector)),
+    const evidence =
+      violation.id === 'aria-hidden-focus'
+        ? await Promise.all(
+            selectors.map((selector) =>
+              readFocusGuardSelectorEvidence(page, selector, axeSnapshotId),
+            ),
+          )
+        : [];
+    const result = classifyBaseUiFocusGuardFinding(
+      violation,
+      [
+        ...guardSnapshots.flatMap(({ evidence: snapshotEvidence }) => snapshotEvidence),
+        ...evidence,
+      ],
+      traversals,
+      reviewedAxeVersions,
     );
-    const result = classifyBaseUiFocusGuardFinding(violation, evidence, traversals);
     observations.push({ id: violation.id, selectors, evidence, result });
     if (!result.adjudicated) blocking.push(violation);
     else {
@@ -419,7 +540,17 @@ export async function expectAddSongsMenuAccessibility(
       description: JSON.stringify(adjudicated),
     });
   }
-  const adjudicationEvidence = JSON.stringify({ observations, traversals }, null, 2);
+  const adjudicationEvidence = JSON.stringify(
+    {
+      versions: reviewedAxeVersions,
+      reviewedGuards: REVIEWED_ADD_SONGS_GUARDS,
+      guardSnapshots: guardSnapshots.map(({ snapshotId, evidence }) => ({ snapshotId, evidence })),
+      observations,
+      traversals,
+    },
+    null,
+    2,
+  );
   await testInfo.attach('axe-focus-guard-adjudication.json', {
     body: adjudicationEvidence,
     contentType: 'application/json',

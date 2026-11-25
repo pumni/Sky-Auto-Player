@@ -24,6 +24,9 @@ describe('StatusBadge', () => {
         <StatusBadge tone="danger" aria-label="Playback blocked">
           High risk
         </StatusBadge>
+        <StatusBadge tone="success" appearance="plain" aria-label="Ready to play">
+          Ready
+        </StatusBadge>
         <StatusBadge appearance="plain">Test · no keys</StatusBadge>
       </>,
     );
@@ -31,6 +34,8 @@ describe('StatusBadge', () => {
     expect(screen.getByText('Review')).toHaveAttribute('title', 'Conversion review required');
     expect(screen.getByText('High risk')).toHaveAttribute('data-tone', 'danger');
     expect(screen.getByText('High risk')).toHaveAttribute('aria-label', 'Playback blocked');
+    expect(screen.getByText('Ready')).toHaveAttribute('data-tone', 'success');
+    expect(screen.getByText('Ready')).toHaveAttribute('data-appearance', 'plain');
     expect(screen.getByText('Test · no keys')).toHaveAttribute('data-appearance', 'plain');
   });
 });

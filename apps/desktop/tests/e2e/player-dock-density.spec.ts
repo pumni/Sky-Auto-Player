@@ -198,6 +198,7 @@ test('compact dock preserves title, active status, test mode, progress, and cent
                 })
                 .join('')
                 .trim(),
+              accessibleName: badge.getAttribute('aria-label'),
             }
           : null,
         decorativeNoteIcon: noteIcon ? getComputedStyle(noteIcon).display !== 'none' : false,
@@ -212,7 +213,8 @@ test('compact dock preserves title, active status, test mode, progress, and cent
     expect(measurements.title?.clipped).toBe(false);
     expect(measurements.status?.clipped).toBe(false);
     expect(measurements.status?.text).toBe('Playing');
-    expect(measurements.badge?.text).toBe('Test');
+    expect(measurements.badge?.text).toBe(viewport.width === 800 ? 'Test · no keys' : 'Dry run');
+    expect(measurements.badge?.accessibleName).toBe('Dry run: no physical keyboard input is sent.');
     expect(measurements.decorativeNoteIcon).toBe(false);
     expect(measurements.progressTrack).not.toBe(measurements.dockBackground);
     expect(measurements.documentWidth).toBeLessThanOrEqual(viewport.width);

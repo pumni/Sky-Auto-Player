@@ -60,6 +60,8 @@ export function usePackagedSmokeTest({
         return !current.library.loading && current.library.error === null;
       }, 'library');
       const search = await bridge.searchSongs({
+        // Keep this readiness probe independent from the store's page generation; it validates
+        // the bridge's current-catalog search response before the smoke marker is acknowledged.
         query: '',
         offset: 0,
         limit: 200,

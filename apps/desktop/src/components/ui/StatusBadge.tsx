@@ -1,7 +1,7 @@
 import type { HTMLAttributes } from 'react';
 import { cn } from 'cn';
 
-export type StatusBadgeTone = 'neutral' | 'warning' | 'danger';
+export type StatusBadgeTone = 'neutral' | 'success' | 'warning' | 'danger';
 type StatusBadgeAppearance = 'soft' | 'plain';
 
 interface StatusBadgeProps extends HTMLAttributes<HTMLSpanElement> {
@@ -27,6 +27,7 @@ export function StatusBadge({
       className={cn(
         'inline-flex min-h-5 items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium leading-4',
         'border-border bg-secondary text-secondary-foreground',
+        'data-[tone=success]:border-success-border data-[tone=success]:bg-success-surface data-[tone=success]:text-success',
         'data-[tone=warning]:border-warning-border data-[tone=warning]:bg-warning-surface data-[tone=warning]:text-warning',
         'data-[tone=danger]:border-danger-border data-[tone=danger]:bg-danger-surface data-[tone=danger]:text-danger',
         'data-[appearance=plain]:border-transparent data-[appearance=plain]:bg-transparent',

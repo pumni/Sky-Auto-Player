@@ -98,7 +98,6 @@ export function SettingsCategoryContent({
     systemColorMode,
     settings.palette,
   );
-  const darkPaletteStandby = effectiveAppearance.colorMode === 'light';
   const activePaletteMeta =
     palettes.find((item) => item.id === settings.palette) ?? DEFAULT_PALETTE;
   const defaults = settings.playback_defaults;
@@ -317,9 +316,7 @@ export function SettingsCategoryContent({
               </SelectContent>
             </Select>
           </div>
-          <div
-            className={`grid w-full max-w-[360px] gap-1.5 ${darkPaletteStandby ? 'text-text-tertiary' : ''}`}
-          >
+          <div className="grid w-full max-w-[360px] gap-1.5">
             <label className="text-[13px] font-medium text-text-secondary" htmlFor={paletteId}>
               Dark palette
             </label>
@@ -329,11 +326,7 @@ export function SettingsCategoryContent({
                 if (nextValue !== null) patch({ palette: nextValue as PaletteId });
               }}
             >
-              <SelectTrigger
-                id={paletteId}
-                aria-label="Dark palette"
-                aria-describedby={darkPaletteStandby ? 'dark-palette-standby-hint' : undefined}
-              >
+              <SelectTrigger id={paletteId} aria-label="Dark palette">
                 <SelectValue>
                   {(value: string | null) =>
                     palettes.find((item) => item.id === value)?.label ?? 'Dark palette'
@@ -359,62 +352,43 @@ export function SettingsCategoryContent({
                 ))}
               </SelectContent>
             </Select>
-            {darkPaletteStandby && (
-              <span id="dark-palette-standby-hint" className="text-xs text-text-tertiary">
-                Saved for Dark mode (Light mode is currently active).
-              </span>
-            )}
           </div>
           <div
             data-slot="appearance-preview"
             data-effective-mode={effectiveAppearance.colorMode}
             role="img"
-            aria-label={`${darkPaletteStandby ? 'Light appearance active; previewing' : 'Dark appearance active'}: ${activePaletteMeta.label}`}
-            className="w-full max-w-[360px] overflow-hidden rounded-pane border border-border"
+            aria-label={`${effectiveAppearance.colorMode === 'light' ? 'Light' : 'Dark'} appearance preview; saved dark palette is ${activePaletteMeta.label}`}
+            className="w-full max-w-[360px] overflow-hidden rounded-pane border border-border bg-background text-foreground"
           >
-            <div
-              className="flex h-7 items-center gap-1.5 border-b border-foreground/10 px-2"
-              style={{ backgroundColor: activePaletteMeta.swatches[1] }}
-            >
-              <span
-                className="size-2 rounded-full"
-                style={{ backgroundColor: activePaletteMeta.swatches[3] }}
-              />
-              <span
-                className="h-1.5 w-14 rounded-full opacity-70"
-                style={{ backgroundColor: activePaletteMeta.swatches[3] }}
-              />
-              <span
-                className="ml-auto h-1.5 w-8 rounded-full opacity-50"
-                style={{ backgroundColor: activePaletteMeta.swatches[3] }}
-              />
+            <div className="flex h-7 items-center gap-1.5 border-b border-border bg-card px-2">
+              <span className="size-2 rounded-full bg-primary" />
+              <span className="h-1.5 w-14 rounded-full bg-text-secondary opacity-70" />
+              <span className="ml-auto h-1.5 w-8 rounded-full bg-text-tertiary opacity-70" />
             </div>
-            <div
-              className="grid grid-cols-[minmax(0,1fr)_68px] gap-2 p-2"
-              style={{ backgroundColor: activePaletteMeta.swatches[0] }}
-            >
-              <div
-                className="grid h-10 grid-cols-[1fr_40px] items-center gap-2 rounded-control border border-foreground/10 px-2"
-                style={{ backgroundColor: activePaletteMeta.swatches[1] }}
-              >
-                <span
-                  className="h-1.5 rounded-full opacity-60"
-                  style={{ backgroundColor: activePaletteMeta.swatches[3] }}
-                />
-                <span
-                  className="h-5 rounded-control"
-                  style={{ backgroundColor: activePaletteMeta.swatches[3] }}
-                />
+            <div className="grid grid-cols-[minmax(0,1fr)_68px] gap-2 bg-background p-2">
+              <div className="grid h-10 grid-cols-[1fr_40px] items-center gap-2 rounded-control border border-border bg-surface px-2">
+                <span className="h-1.5 rounded-full bg-text-secondary opacity-70" />
+                <span className="h-5 rounded-control bg-selection" />
               </div>
-              <div
-                className="h-10 rounded-control border border-foreground/10"
-                style={{ backgroundColor: activePaletteMeta.swatches[2] }}
-              />
+              <div className="h-10 rounded-control border border-border bg-popover" />
+              <span
+                data-slot="appearance-preview-primary-action"
+                className="col-span-2 inline-flex w-fit items-center rounded-control bg-primary px-2 py-1 text-[10px] font-medium text-primary-foreground"
+              >
+                Primary action
+              </span>
             </div>
           </div>
+          <p
+            data-slot="appearance-active-summary"
+            className="m-0 text-xs leading-relaxed text-foreground"
+          >
+            <strong>Active: {effectiveAppearance.colorMode === 'light' ? 'Light' : 'Dark'}.</strong>{' '}
+            Saved dark palette: {activePaletteMeta.label}.
+          </p>
           <p className="m-0 text-xs leading-relaxed text-text-tertiary">
-            The saved palette is used whenever Dark is effective. Follow Windows uses the Windows
-            app color preference while Theme is set to Follow Windows.
+            Follow Windows uses the Windows app color preference while Theme is set to Follow
+            Windows.
           </p>
         </section>
       )}

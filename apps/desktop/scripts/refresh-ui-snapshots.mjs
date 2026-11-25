@@ -12,6 +12,7 @@ const screenshots = {
   'compact.png': 'candidate-workbench-800x560.png',
   'overlay.png': 'candidate-overlay-640x448.png',
   'diagnostics.png': 'candidate-runtime-diagnostics-1366x768.png',
+  'appearance-settings-light.png': 'candidate-appearance-preview-light-1366x768.png',
 };
 
 function git(args) {
@@ -52,7 +53,8 @@ const run = spawnSync(
     env: {
       ...process.env,
       GRAPHITE_WORKSPACE_CAPTURE: 'candidate',
-      GRAPHITE_WORKSPACE_CAPTURE_VIEWS: 'populated,compact,overlay,runtime',
+      GRAPHITE_WORKSPACE_CAPTURE_VIEWS:
+        'populated,compact,overlay,runtime,appearance-preview-light',
     },
   },
 );
@@ -82,7 +84,9 @@ const manifest = {
     'overlay.png':
       'Browser-only responsive inspector overlay, 640x448; not supported native window minimum',
     'diagnostics.png': 'Runtime diagnostics, dry run without physical keyboard input, 1366x768',
+    'appearance-settings-light.png':
+      'Review-only Appearance settings state with Light active and Graphite saved, 1366x768',
   },
 };
 await writeFile(resolve(destination, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
-console.log(`Updated canonical UI screenshots at ${sha}: ${Object.keys(screenshots).join(', ')}`);
+console.log(`Updated UI screenshots at ${sha}: ${Object.keys(screenshots).join(', ')}`);

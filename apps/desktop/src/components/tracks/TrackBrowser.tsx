@@ -126,15 +126,18 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
 
   return (
     <section
-      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface"
+      className="@container/track-browser flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface"
       aria-labelledby="track-browser-title"
       data-slot="track-browser"
     >
       <header
         data-slot="track-browser-header"
-        className="relative flex h-10 min-h-10 flex-none items-center gap-2 bg-surface px-3 @max-[1040px]:h-8 @max-[1040px]:min-h-8 @max-[1040px]:gap-1.5 @max-[1040px]:px-2"
+        className="relative flex h-8 min-h-8 flex-none items-center gap-1.5 bg-surface px-2 @min-[680px]/track-browser:h-10 @min-[680px]/track-browser:min-h-10 @min-[680px]/track-browser:gap-2 @min-[680px]/track-browser:px-3"
       >
-        <div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <div
+          data-slot="track-browser-heading-content"
+          className="flex min-w-0 flex-1 items-baseline gap-1.5"
+        >
           {isPlaylistAddMode && (
             <Button
               variant="outline"
@@ -147,7 +150,7 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
           )}
           <div className="inline-flex min-w-0 max-w-full flex-[0_1_auto] items-center rounded-control pl-1.5">
             <h1
-              className="min-w-0 overflow-hidden pb-1.5 text-ellipsis whitespace-nowrap text-xl font-semibold leading-7 tracking-tight text-foreground @max-[1040px]:text-base @max-[1040px]:leading-6"
+              className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-base font-semibold leading-[22px] tracking-tight text-foreground @min-[680px]/track-browser:text-xl @min-[680px]/track-browser:leading-7"
               id="track-browser-title"
               title={heading}
             >
@@ -156,7 +159,7 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
           </div>
           <span
             data-slot="track-browser-count"
-            className="flex-none whitespace-nowrap text-xs tabular-nums text-text-tertiary before:mr-1.5 before:content-['·'] @max-[1040px]:text-[11px]"
+            className="flex-none whitespace-nowrap text-[11px] tabular-nums text-text-tertiary before:mr-1.5 before:content-['·'] @min-[680px]/track-browser:text-xs"
           >
             {loading
               ? 'Updating…'

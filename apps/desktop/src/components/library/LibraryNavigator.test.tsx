@@ -69,6 +69,7 @@ describe('LibraryNavigator built-in source', () => {
     expect(builtin).toBeDisabled();
     expect(builtin).not.toHaveTextContent('0');
     expect(screen.getByRole('status')).toHaveTextContent(/aren’t available in this installation/i);
+    expect(screen.getByText('Create playlist', { selector: 'button' })).toHaveClass('bg-primary');
     expect(screen.queryByRole('button', { name: /All Songs/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Liked Songs/ })).toBeEnabled();
   });
@@ -87,6 +88,11 @@ describe('LibraryNavigator built-in source', () => {
     expect(builtin).toBeEnabled();
     expect(builtin).toHaveTextContent('0');
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    const createPlaylist = screen.getByText('Create playlist', { selector: 'button' });
+    expect(createPlaylist).toHaveClass('border-border', 'bg-background');
+    expect(
+      screen.getByText('Create a playlist to collect songs or import local sheets.'),
+    ).toBeVisible();
   });
 
   it('offers a working retry after navigation loading fails', async () => {

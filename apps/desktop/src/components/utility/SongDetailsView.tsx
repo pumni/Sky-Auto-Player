@@ -1,4 +1,4 @@
-import { MousePointer2 } from 'lucide-react';
+import { Check, CircleHelp, CircleX, Clock3, MousePointer2, TriangleAlert } from 'lucide-react';
 import { useEffect, useId, useRef, useState } from 'react';
 import type { SheetConversionMode, SheetPitch, SongRow } from '../../bridge/DesktopBridge';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
@@ -117,6 +117,21 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
 
   const isApplying = applyingSongId !== null && applyingSongId === selectedSongId;
   const currentError = applyError?.songId === selectedSongId ? applyError.message : null;
+  const readinessTones = {
+    pending: 'neutral',
+    unavailable: 'neutral',
+    ready: 'success',
+    review: 'warning',
+    blocked: 'danger',
+  } as const;
+  const readinessTone = readinessTones[readiness.state];
+  const ReadinessIcon = {
+    pending: Clock3,
+    unavailable: CircleHelp,
+    ready: Check,
+    review: TriangleAlert,
+    blocked: CircleX,
+  }[readiness.state];
 
   const applyRecommendation = async () => {
     if (!hasActionableRecommendation || recommendationMatchesCurrent || isApplying) {
@@ -195,14 +210,15 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
             Readiness
           </h4>
           <StatusBadge
-            tone={
-              readiness.state === 'blocked'
-                ? 'danger'
-                : readiness.state === 'review'
-                  ? 'warning'
-                  : 'neutral'
+            tone={readinessTone}
+            appearance={
+              readiness.state === 'review' || readiness.state === 'blocked' ? 'soft' : 'plain'
             }
+            className="gap-1.5 px-0 [&>span:first-child]:hidden"
+            data-slot="inspector-readiness-status"
+            data-readiness={readiness.state}
           >
+            <ReadinessIcon size={14} aria-hidden="true" />
             {readiness.label}
           </StatusBadge>
         </div>

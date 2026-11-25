@@ -1,3 +1,8 @@
+export const REVIEWED_BASE_UI_VERSION = '1.9.0';
+export const REVIEWED_AXE_VERSION = '4.14.0';
+
+export type FocusGuardPlacement = 'add-songs-trigger' | 'add-songs-menu';
+
 export interface FocusGuardShapeEvidence {
   tagName: string;
   marker: boolean;
@@ -17,13 +22,16 @@ export interface FocusGuardShapeEvidence {
 }
 
 export interface FocusGuardSelectorEvidence {
+  snapshotId: string;
   selector: string;
   matchCount: number;
-  placement: 'add-songs-trigger' | 'add-songs-menu' | null;
+  placement: FocusGuardPlacement | null;
+  traceIdentity: string | null;
   shape: FocusGuardShapeEvidence | null;
 }
 
 export interface FocusTraversalEvidence {
+  snapshotId: string;
   key: 'Tab' | 'Shift+Tab';
   originId: string;
   startedAt: number;
@@ -33,6 +41,7 @@ export interface FocusTraversalEvidence {
     id: string;
     timestamp: number;
     sentinel: boolean;
+    guardPlacement: FocusGuardPlacement | null;
   }>;
   destination: {
     id: string;
@@ -42,6 +51,15 @@ export interface FocusTraversalEvidence {
     sentinel: boolean;
     visible: boolean;
     timestamp: number;
+    logicalTarget:
+      | 'empty-playlist-browse'
+      | 'playlist-add-trigger'
+      | 'track-grid'
+      | 'library-navigation'
+      | 'other';
+    role: string | null;
+    dataSlot: string | null;
+    accessibleName: string;
   };
 }
 
@@ -62,6 +80,45 @@ export interface AxeFocusViolation {
   nodes: AxeNode[];
 }
 
+interface ReviewedGuard {
+  selector: string;
+  placement: FocusGuardPlacement;
+  dataType: string | null;
+}
+
+export const REVIEWED_ADD_SONGS_GUARDS: readonly ReviewedGuard[] = [
+  {
+    selector: '.flex-none.flex.items-center > span[data-base-ui-focus-guard=""]:nth-child(1)',
+    placement: 'add-songs-trigger',
+    dataType: null,
+  },
+  {
+    selector: '.flex-none.flex.items-center > span[data-base-ui-focus-guard=""]:nth-child(3)',
+    placement: 'add-songs-trigger',
+    dataType: null,
+  },
+  {
+    selector: 'span[data-type="outside"][data-base-ui-focus-guard=""]:nth-child(4)',
+    placement: 'add-songs-trigger',
+    dataType: 'outside',
+  },
+  {
+    selector: 'span[data-type="outside"][data-base-ui-focus-guard=""]:nth-child(6)',
+    placement: 'add-songs-trigger',
+    dataType: 'outside',
+  },
+  {
+    selector: 'span[data-type="inside"][data-base-ui-focus-guard=""]:nth-child(1)',
+    placement: 'add-songs-menu',
+    dataType: 'inside',
+  },
+  {
+    selector: 'span[data-type="inside"][data-base-ui-focus-guard=""]:nth-child(3)',
+    placement: 'add-songs-menu',
+    dataType: 'inside',
+  },
+];
+
 function targetSelectors(target: unknown): string[] | null {
   if (!Array.isArray(target) || target.length === 0) return null;
   if (
@@ -74,17 +131,14 @@ function targetSelectors(target: unknown): string[] | null {
   return target;
 }
 
-function isExactFocusGuard(
-  shape: FocusGuardShapeEvidence | null,
-  placement: FocusGuardSelectorEvidence['placement'],
-): boolean {
+function isExactFocusGuard(evidence: FocusGuardSelectorEvidence, expected: ReviewedGuard): boolean {
+  const shape = evidence.shape;
   if (!shape) return false;
   return (
+    evidence.placement === expected.placement &&
     shape.tagName === 'SPAN' &&
     shape.marker &&
-    ((placement === 'add-songs-trigger' &&
-      (shape.dataType === null || shape.dataType === 'outside')) ||
-      (placement === 'add-songs-menu' && shape.dataType === 'inside')) &&
+    shape.dataType === expected.dataType &&
     shape.ariaHidden === 'true' &&
     shape.tabIndex === 0 &&
     shape.role === null &&
@@ -100,7 +154,10 @@ function isExactFocusGuard(
   );
 }
 
-function hasSafeTraversalEvidence(traversals: FocusTraversalEvidence[]): boolean {
+function hasSafeTraversalEvidence(
+  traversals: FocusTraversalEvidence[],
+  selectorEvidence: FocusGuardSelectorEvidence[],
+): boolean {
   if (traversals.length !== 2) return false;
   const forward = traversals.find((traversal) => traversal.key === 'Tab');
   const backward = traversals.find((traversal) => traversal.key === 'Shift+Tab');
@@ -108,13 +165,31 @@ function hasSafeTraversalEvidence(traversals: FocusTraversalEvidence[]): boolean
   if (
     !forward.menuClosed ||
     !backward.menuClosed ||
+    forward.destination.logicalTarget !== 'empty-playlist-browse' ||
+    forward.destination.role !== 'button' ||
+    forward.destination.accessibleName !== 'Browse Built-in Songs…' ||
+    backward.destination.logicalTarget !== 'playlist-add-trigger' ||
+    backward.destination.role !== 'button' ||
+    backward.destination.accessibleName !== 'Add songs' ||
     forward.destination.id === forward.originId ||
     backward.destination.id === backward.originId ||
     forward.destination.id === backward.destination.id
   ) {
     return false;
   }
+
   for (const traversal of traversals) {
+    const traversalEvidence = selectorEvidence.filter(
+      (evidence) => evidence.snapshotId === traversal.snapshotId,
+    );
+    if (traversalEvidence.length !== REVIEWED_ADD_SONGS_GUARDS.length) return false;
+    const guardPlacements = new Map<string, FocusGuardPlacement>();
+    for (const evidence of traversalEvidence) {
+      if (evidence.traceIdentity === null) continue;
+      if (guardPlacements.has(evidence.traceIdentity) || evidence.placement === null) return false;
+      guardPlacements.set(evidence.traceIdentity, evidence.placement);
+    }
+
     const { destination, events } = traversal;
     if (
       destination.body ||
@@ -122,6 +197,7 @@ function hasSafeTraversalEvidence(traversals: FocusTraversalEvidence[]): boolean
       destination.disabled ||
       destination.sentinel ||
       !destination.visible ||
+      destination.accessibleName.trim().length === 0 ||
       destination.timestamp < traversal.startedAt ||
       destination.timestamp - traversal.startedAt > 1000 ||
       !events.some((event) => event.type === 'focusin') ||
@@ -139,16 +215,21 @@ function hasSafeTraversalEvidence(traversals: FocusTraversalEvidence[]): boolean
     ) {
       return false;
     }
-    const sentinelFocus = events.filter((event) => event.type === 'focusin' && event.sentinel);
-    if (
-      sentinelFocus.some((entry) => {
-        const exit = events.find(
-          (event) => event.type === 'focusout' && event.sentinel && event.id === entry.id,
-        );
-        return !exit || exit.timestamp < entry.timestamp || exit.timestamp - entry.timestamp > 1000;
-      })
-    ) {
-      return false;
+    for (const event of events.filter((entry) => entry.sentinel)) {
+      if (event.guardPlacement !== guardPlacements.get(event.id)) return false;
+      if (
+        event.type === 'focusin' &&
+        !events.some(
+          (exit) =>
+            exit.type === 'focusout' &&
+            exit.sentinel &&
+            exit.id === event.id &&
+            exit.timestamp >= event.timestamp &&
+            exit.timestamp - event.timestamp <= 1000,
+        )
+      ) {
+        return false;
+      }
     }
   }
   return true;
@@ -158,7 +239,14 @@ export function classifyBaseUiFocusGuardFinding(
   violation: AxeFocusViolation,
   selectorEvidence: FocusGuardSelectorEvidence[],
   traversals: FocusTraversalEvidence[],
+  versions: { baseUi: string; axe: string },
 ): { adjudicated: boolean; reason: string } {
+  if (versions.baseUi !== REVIEWED_BASE_UI_VERSION || versions.axe !== REVIEWED_AXE_VERSION) {
+    return {
+      adjudicated: false,
+      reason: `Review is pinned to Base UI ${REVIEWED_BASE_UI_VERSION} and Axe ${REVIEWED_AXE_VERSION}.`,
+    };
+  }
   if (violation.id !== 'aria-hidden-focus' || violation.impact !== 'serious') {
     return {
       adjudicated: false,
@@ -191,28 +279,67 @@ export function classifyBaseUiFocusGuardFinding(
       }
     }
   }
-  for (const selector of selectors) {
-    const evidence = selectorEvidence.find((entry) => entry.selector === selector);
-    if (
-      evidence?.matchCount !== 1 ||
-      evidence.placement === null ||
-      !isExactFocusGuard(evidence.shape, evidence.placement)
-    ) {
-      return {
-        adjudicated: false,
-        reason: 'Every Axe target must resolve to one exact Base UI focus guard.',
-      };
-    }
-  }
-  if (!hasSafeTraversalEvidence(traversals)) {
+
+  const uniqueSelectors = new Set(selectors);
+  const reviewedSelectors = new Set(REVIEWED_ADD_SONGS_GUARDS.map(({ selector }) => selector));
+  if (
+    uniqueSelectors.size !== reviewedSelectors.size ||
+    [...reviewedSelectors].some((selector) => !uniqueSelectors.has(selector))
+  ) {
     return {
       adjudicated: false,
-      reason: 'Tab and Shift+Tab must leave the menu through visible, enabled destinations.',
+      reason: 'The full finding must match the six reviewed Add songs focus-guard selectors.',
+    };
+  }
+  // Each real keyboard traversal and the open-menu Axe scan gets its own DOM snapshot.
+  if (selectorEvidence.length !== REVIEWED_ADD_SONGS_GUARDS.length * (traversals.length + 1)) {
+    return {
+      adjudicated: false,
+      reason: 'Every keyboard traversal and the Axe scan must record six reviewed focus guards.',
+    };
+  }
+
+  const snapshotIds = new Set(selectorEvidence.map(({ snapshotId }) => snapshotId));
+  if (snapshotIds.size !== traversals.length + 1) {
+    return {
+      adjudicated: false,
+      reason: 'Each traversal and the Axe scan must identify a separate open-menu DOM snapshot.',
+    };
+  }
+  for (const snapshotId of snapshotIds) {
+    const snapshotEvidence = selectorEvidence.filter((entry) => entry.snapshotId === snapshotId);
+    if (snapshotEvidence.length !== REVIEWED_ADD_SONGS_GUARDS.length) {
+      return {
+        adjudicated: false,
+        reason: `Snapshot ${snapshotId} does not contain exactly the six reviewed Add songs focus guards.`,
+      };
+    }
+    for (const expected of REVIEWED_ADD_SONGS_GUARDS) {
+      const matches = snapshotEvidence.filter((entry) => entry.selector === expected.selector);
+      const evidence = matches[0];
+      if (
+        matches.length !== 1 ||
+        evidence?.matchCount !== 1 ||
+        !isExactFocusGuard(evidence, expected)
+      ) {
+        return {
+          adjudicated: false,
+          reason: `The reviewed ${expected.placement} guard ${expected.selector} changed shape or placement.`,
+        };
+      }
+    }
+  }
+
+  if (!hasSafeTraversalEvidence(traversals, selectorEvidence)) {
+    return {
+      adjudicated: false,
+      reason:
+        'Real Tab must reach Browse Built-in Songs and Shift+Tab must return to Add songs, clearing each reached guard.',
     };
   }
   return {
     adjudicated: true,
     reason:
-      'Base UI 1.9.0 focus guards matched the exact sentinel shape and both traversal checks passed.',
+      'Base UI 1.9.0 and Axe 4.14.0 matched the six reviewed guard locations and the measured Tab/Shift+Tab destinations.',
   };
 }

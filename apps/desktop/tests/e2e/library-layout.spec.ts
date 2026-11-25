@@ -131,7 +131,7 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
   }
 });
 
-test('Graphite workspace header compacts by viewport and browser width over one canvas', async ({
+test('Graphite workspace header follows the Track Browser width without changing row height', async ({
   page,
 }) => {
   for (const viewport of [
@@ -157,7 +157,9 @@ test('Graphite workspace header compacts by viewport and browser width over one 
           background: computed.backgroundColor,
           color: computed.color,
           fontSize: computed.fontSize,
+          lineHeight: computed.lineHeight,
           fontWeight: computed.fontWeight,
+          alignItems: computed.alignItems,
           borderBottomWidth: computed.borderBottomWidth,
           borderBottomColor: computed.borderBottomColor,
         };
@@ -199,6 +201,7 @@ test('Graphite workspace header compacts by viewport and browser width over one 
         sourceStyle: style('[data-slot="track-browser-header"] h1'),
         titleStyle: style('[data-slot="track-browser-header"] h1'),
         countStyle: style('[data-slot="track-browser-count"]'),
+        headingContentStyle: style('[data-slot="track-browser-heading-content"]'),
         browserStyle: style('[data-pane="browser"]'),
         columnStyle: style('[role="row"][aria-rowindex="1"]'),
       };
@@ -221,23 +224,19 @@ test('Graphite workspace header compacts by viewport and browser width over one 
       throw new Error('Graphite workspace header geometry is incomplete');
     }
 
-    const expectedHeaderHeight = viewport.width <= 900 || geometry.browserWidth <= 520 ? 32 : 40;
+    const expectedHeaderHeight = geometry.browserWidth < 680 ? 32 : 40;
     expect(geometry.header.height).toBe(expectedHeaderHeight);
     expect(geometry.columnHeader.height).toBe(32);
     expect(geometry.firstSong.height).toBe(46);
     expect(geometry.firstSong.y).toBeCloseTo(geometry.columnHeader.bottom, 0);
-    const titleCountCenterDelta =
-      geometry.title.y + geometry.title.height / 2 - geometry.count.y - geometry.count.height / 2;
-    expect(
-      Math.abs(titleCountCenterDelta),
-      `Signed title/count center delta ${titleCountCenterDelta}`,
-    ).toBeLessThanOrEqual(1);
+    expect(geometry.headingContentStyle?.alignItems).toBe('baseline');
     expect(geometry.headingTag).toBe('H1');
     expect(geometry.headerTablists).toBe(0);
     expect(geometry.headerStyle?.background).toBe('rgb(21, 22, 24)');
     expect(geometry.sourceStyle?.background).toBe('rgba(0, 0, 0, 0)');
     expect(geometry.sourceStyle?.color).toBe('rgb(226, 228, 232)');
     expect(geometry.titleStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '20px' : '16px');
+    expect(geometry.titleStyle?.lineHeight).toBe(expectedHeaderHeight === 40 ? '28px' : '22px');
     expect(geometry.titleStyle?.fontWeight).toBe('600');
     expect(geometry.countStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '12px' : '11px');
     expect(geometry.browserStyle?.background).toBe('rgb(25, 26, 27)');

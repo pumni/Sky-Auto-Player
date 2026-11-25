@@ -742,6 +742,8 @@ describe('desktop application shell', () => {
     });
     expect(catalogReadyCalls).toHaveLength(1);
     const smokeSearch = searchSongs.mock.calls.find(([request]) => request.limit === 200);
+    // The smoke query is intentionally unpinned to the store's generation and checks the returned
+    // catalog generation independently before allowing shutdown.
     expect(smokeSearch?.[0]).toMatchObject({
       query: '',
       offset: 0,
