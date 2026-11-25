@@ -1,14 +1,14 @@
 {
   "status": "captured",
-  "source_sha": "b2d5ec396dc9071e402b1d76aed444b405375cec",
-  "desktop_tree_sha": "74fc73f96a7b9014288b063db1bc70c8457cbdf0",
-  "captured_at_utc": "2026-11-25T15:50:17.838Z",
+  "source_sha": "6a78762dc8c26722615000724803327b9c30edcd",
+  "desktop_tree_sha": "63e60ca909d9626e38492959424694f9557cee1e",
+  "captured_at_utc": "2026-11-25T16:05:49.423Z",
   "environment": "Playwright Chromium with deterministic desktop mock bridge; not native Tauri/Windows",
   "generated_by": "bun run ui:refresh (apps/desktop)",
   "targeted_evidence": {
     "directory": "vqc/",
-    "source_sha": "b2d5ec396dc9071e402b1d76aed444b405375cec",
-    "desktop_tree_sha": "74fc73f96a7b9014288b063db1bc70c8457cbdf0",
+    "source_sha": "6a78762dc8c26722615000724803327b9c30edcd",
+    "desktop_tree_sha": "63e60ca909d9626e38492959424694f9557cee1e",
     "scenes": [
       "tooltip-open.png",
       "scrollbar-idle-workbench.png",
