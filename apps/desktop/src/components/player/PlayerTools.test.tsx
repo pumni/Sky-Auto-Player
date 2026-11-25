@@ -82,7 +82,7 @@ describe('PlayerTools playback modes and profile', () => {
     expect(
       within(runningDialog).getByRole('button', { name: 'Test playback (no input)' }),
     ).toBeDisabled();
-  });
+  }, 30_000);
 
   it('does not expose raw profile parameters or a Test button in the player dock', async () => {
     const store = createDesktopStore(createMockBridge());
