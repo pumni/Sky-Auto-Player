@@ -225,7 +225,9 @@ progress[aria-disabled='true']::-moz-progress-bar {
 }
 
 html[data-theme-applying],
-html[data-theme-applying] * {
+html[data-theme-applying] *,
+html[data-theme-applying] *::before,
+html[data-theme-applying] *::after {
   transition-duration: 0ms !important;
 }
 

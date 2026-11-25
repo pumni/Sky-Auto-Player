@@ -2,6 +2,8 @@ import type { PlaybackDecisionId } from '../../bridge/DesktopBridge';
 
 export const TEST_MODE_LABEL = 'Test mode';
 export const TEST_MODE_ACCESSIBLE_DESCRIPTION = 'Test mode: no keyboard input is sent.';
+export const TEST_MODE_PREPARED_DESCRIPTION =
+  'Prepared for Test mode: no keyboard input will be sent.';
 export const TEST_MODE_DIAGNOSTICS_LABEL = 'Test mode (dry run) · no physical input sent';
 export const TEST_MODE_TIMING_UNMEASURED_TITLE = 'Test mode (dry run) · sender timing not measured';
 
@@ -26,8 +28,8 @@ export function admissionDecisionDescription(decision: PlaybackDecisionId): stri
     case 'dry_run':
       return 'Runs in Test mode without sending keyboard input.';
     case 'use_recommended':
-      return 'Applies the recommended hold and tempo for this session.';
+      return 'Applies the timing settings recommended for this session.';
     case 'proceed':
-      return 'Uses your current hold and tempo settings unchanged.';
+      return 'Uses your current timing settings unchanged.';
   }
 }

@@ -7,6 +7,7 @@ import {
   playerStateLabel,
   TEST_MODE_ACCESSIBLE_DESCRIPTION,
   TEST_MODE_LABEL,
+  TEST_MODE_PREPARED_DESCRIPTION,
 } from './playerFormatting';
 
 interface PlayerTrackInfoProps {
@@ -34,9 +35,13 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       playbackSessionStatusConcern(playback) !== null;
     if (ownsSession) {
       if (playback.context) return playback.context.dryRun ? 'test' : 'live';
-      if (playback.preparedContext) return playback.preparedContext.dryRun ? 'test' : 'live';
+      if (playback.preparedContext) {
+        return playback.preparedContext.dryRun ? 'prepared-test' : 'prepared-live';
+      }
     }
-    if (playback.prepared) return playback.prepared.config.dry_run ? 'test' : 'live';
+    if (playback.prepared) {
+      return playback.prepared.config.dry_run ? 'prepared-test' : 'prepared-live';
+    }
     return null;
   });
   const setSongLiked = useStore((store) => store.setSongLiked);
@@ -67,13 +72,21 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           : hasCurrentSong
             ? 'Last played'
             : 'Selected');
+  const testModeDescription =
+    playbackMode === 'test'
+      ? TEST_MODE_ACCESSIBLE_DESCRIPTION
+      : playbackMode === 'prepared-test'
+        ? TEST_MODE_PREPARED_DESCRIPTION
+        : null;
   const statusAccessibilityLabel =
     `${title}: ${baseStatus}` +
-    (playbackMode === 'test'
-      ? '. Test mode; no keyboard input is sent.'
+    (testModeDescription
+      ? `. ${testModeDescription}`
       : playbackMode === 'live'
         ? '. Normal playback may send physical input.'
-        : '');
+        : playbackMode === 'prepared-live'
+          ? '. Prepared for normal playback.'
+          : '');
 
   return (
     <div
@@ -87,7 +100,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       >
         <Music2 size={17} />
       </span>
-      <div className="@container/player-track-info grid min-w-0 flex-1 gap-0.5">
+      <div className="grid min-w-0 flex-1 gap-0.5">
         <div className="flex min-w-0 items-center gap-1.5 max-[700px]:gap-1">
           <strong
             className="min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-foreground"
@@ -122,13 +135,13 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           >
             {baseStatus}
           </span>
-          {playbackMode === 'test' && (
+          {testModeDescription && (
             <StatusBadge
               className="shrink-0"
               appearance="plain"
               indicator={false}
-              aria-label={TEST_MODE_ACCESSIBLE_DESCRIPTION}
-              title={TEST_MODE_ACCESSIBLE_DESCRIPTION}
+              aria-label={testModeDescription}
+              title={testModeDescription}
             >
               {TEST_MODE_LABEL}
             </StatusBadge>

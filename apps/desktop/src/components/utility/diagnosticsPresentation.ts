@@ -1,3 +1,4 @@
+import type { UiEvent } from '../../bridge/generated/UiEvent';
 import type { DesktopStore } from '../../state/store';
 import { playbackIssuePresentation, playbackSessionStatusConcern } from '../../state/store';
 
@@ -76,7 +77,7 @@ export function playbackStatusLabel(playback: PlaybackSummaryState): string {
   }
 }
 
-const KNOWN_EVENT_LABELS: Readonly<Record<string, string>> = {
+const KNOWN_EVENT_LABELS: Readonly<Record<UiEvent['name'], string>> = {
   'core.ready': 'Native runtime ready',
   'core.fatal': 'Native runtime error',
   'catalog.changed': 'Library catalog updated',
@@ -90,7 +91,9 @@ const KNOWN_EVENT_LABELS: Readonly<Record<string, string>> = {
 };
 
 export function knownEventLabel(name: string): string | null {
-  return KNOWN_EVENT_LABELS[name] ?? null;
+  return Object.hasOwn(KNOWN_EVENT_LABELS, name)
+    ? KNOWN_EVENT_LABELS[name as UiEvent['name']]
+    : null;
 }
 
 export function backendStatusLabel(

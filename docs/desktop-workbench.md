@@ -39,8 +39,17 @@ Production action controls use the shared `Button` variants: `default` for prima
 controls with their existing hit targets. The Player Dock uses a 92 px grid with equal flexible
 side columns around a centered transport column capped at 600 px or 45 vw. At compact widths it
 keeps song title, playback status, test-mode label, timeline, and centered transport visible while
-removing the decorative note glyph. The test-mode label uses “Test mode” in both wide and compact layouts; its accessible label always
-says that no keyboard input is sent. The timeline uses the semantic control-hover track color.
+removing the decorative note glyph. The test-mode label uses “Test mode” in both wide and compact layouts; confirmed active sessions
+announce “Test mode: no keyboard input is sent.” while prepared dry-run intent announces
+“Prepared for Test mode: no keyboard input will be sent.” The timeline uses the semantic
+control-hover track color.
+
+Playback confirmation (`PlaybackAdmission.tsx`) preserves native decision order, primary CTA
+(`use_recommended` when offered, otherwise `proceed`), initial focus, and `Not now` cancellation,
+using neutral note-registration warning copy and `aria-describedby`-linked per-option descriptions.
+Graphite 2.0 defines dual Dark (`#121314` / `#191a1b` / `#202122`) and Light
+(`#f5f6f8` / `#ffffff` / `#ffffff`) semantic tokens in `globals.css`, applying mode switches
+instantly (`0ms`) via a transient `data-theme-applying` attribute in `applyAppearance.ts`.
 
 The Library's empty Playlists action uses an outline while Built-in Songs are available and a filled
 primary style when that source is unavailable. Its help text stays short and explains the playlist's

@@ -264,8 +264,10 @@ function ProfileFields({
   onAdvancedTimingOpenChange,
 }: ProfileFieldsProps) {
   const holdId = useId();
+  const holdHintId = useId();
   const tempoId = useId();
   const fpsId = useId();
+  const fpsHintId = useId();
 
   if (!defaults || !bootstrap) {
     return <span className="text-muted-foreground">Profile unavailable</span>;
@@ -306,7 +308,12 @@ function ProfileFields({
               void patchSettings({ playbackDefaults: { holdFrames: Number(value) } });
           }}
         >
-          <SelectTrigger id={holdId} className="h-8" aria-label="Base hold">
+          <SelectTrigger
+            id={holdId}
+            className="h-8"
+            aria-label="Base hold"
+            aria-describedby={holdHintId}
+          >
             <SelectValue>
               {(value: string | null) => (value === null ? 'Base hold' : `${value}f`)}
             </SelectValue>
@@ -320,7 +327,7 @@ function ProfileFields({
             ))}
           </SelectContent>
         </Select>
-        <span className="text-xs leading-4 text-text-tertiary">
+        <span id={holdHintId} className="text-xs leading-4 text-text-tertiary">
           {formatHoldFramesHint(defaults.hold_frames, defaults.fps)}
         </span>
       </div>
@@ -378,7 +385,12 @@ function ProfileFields({
                   void patchSettings({ playbackDefaults: { fps: Number(value) } });
               }}
             >
-              <SelectTrigger id={fpsId} className="h-8" aria-label="FPS">
+              <SelectTrigger
+                id={fpsId}
+                className="h-8"
+                aria-label="FPS"
+                aria-describedby={fpsHintId}
+              >
                 <SelectValue>{(value: string | null) => value ?? 'FPS'}</SelectValue>
               </SelectTrigger>
               <SelectContent className="min-w-40">
@@ -390,6 +402,9 @@ function ProfileFields({
                 ))}
               </SelectContent>
             </Select>
+            <span id={fpsHintId} className="sr-only">
+              Frames per second ({formatFpsFrameHint(defaults.fps)})
+            </span>
           </div>
           <TimingMarginControl
             value={defaults.timing_margin_us}

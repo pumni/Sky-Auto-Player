@@ -42,10 +42,7 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
   const playbackIsActive = useStore((store: DesktopStore) =>
     ['starting', 'playing', 'paused', 'stopping'].includes(store.playback.state),
   );
-  const dryRun = useStore(
-    (store: DesktopStore) =>
-      store.playback.context?.dryRun ?? store.playback.prepared?.config.dry_run ?? false,
-  );
+  const dryRun = useStore((store: DesktopStore) => store.playback.context?.dryRun ?? false);
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
   const nativeSessionActive = diagnostics.enabled && playbackIsActive && sessionId !== null;
   const activeSession = nativeSessionActive && latest?.session_id === sessionId;

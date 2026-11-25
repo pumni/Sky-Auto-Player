@@ -58,7 +58,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
           aria-labelledby="playback-confirmation-title"
           aria-describedby="playback-confirmation-reason playback-confirmation-consequence"
         >
-          <ScrollAreaContent className="grid min-w-0 grid-cols-1 gap-3 px-4 py-3 pr-6">
+          <ScrollAreaContent className="grid min-w-0 grid-cols-1 gap-3 px-4 pt-3 pb-4 pr-6">
             <div className="grid min-w-0 gap-1.5">
               <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-2">
                 <strong
@@ -88,8 +88,8 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                 id="playback-confirmation-consequence"
                 className="m-0 break-words text-xs leading-relaxed text-muted-foreground"
               >
-                Timing risk affects note detection in-game, not your account. Choose an option below
-                or cancel without starting.
+                This warning estimates how accurately the game may register notes. Choose an option
+                below or cancel without starting.
               </p>
             </div>
             <div className="grid min-w-0 gap-2.5">
@@ -106,6 +106,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                     );
                     const status = variant?.timing_advisory?.status;
                     const isPrimary = decision.decision === primaryDecision;
+                    const descriptionId = `playback-decision-description-${decision.decision}`;
                     const estimateLabel =
                       status === 'short_up_gap_risk'
                         ? 'Short same-key Up gap risk'
@@ -122,6 +123,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                           variant={isPrimary ? 'default' : 'outline'}
                           className="h-full min-h-12 w-full justify-center whitespace-normal px-2.5 py-1.5 text-center text-xs leading-[1.3]"
                           type="button"
+                          aria-describedby={descriptionId}
                           disabled={transportOperation !== null}
                           ref={
                             isPrimary ||
@@ -134,7 +136,10 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                         >
                           {admissionDecisionLabel(decision.decision, decision.label)}
                         </Button>
-                        <p className="m-0 text-[11px] leading-4 text-text-secondary">
+                        <p
+                          id={descriptionId}
+                          className="m-0 text-[11px] leading-4 text-text-secondary"
+                        >
                           {admissionDecisionDescription(decision.decision)}
                         </p>
                         <details
