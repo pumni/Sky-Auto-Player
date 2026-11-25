@@ -2460,8 +2460,35 @@ test('Add songs menu reopens safely while its Base UI exit transition is active'
   const browse = menu.getByRole('menuitem', { name: 'Browse Built-in Songs…' });
   await trigger.click();
   await expect(menu).toBeVisible();
+  await page.evaluate(() => {
+    type MenuExitMonitor = { sawEndingStyle: boolean; observer: MutationObserver };
+    const targetWindow = window as Window & { __wp2MenuExitMonitor?: MenuExitMonitor };
+    const monitor = {
+      sawEndingStyle: false,
+      observer: new MutationObserver((records) => {
+        monitor.sawEndingStyle ||= records.some(
+          ({ target }) =>
+            target instanceof HTMLElement &&
+            target.matches('[role="menu"][aria-label="Add songs"]') &&
+            target.hasAttribute('data-ending-style'),
+        );
+      }),
+    };
+    targetWindow.__wp2MenuExitMonitor = monitor;
+    monitor.observer.observe(document.body, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['data-ending-style'],
+    });
+  });
   await page.keyboard.press('Escape');
-  await expect(menu).toHaveAttribute('data-ending-style');
+  expect(
+    await page.evaluate(
+      () =>
+        (window as Window & { __wp2MenuExitMonitor?: { sawEndingStyle: boolean } })
+          .__wp2MenuExitMonitor?.sawEndingStyle,
+    ),
+  ).toBe(true);
 
   await trigger.click();
   await expect(menu).toBeVisible();
@@ -2475,6 +2502,11 @@ test('Add songs menu reopens safely while its Base UI exit transition is active'
   await expect(menu).toHaveCount(0);
   await expect(trigger).toBeFocused();
   await expect(page.locator('[data-base-ui-focus-guard]')).toHaveCount(0);
+  await page.evaluate(() => {
+    (
+      window as Window & { __wp2MenuExitMonitor?: { observer: MutationObserver } }
+    ).__wp2MenuExitMonitor?.observer.disconnect();
+  });
 });
 
 test('long sheet titles remain contained in the Track Browser, Utility, and Player Bar', async ({
