@@ -89,6 +89,7 @@ describe('Sky Graphite 2 semantic theme', () => {
       ['--color-destructive-hover', '--destructive-hover'],
       ['--color-destructive-pressed', '--destructive-pressed'],
       ['--color-control-active', '--control-active'],
+      ['--color-row-hover', '--row-hover'],
       ['--color-scrollbar-thumb', '--scrollbar-thumb'],
       ['--color-scrollbar-thumb-active', '--scrollbar-thumb-active'],
       ['--color-scrim', '--scrim'],

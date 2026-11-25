@@ -14,7 +14,7 @@ export function PlayerBar({ useStore, utilityTriggerRef }: PlayerBarProps) {
   return (
     <footer
       data-slot="player-dock"
-      className="relative grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,min(600px,45vw))_minmax(0,1fr)] items-center gap-2 border-t border-border bg-card px-3 py-2 text-text-secondary"
+      className="relative grid min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,min(600px,45vw))_minmax(0,1fr)] max-[700px]:grid-cols-[minmax(0,1fr)_minmax(0,min(600px,41vw))_minmax(0,1fr)] items-center gap-2 border-t border-border bg-card px-3 py-2 text-text-secondary"
       aria-label="Player controls"
     >
       <PlaybackAdmission useStore={useStore} />

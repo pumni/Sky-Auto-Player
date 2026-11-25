@@ -85,7 +85,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
         <Music2 size={17} />
       </span>
       <div className="@container/player-track-info grid min-w-0 flex-1 gap-0.5">
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex min-w-0 items-center gap-1.5 max-[700px]:gap-1">
           <strong
             className="min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-foreground"
             title={title}
@@ -96,7 +96,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
             <Button
               variant="ghost"
               size="icon-sm"
-              className={`size-[30px] flex-none rounded-full p-0 text-text-tertiary hover:bg-control-hover hover:text-accent-ink focus-visible:text-accent-ink ${liked ? 'text-accent-ink' : ''}`}
+              className={`size-[30px] max-[700px]:size-[28px] flex-none rounded-full p-0 text-text-tertiary hover:bg-control-hover hover:text-accent-ink focus-visible:text-accent-ink ${liked ? 'text-accent-ink' : ''}`}
               type="button"
               aria-label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
               aria-pressed={liked}
@@ -107,7 +107,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
             </Button>
           )}
         </div>
-        <div className="flex min-w-0 items-center gap-1.5">
+        <div className="flex min-w-0 items-center gap-1.5 max-[700px]:gap-1">
           <span
             data-slot="player-track-status"
             className={`block min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-4 ${sessionStatusConcern !== null ? 'text-warning' : active ? 'text-accent-ink' : 'text-muted-foreground'}`}

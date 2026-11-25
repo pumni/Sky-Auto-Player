@@ -28,6 +28,7 @@ const themeRoles = [
   '--secondary',
   '--secondary-foreground',
   '--control-hover',
+  '--row-hover',
   '--control-pressed',
   '--control-active',
   '--scrollbar-thumb',
@@ -722,12 +723,17 @@ test('Light row hover, segmented boundary, forced-colors segmented label, and ne
   await idleRow.hover();
   await expect
     .poll(() => idleRow.evaluate((el) => getComputedStyle(el).backgroundColor))
-    .toBe(computedRgb(lightTheme['--control-hover']));
-  expect(lightTheme['--control-hover']).not.toBe(lightTheme['--selection']);
-  expect(lightTheme['--control-hover']).not.toBe(lightTheme['--playing']);
-  expect(lightTheme['--control-hover']).not.toBe(lightTheme['--card']);
+    .toBe(computedRgb(lightTheme['--row-hover']));
+  expect(lightTheme['--row-hover']).not.toBe(lightTheme['--selection']);
+  expect(lightTheme['--row-hover']).not.toBe(lightTheme['--playing']);
+  expect(lightTheme['--row-hover']).not.toBe(lightTheme['--card']);
+  const lightOrdinalColor = await idleRow
+    .locator('[role="gridcell"]')
+    .first()
+    .evaluate((el) => getComputedStyle(el).color);
+  expect(contrast(lightOrdinalColor, lightTheme['--row-hover'])).toBeGreaterThanOrEqual(4.5);
   expect(
-    contrast(lightTheme['--text-secondary'], lightTheme['--control-hover']),
+    contrast(lightTheme['--text-secondary'], lightTheme['--row-hover']),
   ).toBeGreaterThanOrEqual(4.5);
 
   // Light segmented indicator boundary and contrast
@@ -781,4 +787,20 @@ test('Light row hover, segmented boundary, forced-colors segmented label, and ne
     computedRgb(darkTheme['--overlay-border']),
   );
   await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(profileDialog).toBeHidden();
+
+  // Graphite row hover ordinal contrast and distinct idle/hover/selected/playing states
+  await idleRow.hover();
+  await expect
+    .poll(() => idleRow.evaluate((el) => getComputedStyle(el).backgroundColor))
+    .toBe(computedRgb(darkTheme['--row-hover']));
+  const darkOrdinalColor = await idleRow
+    .locator('[role="gridcell"]')
+    .first()
+    .evaluate((el) => getComputedStyle(el).color);
+  expect(contrast(darkOrdinalColor, darkTheme['--row-hover'])).toBeGreaterThanOrEqual(4.5);
+  expect(darkTheme['--row-hover']).not.toBe(darkTheme['--card']);
+  expect(darkTheme['--row-hover']).not.toBe(darkTheme['--selection']);
+  expect(darkTheme['--row-hover']).not.toBe(darkTheme['--playing']);
 });

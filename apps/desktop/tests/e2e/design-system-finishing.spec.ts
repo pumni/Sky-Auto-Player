@@ -51,7 +51,7 @@ test('Runtime tabs fill the available width and use one raised segmented indicat
   const songDetails = page.getByRole('region', { name: 'Utility: Song Details' });
   await songDetails.getByRole('tab', { name: 'Runtime' }).click();
 
-  const assertColorsAndGeometry = async () => {
+  const assertColorsAndGeometry = async (mode: 'dark' | 'light') => {
     await expect
       .poll(() =>
         page.evaluate(() => {
@@ -117,6 +117,7 @@ test('Runtime tabs fill the available width and use one raised segmented indicat
           controlActive: color('--control-active'),
           foreground: color('--foreground'),
           border: color('--border'),
+          input: color('--input'),
           accentInk: color('--accent-ink'),
         };
         probe.remove();
@@ -151,7 +152,9 @@ test('Runtime tabs fill the available width and use one raised segmented indicat
     );
     expect(result.segmented.track).toBe(result.segmented.secondary);
     expect(result.segmented.indicator).toBe(result.segmented.controlActive);
-    expect(result.segmented.indicatorBorder).toBe(result.segmented.border);
+    expect(result.segmented.indicatorBorder).toBe(
+      mode === 'light' ? result.segmented.input : result.segmented.border,
+    );
     expect(result.segmented.activeBackground).toBe('rgba(0, 0, 0, 0)');
     expect(result.segmented.activeText).toBe(result.segmented.foreground);
     expect(result.segmented.activeWeight).toBeGreaterThanOrEqual(600);
@@ -164,21 +167,32 @@ test('Runtime tabs fill the available width and use one raised segmented indicat
 
   for (const palette of palettes) {
     await selectPalette(page, palette);
-    await assertColorsAndGeometry();
+    await assertColorsAndGeometry('dark');
   }
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
-  await assertColorsAndGeometry();
+  await assertColorsAndGeometry('light');
   await page.emulateMedia({ forcedColors: 'active' });
   await expect
     .poll(() =>
-      page
-        .locator(
+      page.evaluate(() => {
+        const indicator = document.querySelector<HTMLElement>(
           '[data-slot="tabs-list"][aria-label="Diagnostics views"] [data-slot="tabs-indicator"]',
-        )
-        .evaluate((element) => getComputedStyle(element).backgroundColor),
+        );
+        const active = document.querySelector<HTMLElement>(
+          '[data-slot="tabs-list"][aria-label="Diagnostics views"] [role="tab"][aria-selected="true"]',
+        );
+        if (!indicator || !active) return false;
+        const indicatorBg = getComputedStyle(indicator).backgroundColor;
+        const activeColor = getComputedStyle(active).color;
+        return (
+          indicatorBg !== 'rgba(0, 0, 0, 0)' &&
+          activeColor !== 'rgba(0, 0, 0, 0)' &&
+          activeColor !== indicatorBg
+        );
+      }),
     )
-    .not.toBe('rgba(0, 0, 0, 0)');
+    .toBe(true);
 });
 
 test('scrollbar visibility follows scrolling and thumb drag, not hover or focus', async ({
@@ -237,12 +251,73 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
       await expectHidden();
 
       const previousTopBeforeKeyboard = await grid.evaluate((element) => element.scrollTop);
+      await scrollbar.evaluate((element) => {
+        const state = {
+          sawDataScrolling: element.hasAttribute('data-scrolling'),
+          sawPointerAuto: getComputedStyle(element).pointerEvents === 'auto',
+          maxOpacity: Number.parseFloat(getComputedStyle(element).opacity),
+        };
+        const record = () => {
+          if (element.hasAttribute('data-scrolling')) state.sawDataScrolling = true;
+          const style = getComputedStyle(element);
+          if (style.pointerEvents === 'auto') state.sawPointerAuto = true;
+          const opacity = Number.parseFloat(style.opacity);
+          if (opacity > state.maxOpacity) state.maxOpacity = opacity;
+        };
+        const observer = new MutationObserver(() => {
+          record();
+          if (element.hasAttribute('data-scrolling')) {
+            const sample = () => {
+              record();
+              if (element.hasAttribute('data-scrolling')) requestAnimationFrame(sample);
+            };
+            requestAnimationFrame(sample);
+          }
+        });
+        observer.observe(element, { attributes: true, attributeFilter: ['data-scrolling'] });
+        (
+          window as unknown as {
+            __keyboardScrollObservation?: { state: typeof state; stop: () => void };
+          }
+        ).__keyboardScrollObservation = {
+          state,
+          stop: () => observer.disconnect(),
+        };
+      });
       await page.keyboard.press('PageDown');
       await page.keyboard.press('PageDown');
       await expect
         .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
         .toBeGreaterThan(previousTopBeforeKeyboard);
-      await expectActive();
+      await expect
+        .poll(
+          () =>
+            page.evaluate(() => {
+              const obs = (
+                window as unknown as {
+                  __keyboardScrollObservation?: {
+                    state: {
+                      sawDataScrolling: boolean;
+                      sawPointerAuto: boolean;
+                      maxOpacity: number;
+                    };
+                  };
+                }
+              ).__keyboardScrollObservation;
+              return Boolean(
+                obs?.state.sawDataScrolling && obs.state.sawPointerAuto && obs.state.maxOpacity > 0,
+              );
+            }),
+          { intervals: [10, 20, 40] },
+        )
+        .toBe(true);
+      await page.evaluate(() => {
+        const win = window as unknown as {
+          __keyboardScrollObservation?: { stop: () => void };
+        };
+        win.__keyboardScrollObservation?.stop();
+        delete win.__keyboardScrollObservation;
+      });
       await waitForScrollToSettle();
       await expectHidden();
     }
