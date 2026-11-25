@@ -282,8 +282,9 @@ export function classifyBaseUiFocusGuardFinding(
 
   const uniqueSelectors = new Set(selectors);
   const reviewedSelectors = new Set(REVIEWED_ADD_SONGS_GUARDS.map(({ selector }) => selector));
+  // Axe repeats each target in its related-node details, so count result nodes separately.
   if (
-    selectors.length !== reviewedSelectors.size ||
+    violation.nodes.length !== reviewedSelectors.size ||
     uniqueSelectors.size !== reviewedSelectors.size ||
     [...reviewedSelectors].some((selector) => !uniqueSelectors.has(selector))
   ) {
