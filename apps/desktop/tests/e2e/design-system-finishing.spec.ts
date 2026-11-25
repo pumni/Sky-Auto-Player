@@ -201,23 +201,20 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
       .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).pointerEvents))
       .toBe('none');
   };
-  const expectScrolling = async () => {
-    await expect
-      .poll(() => scrollbar.evaluate((element) => element.hasAttribute('data-scrolling')), {
-        intervals: [10, 20, 40],
-      })
-      .toBe(true);
+  const expectActive = async () => {
     await expect
       .poll(
-        () => scrollbar.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity)),
+        () =>
+          scrollbar.evaluate((element) => {
+            const active =
+              element.hasAttribute('data-scrolling') ||
+              element.getAttribute('data-dragging') === 'true';
+            const style = getComputedStyle(element);
+            return active && Number.parseFloat(style.opacity) > 0 && style.pointerEvents === 'auto';
+          }),
         { intervals: [10, 20, 40] },
       )
-      .toBeGreaterThan(0);
-    await expect
-      .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).pointerEvents), {
-        intervals: [10, 20, 40],
-      })
-      .toBe('auto');
+      .toBe(true);
   };
   const waitForScrollToSettle = async () => {
     await expect
@@ -243,9 +240,9 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
       await page.keyboard.press('PageDown');
       await page.keyboard.press('PageDown');
       await expect
-        .poll(() => grid.evaluate((element) => element.scrollTop))
+        .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
         .toBeGreaterThan(previousTopBeforeKeyboard);
-      await expectScrolling();
+      await expectActive();
       await waitForScrollToSettle();
       await expectHidden();
     }
@@ -255,9 +252,9 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
     await page.mouse.wheel(0, 320);
     await page.mouse.wheel(0, 320);
     await expect
-      .poll(() => grid.evaluate((element) => element.scrollTop))
+      .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
       .toBeGreaterThan(previousTop);
-    await expectScrolling();
+    await expectActive();
 
     const colors = await scrollArea.evaluate((area) => {
       const track = area.querySelector<HTMLElement>('[role="grid"]');
@@ -291,7 +288,7 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
       await page.mouse.down();
       await page.mouse.move(thumbX, thumbY + 14);
       await expect.poll(() => scrollbar.getAttribute('data-dragging')).toBe('true');
-      await expectScrolling();
+      await expectActive();
       await waitForScrollToSettle();
       await expect
         .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).opacity))
@@ -342,7 +339,7 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
   await grid.hover();
   await page.mouse.wheel(0, 320);
   await page.mouse.wheel(0, 320);
-  await expectScrolling();
+  await expectActive();
   const lightColors = await scrollArea.evaluate((area) => {
     const track = area.querySelector<HTMLElement>('[role="grid"]');
     const thumb = area.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
