@@ -565,15 +565,12 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   });
   await expect(compactTrackInfo.locator('strong')).toHaveText('Aurora Landing');
   await expect(compactTrackInfo.locator('[data-slot="status-badge"]')).toHaveText('Medium risk');
-  const compactTitleFits = await compactTrackInfo
-    .locator('strong')
-    .evaluate((title) => {
-      const element = title as HTMLElement;
-      return element.scrollWidth <= element.clientWidth;
-    });
+  const compactTitleFits = await compactTrackInfo.locator('strong').evaluate((title) => {
+    const element = title as HTMLElement;
+    return element.scrollWidth <= element.clientWidth;
+  });
   expect(compactTitleFits).toBe(true);
-  if (shouldCapture('compact-admission'))
-    await capture(page, 'candidate-admission-640x448.png');
+  if (shouldCapture('compact-admission')) await capture(page, 'candidate-admission-640x448.png');
 
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/?mockReleaseNotes=short');
