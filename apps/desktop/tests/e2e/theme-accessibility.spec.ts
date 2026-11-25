@@ -615,13 +615,24 @@ test('forced colors retain control feedback and reduced motion removes overlay m
   const idleRow = page.locator('[data-slot="track-row"][data-state="idle"]').first();
   const idleRowColors = await idleRow.evaluate((element) => {
     const grid = element.closest<HTMLElement>('[role="grid"]');
+    const backgroundSurfaces: string[] = [];
+    let ancestor = element.parentElement;
+    while (ancestor) {
+      backgroundSurfaces.push(getComputedStyle(ancestor).backgroundColor);
+      ancestor = ancestor.parentElement;
+    }
+    const surfaceBackground = backgroundSurfaces.find(
+      (color) => color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent',
+    );
     return {
       rowBorder: getComputedStyle(element).borderLeftColor,
       gridSurface: grid ? getComputedStyle(grid).backgroundColor : null,
+      surfaceBackground: surfaceBackground ?? null,
     };
   });
   expect(idleRowColors.gridSurface).not.toBeNull();
-  expect(idleRowColors.rowBorder).toBe(idleRowColors.gridSurface);
+  expect(idleRowColors.surfaceBackground).not.toBeNull();
+  expect(idleRowColors.rowBorder).toBe(idleRowColors.surfaceBackground);
 
   await page.getByRole('button', { name: 'Open settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });

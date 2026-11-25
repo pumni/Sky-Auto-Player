@@ -5,7 +5,10 @@ function ScrollAreaRoot({ className, ...props }: ScrollAreaPrimitive.Root.Props)
   return (
     <ScrollAreaPrimitive.Root
       data-slot="scroll-area"
-      className={cn('group/scroll-area relative min-h-0 min-w-0 overflow-hidden', className)}
+      className={cn(
+        'group/scroll-area relative grid grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,auto)] min-h-0 min-w-0 overflow-hidden',
+        className,
+      )}
       {...props}
     />
   );
@@ -16,7 +19,7 @@ function ScrollAreaViewport({ className, ...props }: ScrollAreaPrimitive.Viewpor
     <ScrollAreaPrimitive.Viewport
       data-slot="scroll-area-viewport"
       className={cn(
-        'size-full overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
+        'col-start-1 row-start-1 overscroll-contain [scrollbar-width:none] [&::-webkit-scrollbar]:hidden',
         className,
       )}
       {...props}
@@ -24,11 +27,14 @@ function ScrollAreaViewport({ className, ...props }: ScrollAreaPrimitive.Viewpor
   );
 }
 
-function ScrollAreaContent({ className, ...props }: ScrollAreaPrimitive.Content.Props) {
+function ScrollAreaContent({ className, style, ...props }: ScrollAreaPrimitive.Content.Props) {
   return (
     <ScrollAreaPrimitive.Content
       data-slot="scroll-area-content"
       className={cn('min-w-0', className)}
+      // Base UI defaults this measurement wrapper to fit-content. App panels need to wrap text
+      // within the viewport; callers can still opt into horizontal content with w-max.
+      style={{ minWidth: 0, ...style }}
       {...props}
     />
   );

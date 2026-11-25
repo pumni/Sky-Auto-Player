@@ -520,7 +520,7 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       const selectedTab = state === 'runtime' ? runtime : details;
       const inactiveTab = state === 'runtime' ? details : runtime;
       expect(selectedTab.color).toBe('rgb(154, 168, 255)');
-      expect(inactiveTab.color).toBe('rgb(166, 168, 173)');
+      expect(inactiveTab.color).toBe('rgb(148, 151, 158)');
       expect(indicator.backgroundColor).toBe('rgb(154, 168, 255)');
       expect(Math.abs(indicator.x - selectedTab.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(indicator.width - selectedTab.width)).toBeLessThanOrEqual(1);

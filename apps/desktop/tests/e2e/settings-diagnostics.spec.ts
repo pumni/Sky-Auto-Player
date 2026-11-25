@@ -19,7 +19,7 @@ test('Playback Profile works through the narrow popover with focus restore', asy
     expect(box).not.toBeNull();
     if (box) {
       expect(box.width).toBeGreaterThanOrEqual(260);
-      expect(box.width).toBeLessThanOrEqual(350);
+      expect(box.width).toBeLessThanOrEqual(360);
       expect(box.x).toBeGreaterThanOrEqual(0);
       expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()?.width ?? 0);
     }

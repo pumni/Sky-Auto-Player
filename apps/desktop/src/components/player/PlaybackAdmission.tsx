@@ -48,7 +48,8 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
   if (admissionRequired && prepared) {
     return (
       <ScrollAreaRoot
-        className="absolute bottom-[calc(100%+8px)] left-1/2 z-20 flex max-h-[min(68dvh,520px)] w-[min(600px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 flex-col rounded-pane border border-warning-border border-l-[3px] bg-popover shadow-2xl"
+        style={{ position: 'absolute' }}
+        className="bottom-[calc(100%+8px)] left-1/2 z-20 flex max-h-[min(68dvh,520px)] w-[min(600px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 flex-col rounded-pane border border-warning-border border-l-[3px] bg-popover shadow-2xl"
         data-slot="playback-admission"
       >
         <ScrollAreaViewport

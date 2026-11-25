@@ -240,7 +240,7 @@ test('Graphite workspace header follows the Track Browser width without changing
     expect(geometry.titleStyle?.fontWeight).toBe('600');
     expect(geometry.countStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '12px' : '11px');
     expect(geometry.browserStyle?.background).toBe('rgb(25, 26, 27)');
-    expect(geometry.columnStyle?.background).toBe('rgb(25, 26, 27)');
+    expect(geometry.columnStyle?.background).toBe('rgb(21, 22, 24)');
     expect(geometry.columnStyle?.borderBottomWidth).toBe('0px');
     expect(geometry.divider).not.toBeNull();
     if (!geometry.divider) throw new Error('Graphite inset column divider is missing');

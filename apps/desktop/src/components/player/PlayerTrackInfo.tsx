@@ -126,8 +126,8 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
               aria-label={testModeDescription}
               title={testModeDescription}
             >
-              <span className="hidden @min-[150px]/player-track-info:inline">Test · no keys</span>
-              <span className="inline @min-[150px]/player-track-info:hidden">Dry run</span>
+              <span className="hidden @min-[180px]/player-track-info:inline">Test · no keys</span>
+              <span className="inline @min-[180px]/player-track-info:hidden">Dry run</span>
             </StatusBadge>
           )}
         </div>

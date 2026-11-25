@@ -137,7 +137,7 @@ export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
                 <ScrollAreaViewport
                   data-slot="update-notes-region"
                   aria-labelledby="update-release-notes-heading"
-                  className="size-full focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+                  className="focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
                   role="region"
                   tabIndex={0}
                 >
@@ -150,7 +150,7 @@ export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
                     </h3>
                     <p
                       data-slot="update-release-notes"
-                      className="m-0 break-words text-[13px] leading-relaxed text-text-secondary"
+                      className="m-0 min-w-0 break-words text-[13px] leading-relaxed text-text-secondary [overflow-wrap:anywhere]"
                     >
                       {update.releaseNotes}
                     </p>
@@ -228,12 +228,8 @@ export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
               </div>
             </div>
             <ScrollAreaRoot className="mt-2 min-h-0 flex-1 rounded-control border border-danger-border bg-danger-surface">
-              <ScrollAreaViewport
-                data-slot="update-error-region"
-                className="size-full"
-                role="alert"
-              >
-                <ScrollAreaContent className="break-words p-3 text-[13px] leading-relaxed text-danger">
+              <ScrollAreaViewport data-slot="update-error-region" role="alert">
+                <ScrollAreaContent className="min-w-0 break-words p-3 text-[13px] leading-relaxed text-danger [overflow-wrap:anywhere]">
                   {errorText}
                 </ScrollAreaContent>
               </ScrollAreaViewport>

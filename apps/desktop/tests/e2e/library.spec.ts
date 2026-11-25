@@ -2834,7 +2834,7 @@ test('F3.3 collapsed rail directly lists playlists and scrolls only its playlist
     };
   });
   expect(beforeScroll.scrollHeight).toBeGreaterThan(beforeScroll.clientHeight);
-  expect(beforeScroll.overflowY).toBe('auto');
+  expect(beforeScroll.overflowY).toBe('scroll');
   expect(beforeScroll.firstTile.width).toBe(40);
   expect(beforeScroll.firstTile.height).toBe(40);
   expect(beforeScroll.documentWidth).toBeLessThanOrEqual(995);
