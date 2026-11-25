@@ -1,8 +1,8 @@
 {
   "status": "captured",
-  "source_sha": "bc89bf9df0992c5bba93296cd69f31c43df55822",
-  "desktop_tree_sha": "79505f63e4f1e4f1f10c5f6ec5eec4596449053b",
-  "captured_at_utc": "2026-11-25T07:40:15.885Z",
+  "source_sha": "33bdc70bd660ce04a020f291d35f1d220d788211",
+  "desktop_tree_sha": "c8870619a996fbf81e6780ce01664532312c1170",
+  "captured_at_utc": "2026-11-25T08:00:47.901Z",
   "environment": "Playwright Chromium with deterministic desktop mock bridge; not native Tauri/Windows",
   "generated_by": "bun run ui:refresh (apps/desktop)",
   "scenes": {
@@ -10,6 +10,7 @@
     "compact.png": "Graphite compact workbench, 800x560 CSS viewport",
     "overlay.png": "Browser-only responsive inspector overlay, 640x448; not supported native window minimum",
     "diagnostics.png": "Runtime diagnostics, dry run without physical keyboard input, 1366x768",
-    "appearance-settings-light.png": "Review-only Appearance settings state with Light active and Graphite saved, 1366x768"
+    "appearance-settings-light.png": "Review-only Appearance settings state with Light active and Graphite saved, 1366x768",
+    "compact-admission.png": "Compact 640x448 dry-run risk confirmation with readable title and risk badge"
   }
 }
