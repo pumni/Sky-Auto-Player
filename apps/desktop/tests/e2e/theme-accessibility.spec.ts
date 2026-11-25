@@ -23,6 +23,9 @@ const themeRoles = [
   '--primary-hover',
   '--primary-pressed',
   '--primary-foreground',
+  '--border',
+  '--secondary',
+  '--control-pressed',
   '--ring',
   '--input',
   '--selection',
@@ -151,7 +154,7 @@ test('all six dark palettes meet semantic text, action, status, and focus contra
   }
 });
 
-test('primary actions use computed rest, hover, and pressed theme colors in every dark palette', async ({
+test('primary and outlined actions use computed theme colors in every dark palette', async ({
   page,
 }) => {
   await page.goto('/');
@@ -169,14 +172,20 @@ test('primary actions use computed rest, hover, and pressed theme colors in ever
     const theme = await resolvedTheme(page);
     const createRest = await createPlaylist.evaluate((element) => {
       const style = getComputedStyle(element);
-      return { background: style.backgroundColor, foreground: style.color };
+      return { background: style.backgroundColor, border: style.borderColor };
     });
-    expect(createRest.background).toBe(computedRgb(theme['--primary']));
-    expect(createRest.foreground).toBe(computedRgb(theme['--primary-foreground']));
+    expect(createRest.background).toBe(computedRgb(theme['--background']));
+    expect(createRest.border).toBe(computedRgb(theme['--border']));
     await createPlaylist.hover();
     await expect
       .poll(() => createPlaylist.evaluate((element) => getComputedStyle(element).backgroundColor))
-      .toBe(computedRgb(theme['--primary-hover']));
+      .toBe(computedRgb(theme['--secondary']));
+    await page.mouse.down();
+    await expect
+      .poll(() => createPlaylist.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .toBe(computedRgb(theme['--control-pressed']));
+    await page.mouse.move(0, 0);
+    await page.mouse.up();
 
     const rest = await primaryAction.evaluate((element) => {
       const style = getComputedStyle(element);

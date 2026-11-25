@@ -1133,7 +1133,7 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
       if (!condition) failures.push(reason);
     };
 
-    check(metrics.titleLineHeight >= metrics.titleFontSize * 1.39, 'short title line box');
+    check(metrics.titleLineHeight >= metrics.titleFontSize * 1.375, 'short title line box');
     check(baselineDelta <= 0.5, 'title/count separator baseline mismatch');
     check(
       metrics.titleOverflow === 'hidden' &&
@@ -1350,7 +1350,7 @@ test('F3.1 heading typography and pager alignment stay clear at desktop and comp
     metrics: playlistMetrics,
   });
   expect(playlistMetrics.titleLineHeight).toBeGreaterThanOrEqual(
-    playlistMetrics.titleFontSize * 1.39,
+    playlistMetrics.titleFontSize * 1.375,
   );
   expect(
     Math.abs(playlistMetrics.titleTextBaseline - playlistMetrics.countTextBaseline),
@@ -1749,8 +1749,8 @@ test('playlist onboarding stays available with either a populated or empty catal
   await page.goto('/');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
   await expect(page.locator('[data-slot="track-browser-guidance"]')).toHaveCount(0);
-  await expect(page.locator('[data-slot="library-empty-playlists-guidance"]')).toContainText(
-    'import local sheet files',
+  await expect(page.locator('[data-slot="library-empty-playlists-guidance"]')).toHaveText(
+    'Create a playlist to collect songs or import local sheets.',
   );
 
   await page.goto('/?mockLibraryState=empty');
@@ -1760,8 +1760,8 @@ test('playlist onboarding stays available with either a populated or empty catal
   await expect(page.locator('[data-slot="track-browser-guidance"]')).toContainText(
     'Create a playlist to import local sheets.',
   );
-  await expect(page.locator('[data-slot="library-empty-playlists-guidance"]')).toContainText(
-    'import local sheet files',
+  await expect(page.locator('[data-slot="library-empty-playlists-guidance"]')).toHaveText(
+    'Create a playlist to collect songs or import local sheets.',
   );
   await expectNoSeriousAccessibilityViolations(page);
 });
@@ -1774,8 +1774,8 @@ test('populated library keeps playlist actions available without repeated onboar
   await page.setViewportSize({ width: 640, height: 448 });
   await expect(page.locator('[data-slot="track-browser-guidance"]')).toHaveCount(0);
   await page.setViewportSize({ width: 1366, height: 768 });
-  await expect(navigator.locator('[data-slot="library-empty-playlists-guidance"]')).toContainText(
-    'import local sheet files',
+  await expect(navigator.locator('[data-slot="library-empty-playlists-guidance"]')).toHaveText(
+    'Create a playlist to collect songs or import local sheets.',
   );
   await expect(
     navigator

@@ -92,7 +92,7 @@ describe('SettingsCategoryContent', () => {
     );
 
     const darkPreview = screen.getByRole('img', {
-      name: 'Dark appearance preview; saved dark palette is Graphite (Default)',
+      name: 'Dark appearance preview using saved palette Graphite (Default)',
     });
     const appearanceSummary = container.querySelector('[data-slot="appearance-active-summary"]');
     expect(darkPreview).toHaveAttribute('data-effective-mode', 'dark');
@@ -110,7 +110,7 @@ describe('SettingsCategoryContent', () => {
     );
     expect(
       screen.getByRole('img', {
-        name: 'Light appearance preview; saved dark palette is Graphite (Default)',
+        name: 'Light appearance preview using saved palette Graphite (Default)',
       }),
     ).toHaveAttribute('data-effective-mode', 'light');
     expect(appearanceSummary).toHaveTextContent(

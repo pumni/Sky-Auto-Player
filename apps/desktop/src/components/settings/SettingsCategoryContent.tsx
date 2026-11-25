@@ -357,7 +357,7 @@ export function SettingsCategoryContent({
             data-slot="appearance-preview"
             data-effective-mode={effectiveAppearance.colorMode}
             role="img"
-            aria-label={`${effectiveAppearance.colorMode === 'light' ? 'Light' : 'Dark'} appearance preview; saved dark palette is ${activePaletteMeta.label}`}
+            aria-label={`${effectiveAppearance.colorMode === 'light' ? 'Light' : 'Dark'} appearance preview using saved palette ${activePaletteMeta.label}`}
             className="w-full max-w-[360px] overflow-hidden rounded-pane border border-border bg-background text-foreground"
           >
             <div className="flex h-7 items-center gap-1.5 border-b border-border bg-card px-2">

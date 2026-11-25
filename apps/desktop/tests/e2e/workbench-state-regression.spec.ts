@@ -97,8 +97,8 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   await expect(page.locator('[data-slot="library-empty-state"] strong')).toHaveText(
     'No Built-in Songs are available',
   );
-  await expect(page.locator('[data-slot="library-empty-playlists-guidance"]')).toContainText(
-    'import local sheet files',
+  await expect(page.locator('[data-slot="library-empty-playlists-guidance"]')).toHaveText(
+    'Create a playlist to collect songs or import local sheets.',
   );
 
   await openApp(page, viewports[1]);

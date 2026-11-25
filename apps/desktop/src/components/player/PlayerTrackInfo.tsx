@@ -84,9 +84,9 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       >
         <Music2 size={17} />
       </span>
-      <div className="@container/player-track-info grid min-w-0 flex-1 gap-0.5">
+      <div className="@container/player-track-info grid min-w-0 flex-1 gap-0.5 max-[1100px]:min-w-[100px]">
         <strong
-          className="overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-foreground"
+          className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-foreground max-[1100px]:break-words max-[1100px]:overflow-visible max-[1100px]:whitespace-normal"
           title={title}
         >
           {title}

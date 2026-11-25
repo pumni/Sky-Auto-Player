@@ -554,6 +554,27 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   await expect(admission).toBeVisible();
   if (shouldCapture('admission')) await capture(page, 'candidate-admission-1366x768.png');
 
+  await openApp(page, { width: 640, height: 448 });
+  await page.getByRole('row', { name: /Aurora Landing/ }).click();
+  const compactAdmissionPlayer = page.getByRole('contentinfo', { name: 'Player controls' });
+  await compactAdmissionPlayer.getByRole('button', { name: 'Play', exact: true }).click();
+  const compactAdmission = page.getByRole('group', { name: 'Playback confirmation' });
+  await expect(compactAdmission).toBeVisible();
+  const compactTrackInfo = compactAdmissionPlayer.getByRole('group', {
+    name: 'Playback for Aurora Landing',
+  });
+  await expect(compactTrackInfo.locator('strong')).toHaveText('Aurora Landing');
+  await expect(compactTrackInfo.locator('[data-slot="status-badge"]')).toHaveText('Medium risk');
+  const compactTitleFits = await compactTrackInfo
+    .locator('strong')
+    .evaluate((title) => {
+      const element = title as HTMLElement;
+      return element.scrollWidth <= element.clientWidth;
+    });
+  expect(compactTitleFits).toBe(true);
+  if (shouldCapture('compact-admission'))
+    await capture(page, 'candidate-admission-640x448.png');
+
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/?mockReleaseNotes=short');
   const updateTrigger = page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ });

@@ -13,6 +13,7 @@ const screenshots = {
   'overlay.png': 'candidate-overlay-640x448.png',
   'diagnostics.png': 'candidate-runtime-diagnostics-1366x768.png',
   'appearance-settings-light.png': 'candidate-appearance-preview-light-1366x768.png',
+  'compact-admission.png': 'candidate-admission-640x448.png',
 };
 
 function git(args) {
@@ -54,7 +55,7 @@ const run = spawnSync(
       ...process.env,
       GRAPHITE_WORKSPACE_CAPTURE: 'candidate',
       GRAPHITE_WORKSPACE_CAPTURE_VIEWS:
-        'populated,compact,overlay,runtime,appearance-preview-light',
+        'populated,compact,overlay,runtime,appearance-preview-light,compact-admission',
     },
   },
 );
@@ -86,6 +87,8 @@ const manifest = {
     'diagnostics.png': 'Runtime diagnostics, dry run without physical keyboard input, 1366x768',
     'appearance-settings-light.png':
       'Review-only Appearance settings state with Light active and Graphite saved, 1366x768',
+    'compact-admission.png':
+      'Compact 640x448 dry-run risk confirmation with readable title and risk badge',
   },
 };
 await writeFile(resolve(destination, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
