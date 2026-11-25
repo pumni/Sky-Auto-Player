@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
@@ -69,9 +69,7 @@ describe('PlayerTools playback modes and profile', () => {
     expect(
       within(dialog).getByText('Try these settings without sending any physical keyboard input.'),
     ).toBeInTheDocument();
-    await act(async () =>
-      within(dialog).getByRole('button', { name: 'Test playback (no input)' }).click(),
-    );
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Test playback (no input)' }));
 
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
     expect(store.getState().playback.context?.dryRun).toBe(true);
@@ -82,7 +80,7 @@ describe('PlayerTools playback modes and profile', () => {
     expect(
       within(runningDialog).getByRole('button', { name: 'Test playback (no input)' }),
     ).toBeDisabled();
-  }, 30_000);
+  });
 
   it('does not expose raw profile parameters or a Test button in the player dock', async () => {
     const store = createDesktopStore(createMockBridge());
