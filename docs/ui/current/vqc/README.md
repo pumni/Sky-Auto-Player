@@ -1,6 +1,6 @@
 # VQC-R2 visual evidence
 
-Captured from desktop source [`0a7e81a5f032`](https://github.com/pumni/Sky-Auto-Player/commit/0a7e81a5f0322d39ca952ea09ea4b6253385d0e8) (desktop tree `1443a2b6ec4aa45a9ae38151f46ee73f6d30bc89`) with Playwright Chromium and the deterministic browser mock bridge. These are rendered app states, not native Tauri or gameplay evidence. The Profile captures use 800x560; the compact Settings captures use 640x448 and 640x320.
+Captured from desktop source [`c7a951593733`](https://github.com/pumni/Sky-Auto-Player/commit/c7a951593733394193a86da567d7868c81bd9f91) (desktop tree `619a3e241ac5eab80efa8e0582f4ecca4cb43692`) with Playwright Chromium and the deterministic browser mock bridge. These are rendered app states, not native Tauri or gameplay evidence. The Profile captures use 800x560; the compact Settings captures use 640x448 and 640x320.
 
 | Capture | Rendered state |
 | --- | --- |
