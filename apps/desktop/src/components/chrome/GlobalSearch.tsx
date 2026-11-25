@@ -144,7 +144,7 @@ function SearchInput({
     <div
       role="search"
       data-slot="global-search"
-      className="flex h-8 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-card px-[9px] text-muted-foreground focus-within:border-ring focus-within:outline focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-ring"
+      className="flex h-8 w-full min-w-0 items-center gap-2 rounded-control border border-input bg-surface px-[9px] text-muted-foreground transition-colors duration-fast focus-within:border-ring focus-within:outline focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-ring motion-reduce:transition-none"
       data-tauri-drag-region="false"
     >
       <Search size={16} className="shrink-0" aria-hidden="true" />

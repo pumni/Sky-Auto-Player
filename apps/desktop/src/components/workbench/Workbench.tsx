@@ -414,7 +414,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       />
       <WorkbenchPane
         pane="browser"
-        className="min-w-[420px] flex-[1_1_0] [container-name:track-browser] [container-type:inline-size]"
+        className="min-w-[420px] flex-[1_1_0] bg-surface [container-name:track-browser] [container-type:inline-size]"
         style={{ minWidth: MIN_TRACK_BROWSER_WIDTH }}
       >
         <TrackBrowser useStore={useStore} />
@@ -467,7 +467,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
             onTransitionCancel={handleUtilityTransitionCancel}
             className={`shrink-0 bg-card [container-name:utility] [container-type:inline-size] ${
               utilityOverlayPresented
-                ? 'absolute top-0 right-1 bottom-1 z-20 max-w-[calc(100%-8px)] rounded-dialog border-border shadow-xl transition-[opacity,translate] duration-[220ms] ease-enter data-[open=false]:pointer-events-none data-[open=false]:translate-x-4 data-[open=false]:opacity-0 data-[open=false]:duration-[160ms] data-[open=false]:ease-exit motion-reduce:transition-none [contain:none]'
+                ? 'absolute top-0 right-1 bottom-1 z-20 max-w-[calc(100%-8px)] rounded-dialog border-overlay-border shadow-xl transition-[opacity,translate] duration-overlay-enter ease-enter data-[open=false]:pointer-events-none data-[open=false]:translate-x-[10px] data-[open=false]:opacity-0 data-[open=false]:duration-overlay-exit data-[open=false]:ease-exit motion-reduce:transition-none [contain:none]'
                 : ''
             }`}
             style={

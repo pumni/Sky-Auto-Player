@@ -20,7 +20,7 @@ function SelectTrigger({ className, children, ...props }: SelectPrimitive.Trigge
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
       className={cn(
-        "group/select-trigger flex h-9 w-full items-center justify-between gap-2 rounded-control border border-input bg-background px-2.5 text-sm whitespace-nowrap shadow-xs transition-colors duration-fast outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background aria-expanded:border-ring aria-expanded:ring-0 aria-expanded:ring-offset-0 aria-expanded:focus-visible:ring-0 aria-expanded:focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-2 data-placeholder:text-muted-foreground *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+        "group/select-trigger flex h-9 w-full items-center justify-between gap-2 rounded-control border border-input bg-background px-2.5 text-sm whitespace-nowrap shadow-xs transition-colors duration-fast outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background aria-expanded:border-ring aria-expanded:ring-0 aria-expanded:ring-offset-0 aria-expanded:focus-visible:ring-0 aria-expanded:focus-visible:ring-offset-0 disabled:cursor-not-allowed disabled:opacity-50 aria-invalid:border-destructive aria-invalid:ring-2 data-placeholder:text-muted-foreground *:data-[slot=select-value]:line-clamp-1 *:data-[slot=select-value]:flex *:data-[slot=select-value]:items-center *:data-[slot=select-value]:gap-1.5 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 motion-reduce:transition-none",
         className,
       )}
       {...props}
@@ -62,7 +62,7 @@ function SelectContent({
         <SelectPrimitive.Popup
           data-slot="select-content"
           className={cn(
-            'relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 max-w-(--available-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-popover border border-overlay-border bg-popover p-1 text-popover-foreground shadow-xl transition-[opacity,scale,translate] duration-[150ms] ease-enter data-[starting-style]:scale-[0.98] data-[starting-style]:opacity-0 data-[starting-style]:duration-[150ms] data-[ending-style]:scale-[0.98] data-[ending-style]:opacity-0 data-[ending-style]:duration-[100ms] data-[ending-style]:ease-exit motion-reduce:transition-none',
+            'relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 max-w-(--available-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-popover border border-overlay-border bg-popover p-1 text-popover-foreground shadow-xl transition-opacity duration-menu-enter ease-enter data-[starting-style]:opacity-0 data-[ending-style]:opacity-0 data-[ending-style]:duration-menu-exit data-[ending-style]:ease-exit motion-reduce:transition-none',
             className,
           )}
           {...props}

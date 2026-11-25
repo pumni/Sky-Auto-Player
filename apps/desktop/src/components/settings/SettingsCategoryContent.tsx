@@ -47,7 +47,7 @@ export interface PaletteMeta {
 export const DEFAULT_PALETTE: PaletteMeta = {
   id: 'graphite',
   label: 'Graphite (Default)',
-  swatches: ['#121314', '#191a1b', '#242526', '#8e9dff'],
+  swatches: ['#121314', '#191a1b', '#202122', '#8e9dff'],
 };
 
 export const PALETTES: readonly PaletteMeta[] = [

@@ -194,7 +194,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
       >
         <ScrollAreaContent className="grid min-w-0 gap-3 px-4 pb-4 pt-3">
           <div className="grid min-w-0 gap-1 border-b border-border pb-3">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">
+            <span className="text-xs font-semibold leading-4 text-text-tertiary">
               Selected song
             </span>
             <h3
@@ -523,7 +523,7 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
             data-risk={song?.risk.level ?? 'unknown'}
           >
             <div className="min-w-0">
-              <span className="text-[11px] font-semibold uppercase tracking-wide text-text-tertiary">
+              <span className="text-xs font-semibold leading-4 text-text-tertiary">
                 Timing risk
               </span>
               <strong className="mt-1 block text-[13px] font-semibold">
