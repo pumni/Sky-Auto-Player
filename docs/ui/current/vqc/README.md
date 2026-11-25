@@ -1,6 +1,6 @@
 # VQC-R2 visual evidence
 
-Captured from desktop source [`229302441884`](https://github.com/pumni/Sky-Auto-Player/commit/2293024418843d3780a6faa67cc62ab5b9292b4f) (desktop tree `b300d8bbe8594f08a0e036a9e41e9cb593cd6ae2`) with Playwright Chromium and the deterministic browser mock bridge. These are rendered app states, not native Tauri or gameplay evidence. The Profile captures use 800x560; the compact Settings captures use 640x448 and 640x320.
+Captured from desktop source [`fb124a9044e6`](https://github.com/pumni/Sky-Auto-Player/commit/fb124a9044e61a068c3a820f1d390ecc825a1305) (desktop tree `a81a39b1d998f1c3742355ffa0c1ceb5c143f316`) with Playwright Chromium and the deterministic browser mock bridge. These are rendered app states, not native Tauri or gameplay evidence. The Profile captures use 800x560; the compact Settings captures use 640x448 and 640x320.
 
 | Capture | Rendered state |
 | --- | --- |
@@ -16,8 +16,7 @@ Captured from desktop source [`229302441884`](https://github.com/pumni/Sky-Auto-
 | [settings-select-open-640x320.png](settings-select-open-640x320.png) | Settings Dark palette Select open at 640x320 |
 | [settings-playback-dark.png](settings-playback-dark.png) | Settings Playback category in Graphite Dark at 1366x768 |
 | [settings-playback-light.png](settings-playback-light.png) | Settings Playback category in Graphite Light at 1366x768 |
-| [settings-appearance-dark.png](settings-appearance-dark.png) | Settings Appearance category in Graphite Dark at 1366x768 |
-| [settings-appearance-light.png](settings-appearance-light.png) | Settings Appearance category in Graphite Light at 1366x768 |
+| [settings-appearance-dark.png](settings-appearance-dark.png) | Settings Appearance category in Graphite Dark at 1366x768 (paired with canonical ../appearance-settings-light.png) |
 | [settings-diagnostics-dark.png](settings-diagnostics-dark.png) | Settings Diagnostics category in Graphite Dark at 1366x768 |
 | [settings-diagnostics-light.png](settings-diagnostics-light.png) | Settings Diagnostics category in Graphite Light at 1366x768 |
 | [settings-updates-dark.png](settings-updates-dark.png) | Settings Updates category in Graphite Dark at 1366x768 |

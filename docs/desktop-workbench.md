@@ -75,11 +75,13 @@ the six cohesive category owners (`PlaybackSettings.tsx`, `AppearanceSettings.ts
 `DiagnosticsSettings.tsx`, `UpdateSettings.tsx`, `DonateSettings.tsx`, and `AboutSettings.tsx`),
 sharing `SettingsLayout.tsx`, `paletteMetadata.ts`, `AutoPlaySwitch.tsx`, and
 `TimingMarginControl.tsx`. Playback uses a shared `computePlaybackHoldTiming` helper with
-`PlayerTools.tsx`, Appearance uses a controlled `RadioGroup` for Theme (`Follow Windows
-(recommended)`, `Light`, `Dark`) plus the existing `Dark palette` Select and an active-token
-mini-workbench preview, Diagnostics presents flat switches with truthful persisted-preference copy,
-Updates summarizes live native updater state and opens `UpdateDialog` without duplicate checks, and
-About presents build metadata in a responsive definition list.
+`PlayerTools.tsx`, Appearance uses a controlled `RadioGroup` of compact 40 px icon tiles for Theme
+(`System`, `Light`, `Dark`) with a single shared Windows-appearance note plus the existing `Dark
+palette` Select and an active-token mini-workbench preview, Diagnostics presents flat switches
+(`Playback telemetry`, `Verbose diagnostics`) linked to one shared truthful note, Updates shares
+`deriveUpdatePresentation` with `UpdateDialog` to separate pending handoff (`Preparing update…`)
+from confirmed native updater states and opens `UpdateDialog` without duplicate checks, and About
+presents build metadata in a responsive definition list.
 `apps/desktop/src/components/utility/DiagnosticsView.tsx`
 composes Diagnostics, with `apps/desktop/src/components/utility/diagnosticsPresentation.ts` and the
 focused playback, readout, event, timing, and performance components owning presentation of their
