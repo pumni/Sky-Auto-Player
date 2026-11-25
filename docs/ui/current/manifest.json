@@ -1,8 +1,8 @@
 {
   "status": "captured",
-  "source_sha": "2bd4529a4916d90f01704a55b6dae1d1b06e649d",
-  "desktop_tree_sha": "3fdf04532bbeee5397e570a737e56819a6fbaa47",
-  "captured_at_utc": "2026-11-25T07:29:50.153Z",
+  "source_sha": "bc89bf9df0992c5bba93296cd69f31c43df55822",
+  "desktop_tree_sha": "79505f63e4f1e4f1f10c5f6ec5eec4596449053b",
+  "captured_at_utc": "2026-11-25T07:40:15.885Z",
   "environment": "Playwright Chromium with deterministic desktop mock bridge; not native Tauri/Windows",
   "generated_by": "bun run ui:refresh (apps/desktop)",
   "scenes": {
