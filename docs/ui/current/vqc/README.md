@@ -1,6 +1,6 @@
 # VQC-R2 visual evidence
 
-Captured from desktop source [`4615bbb722d9`](https://github.com/pumni/Sky-Auto-Player/commit/4615bbb722d9a133d1c0a9b3dd8c74620a208600) (desktop tree `9d789c46bc45214a97af6e3f881c6b4266a78aad`) with Playwright Chromium and the deterministic browser mock bridge. These are rendered app states, not native Tauri or gameplay evidence. The Profile captures use 800x560; the compact Settings captures use 640x448 and 640x320.
+Captured from desktop source [`0c8e12e74ca4`](https://github.com/pumni/Sky-Auto-Player/commit/0c8e12e74ca48c8df13a9c8363d1760006ad8595) (desktop tree `573945d505875de231a3e6fd5a396aabe91c3ccd`) with Playwright Chromium and the deterministic browser mock bridge. These are rendered app states, not native Tauri or gameplay evidence. The Profile captures use 800x560; the compact Settings captures use 640x448 and 640x320.
 
 | Capture | Rendered state |
 | --- | --- |
@@ -25,5 +25,10 @@ Captured from desktop source [`4615bbb722d9`](https://github.com/pumni/Sky-Auto-
 | [transport-pause-playing.png](transport-pause-playing.png) | Filled Pause control while browser-mock dry-run playback is active |
 | [transport-resume-paused.png](transport-resume-paused.png) | Filled Resume control while browser-mock dry-run playback is paused |
 | [transport-long-title-compact.png](transport-long-title-compact.png) | Compact Player Dock with a long title and readable selected/prepared status |
+| [admission-light-640x448.png](admission-light-640x448.png) | Compact 640x448 timing-risk confirmation in Light mode (paired with canonical Dark compact-admission.png) |
+| [recovery-dark-800x560.png](recovery-dark-800x560.png) | Actionable target_not_found playback recovery alert in Graphite Dark at 800x560 |
+| [recovery-light-800x560.png](recovery-light-800x560.png) | Actionable target_not_found playback recovery alert in Graphite Light at 800x560 |
+| [update-dark-800x560.png](update-dark-800x560.png) | Update dialog with release notes in Graphite Dark at 800x560 |
+| [update-light-800x560.png](update-light-800x560.png) | Update dialog with release notes in Graphite Light at 800x560 |
 
 The palette contact sheet contains the Settings Appearance view in Light and each dark palette. The separate interactive checks cover idle, wheel, keyboard, settled, active drag, release, cancellation, no-overflow unmount, reduced-motion, and forced-colors behavior.
