@@ -19,18 +19,25 @@ const bodyTextRoles = [
 const themeRoles = [
   ...surfaces,
   ...bodyTextRoles,
+  '--card-foreground',
+  '--popover-foreground',
+  '--secondary',
+  '--secondary-foreground',
+  '--muted',
+  '--muted-foreground',
+  '--accent',
+  '--accent-foreground',
   '--primary',
   '--primary-hover',
   '--primary-pressed',
   '--primary-foreground',
   '--border',
   '--overlay-border',
-  '--secondary',
-  '--secondary-foreground',
   '--control-hover',
   '--row-hover',
   '--control-pressed',
   '--control-active',
+  '--control-disabled',
   '--scrollbar-thumb',
   '--scrollbar-thumb-active',
   '--ring',
@@ -39,14 +46,18 @@ const themeRoles = [
   '--playing',
   '--success',
   '--success-surface',
+  '--success-border',
   '--warning',
   '--warning-surface',
+  '--warning-border',
   '--danger',
   '--danger-surface',
+  '--danger-border',
   '--destructive',
   '--destructive-hover',
   '--destructive-pressed',
   '--destructive-foreground',
+  '--scrim',
 ] as const;
 
 type ThemeRole = (typeof themeRoles)[number];
@@ -108,6 +119,232 @@ async function resolvedTheme(page: import('@playwright/test').Page) {
     themeRoles as readonly string[],
   ) as Promise<Record<ThemeRole, string>>;
 }
+
+async function resolvedComputedTheme(page: import('@playwright/test').Page) {
+  return page.evaluate(
+    (roles) => {
+      const normalize = (value: string) => {
+        const srgb = value.match(
+          /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)(?:\s*\/\s*[\d.]+)?\)$/i,
+        );
+        if (srgb) {
+          return `rgb(${Math.round(Number(srgb[1]) * 255)}, ${Math.round(Number(srgb[2]) * 255)}, ${Math.round(Number(srgb[3]) * 255)})`;
+        }
+        return value;
+      };
+      const probe = document.createElement('div');
+      probe.style.position = 'fixed';
+      probe.style.visibility = 'hidden';
+      probe.style.pointerEvents = 'none';
+      document.documentElement.appendChild(probe);
+      try {
+        return Object.fromEntries(
+          roles.map((role) => {
+            probe.style.color = `var(${role})`;
+            return [role, normalize(getComputedStyle(probe).color)];
+          }),
+        );
+      } finally {
+        probe.remove();
+      }
+    },
+    themeRoles as readonly string[],
+  ) as Promise<Record<ThemeRole, string>>;
+}
+
+function mixSrgb(first: string, weightPercent: number, second: string): string {
+  const [r1, g1, b1] = rgb(first);
+  const [r2, g2, b2] = rgb(second);
+  const rest = 100 - weightPercent;
+  return `rgb(${Math.round((r1 * weightPercent + r2 * rest) / 100)}, ${Math.round((g1 * weightPercent + g2 * rest) / 100)}, ${Math.round((b1 * weightPercent + b2 * rest) / 100)})`;
+}
+
+// Independent baseline d90e79db inherited roles shared by all five non-Graphite dark palettes.
+const BASELINE_SHARED_DARK_ROLES = {
+  '--success': '#64c496',
+  '--success-surface': '#143326',
+  '--success-border': '#489e74',
+  '--warning': '#f5c451',
+  '--warning-surface': '#3a2c11',
+  '--warning-border': '#b4862d',
+  '--danger': '#f27a80',
+  '--danger-surface': '#3a1c22',
+  '--danger-border': '#be5962',
+  '--destructive': '#c42b36',
+  '--destructive-hover': '#d13a45',
+  '--destructive-pressed': '#9e1f2a',
+  '--destructive-foreground': '#fff',
+  '--scrim': '#08090c',
+} as const;
+
+// Independent baseline d90e79db declarations for the five non-Graphite dark palettes.
+const BASELINE_NON_GRAPHITE_PALETTES = {
+  aurora: {
+    '--background': '#0b1018',
+    '--surface': '#0d141e',
+    '--card': '#101722',
+    '--popover': '#151e2b',
+    '--card-foreground': '#e7edf6',
+    '--popover-foreground': '#e7edf6',
+    '--foreground': '#e7edf6',
+    '--secondary': '#1a2533',
+    '--secondary-foreground': '#e7edf6',
+    '--muted': '#151e2b',
+    '--muted-foreground': '#8a98ad',
+    '--text-secondary': '#b7c2d1',
+    '--text-tertiary': '#8a98ad',
+    '--border': '#243145',
+    '--overlay-border': '#384a66',
+    '--input': '#617390',
+    '--primary': '#785ddd',
+    '--primary-hover': '#825bdb',
+    '--primary-pressed': '#6647bd',
+    '--primary-foreground': '#fff',
+    '--accent-ink': '#9b8cff',
+    '--ring': '#9b8cff',
+    '--accent': '#1a2533',
+    '--accent-foreground': '#e7edf6',
+    '--selection': '#152132',
+    '--playing': mixSrgb('#9b8cff', 8, '#0b1018'),
+    '--control-hover': '#1a2533',
+    '--row-hover': '#1a2533',
+    '--control-pressed': '#223044',
+    '--control-active': '#30425a',
+    '--control-disabled': '#718096',
+  },
+  minimalist: {
+    '--background': '#17191d',
+    '--surface': '#1b1e22',
+    '--card': '#202328',
+    '--popover': '#292d33',
+    '--card-foreground': '#f0f2f4',
+    '--popover-foreground': '#f0f2f4',
+    '--foreground': '#f0f2f4',
+    '--secondary': '#333941',
+    '--secondary-foreground': '#f0f2f4',
+    '--muted': '#292d33',
+    '--muted-foreground': '#9da5ae',
+    '--text-secondary': '#c9ced4',
+    '--text-tertiary': '#9da5ae',
+    '--border': '#3d444d',
+    '--overlay-border': '#4e5662',
+    '--input': '#77818d',
+    '--primary': '#a0b8d5',
+    '--primary-hover': '#c4d0df',
+    '--primary-pressed': '#88a4c4',
+    '--primary-foreground': '#17191d',
+    '--accent-ink': '#a0b8d5',
+    '--ring': '#e1e8f0',
+    '--accent': '#333941',
+    '--accent-foreground': '#f0f2f4',
+    '--selection': '#2d343d',
+    '--playing': mixSrgb('#a0b8d5', 8, '#17191d'),
+    '--control-hover': '#333941',
+    '--row-hover': '#333941',
+    '--control-pressed': '#3b424b',
+    '--control-active': '#4c5661',
+    '--control-disabled': '#858d97',
+  },
+  slate: {
+    '--background': '#10171d',
+    '--surface': '#13202a',
+    '--card': '#17232c',
+    '--popover': '#20313d',
+    '--card-foreground': '#e6f0f5',
+    '--popover-foreground': '#e6f0f5',
+    '--foreground': '#e6f0f5',
+    '--secondary': '#273946',
+    '--secondary-foreground': '#e6f0f5',
+    '--muted': '#20313d',
+    '--muted-foreground': '#8fa9b8',
+    '--text-secondary': '#bad0dc',
+    '--text-tertiary': '#8fa9b8',
+    '--border': '#304755',
+    '--overlay-border': '#425e70',
+    '--input': '#6a8699',
+    '--primary': '#6ca7d8',
+    '--primary-hover': '#83b8e3',
+    '--primary-pressed': '#568fbe',
+    '--primary-foreground': '#10171d',
+    '--accent-ink': '#a8dded',
+    '--ring': '#a8dded',
+    '--accent': '#273946',
+    '--accent-foreground': '#e6f0f5',
+    '--selection': '#2a3d4a',
+    '--playing': mixSrgb('#a8dded', 8, '#10171d'),
+    '--control-hover': '#273946',
+    '--row-hover': '#273946',
+    '--control-pressed': '#314754',
+    '--control-active': '#405b6a',
+    '--control-disabled': '#879ca9',
+  },
+  cyberpunk: {
+    '--background': '#130f1d',
+    '--surface': '#191225',
+    '--card': '#1d1529',
+    '--popover': '#291c37',
+    '--card-foreground': '#f7ecfb',
+    '--popover-foreground': '#f7ecfb',
+    '--foreground': '#f7ecfb',
+    '--secondary': '#352445',
+    '--secondary-foreground': '#f7ecfb',
+    '--muted': '#291c37',
+    '--muted-foreground': '#b297bd',
+    '--text-secondary': '#dbc6e4',
+    '--text-tertiary': '#b297bd',
+    '--border': '#4b2d59',
+    '--overlay-border': '#663d78',
+    '--input': '#976595',
+    '--primary': '#d95abf',
+    '--primary-hover': '#ef78d4',
+    '--primary-pressed': '#c954b1',
+    '--primary-foreground': '#130f1d',
+    '--accent-ink': '#f4a8e3',
+    '--ring': '#f4a8e3',
+    '--accent': '#352445',
+    '--accent-foreground': '#f7ecfb',
+    '--selection': '#3a274a',
+    '--playing': mixSrgb('#f4a8e3', 8, '#130f1d'),
+    '--control-hover': '#352445',
+    '--row-hover': '#352445',
+    '--control-pressed': '#422d54',
+    '--control-active': '#553b6a',
+    '--control-disabled': '#ae8fb8',
+  },
+  classic: {
+    '--background': '#171512',
+    '--surface': '#1c1915',
+    '--card': '#211d18',
+    '--popover': '#2c261f',
+    '--card-foreground': '#f2eadc',
+    '--popover-foreground': '#f2eadc',
+    '--foreground': '#f2eadc',
+    '--secondary': '#393126',
+    '--secondary-foreground': '#f2eadc',
+    '--muted': '#2c261f',
+    '--muted-foreground': '#a89882',
+    '--text-secondary': '#d2c2aa',
+    '--text-tertiary': '#a89882',
+    '--border': '#4b4033',
+    '--overlay-border': '#615342',
+    '--input': '#897864',
+    '--primary': '#c99242',
+    '--primary-hover': '#e0aa5b',
+    '--primary-pressed': '#a87832',
+    '--primary-foreground': '#171512',
+    '--accent-ink': '#e8c17a',
+    '--ring': '#e8c17a',
+    '--accent': '#393126',
+    '--accent-foreground': '#f2eadc',
+    '--selection': '#352c21',
+    '--playing': mixSrgb('#e8c17a', 8, '#171512'),
+    '--control-hover': '#393126',
+    '--row-hover': '#393126',
+    '--control-pressed': '#463b2d',
+    '--control-active': '#5a4a32',
+    '--control-disabled': '#a69a87',
+  },
+} as const;
 
 test('all six dark palettes meet semantic text, action, status, and focus contrast', async ({
   page,
@@ -805,26 +1042,28 @@ test('Light row hover, segmented boundary, forced-colors segmented label, and ne
   expect(darkTheme['--row-hover']).not.toBe(darkTheme['--playing']);
 });
 
-test('Graphite 2.0 surfaces, shared Light across all saved palettes, and non-Graphite palette isolation hold', async ({
+test('Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and non-Graphite baseline isolation hold', async ({
   page,
 }) => {
   await page.goto('/');
+  expect(themeRoles).toHaveLength(47);
 
-  const graphiteDark = await resolvedTheme(page);
-  expect(graphiteDark['--background']).toBe('#121314');
-  expect(graphiteDark['--surface']).toBe('#121314');
-  expect(graphiteDark['--card']).toBe('#191a1b');
-  expect(graphiteDark['--popover']).toBe('#202122');
-  expect(graphiteDark['--selection']).toBe('#303132');
-  expect(graphiteDark['--playing']).toBe('#202326');
-  expect(graphiteDark['--scrollbar-thumb']).toBe('#777a7e');
-  expect(graphiteDark['--scrollbar-thumb-active']).toBe('#a4a6aa');
+  const graphiteDark = await resolvedComputedTheme(page);
+  expect(graphiteDark['--background']).toBe(computedRgb('#121314'));
+  expect(graphiteDark['--surface']).toBe(computedRgb('#121314'));
+  expect(graphiteDark['--card']).toBe(computedRgb('#191a1b'));
+  expect(graphiteDark['--popover']).toBe(computedRgb('#202122'));
+  expect(graphiteDark['--selection']).toBe(computedRgb('#303132'));
+  expect(graphiteDark['--playing']).toBe(computedRgb('#202326'));
+  expect(graphiteDark['--scrollbar-thumb']).toBe(computedRgb('#777a7e'));
+  expect(graphiteDark['--scrollbar-thumb-active']).toBe(computedRgb('#a4a6aa'));
+  expect(graphiteDark['--scrim']).toBe(computedRgb('#08090c'));
 
   // Content canvas vs chrome separation in Dark and Light
   for (const mode of ['dark', 'light'] as const) {
     await page.emulateMedia({ colorScheme: mode });
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
-    const activeTheme = await resolvedTheme(page);
+    const activeTheme = await resolvedComputedTheme(page);
     const regions = await page.evaluate(() => ({
       titlebar: getComputedStyle(document.querySelector('[data-slot="titlebar"]')!).backgroundColor,
       navigator: getComputedStyle(document.querySelector('[data-pane="navigator"]')!)
@@ -832,50 +1071,221 @@ test('Graphite 2.0 surfaces, shared Light across all saved palettes, and non-Gra
       browser: getComputedStyle(document.querySelector('[data-pane="browser"]')!).backgroundColor,
       dock: getComputedStyle(document.querySelector('[data-slot="player-dock"]')!).backgroundColor,
     }));
-    expect(regions.titlebar).toBe(computedRgb(activeTheme['--card']));
-    expect(regions.navigator).toBe(computedRgb(activeTheme['--card']));
-    expect(regions.dock).toBe(computedRgb(activeTheme['--card']));
-    expect(regions.browser).toBe(computedRgb(activeTheme['--surface']));
+    expect(regions.titlebar).toBe(activeTheme['--card']);
+    expect(regions.navigator).toBe(activeTheme['--card']);
+    expect(regions.dock).toBe(activeTheme['--card']);
+    expect(regions.browser).toBe(activeTheme['--surface']);
     expect(regions.browser).not.toBe(regions.titlebar);
   }
 
-  // Every saved dark palette resolves identical shared Light tokens and restores cleanly on Dark
+  // Every saved dark palette resolves identical 47 shared Light roles and restores cleanly on Dark
   await page.emulateMedia({ colorScheme: 'light' });
-  const referenceLight = await resolvedTheme(page);
-  expect(referenceLight['--surface']).toBe('#fff');
-  expect(referenceLight['--card']).toBe('#f7f7f8');
-  expect(referenceLight['--selection']).toBe('#e4e5e7');
-  expect(referenceLight['--playing']).toBe('#edf0f4');
-  expect(referenceLight['--scrollbar-thumb']).toBe('#85888e');
-  expect(referenceLight['--scrollbar-thumb-active']).toBe('#5d6066');
-
-  const expectedNonGraphiteScrollbars = {
-    aurora: '#b7c2d1',
-    minimalist: '#c9ced4',
-    slate: '#bad0dc',
-    cyberpunk: '#dbc6e4',
-    classic: '#d2c2aa',
-  } as const;
+  const referenceLight = await resolvedComputedTheme(page);
+  expect(referenceLight['--surface']).toBe(computedRgb('#fff'));
+  expect(referenceLight['--card']).toBe(computedRgb('#f7f7f8'));
+  expect(referenceLight['--selection']).toBe(computedRgb('#e4e5e7'));
+  expect(referenceLight['--playing']).toBe(computedRgb('#edf0f4'));
+  expect(referenceLight['--scrollbar-thumb']).toBe(computedRgb('#85888e'));
+  expect(referenceLight['--scrollbar-thumb-active']).toBe(computedRgb('#5d6066'));
+  expect(referenceLight['--scrim']).toBe(computedRgb('#16181b'));
 
   for (const palette of palettes) {
     await page.emulateMedia({ colorScheme: 'dark' });
     await selectPalette(page, palette);
-    const darkSnapshot = await resolvedTheme(page);
+    const darkSnapshot = await resolvedComputedTheme(page);
+
     if (palette !== 'graphite') {
-      expect(darkSnapshot['--scrollbar-thumb-active']).toBe(expectedNonGraphiteScrollbars[palette]);
-      expect(darkSnapshot['--scrollbar-thumb']).not.toBe('#777a7e');
+      const baseline = BASELINE_NON_GRAPHITE_PALETTES[palette];
+      for (const role of themeRoles) {
+        if (role === '--playing' || role === '--scrollbar-thumb') {
+          const expectedRgb =
+            role === '--playing'
+              ? rgb(baseline['--playing'])
+              : rgb(mixSrgb(baseline['--text-secondary'], 70, baseline['--background']));
+          const actualRgb = rgb(darkSnapshot[role]);
+          for (let channel = 0; channel < 3; channel += 1) {
+            expect(
+              Math.abs((actualRgb[channel] ?? 0) - (expectedRgb[channel] ?? 0)),
+              `${palette} ${role} channel ${channel}`,
+            ).toBeLessThanOrEqual(1);
+          }
+          continue;
+        }
+        const raw =
+          role === '--scrollbar-thumb-active'
+            ? baseline['--text-secondary']
+            : role in baseline
+              ? baseline[role as keyof typeof baseline]
+              : BASELINE_SHARED_DARK_ROLES[role as keyof typeof BASELINE_SHARED_DARK_ROLES];
+        expect(darkSnapshot[role], `${palette} ${role} baseline oracle`).toBe(computedRgb(raw));
+      }
     }
 
     await page.emulateMedia({ colorScheme: 'light' });
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
     await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
-    const lightSnapshot = await resolvedTheme(page);
-    expect(lightSnapshot).toEqual(referenceLight);
+    const lightSnapshot = await resolvedComputedTheme(page);
+    expect(lightSnapshot, `${palette} saved palette in Light`).toEqual(referenceLight);
 
     await page.emulateMedia({ colorScheme: 'dark' });
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
     await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
-    const restoredDark = await resolvedTheme(page);
-    expect(restoredDark).toEqual(darkSnapshot);
+    const restoredDark = await resolvedComputedTheme(page);
+    expect(restoredDark, `${palette} restored after Light roundtrip`).toEqual(darkSnapshot);
   }
+});
+
+test('rendered control contrast, input boundaries, and M01-M13/M15 motion contracts hold in Dark and Light', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
+
+  for (const mode of ['dark', 'light'] as const) {
+    await page.emulateMedia({ colorScheme: mode, reducedMotion: 'no-preference' });
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
+    const theme = await resolvedComputedTheme(page);
+
+    // GlobalSearch essential border + placeholder rendered contrast
+    const firstRow = page.locator('[data-slot="track-row"]').first();
+    await expect
+      .poll(() => firstRow.evaluate((el) => getComputedStyle(el).color))
+      .toBe(theme['--foreground']);
+    await expect
+      .poll(() =>
+        page
+          .locator('[data-slot="library-nav-item"][data-active="true"]')
+          .evaluate((el) => getComputedStyle(el).backgroundColor),
+      )
+      .toBe(theme['--selection']);
+    const searchBox = page.locator('[data-slot="global-search"]');
+    const searchStyles = await searchBox.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { border: style.borderTopColor, bg: style.backgroundColor };
+    });
+    expect(searchStyles.border).toBe(theme['--input']);
+    expect(searchStyles.bg).toBe(theme['--surface']);
+    expect(contrast(searchStyles.border, theme['--card'])).toBeGreaterThanOrEqual(3);
+    expect(contrast(searchStyles.border, searchStyles.bg)).toBeGreaterThanOrEqual(3);
+    expect(await expectRenderedTextContrast(page, `${mode} workbench`)).toBeGreaterThanOrEqual(4.5);
+
+    // TrackRow wide typography (14/20)
+    const rowTypography = await firstRow.evaluate((el) => {
+      const style = getComputedStyle(el);
+      return { fontSize: style.fontSize, lineHeight: style.lineHeight, height: style.height };
+    });
+    expect(rowTypography).toEqual({ fontSize: '14px', lineHeight: '20px', height: '46px' });
+
+    // PlaylistCreateDialog uses elevated popover surface + overlay border + high-contrast Input
+    await page.locator('[data-slot="library-add-button"]').click();
+    const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+    await expect(createDialog).toBeVisible();
+    // Move focus to Cancel so the auto-focused Input settles to its rest border-input state.
+    await createDialog.getByRole('button', { name: 'Cancel' }).focus();
+    await expect
+      .poll(() =>
+        createDialog.locator('input').evaluate((el) => getComputedStyle(el).borderTopColor),
+      )
+      .toBe(theme['--input']);
+    const dialogMetrics = await createDialog.evaluate((el) => {
+      const style = getComputedStyle(el);
+      const input = el.querySelector<HTMLInputElement>('input');
+      const inputStyle = input ? getComputedStyle(input) : null;
+      return {
+        bg: style.backgroundColor,
+        border: style.borderTopColor,
+        transitionProperty: style.transitionProperty,
+        transitionDuration: style.transitionDuration,
+        inputBg: inputStyle?.backgroundColor ?? null,
+        inputBorder: inputStyle?.borderTopColor ?? null,
+      };
+    });
+    expect(dialogMetrics.bg).toBe(theme['--popover']);
+    expect(dialogMetrics.border).toBe(theme['--overlay-border']);
+    expect(dialogMetrics.transitionProperty).toContain('opacity');
+    expect(dialogMetrics.transitionProperty).toContain('scale');
+    expect(dialogMetrics.transitionDuration).toContain('0.2s');
+    expect(dialogMetrics.inputBg).toBe(theme['--surface']);
+    expect(dialogMetrics.inputBorder).toBe(theme['--input']);
+    expect(contrast(dialogMetrics.inputBorder!, dialogMetrics.inputBg!)).toBeGreaterThanOrEqual(3);
+    expect(contrast(dialogMetrics.inputBorder!, dialogMetrics.bg)).toBeGreaterThanOrEqual(3);
+    expect(
+      await expectRenderedTextContrast(page, `${mode} playlist create dialog`),
+    ).toBeGreaterThanOrEqual(4.5);
+    await page.keyboard.press('Escape');
+    await expect(createDialog).toBeHidden();
+
+    // Settings Switch & Select rendered contrast + fade-only SelectContent (M07)
+    await page.getByRole('button', { name: 'Open settings' }).click();
+    const settings = page.getByRole('dialog', { name: 'Settings' });
+    await expect(settings).toBeVisible();
+    const switchEl = settings.locator('[data-slot="switch"]');
+    await expect(switchEl).toBeVisible();
+    const selectTrigger = settings.locator('[data-slot="select-trigger"]').first();
+    const triggerBorder = await selectTrigger.evaluate((el) => getComputedStyle(el).borderTopColor);
+    expect(triggerBorder).toBe(theme['--input']);
+    expect(contrast(triggerBorder, theme['--background'])).toBeGreaterThanOrEqual(3);
+    await selectTrigger.click();
+    const selectPopup = page.locator('[data-slot="select-content"]:visible');
+    await expect(selectPopup).toBeVisible();
+    const selectMotion = await selectPopup.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { prop: s.transitionProperty, dur: s.transitionDuration };
+    });
+    expect(selectMotion.prop).toBe('opacity');
+    expect(selectMotion.dur).toBe('0.15s');
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await expect(settings).toBeHidden();
+  }
+
+  // M01 Button, M08 Popover (fade-only 180ms), M15 Theme (0ms)
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'no-preference' });
+  const rootTransition = await page.evaluate(
+    () => getComputedStyle(document.documentElement).transitionDuration,
+  );
+  expect(rootTransition).toBe('0s');
+
+  const buttonMotion = await page
+    .locator('[data-slot="library-empty-playlists-create"]')
+    .evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { prop: s.transitionProperty, dur: s.transitionDuration };
+    });
+  expect(buttonMotion.dur).toBe('0.12s');
+
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await player.getByRole('button', { name: 'Configure playback profile' }).click();
+  const popover = page.locator('[data-slot="popover-content"]:visible');
+  await expect(popover).toBeVisible();
+  const popoverMotion = await popover.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { prop: s.transitionProperty, dur: s.transitionDuration };
+  });
+  expect(popoverMotion.prop).toBe('opacity');
+  expect(popoverMotion.dur).toBe('0.18s');
+  await page.keyboard.press('Escape');
+  await expect(popover).toBeHidden();
+
+  // Reduced motion removes transitions on shared primitives and overlay Inspector
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  await page.setViewportSize({ width: 640, height: 448 });
+  const utilityToggle = page.locator('button[aria-label$="utility panel"]');
+  await utilityToggle.click();
+  const overlayPane = page.locator('[data-pane="inspector"][data-presentation-mode="overlay"]');
+  await expect(overlayPane).toBeVisible();
+  const reducedOverlay = await overlayPane.evaluate(
+    (el) => getComputedStyle(el).transitionProperty,
+  );
+  expect(reducedOverlay).toBe('none');
+  // Rapid close/reopen does not leave overlay stuck inert, and Escape restores focus
+  await page.keyboard.press('Escape');
+  await expect(overlayPane).toBeHidden();
+  await expect(utilityToggle).toBeFocused();
+  await utilityToggle.click();
+  await expect(overlayPane).toBeVisible();
+  expect(await overlayPane.evaluate((el) => (el as HTMLElement).inert)).toBe(false);
+  await page.keyboard.press('Escape');
+  await expect(overlayPane).toBeHidden();
+  await expect(utilityToggle).toBeFocused();
 });

@@ -197,7 +197,7 @@ describe('Sky Graphite 2 semantic theme', () => {
     expect(tailwindTheme['--radius-dialog']).toBe('12px');
   });
 
-  it('keeps all six dark palettes color-only, preserves non-Graphite inherited roles, and matches Settings preview swatches', () => {
+  it('keeps all six dark palettes color-only, avoids duplicate Graphite declarations, preserves non-Graphite inherited roles, and matches Settings preview swatches', () => {
     const paletteRules = [
       ...globalsCss.matchAll(/html\[data-palette=['"]([\w-]+)['"]\]\s*\{([\s\S]*?)\r?\n\}/g),
     ];
@@ -206,6 +206,9 @@ describe('Sky Graphite 2 semantic theme', () => {
       'color-mix(in srgb, var(--text-secondary) 70%, var(--background))',
     );
     expect(root['--scrollbar-thumb-active']).toBe('var(--text-secondary)');
+    expect(Object.keys(root).filter((key) => key !== '--focus-gap')).toHaveLength(47);
+    expect(Object.keys(light)).toHaveLength(47);
+
     const themes = new Map<string, Record<string, string>>();
     for (const rule of paletteRules) {
       const id = rule[1];
@@ -219,6 +222,15 @@ describe('Sky Graphite 2 semantic theme', () => {
       expect(declarations).not.toMatch(
         /(?:min|max)?(?:width|height)|gap|padding|margin|radius|font|transition/i,
       );
+      if (id === 'graphite') {
+        expect(Object.keys(tokens).sort()).toEqual([
+          '--scrollbar-thumb',
+          '--scrollbar-thumb-active',
+        ]);
+        for (const [name, value] of Object.entries(tokens)) {
+          expect(value, `graphite ${name} must not duplicate :root`).not.toBe(root[name]);
+        }
+      }
       for (const [name, value] of Object.entries(tokens)) {
         if (name === '--playing' && id !== 'graphite') {
           expect(value).toMatch(/^color-mix\(in srgb, #[\da-f]{6} \d+%, #[\da-f]{6}\)$/i);
@@ -226,7 +238,7 @@ describe('Sky Graphite 2 semantic theme', () => {
           expect(value).toMatch(/^#[\da-f]{3}(?:[\da-f]{3})?$/i);
         }
       }
-      themes.set(id, tokens);
+      themes.set(id, { ...root, ...tokens });
     }
 
     for (const palette of PALETTES) {
