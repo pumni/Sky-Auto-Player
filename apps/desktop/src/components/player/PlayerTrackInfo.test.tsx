@@ -279,15 +279,15 @@ describe('PlayerTrackInfo', () => {
     expect(status).toHaveTextContent('Playing');
     expect(status).toHaveAttribute(
       'aria-label',
-      `${row.title}: Playing. Dry run; no physical input is sent.`,
+      `${row.title}: Playing. Test mode; no keyboard input is sent.`,
     );
     const testMode = container.querySelector<HTMLElement>(
       '[data-slot="status-badge"][data-appearance="plain"]',
     );
-    expect(testMode).toHaveTextContent('Test · no keys');
+    expect(testMode).toHaveTextContent('Test mode');
     expect(testMode).toHaveAttribute('data-slot', 'status-badge');
     expect(testMode).toHaveAttribute('data-appearance', 'plain');
-    expect(testMode).toHaveAttribute('aria-label', 'Dry run: no physical keyboard input is sent.');
+    expect(testMode).toHaveAttribute('aria-label', 'Test mode: no keyboard input is sent.');
     expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 
@@ -314,10 +314,10 @@ describe('PlayerTrackInfo', () => {
     expect(status).toHaveTextContent('Playback status uncertain');
     expect(
       container.querySelector('[data-slot="status-badge"][data-appearance="plain"]'),
-    ).toHaveTextContent('Test · no keys');
+    ).toHaveTextContent('Test mode');
     expect(status).toHaveAttribute(
       'aria-label',
-      expect.stringContaining('no physical input is sent.'),
+      expect.stringContaining('no keyboard input is sent.'),
     );
     expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });

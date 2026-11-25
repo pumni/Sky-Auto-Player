@@ -31,7 +31,7 @@ describe('TimingMarginControl', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
 
     expect(changes).toEqual([900]);
     expect(screen.getByText('900 µs')).toBeInTheDocument();
@@ -58,8 +58,8 @@ describe('TimingMarginControl', () => {
       <TimingMarginControl value={0} options={options} density="full" onChange={async () => 0} />,
     );
 
-    expect(screen.getByRole('button', { name: 'Decrease Timing Margin' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Increase Timing Margin' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Decrease timing margin' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Increase timing margin' })).toBeEnabled();
 
     rerender(
       <TimingMarginControl
@@ -70,8 +70,8 @@ describe('TimingMarginControl', () => {
       />,
     );
 
-    expect(screen.getByRole('button', { name: 'Decrease Timing Margin' })).toBeEnabled();
-    expect(screen.getByRole('button', { name: 'Increase Timing Margin' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Decrease timing margin' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Increase timing margin' })).toBeDisabled();
   });
 
   it('preserves every rapid step while earlier settings writes are pending', async () => {
@@ -89,9 +89,9 @@ describe('TimingMarginControl', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
 
     expect(changes).toEqual([900, 1_000, 1_100]);
     expect(screen.getByText('1100 µs')).toBeInTheDocument();
@@ -116,7 +116,7 @@ describe('TimingMarginControl', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
 
     await waitFor(() => expect(screen.getByText('800 µs')).toBeInTheDocument());
   });
@@ -137,7 +137,7 @@ describe('TimingMarginControl', () => {
     );
 
     // 1. User requests 900
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
     expect(screen.getByText('900 µs')).toBeInTheDocument();
 
     // 2. Write confirms 900
@@ -185,7 +185,7 @@ describe('TimingMarginControl', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
     unmount();
 
     // Resolving after unmount should not throw
@@ -209,7 +209,7 @@ describe('TimingMarginControl', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
     expect(screen.getByText('900 µs')).toBeInTheDocument();
 
     await act(async () => {
@@ -234,7 +234,7 @@ describe('TimingMarginControl', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
     expect(screen.getByText('900 µs')).toBeInTheDocument();
 
     await act(async () => {
@@ -269,11 +269,11 @@ describe('TimingMarginControl', () => {
     );
 
     // Click 1 (800 -> 900)
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
     expect(screen.getByText('900 µs')).toBeInTheDocument();
 
     // Click 2 (900 -> 1000)
-    fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
     expect(screen.getByText('1000 µs')).toBeInTheDocument();
 
     // Newer resolves first with 1000
@@ -310,8 +310,8 @@ describe('TimingMarginControl', () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
       expect(screen.getByText('1000 µs')).toBeInTheDocument();
 
       // Newer resolves with null (fails)
@@ -348,8 +348,8 @@ describe('TimingMarginControl', () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
 
       // Older resolves with 900
       await act(async () => {
@@ -385,8 +385,8 @@ describe('TimingMarginControl', () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
 
       // Older fails first
       await act(async () => {
@@ -421,8 +421,8 @@ describe('TimingMarginControl', () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
 
       // Newer succeeds first
       await act(async () => {
@@ -457,8 +457,8 @@ describe('TimingMarginControl', () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
 
       await act(async () => {
         resolveOlder(null);
@@ -493,8 +493,8 @@ describe('TimingMarginControl', () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
 
       await act(async () => {
         rejectOlder(new Error('Network error'));
@@ -529,8 +529,8 @@ describe('TimingMarginControl', () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
 
       await act(async () => {
         resolveOlder(900);
@@ -561,8 +561,8 @@ describe('TimingMarginControl', () => {
         />,
       );
 
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
 
       await act(async () => {
         rejectOlder(new Error('error 1'));
@@ -591,8 +591,8 @@ describe('TimingMarginControl', () => {
           }}
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
       await act(async () => {
         resolveOlder(900);
       });
@@ -622,8 +622,8 @@ describe('TimingMarginControl', () => {
           }}
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // req 1
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // req 2
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // req 1
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // req 2
       await act(async () => {
         resolveOlderA(950);
       });
@@ -651,8 +651,8 @@ describe('TimingMarginControl', () => {
           }}
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
       await act(async () => {
         resolveNewerB(1050);
       });
@@ -679,7 +679,7 @@ describe('TimingMarginControl', () => {
           }
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
       expect(screen.getByText('900 µs')).toBeInTheDocument();
       await act(async () => {
         resolveWrite(900);
@@ -710,7 +710,7 @@ describe('TimingMarginControl', () => {
           }
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
       expect(screen.getByText('900 µs')).toBeInTheDocument();
       await act(async () => {
         resolveWrite(900);
@@ -751,7 +751,7 @@ describe('TimingMarginControl', () => {
           }
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
       expect(screen.getByText('900 µs')).toBeInTheDocument();
       rerender(
         <TimingMarginControl
@@ -786,7 +786,7 @@ describe('TimingMarginControl', () => {
           }
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
       expect(screen.getByText('900 µs')).toBeInTheDocument();
       viewB.rerender(
         <TimingMarginControl
@@ -825,8 +825,8 @@ describe('TimingMarginControl', () => {
           }}
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
       expect(screen.getByText('1000 µs')).toBeInTheDocument();
 
       rerender(
@@ -869,7 +869,7 @@ describe('TimingMarginControl', () => {
           }
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
       await act(async () => {
         resolveWrite(900);
       });
@@ -907,7 +907,7 @@ describe('TimingMarginControl', () => {
       );
 
       // 1. User requests 900
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
       expect(screen.getByText('900 µs')).toBeInTheDocument();
 
       // 2. Request 1 succeeds with 900
@@ -917,7 +917,7 @@ describe('TimingMarginControl', () => {
       expect(screen.getByText('900 µs')).toBeInTheDocument();
 
       // 3. User requests 1000 (pending)
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
       expect(screen.getByText('1000 µs')).toBeInTheDocument();
 
       // 4. Parent externally updates authoritative prop to 1100
@@ -968,13 +968,13 @@ describe('TimingMarginControl', () => {
           }}
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
       await act(async () => {
         resolveFirst(900);
       });
       expect(screen.getByText('900 µs')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 1000
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 1000
       expect(screen.getByText('1000 µs')).toBeInTheDocument();
 
       rerender(
@@ -1012,7 +1012,7 @@ describe('TimingMarginControl', () => {
           }
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // requests 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // requests 900
       expect(screen.getByText('900 µs')).toBeInTheDocument();
 
       rerender(
@@ -1049,7 +1049,7 @@ describe('TimingMarginControl', () => {
           }
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' })); // 900
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' })); // 900
       expect(screen.getByText('900 µs')).toBeInTheDocument();
 
       rerender(
@@ -1104,8 +1104,8 @@ describe('TimingMarginControl', () => {
           }}
         />,
       );
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
       await act(async () => {
         resolveFirst(900);
       });
@@ -1123,8 +1123,8 @@ describe('TimingMarginControl', () => {
         />,
       );
       expect(screen.getByText('1500 µs')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Decrease Timing Margin' })).toBeEnabled();
-      expect(screen.getByRole('button', { name: 'Increase Timing Margin' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Decrease timing margin' })).toBeEnabled();
+      expect(screen.getByRole('button', { name: 'Increase timing margin' })).toBeEnabled();
     });
   });
 
@@ -1155,8 +1155,8 @@ describe('TimingMarginControl', () => {
       render(<ConnectedControl />);
       expect(screen.getByText('500 µs')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
-      fireEvent.click(screen.getByRole('button', { name: 'Increase Timing Margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
+      fireEvent.click(screen.getByRole('button', { name: 'Increase timing margin' }));
       expect(screen.getByText('700 µs')).toBeInTheDocument();
 
       await waitFor(() => {

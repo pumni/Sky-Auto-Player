@@ -651,10 +651,10 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   const runtimePlayer = await startDryRunWithSelection(page);
   const runtime = await openRuntimeDiagnostics(page);
   await expect(
-    runtime.getByText('Mode: Dry run · no physical input sent', { exact: true }),
+    runtime.getByText('Mode: Test mode (dry run) · no physical input sent', { exact: true }),
   ).toBeVisible();
   await expect(
-    runtime.getByText('Dry run · sender timing not measured', { exact: true }),
+    runtime.getByText('Test mode (dry run) · sender timing not measured', { exact: true }),
   ).toBeVisible();
   await expect(
     runtime.getByText(
@@ -797,7 +797,7 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   await expect(compactProfile.getByLabel('FPS')).toBeVisible();
   if (shouldCapture('profile-expanded'))
     await capture(page, 'candidate-profile-expanded-800x560.png');
-  await compactProfile.getByRole('combobox', { name: 'Base Hold' }).click();
+  await compactProfile.getByRole('combobox', { name: 'Base hold' }).click();
   await expect(page.locator('[data-slot="select-content"]:visible')).toBeVisible();
   if (shouldCapture('profile-select'))
     await capture(page, 'candidate-profile-select-open-800x560.png');

@@ -43,8 +43,14 @@ describe('PlaybackAdmission recovery actions', () => {
       reason?.textContent?.match(/2 feasible same-key repeats have an authored Up-to-Down gap/g),
     ).toHaveLength(1);
     expect(consequence).toHaveTextContent(
-      'Proceed keeps the authored timing and selected settings unchanged.',
+      'Timing risk affects note detection in-game, not your account. Choose an option below or cancel without starting.',
     );
+    expect(
+      screen.getByText('Uses your current hold and tempo settings unchanged.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Runs in Test mode without sending keyboard input.'),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
     const estimates = screen.getAllByText('Short same-key Up gap risk', { selector: 'summary' });
     expect(estimates).toHaveLength(2);

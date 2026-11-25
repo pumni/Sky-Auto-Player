@@ -178,8 +178,12 @@ describe('DiagnosticsView', () => {
       screen.getByText('Playback status: Native playback status uncertain'),
     ).toBeInTheDocument();
     expect(screen.getByText(`Last confirmed session song: ${row.title}`)).toBeInTheDocument();
-    expect(screen.getByText('Mode: Dry run · no physical input sent')).toBeInTheDocument();
-    expect(screen.getByText('Dry run · sender timing not measured')).toBeInTheDocument();
+    expect(
+      screen.getByText('Mode: Test mode (dry run) · no physical input sent'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText('Test mode (dry run) · sender timing not measured'),
+    ).toBeInTheDocument();
     expect(screen.queryByText('Sender samples')).toBeNull();
     expect(screen.queryByText('Completion p50')).toBeNull();
     expect(screen.queryByText('Missed Down boundaries')).toBeNull();
@@ -239,7 +243,7 @@ describe('DiagnosticsView', () => {
     expect(screen.getByText('Max pre-call lateness')).toBeInTheDocument();
     expect(screen.getByText('Pre-call > 10 ms')).toBeInTheDocument();
     expect(screen.getByText('Pre-call 500–750 μs')).toBeInTheDocument();
-    expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('800 µs');
+    expect(screen.getByText('Configured timing margin').parentElement).toHaveTextContent('800 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('17.467 ms');
     expect(screen.queryByText('Missed Down keys')).toBeNull();
     expect(screen.queryByText('Unobserved backlog boundaries')).toBeNull();
@@ -296,7 +300,7 @@ describe('DiagnosticsView', () => {
 
     render(<DiagnosticsView useStore={store} />);
 
-    expect(screen.getByText('Configured Timing Margin').parentElement).toHaveTextContent('0 µs');
+    expect(screen.getByText('Configured timing margin').parentElement).toHaveTextContent('0 µs');
     expect(screen.getByText('Target hold').parentElement).toHaveTextContent('16.667 ms');
   });
 

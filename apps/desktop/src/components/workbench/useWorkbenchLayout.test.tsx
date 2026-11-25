@@ -219,8 +219,9 @@ describe('shared palette geometry boundary', () => {
       resolve(process.cwd(), 'src/components/workbench/Workbench.tsx'),
       'utf8',
     );
-    expect(workbench).toContain('style={{ minWidth: MIN_TRACK_BROWSER_WIDTH }}');
-    expect(workbench).not.toMatch(/minWidth:\s*420/);
+    expect(workbench).toMatch(/'--min-track-browser-width': `\$\{MIN_TRACK_BROWSER_WIDTH\}px`/);
+    expect(workbench).toContain('min-w-(--min-track-browser-width)');
+    expect(workbench).not.toMatch(/minWidth:\s*420|min-w-\[420px\]/);
 
     const themes = readFileSync(resolve(process.cwd(), 'src/styles/globals.css'), 'utf8');
     const paletteRules = [...themes.matchAll(/([^{}]*data-palette[^{}]*)\{([^{}]*)\}/g)];

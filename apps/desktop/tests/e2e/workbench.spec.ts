@@ -702,13 +702,13 @@ test('compact Player Dock presents one readable dry-run status without moving tr
 
   await expect(title).toHaveText('Blue Bird');
   await expect(status).toHaveText('Playing');
-  await expect(status).toHaveAttribute('aria-label', /no physical input is sent/i);
-  await expect(player.locator('[data-slot="status-badge"][data-appearance="plain"]')).toContainText(
-    'Test',
+  await expect(status).toHaveAttribute('aria-label', /no keyboard input is sent/i);
+  await expect(player.locator('[data-slot="status-badge"][data-appearance="plain"]')).toHaveText(
+    'Test mode',
   );
   await expect(
     player.locator('[data-slot="status-badge"][data-appearance="plain"]'),
-  ).toHaveAttribute('aria-label', /no physical keyboard input is sent/i);
+  ).toHaveAttribute('aria-label', /no keyboard input is sent/i);
   await expect(status).toHaveCount(1);
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
   await expect(player.getByRole('button', { name: 'Add to Liked Songs' })).toBeVisible();

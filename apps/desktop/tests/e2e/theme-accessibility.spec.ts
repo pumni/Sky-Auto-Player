@@ -727,6 +727,7 @@ test('Light rendered text remains readable across library, Settings, Diagnostics
   if (await proceed.isVisible().catch(() => false)) await proceed.click();
   const recovery = page.getByRole('alert');
   await expect(recovery).toContainText('Sky window was not found');
+  await expect.poll(() => recovery.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
   expect(await expectRenderedTextContrast(page, 'Light playback recovery')).toBeGreaterThanOrEqual(
     4.5,
   );
@@ -1009,7 +1010,7 @@ test('Light row hover, segmented boundary, forced-colors segmented label, and ne
   await player.getByRole('button', { name: 'Configure playback profile' }).click();
   const profileDialog = page.getByRole('dialog', { name: 'Playback profile' });
   await profileDialog.getByText('Advanced timing', { exact: true }).click();
-  await profileDialog.getByRole('combobox', { name: 'Base Hold' }).click();
+  await profileDialog.getByRole('combobox', { name: 'Base hold' }).click();
   const selectPopup = page.locator('[data-slot="select-content"]:visible');
   await expect(selectPopup).toBeVisible();
   expect(await selectPopup.evaluate((el) => getComputedStyle(el).borderColor)).toBe(
@@ -1135,7 +1136,7 @@ test('Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and
   }
 });
 
-test('rendered control contrast, input boundaries, and M01-M13/M15 motion contracts hold in Dark and Light', async ({
+test('rendered control contrast, Switch visual cues, M15 child instant switch, and input boundaries hold in Dark and Light', async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1366, height: 768 });
@@ -1146,18 +1147,16 @@ test('rendered control contrast, input boundaries, and M01-M13/M15 motion contra
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
     const theme = await resolvedComputedTheme(page);
 
-    // GlobalSearch essential border + placeholder rendered contrast
+    // M15 guarantees immediate child update on mode switch (no mid-transition wait needed).
     const firstRow = page.locator('[data-slot="track-row"]').first();
-    await expect
-      .poll(() => firstRow.evaluate((el) => getComputedStyle(el).color))
-      .toBe(theme['--foreground']);
-    await expect
-      .poll(() =>
-        page
-          .locator('[data-slot="library-nav-item"][data-active="true"]')
-          .evaluate((el) => getComputedStyle(el).backgroundColor),
-      )
-      .toBe(theme['--selection']);
+    expect(await firstRow.evaluate((el) => getComputedStyle(el).color)).toBe(theme['--foreground']);
+    expect(
+      await page
+        .locator('[data-slot="library-nav-item"][data-active="true"]')
+        .evaluate((el) => getComputedStyle(el).backgroundColor),
+    ).toBe(theme['--selection']);
+
+    // GlobalSearch essential border + placeholder rendered contrast
     const searchBox = page.locator('[data-slot="global-search"]');
     const searchStyles = await searchBox.evaluate((el) => {
       const style = getComputedStyle(el);
@@ -1169,7 +1168,7 @@ test('rendered control contrast, input boundaries, and M01-M13/M15 motion contra
     expect(contrast(searchStyles.border, searchStyles.bg)).toBeGreaterThanOrEqual(3);
     expect(await expectRenderedTextContrast(page, `${mode} workbench`)).toBeGreaterThanOrEqual(4.5);
 
-    // TrackRow wide typography (14/20)
+    // TrackRow wide typography (14/20/46px)
     const rowTypography = await firstRow.evaluate((el) => {
       const style = getComputedStyle(el);
       return { fontSize: style.fontSize, lineHeight: style.lineHeight, height: style.height };
@@ -1180,7 +1179,6 @@ test('rendered control contrast, input boundaries, and M01-M13/M15 motion contra
     await page.locator('[data-slot="library-add-button"]').click();
     const createDialog = page.getByRole('dialog', { name: 'New playlist' });
     await expect(createDialog).toBeVisible();
-    // Move focus to Cancel so the auto-focused Input settles to its rest border-input state.
     await createDialog.getByRole('button', { name: 'Cancel' }).focus();
     await expect
       .poll(() =>
@@ -1194,17 +1192,12 @@ test('rendered control contrast, input boundaries, and M01-M13/M15 motion contra
       return {
         bg: style.backgroundColor,
         border: style.borderTopColor,
-        transitionProperty: style.transitionProperty,
-        transitionDuration: style.transitionDuration,
         inputBg: inputStyle?.backgroundColor ?? null,
         inputBorder: inputStyle?.borderTopColor ?? null,
       };
     });
     expect(dialogMetrics.bg).toBe(theme['--popover']);
     expect(dialogMetrics.border).toBe(theme['--overlay-border']);
-    expect(dialogMetrics.transitionProperty).toContain('opacity');
-    expect(dialogMetrics.transitionProperty).toContain('scale');
-    expect(dialogMetrics.transitionDuration).toContain('0.2s');
     expect(dialogMetrics.inputBg).toBe(theme['--surface']);
     expect(dialogMetrics.inputBorder).toBe(theme['--input']);
     expect(contrast(dialogMetrics.inputBorder!, dialogMetrics.inputBg!)).toBeGreaterThanOrEqual(3);
@@ -1215,76 +1208,158 @@ test('rendered control contrast, input boundaries, and M01-M13/M15 motion contra
     await page.keyboard.press('Escape');
     await expect(createDialog).toBeHidden();
 
-    // Settings Switch & Select rendered contrast + fade-only SelectContent (M07)
+    // Settings elevated surface, Switch track/thumb visual cues (checked & unchecked), and Select border
     await page.getByRole('button', { name: 'Open settings' }).click();
     const settings = page.getByRole('dialog', { name: 'Settings' });
     await expect(settings).toBeVisible();
+    const settingsSurface = await settings.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { bg: s.backgroundColor, border: s.borderTopColor };
+    });
+    expect(settingsSurface.bg).toBe(theme['--popover']);
+    expect(settingsSurface.border).toBe(theme['--overlay-border']);
+
     const switchEl = settings.locator('[data-slot="switch"]');
-    await expect(switchEl).toBeVisible();
+    const switchThumb = switchEl.locator('[data-slot="switch-thumb"]');
+    const checkedSwitch = await Promise.all([
+      switchEl.evaluate((el) => getComputedStyle(el).backgroundColor),
+      switchThumb.evaluate((el) => getComputedStyle(el).backgroundColor),
+    ]);
+    expect(checkedSwitch[0]).toBe(theme['--primary']);
+    expect(contrast(checkedSwitch[1], checkedSwitch[0])).toBeGreaterThanOrEqual(3);
+    await switchEl.click();
+    await expect
+      .poll(() => switchEl.evaluate((el) => getComputedStyle(el).backgroundColor))
+      .toBe(theme['--input']);
+    const uncheckedSwitch = await Promise.all([
+      switchEl.evaluate((el) => getComputedStyle(el).backgroundColor),
+      switchThumb.evaluate((el) => getComputedStyle(el).backgroundColor),
+    ]);
+    expect(contrast(uncheckedSwitch[0], theme['--surface'])).toBeGreaterThanOrEqual(3);
+    expect(contrast(uncheckedSwitch[1], uncheckedSwitch[0])).toBeGreaterThanOrEqual(3);
+    await switchEl.click();
+
     const selectTrigger = settings.locator('[data-slot="select-trigger"]').first();
     const triggerBorder = await selectTrigger.evaluate((el) => getComputedStyle(el).borderTopColor);
     expect(triggerBorder).toBe(theme['--input']);
     expect(contrast(triggerBorder, theme['--background'])).toBeGreaterThanOrEqual(3);
-    await selectTrigger.click();
-    const selectPopup = page.locator('[data-slot="select-content"]:visible');
-    await expect(selectPopup).toBeVisible();
-    const selectMotion = await selectPopup.evaluate((el) => {
-      const s = getComputedStyle(el);
-      return { prop: s.transitionProperty, dur: s.transitionDuration };
-    });
-    expect(selectMotion.prop).toBe('opacity');
-    expect(selectMotion.dur).toBe('0.15s');
-    await page.keyboard.press('Escape');
+    expect(
+      await expectRenderedTextContrast(page, `${mode} settings playback`),
+    ).toBeGreaterThanOrEqual(4.5);
     await page.keyboard.press('Escape');
     await expect(settings).toBeHidden();
   }
+});
 
-  // M01 Button, M08 Popover (fade-only 180ms), M15 Theme (0ms)
+test('shared primitive motion durations, normal-motion overlay interruption, and reduced motion hold', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/');
   await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'no-preference' });
-  const rootTransition = await page.evaluate(
-    () => getComputedStyle(document.documentElement).transitionDuration,
-  );
-  expect(rootTransition).toBe('0s');
 
-  const buttonMotion = await page
-    .locator('[data-slot="library-empty-playlists-create"]')
-    .evaluate((el) => {
+  // M01 Button (120ms rest/hover), M04 Transport icon (100ms), M13 Scrollbar (180ms idle)
+  expect(
+    await page
+      .locator('[data-slot="library-empty-playlists-create"]')
+      .evaluate((el) => getComputedStyle(el).transitionDuration),
+  ).toBe('0.12s');
+  expect(
+    await page
+      .locator('[data-slot="primary-transport"] svg')
+      .first()
+      .evaluate((el) => getComputedStyle(el).transitionDuration),
+  ).toBe('0.1s');
+  expect(
+    await page
+      .locator('[data-slot="scroll-area-scrollbar"]')
+      .first()
+      .evaluate((el) => {
+        const s = getComputedStyle(el);
+        return { prop: s.transitionProperty, dur: s.transitionDuration };
+      }),
+  ).toEqual({ prop: 'opacity', dur: '0.18s' });
+
+  // M05 TabsIndicator (150ms)
+  const utilityToggle = page.locator('button[aria-label$="utility panel"]');
+  await utilityToggle.click();
+  expect(
+    await page
+      .locator('[data-slot="tabs-indicator"]')
+      .first()
+      .evaluate((el) => getComputedStyle(el).transitionDuration),
+  ).toBe('0.15s');
+  await utilityToggle.click();
+
+  // M07 Select (fade-only 150ms) & M09 Dialog (opacity + scale 200ms)
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settings).toBeVisible();
+  const dialogMotion = await settings.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { prop: s.transitionProperty, dur: s.transitionDuration };
+  });
+  expect(dialogMotion.prop).toContain('opacity');
+  expect(dialogMotion.prop).toContain('scale');
+  expect(dialogMotion.dur).toContain('0.2s');
+
+  await settings.locator('[data-slot="select-trigger"]').first().click();
+  const selectPopup = page.locator('[data-slot="select-content"]:visible');
+  await expect(selectPopup).toBeVisible();
+  expect(
+    await selectPopup.evaluate((el) => {
       const s = getComputedStyle(el);
       return { prop: s.transitionProperty, dur: s.transitionDuration };
-    });
-  expect(buttonMotion.dur).toBe('0.12s');
+    }),
+  ).toEqual({ prop: 'opacity', dur: '0.15s' });
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Escape');
+  await expect(settings).toBeHidden();
 
+  // M08 Popover (fade-only 180ms)
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await player.getByRole('button', { name: 'Configure playback profile' }).click();
   const popover = page.locator('[data-slot="popover-content"]:visible');
   await expect(popover).toBeVisible();
-  const popoverMotion = await popover.evaluate((el) => {
-    const s = getComputedStyle(el);
-    return { prop: s.transitionProperty, dur: s.transitionDuration };
-  });
-  expect(popoverMotion.prop).toBe('opacity');
-  expect(popoverMotion.dur).toBe('0.18s');
+  expect(
+    await popover.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { prop: s.transitionProperty, dur: s.transitionDuration };
+    }),
+  ).toEqual({ prop: 'opacity', dur: '0.18s' });
   await page.keyboard.press('Escape');
   await expect(popover).toBeHidden();
 
-  // Reduced motion removes transitions on shared primitives and overlay Inspector
-  await page.emulateMedia({ reducedMotion: 'reduce' });
+  // M10 Normal-motion interrupted close/reopen on overlay Inspector (220ms enter, no stuck inert)
   await page.setViewportSize({ width: 640, height: 448 });
-  const utilityToggle = page.locator('button[aria-label$="utility panel"]');
   await utilityToggle.click();
   const overlayPane = page.locator('[data-pane="inspector"][data-presentation-mode="overlay"]');
   await expect(overlayPane).toBeVisible();
-  const reducedOverlay = await overlayPane.evaluate(
-    (el) => getComputedStyle(el).transitionProperty,
-  );
-  expect(reducedOverlay).toBe('none');
-  // Rapid close/reopen does not leave overlay stuck inert, and Escape restores focus
+  const overlayMotion = await overlayPane.evaluate((el) => {
+    const s = getComputedStyle(el);
+    return { prop: s.transitionProperty, dur: s.transitionDuration };
+  });
+  expect(overlayMotion.prop).toContain('opacity');
+  expect(overlayMotion.prop).toContain('translate');
+  expect(overlayMotion.dur).toContain('0.22s');
+  // Interrupt normal-motion exit immediately by reopening before exit finishes
+  await page.keyboard.press('Escape');
+  await utilityToggle.click();
+  await expect(overlayPane).toBeVisible();
+  await expect(overlayPane).toHaveAttribute('data-open', 'true');
+  expect(await overlayPane.evaluate((el) => (el as HTMLElement).inert)).toBe(false);
   await page.keyboard.press('Escape');
   await expect(overlayPane).toBeHidden();
   await expect(utilityToggle).toBeFocused();
+
+  // Reduced motion removes transitions across Button and overlay Inspector
+  await page.emulateMedia({ reducedMotion: 'reduce' });
+  expect(await utilityToggle.evaluate((el) => getComputedStyle(el).transitionProperty)).toBe(
+    'none',
+  );
   await utilityToggle.click();
   await expect(overlayPane).toBeVisible();
-  expect(await overlayPane.evaluate((el) => (el as HTMLElement).inert)).toBe(false);
+  expect(await overlayPane.evaluate((el) => getComputedStyle(el).transitionProperty)).toBe('none');
   await page.keyboard.press('Escape');
   await expect(overlayPane).toBeHidden();
   await expect(utilityToggle).toBeFocused();

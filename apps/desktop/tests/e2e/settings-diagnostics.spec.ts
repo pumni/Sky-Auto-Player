@@ -52,7 +52,7 @@ test('Playback Profile works through the narrow popover with focus restore', asy
     'Effective target hold',
   ]);
   await expect(popover.locator('[data-slot="timing-margin-control"]')).toContainText(
-    'Timing Margin',
+    'Timing margin',
   );
   await expect(popover.locator('[data-slot="timing-margin-control"]')).toContainText('500 µs');
   await expect(popover.locator('[data-slot="timing-margin-control"]')).not.toContainText(
@@ -101,7 +101,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
     'page',
   );
   await expect(dialog.getByRole('heading', { name: 'Timing' })).toBeVisible();
-  const timingMargin = dialog.getByRole('group', { name: 'Timing Margin' });
+  const timingMargin = dialog.getByRole('group', { name: 'Timing margin' });
   await expect(timingMargin).toContainText('500 µs');
   await expect(timingMargin).not.toContainText('Recommended');
   await expect(dialog.getByRole('button', { name: /Use recommended/ })).toHaveCount(0);
@@ -114,7 +114,7 @@ test('Settings modal has no serious accessibility violations and closes accessib
     .locator('[data-slot="timing-margin-control"] > div:first-child > span')
     .boundingBox();
   const timingStepperBox = await dialog
-    .getByRole('button', { name: 'Decrease Timing Margin' })
+    .getByRole('button', { name: 'Decrease timing margin' })
     .boundingBox();
   expect(timingHeadingBox).not.toBeNull();
   expect(timingStepperBox).not.toBeNull();
@@ -628,5 +628,5 @@ test('retired calibration controls are not exposed', async ({ page }) => {
   await expect(settings.getByRole('button', { name: 'Advanced', exact: true })).toHaveCount(0);
   await expect(settings.getByRole('button', { name: 'Open calibration' })).toHaveCount(0);
   await expect(page.getByRole('dialog', { name: 'Timing calibration' })).toHaveCount(0);
-  await expect(settings.getByRole('group', { name: 'Timing Margin' })).toContainText('500 µs');
+  await expect(settings.getByRole('group', { name: 'Timing margin' })).toContainText('500 µs');
 });

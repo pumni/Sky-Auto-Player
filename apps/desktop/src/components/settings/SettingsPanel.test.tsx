@@ -16,7 +16,7 @@ describe('SettingsPanel playback timing', () => {
 
     render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
 
-    expect(screen.getByLabelText('Base Hold')).toBeInTheDocument();
+    expect(screen.getByLabelText('Base hold')).toBeInTheDocument();
     const settingsContent = document.querySelector<HTMLElement>('[data-settings-content]');
     expect(settingsContent).toBeInTheDocument();
     if (!settingsContent) throw new Error('settings content should be available');

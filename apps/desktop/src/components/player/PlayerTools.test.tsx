@@ -46,7 +46,7 @@ describe('PlayerTools playback modes and profile', () => {
 
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
     expect(within(dialog).getByRole('heading', { name: 'Playback profile' })).toBeVisible();
-    expect(within(dialog).getByLabelText('Base Hold')).toBeInTheDocument();
+    expect(within(dialog).getByLabelText('Base hold')).toBeInTheDocument();
     expect(within(dialog).queryByRole('switch', { name: 'Auto Play' })).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('button', { name: 'Auto Play' })).not.toBeInTheDocument();
   });
@@ -88,7 +88,7 @@ describe('PlayerTools playback modes and profile', () => {
     render(<PlayerTools useStore={store} />);
 
     expect(screen.queryByRole('button', { name: 'Test playback (no input)' })).toBeNull();
-    expect(screen.queryByLabelText('Base Hold')).toBeNull();
+    expect(screen.queryByLabelText('Base hold')).toBeNull();
     await act(async () =>
       screen.getByRole('button', { name: 'Configure playback profile' }).click(),
     );
