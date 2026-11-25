@@ -2446,6 +2446,35 @@ test('Add songs menu stays non-modal and supports keyboard exit, Escape, and out
   await expectNoSeriousAccessibilityViolations(page);
 });
 
+test('Add songs menu reopens safely while its Base UI exit transition is active', async ({ page }) => {
+  const navigator = page.getByRole('navigation', { name: 'Library' });
+  await navigator.locator('[data-slot="library-add-button"]').click();
+  const createDialog = page.getByRole('dialog', { name: 'New playlist' });
+  await createDialog.getByLabel('Playlist name').fill('Exit interruption check');
+  await createDialog.getByRole('button', { name: 'Create' }).click();
+
+  const trigger = page.getByRole('button', { name: 'Add songs' });
+  const menu = page.getByRole('menu', { name: 'Add songs' });
+  const browse = menu.getByRole('menuitem', { name: 'Browse Built-in Songs…' });
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveAttribute('data-ending-style');
+
+  await trigger.click();
+  await expect(menu).toBeVisible();
+  await expect(menu).not.toHaveAttribute('data-ending-style');
+  await expect(menu).toHaveCount(1);
+  await page.keyboard.press('ArrowDown');
+  await expect(browse).toBeFocused();
+  await expect(page.locator('[data-base-ui-focus-guard]')).toHaveCount(6);
+
+  await page.keyboard.press('Escape');
+  await expect(menu).toHaveCount(0);
+  await expect(trigger).toBeFocused();
+  await expect(page.locator('[data-base-ui-focus-guard]')).toHaveCount(0);
+});
+
 test('long sheet titles remain contained in the Track Browser, Utility, and Player Bar', async ({
   page,
 }) => {
