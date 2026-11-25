@@ -14,7 +14,11 @@ const diagramLabels = isVi
   : ['SHEET EVENT', 'TIMING WINDOW', 'BATCHED INPUT'];
 ---
 
-<section id="playback" class="section-shell section-shell--open" aria-labelledby="playback-title">
+<section
+  id="playback"
+  class="section-shell section-shell--feature"
+  aria-labelledby="playback-title"
+>
   <div class="container playback-proof__layout">
     <div class="playback-proof__intro">
       <SectionIntro
@@ -22,7 +26,6 @@ const diagramLabels = isVi
         title={data.title}
         description={data.description}
         titleId="playback-title"
-        measure="narrow"
       />
       <ul class="proof-points" aria-label={isVi ? 'Năng lực phát nhạc' : 'Playback capabilities'}>
         {data.points.map((point) => (

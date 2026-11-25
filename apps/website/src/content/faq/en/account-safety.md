@@ -6,4 +6,4 @@ category: 'Safety'
 question: 'Will I get banned for using Sky Auto Player with Sky: Children of the Light?'
 ---
 
-Sky Auto Player runs as a separate application and sends input through the Windows `SendInput` API only after the selected Sky target is verified in the foreground. It does not inspect game memory, inject code into the game process or modify game files. Those technical boundaries do not guarantee that automated playback is permitted. It may conflict with Sky’s Terms of Service, so use it responsibly and at your own risk.
+Sky Auto Player runs as a separate application and sends musical packets through the Windows `SendInput` API only after fresh checks confirm the current foreground window and retained target identity. Bounded safety cleanup may separately attempt releases for keys recorded in its journal. It does not inspect game memory, inject code into the game process or modify game files. Those technical boundaries do not guarantee that automated playback is permitted. It may conflict with Sky’s Terms of Service, so use it responsibly and at your own risk.

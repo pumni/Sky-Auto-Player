@@ -181,7 +181,10 @@ test.describe('published route and asset contracts', () => {
     expect(llms.status()).toBe(200);
     const llmsText = await llms.text();
     expect(llmsText).toContain('Sky Auto Player');
-    expect(llmsText).toContain('SendInput API only');
+    expect(llmsText).toContain(
+      'SendInput API after fresh foreground and retained-target identity checks',
+    );
+    expect(llmsText).toContain('Bounded safety cleanup may separately attempt releases');
     expect(llmsText).toContain('Windows 11 x64');
     expect(llmsText).toContain('Tauri updater separately verifies the .exe.sig sidecar');
     expect(llmsText).toContain('sender-side');

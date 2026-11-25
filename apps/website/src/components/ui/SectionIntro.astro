@@ -3,20 +3,16 @@ import Kicker from './Kicker.astro';
 
 interface Props {
   title: string;
-  kicker?: string;
+  kicker: string;
   description?: string;
-  titleId?: string;
-  measure?: 'narrow' | 'normal' | 'wide';
-  align?: 'start' | 'center';
+  titleId: string;
 }
 
-const { title, kicker, description, titleId, measure = 'normal', align = 'start' } = Astro.props;
+const { title, kicker, description, titleId } = Astro.props;
 ---
 
-<div
-  class:list={['ui-section-intro', `ui-section-intro--${measure}`, `ui-section-intro--${align}`]}
->
-  {kicker && <Kicker>{kicker}</Kicker>}
+<div class="ui-section-intro">
+  <Kicker>{kicker}</Kicker>
   <h2 id={titleId} class="ui-section-title">
     {title}
   </h2>

@@ -54,13 +54,6 @@
     padding: 0.55rem 0.9rem;
   }
 
-  .button:is(:disabled, [aria-disabled='true']) {
-    cursor: not-allowed;
-    opacity: 0.55;
-    pointer-events: none;
-    transform: none;
-  }
-
   .skip-link {
     position: fixed;
     top: var(--space-3);

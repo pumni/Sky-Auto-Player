@@ -11,7 +11,10 @@ const isVi = data.locale === 'vi';
 const strip = data.proofStrip;
 ---
 
-<section class="proof-strip section-shell section-shell--proof" aria-labelledby="proof-strip-title">
+<section
+  class="proof-strip section-shell section-shell--transition"
+  aria-labelledby="proof-strip-title"
+>
   <div class="container proof-strip__layout">
     <div class="proof-strip__header">
       <Kicker>{strip.kicker}</Kicker>

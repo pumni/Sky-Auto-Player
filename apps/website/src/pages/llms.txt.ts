@@ -14,7 +14,8 @@ export function GET() {
 - The canonical package is a Tauri NSIS installer for current-user installation.
 - Windows may show Unknown Publisher or a SmartScreen warning because the installer is unsigned for Authenticode under the current policy. The Tauri updater separately verifies the .exe.sig sidecar; manual installation does not require it.
 - The Library includes built-in songs, liked songs, and playlists. Import local JSON, .skysheet, or JSON-compatible TXT files or folders into a playlist; imports reference the original files without moving or deleting them.
-- Playback timing measurements are sender-side. Windows scheduling and Sky input sampling determine when the game registers input; the app does not guarantee in-game sound or frame timing.
+- Playback uses authored QPC deadlines, a calibrated fixed wake guard, frame-aware hold and release floors, and sender-side timing measurements. The wake guard does not continuously adjust a lead. Windows scheduling and Sky input sampling determine when the game registers input; the app does not guarantee in-game sound or frame timing.
+- The Player Dock's Playback profile controls app playback defaults: Base Hold, Tempo, FPS, and timing margin. These settings are not stored per song or embedded in sheet files.
 
 ## Official pages
 
@@ -47,8 +48,8 @@ export function GET() {
 
 - Automated playback may conflict with Sky's Terms of Service; technical boundaries do not guarantee account safety.
 - The application is a Windows music playback helper, not a game modification tool.
-- It reads user-provided song files and simulates keyboard input through the Windows SendInput API only.
-- It does not read game memory, modify game files, inject code, install keyboard/input hooks, or bypass anti-cheat systems. One audited out-of-context foreground event watcher publishes hints only and cannot authorize input.
+- It reads user-provided song files and sends musical packets through the Windows SendInput API after fresh foreground and retained-target identity checks. Bounded safety cleanup may separately attempt releases for keys recorded in its journal.
+- It does not read game memory, modify game files, inject code, install keyboard/input hooks, attach a debugger, or bypass anti-cheat systems. One audited out-of-context foreground event watcher publishes hints only and cannot authorize a send.
 - Source code: https://github.com/pumni/Sky-Auto-Player (GPL-3.0)
 `;
   return new Response(body, {

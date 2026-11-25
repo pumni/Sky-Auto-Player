@@ -14,7 +14,7 @@ const { data, locale } = Astro.props;
 ---
 
 <section
-  class="hero section-shell section-shell--opening section-shell--after-header"
+  class="hero section-shell section-shell--feature section-shell--intro section-shell--after-header"
   aria-labelledby="hero-title"
 >
   <div class="container hero__layout">
@@ -265,46 +265,6 @@ const { data, locale } = Astro.props;
       bottom: -1.5rem;
       width: 8rem;
       opacity: 0.12;
-    }
-
-    .hero__stage-meta {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: space-between;
-      gap: var(--space-3);
-      margin-block-start: var(--space-3);
-      padding-inline: var(--space-2);
-      color: var(--color-text-tertiary);
-      font-family: var(--font-mono);
-      font-size: var(--type-micro);
-      letter-spacing: 0.06em;
-    }
-
-    .hero__rail {
-      grid-column: 1 / -1;
-      max-width: 42rem;
-      margin-block-start: var(--space-4);
-    }
-
-    .hero__rail::after {
-      position: absolute;
-      bottom: calc(100% - 0.95rem);
-      left: 0.9rem;
-      width: 1px;
-      height: clamp(2rem, 4vw, 4.5rem);
-      background: linear-gradient(180deg, transparent, var(--line-accent));
-      content: '';
-    }
-
-    .hero__rail-label {
-      position: absolute;
-      right: 0;
-      padding-inline-start: var(--space-3);
-      background: var(--color-page);
-      color: var(--color-text-tertiary);
-      font-family: var(--font-mono);
-      font-size: var(--type-micro);
-      letter-spacing: 0.08em;
     }
 
     @media (min-width: 72rem) {

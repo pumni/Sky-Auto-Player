@@ -78,46 +78,229 @@ test.describe('navigation and route contracts', () => {
     await expect(page).toHaveURL(/\/Sky-Auto-Player\/faq\/$/);
   });
 
-  test('mobile menu supports toggle, outside click, Escape, natural tab order and link activation', async ({
-    page,
-  }) => {
-    await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto('/Sky-Auto-Player/');
-    const skipLink = page.locator('.skip-link');
-    await expect(skipLink).toHaveCSS('opacity', '0');
-    await skipLink.focus();
-    await expect(skipLink).toBeFocused();
-    await expect(skipLink).toHaveCSS('opacity', '1');
+  for (const locale of ['/', '/vi/']) {
+    test(`${locale} desktop hash navigation stays accessible before route navigation`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(`/Sky-Auto-Player${locale}`);
+      const nav = page.locator('.site-nav');
 
-    const toggle = page.locator('.menu-toggle');
-    const nav = page.locator('.site-nav');
+      await nav.locator('a[href*="#how-it-works"]').click();
+      await expect(page).toHaveURL(/#how-it-works$/);
+      await expect(page.locator('#how-it-works')).toBeFocused();
+      await expect(nav).toBeVisible();
+      await expect(nav).not.toHaveAttribute('aria-hidden', 'true');
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
 
-    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(nav).not.toBeVisible();
+      await nav.locator('a[href$="/guides/"]').click();
+      await expect(page).toHaveURL(/\/guides\/$/);
+      await expect(page.locator('.site-nav')).toBeVisible();
+      expect(
+        await page.locator('.site-nav').evaluate((element) => (element as HTMLElement).inert),
+      ).toBe(false);
+    });
+  }
 
-    await toggle.click();
-    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    await expect(nav).toHaveAttribute('data-state', 'open');
-    await expect(nav.locator('a').first()).toBeFocused();
-    await page.keyboard.press('Shift+Tab');
-    await expect(page.locator('.brand')).toBeFocused();
-    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  for (const locale of ['/', '/vi/']) {
+    test(`${locale} mobile hash navigation leaves focus on the destination`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`/Sky-Auto-Player${locale}`);
+      const toggle = page.locator('.menu-toggle');
+      const nav = page.locator('.site-nav');
 
-    await page.keyboard.press('Escape');
-    await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(nav).toHaveAttribute('aria-hidden', 'true');
-    await expect(nav).toHaveAttribute('data-state', 'closed', { timeout: 1000 });
+      await toggle.click();
+      await expect(toggle).toBeFocused();
+      await nav.locator('a[href*="#how-it-works"]').click();
 
-    await toggle.click();
-    await page.mouse.click(3, 3);
-    await expect(nav).toHaveAttribute('aria-hidden', 'true');
-    await expect(nav).toHaveAttribute('data-state', 'closed', { timeout: 1000 });
+      await expect(page).toHaveURL(/#how-it-works$/);
+      await expect(page.locator('#how-it-works')).toBeFocused();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      await expect(nav).toHaveAttribute('aria-hidden', 'true');
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
+      await expect(toggle).not.toBeFocused();
+    });
+  }
 
-    await toggle.click();
-    await nav.locator('a[href*="guides"]').first().click();
-    await expect(nav).toHaveAttribute('aria-hidden', 'true');
-    await expect(nav).toHaveAttribute('data-state', 'closed', { timeout: 1000 });
-  });
+  for (const locale of ['/', '/vi/']) {
+    test(`${locale} mobile disclosure keeps natural keyboard traversal and Escape restores the toggle`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`/Sky-Auto-Player${locale}`);
+      const skipLink = page.locator('.skip-link');
+      await expect(skipLink).toHaveCSS('opacity', '0');
+      await skipLink.focus();
+      await expect(skipLink).toBeFocused();
+      await expect(skipLink).toHaveCSS('opacity', '1');
+
+      const toggle = page.locator('.menu-toggle');
+      const nav = page.locator('.site-nav');
+
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      await expect(nav).not.toBeVisible();
+
+      await toggle.click();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      await expect(nav).toBeVisible();
+      await expect(toggle).toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(nav.locator('a').first()).toBeFocused();
+      await page.keyboard.press('Tab');
+      await expect(nav.locator('a').nth(1)).toBeFocused();
+      await page.keyboard.press('Shift+Tab');
+      await expect(nav.locator('a').first()).toBeFocused();
+      await page.keyboard.press('Shift+Tab');
+      await expect(toggle).toBeFocused();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      await page.keyboard.press('Shift+Tab');
+      await expect(page.locator('.brand')).toBeFocused();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+
+      await toggle.click();
+      await page.keyboard.press('Escape');
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      await expect(nav).toHaveAttribute('aria-hidden', 'true');
+      await expect(nav).not.toBeVisible();
+      await expect(toggle).toBeFocused();
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
+    });
+  }
+
+  for (const locale of ['/', '/vi/']) {
+    test(`${locale} mobile outside pointer preserves focusable targets and restores focus for nonfocusable targets`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`/Sky-Auto-Player${locale}`);
+      const toggle = page.locator('.menu-toggle');
+      const nav = page.locator('.site-nav');
+
+      await toggle.click();
+      await page.locator('.header-download').evaluate((element) => {
+        element.addEventListener('click', (event) => event.preventDefault(), { once: true });
+      });
+      await page.locator('.header-download').click();
+      await expect(nav).toHaveAttribute('aria-hidden', 'true');
+      await expect(page.locator('.header-download')).toBeFocused();
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
+
+      await toggle.click();
+      const outsideTarget = page.locator('.site-footer__identity p');
+      await outsideTarget.scrollIntoViewIfNeeded();
+      const outsideBox = await outsideTarget.boundingBox();
+      expect(outsideBox).not.toBeNull();
+      await page.mouse.move(
+        outsideBox!.x + outsideBox!.width / 2,
+        outsideBox!.y + outsideBox!.height / 2,
+      );
+      await page.mouse.down();
+      await page.mouse.up();
+      await expect(nav).toHaveAttribute('aria-hidden', 'true');
+      await expect(toggle).toBeFocused();
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
+    });
+  }
+
+  for (const locale of ['/', '/vi/']) {
+    test(`${locale} modified navigation clicks keep the disclosure open`, async ({ page }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`/Sky-Auto-Player${locale}`);
+      const toggle = page.locator('.menu-toggle');
+      const nav = page.locator('.site-nav');
+      await toggle.click();
+
+      const modifiedClick = await page.evaluate(() => {
+        const link = document.querySelector<HTMLAnchorElement>('.site-nav a[href*="github.com"]');
+        if (!link) throw new Error('GitHub navigation link was not found');
+        document.addEventListener('click', (event) => event.preventDefault(), { once: true });
+        const event = new MouseEvent('click', {
+          bubbles: true,
+          cancelable: true,
+          button: 0,
+          ctrlKey: true,
+        });
+        const uncanceled = link.dispatchEvent(event);
+        return { ctrlKey: event.ctrlKey, defaultPrevented: event.defaultPrevented, uncanceled };
+      });
+      expect(modifiedClick).toEqual({ ctrlKey: true, defaultPrevented: true, uncanceled: false });
+      await expect(page).toHaveURL(new RegExp(`/Sky-Auto-Player${locale.replaceAll('/', '\\/')}$`));
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+    });
+  }
+
+  for (const locale of ['/', '/vi/']) {
+    test(`${locale} mobile rapid toggles, reduced motion changes and history restoration remain coherent`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.goto(`/Sky-Auto-Player${locale}`);
+      const toggle = page.locator('.menu-toggle');
+      const nav = page.locator('.site-nav');
+
+      await toggle.click();
+      await expect(toggle).toBeFocused();
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      await expect(nav).toBeVisible();
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+      await toggle.click();
+      await toggle.click();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      await expect(nav).toBeVisible();
+      await expect(toggle).toBeFocused();
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+
+      await nav.locator('a[href$="/guides/"]').click();
+      await expect(page).toHaveURL(/\/guides\/$/);
+      await page.goBack();
+      await expect(page).toHaveURL(new RegExp(`/Sky-Auto-Player${locale.replaceAll('/', '\\/')}$`));
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      await expect(nav).toHaveAttribute('aria-hidden', 'true');
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
+      await page.goForward();
+      await expect(page).toHaveURL(/\/guides\/$/);
+      await expect(page.locator('.menu-toggle')).toHaveAttribute('aria-expanded', 'false');
+      expect(
+        await page.locator('.site-nav').evaluate((element) => (element as HTMLElement).inert),
+      ).toBe(true);
+    });
+  }
+
+  for (const locale of ['/', '/vi/']) {
+    test(`${locale} resize transfers focus to visible navigation and preserves a focused link`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.goto(`/Sky-Auto-Player${locale}`);
+      const toggle = page.locator('.menu-toggle');
+      const nav = page.locator('.site-nav');
+
+      await toggle.focus();
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await expect(toggle).not.toBeVisible();
+      await expect(nav.locator('a[href]').first()).toBeFocused();
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+      await expect(nav).not.toHaveAttribute('aria-hidden', 'true');
+
+      const focusedLink = nav.locator('a[href]').nth(1);
+      await focusedLink.focus();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(toggle).toBeVisible();
+      await expect(focusedLink).toBeFocused();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await expect(focusedLink).toBeFocused();
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(false);
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(focusedLink).toBeFocused();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+    });
+  }
 
   test('mobile and tablet headers keep the release action visible outside the menu', async ({
     page,

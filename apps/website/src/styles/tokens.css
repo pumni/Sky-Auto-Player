@@ -73,21 +73,11 @@
     --space-8: 4rem;
     --space-10: 8rem;
 
-    --section-xs: clamp(2.5rem, 4vw, 4rem);
-    --section-sm: clamp(3.5rem, 5vw, 5.5rem);
-    --section-md: clamp(5rem, 7vw, 7.5rem);
-    --section-lg: clamp(6.5rem, 9vw, 10rem);
-    --section-xl: clamp(8rem, 12vw, 13rem);
-
-    --section-space-compact: var(--section-sm);
-    --section-space-default: var(--section-md);
-    --section-space-feature: var(--section-lg);
-    --section-space-opening: var(--section-lg);
-    --section-space-transition: var(--section-xs);
-    --section-space-explanation: var(--section-lg);
-    --section-space-product: var(--section-xl);
-    --section-space-utility: var(--section-sm);
-    --section-space-closure: var(--section-lg);
+    --section-compact: clamp(2rem, 4vw, 4rem);
+    --section-default: clamp(3rem, 6vw, 6rem);
+    --section-feature: clamp(4rem, 7vw, 8rem);
+    --section-transition: clamp(2.5rem, 4vw, 4rem);
+    --section-product: clamp(5rem, 8vw, 9rem);
 
     --radius-xs: 0.25rem;
     --radius-sm: 0.45rem;
@@ -95,7 +85,6 @@
     --radius-lg: 1rem;
     --container-max: 84rem;
     --content-max: 44rem;
-    --readable-max: 68ch;
     --gutter: clamp(0.75rem, 3.2vw, 3.5rem);
     --grid-gap: clamp(1rem, 2vw, 2rem);
     --duration-press: 110ms;

@@ -64,9 +64,12 @@ contains a JSON object, not plain text or binary data.
 
 **Song plays notes out of order or skips sections**
 : The sheet may contain timing data that does not align with the configured FPS or tempo.
-Try adjusting the tempo multiplier or FPS in the per-song settings.
+Review the Tempo and FPS values in the Player Dock's **Playback profile**. Windows scheduling
+and the game's input sampling still affect when a sent key is registered.
 
-## Per-song configuration
+## Playback profile
 
-Sky Auto Player stores per-song settings (hold frame selection, tempo, FPS, color palette) separately
-from the sheet files. Changing a sheet file does not reset these settings.
+The Player Dock's **Playback profile** controls app playback defaults; these values are not
+stored per song or embedded in sheet files. **Base Hold** offers 1, 1.25, and 1.5 frames, and
+**Tempo** offers 0.90×, 0.95×, 1.0×, 1.05×, and 1.10×. **Advanced timing** offers FPS values
+of 30, 60, 90, 120, 144, 165, or 240 and a timing margin from 0 to 3,000 µs in 100 µs steps.

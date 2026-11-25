@@ -26,6 +26,80 @@ test.describe('accessibility and responsive contracts', () => {
     });
   }
 
+  test('section spacing roles resolve at narrow, fluid and wide viewport sizes', async ({
+    page,
+  }) => {
+    const widths = [320, 1280, 1920];
+    const expected = {
+      compact: [32, 51.2, 64],
+      default: [48, 76.8, 96],
+      feature: [64, 89.6, 128],
+      transition: [40, 51.2, 64],
+      product: [80, 102.4, 144],
+      introTop: [20, 32, 40],
+    };
+
+    await page.setViewportSize({ width: widths[0], height: 900 });
+    await page.goto('/Sky-Auto-Player/');
+    for (let index = 0; index < widths.length; index++) {
+      const width = widths[index];
+      await page.setViewportSize({ width, height: 900 });
+      const spacing = await page.evaluate(() => {
+        const measure = (selector: string) => {
+          const element = document.querySelector<HTMLElement>(selector);
+          if (!element) throw new Error(`Missing spacing probe ${selector}`);
+          const style = getComputedStyle(element);
+          return {
+            top: Number.parseFloat(style.paddingTop),
+            bottom: Number.parseFloat(style.paddingBottom),
+          };
+        };
+        return {
+          compact: measure('.formats-section'),
+          feature: measure('.final-cta'),
+          transition: measure('.proof-strip'),
+          product: measure('.product-showcase'),
+          intro: measure('.hero'),
+        };
+      });
+
+      expect(
+        Math.abs(spacing.compact.top - expected.compact[index]),
+        `compact at ${width}px`,
+      ).toBeLessThan(0.2);
+      expect(
+        Math.abs(spacing.feature.top - expected.feature[index]),
+        `feature at ${width}px`,
+      ).toBeLessThan(0.2);
+      expect(
+        Math.abs(spacing.transition.top - expected.transition[index]),
+        `transition at ${width}px`,
+      ).toBeLessThan(0.2);
+      expect(
+        Math.abs(spacing.product.top - expected.product[index]),
+        `product at ${width}px`,
+      ).toBeLessThan(0.2);
+      expect(
+        Math.abs(spacing.intro.top - expected.introTop[index]),
+        `intro top at ${width}px`,
+      ).toBeLessThan(0.2);
+      expect(spacing.compact.bottom).toBe(spacing.compact.top);
+      expect(spacing.feature.bottom).toBe(spacing.feature.top);
+      expect(spacing.transition.bottom).toBe(spacing.transition.top);
+      expect(spacing.product.bottom).toBe(spacing.product.top);
+      expect(spacing.intro.bottom).toBe(spacing.feature.bottom);
+    }
+
+    await page.goto('/Sky-Auto-Player/faq/');
+    for (let index = 0; index < widths.length; index++) {
+      await page.setViewportSize({ width: widths[index], height: 900 });
+      const defaultSpacing = await page
+        .locator('.faq-layout')
+        .evaluate((element) => Number.parseFloat(getComputedStyle(element).marginBottom));
+      expect(Math.abs(defaultSpacing - expected.default[index])).toBeLessThan(0.2);
+    }
+  });
+
   test('mobile CTA, real desktop screenshot and project favicon follow the UI contract', async ({
     page,
   }) => {

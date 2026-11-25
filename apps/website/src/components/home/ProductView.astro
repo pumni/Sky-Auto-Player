@@ -12,7 +12,7 @@ const { data, locale } = Astro.props;
 ---
 
 <section
-  class="product-showcase section-shell section-shell--peak section-shell--bordered"
+  class="product-showcase section-shell section-shell--product section-shell--bordered"
   aria-labelledby="product-title"
 >
   <div class="product-showcase__atmosphere" aria-hidden="true"></div>
@@ -64,7 +64,6 @@ const { data, locale } = Astro.props;
         title={data.title}
         description={data.description}
         titleId="product-title"
-        measure="narrow"
       />
       <ol
         class="annotations"

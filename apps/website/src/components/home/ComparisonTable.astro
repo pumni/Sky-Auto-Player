@@ -11,16 +11,11 @@ const { data, locale } = Astro.props;
 ---
 
 <section
-  class="comparison-section section-shell section-shell--utility section-shell--bordered"
+  class="comparison-section section-shell section-shell--compact section-shell--bordered"
   aria-labelledby="comparison-title"
 >
   <div class="container comparison__layout">
-    <SectionIntro
-      kicker={data.kicker}
-      title={data.title}
-      titleId="comparison-title"
-      measure="narrow"
-    />
+    <SectionIntro kicker={data.kicker} title={data.title} titleId="comparison-title" />
     <div class="comparison-wrap">
       <table class="comparison-table">
         <caption class="sr-only">

@@ -12,7 +12,7 @@ summary: >-
 category: getting-started
 order: 1
 published: '2026-08-08'
-updated: '2026-11-18'
+updated: '2026-11-26'
 draft: false
 showDiagram: true
 related:
@@ -56,20 +56,24 @@ fixed 15-slot executor tracks key holds and same-key release gaps. A healthy
 chord is sent as one prepared packet; when independent releases and new notes
 are due together, releases are ordered before new presses.
 
-Before each musical packet, the native sender checks the current foreground
-window and the retained target identity. A foreground event is only a hint to
-recheck focus. The Tauri shell coordinates pause and stop, joins the worker,
-and records retirement before publishing the result to the UI.
+Before each musical packet, the native sender freshly checks the current
+foreground window and retained target identity. A foreground event is only a
+hint to recheck focus and cannot authorize a send. Bounded safety cleanup may
+separately attempt releases for keys already recorded in its journal. The
+Tauri shell coordinates pause and stop, joins the worker, and records
+retirement before publishing the result to the UI.
 
 For the exact timing, cleanup, and recovery rules, see the
 [playback engine contract](https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md).
 
 ## Scope and limitations
 
-Sky Auto Player sends ordinary Windows keyboard input through SendInput. It
-does not control the game's own input sampling loop or guarantee an in-game
-result. The full security boundary, including prohibited process and input
-techniques, is defined in the [security policy](https://github.com/pumni/Sky-Auto-Player/blob/main/SECURITY.md).
+Sky Auto Player sends musical packets through Windows SendInput after fresh
+foreground and target identity checks. Bounded journal-limited safety cleanup
+follows a separate path. It does not control the game's own input sampling
+loop or guarantee an in-game result. The full security boundary, including
+prohibited process and input techniques, is defined in the
+[security policy](https://github.com/pumni/Sky-Auto-Player/blob/main/SECURITY.md).
 
 Automated playback may conflict with Sky's Terms of Service. Sky Auto Player is
 an unofficial community project and is not affiliated with or endorsed by

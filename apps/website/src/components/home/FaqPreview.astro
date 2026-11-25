@@ -20,12 +20,7 @@ const faqUrl = withBase(isVi ? '/vi/faq/' : '/faq/');
 >
   <div class="container faq-preview__layout">
     <div class="faq-preview__heading">
-      <SectionIntro
-        kicker={data.kicker}
-        title={data.title}
-        titleId="faq-preview-title"
-        measure="narrow"
-      />
+      <SectionIntro kicker={data.kicker} title={data.title} titleId="faq-preview-title" />
       <a class="text-link" href={faqUrl}>
         {data.readMoreLink}
         <span aria-hidden="true"> →</span>

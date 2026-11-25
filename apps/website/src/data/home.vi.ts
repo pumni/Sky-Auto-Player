@@ -5,7 +5,7 @@ export const homeVi: HomeContent = {
   seo: {
     title: 'Sky Auto Player — Trình phát nhạc Sky tự động trên Windows',
     description:
-      'Trình phát sheet nhạc cho Sky trên Windows 11 64-bit. Ứng dụng lên lịch sự kiện từ sheet và gửi đầu vào qua Windows SendInput khi Sky được xác minh là cửa sổ đang ở foreground.',
+      'Trình phát sheet nhạc cho Sky trên Windows 11 64-bit. Ứng dụng lên lịch theo deadline QPC và đo timing phía gửi.',
   },
   navigation: {
     overview: 'Tổng quan',
@@ -19,7 +19,7 @@ export const homeVi: HomeContent = {
     kicker: 'Sky Auto Player cho Sky: Children of the Light · Windows 11 64-bit',
     titleLines: ['Chơi bản nhạc,', 'không chơi bàn phím.'],
     description:
-      'Nạp sheet và chọn bài hát. Sky Auto Player lên lịch đầu vào cho nốt, hợp âm và nốt ngân theo dữ liệu timing, rồi gửi qua Windows SendInput khi Sky là target foreground đã được xác minh; game tự quyết định thời điểm lấy mẫu đầu vào.',
+      'Nạp sheet và chọn bài hát. Sky Auto Player lên lịch sự kiện theo deadline QPC. Mỗi musical packet mới được kiểm tra foreground và identity của target Sky đã giữ trước khi gửi qua Windows SendInput; cleanup giới hạn cho lần nhả phím đã ghi journal đi theo đường riêng. Sky lấy mẫu input theo lịch riêng.',
     primaryCta: 'Tải bộ cài Windows',
     primaryCtaDestination: 'Mở GitHub Releases',
     secondaryCta: 'Xem cách hoạt động',
@@ -40,9 +40,9 @@ export const homeVi: HomeContent = {
     kicker: 'Mô hình phát nhạc',
     metric: 'SỰ KIỆN SHEET / SENDINPUT',
     signals: [
-      'Các phím trong hợp âm được gửi trong cùng một batch SendInput',
-      'Adaptive lead theo dõi độ trễ hoàn tất phía gửi',
-      'Timing nốt ngân theo sheet và thiết lập hold frame',
+      'Hợp âm khỏe được gửi trong một prepared packet',
+      'Wake guard cố định đã hiệu chuẩn; không liên tục điều chỉnh lead',
+      'Hold và release floor tính theo frame',
       'HUD hiển thị số đo phía gửi, không phản ánh sampling phía game',
     ],
   },
@@ -50,12 +50,12 @@ export const homeVi: HomeContent = {
     kicker: 'Được xây dựng quanh bản nhạc',
     title: 'Timing cũng là một phần của nhạc cụ.',
     description:
-      'Sky Auto Player lên lịch sự kiện theo mốc thời gian phía gửi rồi đo độ trễ hoàn tất để điều chỉnh adaptive lead. Windows và vòng lặp lấy mẫu đầu vào riêng của Sky quyết định khi nào game đăng ký phím; ứng dụng không thể bảo đảm thời điểm phát âm thanh hay frame trong game.',
+      'Sky Auto Player lên lịch sự kiện theo deadline QPC đã định nghĩa và dùng wake guard cố định đã hiệu chuẩn. Ứng dụng đo thời điểm hoàn tất phía sender nhưng không liên tục điều chỉnh lead. Hold và release floor tính theo frame định hình timing phím nhạc; lịch chạy Windows và vòng lấy mẫu input của Sky vẫn quyết định khi nào game đăng ký phím, nên ứng dụng không thể bảo đảm thời điểm phát âm thanh hay frame trong game.',
     points: [
-      'Các phím trong hợp âm gửi cùng một batch SendInput',
-      'Timing sheet có thiết lập tempo riêng cho mỗi bài',
-      'Sự kiện nốt, hợp âm và nốt ngân',
-      'Adaptive lead dựa trên số đo hoàn tất phía gửi',
+      'Sự kiện sheet được lên lịch theo deadline QPC',
+      'Wake guard cố định đã hiệu chuẩn; không liên tục điều chỉnh lead',
+      'Hold và release floor tính theo frame',
+      'Tempo và Base Hold trong playback profile của Player Dock',
       'HUD hiển thị số đo timing phía gửi',
       'Xem thử bằng dry-run',
     ],
@@ -67,13 +67,13 @@ export const homeVi: HomeContent = {
     playerHeader: 'Sky Auto Player',
     rows: [
       { sequence: 'Chuỗi lần nhấn phím', player: 'Sự kiện nốt, hợp âm và nốt ngân theo sheet' },
+      { sequence: 'Một mẫu khoảng cách cố định', player: 'Sự kiện lên lịch theo deadline QPC' },
       {
-        sequence: 'Một mẫu khoảng cách cố định',
-        player: 'Timing theo dấu thời gian của từng sự kiện',
+        sequence: 'Một tempo dùng cho mọi bài',
+        player: 'Tempo chọn trong profile của Player Dock',
       },
-      { sequence: 'Một tempo dùng cho mọi bài', player: 'Thiết lập tempo được lưu theo bài' },
-      { sequence: 'Một trường độ hold', player: 'Thiết lập hold frame được lưu theo bài' },
-      { sequence: 'Không có số đo phía gửi', player: 'Adaptive lead dùng số đo hoàn tất phía gửi' },
+      { sequence: 'Một trường độ hold', player: 'Base Hold chọn trong profile của Player Dock' },
+      { sequence: 'Không có số đo phía gửi', player: 'Wake guard cố định và số đo phía gửi' },
       {
         sequence: 'Timing chỉ từ chuỗi phím',
         player: 'Diagnostics hiển thị số đo timing phía gửi',
@@ -108,7 +108,7 @@ export const homeVi: HomeContent = {
       {
         title: 'Phát nhạc',
         description:
-          'Chọn bài và bắt đầu phát khi Sky đang ở foreground. Ứng dụng kiểm tra target trước khi gửi đầu vào.',
+          'Chọn bài, dùng Play rồi đưa focus về cửa sổ Sky đã chọn. Mỗi musical packet cần kiểm tra lại foreground hiện tại và identity target.',
       },
     ],
     workflowNote: 'Nhấn / hoặc Ctrl+F để focus tìm kiếm · Esc đóng overlay an toàn',
@@ -117,7 +117,7 @@ export const homeVi: HomeContent = {
     kicker: 'Giới hạn kỹ thuật',
     title: 'Rõ ràng về những gì ứng dụng làm và không làm.',
     description:
-      'Sky Auto Player là ứng dụng riêng cho Windows 11. Ứng dụng chỉ gửi đầu vào qua Windows SendInput sau khi kiểm tra target xác nhận Sky đang ở foreground; mã nguồn được công khai để kiểm tra.',
+      'Sky Auto Player là ứng dụng riêng cho Windows 11. Mỗi musical packet mới cần kiểm tra foreground và identity target mới trước khi gửi qua Windows SendInput. Cleanup giới hạn cho lần nhả phím đã ghi journal đi theo một đường riêng; mã nguồn được công khai để kiểm tra.',
     ledger: [
       { term: 'Đầu vào', definition: 'Windows SendInput', state: 'yes' },
       { term: 'Tiến trình', definition: 'Ứng dụng độc lập', state: 'info' },

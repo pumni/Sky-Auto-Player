@@ -58,16 +58,23 @@ current parser does not support.
 **Cause A — FPS mismatch**: The FPS setting in Sky Auto Player does not match the FPS
 configured inside Sky.
 
-**Fix**: Open the per-song settings and set the FPS to match Sky's frame rate (30 or 60).
+**Fix**: In the Player Dock's **Playback profile**, open **Advanced timing** and select the
+FPS configured in Sky, if available. Supported values are 30, 60, 90, 120, 144, 165, and 240.
+The player's sender-side timing does not reveal when Sky samples input.
 
 **Cause B — Tempo mismatch**: The tempo multiplier is not 1.0.
 
-**Fix**: Reset the tempo multiplier to 1.0 in per-song settings.
+**Fix**: In the Player Dock's **Playback profile**, set **Tempo** to 1.0× to use the sheet's
+authored tempo without an additional tempo multiplier.
 
-**Cause C — System load**: Heavy CPU load causes Windows scheduling jitter, which
-increases sender-side latency beyond what the adaptive lead can compensate.
+**Cause C — System load**: Heavy CPU load can increase Windows scheduling jitter and sender-side
+dispatch lateness. The calibrated wake guard is fixed; it does not continuously adjust a lead to
+compensate for changing load.
 
-**Fix**: Close background applications. Use **Diagnostics** to review sender-side dispatch measurements. Adjust only options available in the selected song's settings; they cannot change Windows scheduling or the game's input sampling. See the [full FAQ](https://pumni.github.io/Sky-Auto-Player/faq/).
+**Fix**: Close background applications and use **Diagnostics** to review sender-side dispatch
+measurements. Playback profile controls can change authored tempo, hold and FPS inputs, but they
+cannot change Windows scheduling or the game's input sampling. See the
+[full FAQ](https://pumni.github.io/Sky-Auto-Player/faq/).
 
 > **Note**: Sky Auto Player controls when keystrokes are _sent_. When the game _processes_
 > them depends on the game's own sampling loop and Windows scheduling — these factors are
@@ -78,23 +85,21 @@ increases sender-side latency beyond what the adaptive lead can compensate.
 **Cause**: The hold duration at the configured FPS is shorter than the game's minimum
 registration time for that key.
 
-**Fix**: In per-song settings, switch from **1.0 frames** to **1.25 frames** or
-**1.5 frames**. The FPS setting must match the FPS inside Sky for hold timing to be correct.
+**Fix**: In the Player Dock's **Playback profile**, try **Base Hold** at 1.25 or 1.5 frames.
+The frame-aware hold floor and timing margin affect sender-side release eligibility; they do not
+guarantee when Sky registers a key.
 
-## Game does not receive any input
+## Playback stops or notes do not register
 
-**Cause A — Focus**: The game window does not have focus when playback starts.
+**Cause — Foreground target**: New musical packets require fresh checks of the foreground window
+and retained target identity. A foreground event is only a hint to recheck; it cannot authorize
+a send. When authority is lost, the engine prevents new musical packets.
 
-**Fix**: Switch to the game window before pressing the play hotkey. Sky Auto Player sends input only when checks confirm the selected Sky target is in the foreground. Restore focus to Sky and retry; input is not routed to an arbitrary active window.
-
-**Cause B — Hotkey not set**: The play hotkey is not bound or conflicts with another application.
-
-**Fix**: Open the command palette (`/`) and check hotkey bindings.
-
-**Cause C — Wrong key layout**: The key layout profile does not match the keyboard layout
-in use inside Sky.
-
-**Fix**: Verify the layout profile in settings matches what Sky shows.
+**Fix**: Focus the selected Sky target before starting or resuming playback. If the app stops on
+focus or target loss, restore the target and follow the Player Dock's playback state before
+starting again. Bounded safety cleanup can separately attempt releases for keys already recorded
+in the release journal. For notes that are sent but not registered, review the sender-side timing
+limits described above and in the [playback guide](https://pumni.github.io/Sky-Auto-Player/guides/timing-engine/).
 
 ## Windows SmartScreen warning on launch
 

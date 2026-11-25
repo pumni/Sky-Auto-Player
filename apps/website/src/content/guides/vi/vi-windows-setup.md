@@ -4,8 +4,7 @@ locale: vi
 slug: windows-setup
 title: Cài Đặt Windows và Lần Khởi Động Đầu Tiên
 description: >-
-  Hướng dẫn từng bước cài đặt Sky Auto Player trên Windows 11: tải installer Tauri,
-  cài đặt, thêm bài hát và cấu hình hotkey.
+  Hướng dẫn cài đặt Sky Auto Player trên Windows 11, nhập sheet và tìm playback profile cùng các điều khiển desktop.
 summary: >-
   Tải installer Tauri NSIS canonical, cài cho current user và nhập sheet qua Library desktop.
 category: getting-started
@@ -42,10 +41,9 @@ evidence:
 
 ## Lần khởi động đầu tiên
 
-Lần đầu khởi động, ứng dụng tạo dữ liệu trong vùng app-data của user. Bạn không cần chỉnh sửa
-thủ công — mọi cài đặt được hỗ trợ đều có trong hộp thoại **Settings**.
+Lần đầu khởi động, ứng dụng tạo dữ liệu trong vùng app-data của user. Bạn không cần chỉnh sửa thủ công. **Settings** quản lý các tùy chọn chung của ứng dụng, bao gồm playback defaults. **Playback profile** trong Player Dock giúp truy cập nhanh **Base Hold**, **Tempo** và **Advanced timing** (FPS và timing margin).
 
-Installer canonical hiện chưa được ký Authenticode theo chính sách đang áp dụng. Windows có thể hiển thị Unknown Publisher hoặc cảnh báo SmartScreen. Chỉ tải từ trang GitHub Releases chính thức. Tauri updater xác minh sidecar `.exe.sig` riêng; sidecar này không cần cho cài đặt thủ công.
+Installer canonical hiện chưa được ký Authenticode theo chính sách đang áp dụng. Windows có thể hiển thị Unknown Publisher hoặc cảnh báo SmartScreen. Chỉ tải từ trang GitHub Releases chính thức. Tauri updater xác minh sidecar .exe.sig riêng; sidecar này không cần cho cài đặt thủ công.
 
 ## Thêm bài hát
 
@@ -55,12 +53,13 @@ Installer canonical hiện chưa được ký Authenticode theo chính sách đa
 
 ## Phím tắt desktop
 
-| Phím tắt | Hành động                    |
-| -------- | ---------------------------- |
-| `/`      | Focus ô tìm kiếm bài         |
-| `Ctrl+F` | Focus ô tìm kiếm bài         |
-| `Esc`    | Đóng overlay an toàn đang mở |
-| `q`      | Không thoát desktop GUI      |
+| Phím tắt | Hành động            |
+| -------- | -------------------- |
+| /        | Focus ô tìm kiếm bài |
+| Ctrl+F   | Focus ô tìm kiếm bài |
+| Ctrl+,   | Mở Settings          |
+| Ctrl+I   | Bật/tắt Inspector    |
+| Esc      | Đóng overlay đang mở |
 
 ## Cập nhật
 

@@ -4,14 +4,8 @@
     margin-inline: auto;
   }
 
-  .grid-12 {
-    display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: var(--grid-gap);
-  }
-
   .section-shell {
-    padding-block: var(--section-space-default);
+    padding-block: var(--section-default);
     scroll-margin-top: 6rem;
   }
 
@@ -20,28 +14,19 @@
   }
 
   .section-shell--compact {
-    padding-block: var(--section-space-compact);
+    padding-block: var(--section-compact);
   }
 
   .section-shell--feature {
-    padding-block: var(--section-space-feature);
+    padding-block: var(--section-feature);
   }
 
-  .section-shell--proof {
-    padding-block: var(--section-space-transition);
+  .section-shell--transition {
+    padding-block: var(--section-transition);
   }
 
-  .section-shell--open {
-    padding-block: var(--section-space-explanation);
-  }
-
-  /* Product showcase peak: largest vertical breath on the page. */
-  .section-shell--peak {
-    padding-block: var(--section-space-product);
-  }
-
-  .section-shell--utility {
-    padding-block: var(--section-space-utility);
+  .section-shell--product {
+    padding-block: var(--section-product);
   }
 
   /* First section under site header: pull content up without killing feature bottom space. */
@@ -49,27 +34,7 @@
     padding-top: clamp(2.25rem, 3.5vw, 3.25rem);
   }
 
-  .section-shell--opening {
-    padding-block: var(--section-space-opening);
-  }
-
-  .section-shell--opening.section-shell--after-header {
+  .section-shell--intro.section-shell--after-header {
     padding-top: clamp(1.25rem, 2.5vw, 2.5rem);
-  }
-
-  .section-shell--closure {
-    padding-block: var(--section-space-closure);
-  }
-
-  .text-measure-body {
-    max-inline-size: var(--readable-max);
-  }
-
-  .text-measure-lead {
-    max-inline-size: 48ch;
-  }
-
-  .text-measure-display {
-    max-inline-size: 11ch;
   }
 }

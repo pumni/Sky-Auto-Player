@@ -47,6 +47,18 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       <span>Sky Auto Player</span>
     </a>
 
+    <button
+      class="menu-toggle"
+      type="button"
+      aria-expanded="false"
+      aria-controls="site-nav"
+      aria-label={isVi ? 'Mở điều hướng' : 'Open navigation'}
+      data-open-label={isVi ? 'Mở điều hướng' : 'Open navigation'}
+      data-close-label={isVi ? 'Đóng điều hướng' : 'Close navigation'}
+    >
+      <span class="menu-toggle__icon" aria-hidden="true"></span>
+    </button>
+
     <nav
       class="site-nav"
       id="site-nav"
@@ -121,17 +133,6 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       >
         {nav.release}
       </a>
-      <button
-        class="menu-toggle"
-        type="button"
-        aria-expanded="false"
-        aria-controls="site-nav"
-        aria-label={isVi ? 'Mở điều hướng' : 'Open navigation'}
-        data-open-label={isVi ? 'Mở điều hướng' : 'Open navigation'}
-        data-close-label={isVi ? 'Đóng điều hướng' : 'Close navigation'}
-      >
-        <span class="menu-toggle__icon" aria-hidden="true"></span>
-      </button>
     </div>
   </div>
 </header>
@@ -241,6 +242,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       border-radius: var(--radius-sm);
       background: var(--color-surface-instrument);
       color: var(--color-text-primary);
+      order: 3;
     }
 
     .menu-toggle:hover,
@@ -431,30 +433,21 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         pointer-events: none;
         transform: translateY(-0.35rem);
         visibility: hidden;
+        --nav-transition-duration: 160ms;
         transition:
-          opacity 160ms var(--ease-standard),
-          transform 160ms var(--ease-out);
+          opacity var(--nav-transition-duration) var(--ease-standard),
+          transform var(--nav-transition-duration) var(--ease-out),
+          visibility 0s linear var(--nav-transition-duration);
       }
 
-      :global(html[data-nav-enhanced='true']) .site-nav[data-state='opening'],
-      :global(html[data-nav-enhanced='true']) .site-nav[data-state='open'] {
+      :global(html[data-nav-enhanced='true'])
+        .site-header:has(.menu-toggle[aria-expanded='true'])
+        .site-nav {
         opacity: 1;
         pointer-events: auto;
         transform: translateY(0);
         visibility: visible;
-        transition-duration: 220ms;
-      }
-
-      :global(html[data-nav-enhanced='true']) .site-nav[data-state='closing'] {
-        opacity: 0;
-        pointer-events: none;
-        transform: translateY(-0.35rem);
-        visibility: visible;
-        transition-duration: 160ms;
-      }
-
-      :global(html[data-nav-enhanced='true']) .site-nav[data-state='closed'] {
-        transition: none;
+        transition-delay: 0s;
       }
 
       :global(html[data-nav-enhanced='true']) .site-nav__link {
@@ -463,7 +456,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 
       :global(html[data-nav-enhanced='true']) .site-actions {
         flex: 0 0 auto;
-        order: 3;
+        order: 2;
       }
 
       :global(html[data-nav-enhanced='true']) .menu-toggle {
@@ -526,12 +519,8 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
   const toggle = document.querySelector<HTMLButtonElement>('.menu-toggle');
   const nav = document.querySelector<HTMLElement>('.site-nav');
   const desktopQuery = window.matchMedia('(min-width: 64rem)');
-  const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
 
   if (toggle && nav) {
-    let closeTimer: number | undefined;
-    let openFrame: number | undefined;
-
     const isOpen = () => toggle.getAttribute('aria-expanded') === 'true';
     const setButtonState = (open: boolean) => {
       toggle.setAttribute('aria-expanded', String(open));
@@ -542,48 +531,62 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
           : toggle.dataset.openLabel || 'Open navigation',
       );
     };
-    const clearPendingMotion = () => {
-      if (closeTimer !== undefined) window.clearTimeout(closeTimer);
-      if (openFrame !== undefined) window.cancelAnimationFrame(openFrame);
-      closeTimer = undefined;
-      openFrame = undefined;
-    };
-    const hidePanelImmediately = () => {
-      clearPendingMotion();
-      nav.inert = true;
-      nav.setAttribute('aria-hidden', 'true');
-      nav.dataset.state = 'closed';
-      setButtonState(false);
+    const setMobileState = (open: boolean) => {
+      nav.inert = !open;
+      if (open) nav.removeAttribute('aria-hidden');
+      else nav.setAttribute('aria-hidden', 'true');
+      setButtonState(open);
     };
     const openMenu = () => {
-      if (desktopQuery.matches) return;
-      clearPendingMotion();
-      nav.inert = false;
-      nav.removeAttribute('aria-hidden');
-      setButtonState(true);
-      nav.dataset.state = 'opening';
-      const firstLink = nav.querySelector<HTMLAnchorElement>('a');
-      firstLink?.focus();
-      openFrame = window.requestAnimationFrame(() => {
-        if (isOpen()) nav.dataset.state = 'open';
-        openFrame = undefined;
-      });
+      if (desktopQuery.matches || isOpen()) return;
+      setMobileState(true);
     };
-    const closeMenu = (restoreFocus = false, immediate = false) => {
-      clearPendingMotion();
-      setButtonState(false);
-      nav.inert = true;
-      nav.setAttribute('aria-hidden', 'true');
+    const closeMenu = (restoreFocus = false) => {
+      if (desktopQuery.matches || !isOpen()) return;
+      setMobileState(false);
       if (restoreFocus) toggle.focus();
-      if (immediate || reducedMotionQuery.matches || desktopQuery.matches) {
-        nav.dataset.state = 'closed';
+    };
+    const isFocusableTarget = (target: EventTarget) => {
+      const element =
+        target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
+      return Boolean(
+        element?.closest(
+          'a[href], area[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), iframe, object, embed, [tabindex], [contenteditable]:not([contenteditable="false"])',
+        ),
+      );
+    };
+    const focusHashDestination = (anchor: HTMLAnchorElement) => {
+      const destination = new URL(anchor.href, window.location.href);
+      const current = new URL(window.location.href);
+      if (
+        destination.origin !== current.origin ||
+        destination.pathname !== current.pathname ||
+        destination.search !== current.search ||
+        !destination.hash
+      ) {
         return;
       }
-      nav.dataset.state = 'closing';
-      closeTimer = window.setTimeout(() => {
-        if (nav.dataset.state === 'closing') nav.dataset.state = 'closed';
-        closeTimer = undefined;
-      }, 160);
+
+      let id: string;
+      try {
+        id = decodeURIComponent(destination.hash.slice(1));
+      } catch {
+        return;
+      }
+      const target = document.getElementById(id);
+      if (!target) return;
+      if (!target.hasAttribute('tabindex')) target.setAttribute('tabindex', '-1');
+      target.focus({ preventScroll: true });
+    };
+    let outsidePointerDown = false;
+    const handleFocusOut = (event: FocusEvent) => {
+      if (!isOpen() || desktopQuery.matches) return;
+      if (outsidePointerDown) return;
+      const nextTarget = event.relatedTarget;
+      if (nextTarget instanceof Node && (toggle.contains(nextTarget) || nav.contains(nextTarget))) {
+        return;
+      }
+      closeMenu();
     };
 
     toggle.addEventListener('click', () => {
@@ -592,58 +595,78 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     });
 
     nav.addEventListener('click', (event) => {
-      if (event.target instanceof Element && event.target.closest('a')) closeMenu(true);
+      if (!(event.target instanceof Element)) return;
+      const anchor = event.target.closest<HTMLAnchorElement>('a[href]');
+      const click = event as MouseEvent;
+      if (
+        !anchor ||
+        event.defaultPrevented ||
+        click.button !== 0 ||
+        click.metaKey ||
+        click.ctrlKey ||
+        click.shiftKey ||
+        click.altKey ||
+        anchor.target === '_blank' ||
+        anchor.hasAttribute('download')
+      ) {
+        return;
+      }
+      focusHashDestination(anchor);
+      if (!desktopQuery.matches && isOpen()) closeMenu();
     });
 
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && isOpen()) {
+      if (event.key === 'Escape' && isOpen() && !desktopQuery.matches) {
         event.preventDefault();
         closeMenu(true);
       }
     });
 
     document.addEventListener('pointerdown', (event) => {
+      outsidePointerDown =
+        isOpen() &&
+        event.target instanceof Node &&
+        !nav.contains(event.target) &&
+        !toggle.contains(event.target);
+    });
+    document.addEventListener('pointerup', () => {
+      outsidePointerDown = false;
+    });
+    document.addEventListener('pointercancel', () => {
+      outsidePointerDown = false;
+    });
+
+    document.addEventListener('click', (event) => {
       if (
         isOpen() &&
         event.target instanceof Node &&
         !nav.contains(event.target) &&
         !toggle.contains(event.target)
       ) {
-        closeMenu();
+        closeMenu(!isFocusableTarget(event.target));
       }
+      outsidePointerDown = false;
     });
 
-    const handleViewportChange = (event: MediaQueryListEvent) => {
-      if (event.matches) {
-        clearPendingMotion();
+    const synchronizeViewport = () => {
+      if (desktopQuery.matches) {
+        const toggleWasFocused = toggle.matches(':focus');
         nav.inert = false;
         nav.removeAttribute('aria-hidden');
-        nav.dataset.state = 'closed';
         setButtonState(false);
+        if (toggleWasFocused) nav.querySelector<HTMLAnchorElement>('a[href]')?.focus();
       } else {
         const focusIsInNav = nav.contains(document.activeElement);
-        hidePanelImmediately();
-        if (focusIsInNav) toggle.focus();
+        setMobileState(focusIsInNav);
       }
     };
-    const handleReducedMotionChange = (event: MediaQueryListEvent) => {
-      if (!event.matches) return;
-      clearPendingMotion();
-      if (nav.dataset.state === 'closing') nav.dataset.state = 'closed';
-      if (nav.dataset.state === 'opening') nav.dataset.state = 'open';
-    };
 
-    desktopQuery.addEventListener('change', handleViewportChange);
-    reducedMotionQuery.addEventListener('change', handleReducedMotionChange);
-    window.addEventListener('pagehide', clearPendingMotion, { once: true });
+    toggle.addEventListener('focusout', handleFocusOut);
+    nav.addEventListener('focusout', handleFocusOut);
+    desktopQuery.addEventListener('change', synchronizeViewport);
+    window.addEventListener('pageshow', synchronizeViewport);
 
-    if (desktopQuery.matches) {
-      nav.inert = false;
-      nav.removeAttribute('aria-hidden');
-      nav.dataset.state = 'closed';
-    } else {
-      hidePanelImmediately();
-    }
+    synchronizeViewport();
     document.documentElement.dataset.navEnhanced = 'true';
   }
 </script>

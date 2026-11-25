@@ -16,12 +16,7 @@ const { data } = Astro.props;
   aria-labelledby="formats-title"
 >
   <div class="container formats__layout">
-    <SectionIntro
-      kicker={data.kicker}
-      title={data.title}
-      titleId="formats-title"
-      measure="narrow"
-    />
+    <SectionIntro kicker={data.kicker} title={data.title} titleId="formats-title" />
     <div class="format-list">
       {data.items.map((item) => (
         <div class="format-row">

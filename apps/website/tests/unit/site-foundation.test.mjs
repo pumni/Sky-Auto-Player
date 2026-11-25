@@ -39,6 +39,11 @@ test('public home content states the supported OS and sender-side timing boundar
   expect(homeVi.hero.metadata).toContain('MIỄN PHÍ · MÃ NGUỒN MỞ');
   expect(homeEn.playback.description).toContain('cannot guarantee in-game sound or frame timing');
   expect(homeVi.playback.description).toContain('không thể bảo đảm thời điểm phát âm thanh');
+  expect(homeEn.playback.description).toContain('authored QPC deadlines');
+  expect(homeEn.playback.description).toContain('calibrated fixed wake guard');
+  expect(homeEn.playback.description).toContain('does not continuously adjust its lead');
+  expect(homeVi.playback.description).toContain('deadline QPC');
+  expect(homeVi.playback.description).toContain('không liên tục điều chỉnh lead');
   expect(homeEn.hero.affiliationDisclaimer).toContain('Unofficial community project');
   expect(homeVi.hero.affiliationDisclaimer).toContain('không chính thức');
   const finalCta = readFileSync(
@@ -117,6 +122,20 @@ test('obsolete compatibility tokens are absent after caller migration', () => {
     '--space-9',
     '--space-11',
     '--color-action-soft',
+    '--section-xs',
+    '--section-sm',
+    '--section-md',
+    '--section-lg',
+    '--section-xl',
+    '--section-space-compact',
+    '--section-space-default',
+    '--section-space-feature',
+    '--section-space-opening',
+    '--section-space-transition',
+    '--section-space-explanation',
+    '--section-space-product',
+    '--section-space-utility',
+    '--section-space-closure',
   ]) {
     expect(sourceText).not.toContain(retiredToken);
   }
@@ -160,6 +179,109 @@ test('fallback tokens and cascade order remain available before optional OKLCH o
   expect(tokens.indexOf('--night-0: #07090d')).toBeLessThan(tokens.indexOf('@supports'));
   expect(tokens.indexOf('--color-action: var(--gold-1)')).toBeLessThan(tokens.indexOf('@supports'));
   expect(tokens).toContain('@supports (color: oklch(50% 0.1 100))');
+});
+
+test('localized public timing and safety copy matches current playback and desktop contracts', () => {
+  const read = (relativePath) => readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+  const collectStrings = (value) => {
+    if (typeof value === 'string') return [value];
+    if (Array.isArray(value)) return value.flatMap(collectStrings);
+    if (typeof value === 'object' && value !== null)
+      return Object.values(value).flatMap(collectStrings);
+    return [];
+  };
+  const enPublic = collectStrings(homeEn).join('\n');
+  const viPublic = collectStrings(homeVi).join('\n');
+  const enTiming = read('../../src/content/guides/en/en-timing-engine.md');
+  const viTiming = read('../../src/content/guides/vi/vi-timing-engine.md');
+  const enTroubleshooting = read('../../src/content/guides/en/en-troubleshooting.md');
+  const viTroubleshooting = read('../../src/content/guides/vi/vi-troubleshooting.md');
+  const enFormats = read('../../src/content/guides/en/en-sheet-formats.md');
+  const viFormats = read('../../src/content/guides/vi/vi-sheet-formats.md');
+  const enSetup = read('../../src/content/guides/en/en-windows-setup.md');
+  const viSetup = read('../../src/content/guides/vi/vi-windows-setup.md');
+  const enSafety = read('../../src/content/faq/en/account-safety.md');
+  const viSafety = read('../../src/content/faq/vi/account-safety.md');
+  const playbackContract = read('../../../../docs/playback-engine.md');
+  const nativeOptions = read('../../../../apps/desktop/src-tauri/src/native_runtime.rs');
+  const settings = read('../../../../rust/crates/sky_app_core/src/settings.rs');
+
+  for (const [locale, home, troubleshooting, formats, setup, safety] of [
+    ['en', enPublic, enTroubleshooting, enFormats, enSetup, enSafety],
+    ['vi', viPublic, viTroubleshooting, viFormats, viSetup, viSafety],
+  ]) {
+    expect(home, locale).not.toMatch(/adaptive lead/i);
+    expect(troubleshooting, locale).not.toMatch(
+      /adaptive lead|per-song settings|command palette|play hotkey|30 or 60|30 hoặc 60/i,
+    );
+    expect(troubleshooting, locale).toMatch(/Playback profile/i);
+    expect(formats, locale).toMatch(/not\s+stored per song|không\s+được lưu riêng theo bài/i);
+    expect(setup, locale).toMatch(/Playback profile/i);
+    expect(setup, locale).not.toMatch(
+      /command palette|play hotkey|hotkey binding|cấu hình hotkey/i,
+    );
+    expect(safety, locale).toContain('journal');
+    expect(safety, locale).toMatch(/foreground/i);
+  }
+
+  expect(enTiming).toMatch(/wake guard remains fixed during playback/i);
+  expect(enTiming).toMatch(/does not continuously adjust/i);
+  expect(viTiming).toMatch(/wake guard\s+được giữ cố định/i);
+  expect(playbackContract).toMatch(/Cleanup safety Up is a separate,\s+journal-limited path/i);
+  expect(playbackContract).toMatch(/H = ceiling\(hold_frames × T\) \+ timing margin/i);
+
+  expect(nativeOptions).toContain('hold_frames: vec![1.0, 1.25, 1.5]');
+  expect(nativeOptions).toContain('tempo_scales: vec![0.90, 0.95, 1.0, 1.05, 1.10]');
+  expect(settings).toContain('VALID_FPS: [u16; 7] = [30, 60, 90, 120, 144, 165, 240]');
+  expect(settings).toContain('TIMING_MARGIN_STEP_US: u64 = 100');
+  expect(enFormats).toContain('30, 60, 90, 120, 144, 165, or 240');
+  expect(viFormats).toContain('30, 60, 90, 120, 144, 165 hoặc 240');
+});
+
+test('replaced header and pattern mechanisms have no remaining source implementation', () => {
+  const read = (relativePath) => readFileSync(new URL(relativePath, import.meta.url), 'utf8');
+  const header = read('../../src/components/layout/SiteHeader.astro');
+  const patterns = read('../../src/styles/patterns.css');
+  const controls = read('../../src/styles/components.css');
+  const hero = read('../../src/components/home/Hero.astro');
+  const layout = read('../../src/styles/layout.css');
+  const intro = read('../../src/components/ui/SectionIntro.astro');
+
+  for (const retiredRule of [
+    '.ui-editorial-rule',
+    '.ui-data-ledger',
+    '.ui-instrument-panel',
+    '.ui-instrument-panel--active',
+    '.ui-instrument-panel--product',
+    '.ui-timing-rail',
+    '.ui-timing-rail__node',
+    '.ui-action-link',
+    '.ui-data-row',
+    '.ui-data-ledger',
+    '.ui-section-intro--narrow',
+    '.ui-section-intro--wide',
+    '.ui-section-intro--center',
+  ]) {
+    expect(patterns).not.toContain(retiredRule);
+  }
+  for (const retiredMechanism of [
+    'closeTimer',
+    'openFrame',
+    'clearPendingMotion',
+    'reducedMotionQuery',
+    "data-state='opening'",
+    "data-state='closing'",
+    'nav.dataset.state',
+  ]) {
+    expect(header).not.toContain(retiredMechanism);
+  }
+  expect(header).toContain(".menu-toggle[aria-expanded='true']");
+  expect(controls).not.toMatch(/\.button:is\(\s*:disabled/);
+  expect(hero).not.toMatch(/\.hero__(?:stage-meta|rail|rail-label)/);
+  expect(layout).not.toMatch(/section-shell--(?:opening|utility|open|peak|closure|proof)/);
+  expect(intro).not.toContain('align?:');
+  expect(intro).not.toContain('measure?:');
+  expect(intro).not.toContain('wide');
 });
 
 test('localized setup and help copy matches current distribution, import, and safety contracts', () => {

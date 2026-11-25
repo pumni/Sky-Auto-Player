@@ -4,8 +4,8 @@ locale: en
 slug: windows-setup
 title: Windows Setup and First Launch
 description: >-
-  Step-by-step setup guide for Sky Auto Player on Windows 11: download the Tauri installer,
-  install, add songs, and configure the hotkeys.
+  Step-by-step setup guide for Sky Auto Player on Windows 11: install the Tauri package,
+  import sheets, and find the playback profile and desktop controls.
 summary: >-
   Download the canonical Tauri NSIS installer, install for the current user, and use the desktop
   Library to import sheets.
@@ -44,8 +44,9 @@ evidence:
 ## First launch
 
 On first launch the application creates its app-data state under the Windows user profile.
-You do not need to edit it manually — all supported settings are available from the desktop
-app's **Settings** dialog.
+You do not need to edit it manually. **Settings** manages app-wide preferences, including
+playback defaults. The Player Dock's **Playback profile** gives quick access to **Base Hold**,
+**Tempo**, and **Advanced timing** (FPS and timing margin).
 
 The canonical installer is intentionally unsigned for Authenticode under the current policy. Windows may show Unknown Publisher or a SmartScreen warning. Download only from the official GitHub Releases page. The Tauri updater verifies the separate .exe.sig sidecar; that sidecar is not required for a manual install.
 
@@ -57,12 +58,13 @@ The canonical installer is intentionally unsigned for Authenticode under the cur
 
 ## Desktop shortcuts
 
-| Shortcut | Action                            |
-| -------- | --------------------------------- |
-| `/`      | Focus song search                 |
-| `Ctrl+F` | Focus song search                 |
-| `Esc`    | Close the active safe overlay     |
-| `q`      | No quit action in the desktop GUI |
+| Shortcut | Action                   |
+| -------- | ------------------------ |
+| `/`      | Focus song search        |
+| `Ctrl+F` | Focus song search        |
+| `Ctrl+,` | Open Settings            |
+| `Ctrl+I` | Toggle the Inspector     |
+| `Esc`    | Close the active overlay |
 
 ## Updating
 

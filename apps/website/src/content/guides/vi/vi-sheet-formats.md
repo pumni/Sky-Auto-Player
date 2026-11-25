@@ -54,16 +54,15 @@ Tạo hoặc chọn playlist trong Library desktop, sau đó chọn **Add songs*
 ## Các lỗi thường gặp
 
 **File không hiện trong Library**
-: Kiểm tra file đã được nhập vào playlist và nguồn còn ở đường dẫn ban đầu. Phần mở rộng phải là `.json`, `.skysheet`, hoặc `.txt`; các định dạng khác không được nhận diện.
+: Kiểm tra file đã được nhập vào playlist và nguồn còn ở đường dẫn ban đầu. Phần mở rộng phải là .json, .skysheet, hoặc .txt; các định dạng khác không được nhận diện.
 
 **Lỗi "Failed to parse"**
 : Nội dung file không phải JSON hợp lệ. Mở file trong text editor để xác nhận nó chứa
 một JSON object, không phải văn bản thường hay dữ liệu nhị phân.
 
 **Bài hát phát nốt không đúng thứ tự hoặc bỏ qua đoạn**
-: Sheet có thể chứa dữ liệu timing không khớp với FPS hay tempo đã cấu hình. Thử điều
-chỉnh tempo multiplier hoặc FPS trong cài đặt theo bài.
+: Sheet có thể chứa timing không khớp với FPS hoặc tempo đã cấu hình. Xem **Tempo** và FPS trong **Playback profile** của Player Dock. Lịch chạy Windows và vòng lấy mẫu input của game vẫn ảnh hưởng thời điểm phím được đăng ký.
 
-## Cấu hình theo bài
+## Playback profile
 
-Sky Auto Player lưu cài đặt riêng cho từng bài (chọn hold frame, tempo, FPS, bảng màu) tách biệt với file sheet. Thay đổi file sheet không reset các cài đặt này.
+**Playback profile** trong Player Dock điều khiển cấu hình playback mặc định của ứng dụng; các giá trị này không được lưu riêng theo bài hay nhúng trong sheet. **Base Hold** có các giá trị 1, 1,25 và 1,5 frame; **Tempo** có 0,90×, 0,95×, 1,0×, 1,05× và 1,10×. Mục **Advanced timing** hỗ trợ FPS 30, 60, 90, 120, 144, 165 hoặc 240 và timing margin từ 0 đến 3.000 µs, bước 100 µs.
