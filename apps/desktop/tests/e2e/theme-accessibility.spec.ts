@@ -375,9 +375,9 @@ test('Light appearance stays independent of the saved dark palette and fits desk
   expect(theme['--primary-pressed']).toBe('#293da3');
   expect(contrast(theme['--primary-foreground'], theme['--primary'])).toBeGreaterThanOrEqual(4.5);
   expect(theme['--selection']).not.toBe(theme['--playing']);
-  await expect(
-    settings.getByText('Saved for Dark mode (Light mode is currently active).'),
-  ).toBeVisible();
+  await expect(settings.locator('[data-slot="appearance-active-summary"]')).toHaveText(
+    'Active: Light. Saved dark palette: Slate.',
+  );
   await settings.getByRole('button', { name: 'Close settings' }).click();
 
   for (const viewport of [

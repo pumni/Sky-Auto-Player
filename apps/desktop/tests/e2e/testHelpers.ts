@@ -366,7 +366,7 @@ export async function finishFocusTraversalTrace(
         labelledText ||
         (element instanceof HTMLInputElement ? element.labels?.[0]?.textContent?.trim() : '') ||
         element?.getAttribute('title')?.trim() ||
-        element?.innerText?.replace(/\s+/g, ' ').trim() ||
+        element?.textContent?.replace(/\s+/g, ' ').trim() ||
         '';
       const logicalTarget = element?.matches('[role="grid"]')
         ? 'track-grid'

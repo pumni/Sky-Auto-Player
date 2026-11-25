@@ -82,7 +82,7 @@ describe('SettingsCategoryContent', () => {
 
   it('previews the saved dark palette and labels the effective color mode', async () => {
     const { store, bootstrap, settings } = await initializedStore();
-    const { rerender } = render(
+    const { rerender, container } = render(
       <SettingsCategoryContent
         category="appearance"
         bootstrap={bootstrap}
@@ -92,9 +92,13 @@ describe('SettingsCategoryContent', () => {
     );
 
     const darkPreview = screen.getByRole('img', {
-      name: 'Dark appearance active: Graphite (Default)',
+      name: 'Dark appearance preview; saved dark palette is Graphite (Default)',
     });
+    const appearanceSummary = container.querySelector('[data-slot="appearance-active-summary"]');
     expect(darkPreview).toHaveAttribute('data-effective-mode', 'dark');
+    expect(appearanceSummary).toHaveTextContent(
+      'Active: Dark. Saved dark palette: Graphite (Default).',
+    );
 
     rerender(
       <SettingsCategoryContent
@@ -106,9 +110,12 @@ describe('SettingsCategoryContent', () => {
     );
     expect(
       screen.getByRole('img', {
-        name: 'Light appearance active; previewing: Graphite (Default)',
+        name: 'Light appearance preview; saved dark palette is Graphite (Default)',
       }),
     ).toHaveAttribute('data-effective-mode', 'light');
+    expect(appearanceSummary).toHaveTextContent(
+      'Active: Light. Saved dark palette: Graphite (Default).',
+    );
   });
 
   it('keeps theme choice independent from the saved dark palette', async () => {
