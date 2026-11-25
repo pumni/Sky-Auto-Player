@@ -127,7 +127,10 @@ is preserved in [`d12-wp2-candidate-startup.json`](d12-wp2-candidate-startup.jso
 `FBD28321BC626E864B16CE2C1B55D89D4329E5D2C80C791BFB00FA9CF90791E1`. The Tauri build produced a
 candidate package, then exited at the unsigned signing step because no private signing key was
 available. No signing credentials were requested or used, and the candidate was not installed.
-Following the owner's direction, the existing install remains at the reviewed 96de package.
+Following the owner's direction, no install or uninstall was performed after that response. An
+earlier CI NSIS installer had already affected the default installation; this handoff does not
+assert the installed binary's source identity, and no rollback was attempted without the original
+installer or backup.
 
 ## Visual review
 
