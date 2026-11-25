@@ -224,7 +224,7 @@ describe('shared palette geometry boundary', () => {
 
     const themes = readFileSync(resolve(process.cwd(), 'src/styles/globals.css'), 'utf8');
     const paletteRules = [...themes.matchAll(/([^{}]*data-palette[^{}]*)\{([^{}]*)\}/g)];
-    expect(paletteRules).toHaveLength(5);
+    expect(paletteRules).toHaveLength(6);
     for (const paletteRule of paletteRules) {
       const selector = paletteRule[1];
       const declarations = paletteRule[2];

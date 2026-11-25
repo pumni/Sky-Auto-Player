@@ -804,3 +804,78 @@ test('Light row hover, segmented boundary, forced-colors segmented label, and ne
   expect(darkTheme['--row-hover']).not.toBe(darkTheme['--selection']);
   expect(darkTheme['--row-hover']).not.toBe(darkTheme['--playing']);
 });
+
+test('Graphite 2.0 surfaces, shared Light across all saved palettes, and non-Graphite palette isolation hold', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const graphiteDark = await resolvedTheme(page);
+  expect(graphiteDark['--background']).toBe('#121314');
+  expect(graphiteDark['--surface']).toBe('#121314');
+  expect(graphiteDark['--card']).toBe('#191a1b');
+  expect(graphiteDark['--popover']).toBe('#202122');
+  expect(graphiteDark['--selection']).toBe('#303132');
+  expect(graphiteDark['--playing']).toBe('#202326');
+  expect(graphiteDark['--scrollbar-thumb']).toBe('#777a7e');
+  expect(graphiteDark['--scrollbar-thumb-active']).toBe('#a4a6aa');
+
+  // Content canvas vs chrome separation in Dark and Light
+  for (const mode of ['dark', 'light'] as const) {
+    await page.emulateMedia({ colorScheme: mode });
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
+    const activeTheme = await resolvedTheme(page);
+    const regions = await page.evaluate(() => ({
+      titlebar: getComputedStyle(document.querySelector('[data-slot="titlebar"]')!).backgroundColor,
+      navigator: getComputedStyle(document.querySelector('[data-pane="navigator"]')!)
+        .backgroundColor,
+      browser: getComputedStyle(document.querySelector('[data-pane="browser"]')!).backgroundColor,
+      dock: getComputedStyle(document.querySelector('[data-slot="player-dock"]')!).backgroundColor,
+    }));
+    expect(regions.titlebar).toBe(computedRgb(activeTheme['--card']));
+    expect(regions.navigator).toBe(computedRgb(activeTheme['--card']));
+    expect(regions.dock).toBe(computedRgb(activeTheme['--card']));
+    expect(regions.browser).toBe(computedRgb(activeTheme['--surface']));
+    expect(regions.browser).not.toBe(regions.titlebar);
+  }
+
+  // Every saved dark palette resolves identical shared Light tokens and restores cleanly on Dark
+  await page.emulateMedia({ colorScheme: 'light' });
+  const referenceLight = await resolvedTheme(page);
+  expect(referenceLight['--surface']).toBe('#fff');
+  expect(referenceLight['--card']).toBe('#f7f7f8');
+  expect(referenceLight['--selection']).toBe('#e4e5e7');
+  expect(referenceLight['--playing']).toBe('#edf0f4');
+  expect(referenceLight['--scrollbar-thumb']).toBe('#85888e');
+  expect(referenceLight['--scrollbar-thumb-active']).toBe('#5d6066');
+
+  const expectedNonGraphiteScrollbars = {
+    aurora: '#b7c2d1',
+    minimalist: '#c9ced4',
+    slate: '#bad0dc',
+    cyberpunk: '#dbc6e4',
+    classic: '#d2c2aa',
+  } as const;
+
+  for (const palette of palettes) {
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await selectPalette(page, palette);
+    const darkSnapshot = await resolvedTheme(page);
+    if (palette !== 'graphite') {
+      expect(darkSnapshot['--scrollbar-thumb-active']).toBe(expectedNonGraphiteScrollbars[palette]);
+      expect(darkSnapshot['--scrollbar-thumb']).not.toBe('#777a7e');
+    }
+
+    await page.emulateMedia({ colorScheme: 'light' });
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+    await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
+    const lightSnapshot = await resolvedTheme(page);
+    expect(lightSnapshot).toEqual(referenceLight);
+
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+    await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
+    const restoredDark = await resolvedTheme(page);
+    expect(restoredDark).toEqual(darkSnapshot);
+  }
+});

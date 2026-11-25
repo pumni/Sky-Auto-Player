@@ -71,6 +71,7 @@ describe('Inspector readiness summary', () => {
   it('does not imply native target or focus qualification', () => {
     const result = resolveInspectorReadiness(ready);
     expect(result.state).toBe('ready');
+    expect(result.label).toBe('Sheet ready');
     expect(result.detail).toMatch(/Native target and focus gates are checked/);
   });
 });

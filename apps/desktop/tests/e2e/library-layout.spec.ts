@@ -232,15 +232,15 @@ test('Graphite workspace header follows the Track Browser width without changing
     expect(geometry.headingContentStyle?.alignItems).toBe('baseline');
     expect(geometry.headingTag).toBe('H1');
     expect(geometry.headerTablists).toBe(0);
-    expect(geometry.headerStyle?.background).toBe('rgb(21, 22, 24)');
+    expect(geometry.headerStyle?.background).toBe('rgb(18, 19, 20)');
     expect(geometry.sourceStyle?.background).toBe('rgba(0, 0, 0, 0)');
     expect(geometry.sourceStyle?.color).toBe('rgb(226, 228, 232)');
     expect(geometry.titleStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '20px' : '16px');
     expect(geometry.titleStyle?.lineHeight).toBe(expectedHeaderHeight === 40 ? '28px' : '22px');
     expect(geometry.titleStyle?.fontWeight).toBe('600');
     expect(geometry.countStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '12px' : '11px');
-    expect(geometry.browserStyle?.background).toBe('rgb(25, 26, 27)');
-    expect(geometry.columnStyle?.background).toBe('rgb(21, 22, 24)');
+    expect(geometry.browserStyle?.background).toBe('rgb(18, 19, 20)');
+    expect(geometry.columnStyle?.background).toBe('rgb(18, 19, 20)');
     expect(geometry.columnStyle?.borderBottomWidth).toBe('0px');
     expect(geometry.divider).not.toBeNull();
     if (!geometry.divider) throw new Error('Graphite inset column divider is missing');
@@ -331,7 +331,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     return { color: style.color, background: style.backgroundColor };
   });
   expect(collapsedToggleStyle).toEqual({
-    color: 'rgb(166, 168, 173)',
+    color: 'rgb(179, 181, 184)',
     background: 'rgba(0, 0, 0, 0)',
   });
   await collapseButton.hover();
@@ -344,7 +344,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     )
     .toEqual({
       color: 'rgb(226, 228, 232)',
-      background: 'rgb(53, 54, 58)',
+      background: 'rgb(48, 49, 50)',
     });
   const pane = await page.locator('[data-pane="navigator"]').boundingBox();
   expect(pane).not.toBeNull();
