@@ -499,6 +499,10 @@ html[data-color-mode='light'] {
     box-shadow: none !important;
   }
 
+  [data-slot='track-row'][data-state='idle'] {
+    border-left-color: var(--card) !important;
+  }
+
   ::selection {
     color: HighlightText;
     background: Highlight;

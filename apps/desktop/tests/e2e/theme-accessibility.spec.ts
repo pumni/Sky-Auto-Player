@@ -599,6 +599,17 @@ test('forced colors retain control feedback and reduced motion removes overlay m
   await page.goto('/');
   await expectNoSeriousAccessibilityViolations(page);
   await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
+  const idleRow = page.locator('[data-slot="track-row"][data-state="idle"]').first();
+  const idleRowColors = await idleRow.evaluate((element) => {
+    const grid = element.closest<HTMLElement>('[role="grid"]');
+    return {
+      rowBorder: getComputedStyle(element).borderLeftColor,
+      gridSurface: grid ? getComputedStyle(grid).backgroundColor : null,
+    };
+  });
+  expect(idleRowColors.gridSurface).not.toBeNull();
+  expect(idleRowColors.rowBorder).toBe(idleRowColors.gridSurface);
+
   await page.getByRole('button', { name: 'Open settings' }).click();
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await expect(dialog).toBeVisible();
