@@ -2446,7 +2446,9 @@ test('Add songs menu stays non-modal and supports keyboard exit, Escape, and out
   await expectNoSeriousAccessibilityViolations(page);
 });
 
-test('Add songs menu reopens safely while its Base UI exit transition is active', async ({ page }) => {
+test('Add songs menu reopens safely while its Base UI exit transition is active', async ({
+  page,
+}) => {
   const navigator = page.getByRole('navigation', { name: 'Library' });
   await navigator.locator('[data-slot="library-add-button"]').click();
   const createDialog = page.getByRole('dialog', { name: 'New playlist' });
