@@ -1,14 +1,15 @@
 {
   "status": "captured",
-  "source_sha": "c420f5f280f339bcaa5d8f83eafe233b5ff129e7",
-  "desktop_tree_sha": "6419857e8a4b5966fef7f4051948c042f183e93a",
-  "captured_at_utc": "2026-11-25T05:34:07.480Z",
+  "source_sha": "6f1f9fad613a279ccfc25d3dee83ea4ba55d7283",
+  "desktop_tree_sha": "810e6ec731ea598f7157087b4ef1feec1998dfba",
+  "captured_at_utc": "2026-11-25T07:11:23.747Z",
   "environment": "Playwright Chromium with deterministic desktop mock bridge; not native Tauri/Windows",
   "generated_by": "bun run ui:refresh (apps/desktop)",
   "scenes": {
     "workbench.png": "Graphite workbench, 1366x768 CSS viewport; selected and dry-run playing rows",
     "compact.png": "Graphite compact workbench, 800x560 CSS viewport",
     "overlay.png": "Browser-only responsive inspector overlay, 640x448; not supported native window minimum",
-    "diagnostics.png": "Runtime diagnostics, dry run without physical keyboard input, 1366x768"
+    "diagnostics.png": "Runtime diagnostics, dry run without physical keyboard input, 1366x768",
+    "appearance-settings-light.png": "Review-only Appearance settings state with Light active and Graphite saved, 1366x768"
   }
 }

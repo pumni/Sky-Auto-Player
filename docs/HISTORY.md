@@ -1,5 +1,33 @@
 # Historical source snapshots
 
+## Desktop UI modernization WP1/WP2 records
+
+The completed campaign work order, migration ledger, WP2 report, and large evidence captures were
+removed from the active docs tree during WP3. Their immutable source is the reviewed WP2 commit
+[`b7387d1a89a80f6f9f0c16c91825b5fb7632bca6`](https://github.com/pumni/Sky-Auto-Player/tree/b7387d1a89a80f6f9f0c16c91825b5fb7632bca6).
+The report contains the comparative browser profiles and their limits; those runs are reused as
+revision-bound evidence and do not qualify native timing. D13 supersedes D12: the former absolute
+bundle ceilings and percentage threshold are historical only, and bundle size is now advisory.
+
+| Archived file at WP2 source | Bytes | SHA-256 |
+| --- | ---: | --- |
+| [Modernization work order](https://github.com/pumni/Sky-Auto-Player/blob/b7387d1a89a80f6f9f0c16c91825b5fb7632bca6/docs/ui/modernization-work-order.md) | 30,467 | `CDF408F873C2F13044D62495D78F6AFFC0446F099AAD46B5F0C68EC3E1A7DA7B` |
+| [WP1-R1 migration ledger](https://github.com/pumni/Sky-Auto-Player/blob/b7387d1a89a80f6f9f0c16c91825b5fb7632bca6/docs/ui/wp1-r1-coverage-migration.md) | 9,976 | `77904D8F142DEA123B816A6CB225455321575CE2B61E2B4C5370B52233A185A3` |
+| [WP2 evidence report](https://github.com/pumni/Sky-Auto-Player/blob/b7387d1a89a80f6f9f0c16c91825b5fb7632bca6/docs/ui/evidence/wp2/README.md) | 10,751 | `AA86691DA4AF134368D1C74537F469809B80A1E5BA815DBE942AB8113B2D907D` |
+| [Expanded visual evidence ZIP](https://github.com/pumni/Sky-Auto-Player/blob/b7387d1a89a80f6f9f0c16c91825b5fb7632bca6/docs/ui/evidence/wp2/expanded-visual-evidence.zip) | 1,644,182 | `56665FD72943A05302F4349B0362275CFC34A7AFA757597DD79A19892D0351E6` |
+| [Candidate startup profile](https://github.com/pumni/Sky-Auto-Player/blob/b7387d1a89a80f6f9f0c16c91825b5fb7632bca6/docs/ui/evidence/wp2/d12-wp2-candidate-startup.json) | 114,611 | `FBD28321BC626E864B16CE2C1B55D89D4329E5D2C80C791BFB00FA9CF90791E1` |
+| [Browser profile baseline](https://github.com/pumni/Sky-Auto-Player/blob/b7387d1a89a80f6f9f0c16c91825b5fb7632bca6/docs/ui/evidence/wp2/wp2-browser-profile-baseline.json) | 24,033 | `FEEC2CE4AB0FFD45684189FE999DD2ADB012BF50A8CCFFC2A81ECFBE7EC76195` |
+| [Browser profile candidate](https://github.com/pumni/Sky-Auto-Player/blob/b7387d1a89a80f6f9f0c16c91825b5fb7632bca6/docs/ui/evidence/wp2/wp2-browser-profile-candidate.json) | 24,672 | `CED07DEAEA5CE2D525B9897FA03B8DA07177CFB45B185C0AF86768E2840328FE` |
+
+The WP2 comparison used Windows 11, Node 24.21, Chromium 156.0.8078.4, a 1366×768 CSS viewport,
+DPR 1, deterministic mock data, and production Vite preview. It used one warm-up and ten measured
+fresh contexts for browser profiles and five interaction samples. At source `c016`, shell-ready
+p50/p95 was 392.2/515.8 ms versus 469.3/541.2 ms at baseline `96de`; initial loaded JS was
+252,140 encoded bytes (+0.83%) and 807,590 decoded bytes (+0.82%). Frame interval p50/p95 stayed
+near 16.7/33.3 ms. These comparative browser samples are reused for WP3; they are not native
+Windows timing claims. The WP2 report's raw Axe reports remain active in `docs/ui/evidence/wp2/`
+for the D11 regression record.
+
 The completed PR #679 release-gap removal work order is archived at [main merge b69e4ad](https://github.com/pumni/Sky-Auto-Player/blob/b69e4ad219689049df8fb97e9a50ef11a751397f/docs/playback-remove-release-gap-plan.md). It is provenance, not current authorization or a live plan. Current contracts are [playback engine](playback-engine.md), [song planning](song-planning.md), and [playback verification](playback-verification.md).
 
 The executed playback-core redesign plan is retained only at its immutable

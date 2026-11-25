@@ -12,7 +12,6 @@ changed behavior; follow its source/test references only as needed.
 | Desktop frontend stack and type boundary | [Type boundary](desktop-type-boundary.md) |
 | App commands, browser runners and worktree isolation | [JavaScript tooling](desktop-tooling.md) |
 | Visual UI work | [Visual reference](ui/README.md) (check capture SHA) |
-| Desktop UI modernization campaign | [Master work order](ui/modernization-work-order.md) |
 | Library identity and membership | [Library V1](library-v1-contract.md) |
 | Built-in songs and provenance | [Manifest](../builtin-songs/manifest.json), [curation](song-curation/README.md) |
 | Sheet parsing, source compatibility | [Source decoding](song-source-decoding.md) |

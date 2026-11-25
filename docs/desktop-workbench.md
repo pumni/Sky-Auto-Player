@@ -38,9 +38,19 @@ Production action controls use the shared `Button` variants: `default` for prima
 `destructive` for irreversible confirmations. Native window-caption buttons remain platform
 controls with their existing hit targets. The Player Dock uses a 92 px grid with equal flexible
 side columns around a centered transport column capped at 600 px or 45 vw. At compact widths it
-keeps song title, playback status, Test label, timeline, and centered transport visible while
-removing the decorative note glyph and shortening the Test label. The timeline uses the semantic
-control-hover track color.
+keeps song title, playback status, test-mode label, timeline, and centered transport visible while
+removing the decorative note glyph. The test-mode label keeps “Test · no keys” when its player
+column can fit it and uses “Dry run” when it cannot; its accessible label always says that no
+physical keyboard input is sent. The timeline uses the semantic control-hover track color.
+
+The Library's empty Playlists action uses an outline while Built-in Songs are available and a filled
+primary style when that source is unavailable. Its help text stays short and explains the playlist's
+purpose. The Track Browser heading responds to its measured center-pane width: at 680 px and above
+it uses 20/28 px type in a 40 px header; below 680 px it uses 16/22 px type in a 32 px header.
+The result count shares the title baseline, and track rows remain 46 px tall.
+Selected rows keep the selection surface and accent rail; playing rows keep a distinct playing
+surface, music glyph, and accent title. When one row is both selected and playing, the selected
+surface/rail and the playing glyph remain visible together, and hover preserves each row's state.
 
 Ordinary dropdown menus default to non-modal Base UI behavior so focus can leave the menu and
 outside controls remain usable. Modal Dialog and Alert Dialog backdrops use the neutral semantic
@@ -130,6 +140,12 @@ Song Details and Runtime Diagnostics retain their own scrollable content. Runtim
 plots, events, and trace export remain available in either presentation. The Inspector ends above
 the Player Dock, which keeps its own independent geometry and controls.
 
+The Inspector summarizes readiness as pending, unavailable, ready, review, or blocked. Unknown or
+missing compatibility/timing data never becomes ready; conversion consent and timing-risk review
+keep separate explanations. Quiet success and pending states use plain labels, while review and
+blocked states use stronger semantic treatments. The underlying generated sheet DTO, full risk
+guidance, and native start gates remain authoritative.
+
 ## Sheet compatibility and playback preparation
 
 Song Details reports the selected sheet's format, schema, track roster, target pitch, and conversion
@@ -178,6 +194,8 @@ Graphite remains the default dark palette with persisted ID `graphite`; Settings
 **Graphite (Default)**. The other five persisted palette IDs remain selectable. `data-palette` and
 `data-color-mode` select overrides in the one frontend stylesheet, `apps/desktop/src/styles/globals.css`.
 Light is a mode override and does not add a palette ID.
+The Appearance preview uses those active semantic tokens and visibly reports the active Light/Dark
+mode separately from the saved dark palette; the preview does not duplicate a hardcoded palette.
 
 The Sky Graphite 2 default uses `--accent-ink` and `--ring` `#9AA8FF`; primary action fill,
 hover, and pressed colors are `#8E9DFF`, `#A3B0FF`, and `#7888F0`, with `#11131A` as the primary
@@ -229,9 +247,9 @@ pixel or prove Windows High Contrast or packaged WebView2 behavior.
   `apps/desktop/tests/e2e/visual-evidence.spec.ts` cover modal accessibility, Diagnostics
   truthfulness, all six palettes, Light and Graphite rendering, focus and semantic color roles,
   forced-colors, reduced motion, update states, and representative visual states.
-- The WP1-R1 migration from removed Graphite/Light suites to current rendered oracles is recorded in
-  [`UI coverage migration ledger`](ui/wp1-r1-coverage-migration.md), including the Base UI open-menu
-  Axe finding that remains unresolved without changing the required focus-guard or Axe policy.
+- Current Base UI focus-guard evidence and its negative controls are described in
+  [`desktop-type-boundary.md`](desktop-type-boundary.md); the historical suite migration is indexed
+  from [`HISTORY.md`](HISTORY.md).
 
 Browser tests use the mock bridge. The 640×448 overlay cases are responsive browser fallbacks,
 not supported native sizes. Packaged WebView2 resize/startup measurements and their baseline

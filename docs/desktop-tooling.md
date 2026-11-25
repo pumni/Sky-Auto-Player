@@ -26,6 +26,13 @@ build starts from this same app directory; its `beforeBuildCommand` runs only
 `bun run build`. The dedicated calibration executable is no longer built or
 bundled.
 
+The desktop's emitted JavaScript size is advisory under D13: there is no hard raw/gzip ceiling or
+percentage growth gate. Keep the approved CSS-first UI treatment and selectively use Motion only
+within the authorized scope; do not split chunks or reduce visual fidelity to chase an arbitrary
+bundle target. The valid WP2 browser profiles remain revision-bound evidence at the reviewed WP2
+source and are linked from [HISTORY.md](HISTORY.md); re-use them for this polish checkpoint rather
+than repeating unchanged performance runs. Browser profiles do not establish native timing.
+
 ## Website setup and checks
 
 The static site has its own frozen install and runs without the Rust workspace:

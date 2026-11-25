@@ -10,6 +10,7 @@ registry or a second component package.
 
 - `tailwindcss` 4.3.5 and `@tailwindcss/vite` 4.3.5
 - `@base-ui/react` 1.9.0
+- `@axe-core/playwright` 4.14.0 for the pinned Add Songs browser review
 - `class-variance-authority` 0.7.1 and `cn` 0.5.2
 - `react` and `react-dom` 19.3.1 with `@types/react` 19.3.0
 - `typescript` 7.0.2
@@ -51,20 +52,27 @@ Dropdown Menu roots use non-modal behavior for ordinary action menus. Modal dial
 Base UI focus ownership; the compact Inspector is a non-modal workbench pane and applies `inert`
 plus `aria-hidden` immediately on close while its CSS exit completes. All popup transition utilities
 include the animated properties and reduced-motion override. The ordinary Add songs menu keeps
-Base UI 1.9.0 `modal={false}` behavior. The focused Axe 4.14 `aria-hidden-focus` result is reviewed
-only in the Add songs E2E checkpoint after the complete unfiltered Axe result is attached and saved
-with the test output. The test-side classifier requires every result and related-node selector to
-resolve to exactly one Base UI sentinel with its empty 1×1 clipped shape, `aria-hidden="true"`,
-`tabindex="0"`, no role or descendants, and no hidden ancestor. Untyped trigger guards and
-`data-type="outside"` guards must be direct siblings of the Add songs trigger; `data-type="inside"`
-guards must be adjacent to the open Add songs menu inside its portal. Real Tab and Shift+Tab focus
-traces must leave the menu for different visible, enabled destinations within the one-second
-sentinel-clearance bound. Hidden controls, mixed findings, spoofed markers, stuck guards, other Axe
-rules and critical findings remain blocking. The unit tests keep those negative controls. The
-behavior is version-bound to Base UI 1.9.0 and Axe 4.14.0 and must be
-removed when either dependency changes or upstream no longer emits the exact sentinel finding.
-No production DOM or Axe configuration is changed. Manual Narrator and NVDA qualification is
-NOT RUN by this browser test.
+Base UI 1.9.0 `modal={false}` behavior. The E2E checkpoint runs the full, unfiltered Axe 4.14.0 scan
+and retains its raw report. Its one serious `aria-hidden-focus` finding is conditionally adjudicated
+only when the result matches the exact six selectors in the
+[`Add Songs adjudicator`](../apps/desktop/src/testing/baseUiFocusGuardAdjudication.ts): two untyped guards and
+two `data-type="outside"` guards beside the trigger, plus two `data-type="inside"` guards adjacent
+to the open portal menu. Each traversal and the Axe scan records a separate six-guard snapshot,
+with expected placement and identity. Instrumented real Tab must close the menu and land on the
+visible, enabled “Browse Built-in Songs…” button in the empty playlist state; Shift+Tab must close
+it and return to the “Add songs” trigger. The traversal evidence correlates each sentinel focus
+event to the measured DOM guard identity and placement; the harness does not synthesize guard
+focus. Guard clearance and destination must occur within one second. Version drift,
+selector/count/placement changes, mixed findings, hidden or stuck focus targets, and unrelated
+serious/critical Axe findings fail closed and have negative unit tests.
+
+The same raw Axe report contains a moderate `region` finding on the Base UI portal menu outside the
+page's landmark tree. It remains visible in the unfiltered report and is not suppressed or included
+in the serious-finding adjudication. No production DOM or Axe configuration is changed. This
+conditional review is pinned to Base UI 1.9.0 and Axe 4.14.0; remove it if either version changes or
+the exact finding no longer appears. The historical WP1/WP2 suite migration and accepted raw Axe
+files are indexed in [`HISTORY.md`](HISTORY.md) and [`ui/README.md`](ui/README.md). Manual Narrator
+and NVDA qualification is NOT RUN by this browser test.
 
 ## Type and platform boundaries
 
@@ -85,8 +93,8 @@ selection behavior. `src/appearance/graphiteThemeTokens.test.ts` checks the sema
 contract. `tests/e2e/theme-accessibility.spec.ts`, `settings-diagnostics.spec.ts`,
 `playback-confirmation-layout.spec.ts`, `update-modal-geometry.spec.ts`, and the workbench and
 library suites cover rendered tokens, dialogs, selection, focus, responsive geometry, and key
-application states. The deleted Graphite and Light suite migration is mapped in the
-[WP1-R1 coverage migration ledger](ui/wp1-r1-coverage-migration.md).
+application states. The revision-bound removed Graphite and Light suite migration is indexed in
+[HISTORY.md](HISTORY.md).
 
 Run from `apps/desktop/` with the pinned Bun version:
 
