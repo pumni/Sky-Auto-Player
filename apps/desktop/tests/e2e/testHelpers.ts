@@ -693,6 +693,16 @@ export async function readPlayerBarGeometry(page: Page) {
       }
     }
     const primaryBox = rect(primary);
+    const primaryButton = primary.querySelector<HTMLButtonElement>(
+      '[data-slot="primary-transport"]',
+    );
+    const glyphIndex =
+      primaryButton?.dataset.transportState === 'playing'
+        ? 1
+        : primaryButton?.dataset.transportState === 'pending'
+          ? 2
+          : 0;
+    const primaryGlyph = primaryButton?.querySelectorAll('svg')[glyphIndex];
     return {
       viewportWidth: window.innerWidth,
       viewportHeight: window.innerHeight,
@@ -702,6 +712,7 @@ export async function readPlayerBarGeometry(page: Page) {
       primary: primaryBox,
       primaryCenterX: primaryBox.x + primaryBox.width / 2,
       primaryCenterY: primaryBox.y + primaryBox.height / 2,
+      primaryGlyph: primaryGlyph ? rect(primaryGlyph) : null,
       timeline: rect(timeline),
       rail: rect(rail),
       visibleControlCenters,
@@ -743,6 +754,17 @@ export function expectPlayerBarGeometry(
   expect(geometry).not.toBeNull();
   if (!geometry) throw new Error('Player Bar geometry is unavailable');
   expect(Math.abs(geometry.primaryCenterX - geometry.viewportCenterX)).toBeLessThanOrEqual(2);
+  expect(geometry.primaryGlyph).not.toBeNull();
+  if (geometry.primaryGlyph) {
+    expect(
+      Math.abs(geometry.primaryGlyph.x + geometry.primaryGlyph.width / 2 - geometry.primaryCenterX),
+    ).toBeLessThanOrEqual(0.75);
+    expect(
+      Math.abs(
+        geometry.primaryGlyph.y + geometry.primaryGlyph.height / 2 - geometry.primaryCenterY,
+      ),
+    ).toBeLessThanOrEqual(0.75);
+  }
   expect(geometry.player.height).toBe(92);
   expect(
     geometry.timeline.y - (geometry.primary.y + geometry.primary.height),
