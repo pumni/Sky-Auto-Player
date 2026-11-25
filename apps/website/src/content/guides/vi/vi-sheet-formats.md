@@ -12,7 +12,7 @@ summary: >-
 category: getting-started
 order: 2
 published: '2026-08-08'
-updated: '2026-08-08'
+updated: '2026-11-26'
 draft: false
 related:
   - windows-setup
@@ -42,11 +42,7 @@ Cả ba dùng cùng cấu trúc dữ liệu — phần mở rộng xác định 
 
 ## Đặt file bài hát ở đâu
 
-Dùng Library desktop để nhập file sheet. Dữ liệu ứng dụng được lưu ở vùng app-data của người
-dùng, tách khỏi thư mục installer và không được quản lý như file cạnh executable.
-
-Sau khi thêm file, nhấn **Reload songs** trong Library desktop mà không cần khởi động lại ứng
-dụng.
+Tạo hoặc chọn playlist trong Library desktop, sau đó chọn **Add songs** để nhập file hoặc cả thư mục. Thao tác nhập tham chiếu file gốc tại chỗ; ứng dụng không di chuyển hay xóa file. Nếu bạn di chuyển hoặc xóa file nguồn, mục đã nhập có thể không còn dùng được.
 
 ## Lấy file sheet ở đâu
 
@@ -58,9 +54,7 @@ dụng.
 ## Các lỗi thường gặp
 
 **File không hiện trong Library**
-: Dùng **Reload songs** trong GUI desktop.
-Nếu vẫn không hiện, kiểm tra phần mở rộng file phải là `.json`, `.skysheet`, hoặc `.txt`.
-Các phần mở rộng khác không được nhận diện.
+: Kiểm tra file đã được nhập vào playlist và nguồn còn ở đường dẫn ban đầu. Phần mở rộng phải là `.json`, `.skysheet`, hoặc `.txt`; các định dạng khác không được nhận diện.
 
 **Lỗi "Failed to parse"**
 : Nội dung file không phải JSON hợp lệ. Mở file trong text editor để xác nhận nó chứa

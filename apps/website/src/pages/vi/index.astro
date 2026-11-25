@@ -26,11 +26,10 @@ const structuredData = {
       '@type': 'SoftwareApplication',
       '@id': softwareId,
       name: 'Sky Auto Player',
-      description:
-        'Trình phát sheet nhạc ưu tiên timing cho Sky: Children of the Light trên Windows. Đọc file sheet do người dùng cung cấp và mô phỏng đầu vào bàn phím qua Windows SendInput API. Không có liên kết với thatgamecompany.',
+      description: homeVi.seo.description,
       softwareVersion: PRODUCT_RELEASE.version,
       applicationCategory: 'MultimediaApplication',
-      operatingSystem: 'Windows 10, Windows 11 (64-bit)',
+      operatingSystem: 'Windows 11 (64-bit)',
       url: siteUrlEn,
       image: new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href,
       downloadUrl: SITE.releaseUrl,

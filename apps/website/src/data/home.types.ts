@@ -7,18 +7,19 @@ export interface HomeContent {
     description: string;
   };
   navigation: {
-    playback: string;
+    overview: string;
     howItWorks: string;
-    technical: string;
     guides: string;
     faq: string;
     github: string;
+    release: string;
   };
   hero: {
     kicker: string;
     titleLines: [string, string];
     description: string;
     primaryCta: string;
+    primaryCtaDestination: string;
     secondaryCta: string;
     metadata: string[];
     riskNote: string;
@@ -41,9 +42,9 @@ export interface HomeContent {
   comparison: {
     kicker: string;
     title: string;
-    macroHeader: string;
+    sequenceHeader: string;
     playerHeader: string;
-    rows: { macro: string; player: string }[];
+    rows: { sequence: string; player: string }[];
   };
   product: {
     kicker: string;
@@ -55,7 +56,7 @@ export interface HomeContent {
     kicker: string;
     title: string;
     items: { title: string; description: string }[];
-    hotkeyNote: string;
+    workflowNote: string;
   };
   technical: {
     kicker: string;

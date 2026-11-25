@@ -54,6 +54,83 @@ test.describe('published route and asset contracts', () => {
 
       expect(softwareApplications).toHaveLength(1);
       expect(softwareApplications[0].softwareVersion).toBe(publishedRelease.version);
+      expect(softwareApplications[0].operatingSystem).toBe('Windows 11 (64-bit)');
+    }
+  });
+
+  test('localized product pages describe current OS, package trust, imports and timing limits', async ({
+    request,
+  }) => {
+    const cases = [
+      {
+        path: '/',
+        required: [
+          'Windows 11 x64',
+          'FREE · OPEN SOURCE',
+          'Get the Windows installer',
+          'Opens GitHub Releases',
+          'the canonical Tauri NSIS installer',
+          'current user',
+          'playlist',
+          'does not move or delete',
+        ],
+      },
+      {
+        path: '/vi/',
+        required: [
+          'WINDOWS 11 64-BIT',
+          'MIỄN PHÍ · MÃ NGUỒN MỞ',
+          'Tải bộ cài Windows',
+          'Mở GitHub Releases',
+          'playlist',
+          'không di chuyển hay xóa',
+        ],
+      },
+      {
+        path: '/faq/',
+        required: [
+          'Windows 11 64-bit only',
+          'not Authenticode-signed',
+          'not needed for a manual install',
+        ],
+      },
+      {
+        path: '/vi/faq/',
+        required: [
+          'Windows 11 64-bit',
+          'chưa được ký Authenticode',
+          'không cần cho cài đặt thủ công',
+        ],
+      },
+      {
+        path: '/guides/windows-setup/',
+        required: ['intentionally unsigned for Authenticode', 'manual install'],
+      },
+      {
+        path: '/vi/guides/windows-setup/',
+        required: ['chưa được ký Authenticode', 'cài đặt thủ công'],
+      },
+      {
+        path: '/guides/sheet-formats/',
+        required: ['Create or select a playlist', 'reference the original files'],
+      },
+      {
+        path: '/vi/guides/sheet-formats/',
+        required: ['Tạo hoặc chọn playlist', 'tham chiếu file gốc'],
+      },
+    ];
+
+    for (const entry of cases) {
+      const response = await request.get(origin + entry.path);
+      expect(response.status(), entry.path).toBe(200);
+      const html = await response.text();
+      for (const phrase of entry.required) expect(html, entry.path).toContain(phrase);
+      if (entry.path === '/' || entry.path === '/vi/') {
+        expect(html, entry.path).toContain('WINDOWS 11 X64');
+        expect(html, entry.path).not.toContain('WINDOWS 10–11');
+      }
+      expect(html, entry.path).not.toContain('Reload songs');
+      expect(html, entry.path).not.toContain('--tuning');
     }
   });
 
@@ -105,6 +182,9 @@ test.describe('published route and asset contracts', () => {
     const llmsText = await llms.text();
     expect(llmsText).toContain('Sky Auto Player');
     expect(llmsText).toContain('SendInput API only');
+    expect(llmsText).toContain('Windows 11 x64');
+    expect(llmsText).toContain('Tauri updater separately verifies the .exe.sig sidecar');
+    expect(llmsText).toContain('sender-side');
 
     const google = await request.get(origin + '/google40b614dcfbf81da7.html');
     expect(google.status()).toBe(200);

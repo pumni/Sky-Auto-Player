@@ -110,315 +110,317 @@ const isVi = locale === 'vi';
 </figure>
 
 <style>
-  .timing-console {
-    --panel-accent: var(--color-action);
-    container: timing-console / inline-size;
-    position: relative;
-    min-width: 0;
-    margin: 0;
-    padding: clamp(var(--space-3), 2.5cqi, var(--space-5));
-    overflow: clip;
-    font-family: var(--font-mono);
-    font-size: var(--type-small);
-  }
-
-  .timing-console::after {
-    position: absolute;
-    top: 0;
-    right: 10%;
-    width: 5rem;
-    height: 1px;
-    background: var(--panel-accent);
-    content: '';
-    opacity: 0.85;
-  }
-
-  .console__topline,
-  .console__playhead {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-3);
-    color: var(--color-text-secondary);
-    font-size: var(--type-label);
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-  }
-
-  .console__status-label {
-    color: var(--color-success);
-  }
-
-  .console__status {
-    display: inline-block;
-    width: 0.5rem;
-    height: 0.5rem;
-    margin-inline-end: var(--space-2);
-    border-radius: 50%;
-    background: var(--color-success);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 12%, transparent);
-  }
-
-  .console__playhead {
-    align-items: baseline;
-    margin-block-start: var(--space-5);
-    padding-block-end: var(--space-3);
-    border-block-end: 1px solid var(--line-accent);
-    color: var(--color-action-soft);
-  }
-
-  .console__playhead-track {
-    position: relative;
-    display: block;
-    flex: 1 1 8rem;
-    height: 1px;
-    margin-inline-start: var(--space-4);
-    background: var(--line-faint);
-  }
-
-  .console__playhead-marker {
-    position: absolute;
-    top: 50%;
-    left: calc(var(--playhead-progress, 0) * 100%);
-    display: block;
-    width: 0.45rem;
-    height: 0.45rem;
-    border-radius: 50%;
-    background: var(--color-action);
-    box-shadow: 0 0 0 0.25rem color-mix(in oklch, var(--color-action) 12%, transparent);
-    transform: translate(-50%, -50%);
-    transition: transform var(--duration-emphasis) var(--ease-out);
-  }
-
-  .telemetry,
-  .timing-event__time {
-    font-variant-numeric: tabular-nums lining-nums;
-  }
-
-  .timing-console__events {
-    display: grid;
-    gap: 0;
-    margin-block: var(--space-4);
-    padding: 0;
-    list-style: none;
-  }
-
-  .timing-event {
-    display: grid;
-    grid-template-columns: minmax(5.8rem, 0.45fr) minmax(8rem, 0.8fr) minmax(4.6rem, 0.35fr);
-    gap: var(--space-3);
-    align-items: center;
-    min-width: 0;
-    padding-block: var(--space-3);
-    border-block-start: 1px solid var(--line-faint);
-  }
-
-  .timing-event:last-child {
-    border-block-end: 1px solid var(--line-faint);
-  }
-
-  .timing-console.is-playing .timing-event:not(.is-active) {
-    opacity: 0.5;
-  }
-
-  .timing-console.is-playing .timing-event.is-active {
-    opacity: 1;
-    background: color-mix(in oklch, var(--color-action) 8%, transparent);
-  }
-
-  .timing-console:not(.is-playing) .timing-event:not([aria-current='step']) {
-    color: var(--color-text-tertiary);
-  }
-
-  .timing-event--active {
-    background: color-mix(in srgb, var(--color-action) 6%, transparent);
-  }
-
-  .timing-event.is-active .timing-event__marker {
-    background: currentColor;
-    box-shadow: 0 0 0 0.22rem color-mix(in oklch, currentColor 14%, transparent);
-  }
-
-  .timing-event__time,
-  .timing-event__keys {
-    color: var(--color-text-primary);
-    font-family: var(--font-mono);
-    font-size: var(--type-small);
-  }
-
-  .timing-event__time {
-    white-space: nowrap;
-  }
-
-  .timing-event__keys {
-    display: inline-flex;
-    min-width: 0;
-    align-items: center;
-    gap: var(--space-2);
-    color: var(--color-action-soft);
-    overflow-wrap: anywhere;
-  }
-
-  .timing-event__marker {
-    display: inline-block;
-    width: 0.6rem;
-    height: 0.6rem;
-    flex: 0 0 auto;
-    border: 1px solid currentColor;
-    border-radius: 50%;
-  }
-
-  .timing-event--chord .timing-event__marker {
-    border-radius: 0.12rem;
-    box-shadow:
-      0.2rem -0.2rem 0 -0.03rem var(--color-surface-instrument),
-      0.2rem -0.2rem 0 0.04rem currentColor;
-  }
-
-  .timing-event--hold .timing-event__marker {
-    width: 1.35rem;
-    height: 0.2rem;
-    border-radius: 0;
-  }
-
-  .timing-event__kind {
-    justify-self: end;
-    color: var(--color-info);
-    font-family: var(--font-mono);
-    font-size: var(--type-label);
-    letter-spacing: 0.08em;
-    white-space: nowrap;
-  }
-
-  .hold-line {
-    display: inline-block;
-    color: var(--color-success);
-    letter-spacing: -0.15em;
-    transform: scaleX(0.35);
-    transform-origin: left;
-    transition: transform var(--duration-emphasis) var(--ease-out);
-  }
-
-  .timing-event.is-active .hold-line {
-    transform: scaleX(1);
-  }
-
-  .instrument-grid {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: clamp(0.28rem, 1vw, 0.55rem);
-    margin-block-start: var(--space-4);
-  }
-
-  .instrument-key {
-    display: grid;
-    min-width: 0;
-    aspect-ratio: 1;
-    place-items: center;
-    border: 1px solid var(--line-default);
-    border-radius: var(--radius-xs);
-    background: var(--color-surface-quiet);
-    color: var(--color-text-secondary);
-    transition:
-      background-color var(--duration-fast) var(--ease-standard),
-      border-color var(--duration-fast) var(--ease-standard),
-      transform var(--duration-fast) var(--ease-standard);
-  }
-
-  .instrument-key[data-event='2'].is-active {
-    border-color: var(--color-info);
-    background: color-mix(in srgb, var(--color-info) 22%, transparent);
-    color: var(--color-text-primary);
-  }
-
-  .instrument-key[data-event='1'].is-active,
-  .instrument-key[data-event='4'].is-active {
-    border-color: var(--color-action);
-    background: color-mix(in srgb, var(--color-action) 18%, transparent);
-    color: var(--color-action-soft);
-  }
-
-  .instrument-key[data-event='3'].is-active {
-    border-color: var(--color-success);
-    background: color-mix(in srgb, var(--color-success) 17%, transparent);
-    color: var(--color-text-primary);
-  }
-
-  .console__replay {
-    min-height: 44px;
-    margin-block-start: var(--space-4);
-    padding: 0;
-    border: 0;
-    background: transparent;
-    color: var(--color-text-secondary);
-    font-family: var(--font-mono);
-    font-size: var(--type-micro);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    cursor: pointer;
-  }
-
-  .console__replay:hover,
-  .console__replay:focus-visible {
-    color: var(--color-action-soft);
-  }
-
-  @container timing-console (width < 30rem) {
-    .timing-event {
-      grid-template-columns: max-content auto;
-      gap: var(--space-1) var(--space-3);
-    }
-
-    .timing-event__time {
-      grid-column: 1;
-      grid-row: 1;
-    }
-
-    .timing-event__kind {
-      grid-column: 2;
-      grid-row: 1;
-      justify-self: start;
-    }
-
-    .timing-event__keys {
-      grid-column: 1 / -1;
-      grid-row: 2;
-    }
-  }
-
-  @container timing-console (width >= 24rem) {
-    .instrument-key {
-      aspect-ratio: 2.2 / 1;
-    }
-  }
-
-  @media (max-width: 40rem) {
+  @layer components {
     .timing-console {
-      padding: var(--space-3);
+      --panel-accent: var(--color-action);
+      container: timing-console / inline-size;
+      position: relative;
+      min-width: 0;
+      margin: 0;
+      padding: clamp(var(--space-3), 2.5cqi, var(--space-5));
+      overflow: clip;
+      font-family: var(--font-mono);
+      font-size: var(--type-small);
     }
 
-    .hold-line {
-      display: none;
-    }
-
-    /* Condensed score: only keys that participate in the demo sequence. */
-    .instrument-key:not([data-event]) {
-      display: none;
-    }
-
-    .instrument-grid {
-      grid-template-columns: repeat(auto-fit, minmax(2.6rem, 1fr));
+    .timing-console::after {
+      position: absolute;
+      top: 0;
+      right: 10%;
+      width: 5rem;
+      height: 1px;
+      background: var(--panel-accent);
+      content: '';
+      opacity: 0.85;
     }
 
     .console__topline,
     .console__playhead {
-      gap: var(--space-2);
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      color: var(--color-text-secondary);
+      font-size: var(--type-label);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .console__status-label {
+      color: var(--color-success);
+    }
+
+    .console__status {
+      display: inline-block;
+      width: 0.5rem;
+      height: 0.5rem;
+      margin-inline-end: var(--space-2);
+      border-radius: 50%;
+      background: var(--color-success);
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-success) 12%, transparent);
+    }
+
+    .console__playhead {
+      align-items: baseline;
+      margin-block-start: var(--space-5);
+      padding-block-end: var(--space-3);
+      border-block-end: 1px solid var(--line-accent);
+      color: var(--color-text-secondary);
     }
 
     .console__playhead-track {
-      flex-basis: 4rem;
-      margin-inline-start: var(--space-2);
+      position: relative;
+      display: block;
+      flex: 1 1 8rem;
+      height: 1px;
+      margin-inline-start: var(--space-4);
+      background: var(--line-faint);
+    }
+
+    .console__playhead-marker {
+      position: absolute;
+      top: 50%;
+      left: calc(var(--playhead-progress, 0) * 100%);
+      display: block;
+      width: 0.45rem;
+      height: 0.45rem;
+      border-radius: 50%;
+      background: var(--color-action);
+      box-shadow: 0 0 0 0.25rem color-mix(in oklch, var(--color-action) 12%, transparent);
+      transform: translate(-50%, -50%);
+      transition: transform var(--duration-emphasis) var(--ease-out);
+    }
+
+    .telemetry,
+    .timing-event__time {
+      font-variant-numeric: tabular-nums lining-nums;
+    }
+
+    .timing-console__events {
+      display: grid;
+      gap: 0;
+      margin-block: var(--space-4);
+      padding: 0;
+      list-style: none;
+    }
+
+    .timing-event {
+      display: grid;
+      grid-template-columns: minmax(5.8rem, 0.45fr) minmax(8rem, 0.8fr) minmax(4.6rem, 0.35fr);
+      gap: var(--space-3);
+      align-items: center;
+      min-width: 0;
+      padding-block: var(--space-3);
+      border-block-start: 1px solid var(--line-faint);
+    }
+
+    .timing-event:last-child {
+      border-block-end: 1px solid var(--line-faint);
+    }
+
+    .timing-console.is-playing .timing-event:not(.is-active) {
+      opacity: 0.5;
+    }
+
+    .timing-console.is-playing .timing-event.is-active {
+      opacity: 1;
+      background: color-mix(in oklch, var(--color-action) 8%, transparent);
+    }
+
+    .timing-console:not(.is-playing) .timing-event:not([aria-current='step']) {
+      color: var(--color-text-tertiary);
+    }
+
+    .timing-event--active {
+      background: color-mix(in srgb, var(--color-action) 6%, transparent);
+    }
+
+    .timing-event.is-active .timing-event__marker {
+      background: currentColor;
+      box-shadow: 0 0 0 0.22rem color-mix(in oklch, currentColor 14%, transparent);
+    }
+
+    .timing-event__time,
+    .timing-event__keys {
+      color: var(--color-text-primary);
+      font-family: var(--font-mono);
+      font-size: var(--type-small);
+    }
+
+    .timing-event__time {
+      white-space: nowrap;
+    }
+
+    .timing-event__keys {
+      display: inline-flex;
+      min-width: 0;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--color-text-secondary);
+      overflow-wrap: anywhere;
+    }
+
+    .timing-event__marker {
+      display: inline-block;
+      width: 0.6rem;
+      height: 0.6rem;
+      flex: 0 0 auto;
+      border: 1px solid currentColor;
+      border-radius: 50%;
+    }
+
+    .timing-event--chord .timing-event__marker {
+      border-radius: 0.12rem;
+      box-shadow:
+        0.2rem -0.2rem 0 -0.03rem var(--color-surface-instrument),
+        0.2rem -0.2rem 0 0.04rem currentColor;
+    }
+
+    .timing-event--hold .timing-event__marker {
+      width: 1.35rem;
+      height: 0.2rem;
+      border-radius: 0;
+    }
+
+    .timing-event__kind {
+      justify-self: end;
+      color: var(--color-info);
+      font-family: var(--font-mono);
+      font-size: var(--type-label);
+      letter-spacing: 0.08em;
+      white-space: nowrap;
+    }
+
+    .hold-line {
+      display: inline-block;
+      color: var(--color-success);
+      letter-spacing: -0.15em;
+      transform: scaleX(0.35);
+      transform-origin: left;
+      transition: transform var(--duration-emphasis) var(--ease-out);
+    }
+
+    .timing-event.is-active .hold-line {
+      transform: scaleX(1);
+    }
+
+    .instrument-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: clamp(0.28rem, 1vw, 0.55rem);
+      margin-block-start: var(--space-4);
+    }
+
+    .instrument-key {
+      display: grid;
+      min-width: 0;
+      aspect-ratio: 1;
+      place-items: center;
+      border: 1px solid var(--line-default);
+      border-radius: var(--radius-xs);
+      background: var(--color-surface-quiet);
+      color: var(--color-text-secondary);
+      transition:
+        background-color var(--duration-fast) var(--ease-standard),
+        border-color var(--duration-fast) var(--ease-standard),
+        transform var(--duration-fast) var(--ease-standard);
+    }
+
+    .instrument-key[data-event='2'].is-active {
+      border-color: var(--color-info);
+      background: color-mix(in srgb, var(--color-info) 22%, transparent);
+      color: var(--color-text-primary);
+    }
+
+    .instrument-key[data-event='1'].is-active,
+    .instrument-key[data-event='4'].is-active {
+      border-color: var(--color-action);
+      background: color-mix(in srgb, var(--color-action) 18%, transparent);
+      color: var(--color-text-secondary);
+    }
+
+    .instrument-key[data-event='3'].is-active {
+      border-color: var(--color-success);
+      background: color-mix(in srgb, var(--color-success) 17%, transparent);
+      color: var(--color-text-primary);
+    }
+
+    .console__replay {
+      min-height: 44px;
+      margin-block-start: var(--space-4);
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--color-text-secondary);
+      font-family: var(--font-mono);
+      font-size: var(--type-micro);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      cursor: pointer;
+    }
+
+    .console__replay:hover,
+    .console__replay:focus-visible {
+      color: var(--color-text-secondary);
+    }
+
+    @container timing-console (width < 30rem) {
+      .timing-event {
+        grid-template-columns: max-content auto;
+        gap: var(--space-1) var(--space-3);
+      }
+
+      .timing-event__time {
+        grid-column: 1;
+        grid-row: 1;
+      }
+
+      .timing-event__kind {
+        grid-column: 2;
+        grid-row: 1;
+        justify-self: start;
+      }
+
+      .timing-event__keys {
+        grid-column: 1 / -1;
+        grid-row: 2;
+      }
+    }
+
+    @container timing-console (width >= 24rem) {
+      .instrument-key {
+        aspect-ratio: 2.2 / 1;
+      }
+    }
+
+    @media (max-width: 40rem) {
+      .timing-console {
+        padding: var(--space-3);
+      }
+
+      .hold-line {
+        display: none;
+      }
+
+      /* Condensed score: only keys that participate in the demo sequence. */
+      .instrument-key:not([data-event]) {
+        display: none;
+      }
+
+      .instrument-grid {
+        grid-template-columns: repeat(auto-fit, minmax(2.6rem, 1fr));
+      }
+
+      .console__topline,
+      .console__playhead {
+        gap: var(--space-2);
+      }
+
+      .console__playhead-track {
+        flex-basis: 4rem;
+        margin-inline-start: var(--space-2);
+      }
     }
   }
 </style>

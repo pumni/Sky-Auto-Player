@@ -21,7 +21,9 @@ const { locale, faqs } = Astro.props;
 </article>
 
 <style>
-  .faq-content h2 {
-    margin-bottom: var(--space-6);
+  @layer components {
+    .faq-content h2 {
+      margin-bottom: var(--space-6);
+    }
   }
 </style>

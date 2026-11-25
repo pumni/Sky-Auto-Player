@@ -8,5 +8,5 @@ question: "C\u01a1 ch\u1ebf c\u1eadp nh\u1eadt c\u1ee7a Sky Auto Player ho\u1ea1
 
 Ứng dụng kiểm tra channel v4 và cung cấp **Update and Restart**. Official Tauri updater qua
 `UpdateService` Rust xác minh artifact NSIS đúng bằng `.exe.sig` rồi chạy installer current-user.
-V4 không có custom updater executable, updater ZIP portable hoặc hợp đồng `MANIFEST.json.sig`.
+V4 không có custom updater executable, updater ZIP portable hoặc hợp đồng `MANIFEST.json.sig`. Chữ ký updater này tách biệt với chữ ký Authenticode.
 Nếu update không thể stage, hãy tải installer canonical từ [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases).

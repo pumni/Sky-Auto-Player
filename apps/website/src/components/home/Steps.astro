@@ -7,7 +7,7 @@ interface Props {
   locale: 'en' | 'vi';
 }
 
-const { data } = Astro.props;
+const { data, locale } = Astro.props;
 ---
 
 <section
@@ -32,181 +32,183 @@ const { data } = Astro.props;
           </li>
         ))}
       </ol>
-      <p class="hotkey-note">
-        <span>KEYBOARD STRIP</span>
-        {data.hotkeyNote}
+      <p class="workflow-note">
+        <span>{locale === 'vi' ? 'PHÍM TẮT' : 'SHORTCUTS'}</span>
+        {data.workflowNote}
       </p>
     </div>
   </div>
 </section>
 
 <style>
-  .steps__layout {
-    display: grid;
-    gap: var(--space-7);
-  }
-
-  @media (min-width: 72rem) {
+  @layer components {
     .steps__layout {
-      grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
-      gap: var(--grid-gap);
-      align-items: start;
+      display: grid;
+      gap: var(--space-7);
     }
 
-    /* Editorial offset: sequence sits one optical step right of the title column. */
-    .steps__layout > :last-child {
-      padding-inline-start: var(--space-4);
+    @media (min-width: 72rem) {
+      .steps__layout {
+        grid-template-columns: minmax(0, 4fr) minmax(0, 8fr);
+        gap: var(--grid-gap);
+        align-items: start;
+      }
+
+      /* Editorial offset: sequence sits one optical step right of the title column. */
+      .steps__layout > :last-child {
+        padding-inline-start: var(--space-4);
+      }
+
+      .steps {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+
+      .steps::before {
+        top: 2.65rem;
+        right: 0;
+        bottom: auto;
+        left: 0;
+        width: auto;
+        height: 1px;
+      }
+
+      .steps .step {
+        grid-template-columns: 3.5rem minmax(0, 1fr);
+        align-content: start;
+        padding: 0 var(--space-5) var(--space-5);
+        border-block-start: 0;
+        border-inline-start: 1px solid var(--line-faint);
+      }
+
+      .step:first-child {
+        padding-inline-start: 0;
+        border-inline-start: 0;
+      }
+
+      .step:last-child {
+        border-block-end: 0;
+      }
+
+      .steps .step__number {
+        grid-column: 1;
+        grid-row: 1;
+        font-size: clamp(2.25rem, 3vw, 2.75rem);
+      }
+
+      .steps .step__copy {
+        grid-column: 2;
+        grid-row: 1;
+      }
     }
 
     .steps {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
+      position: relative;
+      display: grid;
+      gap: 0;
+      max-width: 58rem;
+      margin: 0;
+      padding: 0;
+      list-style: none;
     }
 
     .steps::before {
-      top: 2.65rem;
-      right: 0;
-      bottom: auto;
-      left: 0;
-      width: auto;
-      height: 1px;
+      position: absolute;
+      top: 0.75rem;
+      bottom: 0.75rem;
+      left: 0.8rem;
+      width: 1px;
+      background: var(--line-accent);
+      content: '';
     }
 
-    .steps .step {
-      grid-template-columns: 3.5rem minmax(0, 1fr);
-      align-content: start;
-      padding: 0 var(--space-5) var(--space-5);
-      border-block-start: 0;
-      border-inline-start: 1px solid var(--line-faint);
-    }
-
-    .step:first-child {
-      padding-inline-start: 0;
-      border-inline-start: 0;
+    .step {
+      position: relative;
+      display: grid;
+      grid-template-columns: 3rem minmax(0, 1fr);
+      gap: var(--space-4);
+      padding-block: var(--space-5);
+      border-block-start: 1px solid var(--line-faint);
     }
 
     .step:last-child {
-      border-block-end: 0;
+      border-block-end: 1px solid var(--line-faint);
     }
 
-    .steps .step__number {
-      grid-column: 1;
-      grid-row: 1;
-      font-size: clamp(2.25rem, 3vw, 2.75rem);
+    .step__number {
+      position: relative;
+      z-index: 1;
+      display: block;
+      width: max-content;
+      min-width: 2.5rem;
+      background: var(--color-page);
+      color: var(--color-action);
+      font-family: var(--font-mono);
+      font-size: clamp(2.25rem, 4vw, 3.75rem);
+      font-variant-numeric: tabular-nums;
+      line-height: 1;
     }
 
-    .steps .step__copy {
-      grid-column: 2;
-      grid-row: 1;
+    .step__copy {
+      min-width: 0;
     }
-  }
 
-  .steps {
-    position: relative;
-    display: grid;
-    gap: 0;
-    max-width: 58rem;
-    margin: 0;
-    padding: 0;
-    list-style: none;
-  }
+    .step h3 {
+      margin-block-end: var(--space-2);
+      font-size: var(--type-h3);
+      font-weight: 650;
+    }
 
-  .steps::before {
-    position: absolute;
-    top: 0.75rem;
-    bottom: 0.75rem;
-    left: 0.8rem;
-    width: 1px;
-    background: var(--line-accent);
-    content: '';
-  }
+    .step__cue {
+      display: block;
+      width: 2rem;
+      height: 1.35rem;
+      margin-block-end: var(--space-4);
+      border: 1px solid var(--line-default);
+      color: var(--color-info);
+    }
 
-  .step {
-    position: relative;
-    display: grid;
-    grid-template-columns: 3rem minmax(0, 1fr);
-    gap: var(--space-4);
-    padding-block: var(--space-5);
-    border-block-start: 1px solid var(--line-faint);
-  }
+    .step__cue--1 {
+      width: 1.15rem;
+      border-color: var(--color-action);
+    }
 
-  .step:last-child {
-    border-block-end: 1px solid var(--line-faint);
-  }
+    .step__cue--2 {
+      height: 1rem;
+      border-inline: 0;
+      border-color: var(--color-info);
+      box-shadow:
+        0 0.35rem 0 -0.3rem var(--color-info),
+        0 0.7rem 0 -0.3rem var(--color-info);
+    }
 
-  .step__number {
-    position: relative;
-    z-index: 1;
-    display: block;
-    width: max-content;
-    min-width: 2.5rem;
-    background: var(--color-page);
-    color: var(--color-action);
-    font-family: var(--font-mono);
-    font-size: clamp(2.25rem, 4vw, 3.75rem);
-    font-variant-numeric: tabular-nums;
-    line-height: 1;
-  }
+    .step__cue--3 {
+      border-color: var(--color-success);
+      border-radius: var(--radius-xs);
+      box-shadow: inset 0 -0.25rem 0 color-mix(in oklch, var(--color-success) 18%, transparent);
+    }
 
-  .step__copy {
-    min-width: 0;
-  }
+    .step p {
+      max-width: 52rem;
+      color: var(--color-text-tertiary);
+    }
 
-  .step h3 {
-    margin-block-end: var(--space-2);
-    font-size: var(--type-h3);
-    font-weight: 650;
-  }
+    .workflow-note {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-3) var(--space-5);
+      max-width: 58rem;
+      margin-block-start: var(--space-5);
+      padding-block-start: var(--space-4);
+      border-block-start: 1px solid var(--line-default);
+      color: var(--color-text-secondary);
+      font-family: var(--font-mono);
+      font-size: var(--type-small);
+    }
 
-  .step__cue {
-    display: block;
-    width: 2rem;
-    height: 1.35rem;
-    margin-block-end: var(--space-4);
-    border: 1px solid var(--line-default);
-    color: var(--color-info);
-  }
-
-  .step__cue--1 {
-    width: 1.15rem;
-    border-color: var(--color-action);
-  }
-
-  .step__cue--2 {
-    height: 1rem;
-    border-inline: 0;
-    border-color: var(--color-info);
-    box-shadow:
-      0 0.35rem 0 -0.3rem var(--color-info),
-      0 0.7rem 0 -0.3rem var(--color-info);
-  }
-
-  .step__cue--3 {
-    border-color: var(--color-success);
-    border-radius: var(--radius-xs);
-    box-shadow: inset 0 -0.25rem 0 color-mix(in oklch, var(--color-success) 18%, transparent);
-  }
-
-  .step p {
-    max-width: 52rem;
-    color: var(--color-text-tertiary);
-  }
-
-  .hotkey-note {
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--space-3) var(--space-5);
-    max-width: 58rem;
-    margin-block-start: var(--space-5);
-    padding-block-start: var(--space-4);
-    border-block-start: 1px solid var(--line-default);
-    color: var(--color-text-secondary);
-    font-family: var(--font-mono);
-    font-size: var(--type-small);
-  }
-
-  .hotkey-note span {
-    color: var(--color-action);
-    font-size: var(--type-micro);
-    letter-spacing: 0.08em;
+    .workflow-note span {
+      color: var(--color-action);
+      font-size: var(--type-micro);
+      letter-spacing: 0.08em;
+    }
   }
 </style>

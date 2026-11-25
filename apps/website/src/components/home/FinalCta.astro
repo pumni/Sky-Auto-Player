@@ -34,7 +34,7 @@ const { data, locale } = Astro.props;
       <a class="button button--secondary" href={SITE.repositoryUrl}>
         {data.secondaryCta}
       </a>
-      <span class="final-cta__metric">JSON · SKYSHEET · TXT / WINDOWS 10–11</span>
+      <span class="final-cta__metric">JSON · SKYSHEET · TXT / WINDOWS 11 X64</span>
     </div>
     <span class="final-cta__mark" aria-hidden="true">
       <BrandMark />
@@ -43,121 +43,123 @@ const { data, locale } = Astro.props;
 </section>
 
 <style>
-  .final-cta {
-    position: relative;
-    overflow: hidden;
-    border-block: 1px solid var(--line-default);
-    background: var(--color-surface-quiet);
-  }
+  @layer components {
+    .final-cta {
+      position: relative;
+      overflow: hidden;
+      border-block: 1px solid var(--line-default);
+      background: var(--color-surface-quiet);
+    }
 
-  .final-cta__layout {
-    position: relative;
-    display: grid;
-    gap: var(--space-7);
-  }
-
-  .final-cta__copy,
-  .final-cta__actions,
-  .final-cta__measure {
-    position: relative;
-    z-index: 1;
-  }
-
-  .final-cta__measure {
-    display: grid;
-    grid-template-columns: auto minmax(5rem, 1fr);
-    grid-column: 1 / -1;
-    gap: var(--space-5);
-    align-items: center;
-    max-width: 36rem;
-    color: var(--color-success);
-    font-family: var(--font-mono);
-    font-size: var(--type-micro);
-    letter-spacing: 0.08em;
-  }
-
-  .final-cta__score .ui-score-node {
-    left: 22%;
-  }
-
-  .final-cta__score .ui-score-playhead {
-    left: 76%;
-  }
-
-  .final-cta__eyebrow,
-  .final-cta__metric {
-    font-family: var(--font-mono);
-    font-size: var(--type-micro);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-  }
-
-  .final-cta__eyebrow {
-    margin-block-end: var(--space-3);
-    color: var(--color-text-secondary);
-  }
-
-  .final-cta h2 {
-    max-width: 10ch;
-    margin-block-end: var(--space-4);
-    font-size: var(--type-h2);
-  }
-
-  .final-cta__description {
-    color: var(--color-text-secondary);
-  }
-
-  .final-cta__actions {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: var(--space-3);
-  }
-
-  .final-cta__metric {
-    flex-basis: 100%;
-    color: var(--color-text-tertiary);
-  }
-
-  .final-cta__mark {
-    position: absolute;
-    left: -2rem;
-    bottom: -2rem;
-    opacity: 0.1;
-    transform: scale(2.5);
-    transform-origin: left bottom;
-  }
-
-  @media (min-width: 64rem) {
     .final-cta__layout {
-      grid-template-columns: repeat(12, minmax(0, 1fr));
-      gap: var(--grid-gap);
-      align-items: center;
+      position: relative;
+      display: grid;
+      gap: var(--space-7);
     }
 
-    .final-cta__copy {
-      grid-column: 1 / span 7;
-    }
-
-    .final-cta__actions {
-      grid-column: 8 / -1;
-      justify-content: flex-start;
-    }
-  }
-
-  @media (max-width: 40rem) {
+    .final-cta__copy,
+    .final-cta__actions,
     .final-cta__measure {
-      grid-template-columns: 1fr;
-      gap: var(--space-2);
+      position: relative;
+      z-index: 1;
+    }
+
+    .final-cta__measure {
+      display: grid;
+      grid-template-columns: auto minmax(5rem, 1fr);
+      grid-column: 1 / -1;
+      gap: var(--space-5);
+      align-items: center;
+      max-width: 36rem;
+      color: var(--color-success);
+      font-family: var(--font-mono);
+      font-size: var(--type-micro);
+      letter-spacing: 0.08em;
+    }
+
+    .final-cta__score .ui-score-node {
+      left: 22%;
+    }
+
+    .final-cta__score .ui-score-playhead {
+      left: 76%;
+    }
+
+    .final-cta__eyebrow,
+    .final-cta__metric {
+      font-family: var(--font-mono);
+      font-size: var(--type-micro);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .final-cta__eyebrow {
+      margin-block-end: var(--space-3);
+      color: var(--color-text-secondary);
+    }
+
+    .final-cta h2 {
+      max-width: 10ch;
+      margin-block-end: var(--space-4);
+      font-size: var(--type-h2);
+    }
+
+    .final-cta__description {
+      color: var(--color-text-secondary);
     }
 
     .final-cta__actions {
-      flex-direction: column;
-      align-items: stretch;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: var(--space-3);
     }
 
     .final-cta__metric {
-      margin-block-start: var(--space-2);
+      flex-basis: 100%;
+      color: var(--color-text-tertiary);
+    }
+
+    .final-cta__mark {
+      position: absolute;
+      left: -2rem;
+      bottom: -2rem;
+      opacity: 0.1;
+      transform: scale(2.5);
+      transform-origin: left bottom;
+    }
+
+    @media (min-width: 64rem) {
+      .final-cta__layout {
+        grid-template-columns: repeat(12, minmax(0, 1fr));
+        gap: var(--grid-gap);
+        align-items: center;
+      }
+
+      .final-cta__copy {
+        grid-column: 1 / span 7;
+      }
+
+      .final-cta__actions {
+        grid-column: 8 / -1;
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 40rem) {
+      .final-cta__measure {
+        grid-template-columns: 1fr;
+        gap: var(--space-2);
+      }
+
+      .final-cta__actions {
+        flex-direction: column;
+        align-items: stretch;
+      }
+
+      .final-cta__metric {
+        margin-block-start: var(--space-2);
+      }
     }
   }
 </style>

@@ -5,84 +5,95 @@ export const homeVi: HomeContent = {
   seo: {
     title: 'Sky Auto Player — Trình phát nhạc Sky tự động trên Windows',
     description:
-      'Nạp sheet nhạc Sky và phát nốt, hợp âm cùng nốt ngân đúng nhịp — căn theo mô hình timing của sheet và bù độ trễ phía gửi, không phải phát lại macro.',
+      'Trình phát sheet nhạc cho Sky trên Windows 11 64-bit. Ứng dụng lên lịch sự kiện từ sheet và gửi đầu vào qua Windows SendInput khi Sky được xác minh là cửa sổ đang ở foreground.',
   },
   navigation: {
-    playback: 'Phát nhạc',
+    overview: 'Tổng quan',
     howItWorks: 'Cách hoạt động',
-    technical: 'Kỹ thuật',
     guides: 'Hướng dẫn',
     faq: 'FAQ',
     github: 'GitHub',
+    release: 'Bản phát hành',
   },
   hero: {
-    kicker: 'Sky Auto Player cho Sky: Children of the Light · Windows 10/11',
+    kicker: 'Sky Auto Player cho Sky: Children of the Light · Windows 11 64-bit',
     titleLines: ['Chơi bản nhạc,', 'không chơi bàn phím.'],
     description:
-      'Nạp một sheet nhạc Sky, chuyển sang game và để từng nốt, hợp âm cùng nốt ngân rơi đúng nhịp — lên lịch theo mô hình timing của sheet và bù độ trễ phía gửi, chứ không chỉ gửi phím tuần tự.',
-    primaryCta: 'Tải xuống cho Windows',
+      'Nạp sheet và chọn bài hát. Sky Auto Player lên lịch đầu vào cho nốt, hợp âm và nốt ngân theo dữ liệu timing, rồi gửi qua Windows SendInput khi Sky là target foreground đã được xác minh; game tự quyết định thời điểm lấy mẫu đầu vào.',
+    primaryCta: 'Tải bộ cài Windows',
+    primaryCtaDestination: 'Mở GitHub Releases',
     secondaryCta: 'Xem cách hoạt động',
-    metadata: ['JSON', 'SKYSHEET', 'TXT', 'MÃ NGUỒN MỞ', 'TAURI NSIS', 'CURRENT USER'],
+    metadata: [
+      'JSON',
+      'SKYSHEET',
+      'TXT',
+      'MIỄN PHÍ · MÃ NGUỒN MỞ',
+      'WINDOWS 11 64-BIT',
+      'TAURI DESKTOP',
+    ],
     riskNote: 'Tự động phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky.',
     riskNoteLink: 'Hãy dùng có trách nhiệm và tự chịu rủi ro.',
     affiliationDisclaimer:
       'Dự án cộng đồng không chính thức. Không có liên kết hay sự chứng thực từ thatgamecompany.',
   },
   proofStrip: {
-    kicker: 'Hồ sơ trình diễn',
-    metric: 'SENDINPUT BATCH / MỤC TIÊU 60 FPS',
+    kicker: 'Mô hình phát nhạc',
+    metric: 'SỰ KIỆN SHEET / SENDINPUT',
     signals: [
-      'Nốt trong hợp âm được gửi trong cùng một batch SendInput — giảm độ lệch phía gửi',
-      'Ứng dụng thích nghi theo độ trễ hoàn tất phía gửi đo được trên từng máy',
-      'Nốt ngân giữ đủ trường độ, không bị cắt ngang',
-      'Phát nhạc và giao diện chạy rời rành — HUD vẫn mượt',
+      'Các phím trong hợp âm được gửi trong cùng một batch SendInput',
+      'Adaptive lead theo dõi độ trễ hoàn tất phía gửi',
+      'Timing nốt ngân theo sheet và thiết lập hold frame',
+      'HUD hiển thị số đo phía gửi, không phản ánh sampling phía game',
     ],
   },
   playback: {
     kicker: 'Được xây dựng quanh bản nhạc',
     title: 'Timing cũng là một phần của nhạc cụ.',
     description:
-      'Sheet nhạc không chỉ là một danh sách phím. Hợp âm phải vang cùng lúc, đoạn nhanh cần khoảng cách ổn định và nốt ngân phải giữ đủ trường độ. Sky Auto Player lên lịch các sự kiện âm nhạc như một màn trình diễn thay vì phát lại một macro chung chung. Timing được đo tại ranh giới hoàn tất phía gửi — không phụ thuộc vào thời điểm game nhận phím hoặc phát âm thanh.',
+      'Sky Auto Player lên lịch sự kiện theo mốc thời gian phía gửi rồi đo độ trễ hoàn tất để điều chỉnh adaptive lead. Windows và vòng lặp lấy mẫu đầu vào riêng của Sky quyết định khi nào game đăng ký phím; ứng dụng không thể bảo đảm thời điểm phát âm thanh hay frame trong game.',
     points: [
-      'Nốt trong hợp âm trong một batch SendInput',
-      'Phát theo tempo',
-      'Nốt, hợp âm và nốt ngân',
-      'Độ trễ phía gửi tự học theo từng máy',
-      'Phát nhạc và HUD chạy trên hai luồng riêng',
+      'Các phím trong hợp âm gửi cùng một batch SendInput',
+      'Timing sheet có thiết lập tempo riêng cho mỗi bài',
+      'Sự kiện nốt, hợp âm và nốt ngân',
+      'Adaptive lead dựa trên số đo hoàn tất phía gửi',
+      'HUD hiển thị số đo timing phía gửi',
       'Xem thử bằng dry-run',
     ],
   },
   comparison: {
-    kicker: 'Không phải macro chung chung',
-    title: 'Xây cho âm nhạc, không phải chuỗi click.',
-    macroHeader: 'Macro thông thường',
+    kicker: 'Từ sự kiện sheet đến đầu vào',
+    title: 'Phát nhạc theo dữ liệu sheet.',
+    sequenceHeader: 'Chuỗi độ trễ cố định',
     playerHeader: 'Sky Auto Player',
     rows: [
-      { macro: 'Gửi phím tuần tự', player: 'Hợp âm được căn vào cùng một frame gửi' },
-      { macro: 'Độ trễ cố định', player: 'Timing đi theo sheet và tempo' },
-      { macro: 'Chủ yếu giả định bấm-thả', player: 'Hỗ trợ nốt, hợp âm và nốt ngân' },
-      { macro: 'Một cấu hình dùng cho mọi bài', player: 'Profile timing riêng cho từng bài' },
+      { sequence: 'Chuỗi lần nhấn phím', player: 'Sự kiện nốt, hợp âm và nốt ngân theo sheet' },
       {
-        macro: 'Độ trễ cố định, một loại cho mọi máy',
-        player: 'Tự học độ trễ máy bạn rồi bù trước',
+        sequence: 'Một mẫu khoảng cách cố định',
+        player: 'Timing theo dấu thời gian của từng sự kiện',
       },
-      { macro: 'HUD giật khi bận', player: 'Phát nốt và giao diện chạy trên hai luồng riêng' },
+      { sequence: 'Một tempo dùng cho mọi bài', player: 'Thiết lập tempo được lưu theo bài' },
+      { sequence: 'Một trường độ hold', player: 'Thiết lập hold frame được lưu theo bài' },
+      { sequence: 'Không có số đo phía gửi', player: 'Adaptive lead dùng số đo hoàn tất phía gửi' },
+      {
+        sequence: 'Timing chỉ từ chuỗi phím',
+        player: 'Diagnostics hiển thị số đo timing phía gửi',
+      },
     ],
   },
   product: {
     kicker: 'Ứng dụng thực tế',
     title: 'Thư viện, profile timing và điều khiển trong cùng một giao diện.',
     description:
-      'Ứng dụng desktop Tauri giữ việc tìm kiếm, thiết lập phát và trạng thái trong một cửa sổ tập trung.',
+      'Ứng dụng Windows có thư viện bài hát tích hợp, liked songs, playlist và diagnostics.',
     annotations: [
-      'Tìm và chọn bài trong Library desktop.',
-      'Xem rủi ro timing và đề xuất trong Song Detail.',
-      'Luôn có sẵn playback, diagnostics và settings.',
+      'Duyệt bài tích hợp sẵn và liked songs trong Library.',
+      'Tạo hoặc chọn playlist, rồi dùng Add songs để nhập file hay cả thư mục.',
+      'File được nhập vẫn ở vị trí gốc; ứng dụng không di chuyển hay xóa chúng.',
     ],
   },
   steps: {
     kicker: 'Ba bước',
-    title: 'Từ tải xuống đến phát nhạc chỉ trong vài phút.',
+    title: 'Các bước bắt đầu với sheet.',
     items: [
       {
         title: 'Tải xuống',
@@ -92,22 +103,21 @@ export const homeVi: HomeContent = {
       {
         title: 'Thêm sheet nhạc',
         description:
-          'Xuất sheet dạng JSON, .skysheet hoặc TXT tương thích từ Sky Music editor rồi nhập qua Library desktop.',
+          'Tạo hoặc chọn playlist, rồi dùng Add songs để nhập file JSON, .skysheet, TXT tương thích JSON hoặc cả thư mục. File nguồn vẫn ở vị trí ban đầu.',
       },
       {
         title: 'Phát nhạc',
         description:
-          'Mở Sky Auto Player, chọn bài hát rồi chuyển sang cửa sổ Sky khi bạn đã sẵn sàng.',
+          'Chọn bài và bắt đầu phát khi Sky đang ở foreground. Ứng dụng kiểm tra target trước khi gửi đầu vào.',
       },
     ],
-    hotkeyNote:
-      'Nhấn Reload songs trong GUI · / hoặc Ctrl+F để focus tìm kiếm · Esc đóng overlay an toàn',
+    workflowNote: 'Nhấn / hoặc Ctrl+F để focus tìm kiếm · Esc đóng overlay an toàn',
   },
   technical: {
     kicker: 'Giới hạn kỹ thuật',
     title: 'Rõ ràng về những gì ứng dụng làm và không làm.',
     description:
-      'Sky Auto Player chạy như một ứng dụng Windows độc lập và gửi các sự kiện đầu vào tiêu chuẩn. Mã nguồn được công khai để mọi người có thể trực tiếp kiểm tra cách triển khai.',
+      'Sky Auto Player là ứng dụng riêng cho Windows 11. Ứng dụng chỉ gửi đầu vào qua Windows SendInput sau khi kiểm tra target xác nhận Sky đang ở foreground; mã nguồn được công khai để kiểm tra.',
     ledger: [
       { term: 'Đầu vào', definition: 'Windows SendInput', state: 'yes' },
       { term: 'Tiến trình', definition: 'Ứng dụng độc lập', state: 'info' },
@@ -117,7 +127,7 @@ export const homeVi: HomeContent = {
       { term: 'Giấy phép', definition: 'GNU GPL v3.0', state: 'info' },
       {
         term: 'Cập nhật',
-        definition: 'Trình cập nhật riêng có xác minh checksum',
+        definition: 'Tauri updater xác minh sidecar .exe.sig',
         state: 'info',
       },
     ],
@@ -175,7 +185,8 @@ export const homeVi: HomeContent = {
   },
   finalCta: {
     title: 'Màn trình diễn tiếp theo đã nằm sẵn trong sheet.',
-    description: 'Tải Sky Auto Player, thêm một sheet và để ứng dụng xử lý phần timing.',
+    description:
+      'Mở bản phát hành chính thức, thêm sheet vào playlist và xem các thiết lập phát hiện có.',
     primaryCta: 'Xem các bản phát hành',
     secondaryCta: 'Xem mã nguồn trên GitHub',
   },

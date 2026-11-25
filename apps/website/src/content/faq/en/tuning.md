@@ -6,8 +6,4 @@ category: 'Troubleshooting'
 question: 'Can I tune Sky Auto Player for a weak PC?'
 ---
 
-Yes. Open the in-app **Settings** and **Diagnostics** panels to inspect runtime status and adjust playback parameters:
-
-- **Game FPS & Hold Timing**: Align the selected Game FPS with your in-game frame rate cap (e.g., 30 or 60 FPS) and adjust hold frames and timing margin to ensure reliable note registration.
-- **Timing Margin & Tolerances**: Fine-tune the timing margin and late-down tolerance to match system dispatch capabilities.
-- **Diagnostics Panel**: Review real-time dispatch telemetry and focus status directly inside the application.
+There is no command-line tuning preset for weak PCs. Use **Diagnostics** to review sender-side dispatch measurements, and adjust only the tempo, FPS, or hold options available in the selected song's settings. These settings affect the scheduled input; they cannot change Windows scheduling or Sky's input sampling.

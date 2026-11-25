@@ -22,6 +22,12 @@ Run from this directory:
 
 The site is static output. The production build is written to dist/, and the E2E suite checks routing, canonical metadata, accessibility, responsive behavior, the project favicon, and the mobile screenshot crop.
 
+## Shared site foundation
+
+Global styles use the declared cascade order in src/styles/tokens.css: reset, tokens, theme, base, layout, patterns, components, and utilities. Semantic color, type, spacing, and motion tokens live in that file; shared controls live in src/styles/components.css. Astro component styles belong to the components layer.
+
+The shared header and footer are rendered by BaseLayout on every localized route. Navigation labels are typed in src/data/home.types.ts and provided in both home.en.ts and home.vi.ts; route targets use the base-aware URL helpers. Keep localized home data structurally aligned, and reconcile public product claims against the owning library, playback, and distribution contracts before publishing.
+
 ## Published application version
 
 `src/data/product-release.json` records the latest publicly published stable

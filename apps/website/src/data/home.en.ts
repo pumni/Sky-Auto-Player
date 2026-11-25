@@ -3,72 +3,73 @@ import type { HomeContent } from './home.types';
 export const homeEn: HomeContent = {
   locale: 'en',
   seo: {
-    title: 'Sky Auto Player — Timing-First Music Player for Sky on Windows',
+    title: 'Sky Auto Player — Timing-First Music Player for Sky on Windows 11',
     description:
-      'Load a Sky music sheet and play notes, chords and holds on time — timing-first, sender-side latency compensated, no macro replay.',
+      'Timing-first music sheet playback for Sky on Windows 11 x64, with sender-side timing measurements and Windows SendInput.',
   },
   navigation: {
-    playback: 'Playback',
+    overview: 'Overview',
     howItWorks: 'How it works',
-    technical: 'Technical',
     guides: 'Guides',
     faq: 'FAQ',
     github: 'GitHub',
+    release: 'Releases',
   },
   hero: {
-    kicker: 'Sky Auto Player for Sky: Children of the Light · Windows 10/11',
+    kicker: 'Sky Auto Player for Sky: Children of the Light · Windows 11 x64',
     titleLines: ['Play the sheet.', 'Not the keyboard.'],
     description:
-      "Load a Sky music sheet, switch to the game, and let every note, chord, and hold land on the beat — scheduled from the sheet's timing model and dispatched through Windows SendInput.",
-    primaryCta: 'Download for Windows',
+      'Load a sheet and choose a song. Sky Auto Player schedules note, chord, and hold input from the sheet timing and sends it through Windows SendInput while Sky is the verified foreground target; the game decides when it samples that input.',
+    primaryCta: 'Get the Windows installer',
+    primaryCtaDestination: 'Opens GitHub Releases',
     secondaryCta: 'See how it works',
-    metadata: ['JSON', 'SKYSHEET', 'TXT', 'OPEN SOURCE', 'TAURI NSIS', 'CURRENT USER'],
+    metadata: ['JSON', 'SKYSHEET', 'TXT', 'FREE · OPEN SOURCE', 'WINDOWS 11 X64', 'TAURI DESKTOP'],
     riskNote: 'Automated playback may conflict with Sky’s Terms of Service.',
     riskNoteLink: 'Use responsibly and at your own risk.',
     affiliationDisclaimer:
       'Unofficial community project. Not affiliated with or endorsed by thatgamecompany.',
   },
   proofStrip: {
-    kicker: 'Performance profile',
-    metric: 'SENDINPUT BATCH / 60 FPS TARGET',
+    kicker: 'Playback model',
+    metric: 'SHEET EVENTS / SENDINPUT',
     signals: [
-      'Chord notes submitted in one SendInput batch — sender-side skew minimised',
-      'Adaptive lead learns sender-side completion delay on this machine',
-      'Holds keep their full duration, never clipped',
-      'Player and display on separate threads — HUD stays smooth',
+      'Chord inputs are submitted in one SendInput batch',
+      'Adaptive lead tracks sender-side completion delay',
+      'Hold timing follows the sheet and selected hold-frame setting',
+      'The HUD reports sender-side measurements, not game-side sampling',
     ],
   },
   playback: {
     kicker: 'Built around the music',
     title: 'Timing is the instrument.',
     description:
-      'A sheet is more than a list of keys. Chords must arrive together, fast passages need consistent spacing, and holds need their full duration. Sky Auto Player schedules those musical events as a performance rather than replaying a generic macro. Dispatch timing is measured at sender-side completion — not just the scheduled timestamp.',
+      "Sky Auto Player schedules sheet events at sender-side timestamps, then measures dispatch completion to adjust its lead. Windows scheduling and Sky's own input sampling determine when the game registers a key; the app cannot guarantee in-game sound or frame timing.",
     points: [
-      'Chord notes in one SendInput batch',
-      'Tempo-aware playback',
-      'Notes, chords and holds',
-      'Sender-side latency learned per machine',
-      'Player and HUD on separate threads',
+      'Chord inputs submitted in one SendInput batch',
+      'Sheet timing with a per-song tempo setting',
+      'Note, chord, and hold events',
+      'Adaptive lead based on sender-side completion',
+      'Sender-side timing metrics in the HUD',
       'Dry-run preview',
     ],
   },
   comparison: {
-    kicker: 'Not a generic macro',
-    title: 'Built for music, not click sequences.',
-    macroHeader: 'Generic macro',
+    kicker: 'From sheet event to input',
+    title: 'Playback follows the sheet.',
+    sequenceHeader: 'Fixed-delay sequence',
     playerHeader: 'Sky Auto Player',
     rows: [
-      { macro: 'Sequential key presses', player: 'Chords aligned to one dispatch frame' },
-      { macro: 'Fixed delays', player: 'Timing follows the sheet and tempo' },
-      { macro: 'Tap-focused playback', player: 'Notes, chords and holds' },
-      { macro: 'One global setup', player: 'Per-song timing profiles' },
+      { sequence: 'A sequence of key presses', player: 'Sheet-based note, chord, and hold events' },
+      { sequence: 'One fixed interval pattern', player: 'Timing follows sheet event timestamps' },
+      { sequence: 'One tempo for every song', player: 'Tempo settings are saved per song' },
+      { sequence: 'One hold duration', player: 'Hold frame options are saved per song' },
       {
-        macro: 'Fixed delay, one-size-fits-all',
-        player: 'Learns your machine delay and compensates',
+        sequence: 'No sender feedback',
+        player: 'Adaptive lead uses sender-side completion measurements',
       },
       {
-        macro: 'HUD stutters when busy',
-        player: 'Note firing and display run on separate threads',
+        sequence: 'Timing set only by the sequence',
+        player: 'Diagnostics report sender-side timing measurements',
       },
     ],
   },
@@ -76,16 +77,16 @@ export const homeEn: HomeContent = {
     kicker: 'The actual player',
     title: 'Your library, timing profile and controls in one place.',
     description:
-      'The Tauri desktop app keeps song search, playback setup and status visible in one focused window.',
+      'The Windows desktop app includes a built-in song catalog, liked songs, playlists, and diagnostics.',
     annotations: [
-      'Search and select songs from the desktop Library.',
-      'Review timing risk and recommendations in Song Detail.',
-      'Keep playback, diagnostics and settings within reach.',
+      'Browse built-in songs and liked songs in the Library.',
+      'Create or select a playlist, then use Add songs to import local files or a folder.',
+      'Imports reference the original files; the app does not move or delete them.',
     ],
   },
   steps: {
     kicker: 'Three steps',
-    title: 'From download to playback in minutes.',
+    title: 'Get started with a sheet.',
     items: [
       {
         title: 'Download',
@@ -95,22 +96,21 @@ export const homeEn: HomeContent = {
       {
         title: 'Add a sheet',
         description:
-          'Export a JSON, .skysheet or compatible TXT sheet from the Sky Music editor and import it through the desktop Library.',
+          'Create or select a playlist, then use Add songs to import a JSON, .skysheet or JSON-compatible TXT file or folder. Imported sources stay in their original location.',
       },
       {
         title: 'Play',
         description:
-          'Open Sky Auto Player, choose a song, then switch to the Sky window when you are ready.',
+          'Choose a song and start playback with Sky in the foreground. The app checks the target before sending input.',
       },
     ],
-    hotkeyNote:
-      'Press Reload songs in the GUI · / or Ctrl+F focuses search · Esc closes safe overlays',
+    workflowNote: 'Use / or Ctrl+F to focus search · Esc closes safe overlays',
   },
   technical: {
     kicker: 'Technical boundaries',
     title: 'Clear about what it does—and what it does not do.',
     description:
-      'Sky Auto Player runs as a separate Windows application and sends standard input events. Its source is public, so the implementation can be reviewed directly.',
+      'Sky Auto Player is a separate Windows 11 app. It sends input through Windows SendInput only after target checks confirm Sky is in the foreground; the source is public for review.',
     ledger: [
       { term: 'Input', definition: 'Windows SendInput', state: 'yes' },
       { term: 'Process', definition: 'Separate application', state: 'info' },
@@ -120,7 +120,7 @@ export const homeEn: HomeContent = {
       { term: 'License', definition: 'GNU GPL v3.0', state: 'info' },
       {
         term: 'Updates',
-        definition: 'Explicit updater with checksum verification',
+        definition: 'Tauri updater verifies the .exe.sig sidecar',
         state: 'info',
       },
     ],
@@ -178,7 +178,8 @@ export const homeEn: HomeContent = {
   },
   finalCta: {
     title: 'Your next performance is already written.',
-    description: 'Download Sky Auto Player, add a sheet and let the timing take care of itself.',
+    description:
+      'Browse the official release, add a sheet to a playlist and review the available playback settings.',
     primaryCta: 'Browse releases',
     secondaryCta: 'View source on GitHub',
   },

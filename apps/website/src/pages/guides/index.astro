@@ -14,7 +14,7 @@ const structuredData = {
   '@type': 'CollectionPage',
   name: 'Sky Auto Player Guides',
   description:
-    'Technical guides for Sky Auto Player: setup, timing model, sheet formats, security boundaries, and troubleshooting.',
+    'Technical guides for Sky Auto Player on Windows 11 x64: setup, timing model, sheet formats, security boundaries, and troubleshooting.',
   url: canonicalUrl,
   inLanguage: 'en',
   isPartOf: {
@@ -28,7 +28,7 @@ const structuredData = {
   seo={{
     title: 'Guides — Sky Auto Player',
     description:
-      'Technical guides for Sky Auto Player on Windows: setup, timing model, sheet formats, security boundaries, and troubleshooting.',
+      'Technical guides for Sky Auto Player on Windows 11 x64: setup, timing model, sheet formats, security boundaries, and troubleshooting.',
   }}
   structuredData={structuredData}
 >
@@ -37,8 +37,9 @@ const structuredData = {
       <p class="kicker">Documentation</p>
       <h1>Sky Auto Player Guides</h1>
       <p class="guides-hub-page__intro">
-        First-party guides covering setup, the timing model, supported sheet formats, technical
-        boundaries, and troubleshooting — written against the current source code.
+        First-party guides covering Windows 11 setup, playlist imports, the sender-side timing
+        model, supported sheet formats, technical boundaries, and troubleshooting — written against
+        current contracts.
       </p>
     </div>
   </div>
@@ -48,23 +49,25 @@ const structuredData = {
 </BaseLayout>
 
 <style>
-  .guides-hub-page {
-    border-top: 0;
-  }
+  @layer components {
+    .guides-hub-page {
+      border-top: 0;
+    }
 
-  .guides-hub-page h1 {
-    margin-block: var(--space-3) var(--space-4);
-  }
+    .guides-hub-page h1 {
+      margin-block: var(--space-3) var(--space-4);
+    }
 
-  .guides-hub-page__intro {
-    font-size: var(--type-lead);
-    color: var(--color-text-secondary);
-    max-inline-size: 60ch;
-    line-height: var(--leading-lead);
-    margin-block-end: 0;
-  }
+    .guides-hub-page__intro {
+      font-size: var(--type-lead);
+      color: var(--color-text-secondary);
+      max-inline-size: 60ch;
+      line-height: var(--leading-lead);
+      margin-block-end: 0;
+    }
 
-  .guides-hub-page__body {
-    padding-block: var(--space-6) var(--space-16);
+    .guides-hub-page__body {
+      padding-block: var(--space-6) var(--space-8);
+    }
   }
 </style>

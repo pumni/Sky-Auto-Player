@@ -1,6 +1,25 @@
 import { test, expect } from '@playwright/test';
 
-const routes = ['/', '/faq/', '/vi/', '/vi/faq/', '/guides/', '/vi/guides/'];
+const routes = [
+  '/',
+  '/faq/',
+  '/vi/',
+  '/vi/faq/',
+  '/guides/',
+  '/vi/guides/',
+  '/guides/how-it-works/',
+  '/guides/sheet-formats/',
+  '/guides/windows-setup/',
+  '/guides/timing-engine/',
+  '/guides/security-boundaries/',
+  '/guides/troubleshooting/',
+  '/vi/guides/how-it-works/',
+  '/vi/guides/sheet-formats/',
+  '/vi/guides/windows-setup/',
+  '/vi/guides/timing-engine/',
+  '/vi/guides/security-boundaries/',
+  '/vi/guides/troubleshooting/',
+];
 
 const guideRoutes = [
   { en: '/guides/how-it-works/', vi: '/vi/guides/how-it-works/' },
@@ -59,7 +78,7 @@ test.describe('navigation and route contracts', () => {
     await expect(page).toHaveURL(/\/Sky-Auto-Player\/faq\/$/);
   });
 
-  test('mobile menu supports toggle, outside click, Escape and link activation', async ({
+  test('mobile menu supports toggle, outside click, Escape, natural tab order and link activation', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -78,30 +97,55 @@ test.describe('navigation and route contracts', () => {
 
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-expanded', 'true');
-    await expect(nav).toHaveClass(/is-open/);
+    await expect(nav).toHaveAttribute('data-state', 'open');
     await expect(nav.locator('a').first()).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(page.locator('.brand')).toBeFocused();
+    await expect(toggle).toHaveAttribute('aria-expanded', 'true');
 
     await page.keyboard.press('Escape');
     await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-    await expect(nav).not.toHaveClass(/is-open/);
+    await expect(nav).toHaveAttribute('aria-hidden', 'true');
+    await expect(nav).toHaveAttribute('data-state', 'closed', { timeout: 1000 });
 
     await toggle.click();
     await page.mouse.click(3, 3);
-    await expect(nav).not.toHaveClass(/is-open/);
+    await expect(nav).toHaveAttribute('aria-hidden', 'true');
+    await expect(nav).toHaveAttribute('data-state', 'closed', { timeout: 1000 });
 
     await toggle.click();
     await nav.locator('a[href*="guides"]').first().click();
-    await expect(nav).not.toHaveClass(/is-open/);
+    await expect(nav).toHaveAttribute('aria-hidden', 'true');
+    await expect(nav).toHaveAttribute('data-state', 'closed', { timeout: 1000 });
   });
 
-  test('tablet menu keeps the primary download action available', async ({ page }) => {
-    await page.setViewportSize({ width: 768, height: 1024 });
-    await page.goto('/Sky-Auto-Player/');
-    await page.locator('.menu-toggle').click();
-    await expect(page.locator('.nav-download')).toBeVisible();
-    await expect(page.locator('.nav-download')).toHaveAttribute(
-      'href',
-      'https://github.com/pumni/Sky-Auto-Player/releases',
-    );
+  test('mobile and tablet headers keep the release action visible outside the menu', async ({
+    page,
+  }) => {
+    for (const width of [390, 768]) {
+      await page.setViewportSize({ width, height: 900 });
+      await page.goto('/Sky-Auto-Player/');
+      const releases = page.locator('.header-download');
+      await expect(releases).toBeVisible();
+      await expect(releases).toHaveAttribute(
+        'href',
+        'https://github.com/pumni/Sky-Auto-Player/releases',
+      );
+      await expect(releases).toHaveAccessibleName(/GitHub Releases/);
+      await expect(page.locator('.menu-toggle')).toBeVisible();
+    }
+  });
+
+  test('locale switching preserves the guide article route in both languages', async ({ page }) => {
+    await page.goto('/Sky-Auto-Player/guides/how-it-works/');
+    await page.locator('.locale-switch__option[lang="vi"]').click();
+    await expect
+      .poll(() => new URL(page.url()).pathname)
+      .toBe('/Sky-Auto-Player/vi/guides/how-it-works/');
+
+    await page.locator('.locale-switch__option[lang="en"]').click();
+    await expect
+      .poll(() => new URL(page.url()).pathname)
+      .toBe('/Sky-Auto-Player/guides/how-it-works/');
   });
 });

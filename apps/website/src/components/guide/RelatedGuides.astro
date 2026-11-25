@@ -32,48 +32,50 @@ const guideBase = isVi ? '/vi/guides/' : '/guides/';
 </aside>
 
 <style>
-  .related-guides {
-    padding: var(--space-5);
-    border: 1px solid var(--line-default);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface-instrument);
-    height: fit-content;
-    position: sticky;
-    top: calc(var(--space-6) + 4rem); /* below sticky header */
-  }
-
-  .related-guides__title {
-    font-size: var(--type-small);
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    color: var(--color-text-tertiary);
-    margin-block-end: var(--space-4);
-  }
-
-  .related-guides__list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    display: grid;
-    gap: var(--space-3);
-  }
-
-  .related-guides__link {
-    display: block;
-    font-size: var(--type-small);
-    color: var(--color-text-secondary);
-    line-height: 1.4;
-    text-underline-offset: 0.2em;
-  }
-
-  .related-guides__link:hover {
-    color: var(--color-text-primary);
-  }
-
-  @media (max-width: 63.99rem) {
+  @layer components {
     .related-guides {
-      position: static;
+      padding: var(--space-5);
+      border: 1px solid var(--line-default);
+      border-radius: var(--radius-sm);
+      background: var(--color-surface-instrument);
+      height: fit-content;
+      position: sticky;
+      top: calc(var(--space-6) + 4rem); /* below sticky header */
+    }
+
+    .related-guides__title {
+      font-size: var(--type-small);
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--color-text-tertiary);
+      margin-block-end: var(--space-4);
+    }
+
+    .related-guides__list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: var(--space-3);
+    }
+
+    .related-guides__link {
+      display: block;
+      font-size: var(--type-small);
+      color: var(--color-text-secondary);
+      line-height: 1.4;
+      text-underline-offset: 0.2em;
+    }
+
+    .related-guides__link:hover {
+      color: var(--color-text-primary);
+    }
+
+    @media (max-width: 63.99rem) {
+      .related-guides {
+        position: static;
+      }
     }
   }
 </style>

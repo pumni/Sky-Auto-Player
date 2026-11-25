@@ -1,7 +1,7 @@
 ---
 import type { Locale } from '../../data/site';
 import { SITE } from '../../data/site';
-import { withBase } from '../../utils/urls';
+import { localizedPath, withBase } from '../../utils/urls';
 
 interface Props {
   locale: Locale;
@@ -9,96 +9,115 @@ interface Props {
 
 const { locale } = Astro.props;
 const isVi = locale === 'vi';
+const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
 ---
 
 <footer class="site-footer">
   <div class="container site-footer__layout">
     <div class="site-footer__identity">
-      <span class="site-footer__brand">
+      <a class="site-footer__brand" href={withBase(isVi ? '/vi/' : '/')}>
         <img src={withBase('/favicon.svg')} alt="" width="24" height="24" aria-hidden="true" />
         <span>Sky Auto Player</span>
-      </span>
+      </a>
       <p>
         {isVi
-          ? 'Sky Auto Player · Mã nguồn mở theo GNU GPL v3.0 · Xây dựng cho cộng đồng âm nhạc Sky'
-          : 'Sky Auto Player · Open source under GNU GPL v3.0 · Built for the Sky music community'}
+          ? 'Mã nguồn mở theo GNU GPL v3.0 · Dự án cộng đồng không chính thức cho cộng đồng âm nhạc Sky.'
+          : 'Open source under GNU GPL v3.0 · An unofficial community project for Sky music players.'}
       </p>
     </div>
-    <nav class="site-footer__links" aria-label={isVi ? 'Chân trang' : 'Footer'}>
+    <nav class="site-footer__links" aria-label={isVi ? 'Liên kết chân trang' : 'Footer links'}>
+      <a href={SITE.releaseUrl}>{isVi ? 'Bản phát hành' : 'Releases'}</a>
       <a href={withBase(isVi ? '/vi/guides/' : '/guides/')}>{isVi ? 'Hướng dẫn' : 'Guides'}</a>
       <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>FAQ</a>
-      <a href={SITE.repositoryUrl}>GitHub</a>
-      <a href={`${SITE.repositoryUrl}/releases`}>{isVi ? 'Bản phát hành' : 'Releases'}</a>
+      <a href={SITE.repositoryUrl}>{isVi ? 'Mã nguồn' : 'Source'}</a>
       <a href={`${SITE.repositoryUrl}/blob/main/LICENSE`}>{isVi ? 'Giấy phép' : 'License'}</a>
-      <a href={`${SITE.repositoryUrl}/issues`}>Issues</a>
-      <a href={withBase(isVi ? '/' : '/vi/')}>{isVi ? 'English' : 'Tiếng Việt'}</a>
+      <a href={`${SITE.repositoryUrl}/issues`}>{isVi ? 'Báo lỗi' : 'Issues'}</a>
+      <a href={otherLocalePath} lang={isVi ? 'en' : 'vi'} hreflang={isVi ? 'en' : 'vi'}>
+        {isVi ? 'English' : 'Tiếng Việt'}
+      </a>
     </nav>
   </div>
 </footer>
 
 <style>
-  .site-footer {
-    border-top: 1px solid var(--line-faint);
-    padding-block: var(--section-xs);
-    color: var(--color-text-tertiary);
-    font-size: var(--type-small);
-  }
+  @layer components {
+    .site-footer {
+      border-top: 1px solid var(--line-faint);
+      padding-block: var(--section-xs);
+      color: var(--color-text-tertiary);
+      font-size: var(--type-small);
+    }
 
-  .site-footer__layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
-    gap: var(--space-7);
-    align-items: end;
-  }
-
-  .site-footer__identity {
-    display: grid;
-    gap: var(--space-3);
-  }
-
-  .site-footer__identity p {
-    max-inline-size: 34rem;
-  }
-
-  .site-footer__brand {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--space-2);
-    color: var(--color-text-primary);
-    font-weight: 650;
-  }
-
-  .site-footer__brand img {
-    width: 24px;
-    height: 24px;
-  }
-
-  .site-footer__links {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: var(--space-3) var(--space-5);
-  }
-
-  .site-footer__links a {
-    display: inline-flex;
-    min-height: 32px;
-    align-items: center;
-    color: var(--color-text-secondary);
-  }
-
-  .site-footer__links a:hover {
-    color: var(--color-text-primary);
-  }
-
-  @media (max-width: 48rem) {
     .site-footer__layout {
-      grid-template-columns: 1fr;
-      align-items: start;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+      gap: var(--space-7);
+      align-items: end;
+    }
+
+    .site-footer__identity {
+      display: grid;
+      gap: var(--space-3);
+    }
+
+    .site-footer__identity p {
+      max-inline-size: 34rem;
+    }
+
+    .site-footer__brand {
+      display: inline-flex;
+      width: fit-content;
+      min-height: 44px;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--color-text-primary);
+      font-weight: 650;
+    }
+
+    .site-footer__brand img {
+      width: 24px;
+      height: 24px;
     }
 
     .site-footer__links {
-      justify-content: flex-start;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: var(--space-2) var(--space-4);
+    }
+
+    .site-footer__links a {
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
+      color: var(--color-text-secondary);
+      text-decoration: underline;
+      text-decoration-color: var(--line-default);
+      text-underline-offset: 0.2em;
+    }
+
+    .site-footer__links a:hover,
+    .site-footer__links a:focus-visible {
+      color: var(--color-text-primary);
+      text-decoration-color: var(--color-focus);
+    }
+
+    @media (max-width: 48rem) {
+      .site-footer__layout {
+        grid-template-columns: 1fr;
+        align-items: start;
+      }
+
+      .site-footer__links {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (forced-colors: active) {
+      .site-footer__links a {
+        color: LinkText;
+        text-decoration: underline;
+      }
     }
   }
 </style>

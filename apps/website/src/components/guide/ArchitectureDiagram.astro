@@ -286,117 +286,119 @@ const descId = `${diagramId}-desc`;
 </figure>
 
 <style>
-  .arch-diagram {
-    margin: var(--space-7) 0;
-    overflow-x: auto;
-  }
+  @layer components {
+    .arch-diagram {
+      margin: var(--space-7) 0;
+      overflow-x: auto;
+    }
 
-  .arch-diagram__svg {
-    display: block;
-    width: 100%;
-    max-width: 760px;
-    height: auto;
-    color: var(--color-text-primary);
-  }
+    .arch-diagram__svg {
+      display: block;
+      width: 100%;
+      max-width: 760px;
+      height: auto;
+      color: var(--color-text-primary);
+    }
 
-  /* Box types */
-  .arch-diagram__box {
-    fill: var(--color-surface-quiet);
-    stroke-width: 1.5;
-  }
+    /* Box types */
+    .arch-diagram__box {
+      fill: var(--color-surface-quiet);
+      stroke-width: 1.5;
+    }
 
-  .arch-diagram__box--input {
-    stroke: var(--color-text-tertiary);
-  }
+    .arch-diagram__box--input {
+      stroke: var(--color-text-tertiary);
+    }
 
-  .arch-diagram__box--domain {
-    stroke: color-mix(in oklch, var(--color-action) 60%, transparent);
-    fill: color-mix(in oklch, var(--color-action) 8%, var(--color-surface-quiet));
-  }
+    .arch-diagram__box--domain {
+      stroke: color-mix(in oklch, var(--color-action) 60%, transparent);
+      fill: color-mix(in oklch, var(--color-action) 8%, var(--color-surface-quiet));
+    }
 
-  .arch-diagram__box--infra {
-    stroke: color-mix(in oklch, var(--color-action) 80%, transparent);
-    fill: color-mix(in oklch, var(--color-action) 12%, var(--color-surface-quiet));
-  }
+    .arch-diagram__box--infra {
+      stroke: color-mix(in oklch, var(--color-action) 80%, transparent);
+      fill: color-mix(in oklch, var(--color-action) 12%, var(--color-surface-quiet));
+    }
 
-  .arch-diagram__box--platform {
-    stroke: color-mix(in oklch, var(--color-action) 100%, transparent);
-    fill: color-mix(in oklch, var(--color-action) 18%, var(--color-surface-quiet));
-  }
+    .arch-diagram__box--platform {
+      stroke: color-mix(in oklch, var(--color-action) 100%, transparent);
+      fill: color-mix(in oklch, var(--color-action) 18%, var(--color-surface-quiet));
+    }
 
-  .arch-diagram__box--game {
-    stroke: var(--line-default);
-    fill: var(--color-page);
-    opacity: 0.7;
-  }
+    .arch-diagram__box--game {
+      stroke: var(--line-default);
+      fill: var(--color-page);
+      opacity: 0.7;
+    }
 
-  .arch-diagram__label {
-    font-family: var(--font-mono);
-    font-size: 11px;
-    fill: var(--color-text-primary);
-    text-anchor: middle;
-    dominant-baseline: auto;
-  }
+    .arch-diagram__label {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      fill: var(--color-text-primary);
+      text-anchor: middle;
+      dominant-baseline: auto;
+    }
 
-  .arch-diagram__sublabel {
-    font-size: 9px;
-    fill: var(--color-text-tertiary);
-    text-anchor: middle;
-    dominant-baseline: auto;
-  }
+    .arch-diagram__sublabel {
+      font-size: 9px;
+      fill: var(--color-text-tertiary);
+      text-anchor: middle;
+      dominant-baseline: auto;
+    }
 
-  .arch-diagram__connector {
-    stroke: var(--color-text-secondary);
-    stroke-width: 1.5;
-  }
+    .arch-diagram__connector {
+      stroke: var(--color-text-secondary);
+      stroke-width: 1.5;
+    }
 
-  .arch-diagram__arrow-fill {
-    color: var(--color-text-secondary);
-  }
+    .arch-diagram__arrow-fill {
+      color: var(--color-text-secondary);
+    }
 
-  .arch-diagram__boundary {
-    stroke: var(--color-text-tertiary);
-    stroke-width: 1;
-    opacity: 0.5;
-  }
+    .arch-diagram__boundary {
+      stroke: var(--color-text-tertiary);
+      stroke-width: 1;
+      opacity: 0.5;
+    }
 
-  .arch-diagram__boundary-label {
-    font-size: 8px;
-    fill: var(--color-text-tertiary);
-    font-family: var(--font-mono);
-  }
+    .arch-diagram__boundary-label {
+      font-size: 8px;
+      fill: var(--color-text-tertiary);
+      font-family: var(--font-mono);
+    }
 
-  .arch-diagram__caption {
-    font-size: var(--type-small);
-    color: var(--color-text-secondary);
-    margin-block-start: var(--space-4);
-  }
+    .arch-diagram__caption {
+      font-size: var(--type-small);
+      color: var(--color-text-secondary);
+      margin-block-start: var(--space-4);
+    }
 
-  .arch-diagram__steps {
-    margin: 0;
-    padding-inline-start: 1.4em;
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-1);
-  }
-
-  @media (min-width: 40rem) {
     .arch-diagram__steps {
-      flex-direction: row;
-      flex-wrap: wrap;
-      gap: var(--space-2);
-      padding: 0;
-      list-style: none;
+      margin: 0;
+      padding-inline-start: 1.4em;
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-1);
     }
 
-    .arch-diagram__steps li::after {
-      content: '→';
-      margin-inline-start: var(--space-2);
-      color: var(--color-text-tertiary);
-    }
+    @media (min-width: 40rem) {
+      .arch-diagram__steps {
+        flex-direction: row;
+        flex-wrap: wrap;
+        gap: var(--space-2);
+        padding: 0;
+        list-style: none;
+      }
 
-    .arch-diagram__steps li:last-child::after {
-      content: '';
+      .arch-diagram__steps li::after {
+        content: '→';
+        margin-inline-start: var(--space-2);
+        color: var(--color-text-tertiary);
+      }
+
+      .arch-diagram__steps li:last-child::after {
+        content: '';
+      }
     }
   }
 </style>

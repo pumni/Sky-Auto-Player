@@ -38,13 +38,18 @@ test.describe('accessibility and responsive contracts', () => {
         await heroActions.evaluate((element) => element.getBoundingClientRect().width),
       );
     }
-    await expect(page.locator('.header-download')).toBeHidden();
-    await page.locator('.menu-toggle').click();
-    await expect(page.locator('.nav-download')).toBeVisible();
-    await expect(page.locator('.nav-download')).toHaveAttribute(
+    const releaseAction = page.locator('.header-download');
+    await expect(releaseAction).toBeVisible();
+    await expect(releaseAction).toHaveAttribute(
       'href',
       'https://github.com/pumni/Sky-Auto-Player/releases',
     );
+    await expect(page.locator('.site-nav')).not.toBeVisible();
+    await page.locator('.menu-toggle').click();
+    await expect(page.locator('.site-nav')).toBeVisible();
+    await expect(page.locator('.menu-toggle')).toHaveAttribute('aria-expanded', 'true');
+    await expect(releaseAction).toBeVisible();
+    await expect(page.locator('.nav-download')).toHaveCount(0);
     await expect(page.locator('picture source[media="(max-width: 40rem)"]')).toHaveAttribute(
       'srcset',
       /minimum-real-tauri\.png/,
@@ -352,14 +357,21 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('.site-footer__brand img')).toHaveAttribute('src', /favicon\.svg/);
   });
 
-  test('core content and navigation remain available without JavaScript', async ({ browser }) => {
-    const context = await browser.newContext({ javaScriptEnabled: false });
+  test('mobile core content and navigation stay in document flow without JavaScript', async ({
+    browser,
+  }) => {
+    const context = await browser.newContext({
+      javaScriptEnabled: false,
+      viewport: { width: 390, height: 844 },
+    });
     const page = await context.newPage();
     await page.goto('/Sky-Auto-Player/');
     await expect(page.locator('main h1')).toBeVisible();
     await expect(page.locator('.timing-event[aria-current="step"]')).toBeVisible();
     await expect(page.locator('.site-nav')).toBeVisible();
+    await expect(page.locator('.header-download')).toBeVisible();
     await expect(page.locator('.menu-toggle')).toBeHidden();
+    await expect(page.locator('.site-nav')).toHaveCSS('position', 'static');
     await context.close();
   });
 

@@ -25,11 +25,10 @@ const structuredData = {
       '@type': 'SoftwareApplication',
       '@id': softwareId,
       name: 'Sky Auto Player',
-      description:
-        'A timing-first music sheet player for Sky: Children of the Light on Windows. Reads user-provided sheet files and simulates keyboard input through the Windows SendInput API. Not affiliated with thatgamecompany.',
+      description: homeEn.seo.description,
       softwareVersion: PRODUCT_RELEASE.version,
       applicationCategory: 'MultimediaApplication',
-      operatingSystem: 'Windows 10, Windows 11 (64-bit)',
+      operatingSystem: 'Windows 11 (64-bit)',
       url: siteUrl,
       image: new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href,
       downloadUrl: SITE.releaseUrl,

@@ -14,8 +14,18 @@ const isVi = locale === 'vi';
 const content = isVi ? homeVi : homeEn;
 const nav = content.navigation;
 const currentPath = Astro.url.pathname;
-const isFaq = currentPath.includes('/faq');
-const isGuide = currentPath.includes('/guides');
+const routePath = currentPath.startsWith(`${SITE.basePath}/`)
+  ? currentPath.slice(SITE.basePath.length)
+  : currentPath === SITE.basePath
+    ? '/'
+    : currentPath;
+const homePath = isVi ? '/vi/' : '/';
+const guidesPath = isVi ? '/vi/guides/' : '/guides/';
+const faqPath = isVi ? '/vi/faq/' : '/faq/';
+const isHome = routePath === homePath;
+const isGuide = routePath.startsWith(guidesPath);
+const isGuideHub = routePath === guidesPath;
+const isFaqPage = routePath === faqPath;
 const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 ---
 
@@ -23,8 +33,8 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
   <div class="container site-header__inner">
     <a
       class="brand"
-      href={withBase(isVi ? '/vi/' : '/')}
-      aria-label={isVi ? 'Sky Auto Player trang chủ' : 'Sky Auto Player home'}
+      href={withBase(homePath)}
+      aria-label={isVi ? 'Sky Auto Player — trang chủ' : 'Sky Auto Player — home'}
     >
       <img
         class="brand__mark"
@@ -37,28 +47,51 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       <span>Sky Auto Player</span>
     </a>
 
-    <nav class="site-nav" id="site-nav" aria-label={isVi ? 'Điều hướng chính' : 'Primary'}>
-      <a href={withBase(isVi ? '/vi/#playback' : '/#playback')}>{nav.playback}</a>
-      <a href={withBase(isVi ? '/vi/#how-it-works' : '/#how-it-works')}>{nav.howItWorks}</a>
-      <a href={withBase(isVi ? '/vi/#technical' : '/#technical')}>{nav.technical}</a>
+    <nav
+      class="site-nav"
+      id="site-nav"
+      aria-label={isVi ? 'Điều hướng chính' : 'Primary navigation'}
+    >
       <a
-        href={withBase(isVi ? '/vi/guides/' : '/guides/')}
-        aria-current={isGuide ? 'page' : undefined}
+        class="site-nav__link"
+        href={withBase(homePath)}
+        aria-current={isHome ? 'page' : undefined}
+      >
+        {nav.overview}
+      </a>
+      <a class="site-nav__link" href={withBase(isVi ? '/vi/#how-it-works' : '/#how-it-works')}>
+        {nav.howItWorks}
+      </a>
+      <a
+        class="site-nav__link"
+        href={withBase(guidesPath)}
+        data-section-active={isGuide ? 'true' : undefined}
+        aria-current={isGuideHub ? 'page' : undefined}
       >
         {nav.guides}
       </a>
-      <a href={withBase(isVi ? '/vi/faq/' : '/faq/')} aria-current={isFaq ? 'page' : undefined}>
+      <a
+        class="site-nav__link"
+        href={withBase(faqPath)}
+        aria-current={isFaqPage ? 'page' : undefined}
+      >
         {nav.faq}
       </a>
-      <a href={SITE.repositoryUrl}>{nav.github}</a>
-      <a class="nav-download" href={SITE.releaseUrl}>
-        {isVi ? 'Tải xuống' : 'Download'}
+      <a class="site-nav__link" href={SITE.repositoryUrl}>
+        {nav.github}
       </a>
 
-      <span class="locale-switch" aria-label={isVi ? 'Chọn ngôn ngữ' : 'Choose language'}>
+      <div
+        class="locale-switch"
+        role="group"
+        aria-label={isVi ? 'Chọn ngôn ngữ' : 'Choose language'}
+      >
         <a
           class="locale-switch__option"
           href={isVi ? otherLocalePath : currentPath}
+          lang="en"
+          hreflang="en"
+          aria-label="EN — English"
           aria-current={!isVi ? 'page' : undefined}
         >
           EN
@@ -66,16 +99,27 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         <a
           class="locale-switch__option"
           href={isVi ? currentPath : otherLocalePath}
+          lang="vi"
+          hreflang="vi"
+          aria-label="VI — Tiếng Việt"
           aria-current={isVi ? 'page' : undefined}
         >
           VI
         </a>
-      </span>
+      </div>
     </nav>
 
     <div class="site-actions">
-      <a class="button button--primary button--small header-download" href={SITE.releaseUrl}>
-        {isVi ? 'Tải xuống' : 'Download'}
+      <a
+        class="button button--primary button--small header-download"
+        href={SITE.releaseUrl}
+        aria-label={
+          isVi
+            ? 'Bản phát hành — mở GitHub Releases để tải bộ cài Windows'
+            : 'Releases — open GitHub Releases to get the Windows installer'
+        }
+      >
+        {nav.release}
       </a>
       <button
         class="menu-toggle"
@@ -93,340 +137,474 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 </header>
 
 <style>
-  .site-header {
-    position: relative;
-    z-index: 100;
-    border-bottom: 1px solid var(--line-faint);
-    background: var(--color-page);
-    padding-block: 1rem;
-  }
-
-  .site-header__inner {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-4);
-  }
-
-  .brand {
-    position: relative;
-    display: inline-flex;
-    min-width: 0;
-    align-items: center;
-    gap: var(--space-2);
-    color: var(--color-text-primary);
-    font-size: var(--type-small);
-    font-weight: 700;
-    letter-spacing: -0.01em;
-  }
-
-  .brand > span:last-child {
-    white-space: nowrap;
-  }
-
-  .brand__mark {
-    width: 32px;
-    height: 32px;
-    flex: 0 0 auto;
-  }
-
-  .brand::after {
-    position: absolute;
-    right: 0;
-    bottom: -0.25rem;
-    left: 2.5rem;
-    height: 1px;
-    background: var(--line-accent);
-    content: '';
-    transform: scaleX(0.18);
-    transform-origin: left;
-    transition: transform var(--duration-fast) var(--ease-standard);
-  }
-
-  .brand:hover::after,
-  .brand:focus-visible::after {
-    transform: scaleX(1);
-  }
-
-  .site-nav {
-    display: flex;
-    align-items: center;
-    gap: clamp(0.9rem, 1.8vw, 1.75rem);
-  }
-
-  .site-nav > a {
-    position: relative;
-    display: inline-flex;
-    min-height: 44px;
-    align-items: center;
-    color: var(--color-text-secondary);
-    font-size: var(--type-label);
-    font-weight: 600;
-  }
-
-  .site-nav > a::after {
-    position: absolute;
-    right: 0;
-    bottom: 0.35rem;
-    left: 0;
-    height: 1px;
-    background: var(--color-action);
-    content: '';
-    transform: scaleX(0);
-    transform-origin: right;
-    transition: transform var(--duration-fast) var(--ease-standard);
-  }
-
-  .site-nav > a:hover,
-  .site-nav > a:focus-visible {
-    color: var(--color-text-primary);
-  }
-
-  .site-nav > a:hover::after,
-  .site-nav > a:focus-visible::after {
-    transform: scaleX(1);
-    transform-origin: left;
-  }
-
-  .site-actions {
-    display: flex;
-    flex: 0 0 auto;
-    align-items: center;
-    gap: var(--space-3);
-  }
-
-  .locale-switch {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-  }
-
-  .locale-switch__option {
-    position: relative;
-    display: grid;
-    min-width: 2.75rem;
-    min-height: 44px;
-    place-items: center;
-    color: var(--color-text-secondary);
-    font-family: var(--font-mono);
-    font-size: var(--type-label);
-    font-weight: 600;
-  }
-
-  .locale-switch__option::after {
-    position: absolute;
-    right: 0.35rem;
-    bottom: 0.35rem;
-    left: 0.35rem;
-    height: 1px;
-    background: var(--color-action);
-    content: '';
-    transform: scaleX(0);
-    transition: transform var(--duration-fast) var(--ease-standard);
-  }
-
-  .locale-switch__option:hover,
-  .locale-switch__option[aria-current='page'] {
-    color: var(--color-text-primary);
-  }
-
-  .locale-switch__option[aria-current='page']::after {
-    transform: scaleX(1);
-  }
-
-  .nav-download {
-    display: none;
-  }
-
-  .menu-toggle {
-    display: none;
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    border: 1px solid var(--line-default);
-    border-radius: var(--radius-sm);
-    background: var(--color-surface-instrument);
-    color: var(--color-text-primary);
-  }
-
-  .menu-toggle__icon,
-  .menu-toggle__icon::before,
-  .menu-toggle__icon::after {
-    display: block;
-    width: 1.25rem;
-    height: 2px;
-    background: currentColor;
-    transition:
-      transform var(--duration-fast) var(--ease-out),
-      top var(--duration-fast) var(--ease-out),
-      background var(--duration-fast) var(--ease-out);
-  }
-
-  .menu-toggle__icon {
-    position: relative;
-    margin: auto;
-  }
-
-  .menu-toggle__icon::before,
-  .menu-toggle__icon::after {
-    position: absolute;
-    left: 0;
-    content: '';
-  }
-
-  .menu-toggle__icon::before {
-    top: -0.4rem;
-  }
-
-  .menu-toggle__icon::after {
-    top: 0.4rem;
-  }
-
-  .menu-toggle[aria-expanded='true'] .menu-toggle__icon {
-    background: transparent;
-  }
-
-  .menu-toggle[aria-expanded='true'] .menu-toggle__icon::before {
-    top: 0;
-    transform: rotate(45deg);
-  }
-
-  .menu-toggle[aria-expanded='true'] .menu-toggle__icon::after {
-    top: 0;
-    transform: rotate(-45deg);
-  }
-
-  @media (max-width: 63.99rem) {
-    .header-download {
-      display: none;
+  @layer components {
+    .site-header {
+      position: relative;
+      z-index: 100;
+      border-bottom: 1px solid var(--line-faint);
+      background: var(--color-page);
+      padding-block: 0.75rem;
     }
 
-    :global(.js) .menu-toggle {
-      display: block;
+    .site-header__inner {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-4);
+    }
+
+    .brand {
+      position: relative;
+      display: inline-flex;
+      min-width: 0;
+      align-items: center;
+      gap: var(--space-2);
+      color: var(--color-text-primary);
+      font-size: var(--type-small);
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      order: 0;
+    }
+
+    .brand > span:last-child {
+      white-space: nowrap;
+    }
+
+    .brand__mark {
+      width: 32px;
+      height: 32px;
+      flex: 0 0 auto;
     }
 
     .site-nav {
-      position: absolute;
-      top: 100%;
-      right: 0;
-      left: 0;
       display: flex;
+      flex: 1 0 100%;
       flex-direction: column;
       align-items: stretch;
       gap: 0;
-      padding: var(--space-3) var(--gutter) var(--space-5);
-      border-bottom: 1px solid var(--line-default);
-      background: var(--color-page);
+      padding-block: var(--space-3) var(--space-2);
+      border-top: 1px solid var(--line-faint);
+      order: 2;
     }
 
-    :global(.js) .site-nav {
-      display: none;
-    }
-
-    :global(.js) .site-nav.is-open {
-      display: flex;
-    }
-
-    .site-nav > a {
+    .site-nav__link {
+      position: relative;
+      display: inline-flex;
+      min-height: 44px;
+      align-items: center;
       border-bottom: 1px solid var(--line-faint);
+      color: var(--color-text-secondary);
+      font-size: var(--type-small);
+      font-weight: 600;
+      text-decoration: none;
     }
 
-    .site-nav > a::after {
-      bottom: 0;
+    .site-nav__link:hover,
+    .site-nav__link:focus-visible,
+    .site-nav__link[aria-current='page'],
+    .site-nav__link[data-section-active='true'] {
+      color: var(--color-text-primary);
+    }
+
+    .site-nav__link[aria-current='page']::after,
+    .site-nav__link[data-section-active='true']::after {
+      position: absolute;
+      right: 0;
+      bottom: -1px;
+      left: 0;
+      height: 2px;
+      background: var(--color-interactive-selected);
+      content: '';
+    }
+
+    .site-actions {
+      display: flex;
+      flex: 1 0 100%;
+      align-items: center;
+      gap: var(--space-2);
+      order: 3;
+    }
+
+    .header-download {
+      white-space: nowrap;
+    }
+
+    .menu-toggle {
+      display: none;
+      width: 44px;
+      height: 44px;
+      flex: 0 0 44px;
+      place-items: center;
+      padding: 0;
+      border: 1px solid var(--color-interactive-border);
+      border-radius: var(--radius-sm);
+      background: var(--color-surface-instrument);
+      color: var(--color-text-primary);
+    }
+
+    .menu-toggle:hover,
+    .menu-toggle[aria-expanded='true'] {
+      background: var(--color-interactive-hover);
+    }
+
+    .menu-toggle:active {
+      background: var(--color-interactive-pressed);
+    }
+
+    .menu-toggle__icon,
+    .menu-toggle__icon::before,
+    .menu-toggle__icon::after {
+      display: block;
+      width: 1.25rem;
+      height: 2px;
+      background: currentColor;
+      transition:
+        transform var(--duration-fast) var(--ease-out),
+        top var(--duration-fast) var(--ease-out),
+        background-color var(--duration-fast) var(--ease-out);
+    }
+
+    .menu-toggle__icon {
+      position: relative;
+    }
+
+    .menu-toggle__icon::before,
+    .menu-toggle__icon::after {
+      position: absolute;
+      left: 0;
+      content: '';
+    }
+
+    .menu-toggle__icon::before {
+      top: -0.4rem;
+    }
+
+    .menu-toggle__icon::after {
+      top: 0.4rem;
+    }
+
+    .menu-toggle[aria-expanded='true'] .menu-toggle__icon {
+      background: transparent;
+    }
+
+    .menu-toggle[aria-expanded='true'] .menu-toggle__icon::before {
+      top: 0;
+      transform: rotate(45deg);
+    }
+
+    .menu-toggle[aria-expanded='true'] .menu-toggle__icon::after {
+      top: 0;
+      transform: rotate(-45deg);
     }
 
     .locale-switch {
-      align-self: flex-start;
-      margin-block-start: var(--space-2);
-    }
-
-    .nav-download {
       display: inline-flex;
-      color: var(--color-action);
-    }
-  }
-
-  @media (max-width: 26.25rem) {
-    .brand > span:last-child {
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-  }
-
-  @media (min-width: 64rem) {
-    .site-header {
-      position: sticky;
-      top: 0;
-      background: var(--color-page);
+      align-items: center;
+      gap: var(--space-1);
+      padding-block-start: var(--space-2);
     }
 
-    @supports (backdrop-filter: blur(1px)) {
+    .locale-switch__option {
+      position: relative;
+      display: grid;
+      min-width: 2.75rem;
+      min-height: 44px;
+      place-items: center;
+      border-radius: var(--radius-sm);
+      color: var(--color-text-secondary);
+      font-family: var(--font-body);
+      font-size: var(--type-label);
+      font-weight: 650;
+      text-decoration: none;
+    }
+
+    .locale-switch__option[aria-current='page'] {
+      background: var(--color-surface-active);
+      color: var(--color-text-primary);
+      box-shadow: inset 0 -2px var(--color-interactive-selected);
+    }
+
+    .locale-switch__option:hover {
+      color: var(--color-text-primary);
+    }
+
+    @media (max-width: 22.5rem) {
+      .site-header__inner {
+        gap: var(--space-2);
+      }
+
+      .brand {
+        gap: var(--space-1);
+        font-size: var(--type-micro);
+      }
+
+      .site-actions {
+        gap: var(--space-1);
+      }
+
+      .header-download {
+        padding-inline: 0.65rem;
+      }
+    }
+
+    @media (min-width: 64rem) {
       .site-header {
-        background: color-mix(in oklch, var(--color-page) 94%, transparent);
-        backdrop-filter: blur(12px);
+        position: sticky;
+        top: 0;
+        background: var(--color-page);
+      }
+
+      @supports (backdrop-filter: blur(1px)) {
+        .site-header {
+          background: color-mix(in oklch, var(--color-page) 94%, transparent);
+          backdrop-filter: blur(12px);
+        }
+      }
+
+      .site-header__inner {
+        flex-wrap: nowrap;
+      }
+
+      .site-nav {
+        position: static;
+        flex: 0 1 auto;
+        flex-direction: row;
+        align-items: center;
+        justify-content: center;
+        gap: clamp(0.45rem, 1vw, 1.25rem);
+        padding: 0;
+        border: 0;
+        order: 1;
+      }
+
+      .site-nav__link {
+        min-height: 44px;
+        border: 0;
+        font-size: var(--type-label);
+      }
+
+      .site-nav__link[aria-current='page']::after,
+      .site-nav__link[data-section-active='true']::after {
+        bottom: 0.25rem;
+        height: 1px;
+      }
+
+      .site-actions {
+        flex: 0 0 auto;
+        gap: var(--space-2);
+        order: 2;
+      }
+
+      .menu-toggle {
+        display: none;
+      }
+
+      .locale-switch {
+        padding: 0;
+      }
+    }
+
+    @media (max-width: 63.99rem) {
+      :global(html[data-nav-enhanced='true']) .site-header__inner {
+        flex-wrap: nowrap;
+      }
+
+      :global(html[data-nav-enhanced='true']) .site-nav {
+        position: absolute;
+        top: 100%;
+        right: 0;
+        left: 0;
+        z-index: 101;
+        display: flex;
+        max-height: calc(100dvh - 5rem);
+        flex: initial;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 0;
+        overflow-y: auto;
+        padding: var(--space-3) var(--gutter) var(--space-5);
+        border-top: 0;
+        border-bottom: 1px solid var(--color-interactive-border);
+        background: var(--color-page);
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(-0.35rem);
+        visibility: hidden;
+        transition:
+          opacity 160ms var(--ease-standard),
+          transform 160ms var(--ease-out);
+      }
+
+      :global(html[data-nav-enhanced='true']) .site-nav[data-state='opening'],
+      :global(html[data-nav-enhanced='true']) .site-nav[data-state='open'] {
+        opacity: 1;
+        pointer-events: auto;
+        transform: translateY(0);
+        visibility: visible;
+        transition-duration: 220ms;
+      }
+
+      :global(html[data-nav-enhanced='true']) .site-nav[data-state='closing'] {
+        opacity: 0;
+        pointer-events: none;
+        transform: translateY(-0.35rem);
+        visibility: visible;
+        transition-duration: 160ms;
+      }
+
+      :global(html[data-nav-enhanced='true']) .site-nav[data-state='closed'] {
+        transition: none;
+      }
+
+      :global(html[data-nav-enhanced='true']) .site-nav__link {
+        border-bottom: 1px solid var(--line-faint);
+      }
+
+      :global(html[data-nav-enhanced='true']) .site-actions {
+        flex: 0 0 auto;
+        order: 3;
+      }
+
+      :global(html[data-nav-enhanced='true']) .menu-toggle {
+        display: inline-grid;
+      }
+
+      :global(html[data-nav-enhanced='true']) .locale-switch {
+        align-self: flex-start;
+        padding-block-start: var(--space-2);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .menu-toggle__icon,
+      .menu-toggle__icon::before,
+      .menu-toggle__icon::after {
+        transition: none;
+      }
+
+      :global(html[data-nav-enhanced='true']) .site-nav {
+        transition: none !important;
+      }
+    }
+
+    @media (forced-colors: active) {
+      .site-header {
+        border-color: CanvasText;
+        background: Canvas;
+        backdrop-filter: none;
+      }
+
+      .site-nav__link,
+      .locale-switch__option {
+        color: LinkText;
+      }
+
+      .site-nav__link[aria-current='page'],
+      .site-nav__link[data-section-active='true'],
+      .locale-switch__option[aria-current='page'] {
+        color: CanvasText;
+        outline: 1px solid Highlight;
+        outline-offset: -2px;
+      }
+
+      .menu-toggle {
+        border-color: ButtonText;
+        background: ButtonFace;
+        color: ButtonText;
+      }
+
+      :global(html[data-nav-enhanced='true']) .site-nav {
+        border-color: CanvasText;
+        background: Canvas;
       }
     }
   }
 </style>
 
 <script>
-  document.documentElement.classList.add('js');
-
   const toggle = document.querySelector<HTMLButtonElement>('.menu-toggle');
   const nav = document.querySelector<HTMLElement>('.site-nav');
   const desktopQuery = window.matchMedia('(min-width: 64rem)');
+  const reducedMotionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-  if (toggle && nav && toggle.dataset.menuEnhanced !== 'true') {
-    toggle.dataset.menuEnhanced = 'true';
-    const getLinks = () => Array.from(nav.querySelectorAll<HTMLAnchorElement>('a'));
+  if (toggle && nav) {
+    let closeTimer: number | undefined;
+    let openFrame: number | undefined;
 
-    const closeMenu = (returnFocus = false) => {
-      toggle.setAttribute('aria-expanded', 'false');
-      toggle.setAttribute('aria-label', toggle.dataset.openLabel || 'Open navigation');
-      nav.classList.remove('is-open');
-      if (returnFocus) toggle.focus();
+    const isOpen = () => toggle.getAttribute('aria-expanded') === 'true';
+    const setButtonState = (open: boolean) => {
+      toggle.setAttribute('aria-expanded', String(open));
+      toggle.setAttribute(
+        'aria-label',
+        open
+          ? toggle.dataset.closeLabel || 'Close navigation'
+          : toggle.dataset.openLabel || 'Open navigation',
+      );
     };
-
+    const clearPendingMotion = () => {
+      if (closeTimer !== undefined) window.clearTimeout(closeTimer);
+      if (openFrame !== undefined) window.cancelAnimationFrame(openFrame);
+      closeTimer = undefined;
+      openFrame = undefined;
+    };
+    const hidePanelImmediately = () => {
+      clearPendingMotion();
+      nav.inert = true;
+      nav.setAttribute('aria-hidden', 'true');
+      nav.dataset.state = 'closed';
+      setButtonState(false);
+    };
     const openMenu = () => {
-      toggle.setAttribute('aria-expanded', 'true');
-      toggle.setAttribute('aria-label', toggle.dataset.closeLabel || 'Close navigation');
-      nav.classList.add('is-open');
-      getLinks()[0]?.focus();
+      if (desktopQuery.matches) return;
+      clearPendingMotion();
+      nav.inert = false;
+      nav.removeAttribute('aria-hidden');
+      setButtonState(true);
+      nav.dataset.state = 'opening';
+      const firstLink = nav.querySelector<HTMLAnchorElement>('a');
+      firstLink?.focus();
+      openFrame = window.requestAnimationFrame(() => {
+        if (isOpen()) nav.dataset.state = 'open';
+        openFrame = undefined;
+      });
+    };
+    const closeMenu = (restoreFocus = false, immediate = false) => {
+      clearPendingMotion();
+      setButtonState(false);
+      nav.inert = true;
+      nav.setAttribute('aria-hidden', 'true');
+      if (restoreFocus) toggle.focus();
+      if (immediate || reducedMotionQuery.matches || desktopQuery.matches) {
+        nav.dataset.state = 'closed';
+        return;
+      }
+      nav.dataset.state = 'closing';
+      closeTimer = window.setTimeout(() => {
+        if (nav.dataset.state === 'closing') nav.dataset.state = 'closed';
+        closeTimer = undefined;
+      }, 160);
     };
 
     toggle.addEventListener('click', () => {
-      if (toggle.getAttribute('aria-expanded') === 'true') closeMenu();
+      if (isOpen()) closeMenu();
       else openMenu();
     });
 
     nav.addEventListener('click', (event) => {
-      if (event.target instanceof HTMLAnchorElement) closeMenu();
+      if (event.target instanceof Element && event.target.closest('a')) closeMenu(true);
     });
 
     document.addEventListener('keydown', (event) => {
-      if (toggle.getAttribute('aria-expanded') !== 'true') return;
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && isOpen()) {
         event.preventDefault();
         closeMenu(true);
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const links = getLinks();
-      const first = links[0];
-      const last = links.at(-1);
-      if (!first || !last) return;
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
       }
     });
 
     document.addEventListener('pointerdown', (event) => {
-      if (toggle.getAttribute('aria-expanded') !== 'true') return;
       if (
+        isOpen() &&
         event.target instanceof Node &&
         !nav.contains(event.target) &&
         !toggle.contains(event.target)
@@ -435,9 +613,37 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       }
     });
 
-    const handleDesktopChange = (event: MediaQueryListEvent | MediaQueryList) => {
-      if (event.matches) closeMenu();
+    const handleViewportChange = (event: MediaQueryListEvent) => {
+      if (event.matches) {
+        clearPendingMotion();
+        nav.inert = false;
+        nav.removeAttribute('aria-hidden');
+        nav.dataset.state = 'closed';
+        setButtonState(false);
+      } else {
+        const focusIsInNav = nav.contains(document.activeElement);
+        hidePanelImmediately();
+        if (focusIsInNav) toggle.focus();
+      }
     };
-    desktopQuery.addEventListener('change', handleDesktopChange);
+    const handleReducedMotionChange = (event: MediaQueryListEvent) => {
+      if (!event.matches) return;
+      clearPendingMotion();
+      if (nav.dataset.state === 'closing') nav.dataset.state = 'closed';
+      if (nav.dataset.state === 'opening') nav.dataset.state = 'open';
+    };
+
+    desktopQuery.addEventListener('change', handleViewportChange);
+    reducedMotionQuery.addEventListener('change', handleReducedMotionChange);
+    window.addEventListener('pagehide', clearPendingMotion, { once: true });
+
+    if (desktopQuery.matches) {
+      nav.inert = false;
+      nav.removeAttribute('aria-hidden');
+      nav.dataset.state = 'closed';
+    } else {
+      hidePanelImmediately();
+    }
+    document.documentElement.dataset.navEnhanced = 'true';
   }
 </script>

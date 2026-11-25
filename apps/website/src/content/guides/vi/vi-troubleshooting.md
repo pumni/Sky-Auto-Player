@@ -12,7 +12,7 @@ summary: >-
 category: support
 order: 1
 published: '2026-08-08'
-updated: '2026-08-08'
+updated: '2026-11-26'
 draft: false
 related:
   - windows-setup
@@ -32,13 +32,13 @@ evidence:
 
 ## Bài hát không hiện trong Library
 
-**Nguyên nhân**: Phần mở rộng file không được nhận diện, hoặc Library chưa được reload.
+**Nguyên nhân**: Phần mở rộng file không được nhận diện, hoặc sheet chưa được nhập vào playlist.
 
 **Sửa**:
 
 1. Xác nhận phần mở rộng là `.json`, `.skysheet`, hoặc `.txt`.
-2. Nhấn **Reload songs** trong desktop GUI để reload mà không cần khởi động lại.
-3. Nếu vẫn không hiện, kiểm tra file nằm trực tiếp trong thư mục `songs/`, không phải trong thư mục con.
+2. Tạo hoặc chọn playlist, rồi dùng **Add songs** để nhập file hoặc thư mục chứa file.
+3. Kiểm tra file nguồn vẫn ở đường dẫn ban đầu; thao tác nhập tham chiếu file tại chỗ.
 
 ## Lỗi "Failed to parse" hoặc lỗi parse khi khởi động
 
@@ -65,8 +65,7 @@ parser hiện tại chưa hỗ trợ.
 **Nguyên nhân C — Tải hệ thống cao**: CPU tải nặng gây jitter scheduling Windows, làm tăng
 độ trễ phía sender vượt quá khả năng bù của adaptive lead.
 
-**Sửa**: Đóng ứng dụng nền. Thử bật tuning preset cho PC yếu qua flag `--tuning`. Xem
-[FAQ đầy đủ](https://pumni.github.io/Sky-Auto-Player/vi/faq/).
+**Sửa**: Đóng ứng dụng nền. Dùng **Diagnostics** để xem số đo dispatch phía gửi. Chỉ điều chỉnh tùy chọn có trong cài đặt bài đang chọn; các thiết lập này không đổi lịch chạy Windows hay vòng lấy mẫu input của game. Xem [FAQ đầy đủ](https://pumni.github.io/Sky-Auto-Player/vi/faq/).
 
 > **Lưu ý**: Sky Auto Player kiểm soát khi nào phím được _gửi_. Khi game _xử lý_ chúng
 > phụ thuộc vào vòng lặp sampling input của game và scheduling Windows — những yếu tố này
@@ -84,8 +83,7 @@ của game cho phím đó.
 
 **Nguyên nhân A — Focus**: Cửa sổ game không có focus khi phát nhạc bắt đầu.
 
-**Sửa**: Chuyển sang cửa sổ game trước khi nhấn hotkey phát. Sky Auto Player gửi phím đến
-cửa sổ đang active; nếu game không được focus, phím sẽ đi nơi khác.
+**Sửa**: Chuyển sang cửa sổ game trước khi nhấn hotkey phát. Sky Auto Player chỉ gửi đầu vào sau khi kiểm tra xác nhận target Sky được chọn đang ở foreground. Hãy chuyển focus về Sky rồi thử lại; đầu vào không được chuyển đến một cửa sổ active bất kỳ.
 
 **Nguyên nhân B — Hotkey chưa đặt**: Hotkey phát chưa được bind hoặc xung đột với ứng dụng khác.
 
@@ -98,11 +96,9 @@ dùng trong Sky.
 
 ## Cảnh báo Windows SmartScreen khi khởi động
 
-**Nguyên nhân**: Installer hoặc binary không đạt identity Authenticode mong đợi, hoặc không
-được tải từ trang GitHub Releases chính thức của Sky Auto Player.
+**Nguyên nhân**: Installer canonical hiện chưa được ký Authenticode theo chính sách hiện hành. Windows có thể hiển thị Unknown Publisher hoặc cảnh báo SmartScreen.
 
-**Sửa**: Không bỏ qua cảnh báo. Xóa file và tải lại installer cùng sidecar `.exe.sig` từ
-[trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases).
+**Sửa**: Xác nhận file được tải từ [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases). Tauri updater xác minh sidecar `.exe.sig` riêng; sidecar không cung cấp publisher identity Authenticode. Nếu không xác nhận được nguồn tải, đừng chạy installer.
 
 ## Cập nhật thủ công
 
@@ -119,8 +115,7 @@ dùng trong Sky.
 **Nguyên nhân**: Chỉ số jitter của HUD phản ánh phương sai dispatch _phía sender_. Giá trị cao
 cho thấy áp lực scheduling OS trên máy của bạn.
 
-**Sửa**: Đóng ứng dụng nền. Thử tuning preset. Lưu ý rằng jitter phía sender không trực
-tiếp dẫn đến lỗi timing nghe được — sampling rate của game thường là yếu tố lớn hơn.
+**Sửa**: Đóng ứng dụng ngốn tài nguyên và xem lại các số đo phía gửi. Những số đo này không cho biết khi nào Sky đăng ký đầu vào hay phát ra âm thanh.
 
 ## Giới hạn đã biết
 
@@ -130,7 +125,7 @@ Những vấn đề này không thể sửa từ phía player và được ghi n
   ghi đè tần số polling input của game.
 - **Đoạn nhạc rất nhanh**: Arpeggio cực dày ở BPM cao có thể vượt quá khả năng đăng ký
   nốt riêng lẻ của game, bất kể phím được gửi chính xác đến mức nào.
-- **Chỉ hỗ trợ Windows**: MMCSS real-time scheduling và `SendInput` là Windows API. macOS
-  và Linux không được hỗ trợ và không có trong roadmap.
+- **Windows 11 64-bit**: Bản đóng gói hiện tại cần Windows 11 64-bit. Không hỗ trợ gói
+  Windows 10, macOS hay Linux.
 - **Dự án không chính thức**: Sky Auto Player không liên kết với thatgamecompany. Tự động
   phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky.

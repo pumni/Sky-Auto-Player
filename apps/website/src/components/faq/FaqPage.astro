@@ -87,58 +87,60 @@ const structuredData = {
 </BaseLayout>
 
 <style>
-  .faq-layout {
-    display: grid;
-    gap: var(--space-8);
-    margin-bottom: var(--section-space-default);
-  }
-  @media (min-width: 64rem) {
+  @layer components {
     .faq-layout {
-      grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
+      display: grid;
+      gap: var(--space-8);
+      margin-bottom: var(--section-space-default);
     }
-  }
-  .kicker {
-    font-weight: 700;
-    color: var(--color-text-muted);
-    text-transform: uppercase;
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.1em;
-    margin-bottom: var(--space-2);
-  }
-  .faq-hero__copy {
-    font-size: var(--font-size-lead);
-    color: var(--color-text-subtle);
-    margin-top: var(--space-4);
-    max-width: var(--content-max);
-  }
-  .final-cta {
-    background: var(--color-surface-1);
-    text-align: center;
-    border-top: 1px solid var(--border-default);
-  }
-  .final-cta__layout {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-6);
-  }
-  .final-cta h2 {
-    margin-bottom: var(--space-4);
-  }
-  .final-cta p {
-    color: var(--color-text-subtle);
-  }
-  .final-cta__actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: var(--space-4);
-  }
-  @media (max-width: 40rem) {
-    .final-cta__actions {
+    @media (min-width: 64rem) {
+      .faq-layout {
+        grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
+      }
+    }
+    .kicker {
+      font-weight: 700;
+      color: var(--color-text-secondary);
+      text-transform: uppercase;
+      font-size: var(--type-label);
+      letter-spacing: 0.1em;
+      margin-bottom: var(--space-2);
+    }
+    .faq-hero__copy {
+      font-size: var(--type-lead);
+      color: var(--color-text-tertiary);
+      margin-top: var(--space-4);
+      max-width: var(--content-max);
+    }
+    .final-cta {
+      background: var(--color-surface-quiet);
+      text-align: center;
+      border-top: 1px solid var(--line-default);
+    }
+    .final-cta__layout {
+      display: flex;
       flex-direction: column;
-      align-items: stretch;
-      width: min(100%, 22rem);
+      align-items: center;
+      gap: var(--space-6);
+    }
+    .final-cta h2 {
+      margin-bottom: var(--space-4);
+    }
+    .final-cta p {
+      color: var(--color-text-tertiary);
+    }
+    .final-cta__actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: var(--space-4);
+    }
+    @media (max-width: 40rem) {
+      .final-cta__actions {
+        flex-direction: column;
+        align-items: stretch;
+        width: min(100%, 22rem);
+      }
     }
   }
 </style>

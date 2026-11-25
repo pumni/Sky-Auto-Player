@@ -10,6 +10,7 @@
     html {
       scroll-behavior: auto;
     }
+
     *,
     *::before,
     *::after {
@@ -25,7 +26,7 @@
     background: var(--color-page);
     color: var(--color-text-primary);
     font-family: var(--font-body);
-    font-size: var(--font-size-body);
+    font-size: var(--type-body);
     line-height: var(--leading-body);
     font-synthesis: none;
     text-rendering: optimizeLegibility;
@@ -34,8 +35,8 @@
   h1,
   h2,
   h3 {
-    font-family: var(--font-display);
     color: var(--color-text-primary);
+    font-family: var(--font-display);
     font-weight: 600;
     line-height: var(--leading-heading);
     text-wrap: balance;
@@ -53,13 +54,13 @@
   }
 
   h1 {
-    font-size: var(--font-size-hero);
+    font-size: var(--type-hero);
     line-height: var(--leading-display);
     letter-spacing: -0.04em;
   }
 
   h2 {
-    font-size: var(--font-size-h2);
+    font-size: var(--type-h2);
   }
 
   h3 {
@@ -80,27 +81,48 @@
   }
 
   :lang(vi) {
-    --leading-display: 1.02;
+    --leading-display: 1.04;
   }
 
   ::selection {
     background: var(--color-action);
-    color: var(--color-page);
+    color: var(--color-text-on-action);
   }
 
   :focus-visible {
-    outline: 2px solid var(--color-action);
-    outline-offset: 4px;
+    outline: 2px solid var(--color-focus);
+    outline-offset: 3px;
     border-radius: 2px;
+  }
+
+  @media (forced-colors: active) {
+    :focus-visible {
+      outline-color: Highlight;
+    }
+
+    a {
+      text-decoration: underline;
+    }
   }
 }
 
 @layer patterns {
-  a {
-    text-underline-offset: 0.18em;
+  .ui-prose a {
+    color: var(--color-text-primary);
+    text-decoration: underline;
+    text-decoration-color: var(--color-text-tertiary);
+    text-decoration-thickness: 1px;
+    text-underline-offset: 0.2em;
+    text-decoration-skip-ink: auto;
+    transition: text-decoration-color var(--duration-fast) var(--ease-standard);
   }
 
-  a:hover {
-    color: var(--color-text-primary);
+  .ui-prose a:hover,
+  .ui-prose a:focus-visible {
+    text-decoration-color: var(--color-focus);
+  }
+
+  .ui-prose a:focus-visible {
+    outline-offset: 2px;
   }
 }

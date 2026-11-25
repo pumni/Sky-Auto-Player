@@ -13,7 +13,7 @@ summary: >-
 category: support
 order: 1
 published: '2026-08-08'
-updated: '2026-08-08'
+updated: '2026-11-26'
 draft: false
 related:
   - windows-setup
@@ -33,13 +33,13 @@ evidence:
 
 ## Song not appearing in the Library
 
-**Cause**: The file extension is not recognised, or the Library has not been reloaded.
+**Cause**: The file extension is not recognised, or the sheet has not been imported into a playlist.
 
 **Fix**:
 
 1. Confirm the file extension is `.json`, `.skysheet`, or `.txt`.
-2. Press **Reload songs** in the desktop GUI without restarting.
-3. If still missing, check that the file is directly inside the `songs/` folder, not in a subfolder.
+2. Create or select a playlist and use **Add songs** to import the file or its folder.
+3. Confirm the source still exists at the original path; imports reference files in place.
 
 ## "Failed to parse" or parse error on launch
 
@@ -67,8 +67,7 @@ configured inside Sky.
 **Cause C — System load**: Heavy CPU load causes Windows scheduling jitter, which
 increases sender-side latency beyond what the adaptive lead can compensate.
 
-**Fix**: Close background applications. Consider enabling a tuning preset for weak PCs
-via the `--tuning` flag. See the [full FAQ](https://pumni.github.io/Sky-Auto-Player/faq/).
+**Fix**: Close background applications. Use **Diagnostics** to review sender-side dispatch measurements. Adjust only options available in the selected song's settings; they cannot change Windows scheduling or the game's input sampling. See the [full FAQ](https://pumni.github.io/Sky-Auto-Player/faq/).
 
 > **Note**: Sky Auto Player controls when keystrokes are _sent_. When the game _processes_
 > them depends on the game's own sampling loop and Windows scheduling — these factors are
@@ -86,8 +85,7 @@ registration time for that key.
 
 **Cause A — Focus**: The game window does not have focus when playback starts.
 
-**Fix**: Switch to the game window before pressing the play hotkey. Sky Auto Player sends
-keystrokes to the active window; if the game is not focused, keystrokes go elsewhere.
+**Fix**: Switch to the game window before pressing the play hotkey. Sky Auto Player sends input only when checks confirm the selected Sky target is in the foreground. Restore focus to Sky and retry; input is not routed to an arbitrary active window.
 
 **Cause B — Hotkey not set**: The play hotkey is not bound or conflicts with another application.
 
@@ -100,11 +98,9 @@ in use inside Sky.
 
 ## Windows SmartScreen warning on launch
 
-**Cause**: The installer or an installed binary did not pass the expected Authenticode identity
-or was not downloaded from the official Sky Auto Player GitHub Releases page.
+**Cause**: The canonical installer is intentionally unsigned for Authenticode under the current policy. Windows may show Unknown Publisher or a SmartScreen warning.
 
-**Fix**: Do not bypass the warning. Delete the download and obtain the installer and `.exe.sig`
-sidecar again from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
+**Fix**: Confirm the download came from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases). The Tauri updater verifies the separate `.exe.sig` sidecar; it does not provide Authenticode publisher identity. If you cannot confirm the source, do not run the installer.
 
 ## Updating manually
 
@@ -122,9 +118,7 @@ sidecar again from the [official Sky Auto Player GitHub Releases page](https://g
 **Cause**: The HUD's jitter metric reflects _sender-side_ dispatch variance. High values
 indicate OS scheduling pressure on your machine.
 
-**Fix**: Close background applications. Try a tuning preset. Note that sender-side jitter
-does not directly translate to audible timing errors — the game's sampling rate is often
-the larger factor.
+**Fix**: Close resource-heavy applications and review the sender-side measurements again. These measurements do not show when Sky registers input or produces sound.
 
 ## Known limitations
 
@@ -134,7 +128,7 @@ These issues cannot be fixed from the player side and are documented as known co
   cannot override the game's input polling rate.
 - **Very fast passages**: Extremely dense arpeggios at high BPM may exceed the game's
   ability to register individual notes, regardless of how precisely they are sent.
-- **Windows only**: MMCSS real-time scheduling and `SendInput` are Windows APIs. macOS
-  and Linux are not supported and are not on the roadmap.
+- **Windows 11 x64**: The current packaged app requires Windows 11 64-bit. Windows 10,
+  macOS, and Linux packages are not supported.
 - **Unofficial project**: Sky Auto Player is not affiliated with thatgamecompany.
   Automated playback may conflict with Sky's Terms of Service.
