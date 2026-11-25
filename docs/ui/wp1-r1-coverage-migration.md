@@ -1,9 +1,11 @@
-# WP1-R1 Coverage Migration Ledger
+# WP1-R1 Coverage Migration Ledger and WP2 D11 Result
 
-This ledger maps the independent review's deleted Graphite/UI oracles to tests that exercise the
+The first section preserves the **historical WP1-R1 baseline** at reviewed source identity
+`8bb6789589062fa5bf86595427a307fddb6a8217`. It maps the independent review's deleted Graphite/UI oracles to tests that exercise the
 current Tailwind v4, Base UI, and shared-component architecture. It records the reviewed source
-identity `8bb6789589062fa5bf86595427a307fddb6a8217`; old selectors and screenshot-only checks were
-not carried forward as assertions.
+identity; old selectors and screenshot-only checks were not carried forward as assertions. The
+WP1-R1 Axe limitation below describes that historical checkpoint and is superseded for the
+authorized stable Add songs flow by the conditional D11 result later in this file.
 
 | Removed suite or test | Meaningful oracle | Current replacement coverage |
 | --- | --- | --- |
@@ -17,9 +19,9 @@ not carried forward as assertions.
 | `palette-appearance.spec.ts` | All palette tokens/contrast; Graphite default ID; Settings geometry/focus; consumers and interactions; forced colors | `graphiteThemeTokens.test.ts`: exact Graphite/Light action tokens, six palette definitions, swatches, and contrast. `settings-diagnostics.spec.ts`: all six palette IDs round-trip through Settings. `system-appearance.spec.ts`: saved dark palette stays independent from active mode. `theme-accessibility.spec.ts`: rendered computed colors, focus, row state and forced-colors behavior. |
 | `AppSelect.test.tsx` | Hold/FPS formatting, Default tempo, accessible listbox, disabled option/Escape, and Tab dismissal without a focus trap | Formatting assertions moved to `playbackOptionFormatting.test.ts`; listbox selection, disabled option, Escape and focus restoration live in `select.test.tsx`; `player-dock-density.spec.ts` now exercises Tab dismissal against a rendered Playback Profile Select at each covered dock viewport. |
 
-## Current Axe limitation
+## Historical WP1-R1 Axe finding
 
-The ordinary Add songs menu uses the shared Base UI 1.9.0 Menu root with its supported
+At the WP1-R1 baseline, the ordinary Add songs menu used the shared Base UI 1.9.0 Menu root with its supported
 `modal={false}` setting. The keyboard regression covers ArrowDown/ArrowUp, Space, Enter,
 Tab/Shift+Tab exit, Escape restoration, outside interaction, compact hit targets, and focus leaving
 Base UI's guards in `library.spec.ts`. The compact regression opens the menu at 640×448 with the
@@ -37,11 +39,45 @@ $env:GRAPHITE_WORKSPACE_CAPTURE = 'candidate'
 bun run test:e2e -- tests/e2e/library.spec.ts --grep "compact playlist source keeps Add, Import, Back, long-name access, and hit targets" --reporter=line --workers=1
 ```
 
-The test's accessible-role queries and focus assertions expose the menu and its focused menu item
-to the browser accessibility tree; the broader Add songs keyboard test validates the tab exit and
-focus restoration sequence. This is browser keyboard/accessibility-tree evidence, not a claim of a
-manual NVDA or Narrator session. Axe remains enabled with no rule/selector exclusions, and no
-Base UI focus guard is changed. A previous full run also found the guard during a populated
-playlist scan; the final full run passed that scan. The final canonical gate reports 148 passed,
-1 skipped, and this 1 failed E2E test. R5 therefore remains unresolved pending the required
-leader decision on the exact guard-only finding; it is not counted as passing.
+The test's accessible-role queries and focus assertions exposed the menu and its focused menu item
+to the browser accessibility tree; the broader Add songs keyboard test validated the tab exit and
+focus restoration sequence. That checkpoint was browser keyboard/accessibility-tree evidence, not
+a manual NVDA or Narrator session. Its R5 disposition was unresolved at that time. The D11
+adjudication below records the leader-authorized, version-bound treatment and retains the complete
+unfiltered Axe result.
+
+## WP2 D11 conditional adjudication
+
+**Scope:** `@base-ui/react@1.9.0` `Menu` focus guards, only during the stable open Add songs menu
+flow used by the compact playlist regression. This is an adjudication of six known library-owned
+sentinels for that one scan, not a claim that the application has no Axe findings.
+
+The test first retains Axe 4.14's complete unfiltered result, then classifies each `aria-hidden-focus`
+node against the pinned Base UI implementation and its DOM placement. The six nodes observed are
+two wrapper guards with no `data-type`, two `outside`, and two `inside` guards. Classification fails
+closed if the package version, rule, target count, selector, marker, placement, tag, element shape,
+geometry, visibility, hidden ancestry, or descendant structure differs. No production DOM is
+mutated, and Axe has no global rule or selector exclusion.
+
+Before conditional acceptance, the behavioral checks verify Tab and Shift+Tab both leave the
+popup within one second, with visible destinations outside the sentinel flow. Keyboard coverage
+also checks open and closed states, Escape restoration, outside pointer dismissal, nested Add songs
+dialog/add-mode transitions, menu-to-AlertDialog focus behavior, and rapid close/reopen. The full
+accessibility tree exposes the named menu and all three menu items while excluding all six guards.
+Negative controls exercise hidden buttons, descendants, hidden ancestors, spoofed markers,
+duplicate selectors, mixed targets, out-of-flow targets, malformed related nodes, other Axe rules
+and critical findings, stuck focus, body/hidden destinations, and focus loops.
+
+The complete raw Axe report is
+[`axe-full-unfiltered-add-songs.json`](evidence/wp2/axe-full-unfiltered-add-songs.json) (SHA-256
+`7C1A8DE365AF5A6B69F9D9C0CB6F2D3C528AF459F51EECD483476D6B6561C1CB`). It contains 2 violations:
+`aria-hidden-focus` (serious, six sentinel nodes) and `region` (moderate, one finding), plus 4
+incomplete rules, 43 passes, and 46 inapplicable rules. The separate
+[`axe-focus-guard-adjudication.json`](evidence/wp2/axe-focus-guard-adjudication.json) record (SHA-256
+`FE64A7D22E8FF875C99016CA57878AD61DBC8170D0559E3B9C83E97CEACB6AC9`) preserves the observed
+classification and keyboard traversals.
+
+This satisfies the conditional D11 gate only for the stable open Add songs flow under the pinned
+Base UI version. Any dependency-version or sentinel-structure change must fail closed and trigger
+re-adjudication; remove the exception when Base UI fixes the underlying behavior. Manual Narrator
+and NVDA verification was **not run**.

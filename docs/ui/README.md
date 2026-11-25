@@ -14,5 +14,7 @@ This executes the existing opt-in Playwright visual capture, checks four PNGs, a
 
 Historic visual reviews remain available through immutable commit-pinned links in their original evidence reports. Review screenshots, one-off comparison captures, traces, and logs belong in ignored `test-results/` or PR/release artifacts—not a continually expanding set of screenshot folders under `docs/evidence/`.
 
-The WP1-R1 coverage migration and its outstanding Base UI open-menu Axe finding are documented in
-the [coverage migration ledger](wp1-r1-coverage-migration.md).
+The [coverage migration ledger](wp1-r1-coverage-migration.md) preserves the historical WP1-R1
+baseline and records the narrowly scoped WP2 D11 adjudication for Base UI 1.9.0 focus sentinels.
+WP2 source, verification, raw Axe results, performance measurements, and expanded visual evidence
+are indexed in the [WP2 evidence report](evidence/wp2/README.md).
