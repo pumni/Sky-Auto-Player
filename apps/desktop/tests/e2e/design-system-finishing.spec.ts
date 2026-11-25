@@ -17,8 +17,7 @@ function channels(color: string): [number, number, number] {
     const short = (lightness - 0.0894841775 * a - 1.291485548 * b) ** 3;
     const toSrgb = (value: number) => {
       const linear = Math.max(0, Math.min(1, value));
-      const encoded =
-        linear <= 0.0031308 ? 12.92 * linear : 1.055 * linear ** (1 / 2.4) - 0.055;
+      const encoded = linear <= 0.0031308 ? 12.92 * linear : 1.055 * linear ** (1 / 2.4) - 0.055;
       return Math.round(encoded * 255);
     };
     return [
@@ -209,8 +208,8 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
       })
       .toBe(true);
     await expect
-      .poll(() =>
-        scrollbar.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity)),
+      .poll(
+        () => scrollbar.evaluate((element) => Number.parseFloat(getComputedStyle(element).opacity)),
         { intervals: [10, 20, 40] },
       )
       .toBeGreaterThan(0);
