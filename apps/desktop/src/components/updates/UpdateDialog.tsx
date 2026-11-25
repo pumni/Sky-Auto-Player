@@ -88,7 +88,7 @@ export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
     >
       <DialogContent
         aria-label="Software update"
-        className="flex max-h-[calc(100dvh-32px)] w-[min(540px,calc(100vw-32px))] min-h-0 min-w-0 flex-col gap-0 overflow-hidden rounded-dialog border-border bg-card p-5 shadow-2xl"
+        className="flex max-h-[calc(100dvh-32px)] w-[min(540px,calc(100vw-32px))] min-h-0 min-w-0 flex-col gap-0 overflow-hidden p-5 shadow-2xl"
         showCloseButton={false}
       >
         <div
@@ -143,7 +143,7 @@ export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
                 >
                   <ScrollAreaContent className="grid min-w-0 gap-2 p-3.5 text-text-secondary">
                     <h3
-                      className="m-0 flex-none text-[11px] font-semibold uppercase tracking-wide text-text-tertiary"
+                      className="m-0 flex-none text-xs font-semibold leading-4 text-text-tertiary"
                       id="update-release-notes-heading"
                     >
                       What’s new

@@ -152,12 +152,12 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
               side="top"
               align="end"
               sideOffset={8}
-              className="flex h-max max-h-(--available-height) max-[700px]:max-h-[min(360px,var(--available-height))] w-[min(360px,calc(100vw-24px))] min-w-[min(320px,calc(100vw-24px))] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-pane border border-border bg-popover p-0 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="flex h-max max-h-(--available-height) max-[700px]:max-h-[min(360px,var(--available-height))] w-[min(360px,calc(100vw-24px))] min-w-[min(320px,calc(100vw-24px))] max-w-[calc(100vw-24px)] flex-col overflow-hidden p-0 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               role="dialog"
               aria-label="Playback profile"
             >
               <ScrollAreaRoot className="min-h-0 flex-1">
-                <ScrollAreaViewport className="rounded-pane">
+                <ScrollAreaViewport className="rounded-popover">
                   <ScrollAreaContent className="grid min-w-0 gap-2.5 p-4">
                     <header className="flex min-w-0 items-baseline justify-between gap-2">
                       <h3 className="m-0 shrink-0 text-sm font-semibold leading-5 text-foreground">
@@ -297,7 +297,7 @@ function ProfileFields({
     <>
       <div className="grid min-w-0 gap-0.5">
         <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={holdId}>
-          Base Hold
+          Base hold
         </label>
         <Select
           value={String(defaults.hold_frames)}
@@ -306,9 +306,9 @@ function ProfileFields({
               void patchSettings({ playbackDefaults: { holdFrames: Number(value) } });
           }}
         >
-          <SelectTrigger id={holdId} className="h-8" aria-label="Base Hold">
+          <SelectTrigger id={holdId} className="h-8" aria-label="Base hold">
             <SelectValue>
-              {(value: string | null) => (value === null ? 'Base Hold' : `${value}f`)}
+              {(value: string | null) => (value === null ? 'Base hold' : `${value}f`)}
             </SelectValue>
           </SelectTrigger>
           <SelectContent className="min-w-40">

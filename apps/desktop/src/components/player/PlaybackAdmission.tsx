@@ -2,7 +2,7 @@ import { LoaderCircle } from 'lucide-react';
 import { useEffect, useRef } from 'react';
 import type { DesktopStoreHook } from '../../state/store';
 import { playbackIssuePresentation } from '../../state/store';
-import { admissionDecisionLabel } from './playerFormatting';
+import { admissionDecisionDescription, admissionDecisionLabel } from './playerFormatting';
 import { TimingAdvisory } from './TimingAdvisory';
 import { Button } from '../ui/button';
 import {
@@ -49,7 +49,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
     return (
       <ScrollAreaRoot
         style={{ position: 'absolute' }}
-        className="bottom-[calc(100%+8px)] left-1/2 z-20 flex max-h-[min(68dvh,520px)] w-[min(600px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 flex-col rounded-pane border border-warning-border border-l-[3px] bg-popover shadow-2xl"
+        className="bottom-[calc(100%+8px)] left-1/2 z-20 flex max-h-[min(68dvh,520px)] w-[min(600px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 flex-col rounded-popover border border-warning-border border-l-[3px] bg-popover shadow-2xl transition-opacity duration-admission-enter ease-enter motion-reduce:transition-none"
         data-slot="playback-admission"
       >
         <ScrollAreaViewport
@@ -60,12 +60,21 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
         >
           <ScrollAreaContent className="grid min-w-0 grid-cols-1 gap-3 px-4 py-3 pr-6">
             <div className="grid min-w-0 gap-1.5">
-              <strong
-                className="text-sm font-semibold text-foreground"
-                id="playback-confirmation-title"
-              >
-                Playback confirmation
-              </strong>
+              <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-2">
+                <strong
+                  className="text-sm font-semibold text-foreground"
+                  id="playback-confirmation-title"
+                >
+                  Playback confirmation
+                </strong>
+                <span
+                  data-slot="playback-admission-song"
+                  className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-secondary"
+                  title={prepared.song.title}
+                >
+                  {prepared.song.title}
+                </span>
+              </div>
               <span className="overflow-visible whitespace-normal text-[13px] font-semibold text-warning">
                 {prepared.risk.headline}
               </span>
@@ -79,7 +88,8 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                 id="playback-confirmation-consequence"
                 className="m-0 break-words text-xs leading-relaxed text-muted-foreground"
               >
-                Proceed keeps the authored timing and selected settings unchanged.
+                Timing risk affects note detection in-game, not your account. Choose an option below
+                or cancel without starting.
               </p>
             </div>
             <div className="grid min-w-0 gap-2.5">
@@ -104,7 +114,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                           : 'View timing estimate';
                     return (
                       <div
-                        className="grid min-w-0 grid-rows-[minmax(48px,auto)_auto] content-start gap-1.5"
+                        className="grid min-w-0 grid-rows-[minmax(48px,auto)_auto_auto] content-start gap-1.5"
                         data-slot="admission-option"
                         key={decision.decision}
                       >
@@ -124,6 +134,9 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                         >
                           {admissionDecisionLabel(decision.decision, decision.label)}
                         </Button>
+                        <p className="m-0 text-[11px] leading-4 text-text-secondary">
+                          {admissionDecisionDescription(decision.decision)}
+                        </p>
                         <details
                           data-slot="admission-option-estimate"
                           className="min-w-0 text-[11px] text-text-secondary"
@@ -192,7 +205,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
 
   return (
     <section
-      className={`absolute bottom-[calc(100%+8px)] left-3 right-3 z-20 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-control border border-danger-border border-l-[3px] bg-danger-surface px-3 py-2.5 shadow-xl max-[700px]:grid-cols-1 ${['recoverable_status', 'conflict'].includes(presentedIssue.kind) ? 'border-warning-border bg-warning-surface' : ''}`}
+      className={`absolute bottom-[calc(100%+8px)] left-3 right-3 z-20 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 rounded-control border border-danger-border border-l-[3px] bg-danger-surface px-3 py-2.5 shadow-xl transition-opacity duration-admission-enter ease-enter motion-reduce:transition-none max-[700px]:grid-cols-1 ${['recoverable_status', 'conflict'].includes(presentedIssue.kind) ? 'border-warning-border bg-warning-surface' : ''}`}
       role="alert"
       data-slot="playback-recovery"
       aria-labelledby="playback-recovery-title"

@@ -76,6 +76,23 @@ export function playbackStatusLabel(playback: PlaybackSummaryState): string {
   }
 }
 
+const KNOWN_EVENT_LABELS: Readonly<Record<string, string>> = {
+  'core.ready': 'Native runtime ready',
+  'core.fatal': 'Native runtime error',
+  'catalog.changed': 'Library catalog updated',
+  'catalog.load_failed': 'Library catalog failed',
+  'playback.state_changed': 'Playback state changed',
+  'playback.snapshot': 'Playback snapshot',
+  'playback.finished': 'Playback finished',
+  'playback.failed': 'Playback failed',
+  'diagnostics.snapshot': 'Diagnostics snapshot',
+  'update.changed': 'Update status changed',
+};
+
+export function knownEventLabel(name: string): string | null {
+  return KNOWN_EVENT_LABELS[name] ?? null;
+}
+
 export function backendStatusLabel(
   status: DesktopStore['diagnostics']['samples'][number]['backend_status'],
 ): string {

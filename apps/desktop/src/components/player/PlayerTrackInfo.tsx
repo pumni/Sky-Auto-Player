@@ -3,7 +3,11 @@ import type { DesktopStoreHook } from '../../state/store';
 import { playbackSessionStatusConcern, selectSongById } from '../../state/store';
 import { StatusBadge } from '../ui/StatusBadge';
 import { Button } from '../ui/button';
-import { playerStateLabel } from './playerFormatting';
+import {
+  playerStateLabel,
+  TEST_MODE_ACCESSIBLE_DESCRIPTION,
+  TEST_MODE_LABEL,
+} from './playerFormatting';
 
 interface PlayerTrackInfoProps {
   useStore: DesktopStoreHook;
@@ -66,11 +70,10 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const statusAccessibilityLabel =
     `${title}: ${baseStatus}` +
     (playbackMode === 'test'
-      ? '. Dry run; no physical input is sent.'
+      ? '. Test mode; no keyboard input is sent.'
       : playbackMode === 'live'
         ? '. Normal playback may send physical input.'
         : '');
-  const testModeDescription = 'Dry run: no physical keyboard input is sent.';
 
   return (
     <div
@@ -124,11 +127,10 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
               className="shrink-0"
               appearance="plain"
               indicator={false}
-              aria-label={testModeDescription}
-              title={testModeDescription}
+              aria-label={TEST_MODE_ACCESSIBLE_DESCRIPTION}
+              title={TEST_MODE_ACCESSIBLE_DESCRIPTION}
             >
-              <span className="hidden @min-[180px]/player-track-info:inline">Test · no keys</span>
-              <span className="inline @min-[180px]/player-track-info:hidden">Dry run</span>
+              {TEST_MODE_LABEL}
             </StatusBadge>
           )}
         </div>

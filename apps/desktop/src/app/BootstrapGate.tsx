@@ -22,9 +22,7 @@ export function BootstrapGate({ useStore, children }: BootstrapGateProps) {
         >
           ♪
         </div>
-        <p className="m-0 text-[11px] font-semibold tracking-wide text-text-tertiary">
-          SKY AUTO PLAYER
-        </p>
+        <p className="m-0 text-xs font-semibold leading-4 text-text-tertiary">Sky Auto Player</p>
         <h1 className="m-0 text-xl font-semibold leading-7 text-foreground">
           Opening your library…
         </h1>
@@ -39,9 +37,7 @@ export function BootstrapGate({ useStore, children }: BootstrapGateProps) {
         className="grid min-h-dvh content-center justify-items-center gap-2 bg-background p-6 text-center"
         role="alert"
       >
-        <p className="m-0 text-[11px] font-semibold tracking-wide text-danger">
-          APPLICATION UNAVAILABLE
-        </p>
+        <p className="m-0 text-xs font-semibold leading-4 text-danger">Application unavailable</p>
         <h1 className="m-0 max-w-[580px] text-xl font-semibold leading-7 text-foreground">
           Sky Auto Player could not start.
         </h1>

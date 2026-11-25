@@ -1,5 +1,6 @@
 import type { DesktopStoreHook } from '../../state/store';
 import { playbackSessionStatusConcern } from '../../state/store';
+import { TEST_MODE_DIAGNOSTICS_LABEL } from '../player/playerFormatting';
 import { playbackStatusLabel } from './diagnosticsPresentation';
 
 export function DiagnosticsPlaybackSummary({ useStore }: { useStore: DesktopStoreHook }) {
@@ -64,7 +65,7 @@ export function DiagnosticsPlaybackSummary({ useStore }: { useStore: DesktopStor
       )}
       {dryRun !== null && (isActive || playback.prepared) && (
         <span className="break-words text-xs text-text-secondary">
-          Mode: {dryRun ? 'Dry run · no physical input sent' : 'Physical input'}
+          Mode: {dryRun ? TEST_MODE_DIAGNOSTICS_LABEL : 'Physical input'}
         </span>
       )}
     </section>

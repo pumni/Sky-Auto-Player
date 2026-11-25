@@ -50,15 +50,13 @@ export function SettingsPanel({ bootstrap, useStore, onUpdateDialogOpen }: Setti
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogContent
-        className="flex h-[min(640px,88dvh)] w-[min(820px,calc(100vw-32px))] min-h-0 flex-col gap-0 overflow-hidden rounded-dialog border-border bg-card px-5 pb-3.5 pt-[18px] shadow-2xl"
+        className="flex h-[min(640px,88dvh)] w-[min(820px,calc(100vw-32px))] min-h-0 flex-col gap-0 overflow-hidden px-5 pb-3.5 pt-[18px] shadow-2xl"
         aria-labelledby="settings-title"
         showCloseButton={false}
       >
         <div className="mb-3 flex flex-none items-start justify-between gap-4">
           <div className="grid gap-px">
-            <p className="m-0 text-[11px] font-semibold tracking-wide text-text-tertiary">
-              PREFERENCES
-            </p>
+            <p className="m-0 text-xs font-semibold leading-4 text-text-tertiary">Preferences</p>
             <DialogTitle className="m-0 text-2xl font-semibold leading-8" id="settings-title">
               Settings
             </DialogTitle>

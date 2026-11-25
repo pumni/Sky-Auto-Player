@@ -39,9 +39,8 @@ Production action controls use the shared `Button` variants: `default` for prima
 controls with their existing hit targets. The Player Dock uses a 92 px grid with equal flexible
 side columns around a centered transport column capped at 600 px or 45 vw. At compact widths it
 keeps song title, playback status, test-mode label, timeline, and centered transport visible while
-removing the decorative note glyph. The test-mode label keeps “Test · no keys” when its player
-column can fit it and uses “Dry run” when it cannot; its accessible label always says that no
-physical keyboard input is sent. The timeline uses the semantic control-hover track color.
+removing the decorative note glyph. The test-mode label uses “Test mode” in both wide and compact layouts; its accessible label always
+says that no keyboard input is sent. The timeline uses the semantic control-hover track color.
 
 The Library's empty Playlists action uses an outline while Built-in Songs are available and a filled
 primary style when that source is unavailable. Its help text stays short and explains the playlist's

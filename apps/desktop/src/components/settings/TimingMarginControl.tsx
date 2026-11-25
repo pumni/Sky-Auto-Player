@@ -116,11 +116,11 @@ export function TimingMarginControl({
     <div
       className={`grid min-w-0 ${density === 'compact' ? 'grid-cols-1 content-start gap-1' : 'grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1'}`}
       role="group"
-      aria-label="Timing Margin"
+      aria-label="Timing margin"
       data-slot="timing-margin-control"
     >
       <div className="flex min-w-0 items-center justify-between">
-        <span className="text-xs font-medium text-text-secondary">Timing Margin</span>
+        <span className="text-xs font-medium text-text-secondary">Timing margin</span>
       </div>
       <div className="grid h-8 grid-cols-[32px_minmax(0,1fr)_32px] items-center gap-1 rounded-control border border-border bg-surface px-1">
         <Button
@@ -128,7 +128,7 @@ export function TimingMarginControl({
           size="icon-xs"
           className="size-7 rounded-control p-0 text-text-secondary hover:bg-control-hover hover:text-foreground"
           type="button"
-          aria-label="Decrease Timing Margin"
+          aria-label="Decrease timing margin"
           disabled={requestedValue <= min}
           onClick={() => requestValue(Math.max(min, requestedValue - step))}
         >
@@ -142,7 +142,7 @@ export function TimingMarginControl({
           size="icon-xs"
           className="size-7 rounded-control p-0 text-text-secondary hover:bg-control-hover hover:text-foreground"
           type="button"
-          aria-label="Increase Timing Margin"
+          aria-label="Increase timing margin"
           disabled={requestedValue >= max}
           onClick={() => requestValue(Math.min(max, requestedValue + step))}
         >

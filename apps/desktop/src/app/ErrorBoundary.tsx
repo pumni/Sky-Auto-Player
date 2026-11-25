@@ -28,7 +28,7 @@ export class ErrorBoundary extends Component<PropsWithChildren, State> {
           className="grid min-h-dvh content-center justify-items-center gap-2 bg-background p-6 text-center"
           role="alert"
         >
-          <p className="m-0 text-[11px] font-semibold tracking-wide text-danger">DESKTOP UI</p>
+          <p className="m-0 text-xs font-semibold leading-4 text-danger">Desktop UI</p>
           <h1 className="m-0 max-w-[580px] text-xl font-semibold leading-7 text-foreground">
             The desktop surface stopped rendering.
           </h1>

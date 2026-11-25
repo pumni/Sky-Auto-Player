@@ -61,6 +61,8 @@
   --duration-standard: 180ms;
   --duration-panel: 240ms;
   --duration-tab: 150ms;
+  --duration-transport-icon: 100ms;
+  --duration-admission-enter: var(--duration-fast);
   --duration-tooltip-enter: 100ms;
   --duration-tooltip-exit: var(--duration-micro);
   --duration-menu-enter: var(--duration-tab);
@@ -222,10 +224,20 @@ progress[aria-disabled='true']::-moz-progress-bar {
   }
 }
 
+html[data-theme-applying],
+html[data-theme-applying] * {
+  transition-duration: 0ms !important;
+}
+
 @starting-style {
   [data-workbench-pane][data-pane='inspector'][data-presentation-mode='overlay'][data-open='true'] {
     opacity: 0;
     translate: 10px 0;
+  }
+
+  [data-slot='playback-admission'],
+  [data-slot='playback-recovery'] {
+    opacity: 0;
   }
 }
 

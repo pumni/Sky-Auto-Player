@@ -140,7 +140,7 @@ export function SettingsCategoryContent({
                   className="cursor-pointer text-[13px] font-medium text-text-secondary"
                   htmlFor={baseHoldId}
                 >
-                  Base Hold
+                  Base hold
                 </label>
                 <Select
                   value={String(defaults.hold_frames)}
@@ -149,11 +149,11 @@ export function SettingsCategoryContent({
                       patch({ playbackDefaults: { holdFrames: Number(nextValue) } });
                   }}
                 >
-                  <SelectTrigger id={baseHoldId} aria-label="Base Hold">
+                  <SelectTrigger id={baseHoldId} aria-label="Base hold">
                     <SelectValue>
                       {(value: string | null) =>
                         value === null
-                          ? 'Base Hold'
+                          ? 'Base hold'
                           : `${value} ${Number(value) === 1 ? 'frame' : 'frames'}`
                       }
                     </SelectValue>
