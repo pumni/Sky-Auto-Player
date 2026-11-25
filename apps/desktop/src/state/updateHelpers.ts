@@ -16,7 +16,6 @@ export interface UpdatePresentationState {
 export interface UpdatePresentation {
   isChecking: boolean;
   isNativeBusy: boolean;
-  isPendingHandoff: boolean;
   isBusy: boolean;
   isError: boolean;
   isAvailable: boolean;
@@ -77,7 +76,7 @@ export function formatUpdateError(
     : 'An unexpected error occurred while checking for updates.';
 }
 
-export function getUpdateErrorHeading(
+function getUpdateErrorHeading(
   errorCode: UpdateErrorCode | null,
   retryAction: UpdateRetryAction,
   hasTransportError = false,
@@ -155,7 +154,6 @@ export function deriveUpdatePresentation(update: UpdatePresentationState): Updat
   return {
     isChecking,
     isNativeBusy,
-    isPendingHandoff,
     isBusy,
     isError,
     isAvailable,

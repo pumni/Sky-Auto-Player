@@ -66,9 +66,9 @@ export function UpdateSettings({
 
       <div
         data-slot="update-status-group"
-        className="grid min-w-0 gap-3 rounded-pane border border-border bg-card px-4 py-3.5"
+        className="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-3 rounded-pane border border-border bg-card px-4 py-3.5"
       >
-        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+        <div className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <div className="grid min-w-0 gap-0.5">
             <span className="text-xs leading-[18px] text-text-tertiary">Installed version</span>
             <span className="break-words text-xl font-semibold leading-7 tabular-nums text-foreground">
@@ -80,10 +80,10 @@ export function UpdateSettings({
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
           {isError ? (
             <p
-              className="m-0 min-w-0 flex-1 break-words text-xs leading-[18px] text-danger [overflow-wrap:anywhere]"
+              className="m-0 min-w-0 basis-full break-words text-xs leading-[18px] text-danger [overflow-wrap:anywhere] @min-[420px]/settings-content:basis-0 @min-[420px]/settings-content:flex-1"
               role="alert"
             >
               {errorText}

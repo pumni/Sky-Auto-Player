@@ -713,3 +713,41 @@ test('Settings unified shell, Ctrl+, shortcut, radio arrows, and scroll reset ho
   );
   await expectNoSeriousAccessibilityViolations(page);
 });
+
+test('Settings Updates wraps long errors without horizontal overflow at compact widths', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 640, height: 448 });
+  await page.goto('/?mockUpdateState=error-long');
+  await page.getByRole('button', { name: 'Open settings' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Settings' });
+  await dialog.getByRole('button', { name: 'Updates', exact: true }).click();
+
+  const content = dialog.locator('[data-settings-content]');
+  const alert = dialog.getByRole('alert');
+  const checkAgain = dialog.getByRole('button', { name: 'Check again', exact: true });
+  const viewDetails = dialog.getByRole('button', { name: 'View details', exact: true });
+  await expect(alert).toBeVisible();
+  await expect(checkAgain).toBeVisible();
+  await expect(viewDetails).toBeVisible();
+  for (const viewport of [
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const bounds = await dialog.evaluate((el) => {
+      const scroller = el.querySelector<HTMLElement>('[data-settings-content]');
+      const statusGroup = el.querySelector<HTMLElement>('[data-slot="update-status-group"]');
+      if (!scroller || !statusGroup) return null;
+      const scrollerBox = scroller.getBoundingClientRect();
+      const groupBox = statusGroup.getBoundingClientRect();
+      return {
+        overflowX: scroller.scrollWidth > scroller.clientWidth,
+        groupFitsX: groupBox.right <= scrollerBox.right + 1,
+      };
+    });
+    expect(bounds).not.toBeNull();
+    expect(bounds?.overflowX).toBe(false);
+    expect(bounds?.groupFitsX).toBe(true);
+  }
+});
