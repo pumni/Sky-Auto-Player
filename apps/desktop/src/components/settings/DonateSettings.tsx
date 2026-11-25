@@ -25,7 +25,7 @@ export function DonateSettings() {
     <section
       data-settings-category="donate"
       data-slot="settings-category-content"
-      className="grid content-start gap-5"
+      className="grid content-start gap-4"
       aria-labelledby="donate-settings-title"
     >
       <SettingsCategoryHeader

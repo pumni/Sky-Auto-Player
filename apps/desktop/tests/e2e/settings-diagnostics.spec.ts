@@ -632,8 +632,21 @@ test('Settings unified shell, Ctrl+, shortcut, radio arrows, and scroll reset ho
     expect(shellTokens.canvasBg).toBe(shellTokens.expectedCanvasBg);
   }
 
-  // Scroll Playback content down, then switch to Appearance and confirm scroll resets to top
+  // Default Playback fits without scroll at 1366x768, including frozen-session note
+  await page.setViewportSize({ width: 1366, height: 768 });
   const content = dialog.locator('[data-settings-content]');
+  const wideFit = await content.evaluate((el) => ({
+    scrollHeight: el.scrollHeight,
+    clientHeight: el.clientHeight,
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }));
+  expect(wideFit.scrollHeight).toBeLessThanOrEqual(wideFit.clientHeight);
+  expect(wideFit.scrollWidth).toBeLessThanOrEqual(wideFit.clientWidth);
+  await expect(dialog.getByText(/Changes apply to the next prepared session/)).toBeInViewport();
+
+  // At compact height, scroll Playback down, then switch to Appearance and confirm scroll resets to top
+  await page.setViewportSize({ width: 1024, height: 640 });
   await content.evaluate((el) => {
     el.scrollTop = el.scrollHeight;
   });
@@ -642,9 +655,31 @@ test('Settings unified shell, Ctrl+, shortcut, radio arrows, and scroll reset ho
   await expect(appearanceNav).toBeFocused();
   expect(await content.evaluate((el) => el.scrollTop)).toBe(0);
 
+  // Compact 40px Theme radio tiles (3-col at wide/native min, no clipping, checkmark cue)
+  const themeTiles = dialog.locator('[data-slot="theme-radio-option"]');
+  await expect(themeTiles).toHaveCount(3);
+  const tileGeometry = await themeTiles.evaluateAll((elements) =>
+    elements.map((el) => {
+      const r = el.getBoundingClientRect();
+      return {
+        top: r.top,
+        height: r.height,
+        scrollWidth: el.scrollWidth,
+        clientWidth: el.clientWidth,
+        checked: el.getAttribute('aria-checked'),
+      };
+    }),
+  );
+  for (const tile of tileGeometry) {
+    expect(tile.height).toBeGreaterThanOrEqual(40);
+    expect(tile.height).toBeLessThanOrEqual(48);
+    expect(tile.scrollWidth).toBeLessThanOrEqual(tile.clientWidth + 1);
+    expect(Math.abs(tile.top - (tileGeometry[0]?.top ?? 0))).toBeLessThanOrEqual(1);
+  }
+
   // Radio arrow navigation switches Theme and retains focus without stale data-theme-applying
-  const followWindows = dialog.getByRole('radio', { name: /Follow Windows/ });
-  await followWindows.focus();
+  const systemRadio = dialog.getByRole('radio', { name: 'System', exact: true });
+  await systemRadio.focus();
   await page.keyboard.press('ArrowRight');
   const lightRadio = dialog.getByRole('radio', { name: 'Light', exact: true });
   await expect(lightRadio).toBeFocused();
@@ -652,7 +687,22 @@ test('Settings unified shell, Ctrl+, shortcut, radio arrows, and scroll reset ho
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
   await expect(page.locator('html')).not.toHaveAttribute('data-theme-applying', 'true');
 
+  // Verify no horizontal overflow on Appearance across desktop & stress viewports
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 1200, height: 760 },
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+    { width: 640, height: 320 },
+    { width: 440, height: 360 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const overflow = await content.evaluate((el) => el.scrollWidth > el.clientWidth);
+    expect(overflow).toBe(false);
+  }
+
   // Close and reopen preserves category selection (Appearance)
+  await page.setViewportSize({ width: 1024, height: 640 });
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
   await page.keyboard.press('Control+,');

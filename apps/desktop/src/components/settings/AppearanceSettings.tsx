@@ -1,39 +1,25 @@
 import { Radio } from '@base-ui/react/radio';
 import { RadioGroup } from '@base-ui/react/radio-group';
-import { Monitor, Moon, Sun, type LucideIcon } from 'lucide-react';
+import { Check, type LucideIcon, Monitor, Moon, Sun } from 'lucide-react';
 import { useId } from 'react';
 import { resolveAppearance } from '../../appearance/resolveAppearance';
 import { useSystemAppearance } from '../../appearance/useSystemAppearance';
 import type { AppearanceMode, PaletteId, SettingsPatch } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
-import { SettingsCategoryHeader } from './SettingsLayout';
 import { DEFAULT_PALETTE, PALETTES, type PaletteMeta } from './paletteMetadata';
+import { SettingsCategoryHeader } from './SettingsLayout';
 
 interface ThemeOption {
   value: AppearanceMode;
   label: string;
-  description?: string;
   icon: LucideIcon;
 }
 
 const THEME_OPTIONS: readonly ThemeOption[] = [
-  {
-    value: 'system',
-    label: 'Follow Windows (recommended)',
-    description: 'Windows app color preference',
-    icon: Monitor,
-  },
-  {
-    value: 'light',
-    label: 'Light',
-    icon: Sun,
-  },
-  {
-    value: 'dark',
-    label: 'Dark',
-    icon: Moon,
-  },
+  { value: 'system', label: 'System', icon: Monitor },
+  { value: 'light', label: 'Light', icon: Sun },
+  { value: 'dark', label: 'Dark', icon: Moon },
 ];
 
 function PaletteSwatches({ palette }: { palette: PaletteMeta }) {
@@ -62,6 +48,7 @@ interface AppearanceSettingsProps {
 
 export function AppearanceSettings({ settings, useStore }: AppearanceSettingsProps) {
   const themeGroupLabelId = useId();
+  const themeHelpId = useId();
   const paletteId = useId();
   const paletteHelpId = useId();
   const patchSettings = useStore((store) => store.patchSettings);
@@ -76,6 +63,10 @@ export function AppearanceSettings({ settings, useStore }: AppearanceSettingsPro
     PALETTES.find((item) => item.id === settings.palette) ?? DEFAULT_PALETTE;
   const usesUnifiedShell =
     effectiveAppearance.colorMode === 'light' || effectiveAppearance.palette === 'graphite';
+  const previewLabel =
+    effectiveAppearance.colorMode === 'light'
+      ? `Light appearance preview (saved dark palette: ${activePaletteMeta.label})`
+      : `Dark appearance preview (${activePaletteMeta.label} palette)`;
 
   return (
     <section
@@ -87,61 +78,56 @@ export function AppearanceSettings({ settings, useStore }: AppearanceSettingsPro
       <SettingsCategoryHeader
         id="appearance-settings-title"
         title="Appearance"
-        description="Choose how Sky Auto Player follows Windows appearance and dark palette tokens."
+        description="Choose how Sky Auto Player looks."
       />
 
-      <div className="grid min-w-0 gap-3 border-t border-border pt-5">
+      <div className="grid min-w-0 gap-2 border-t border-border pt-3">
         <h4 id={themeGroupLabelId} className="m-0 text-sm font-semibold leading-5 text-foreground">
           Theme
         </h4>
         <RadioGroup
           aria-labelledby={themeGroupLabelId}
+          aria-describedby={themeHelpId}
           value={settings.appearance_mode}
           onValueChange={(value) => {
             if (value === 'system' || value === 'light' || value === 'dark') {
               patch({ appearanceMode: value });
             }
           }}
-          className="grid min-w-0 grid-cols-1 gap-2 @min-[420px]/settings-content:grid-cols-3"
+          className="grid w-full max-w-[440px] min-w-0 grid-cols-1 gap-2 @min-[360px]/settings-content:grid-cols-3"
         >
           {THEME_OPTIONS.map((option) => {
             const Icon = option.icon;
             return (
-              <label
+              <Radio.Root
                 key={option.value}
+                value={option.value}
                 data-slot="theme-radio-option"
                 data-value={option.value}
-                className="group relative flex min-w-0 cursor-pointer items-start gap-2.5 rounded-control border border-border bg-card px-3 py-2.5 text-left transition-colors duration-fast hover:bg-control-hover has-[[data-checked]]:border-accent-ink has-[[data-checked]]:bg-selection motion-reduce:transition-none"
+                className="group relative flex min-h-10 min-w-0 cursor-pointer items-center justify-center gap-2 rounded-control border border-input bg-card px-2.5 text-[13px] font-medium leading-5 text-foreground outline-none transition-colors duration-fast hover:bg-control-hover focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface data-[checked]:border-accent-ink data-[checked]:bg-selection motion-reduce:transition-none forced-colors:data-[checked]:border-[Highlight]"
               >
-                <Radio.Root
-                  value={option.value}
-                  className="mt-0.5 grid size-4 shrink-0 place-items-center rounded-full border border-input bg-surface outline-none transition-colors duration-fast focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-surface data-[checked]:border-accent-ink motion-reduce:transition-none"
-                >
-                  <Radio.Indicator className="size-2 rounded-full bg-accent-ink" />
-                </Radio.Root>
-                <span className="grid min-w-0 flex-1 gap-0.5">
-                  <span className="flex min-w-0 items-center gap-1.5 text-[13px] font-medium leading-5 text-foreground">
-                    <Icon
-                      size={14}
-                      className="shrink-0 text-text-secondary group-has-[[data-checked]]:text-accent-ink"
-                      aria-hidden="true"
-                    />
-                    <span className="min-w-0 break-words">{option.label}</span>
-                  </span>
-                  {option.description && (
-                    <span className="text-xs leading-[18px] text-text-secondary">
-                      {option.description}
-                    </span>
-                  )}
+                <Icon
+                  size={16}
+                  className="shrink-0 text-text-secondary group-data-[checked]:text-accent-ink"
+                  aria-hidden="true"
+                />
+                <span className="whitespace-nowrap">{option.label}</span>
+                <span className="grid size-4 shrink-0 place-items-center" aria-hidden="true">
+                  <Radio.Indicator className="grid place-items-center text-accent-ink">
+                    <Check size={14} strokeWidth={2.25} />
+                  </Radio.Indicator>
                 </span>
-              </label>
+              </Radio.Root>
             );
           })}
         </RadioGroup>
+        <p id={themeHelpId} className="m-0 text-xs leading-[18px] text-text-secondary">
+          System follows Windows appearance.
+        </p>
       </div>
 
-      <div className="grid min-w-0 gap-2 border-t border-border pt-4">
-        <div className="grid w-full max-w-[440px] gap-1.5">
+      <div className="grid min-w-0 gap-2 border-t border-border pt-3">
+        <div className="grid w-full max-w-[440px] min-w-0 gap-1.5">
           <label
             className="cursor-pointer text-sm font-semibold leading-5 text-foreground"
             htmlFor={paletteId}
@@ -156,6 +142,7 @@ export function AppearanceSettings({ settings, useStore }: AppearanceSettingsPro
           >
             <SelectTrigger
               id={paletteId}
+              className="w-full min-w-0"
               aria-label="Dark palette"
               aria-describedby={paletteHelpId}
             >
@@ -189,14 +176,14 @@ export function AppearanceSettings({ settings, useStore }: AppearanceSettingsPro
         </div>
       </div>
 
-      <div className="grid min-w-0 gap-2.5 border-t border-border pt-4">
+      <div className="grid min-w-0 gap-2 border-t border-border pt-3">
         <h4 className="m-0 text-sm font-semibold leading-5 text-foreground">Preview</h4>
         <div
           data-slot="appearance-preview"
           data-effective-mode={effectiveAppearance.colorMode}
           role="img"
-          aria-label={`${effectiveAppearance.colorMode === 'light' ? 'Light' : 'Dark'} appearance preview using saved palette ${activePaletteMeta.label}`}
-          className={`pointer-events-none w-full max-w-[460px] select-none overflow-hidden rounded-pane border border-border text-foreground ${usesUnifiedShell ? 'bg-card' : 'bg-background'}`}
+          aria-label={previewLabel}
+          className={`pointer-events-none w-full max-w-[440px] min-w-0 select-none overflow-hidden rounded-pane border border-border text-foreground ${usesUnifiedShell ? 'bg-card' : 'bg-background'}`}
         >
           {/* Mini title bar */}
           <div
@@ -209,9 +196,9 @@ export function AppearanceSettings({ settings, useStore }: AppearanceSettingsPro
           </div>
 
           {/* Mini workbench panes */}
-          <div className="grid grid-cols-[44px_minmax(0,1fr)_76px] gap-1.5 px-1.5 pb-1.5">
+          <div className="grid min-w-0 grid-cols-[minmax(28px,44px)_minmax(0,1fr)_minmax(44px,76px)] gap-1.5 px-1.5 pb-1.5">
             {/* Mini navigator */}
-            <div className="grid content-start gap-1 rounded-control bg-card p-1.5">
+            <div className="grid min-w-0 content-start gap-1 rounded-control bg-card p-1.5">
               <span className="h-2 w-full rounded-sm bg-selection" />
               <span className="h-1.5 w-4/5 rounded-sm bg-text-tertiary opacity-50" />
               <span className="h-1.5 w-3/5 rounded-sm bg-text-tertiary opacity-40" />
@@ -220,23 +207,23 @@ export function AppearanceSettings({ settings, useStore }: AppearanceSettingsPro
             {/* Mini track browser canvas */}
             <div
               data-slot="appearance-preview-canvas"
-              className="grid content-start gap-1 rounded-control border border-border bg-surface p-1.5"
+              className="grid min-w-0 content-start gap-1 rounded-control border border-border bg-surface p-1.5"
             >
-              <div className="flex items-center gap-1.5 rounded-sm bg-selection px-1.5 py-1">
+              <div className="flex min-w-0 items-center gap-1.5 rounded-sm bg-selection px-1.5 py-1">
                 <span className="h-2.5 w-0.5 shrink-0 rounded-full bg-accent-ink" />
-                <span className="h-1.5 w-16 rounded-full bg-foreground opacity-85" />
+                <span className="h-1.5 w-16 max-w-full rounded-full bg-foreground opacity-85" />
               </div>
-              <div className="flex items-center gap-1.5 px-1.5 py-0.5">
-                <span className="h-1.5 w-12 rounded-full bg-text-secondary opacity-55" />
+              <div className="flex min-w-0 items-center gap-1.5 px-1.5 py-0.5">
+                <span className="h-1.5 w-12 max-w-full rounded-full bg-text-secondary opacity-55" />
               </div>
-              <div className="flex items-center gap-1.5 px-1.5 py-0.5">
-                <span className="h-1.5 w-14 rounded-full bg-text-tertiary opacity-45" />
+              <div className="flex min-w-0 items-center gap-1.5 px-1.5 py-0.5">
+                <span className="h-1.5 w-14 max-w-full rounded-full bg-text-tertiary opacity-45" />
               </div>
             </div>
 
             {/* Mini inspector */}
-            <div className="grid content-start gap-1.5 rounded-control border border-border bg-card p-1.5">
-              <span className="h-1.5 w-10 rounded-full bg-text-secondary opacity-70" />
+            <div className="grid min-w-0 content-start gap-1.5 rounded-control border border-border bg-card p-1.5">
+              <span className="h-1.5 w-10 max-w-full rounded-full bg-text-secondary opacity-70" />
               <span className="h-1.5 w-full rounded-full bg-text-tertiary opacity-45" />
               <span className="h-1.5 w-3/4 rounded-full bg-text-tertiary opacity-45" />
             </div>

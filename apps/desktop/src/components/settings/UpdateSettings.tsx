@@ -2,7 +2,7 @@ import { RefreshCw } from 'lucide-react';
 import { useId } from 'react';
 import type { Bootstrap, SettingsPatch } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
-import { formatUpdateError } from '../../state/updateHelpers';
+import { deriveUpdatePresentation } from '../../state/updateHelpers';
 import { Button } from '../ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { SettingsCategoryHeader, SettingsSection, SettingsSwitchRow } from './SettingsLayout';
@@ -27,21 +27,16 @@ export function UpdateSettings({
   const setUpdateDialogOpen = useStore((store) => store.setUpdateDialogOpen);
   const patch = (value: SettingsPatch) => void patchSettings(value);
 
-  const isChecking = update.checkRequestPending || update.state === 'checking';
-  const isBusy =
-    update.installRequestPending || ['downloading', 'ready', 'installing'].includes(update.state);
-  const isError = update.state === 'error' || Boolean(update.transportError);
-  const isAvailable = !isError && update.state === 'available' && Boolean(update.availableVersion);
-  const isCurrent = !isError && update.state === 'current';
-  const effectiveRetryAction = update.transportError
-    ? (update.transportErrorAction ?? 'check')
-    : update.retryAction;
-
-  const errorText = isError
-    ? update.transportError
-      ? formatUpdateError(null, update.transportError)
-      : formatUpdateError(update.errorCode, update.errorDetail)
-    : null;
+  const {
+    isChecking,
+    isBusy,
+    isError,
+    isAvailable,
+    isCurrent,
+    effectiveRetryAction,
+    errorText,
+    busyHeading,
+  } = deriveUpdatePresentation(update);
 
   const channelLabel =
     settings.update_preferences.channel === 'beta' ? 'Beta (unavailable)' : 'Stable';
@@ -56,18 +51,11 @@ export function UpdateSettings({
     void checkForUpdate('manual');
   };
 
-  const busyStatusText =
-    update.state === 'downloading'
-      ? 'Downloading update…'
-      : update.state === 'ready'
-        ? 'Update ready to install'
-        : 'Installing update…';
-
   return (
     <section
       data-settings-category="updates"
       data-slot="settings-category-content"
-      className="grid content-start gap-5"
+      className="grid content-start gap-4"
       aria-labelledby="update-settings-title"
     >
       <SettingsCategoryHeader
@@ -83,7 +71,7 @@ export function UpdateSettings({
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <div className="grid min-w-0 gap-0.5">
             <span className="text-xs leading-[18px] text-text-tertiary">Installed version</span>
-            <span className="text-xl font-semibold leading-7 tabular-nums text-foreground">
+            <span className="break-words text-xl font-semibold leading-7 tabular-nums text-foreground">
               {bootstrap.app_version}
             </span>
           </div>
@@ -94,19 +82,22 @@ export function UpdateSettings({
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
           {isError ? (
-            <p className="m-0 min-w-0 flex-1 text-xs leading-[18px] text-danger" role="alert">
+            <p
+              className="m-0 min-w-0 flex-1 break-words text-xs leading-[18px] text-danger [overflow-wrap:anywhere]"
+              role="alert"
+            >
               {errorText}
             </p>
           ) : (
             <p
-              className="m-0 min-w-0 flex-1 text-xs leading-[18px] text-text-secondary"
+              className="m-0 min-w-0 flex-1 break-words text-xs leading-[18px] text-text-secondary [overflow-wrap:anywhere]"
               role="status"
               aria-live="polite"
             >
               {isChecking
                 ? 'Checking for updates…'
                 : isBusy
-                  ? busyStatusText
+                  ? busyHeading
                   : isAvailable
                     ? `Update available: ${update.availableVersion}`
                     : isCurrent

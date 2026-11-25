@@ -81,7 +81,7 @@ describe('SettingsCategoryContent', () => {
     expect(store.getState().settings?.appearance_mode).toBe('system');
   });
 
-  it('previews the saved dark palette and labels the effective color mode', async () => {
+  it('previews the active appearance separately from the saved dark palette', async () => {
     const { store, bootstrap, settings } = await initializedStore();
     const { rerender, container } = render(
       <SettingsCategoryContent
@@ -93,7 +93,7 @@ describe('SettingsCategoryContent', () => {
     );
 
     const darkPreview = screen.getByRole('img', {
-      name: 'Dark appearance preview using saved palette Graphite (Default)',
+      name: 'Dark appearance preview (Graphite (Default) palette)',
     });
     const appearanceSummary = container.querySelector('[data-slot="appearance-active-summary"]');
     expect(darkPreview).toHaveAttribute('data-effective-mode', 'dark');
@@ -111,7 +111,7 @@ describe('SettingsCategoryContent', () => {
     );
     expect(
       screen.getByRole('img', {
-        name: 'Light appearance preview using saved palette Graphite (Default)',
+        name: 'Light appearance preview (saved dark palette: Graphite (Default))',
       }),
     ).toHaveAttribute('data-effective-mode', 'light');
     expect(appearanceSummary).toHaveTextContent(
@@ -119,7 +119,7 @@ describe('SettingsCategoryContent', () => {
     );
   });
 
-  it('uses a radio group for Theme choices and keeps Dark palette independent', async () => {
+  it('uses compact System/Light/Dark radio tiles and keeps Dark palette independent', async () => {
     const { store, bootstrap, settings } = await initializedStore();
     const { rerender } = render(
       <SettingsCategoryContent
@@ -131,11 +131,11 @@ describe('SettingsCategoryContent', () => {
     );
 
     const themeGroup = screen.getByRole('radiogroup', { name: 'Theme' });
-    expect(themeGroup).toBeInTheDocument();
-    const followWindows = screen.getByRole('radio', { name: /Follow Windows \(recommended\)/ });
+    expect(themeGroup).toHaveAccessibleDescription('System follows Windows appearance.');
+    const system = screen.getByRole('radio', { name: 'System' });
     const light = screen.getByRole('radio', { name: 'Light' });
     const dark = screen.getByRole('radio', { name: 'Dark' });
-    expect(followWindows).toHaveAttribute('aria-checked', 'true');
+    expect(system).toHaveAttribute('aria-checked', 'true');
     expect(light).toHaveAttribute('aria-checked', 'false');
     expect(dark).toHaveAttribute('aria-checked', 'false');
 
@@ -161,7 +161,7 @@ describe('SettingsCategoryContent', () => {
     expect(store.getState().settings?.appearance_mode).toBe('light');
   });
 
-  it('uses truthful switch controls in Diagnostics and persists toggles', async () => {
+  it('uses concise Diagnostics switches linked to one shared truthful note', async () => {
     const { store, bootstrap, settings } = await initializedStore();
     const { rerender } = render(
       <SettingsCategoryContent
@@ -172,17 +172,13 @@ describe('SettingsCategoryContent', () => {
       />,
     );
 
-    const telemetrySwitch = screen.getByRole('switch', { name: 'Playback telemetry preference' });
-    const verboseSwitch = screen.getByRole('switch', { name: 'Verbose diagnostics preference' });
-    expect(telemetrySwitch).toHaveAccessibleDescription('Stores your telemetry preference.');
-    expect(verboseSwitch).toHaveAccessibleDescription(
-      'Stores your verbose diagnostics preference.',
-    );
-    expect(
-      screen.getByText(
-        'These preferences are saved, but this build does not establish a data-sharing or additional display effect.',
-      ),
-    ).toBeInTheDocument();
+    const sharedNote =
+      'These preferences are saved. This build has no confirmed data-sharing or additional diagnostics display effect.';
+    const telemetrySwitch = screen.getByRole('switch', { name: 'Playback telemetry' });
+    const verboseSwitch = screen.getByRole('switch', { name: 'Verbose diagnostics' });
+    expect(telemetrySwitch).toHaveAccessibleDescription(sharedNote);
+    expect(verboseSwitch).toHaveAccessibleDescription(sharedNote);
+    expect(screen.queryByRole('heading', { name: 'Diagnostics preferences' })).toBeNull();
 
     await act(async () => {
       telemetrySwitch.click();
@@ -198,18 +194,18 @@ describe('SettingsCategoryContent', () => {
       />,
     );
     await act(async () => {
-      screen.getByRole('switch', { name: 'Verbose diagnostics preference' }).click();
+      screen.getByRole('switch', { name: 'Verbose diagnostics' }).click();
     });
     await waitFor(() => expect(store.getState().settings?.verbose_hud).toBe(true));
   });
 
-  it('renders truthful Updates status states and opens UpdateDialog without duplicate checks', async () => {
+  it('renders truthful Updates states, pending handoff, errors, and triggers manual check once', async () => {
     const { bridge, store, bootstrap, settings } = await initializedStore();
     const checkSpy = vi.spyOn(bridge, 'checkForUpdate');
     const onUpdateDialogOpen = vi.fn();
 
     // 1. Available state (default mock after initialize) -> View update opens dialog without check
-    const { rerender } = render(
+    render(
       <SettingsCategoryContent
         category="updates"
         bootstrap={bootstrap}
@@ -228,28 +224,30 @@ describe('SettingsCategoryContent', () => {
     expect(store.getState().update.dialogOpen).toBe(true);
     expect(checkSpy).not.toHaveBeenCalled();
 
-    // 2. Idle state -> Check for updates triggers manual check once
+    // 2. Idle state -> clicking Check for updates triggers manual check once
     act(() => {
       store.setState((prev) => ({
         update: { ...prev.update, state: 'idle', availableVersion: null, dialogOpen: false },
       }));
     });
-    rerender(
-      <SettingsCategoryContent
-        category="updates"
-        bootstrap={bootstrap}
-        settings={settings}
-        useStore={store}
-        onUpdateDialogOpen={onUpdateDialogOpen}
-      />,
-    );
     expect(screen.queryByText("You're up to date")).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Check for updates' })).toBeEnabled();
+    const checkBtn = screen.getByRole('button', { name: 'Check for updates' });
+    expect(checkBtn).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(checkBtn);
+    });
+    expect(checkSpy).toHaveBeenCalledTimes(1);
+    expect(checkSpy).toHaveBeenCalledWith({ origin: 'manual' });
 
     // 3. Current state -> You're up to date
     act(() => {
       store.setState((prev) => ({
-        update: { ...prev.update, state: 'current', availableVersion: null },
+        update: {
+          ...prev.update,
+          state: 'current',
+          availableVersion: null,
+          checkRequestPending: false,
+        },
       }));
     });
     expect(screen.getByText("You're up to date")).toBeInTheDocument();
@@ -262,16 +260,38 @@ describe('SettingsCategoryContent', () => {
     });
     expect(screen.getByRole('button', { name: 'Checking for updates…' })).toBeDisabled();
 
-    // 5. Downloading state -> truthful status + View update
+    // 5. Pending-only handoff (state: available + installRequestPending: true) -> Preparing update…
     act(() => {
       store.setState((prev) => ({
-        update: { ...prev.update, state: 'downloading', checkRequestPending: false },
+        update: {
+          ...prev.update,
+          state: 'available',
+          availableVersion: '4.2.0',
+          checkRequestPending: false,
+          installRequestPending: true,
+        },
       }));
     });
-    expect(screen.getByText('Downloading update…')).toBeInTheDocument();
+    expect(screen.getByText('Preparing update…')).toBeInTheDocument();
+    expect(screen.queryByText('Installing update…')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View update' })).toBeEnabled();
 
-    // 6. Error state with retryAction: 'check' -> Check again + View details
+    // 6. Native busy states: downloading, ready, installing
+    for (const [nativeState, expectedText] of [
+      ['downloading', 'Downloading update…'],
+      ['ready', 'Update ready to install'],
+      ['installing', 'Installing update…'],
+    ] as const) {
+      act(() => {
+        store.setState((prev) => ({
+          update: { ...prev.update, state: nativeState, installRequestPending: false },
+        }));
+      });
+      expect(screen.getByText(expectedText)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'View update' })).toBeEnabled();
+    }
+
+    // 7. Error state with retryAction: 'check' -> Check again + View details
     act(() => {
       store.setState((prev) => ({
         update: {
@@ -279,6 +299,8 @@ describe('SettingsCategoryContent', () => {
           state: 'error',
           errorCode: 'check_failed',
           retryAction: 'check',
+          transportError: null,
+          transportErrorAction: null,
         },
       }));
     });
@@ -286,7 +308,7 @@ describe('SettingsCategoryContent', () => {
     expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'View details' })).toBeEnabled();
 
-    // 7. Error state with retryAction: 'none' -> View details only (no guessing)
+    // 8. Error state with retryAction: 'none' -> View details only
     act(() => {
       store.setState((prev) => ({
         update: {
@@ -297,6 +319,39 @@ describe('SettingsCategoryContent', () => {
         },
       }));
     });
+    expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'View details' })).toBeEnabled();
+
+    // 9. Transport check error takes precedence over available state -> Check again + View details
+    act(() => {
+      store.setState((prev) => ({
+        update: {
+          ...prev.update,
+          state: 'available',
+          availableVersion: '4.2.0',
+          errorCode: null,
+          transportError: 'IPC check timed out',
+          transportErrorAction: 'check',
+        },
+      }));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('IPC check timed out');
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'View details' })).toBeEnabled();
+
+    // 10. Transport install error -> View details only (no Check again)
+    act(() => {
+      store.setState((prev) => ({
+        update: {
+          ...prev.update,
+          state: 'available',
+          availableVersion: '4.2.0',
+          transportError: 'IPC handoff rejected',
+          transportErrorAction: 'install',
+        },
+      }));
+    });
+    expect(screen.getByRole('alert')).toHaveTextContent('IPC handoff rejected');
     expect(screen.queryByRole('button', { name: 'Check again' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'View details' })).toBeEnabled();
   });

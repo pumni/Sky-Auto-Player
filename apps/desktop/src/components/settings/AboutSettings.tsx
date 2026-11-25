@@ -22,7 +22,7 @@ export function AboutSettings({ bootstrap }: AboutSettingsProps) {
     <section
       data-settings-category="about"
       data-slot="settings-category-content"
-      className="grid content-start gap-5"
+      className="grid content-start gap-4"
       aria-labelledby="about-settings-title"
     >
       <header className="flex min-w-0 items-start gap-3.5">

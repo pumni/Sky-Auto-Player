@@ -35,7 +35,7 @@ export function PlaybackSettings({ bootstrap, settings, useStore }: PlaybackSett
     <section
       data-settings-category="playback"
       data-slot="settings-category-content"
-      className="grid content-start gap-5"
+      className="grid content-start gap-4"
       aria-labelledby="playback-settings-title"
     >
       <SettingsCategoryHeader
@@ -164,7 +164,7 @@ export function PlaybackSettings({ bootstrap, settings, useStore }: PlaybackSett
 
         <dl
           data-slot="playback-timing-readout"
-          className="m-0 grid gap-3 rounded-pane border border-border bg-card px-3.5 py-3 tabular-nums"
+          className="m-0 grid grid-cols-1 gap-x-6 gap-y-2 rounded-pane border border-border bg-card px-3.5 py-2.5 tabular-nums @min-[420px]/settings-content:grid-cols-[minmax(0,1fr)_auto_auto] @min-[420px]/settings-content:items-end"
         >
           <div className="grid gap-0.5">
             <dt className="text-xs leading-[18px] text-text-tertiary">Target hold</dt>
@@ -172,19 +172,17 @@ export function PlaybackSettings({ bootstrap, settings, useStore }: PlaybackSett
               {(minHoldUs / 1_000).toFixed(3)} ms
             </dd>
           </div>
-          <div className="grid grid-cols-1 gap-x-5 gap-y-2 border-t border-border pt-2.5 @min-[320px]/settings-content:grid-cols-2">
-            <div className="grid gap-0.5">
-              <dt className="text-xs leading-[18px] text-text-tertiary">1 frame</dt>
-              <dd className="m-0 text-[13px] font-medium leading-5 text-foreground">
-                {(frameUs / 1_000).toFixed(3)} ms
-              </dd>
-            </div>
-            <div className="grid gap-0.5">
-              <dt className="text-xs leading-[18px] text-text-tertiary">Base hold</dt>
-              <dd className="m-0 text-[13px] font-medium leading-5 text-foreground">
-                {(frameBaseHoldUs / 1_000).toFixed(3)} ms
-              </dd>
-            </div>
+          <div className="grid gap-0.5">
+            <dt className="text-xs leading-[18px] text-text-tertiary">1 frame</dt>
+            <dd className="m-0 text-[13px] font-medium leading-5 text-foreground">
+              {(frameUs / 1_000).toFixed(3)} ms
+            </dd>
+          </div>
+          <div className="grid gap-0.5">
+            <dt className="text-xs leading-[18px] text-text-tertiary">Base hold</dt>
+            <dd className="m-0 text-[13px] font-medium leading-5 text-foreground">
+              {(frameBaseHoldUs / 1_000).toFixed(3)} ms
+            </dd>
           </div>
         </dl>
 

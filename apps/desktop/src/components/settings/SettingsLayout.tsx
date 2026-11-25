@@ -37,7 +37,7 @@ interface SettingsSectionProps {
 
 export function SettingsSection({ title, divider = false, children }: SettingsSectionProps) {
   return (
-    <div className={`grid min-w-0 gap-3 ${divider ? 'border-t border-border pt-5' : ''}`}>
+    <div className={`grid min-w-0 gap-3 ${divider ? 'border-t border-border pt-3' : ''}`}>
       <h4 className="m-0 text-sm font-semibold leading-5 text-foreground">{title}</h4>
       {children}
     </div>
@@ -46,7 +46,8 @@ export function SettingsSection({ title, divider = false, children }: SettingsSe
 
 interface SettingsSwitchRowProps {
   label: string;
-  description: string;
+  description?: string;
+  ariaDescribedBy?: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
   dataSlot?: string;
@@ -55,11 +56,13 @@ interface SettingsSwitchRowProps {
 export function SettingsSwitchRow({
   label,
   description,
+  ariaDescribedBy,
   checked,
   onChange,
   dataSlot = 'settings-switch-row',
 }: SettingsSwitchRowProps) {
   const descriptionId = useId();
+  const resolvedDescribedBy = description ? descriptionId : ariaDescribedBy;
   return (
     <div
       data-slot={dataSlot}
@@ -67,9 +70,11 @@ export function SettingsSwitchRow({
     >
       <div className="grid min-w-0 gap-0.5">
         <span className="text-[13px] font-medium leading-5 text-foreground">{label}</span>
-        <span id={descriptionId} className="text-xs leading-[18px] text-text-secondary">
-          {description}
-        </span>
+        {description && (
+          <span id={descriptionId} className="text-xs leading-[18px] text-text-secondary">
+            {description}
+          </span>
+        )}
       </div>
       <div className="flex flex-none items-center gap-2">
         <span className="text-xs tabular-nums text-text-tertiary" aria-live="polite">
@@ -79,7 +84,7 @@ export function SettingsSwitchRow({
           checked={checked}
           onCheckedChange={onChange}
           aria-label={label}
-          aria-describedby={descriptionId}
+          aria-describedby={resolvedDescribedBy}
         />
       </div>
     </div>

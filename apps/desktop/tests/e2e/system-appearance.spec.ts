@@ -14,8 +14,8 @@ test('fresh System mode follows the OS while manual mode and dark palette stay i
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
   const themeGroup = settings.getByRole('radiogroup', { name: 'Theme' });
-  const followWindowsRadio = themeGroup.getByRole('radio', { name: /Follow Windows/ });
-  const darkRadio = themeGroup.getByRole('radio', { name: 'Dark' });
+  const systemRadio = themeGroup.getByRole('radio', { name: 'System', exact: true });
+  const darkRadio = themeGroup.getByRole('radio', { name: 'Dark', exact: true });
   const palette = settings.getByRole('combobox', { name: 'Dark palette' });
   const appearanceSummary = settings.locator('[data-slot="appearance-active-summary"]');
   const preview = settings.locator('[data-slot="appearance-preview"]');
@@ -60,12 +60,17 @@ test('fresh System mode follows the OS while manual mode and dark palette stay i
     }
   };
 
-  await expect(followWindowsRadio).toHaveAttribute('aria-checked', 'true');
+  await expect(themeGroup).toHaveAccessibleDescription('System follows Windows appearance.');
+  await expect(systemRadio).toHaveAttribute('aria-checked', 'true');
   await expect(palette).toContainText('Graphite (Default)');
   await expect(appearanceSummary).toHaveText(
     'Active: Dark. Saved dark palette: Graphite (Default).',
   );
   await expect(preview).toHaveAttribute('data-effective-mode', 'dark');
+  await expect(preview).toHaveAttribute(
+    'aria-label',
+    'Dark appearance preview (Graphite (Default) palette)',
+  );
   await assertPreviewUsesRuntimeTokens();
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(root).toHaveAttribute('data-color-mode', 'light');
@@ -74,6 +79,10 @@ test('fresh System mode follows the OS while manual mode and dark palette stay i
     'Active: Light. Saved dark palette: Graphite (Default).',
   );
   await expect(preview).toHaveAttribute('data-effective-mode', 'light');
+  await expect(preview).toHaveAttribute(
+    'aria-label',
+    'Light appearance preview (saved dark palette: Graphite (Default))',
+  );
   await assertPreviewUsesRuntimeTokens();
 
   await palette.click();
@@ -94,7 +103,7 @@ test('fresh System mode follows the OS while manual mode and dark palette stay i
   await page.emulateMedia({ colorScheme: 'light' });
   await expect(root).toHaveAttribute('data-color-mode', 'dark');
 
-  await followWindowsRadio.click();
+  await systemRadio.click();
   await expect(root).toHaveAttribute('data-color-mode', 'light');
   await expect(appearanceSummary).toHaveText('Active: Light. Saved dark palette: Slate.');
   expect(

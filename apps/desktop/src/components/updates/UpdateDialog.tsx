@@ -1,8 +1,8 @@
 import { AlertCircle, ArrowDownToLine, Check, LoaderCircle, Sparkles, X } from 'lucide-react';
-import type { UpdateErrorCode, UpdateRetryAction } from '../../bridge/DesktopBridge';
 import type { DesktopStoreHook } from '../../state/store';
-import { formatUpdateError } from '../../state/updateHelpers';
+import { deriveUpdatePresentation } from '../../state/updateHelpers';
 import { Button } from '../ui/button';
+import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
 import {
   ScrollAreaContent,
   ScrollAreaRoot,
@@ -10,38 +10,6 @@ import {
   ScrollAreaThumb,
   ScrollAreaViewport,
 } from '../ui/scroll-area';
-import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
-
-function getErrorHeading(
-  errorCode: UpdateErrorCode | null,
-  retryAction: UpdateRetryAction,
-  hasTransportError = false,
-): string {
-  if (hasTransportError) {
-    return retryAction === 'install' ? 'Update failed' : 'Update check failed';
-  }
-  if (
-    errorCode === 'check_failed' ||
-    errorCode === 'state_persistence_failed' ||
-    errorCode === 'channel_unavailable' ||
-    errorCode === 'update_service_unavailable'
-  ) {
-    return 'Update check failed';
-  }
-  if (
-    errorCode === 'playback_active' ||
-    errorCode === 'update_busy' ||
-    errorCode === 'closing' ||
-    errorCode === 'stale_update' ||
-    errorCode === 'update_unavailable' ||
-    errorCode === 'download_failed' ||
-    errorCode === 'install_failed' ||
-    retryAction === 'install'
-  ) {
-    return 'Update failed';
-  }
-  return 'Update check failed';
-}
 
 interface UpdateDialogProps {
   useStore: DesktopStoreHook;
@@ -55,23 +23,22 @@ export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
   const handoff = useStore((store) => store.beginUpdateHandoff);
   const patchSettings = useStore((store) => store.patchSettings);
 
-  const busy =
-    update.installRequestPending || ['downloading', 'ready', 'installing'].includes(update.state);
-  const isChecking = update.checkRequestPending || update.state === 'checking';
-  const isError = update.state === 'error' || Boolean(update.transportError);
-  const isAvailable = !isError && update.state === 'available' && Boolean(update.availableVersion);
-  const isCurrent = !isError && update.state === 'current';
-
-  const effectiveRetryAction = update.transportError
-    ? (update.transportErrorAction ?? 'check')
-    : update.retryAction;
-
-  const errorText = update.transportError
-    ? formatUpdateError(null, update.transportError)
-    : formatUpdateError(update.errorCode, update.errorDetail);
+  const {
+    isChecking,
+    isNativeBusy,
+    isBusy: busy,
+    isError,
+    isAvailable,
+    isCurrent,
+    effectiveRetryAction,
+    errorHeading,
+    errorText,
+    busyHeading,
+    busyDetail,
+  } = deriveUpdatePresentation(update);
 
   const hasDeterminateProgress =
-    busy && typeof update.progress?.total === 'number' && update.progress.total > 0;
+    isNativeBusy && typeof update.progress?.total === 'number' && update.progress.total > 0;
   const progressValue = hasDeterminateProgress
     ? Math.min(update.progress?.total ?? 0, Math.max(0, update.progress?.completed ?? 0))
     : undefined;
@@ -219,11 +186,7 @@ export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
               </div>
               <div className="flex min-w-0 flex-1 flex-col gap-1" role="status" aria-live="polite">
                 <h3 className="m-0 text-xl font-semibold leading-7 text-foreground">
-                  {getErrorHeading(
-                    update.errorCode,
-                    effectiveRetryAction,
-                    Boolean(update.transportError),
-                  )}
+                  {errorHeading}
                 </h3>
               </div>
             </div>
@@ -348,19 +311,9 @@ export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
               </div>
               <div className="flex min-w-0 flex-1 flex-col gap-1" role="status" aria-live="polite">
                 <h3 className="m-0 text-xl font-semibold leading-7 text-foreground">
-                  {update.state === 'downloading'
-                    ? 'Downloading update…'
-                    : update.state === 'ready'
-                      ? 'Update ready to install'
-                      : update.state === 'installing'
-                        ? 'Installing update…'
-                        : 'No update available'}
+                  {busyHeading}
                 </h3>
-                <p className="m-0 text-sm text-muted-foreground">
-                  {busy
-                    ? `${update.progress?.message || 'The update is being applied.'}${update.progress?.total ? ` (${update.progress.completed}/${update.progress.total} bytes)` : ''}`
-                    : 'The installed application is up to date.'}
-                </p>
+                <p className="m-0 text-sm text-muted-foreground">{busyDetail}</p>
               </div>
             </div>
             {busy && (

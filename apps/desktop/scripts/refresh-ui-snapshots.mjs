@@ -29,7 +29,6 @@ const vqcScreenshots = {
   'settings-playback-dark.png': 'candidate-settings-playback-dark-1366x768.png',
   'settings-playback-light.png': 'candidate-settings-playback-light-1366x768.png',
   'settings-appearance-dark.png': 'candidate-settings-appearance-dark-1366x768.png',
-  'settings-appearance-light.png': 'candidate-settings-appearance-light-1366x768.png',
   'settings-diagnostics-dark.png': 'candidate-settings-diagnostics-dark-1366x768.png',
   'settings-diagnostics-light.png': 'candidate-settings-diagnostics-light-1366x768.png',
   'settings-updates-dark.png': 'candidate-settings-updates-dark-1366x768.png',
@@ -114,9 +113,11 @@ const run = spawnSync(
         'settings-nav',
         'settings-nav-tiny',
         'settings-select',
-        ...['playback', 'appearance', 'diagnostics', 'updates', 'donate', 'about'].flatMap(
-          (category) => [`settings-${category}-dark`, `settings-${category}-light`],
-        ),
+        ...['playback', 'diagnostics', 'updates', 'donate', 'about'].flatMap((category) => [
+          `settings-${category}-dark`,
+          `settings-${category}-light`,
+        ]),
+        'settings-appearance-dark',
         'transport-idle',
         'transport-playing',
         'transport-paused',
@@ -174,8 +175,8 @@ const vqcRows = {
   'settings-select-open-640x320.png': 'Settings Dark palette Select open at 640x320',
   'settings-playback-dark.png': 'Settings Playback category in Graphite Dark at 1366x768',
   'settings-playback-light.png': 'Settings Playback category in Graphite Light at 1366x768',
-  'settings-appearance-dark.png': 'Settings Appearance category in Graphite Dark at 1366x768',
-  'settings-appearance-light.png': 'Settings Appearance category in Graphite Light at 1366x768',
+  'settings-appearance-dark.png':
+    'Settings Appearance category in Graphite Dark at 1366x768 (paired with canonical ../appearance-settings-light.png)',
   'settings-diagnostics-dark.png': 'Settings Diagnostics category in Graphite Dark at 1366x768',
   'settings-diagnostics-light.png': 'Settings Diagnostics category in Graphite Light at 1366x768',
   'settings-updates-dark.png': 'Settings Updates category in Graphite Dark at 1366x768',

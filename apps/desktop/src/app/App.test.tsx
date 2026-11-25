@@ -439,7 +439,7 @@ describe('desktop application shell', () => {
     nativeWindow.emitTheme('dark');
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('light'));
 
-    fireEvent.click(screen.getByRole('radio', { name: /Follow Windows/ }));
+    fireEvent.click(screen.getByRole('radio', { name: 'System' }));
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('dark'));
   });
 
