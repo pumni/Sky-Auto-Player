@@ -5,6 +5,8 @@ export const TEST_MODE_ACCESSIBLE_DESCRIPTION = 'Test mode: no keyboard input is
 export const TEST_MODE_PREPARED_DESCRIPTION =
   'Prepared for Test mode: no keyboard input will be sent.';
 export const TEST_MODE_DIAGNOSTICS_LABEL = 'Test mode (dry run) · no physical input sent';
+export const TEST_MODE_PREPARED_DIAGNOSTICS_LABEL =
+  'Test mode (dry run) · no physical input will be sent';
 export const TEST_MODE_TIMING_UNMEASURED_TITLE = 'Test mode (dry run) · sender timing not measured';
 
 export function formatPlayerDuration(value: number): string {

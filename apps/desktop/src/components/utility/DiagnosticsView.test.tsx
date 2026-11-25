@@ -110,7 +110,7 @@ describe('DiagnosticsView', () => {
 
     render(<DiagnosticsView useStore={store} />);
     expect(
-      screen.getByText('Prepared mode: Test mode (dry run) · no physical input sent'),
+      screen.getByText('Prepared mode: Test mode (dry run) · no physical input will be sent'),
     ).toBeInTheDocument();
     expect(
       screen.queryByText('Mode: Test mode (dry run) · no physical input sent'),

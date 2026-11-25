@@ -1,6 +1,9 @@
 import type { DesktopStoreHook } from '../../state/store';
 import { playbackSessionStatusConcern } from '../../state/store';
-import { TEST_MODE_DIAGNOSTICS_LABEL } from '../player/playerFormatting';
+import {
+  TEST_MODE_DIAGNOSTICS_LABEL,
+  TEST_MODE_PREPARED_DIAGNOSTICS_LABEL,
+} from '../player/playerFormatting';
 import { playbackStatusLabel } from './diagnosticsPresentation';
 
 export function DiagnosticsPlaybackSummary({ useStore }: { useStore: DesktopStoreHook }) {
@@ -40,7 +43,7 @@ export function DiagnosticsPlaybackSummary({ useStore }: { useStore: DesktopStor
       : preparedDryRun !== null && (isActive || playback.prepared !== null)
         ? {
             label: 'Prepared mode',
-            value: preparedDryRun ? TEST_MODE_DIAGNOSTICS_LABEL : 'Physical input',
+            value: preparedDryRun ? TEST_MODE_PREPARED_DIAGNOSTICS_LABEL : 'Physical input',
           }
         : null;
   const hasPlaybackContext =
