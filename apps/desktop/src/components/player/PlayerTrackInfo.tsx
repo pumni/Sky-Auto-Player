@@ -74,7 +74,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
 
   return (
     <div
-      className="col-start-1 row-start-1 flex min-w-0 items-center gap-2.5 max-[1100px]:grid max-[1100px]:grid-cols-[minmax(0,1fr)_30px] max-[1100px]:grid-rows-[30px_16px_auto] max-[1100px]:items-start max-[1100px]:gap-x-2 max-[1100px]:gap-y-0"
+      className="col-start-1 row-start-1 flex min-w-0 items-center gap-2.5"
       role="group"
       aria-label={`Playback for ${title}`}
     >
@@ -84,17 +84,33 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
       >
         <Music2 size={17} />
       </span>
-      <div className="@container/player-track-info grid min-w-0 flex-1 gap-0.5 max-[1100px]:col-start-1 max-[1100px]:row-span-2 max-[1100px]:row-start-1 max-[1100px]:w-full">
-        <strong
-          className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-foreground"
-          title={title}
-        >
-          {title}
-        </strong>
+      <div className="@container/player-track-info grid min-w-0 flex-1 gap-0.5">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <strong
+            className="min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-foreground"
+            title={title}
+          >
+            {title}
+          </strong>
+          {likeSongId && (hasCurrentSong || fallbackIdentity) && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={`size-[30px] flex-none rounded-full p-0 text-text-tertiary hover:bg-control-hover hover:text-accent-ink focus-visible:text-accent-ink ${liked ? 'text-accent-ink' : ''}`}
+              type="button"
+              aria-label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+              aria-pressed={liked}
+              title={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+              onClick={() => void setSongLiked(likeSongId, !liked)}
+            >
+              <Heart size={16} fill={liked ? 'currentColor' : 'none'} aria-hidden="true" />
+            </Button>
+          )}
+        </div>
         <div className="flex min-w-0 items-center gap-1.5">
           <span
             data-slot="player-track-status"
-            className={`block min-w-0 flex-[0_1_auto] break-words text-xs leading-4 max-[1100px]:truncate ${baseStatus.length <= 18 ? 'whitespace-nowrap' : 'whitespace-normal'} ${sessionStatusConcern !== null ? 'text-warning' : active ? 'text-accent-ink' : 'text-muted-foreground'}`}
+            className={`block min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-4 ${sessionStatusConcern !== null ? 'text-warning' : active ? 'text-accent-ink' : 'text-muted-foreground'}`}
             role="status"
             aria-label={statusAccessibilityLabel}
             aria-live="polite"
@@ -115,31 +131,17 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
             </StatusBadge>
           )}
         </div>
+        {preparedRisk && ['medium', 'high'].includes(preparedRisk.level) && (
+          <StatusBadge
+            className="w-fit shrink-0"
+            tone={preparedRisk.level === 'high' ? 'danger' : 'warning'}
+            aria-label={preparedRisk.headline}
+            title={preparedRisk.headline}
+          >
+            {preparedRisk.level === 'high' ? 'High risk' : 'Medium risk'}
+          </StatusBadge>
+        )}
       </div>
-      {likeSongId && (hasCurrentSong || fallbackIdentity) && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className={`size-[30px] flex-none rounded-full p-0 text-text-tertiary hover:bg-control-hover hover:text-accent-ink focus-visible:text-accent-ink max-[1100px]:col-start-2 max-[1100px]:row-start-1 ${liked ? 'text-accent-ink' : ''}`}
-          type="button"
-          aria-label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
-          aria-pressed={liked}
-          title={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
-          onClick={() => void setSongLiked(likeSongId, !liked)}
-        >
-          <Heart size={16} fill={liked ? 'currentColor' : 'none'} aria-hidden="true" />
-        </Button>
-      )}
-      {preparedRisk && ['medium', 'high'].includes(preparedRisk.level) && (
-        <StatusBadge
-          className="shrink-0 max-[1100px]:col-span-2 max-[1100px]:col-start-1 max-[1100px]:row-start-3 max-[1100px]:justify-self-start"
-          tone={preparedRisk.level === 'high' ? 'danger' : 'warning'}
-          aria-label={preparedRisk.headline}
-          title={preparedRisk.headline}
-        >
-          {preparedRisk.level === 'high' ? 'High risk' : 'Medium risk'}
-        </StatusBadge>
-      )}
     </div>
   );
 }

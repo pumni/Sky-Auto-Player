@@ -1,5 +1,12 @@
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { TabsContent } from '../ui/tabs';
+import {
+  ScrollAreaContent,
+  ScrollAreaRoot,
+  ScrollAreaScrollbar,
+  ScrollAreaThumb,
+  ScrollAreaViewport,
+} from '../ui/scroll-area';
 import { backendStatusLabel, measure, playbackStatusLabel } from './diagnosticsPresentation';
 import {
   DiagnosticsEmptyState,
@@ -144,237 +151,283 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
           ? 'danger'
           : 'neutral';
   return (
-    <TabsContent value="performance" className="min-h-[116px] min-w-0 flex-1 pt-3">
-      {diagnostics.error ? (
-        <DiagnosticsEmptyState
-          title="Diagnostics error"
-          detail={diagnostics.error}
-          status="error"
-        />
-      ) : !diagnostics.enabled ? (
-        <DiagnosticsEmptyState
-          title="Diagnostics disabled"
-          detail="Open Runtime diagnostics to inspect sender-side timing and input-health metrics."
-        />
-      ) : !nativeSessionActive ? (
-        <DiagnosticsEmptyState
-          title={playbackState === 'finished' ? 'No active playback session' : playbackStatus}
-          detail={
-            playbackStartPending || transportOperation === 'starting'
-              ? 'Waiting for native playback confirmation before showing session diagnostics.'
-              : transportOperation === 'preparing'
-                ? 'Playback is being prepared; session diagnostics appear after it starts.'
-                : preparedAdmission === 'confirmation_required'
-                  ? 'Review and confirm playback before a native session can start.'
-                  : playbackState === 'failed'
-                    ? (playbackError ?? 'Playback failed before an active session was confirmed.')
-                    : 'Runtime timing and input-health metrics appear when playback starts.'
-          }
-        />
-      ) : !activeSession || !latest ? (
-        <DiagnosticsEmptyState
-          title="Waiting for session diagnostics"
-          detail="Native playback is active; its matching diagnostics snapshot has not arrived yet."
-        />
-      ) : dryRun ? (
-        <DiagnosticsEmptyState
-          title="Dry run · sender timing not measured"
-          detail="This session sends no physical keyboard input. Start normal playback to collect physical sender measurements."
-        />
-      ) : (
-        <>
-          <section
-            className={`mb-3 grid gap-1 border-l-[3px] border-border rounded-r-control bg-surface px-2.5 py-2 ${senderSummary.tone === 'healthy' ? 'border-l-success text-success' : senderSummary.tone === 'warning' ? 'border-l-warning text-warning' : senderSummary.tone === 'danger' ? 'border-l-danger text-danger' : 'text-text-secondary'}`}
-            data-tone={senderSummary.tone}
-            aria-label="Sender-side status"
-            data-slot="diagnostics-sender-summary"
-          >
-            <strong className="text-xs font-semibold">
-              Sender-side status: {senderSummary.status}
-            </strong>
-            <span className="text-xs text-text-secondary">{senderSummary.detail}</span>
-          </section>
-          <MetricGroup title="Sender availability">
-            <Metric
-              label="Physical session"
-              value={dryRun ? 'Not applicable (dry run)' : latest.physical_session ? 'Yes' : 'No'}
-            />
-            <Metric
-              label="Player attached"
-              value={dryRun ? 'Not applicable (dry run)' : latest.player_attached ? 'Yes' : 'No'}
-            />
-            <Metric label="Sender samples" value={senderSampleMetric(latest.sender_sample_count)} />
-            <Metric
-              label="Sender backend"
-              value={dryRun ? 'Not measured' : backendStatusLabel(latest.backend_status)}
-              tone={backendTone}
-            />
-          </MetricGroup>
-          <MetricGroup title="Timing">
-            <Metric label="Completion p50" value={backendMeasure(latest.p50_ms, 'ms')} />
-            <Metric label="Completion p95" value={backendMeasure(latest.p95_ms, 'ms')} />
-            <Metric label="Session max" value={backendMeasure(latest.max_lateness_us, 'μs')} />
-            <Metric
-              label="Max pre-call lateness"
-              value={backendMeasure(latest.max_sendinput_pre_call_lateness_us, 'μs')}
-            />
-            <Metric
-              label="Completion jitter σ"
-              value={backendMeasure(latest.sigma_onset_ms, 'ms')}
-            />
-          </MetricGroup>
-          <MetricGroup title="Frozen session timing">
-            <Metric label="FPS" value={String(latest.fps)} />
-            <Metric label="Frame period" value={`${(latest.frame_us / 1_000).toFixed(3)} ms`} />
-            <Metric
-              label="Base hold"
-              value={`${(latest.frame_base_hold_us / 1_000).toFixed(3)} ms`}
-            />
-            <Metric label="Configured Timing Margin" value={`${latest.timing_margin_us} µs`} />
-            <Metric label="Target hold" value={`${(latest.min_hold_us / 1_000).toFixed(3)} ms`} />
-          </MetricGroup>
-          <MetricGroup title="Late events">
-            <Metric label="Completion > 2 ms" value={senderSampleMetric(latest.late_2ms)} />
-            <Metric label="Completion > 5 ms" value={senderSampleMetric(latest.late_5ms)} />
-            <Metric label="Completion > 10 ms" value={senderSampleMetric(latest.late_10ms)} />
-            <Metric label="Pre-call > 2 ms" value={senderSampleMetric(latest.pre_call_late_2ms)} />
-            <Metric label="Pre-call > 5 ms" value={senderSampleMetric(latest.pre_call_late_5ms)} />
-            <Metric
-              label="Pre-call > 10 ms"
-              value={senderSampleMetric(latest.pre_call_late_10ms)}
-            />
-          </MetricGroup>
-          <MetricGroup title="Pre-call distribution">
-            <Metric
-              label="Pre-call < 250 μs"
-              value={senderSampleMetric(latest.pre_call_lt_250us)}
-            />
-            <Metric
-              label="Pre-call 250–500 μs"
-              value={senderSampleMetric(latest.pre_call_250_500us)}
-            />
-            <Metric
-              label="Pre-call 500–750 μs"
-              value={senderSampleMetric(latest.pre_call_500_750us)}
-            />
-            <Metric
-              label="Pre-call 750–1000 μs"
-              value={senderSampleMetric(latest.pre_call_750_1000us)}
-            />
-            <Metric
-              label="Pre-call 1.0–1.5 ms"
-              value={senderSampleMetric(latest.pre_call_1000_1500us)}
-            />
-            <Metric
-              label="Pre-call 1.5–2.0 ms"
-              value={senderSampleMetric(latest.pre_call_1500_2000us)}
-            />
-            <Metric
-              label="Pre-call ≥ 2.0 ms"
-              value={senderSampleMetric(latest.pre_call_ge_2000us)}
-            />
-          </MetricGroup>
-          <MetricGroup title="Deadline admission">
-            <Metric
-              label="Focus gate rejections"
-              value={playerMetric(latest.final_gate_focus_losses)}
-            />
-            <Metric
-              label="Target / owner rejections"
-              value={playerMetric(latest.final_gate_target_changes)}
-            />
-            <Metric
-              label="Lease gate rejections"
-              value={playerMetric(latest.final_gate_lease_expirations)}
-            />
-            <Metric
-              label="Control / modifier rejections"
-              value={playerMetric(latest.final_gate_control_rejections)}
-            />
-          </MetricGroup>
-          <MetricGroup title="Hold floor delays">
-            <Metric
-              label="Hold-floor delayed boundaries"
-              value={playerMetric(latest.hold_floor_delay_boundaries)}
-            />
-            <Metric
-              label="Maximum hold-floor delay"
-              value={dryRun ? 'Not measured' : measure(latest.max_hold_floor_delay_us, 'µs', 0)}
-            />
-          </MetricGroup>
-          <MetricGroup title="Input transport">
-            <Metric
-              label="SendInput zero-progress failures"
-              value={playerMetric(latest.sendinput_zero_progress_failures)}
-            />
-            <Metric
-              label="SendInput partial events"
-              value={playerMetric(latest.sendinput_partial_events)}
-            />
-            <Metric label="Dropped keys" value={playerMetric(latest.keys_dropped)} />
-            <Metric label="Chord splits" value={playerMetric(latest.chord_split_events)} />
-            <Metric label="Stuck keys" value={playerMetric(latest.stuck_keys)} />
-            <Metric label="Active keys" value={playerMetric(latest.active_keys)} />
-          </MetricGroup>
-          <MetricGroup title="Windows power lifecycle">
-            <Metric
-              label="Suspend/resume notifications"
-              value={latest.suspend_resume_registered ? 'Registered' : 'Unavailable'}
-            />
-            <Metric
-              label="System power state"
-              value={latest.system_suspend_active ? 'Suspended / re-admission blocked' : 'Running'}
-            />
-            <Metric
-              label="Suspend notifications"
-              value={String(latest.system_suspend_notifications)}
-            />
-            <Metric
-              label="Resume notifications"
-              value={String(latest.system_resume_notifications)}
-            />
-            <Metric
-              label="Duplicate notifications"
-              value={String(latest.duplicate_system_power_notifications)}
-            />
-            <Metric
-              label="Power request active"
-              value={latest.power_request_active ? 'Yes' : 'No'}
-            />
-            <Metric
-              label="Power request create failures"
-              value={String(latest.power_request_create_failures)}
-            />
-            <Metric
-              label="Power request set failures"
-              value={String(latest.power_request_set_failures)}
-            />
-            <Metric
-              label="Power request clear failures"
-              value={String(latest.power_request_clear_failures)}
-            />
-            <Metric
-              label="Power request close failures"
-              value={String(latest.power_request_close_failures)}
-            />
-            <Metric
-              label="Notification registration failures"
-              value={String(latest.suspend_resume_registration_failures)}
-            />
-            <Metric
-              label="Notification unregistration failures"
-              value={String(latest.suspend_resume_unregistration_failures)}
-            />
-          </MetricGroup>
-          <MetricGroup title="Release">
-            <Metric
-              label="Max release lateness"
-              value={backendMeasure(latest.release_max_us, 'μs')}
-            />
-            <Metric label="Release > 2 ms" value={senderSampleMetric(latest.release_late_2ms)} />
-          </MetricGroup>
-        </>
-      )}
+    <TabsContent value="performance" className="flex min-h-[116px] min-w-0 flex-1 flex-col">
+      <ScrollAreaRoot className="min-h-0 min-w-0 flex-1">
+        <ScrollAreaViewport
+          className="size-full"
+          role="region"
+          aria-label="Performance diagnostics"
+        >
+          <ScrollAreaContent className="min-w-0 pt-3 pb-4">
+            {diagnostics.error ? (
+              <DiagnosticsEmptyState
+                title="Diagnostics error"
+                detail={diagnostics.error}
+                status="error"
+              />
+            ) : !diagnostics.enabled ? (
+              <DiagnosticsEmptyState
+                title="Diagnostics disabled"
+                detail="Open Runtime diagnostics to inspect sender-side timing and input-health metrics."
+              />
+            ) : !nativeSessionActive ? (
+              <DiagnosticsEmptyState
+                title={playbackState === 'finished' ? 'No active playback session' : playbackStatus}
+                detail={
+                  playbackStartPending || transportOperation === 'starting'
+                    ? 'Waiting for native playback confirmation before showing session diagnostics.'
+                    : transportOperation === 'preparing'
+                      ? 'Playback is being prepared; session diagnostics appear after it starts.'
+                      : preparedAdmission === 'confirmation_required'
+                        ? 'Review and confirm playback before a native session can start.'
+                        : playbackState === 'failed'
+                          ? (playbackError ??
+                            'Playback failed before an active session was confirmed.')
+                          : 'Runtime timing and input-health metrics appear when playback starts.'
+                }
+              />
+            ) : !activeSession || !latest ? (
+              <DiagnosticsEmptyState
+                title="Waiting for session diagnostics"
+                detail="Native playback is active; its matching diagnostics snapshot has not arrived yet."
+              />
+            ) : dryRun ? (
+              <DiagnosticsEmptyState
+                title="Dry run · sender timing not measured"
+                detail="This session sends no physical keyboard input. Start normal playback to collect physical sender measurements."
+              />
+            ) : (
+              <>
+                <section
+                  className={`mb-3 grid gap-1 border-l-[3px] border-border rounded-r-control bg-surface px-2.5 py-2 ${senderSummary.tone === 'healthy' ? 'border-l-success text-success' : senderSummary.tone === 'warning' ? 'border-l-warning text-warning' : senderSummary.tone === 'danger' ? 'border-l-danger text-danger' : 'text-text-secondary'}`}
+                  data-tone={senderSummary.tone}
+                  aria-label="Sender-side status"
+                  data-slot="diagnostics-sender-summary"
+                >
+                  <strong className="text-xs font-semibold">
+                    Sender-side status: {senderSummary.status}
+                  </strong>
+                  <span className="text-xs text-text-secondary">{senderSummary.detail}</span>
+                </section>
+                <MetricGroup title="Sender availability">
+                  <Metric
+                    label="Physical session"
+                    value={
+                      dryRun ? 'Not applicable (dry run)' : latest.physical_session ? 'Yes' : 'No'
+                    }
+                  />
+                  <Metric
+                    label="Player attached"
+                    value={
+                      dryRun ? 'Not applicable (dry run)' : latest.player_attached ? 'Yes' : 'No'
+                    }
+                  />
+                  <Metric
+                    label="Sender samples"
+                    value={senderSampleMetric(latest.sender_sample_count)}
+                  />
+                  <Metric
+                    label="Sender backend"
+                    value={dryRun ? 'Not measured' : backendStatusLabel(latest.backend_status)}
+                    tone={backendTone}
+                  />
+                </MetricGroup>
+                <MetricGroup title="Timing">
+                  <Metric label="Completion p50" value={backendMeasure(latest.p50_ms, 'ms')} />
+                  <Metric label="Completion p95" value={backendMeasure(latest.p95_ms, 'ms')} />
+                  <Metric
+                    label="Session max"
+                    value={backendMeasure(latest.max_lateness_us, 'μs')}
+                  />
+                  <Metric
+                    label="Max pre-call lateness"
+                    value={backendMeasure(latest.max_sendinput_pre_call_lateness_us, 'μs')}
+                  />
+                  <Metric
+                    label="Completion jitter σ"
+                    value={backendMeasure(latest.sigma_onset_ms, 'ms')}
+                  />
+                </MetricGroup>
+                <MetricGroup title="Frozen session timing">
+                  <Metric label="FPS" value={String(latest.fps)} />
+                  <Metric
+                    label="Frame period"
+                    value={`${(latest.frame_us / 1_000).toFixed(3)} ms`}
+                  />
+                  <Metric
+                    label="Base hold"
+                    value={`${(latest.frame_base_hold_us / 1_000).toFixed(3)} ms`}
+                  />
+                  <Metric
+                    label="Configured Timing Margin"
+                    value={`${latest.timing_margin_us} µs`}
+                  />
+                  <Metric
+                    label="Target hold"
+                    value={`${(latest.min_hold_us / 1_000).toFixed(3)} ms`}
+                  />
+                </MetricGroup>
+                <MetricGroup title="Late events">
+                  <Metric label="Completion > 2 ms" value={senderSampleMetric(latest.late_2ms)} />
+                  <Metric label="Completion > 5 ms" value={senderSampleMetric(latest.late_5ms)} />
+                  <Metric label="Completion > 10 ms" value={senderSampleMetric(latest.late_10ms)} />
+                  <Metric
+                    label="Pre-call > 2 ms"
+                    value={senderSampleMetric(latest.pre_call_late_2ms)}
+                  />
+                  <Metric
+                    label="Pre-call > 5 ms"
+                    value={senderSampleMetric(latest.pre_call_late_5ms)}
+                  />
+                  <Metric
+                    label="Pre-call > 10 ms"
+                    value={senderSampleMetric(latest.pre_call_late_10ms)}
+                  />
+                </MetricGroup>
+                <MetricGroup title="Pre-call distribution">
+                  <Metric
+                    label="Pre-call < 250 μs"
+                    value={senderSampleMetric(latest.pre_call_lt_250us)}
+                  />
+                  <Metric
+                    label="Pre-call 250–500 μs"
+                    value={senderSampleMetric(latest.pre_call_250_500us)}
+                  />
+                  <Metric
+                    label="Pre-call 500–750 μs"
+                    value={senderSampleMetric(latest.pre_call_500_750us)}
+                  />
+                  <Metric
+                    label="Pre-call 750–1000 μs"
+                    value={senderSampleMetric(latest.pre_call_750_1000us)}
+                  />
+                  <Metric
+                    label="Pre-call 1.0–1.5 ms"
+                    value={senderSampleMetric(latest.pre_call_1000_1500us)}
+                  />
+                  <Metric
+                    label="Pre-call 1.5–2.0 ms"
+                    value={senderSampleMetric(latest.pre_call_1500_2000us)}
+                  />
+                  <Metric
+                    label="Pre-call ≥ 2.0 ms"
+                    value={senderSampleMetric(latest.pre_call_ge_2000us)}
+                  />
+                </MetricGroup>
+                <MetricGroup title="Deadline admission">
+                  <Metric
+                    label="Focus gate rejections"
+                    value={playerMetric(latest.final_gate_focus_losses)}
+                  />
+                  <Metric
+                    label="Target / owner rejections"
+                    value={playerMetric(latest.final_gate_target_changes)}
+                  />
+                  <Metric
+                    label="Lease gate rejections"
+                    value={playerMetric(latest.final_gate_lease_expirations)}
+                  />
+                  <Metric
+                    label="Control / modifier rejections"
+                    value={playerMetric(latest.final_gate_control_rejections)}
+                  />
+                </MetricGroup>
+                <MetricGroup title="Hold floor delays">
+                  <Metric
+                    label="Hold-floor delayed boundaries"
+                    value={playerMetric(latest.hold_floor_delay_boundaries)}
+                  />
+                  <Metric
+                    label="Maximum hold-floor delay"
+                    value={
+                      dryRun ? 'Not measured' : measure(latest.max_hold_floor_delay_us, 'µs', 0)
+                    }
+                  />
+                </MetricGroup>
+                <MetricGroup title="Input transport">
+                  <Metric
+                    label="SendInput zero-progress failures"
+                    value={playerMetric(latest.sendinput_zero_progress_failures)}
+                  />
+                  <Metric
+                    label="SendInput partial events"
+                    value={playerMetric(latest.sendinput_partial_events)}
+                  />
+                  <Metric label="Dropped keys" value={playerMetric(latest.keys_dropped)} />
+                  <Metric label="Chord splits" value={playerMetric(latest.chord_split_events)} />
+                  <Metric label="Stuck keys" value={playerMetric(latest.stuck_keys)} />
+                  <Metric label="Active keys" value={playerMetric(latest.active_keys)} />
+                </MetricGroup>
+                <MetricGroup title="Windows power lifecycle">
+                  <Metric
+                    label="Suspend/resume notifications"
+                    value={latest.suspend_resume_registered ? 'Registered' : 'Unavailable'}
+                  />
+                  <Metric
+                    label="System power state"
+                    value={
+                      latest.system_suspend_active ? 'Suspended / re-admission blocked' : 'Running'
+                    }
+                  />
+                  <Metric
+                    label="Suspend notifications"
+                    value={String(latest.system_suspend_notifications)}
+                  />
+                  <Metric
+                    label="Resume notifications"
+                    value={String(latest.system_resume_notifications)}
+                  />
+                  <Metric
+                    label="Duplicate notifications"
+                    value={String(latest.duplicate_system_power_notifications)}
+                  />
+                  <Metric
+                    label="Power request active"
+                    value={latest.power_request_active ? 'Yes' : 'No'}
+                  />
+                  <Metric
+                    label="Power request create failures"
+                    value={String(latest.power_request_create_failures)}
+                  />
+                  <Metric
+                    label="Power request set failures"
+                    value={String(latest.power_request_set_failures)}
+                  />
+                  <Metric
+                    label="Power request clear failures"
+                    value={String(latest.power_request_clear_failures)}
+                  />
+                  <Metric
+                    label="Power request close failures"
+                    value={String(latest.power_request_close_failures)}
+                  />
+                  <Metric
+                    label="Notification registration failures"
+                    value={String(latest.suspend_resume_registration_failures)}
+                  />
+                  <Metric
+                    label="Notification unregistration failures"
+                    value={String(latest.suspend_resume_unregistration_failures)}
+                  />
+                </MetricGroup>
+                <MetricGroup title="Release">
+                  <Metric
+                    label="Max release lateness"
+                    value={backendMeasure(latest.release_max_us, 'μs')}
+                  />
+                  <Metric
+                    label="Release > 2 ms"
+                    value={senderSampleMetric(latest.release_late_2ms)}
+                  />
+                </MetricGroup>
+              </>
+            )}
+          </ScrollAreaContent>
+        </ScrollAreaViewport>
+        <ScrollAreaScrollbar orientation="vertical">
+          <ScrollAreaThumb />
+        </ScrollAreaScrollbar>
+      </ScrollAreaRoot>
     </TabsContent>
   );
 }

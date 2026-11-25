@@ -213,11 +213,15 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
               <span className="relative grid size-[18px] place-items-center" aria-hidden="true">
                 <Play
                   className={`absolute inset-0 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${!primaryPending && !primaryIsPlaying ? 'opacity-100' : 'opacity-0'}`}
-                  size={18}
+                  size={20}
+                  fill="currentColor"
+                  strokeWidth={1.5}
                 />
                 <Pause
                   className={`absolute inset-0 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${!primaryPending && primaryIsPlaying ? 'opacity-100' : 'opacity-0'}`}
                   size={18}
+                  fill="currentColor"
+                  strokeWidth={1.5}
                 />
                 <LoaderCircle
                   className={`absolute inset-0 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${primaryPending ? 'animate-spin opacity-100 motion-reduce:animate-none' : 'opacity-0'}`}
@@ -249,7 +253,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
           disabled={!stopCanAct || playback.transportOperation === 'stopping'}
           onClick={() => void stop()}
         >
-          <Square size={14} aria-hidden="true" />
+          <Square size={13} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
         </Button>
       </div>
       <PlayerTransportTimeline useStore={useStore} transportStatus={transportStatus} />

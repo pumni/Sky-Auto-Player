@@ -80,7 +80,7 @@ export const TrackRow = memo(function TrackRow({
   return (
     <div
       id={`song-row-${row.song_id}`}
-      className={`group absolute inset-x-1.5 grid h-[46px] min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 rounded-control border-l-2 px-[10px] pr-1.5 text-[13px] font-medium outline-none transition-colors duration-fast hover:bg-control-hover focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/track-browser:right-1 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-1.5 @max-[440px]/track-browser:left-1 @max-[440px]/track-browser:right-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:pl-0.5 motion-reduce:transition-none ${selected ? 'border-l-accent-ink' : 'border-l-transparent'} ${selected ? 'bg-selection font-semibold text-foreground' : playing ? 'bg-playing text-text-secondary' : 'text-text-secondary'} data-[state=selected]:hover:bg-selection data-[state=selected]:focus-visible:bg-selection data-[state=playing]:hover:bg-playing data-[state=playing]:focus-visible:bg-playing data-[state=selected-playing]:hover:bg-selection data-[state=selected-playing]:focus-visible:bg-selection`}
+      className={`group absolute inset-x-1.5 grid h-[46px] min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 rounded-control border-l-2 px-[10px] pr-3 text-[13px] font-medium outline-none transition-colors duration-fast hover:bg-control-hover focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/track-browser:right-1 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-2 @max-[440px]/track-browser:left-1 @max-[440px]/track-browser:right-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:pl-0.5 @max-[440px]/track-browser:pr-1 motion-reduce:transition-none ${selected ? 'border-l-accent-ink' : 'border-l-transparent'} ${selected ? 'bg-selection font-semibold text-foreground' : playing ? 'bg-playing text-text-secondary' : 'text-text-secondary'} data-[state=selected]:hover:bg-selection data-[state=selected]:focus-visible:bg-selection data-[state=playing]:hover:bg-playing data-[state=playing]:focus-visible:bg-playing data-[state=selected-playing]:hover:bg-selection data-[state=selected-playing]:focus-visible:bg-selection`}
       data-selected={selected}
       data-playing={playing}
       data-state={
@@ -112,66 +112,59 @@ export const TrackRow = memo(function TrackRow({
       >
         {playing ? <Music2 size={14} aria-hidden="true" /> : ordinal}
       </span>
-      <Tooltip
-        open={clippedHoverSongId === row.song_id}
-        onOpenChange={(isOpen) => {
-          if (!isOpen) {
-            setClippedHoverSongId(null);
-          } else {
-            const title = titleTextRef.current;
-            setClippedHoverSongId(
-              title && title.scrollWidth > title.clientWidth ? row.song_id : null,
-            );
-          }
-        }}
+      <span
+        data-slot="track-title-cell"
+        className="flex min-w-0 items-center gap-1.5 overflow-hidden"
+        role="gridcell"
       >
-        <TooltipTrigger
-          render={
-            <span
-              data-slot="track-title-cell"
-              className="flex min-w-0 items-center gap-1.5 overflow-hidden"
-              role="gridcell"
-              tabIndex={-1}
-            />
-          }
-          onPointerEnter={(event) => {
-            if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
-            const title = event.currentTarget.querySelector<HTMLElement>('[data-track-title]');
-            setClippedHoverSongId(
-              title && title.scrollWidth > title.clientWidth ? row.song_id : null,
-            );
+        <Tooltip
+          open={clippedHoverSongId === row.song_id}
+          onOpenChange={(isOpen) => {
+            if (!isOpen) {
+              setClippedHoverSongId(null);
+            } else {
+              const title = titleTextRef.current;
+              setClippedHoverSongId(
+                title && title.scrollWidth > title.clientWidth ? row.song_id : null,
+              );
+            }
           }}
-          onPointerLeave={() => setClippedHoverSongId(null)}
         >
-          <span
-            ref={titleTextRef}
-            data-track-title
-            className={`min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap ${playing ? 'font-semibold text-accent-ink' : ''}`}
+          <TooltipTrigger
+            render={
+              <span
+                ref={titleTextRef}
+                data-track-title
+                className={`min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap ${playing ? 'font-semibold text-accent-ink' : ''}`}
+              />
+            }
+            onPointerEnter={(event) => {
+              if (event.pointerType !== 'mouse' && event.pointerType !== 'pen') return;
+              const title = event.currentTarget;
+              setClippedHoverSongId(title.scrollWidth > title.clientWidth ? row.song_id : null);
+            }}
+            onPointerLeave={() => setClippedHoverSongId(null)}
           >
             {row.title}
-          </span>
-          {metadata && (
-            <StatusBadge
-              className="shrink-0"
-              tone={metadata.tone}
-              aria-label={metadata.label}
-              title={metadata.label}
-            >
-              {metadata.value}
-            </StatusBadge>
-          )}
-          {selected && <span className="sr-only">Selected for inspection</span>}
-          {playing && <span className="sr-only">Now Playing</span>}
-          {actions}
-        </TooltipTrigger>
-        <TooltipContent
-          side="top"
-          align="start"
-          className="max-w-[min(320px,calc(100vw-64px))] break-words rounded-control border border-border bg-popover px-2 py-1.5 text-xs leading-[1.4] text-popover-foreground shadow-lg"
-        >
-          {row.title}
-        </TooltipContent>
-      </Tooltip>
+          </TooltipTrigger>
+          <TooltipContent side="top" align="start">
+            {row.title}
+          </TooltipContent>
+        </Tooltip>
+        {metadata && (
+          <StatusBadge
+            className="shrink-0"
+            tone={metadata.tone}
+            aria-label={metadata.label}
+            title={metadata.label}
+          >
+            {metadata.value}
+          </StatusBadge>
+        )}
+        {selected && <span className="sr-only">Selected for inspection</span>}
+        {playing && <span className="sr-only">Now Playing</span>}
+        {actions}
+      </span>
       <span className="flex min-w-0 items-center justify-center" role="gridcell">
         <Button
           variant="ghost"
@@ -233,7 +226,7 @@ export const VirtualTrackRow = memo(function VirtualTrackRow({
   if (!row) {
     return (
       <div
-        className="absolute inset-x-1.5 grid h-[46px] min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 px-[10px] pr-1.5 text-[13px] text-text-tertiary opacity-70 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:px-0.5"
+        className="absolute inset-x-1.5 grid h-[46px] min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 px-[10px] pr-3 text-[13px] text-text-tertiary opacity-70 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-2 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:px-0.5 @max-[440px]/track-browser:pr-1"
         role="row"
         aria-busy="true"
         aria-rowindex={index + 2}

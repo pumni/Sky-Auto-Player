@@ -139,6 +139,13 @@ async function readWorkspaceGeometry(page: Page) {
     };
     const trackTable = document.querySelector<HTMLElement>('[role="grid"]');
     const trackFrame = document.querySelector<HTMLElement>('[data-slot="track-table-frame"]');
+    const scrollArea = trackTable?.closest<HTMLElement>('[data-slot="scroll-area"]');
+    const verticalScrollbar = scrollArea?.querySelector<HTMLElement>(
+      '[data-slot="scroll-area-scrollbar"][data-orientation="vertical"]',
+    );
+    const scrollbarThumb = verticalScrollbar?.querySelector<HTMLElement>(
+      '[data-slot="scroll-area-thumb"]',
+    );
     const browserPane = document.querySelector<HTMLElement>('[data-pane="browser"]');
     const tableHeader = document.querySelector<HTMLElement>('[role="row"][aria-rowindex="1"]');
     const headerCells = Array.from(
@@ -151,13 +158,6 @@ async function readWorkspaceGeometry(page: Page) {
       const rowRect = row?.getBoundingClientRect();
       const paneRect = browserPane?.getBoundingClientRect();
       const paneStyle = browserPane ? getComputedStyle(browserPane) : null;
-      const classicScrollbarReservation =
-        trackTable && tableStyle
-          ? trackTable.offsetWidth -
-            trackTable.clientWidth -
-            trackTable.clientLeft -
-            Number.parseFloat(tableStyle.borderRightWidth)
-          : 0;
       const contentLeft = paneRect
         ? paneRect.left + Number.parseFloat(paneStyle?.borderLeftWidth ?? '0')
         : null;
@@ -187,13 +187,6 @@ async function readWorkspaceGeometry(page: Page) {
         rowFillInsets:
           rowRect && frameRect
             ? { left: rowRect.left - frameRect.left, right: frameRect.right - rowRect.right }
-            : null,
-        scrollbarCompensatedPaneInsets:
-          rowRect && contentLeft !== null && contentRight !== null
-            ? {
-                left: rowRect.left - contentLeft,
-                right: contentRight - rowRect.right - classicScrollbarReservation,
-              }
             : null,
         cells: cells.map((cell, index) => {
           const cellRect = cell.getBoundingClientRect();
@@ -344,13 +337,18 @@ async function readWorkspaceGeometry(page: Page) {
                 reservedInline: trackTable.offsetWidth - trackTable.clientWidth,
                 computedBorderLeft: tableStyle.borderLeftWidth,
                 computedBorderRight: tableStyle.borderRightWidth,
-                actualClassicScrollbarReservation:
-                  trackTable.offsetWidth -
-                  trackTable.clientWidth -
-                  trackTable.clientLeft -
-                  Number.parseFloat(tableStyle.borderRightWidth),
+                hasVerticalOverflow: scrollArea?.hasAttribute('data-has-overflow-y') ?? false,
               }
             : null,
+        scrollbar: verticalScrollbar
+          ? {
+              visible: getComputedStyle(verticalScrollbar).display !== 'none',
+              width: verticalScrollbar.getBoundingClientRect().width,
+              height: verticalScrollbar.getBoundingClientRect().height,
+              thumbWidth: scrollbarThumb?.getBoundingClientRect().width ?? null,
+              thumbHeight: scrollbarThumb?.getBoundingClientRect().height ?? null,
+            }
+          : null,
         paneBorders: paneStyle
           ? {
               left: paneStyle.borderLeftWidth,
@@ -404,25 +402,23 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     'Candle Run',
   );
   await page.getByRole('row', { name: /Aurora Landing/ }).hover();
-  const classicScrollbarSimulation = await page.addStyleTag({
-    content: `
-      [role="grid"] {
-        overflow-y: scroll !important;
-        scrollbar-gutter: stable !important;
-        scrollbar-width: auto !important;
-      }
-      [role="grid"]::-webkit-scrollbar {
-        width: 16px !important;
-      }
-    `,
-  });
-  const classicScrollbarGeometry = await readWorkspaceGeometry(page);
-  expect(
-    classicScrollbarGeometry.trackCanvas.scrollportMetrics?.actualClassicScrollbarReservation,
-  ).toBeGreaterThan(0);
-  measurements['1366x768ClassicScrollbar'] = classicScrollbarGeometry;
-  await classicScrollbarSimulation.evaluate((style) => style.remove());
-  measurements['1366x768'] = await readWorkspaceGeometry(page);
+  const wideGeometry = await readWorkspaceGeometry(page);
+  expect(wideGeometry.trackCanvas.scrollportMetrics?.hasVerticalOverflow).toBe(true);
+  expect(wideGeometry.trackCanvas.scrollbar?.visible).toBe(true);
+  expect(wideGeometry.trackCanvas.scrollbar?.width).toBe(10);
+  expect(wideGeometry.trackCanvas.scrollbar?.thumbWidth).toBe(6);
+  expect(wideGeometry.trackCanvas.scrollbar?.thumbHeight).toBeGreaterThan(0);
+  expect(wideGeometry.trackCanvas.scrollbar?.thumbHeight).toBeLessThan(
+    wideGeometry.trackCanvas.scrollbar?.height ?? 0,
+  );
+  for (const row of Object.values(wideGeometry.trackCanvas.rows)) {
+    if (!row) continue;
+    for (const cell of row.cells) {
+      expect(Math.abs(cell.delta?.left ?? 0)).toBeLessThanOrEqual(1);
+      expect(Math.abs(cell.delta?.right ?? 0)).toBeLessThanOrEqual(1);
+    }
+  }
+  measurements['1366x768'] = wideGeometry;
   if (shouldCapture('populated')) await capture(page, 'candidate-populated-1366x768.png');
 
   await openApp(page, { width: 1200, height: 760 }, 'expanded', true);

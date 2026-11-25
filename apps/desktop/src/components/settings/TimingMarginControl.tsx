@@ -114,7 +114,7 @@ export function TimingMarginControl({
 
   return (
     <div
-      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1"
+      className={`grid min-w-0 ${density === 'compact' ? 'grid-cols-1 content-start gap-1' : 'grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 gap-y-1'}`}
       role="group"
       aria-label="Timing Margin"
       data-slot="timing-margin-control"

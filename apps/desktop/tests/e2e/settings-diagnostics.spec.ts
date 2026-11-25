@@ -46,7 +46,11 @@ test('Playback Profile works through the narrow popover with focus restore', asy
   await expect(popover.getByLabel('FPS')).toBeHidden();
   await advancedTiming.click();
   await expect(popover.getByLabel('FPS')).toBeVisible();
-  await expect(popover.locator('details dt')).toHaveText(['Calculated target hold']);
+  await expect(popover.locator('details dt')).toHaveText([
+    'Frame duration',
+    'Base hold duration',
+    'Effective target hold',
+  ]);
   await expect(popover.locator('[data-slot="timing-margin-control"]')).toContainText(
     'Timing Margin',
   );

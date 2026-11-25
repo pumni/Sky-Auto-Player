@@ -47,12 +47,7 @@ function UtilityRailItem({ label, active, icon, onSelect }: UtilityRailItemProps
           {icon}
         </span>
       </TooltipTrigger>
-      <TooltipContent
-        side="left"
-        className="max-w-[min(320px,calc(100vw-64px))] break-words rounded-control border border-border bg-popover px-2 py-1.5 text-xs leading-[1.4] text-popover-foreground shadow-lg"
-      >
-        {label}
-      </TooltipContent>
+      <TooltipContent side="left">{label}</TooltipContent>
     </Tooltip>
   );
 }
@@ -232,10 +227,10 @@ export function UtilityPane({
           onClose={close}
         />
         <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          <TabsContent className="flex min-h-0 min-w-0 flex-1 overflow-auto" value="details">
+          <TabsContent className="flex min-h-0 min-w-0 flex-1" value="details">
             {utility.activeView === 'details' && <SongDetailsView useStore={useStore} />}
           </TabsContent>
-          <TabsContent className="flex min-h-0 min-w-0 flex-1 overflow-auto" value="diagnostics">
+          <TabsContent className="flex min-h-0 min-w-0 flex-1" value="diagnostics">
             {utility.activeView === 'diagnostics' && (
               <Suspense
                 fallback={

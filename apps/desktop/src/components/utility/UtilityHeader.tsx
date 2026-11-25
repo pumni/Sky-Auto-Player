@@ -55,24 +55,18 @@ export function UtilityHeader({
         </Button>
       )}
       <TabsList
-        className="col-span-2 row-start-2 w-full justify-start gap-0 border-b border-border p-0"
+        className="col-span-2 row-start-2 w-full justify-start"
         aria-label="Utility views"
         variant="line"
         activateOnFocus
       >
-        <TabsTrigger
-          className="min-h-[34px] flex-none rounded-none border-0 px-3 text-xs text-text-secondary duration-tab hover:bg-control-hover hover:text-foreground data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
-          value="details"
-        >
+        <TabsTrigger className="min-h-[34px] flex-none px-3 text-xs" value="details">
           <span>Details</span>
         </TabsTrigger>
-        <TabsTrigger
-          className="min-h-[34px] flex-none rounded-none border-0 px-3 text-xs text-text-secondary duration-tab hover:bg-control-hover hover:text-foreground data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
-          value="diagnostics"
-        >
+        <TabsTrigger className="min-h-[34px] flex-none px-3 text-xs" value="diagnostics">
           <span>Runtime</span>
         </TabsTrigger>
-        <TabsIndicator />
+        <TabsIndicator variant="line" />
       </TabsList>
     </header>
   );

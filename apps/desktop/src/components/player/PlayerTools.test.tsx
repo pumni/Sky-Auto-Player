@@ -66,9 +66,7 @@ describe('PlayerTools playback modes and profile', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
     expect(within(dialog).getByText(row.title)).toBeInTheDocument();
-    expect(
-      within(dialog).getByText('Try these settings without sending any physical keyboard input.'),
-    ).toBeInTheDocument();
+    expect(within(dialog).getByText('No keyboard input is sent.')).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Test playback (no input)' }));
 
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
@@ -100,7 +98,8 @@ describe('PlayerTools playback modes and profile', () => {
     expect(within(dialog).getByLabelText('FPS')).not.toBeVisible();
     await act(async () => advancedTiming.closest('summary')?.click());
     expect(within(dialog).getByLabelText('FPS')).toBeVisible();
-    expect(within(dialog).getByText('Calculated target hold')).toBeVisible();
+    expect(within(dialog).getByText('Effective target hold')).toBeVisible();
+    expect(within(dialog).getByText('Frame duration')).toBeVisible();
     expect(within(dialog).getByText('Safe preview')).toBeVisible();
     expect(
       within(dialog).getByText(

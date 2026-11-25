@@ -136,9 +136,18 @@ clamped bounds.
 The registered Navigator and Inspector width properties use `inherits: false`; live resizing writes
 them directly to their pane elements so nested rows and content do not inherit pane geometry.
 
-Song Details and Runtime Diagnostics retain their own scrollable content. Runtime metrics, timing
-plots, events, and trace export remain available in either presentation. The Inspector ends above
-the Player Dock, which keeps its own independent geometry and controls.
+Ordinary overflowing panels use the source-owned `components/ui/scroll-area.tsx` wrapper around
+Base UI's native scroll viewport and custom scrollbar parts. Each active content panel has one
+scroll viewport; the Details and Runtime tabs own independent viewports, and Runtime's
+Performance, Timing, and Events tabs each own one viewport beneath their fixed tab list. The
+library and Settings navigation/content panes use the same component. Its thumb uses Base UI's
+overflow, hover, and scrolling state; there is no app-wide native scrollbar override or
+per-region scroll timer. The Track Browser gives TanStack Virtual the actual Base UI viewport
+element as its scroll element, preserving row height, keyboard navigation, page reset, and
+scroll-to-index behavior. Select and menu popups keep their own library-managed scrolling.
+
+Runtime metrics, timing plots, events, and trace export remain available in either presentation.
+The Inspector ends above the Player Dock, which keeps its own independent geometry and controls.
 
 The Inspector summarizes readiness as pending, unavailable, ready, review, or blocked. Unknown or
 missing compatibility/timing data never becomes ready; conversion consent and timing-risk review

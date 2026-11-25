@@ -8,6 +8,13 @@ import {
 import { TimingMarginControl } from '../settings/TimingMarginControl';
 import { Button } from '../ui/button';
 import {
+  ScrollAreaContent,
+  ScrollAreaRoot,
+  ScrollAreaScrollbar,
+  ScrollAreaThumb,
+  ScrollAreaViewport,
+} from '../ui/scroll-area';
+import {
   formatFpsFrameHint,
   formatHoldFramesHint,
   formatTempoHint,
@@ -52,6 +59,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
   const [autoPlayPending, setAutoPlayPending] = useState(false);
   const autoPlayMutationPending = useRef(false);
   const profileTriggerRef = useRef<HTMLButtonElement>(null);
+  const [profileAdvancedOpen, setProfileAdvancedOpen] = useState(false);
   const hasTestSong = Boolean(playback.currentSong || selectedSongId);
   const canPreparePlayback =
     hasTestSong &&
@@ -116,7 +124,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         </TooltipContent>
       </Tooltip>
       <div className="relative w-8 min-w-0">
-        <Tooltip>
+        <Tooltip disabled={profileOpen}>
           <Popover open={profileOpen} onOpenChange={setProfileOpen}>
             <TooltipTrigger
               render={
@@ -144,72 +152,71 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
               side="top"
               align="end"
               sideOffset={8}
-              className="grid max-h-[calc(100vh-130px)] w-[min(350px,calc(100vw-24px))] min-w-[min(280px,calc(100vw-24px))] max-w-[calc(100vw-24px)] gap-2.5 overflow-y-auto rounded-pane border border-border bg-card p-4 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className={`flex ${profileAdvancedOpen ? 'h-[min(476px,calc(100dvh-32px))]' : 'h-max'} max-h-[min(560px,calc(100dvh-32px))] w-[min(360px,calc(100vw-24px))] min-w-[min(320px,calc(100vw-24px))] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-pane border border-border bg-card p-0 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring`}
               role="dialog"
               aria-label="Playback profile"
             >
-              <header className="flex items-start justify-between gap-2.5">
-                <div className="min-w-0">
-                  <h3 className="m-0 text-sm font-semibold leading-[1.3] text-foreground">
-                    Playback profile
-                  </h3>
-                  <p className="mb-0 mt-1 text-xs leading-[1.4] text-text-tertiary">
-                    Fine-tune how each song is played.
-                  </p>
-                </div>
-                {profileSummary && (
-                  <span
-                    className="mt-0.5 flex-none whitespace-nowrap font-mono text-[11px] tabular-nums text-text-tertiary"
-                    aria-hidden="true"
-                  >
-                    {defaults?.hold_frames}f · {defaults?.tempo_scale}× · {defaults?.fps}
-                  </span>
-                )}
-              </header>
-              <div
-                data-slot="profile-fields"
-                className="grid min-w-0 grid-cols-2 gap-x-2.5 gap-y-3"
-              >
-                <ProfileFields
-                  defaults={defaults}
-                  bootstrap={bootstrap}
-                  patchSettings={patchSettings}
-                />
-              </div>
-              <div className="flex min-w-0 items-start justify-between gap-3 border-t border-border pt-3">
-                <div className="min-w-0">
-                  <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-                    <strong className="text-[13px] font-semibold text-foreground">
-                      Safe preview
-                    </strong>
-                    {selectedSongTitle && (
-                      <span
-                        className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-secondary"
-                        title={selectedSongTitle}
+              <ScrollAreaRoot className="min-h-0 flex-1">
+                <ScrollAreaViewport className="rounded-pane">
+                  <ScrollAreaContent className="grid min-w-0 gap-3 p-4 pr-6">
+                    <header className="grid gap-1">
+                      <h3 className="m-0 text-base font-semibold leading-[22px] text-foreground">
+                        Playback profile
+                      </h3>
+                      <p className="m-0 text-xs leading-[1.4] text-text-tertiary">
+                        Fine-tune how each song is played.
+                      </p>
+                    </header>
+                    <div
+                      data-slot="profile-fields"
+                      className="grid min-w-0 grid-cols-2 gap-x-2.5 gap-y-3"
+                    >
+                      <ProfileFields
+                        defaults={defaults}
+                        bootstrap={bootstrap}
+                        patchSettings={patchSettings}
+                        advancedTimingOpen={profileAdvancedOpen}
+                        onAdvancedTimingOpenChange={setProfileAdvancedOpen}
+                      />
+                    </div>
+                    <div className="grid min-w-0 gap-2.5 border-t border-border pt-3">
+                      <div className="grid min-w-0 gap-1">
+                        <strong className="text-[13px] font-semibold text-foreground">
+                          Safe preview
+                        </strong>
+                        {selectedSongTitle && (
+                          <span
+                            className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-xs text-text-secondary"
+                            title={selectedSongTitle}
+                          >
+                            {selectedSongTitle}
+                          </span>
+                        )}
+                        <p className="m-0 text-xs leading-relaxed text-text-secondary">
+                          {canPreparePlayback ? 'No keyboard input is sent.' : previewDescription}
+                        </p>
+                      </div>
+                      <Button
+                        variant="default"
+                        size="default"
+                        className="min-h-9 w-full text-xs disabled:border disabled:border-border disabled:bg-card disabled:text-muted-foreground"
+                        type="button"
+                        disabled={!canPreparePlayback}
+                        onClick={() => {
+                          setProfileOpen(false);
+                          void prepareAndMaybeStart();
+                        }}
                       >
-                        {selectedSongTitle}
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1.5 mb-0 text-xs leading-relaxed text-text-secondary">
-                    {previewDescription}
-                  </p>
-                </div>
-                <Button
-                  variant="default"
-                  size="default"
-                  className="min-h-9 flex-none px-3 text-xs disabled:border disabled:border-border disabled:bg-card disabled:text-muted-foreground"
-                  type="button"
-                  disabled={!canPreparePlayback}
-                  onClick={() => {
-                    setProfileOpen(false);
-                    void prepareAndMaybeStart();
-                  }}
-                >
-                  <FlaskConical size={15} aria-hidden="true" />
-                  Test playback (no input)
-                </Button>
-              </div>
+                        <FlaskConical size={15} aria-hidden="true" />
+                        Test playback (no input)
+                      </Button>
+                    </div>
+                  </ScrollAreaContent>
+                </ScrollAreaViewport>
+                <ScrollAreaScrollbar orientation="vertical" aria-hidden="true">
+                  <ScrollAreaThumb />
+                </ScrollAreaScrollbar>
+              </ScrollAreaRoot>
             </PopoverContent>
           </Popover>
         </Tooltip>
@@ -243,9 +250,17 @@ interface ProfileFieldsProps {
   defaults: NonNullable<DesktopStore['settings']>['playback_defaults'] | undefined;
   bootstrap: DesktopStore['bootstrap'];
   patchSettings: DesktopStore['patchSettings'];
+  advancedTimingOpen: boolean;
+  onAdvancedTimingOpenChange: (open: boolean) => void;
 }
 
-function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProps) {
+function ProfileFields({
+  defaults,
+  bootstrap,
+  patchSettings,
+  advancedTimingOpen,
+  onAdvancedTimingOpenChange,
+}: ProfileFieldsProps) {
   const holdId = useId();
   const tempoId = useId();
   const fpsId = useId();
@@ -303,6 +318,9 @@ function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProp
             ))}
           </SelectContent>
         </Select>
+        <span className="text-[11px] leading-4 text-text-tertiary">
+          {formatHoldFramesHint(defaults.hold_frames, defaults.fps)}
+        </span>
       </div>
       <div className="grid min-w-0 gap-1">
         <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={tempoId}>
@@ -329,8 +347,15 @@ function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProp
             ))}
           </SelectContent>
         </Select>
+        <span className="text-[11px] leading-4 text-text-tertiary">
+          {formatTempoHint(defaults.tempo_scale) ?? '\u00a0'}
+        </span>
       </div>
-      <details className="group col-span-2 min-w-0 border-t border-border pt-2">
+      <details
+        className="group col-span-2 min-w-0 border-t border-border pt-2"
+        open={advancedTimingOpen}
+        onToggle={(event) => onAdvancedTimingOpenChange(event.currentTarget.open)}
+      >
         <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-[13px] font-medium text-text-secondary hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
           <ChevronRight
             className="size-3.5 transition-[rotate] duration-fast group-open:rotate-90 motion-reduce:transition-none"
@@ -374,8 +399,16 @@ function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProp
               )
             }
           />
-          <dl className="col-span-2 m-0 grid grid-cols-[1fr_auto] gap-1 border-t border-border pt-2 text-xs">
-            <dt className="text-text-tertiary">Calculated target hold</dt>
+          <dl className="col-span-2 m-0 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 border-t border-border pt-2 text-xs">
+            <dt className="text-text-tertiary">Frame duration</dt>
+            <dd className="m-0 font-mono tabular-nums text-foreground">
+              {(frameUs / 1_000).toFixed(3)} ms
+            </dd>
+            <dt className="text-text-tertiary">Base hold duration</dt>
+            <dd className="m-0 font-mono tabular-nums text-foreground">
+              {(frameBaseHoldUs / 1_000).toFixed(3)} ms
+            </dd>
+            <dt className="text-text-tertiary">Effective target hold</dt>
             <dd className="m-0 font-mono tabular-nums text-foreground">
               {(minHoldUs / 1_000).toFixed(3)} ms
             </dd>

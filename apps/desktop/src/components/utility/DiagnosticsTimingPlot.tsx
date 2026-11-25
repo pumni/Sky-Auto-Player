@@ -1,5 +1,12 @@
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { TabsContent } from '../ui/tabs';
+import {
+  ScrollAreaContent,
+  ScrollAreaRoot,
+  ScrollAreaScrollbar,
+  ScrollAreaThumb,
+  ScrollAreaViewport,
+} from '../ui/scroll-area';
 import { number } from './diagnosticsPresentation';
 import { DiagnosticsEmptyState } from './DiagnosticsReadouts';
 
@@ -219,12 +226,21 @@ export function DiagnosticsTimingPanel({ useStore }: { useStore: DesktopStoreHoo
   const activeSession = nativeSessionActive && latest?.session_id === sessionId;
 
   return (
-    <TabsContent value="timing" className="min-h-[116px] min-w-0 flex-1 pt-3">
-      <DiagnosticsTimingPlot
-        samples={activeSession ? samples : []}
-        hasActiveSession={nativeSessionActive}
-        dryRun={nativeSessionActive && dryRun}
-      />
+    <TabsContent value="timing" className="flex min-h-[116px] min-w-0 flex-1 flex-col">
+      <ScrollAreaRoot className="min-h-0 min-w-0 flex-1">
+        <ScrollAreaViewport className="size-full" role="region" aria-label="Timing diagnostics">
+          <ScrollAreaContent className="min-w-0 pt-3 pb-4">
+            <DiagnosticsTimingPlot
+              samples={activeSession ? samples : []}
+              hasActiveSession={nativeSessionActive}
+              dryRun={nativeSessionActive && dryRun}
+            />
+          </ScrollAreaContent>
+        </ScrollAreaViewport>
+        <ScrollAreaScrollbar orientation="vertical">
+          <ScrollAreaThumb />
+        </ScrollAreaScrollbar>
+      </ScrollAreaRoot>
     </TabsContent>
   );
 }

@@ -2,6 +2,13 @@ import { ChevronLeft, ChevronRight, Disc3, Heart, ListMusic, RefreshCw } from 'l
 import { useRef, useState } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { Button } from '../ui/button';
+import {
+  ScrollAreaContent,
+  ScrollAreaRoot,
+  ScrollAreaScrollbar,
+  ScrollAreaThumb,
+  ScrollAreaViewport,
+} from '../ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { LibraryAddMenu } from './LibraryAddMenu';
 import { LibraryConfirmDialog } from './LibraryConfirmDialog';
@@ -64,12 +71,7 @@ function CollapsedPlaylistTile({
           {monogram ? <span>{monogram}</span> : <ListMusic size={18} />}
         </span>
       </TooltipTrigger>
-      <TooltipContent
-        side="right"
-        className="max-w-[min(320px,calc(100vw-64px))] break-words rounded-control border border-border bg-popover px-2 py-1.5 text-xs leading-[1.4] text-popover-foreground shadow-lg"
-      >
-        {displayName}
-      </TooltipContent>
+      <TooltipContent side="right">{displayName}</TooltipContent>
     </Tooltip>
   );
 }
@@ -221,108 +223,126 @@ export function LibraryNavigator({
           data-slot="library-collapsed-playlists"
           className="mt-2 flex min-h-0 w-11 flex-1 flex-col border-t border-border pt-[6px]"
         >
-          <div
-            data-slot="library-collapsed-playlist-scroller"
-            className="flex min-h-0 w-full flex-1 flex-col items-center gap-1 overflow-y-auto overscroll-contain"
-            role="group"
-            aria-label="Playlists"
-          >
-            {collapsedPlaylists.map((playlist, index) => {
-              const active = source.kind === 'playlist' && source.id === playlist.id;
-              const duplicateName = (playlistNameCounts.get(playlist.name) ?? 0) > 1;
-              const displayName = playlist.name.trim() ? playlist.name : `Playlist ${index + 1}`;
-              const accessibleName = duplicateName
-                ? `${displayName}, playlist ${index + 1}`
-                : displayName;
-              const monogram = playlistMonogram(playlist.name);
+          <ScrollAreaRoot className="min-h-0 w-full flex-1">
+            <ScrollAreaViewport
+              data-slot="library-collapsed-playlist-scroller"
+              className="size-full"
+              role="group"
+              aria-label="Playlists"
+            >
+              <ScrollAreaContent className="flex min-h-full w-full flex-col items-center gap-1">
+                {collapsedPlaylists.map((playlist, index) => {
+                  const active = source.kind === 'playlist' && source.id === playlist.id;
+                  const duplicateName = (playlistNameCounts.get(playlist.name) ?? 0) > 1;
+                  const displayName = playlist.name.trim()
+                    ? playlist.name
+                    : `Playlist ${index + 1}`;
+                  const accessibleName = duplicateName
+                    ? `${displayName}, playlist ${index + 1}`
+                    : displayName;
+                  const monogram = playlistMonogram(playlist.name);
 
-              return (
-                <CollapsedPlaylistTile
-                  key={playlist.id}
-                  id={playlist.id}
-                  displayName={displayName}
-                  accessibleName={accessibleName}
-                  monogram={monogram}
-                  active={active}
-                  onSelect={() => void selectLibrarySource({ kind: 'playlist', id: playlist.id })}
-                />
-              );
-            })}
-            {navigation.loadState === 'error' && (
-              <>
-                <span className="sr-only" role="alert">
-                  Couldn’t load playlists. {navigation.lastError ?? ''}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="grid size-10 place-items-center rounded-control border-0 bg-transparent text-text-secondary hover:bg-control-hover hover:text-foreground"
-                  type="button"
-                  aria-label="Retry library navigation"
-                  onClick={() => void useStore.getState().loadLibraryNavigation()}
-                >
-                  <RefreshCw size={16} aria-hidden="true" />
-                </Button>
-              </>
-            )}
-            {!navigationReady && navigation.loadState !== 'error' && (
-              <span className="sr-only" role="status">
-                Loading playlists.
-              </span>
-            )}
-          </div>
+                  return (
+                    <CollapsedPlaylistTile
+                      key={playlist.id}
+                      id={playlist.id}
+                      displayName={displayName}
+                      accessibleName={accessibleName}
+                      monogram={monogram}
+                      active={active}
+                      onSelect={() =>
+                        void selectLibrarySource({ kind: 'playlist', id: playlist.id })
+                      }
+                    />
+                  );
+                })}
+                {navigation.loadState === 'error' && (
+                  <>
+                    <span className="sr-only" role="alert">
+                      Couldn’t load playlists. {navigation.lastError ?? ''}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="grid size-10 place-items-center rounded-control border-0 bg-transparent text-text-secondary hover:bg-control-hover hover:text-foreground"
+                      type="button"
+                      aria-label="Retry library navigation"
+                      onClick={() => void useStore.getState().loadLibraryNavigation()}
+                    >
+                      <RefreshCw size={16} aria-hidden="true" />
+                    </Button>
+                  </>
+                )}
+                {!navigationReady && navigation.loadState !== 'error' && (
+                  <span className="sr-only" role="status">
+                    Loading playlists.
+                  </span>
+                )}
+              </ScrollAreaContent>
+            </ScrollAreaViewport>
+            <ScrollAreaScrollbar orientation="vertical">
+              <ScrollAreaThumb />
+            </ScrollAreaScrollbar>
+          </ScrollAreaRoot>
         </div>
       ) : (
-        <div
+        <ScrollAreaRoot
           data-slot="library-secondary-sections"
-          className="mt-3 grid min-h-0 min-w-0 flex-1 content-start gap-3 overflow-auto border-t border-border pt-2"
+          className="mt-3 min-h-0 min-w-0 flex-1 border-t border-border pt-2"
         >
-          <LibrarySection label="Playlists" showWhenEmpty>
-            {navigation.playlistOrder.map((id) => {
-              const playlist = navigation.playlistsById.get(id);
-              if (!playlist) return null;
-              return (
-                <PlaylistNavItem
-                  key={id}
-                  playlist={playlist}
-                  active={source.kind === 'playlist' && source.id === id}
-                  pending={
-                    navigation.pendingMutations.has(`playlist:${id}:rename`) ||
-                    navigation.pendingMutations.has(`playlist:${id}:delete`)
-                  }
-                  onSelect={() => void selectLibrarySource({ kind: 'playlist', id })}
-                  onAddSongs={() => void openPlaylistAdd(id)}
-                  onRename={() => setRenameId(id)}
-                  onDelete={() => setDeleteId(id)}
-                />
-              );
-            })}
-            {navigation.loadState === 'ready' && navigation.playlistOrder.length === 0 && (
-              <div data-slot="library-empty-playlists" className="mx-2 mt-2 grid min-w-0 gap-2">
-                <p
-                  data-slot="library-empty-playlists-guidance"
-                  className="m-0 text-xs leading-relaxed text-text-secondary"
-                >
-                  Create a playlist to collect songs or import local sheets.
-                </p>
-                <Button
-                  variant={
-                    (navigation.builtinAvailable && navigation.builtinSongCount > 0) ||
-                    likedTotal > 0
-                      ? 'outline'
-                      : 'default'
-                  }
-                  data-slot="library-empty-playlists-create"
-                  className="h-9 justify-center text-[13px]"
-                  type="button"
-                  onClick={() => setCreateOpen(true)}
-                >
-                  Create playlist
-                </Button>
-              </div>
-            )}
-          </LibrarySection>
-        </div>
+          <ScrollAreaViewport className="size-full">
+            <ScrollAreaContent className="grid min-w-0 content-start gap-3">
+              <LibrarySection label="Playlists" showWhenEmpty>
+                {navigation.playlistOrder.map((id) => {
+                  const playlist = navigation.playlistsById.get(id);
+                  if (!playlist) return null;
+                  return (
+                    <PlaylistNavItem
+                      key={id}
+                      playlist={playlist}
+                      active={source.kind === 'playlist' && source.id === id}
+                      pending={
+                        navigation.pendingMutations.has(`playlist:${id}:rename`) ||
+                        navigation.pendingMutations.has(`playlist:${id}:delete`)
+                      }
+                      onSelect={() => void selectLibrarySource({ kind: 'playlist', id })}
+                      onAddSongs={() => void openPlaylistAdd(id)}
+                      onRename={() => setRenameId(id)}
+                      onDelete={() => setDeleteId(id)}
+                    />
+                  );
+                })}
+                {navigation.loadState === 'ready' && navigation.playlistOrder.length === 0 && (
+                  <div data-slot="library-empty-playlists" className="mx-2 mt-2 grid min-w-0 gap-2">
+                    <p
+                      data-slot="library-empty-playlists-guidance"
+                      className="m-0 text-xs leading-relaxed text-text-secondary"
+                    >
+                      Create a playlist to collect songs or import local sheets.
+                    </p>
+                    <Button
+                      variant={
+                        (navigation.builtinAvailable && navigation.builtinSongCount > 0) ||
+                        likedTotal > 0
+                          ? 'outline'
+                          : 'default'
+                      }
+                      data-slot="library-empty-playlists-create"
+                      className="h-9 justify-center text-[13px]"
+                      type="button"
+                      onClick={() => setCreateOpen(true)}
+                    >
+                      Create playlist
+                    </Button>
+                  </div>
+                )}
+              </LibrarySection>
+            </ScrollAreaContent>
+          </ScrollAreaViewport>
+          <ScrollAreaScrollbar orientation="vertical">
+            <ScrollAreaThumb />
+          </ScrollAreaScrollbar>
+        </ScrollAreaRoot>
       )}
 
       {!collapsed && navigation.lastError && navigation.loadState !== 'error' && (

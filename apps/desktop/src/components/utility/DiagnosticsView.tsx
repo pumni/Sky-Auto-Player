@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import type { DesktopStoreHook } from '../../state/store';
 import { Button } from '../ui/button';
 import { Tabs, TabsIndicator, TabsList, TabsTrigger } from '../ui/tabs';
@@ -15,7 +14,6 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
   const [traceExporting, setTraceExporting] = useState(false);
   const [traceExportError, setTraceExportError] = useState<string | null>(null);
   const [traceExportIdentity, setTraceExportIdentity] = useState<{ session: string } | null>(null);
-  const scrollRef = useScrollVisibility<HTMLDivElement>();
   const visibleTraceExportIdentity =
     traceExportIdentity !== null &&
     (sessionId === null || sessionId === traceExportIdentity.session)
@@ -51,8 +49,7 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
 
   return (
     <div
-      ref={scrollRef}
-      className="flex min-h-0 min-w-0 flex-1 flex-col gap-0 overflow-auto px-4 pb-4"
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pb-4 pt-3"
       aria-labelledby="diagnostics-title"
       data-slot="diagnostics-view"
     >
@@ -68,7 +65,7 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
         </p>
       )}
       {diagnostics.enabled && <DiagnosticsPlaybackSummary useStore={useStore} />}
-      <div className="mb-2.5 flex flex-wrap items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button
           variant="outline"
           size="sm"
@@ -95,30 +92,11 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
         </p>
       )}
       <Tabs className="flex min-h-0 flex-1 flex-col gap-0" defaultValue="performance">
-        <TabsList
-          className="flex flex-none gap-0.5 overflow-x-auto border-b border-border"
-          aria-label="Diagnostics views"
-          activateOnFocus
-        >
-          <TabsTrigger
-            className="whitespace-nowrap rounded-none border-0 px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
-            value="performance"
-          >
-            Performance
-          </TabsTrigger>
-          <TabsTrigger
-            className="whitespace-nowrap rounded-none border-0 px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
-            value="timing"
-          >
-            Timing
-          </TabsTrigger>
-          <TabsTrigger
-            className="whitespace-nowrap rounded-none border-0 px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
-            value="events"
-          >
-            Events
-          </TabsTrigger>
-          <TabsIndicator />
+        <TabsList aria-label="Diagnostics views" variant="segmented" activateOnFocus>
+          <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="timing">Timing</TabsTrigger>
+          <TabsTrigger value="events">Events</TabsTrigger>
+          <TabsIndicator variant="segmented" />
         </TabsList>
         <DiagnosticsPerformancePanel useStore={useStore} />
         <DiagnosticsTimingPanel useStore={useStore} />

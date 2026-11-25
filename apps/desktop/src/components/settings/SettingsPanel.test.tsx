@@ -17,12 +17,13 @@ describe('SettingsPanel playback timing', () => {
     render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
 
     expect(screen.getByLabelText('Base Hold')).toBeInTheDocument();
-    const settingsContent = document.querySelector('[data-settings-content]');
+    const settingsContent = document.querySelector<HTMLElement>('[data-settings-content]');
     expect(settingsContent).toBeInTheDocument();
     if (!settingsContent) throw new Error('settings content should be available');
-    expect(settingsContent).toHaveAttribute('data-scroll-region', '');
-    fireEvent.scroll(settingsContent);
-    await waitFor(() => expect(settingsContent).toHaveAttribute('data-scrolling', 'true'));
+    expect(settingsContent).toHaveAttribute('data-slot', 'scroll-area-viewport');
+    const settingsScrollArea = settingsContent.closest<HTMLElement>('[data-slot="scroll-area"]');
+    expect(settingsScrollArea).not.toBeNull();
+    expect(settingsScrollArea).toContainElement(settingsContent);
     const behaviorHeading = screen.getByRole('heading', { name: 'Behavior' });
     const defaultsHeading = screen.getByRole('heading', { name: 'Playback defaults' });
     expect(

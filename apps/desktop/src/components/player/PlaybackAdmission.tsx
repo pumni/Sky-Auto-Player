@@ -5,6 +5,13 @@ import { playbackIssuePresentation } from '../../state/store';
 import { admissionDecisionLabel } from './playerFormatting';
 import { TimingAdvisory } from './TimingAdvisory';
 import { Button } from '../ui/button';
+import {
+  ScrollAreaContent,
+  ScrollAreaRoot,
+  ScrollAreaScrollbar,
+  ScrollAreaThumb,
+  ScrollAreaViewport,
+} from '../ui/scroll-area';
 
 interface PlaybackAdmissionProps {
   useStore: DesktopStoreHook;
@@ -40,104 +47,113 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
 
   if (admissionRequired && prepared) {
     return (
-      <section
-        className="absolute bottom-[calc(100%+8px)] left-1/2 z-20 grid max-h-[min(68dvh,520px)] w-[min(600px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 grid-cols-1 gap-3 overflow-auto overscroll-contain rounded-pane border border-warning-border border-l-[3px] bg-popover px-4 py-3 shadow-2xl"
-        role="group"
+      <ScrollAreaRoot
+        className="absolute bottom-[calc(100%+8px)] left-1/2 z-20 flex max-h-[min(68dvh,520px)] w-[min(600px,calc(100vw-24px))] max-w-[calc(100vw-24px)] -translate-x-1/2 flex-col rounded-pane border border-warning-border border-l-[3px] bg-popover shadow-2xl"
         data-slot="playback-admission"
-        aria-labelledby="playback-confirmation-title"
-        aria-describedby="playback-confirmation-reason playback-confirmation-consequence"
       >
-        <div className="grid min-w-0 gap-1.5">
-          <strong
-            className="text-sm font-semibold text-foreground"
-            id="playback-confirmation-title"
-          >
-            Playback confirmation
-          </strong>
-          <span className="overflow-visible whitespace-normal text-[13px] font-semibold text-warning">
-            {prepared.risk.headline}
-          </span>
-          <p
-            id="playback-confirmation-reason"
-            className="m-0 break-words text-xs leading-relaxed text-foreground"
-          >
-            {riskExplanation}
-          </p>
-          <p
-            id="playback-confirmation-consequence"
-            className="m-0 break-words text-xs leading-relaxed text-muted-foreground"
-          >
-            Proceed keeps the authored timing and selected settings unchanged.
-          </p>
-        </div>
-        <div className="grid min-w-0 gap-2.5">
-          <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,165px),1fr))] items-stretch gap-2.5">
-            {(() => {
-              const primaryDecision = prepared.decisions.some(
-                (item) => item.decision === 'use_recommended',
-              )
-                ? 'use_recommended'
-                : 'proceed';
-              return prepared.decisions.map((decision, index) => {
-                const variant = prepared.variants.find(
-                  (item) => item.decision === decision.decision,
-                );
-                const status = variant?.timing_advisory?.status;
-                const isPrimary = decision.decision === primaryDecision;
-                const estimateLabel =
-                  status === 'short_up_gap_risk'
-                    ? 'Short same-key Up gap risk'
-                    : status === 'no_short_up_gap_risk'
-                      ? 'No short same-key Up gap'
-                      : 'View timing estimate';
-                return (
-                  <div
-                    className="grid min-w-0 grid-rows-[minmax(48px,auto)_auto] content-start gap-1.5"
-                    data-slot="admission-option"
-                    key={decision.decision}
-                  >
-                    <Button
-                      variant={isPrimary ? 'default' : 'outline'}
-                      className="h-full min-h-12 w-full justify-center whitespace-normal px-2.5 py-1.5 text-center text-xs leading-[1.3]"
-                      type="button"
-                      disabled={transportOperation !== null}
-                      ref={
-                        isPrimary ||
-                        (!prepared.decisions.some((d) => d.decision === primaryDecision) &&
-                          index === 0)
-                          ? admissionActionRef
-                          : undefined
-                      }
-                      onClick={() => void start(decision.decision)}
-                    >
-                      {admissionDecisionLabel(decision.decision, decision.label)}
-                    </Button>
-                    <details
-                      data-slot="admission-option-estimate"
-                      className="min-w-0 text-[11px] text-text-secondary"
-                    >
-                      <summary className="cursor-pointer break-words py-1 hover:text-foreground">
-                        {estimateLabel}
-                      </summary>
-                      <TimingAdvisory advisory={variant?.timing_advisory} />
-                    </details>
-                  </div>
-                );
-              });
-            })()}
-          </div>
-          <Button
-            variant="ghost"
-            className="min-h-8 min-w-[100px] justify-self-end"
-            type="button"
-            title="Dismiss the prepared playback without starting"
-            disabled={transportOperation !== null}
-            onClick={cancel}
-          >
-            Not now
-          </Button>
-        </div>
-      </section>
+        <ScrollAreaViewport
+          className="min-h-0 flex-1"
+          role="group"
+          aria-labelledby="playback-confirmation-title"
+          aria-describedby="playback-confirmation-reason playback-confirmation-consequence"
+        >
+          <ScrollAreaContent className="grid min-w-0 grid-cols-1 gap-3 px-4 py-3 pr-6">
+            <div className="grid min-w-0 gap-1.5">
+              <strong
+                className="text-sm font-semibold text-foreground"
+                id="playback-confirmation-title"
+              >
+                Playback confirmation
+              </strong>
+              <span className="overflow-visible whitespace-normal text-[13px] font-semibold text-warning">
+                {prepared.risk.headline}
+              </span>
+              <p
+                id="playback-confirmation-reason"
+                className="m-0 break-words text-xs leading-relaxed text-foreground"
+              >
+                {riskExplanation}
+              </p>
+              <p
+                id="playback-confirmation-consequence"
+                className="m-0 break-words text-xs leading-relaxed text-muted-foreground"
+              >
+                Proceed keeps the authored timing and selected settings unchanged.
+              </p>
+            </div>
+            <div className="grid min-w-0 gap-2.5">
+              <div className="grid min-w-0 grid-cols-[repeat(auto-fit,minmax(min(100%,165px),1fr))] items-stretch gap-2.5">
+                {(() => {
+                  const primaryDecision = prepared.decisions.some(
+                    (item) => item.decision === 'use_recommended',
+                  )
+                    ? 'use_recommended'
+                    : 'proceed';
+                  return prepared.decisions.map((decision, index) => {
+                    const variant = prepared.variants.find(
+                      (item) => item.decision === decision.decision,
+                    );
+                    const status = variant?.timing_advisory?.status;
+                    const isPrimary = decision.decision === primaryDecision;
+                    const estimateLabel =
+                      status === 'short_up_gap_risk'
+                        ? 'Short same-key Up gap risk'
+                        : status === 'no_short_up_gap_risk'
+                          ? 'No short same-key Up gap'
+                          : 'View timing estimate';
+                    return (
+                      <div
+                        className="grid min-w-0 grid-rows-[minmax(48px,auto)_auto] content-start gap-1.5"
+                        data-slot="admission-option"
+                        key={decision.decision}
+                      >
+                        <Button
+                          variant={isPrimary ? 'default' : 'outline'}
+                          className="h-full min-h-12 w-full justify-center whitespace-normal px-2.5 py-1.5 text-center text-xs leading-[1.3]"
+                          type="button"
+                          disabled={transportOperation !== null}
+                          ref={
+                            isPrimary ||
+                            (!prepared.decisions.some((d) => d.decision === primaryDecision) &&
+                              index === 0)
+                              ? admissionActionRef
+                              : undefined
+                          }
+                          onClick={() => void start(decision.decision)}
+                        >
+                          {admissionDecisionLabel(decision.decision, decision.label)}
+                        </Button>
+                        <details
+                          data-slot="admission-option-estimate"
+                          className="min-w-0 text-[11px] text-text-secondary"
+                        >
+                          <summary className="cursor-pointer break-words py-1 hover:text-foreground">
+                            {estimateLabel}
+                          </summary>
+                          <TimingAdvisory advisory={variant?.timing_advisory} />
+                        </details>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+              <Button
+                variant="ghost"
+                className="min-h-8 min-w-[100px] justify-self-end"
+                type="button"
+                title="Dismiss the prepared playback without starting"
+                disabled={transportOperation !== null}
+                onClick={cancel}
+              >
+                Not now
+              </Button>
+            </div>
+          </ScrollAreaContent>
+        </ScrollAreaViewport>
+        <ScrollAreaScrollbar orientation="vertical">
+          <ScrollAreaThumb />
+        </ScrollAreaScrollbar>
+      </ScrollAreaRoot>
     );
   }
 
@@ -187,7 +203,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
         </strong>
         <span
           id="playback-recovery-message"
-          className={`block max-h-8 overflow-auto text-xs leading-[1.35] ${['recoverable_status', 'conflict'].includes(presentedIssue.kind) ? 'text-text-secondary' : 'break-words text-danger'}`}
+          className={`block break-words text-xs leading-[1.35] ${['recoverable_status', 'conflict'].includes(presentedIssue.kind) ? 'text-text-secondary' : 'text-danger'}`}
         >
           {presentedIssue.message}
         </span>

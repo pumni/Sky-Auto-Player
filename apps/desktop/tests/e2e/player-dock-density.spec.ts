@@ -6,6 +6,7 @@ for (const viewport of [
   { width: 1005, height: 615 },
   { width: 987, height: 691 },
   { width: 800, height: 560 },
+  { width: 640, height: 448 },
 ]) {
   test(`player dock and compact pager fit ${viewport.width}x${viewport.height}`, async ({
     page,
@@ -112,7 +113,17 @@ for (const viewport of [
     for (const control of basicControls) expect(control.width).toBeGreaterThanOrEqual(60);
     await advancedTiming.click();
     await expect(profile.getByLabel('FPS')).toBeVisible();
-    await expect(profile.getByText('Calculated target hold')).toBeVisible();
+    await expect(profile.getByText('Effective target hold')).toBeVisible();
+    const fpsBounds = await profile.getByLabel('FPS').boundingBox();
+    const timingMarginControlBounds = await profile
+      .locator('[data-slot="timing-margin-control"] > div:nth-child(2)')
+      .boundingBox();
+    expect(fpsBounds).not.toBeNull();
+    expect(timingMarginControlBounds).not.toBeNull();
+    if (fpsBounds && timingMarginControlBounds) {
+      expect(Math.abs(fpsBounds.y - timingMarginControlBounds.y)).toBeLessThanOrEqual(1);
+      expect(Math.abs(fpsBounds.height - timingMarginControlBounds.height)).toBeLessThanOrEqual(1);
+    }
     const marginBounds = await profile.locator('[data-slot="timing-margin-control"]').boundingBox();
     expect(marginBounds).not.toBeNull();
     const advancedBounds = await profile.locator('details[open]').boundingBox();
@@ -125,6 +136,23 @@ for (const viewport of [
     expect(marginBounds!.y + marginBounds!.height).toBeLessThanOrEqual(
       advancedBounds!.y + advancedBounds!.height,
     );
+    if (viewport.width <= 640) {
+      const profileViewport = profile.locator('[data-slot="scroll-area-viewport"]');
+      await profileViewport.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+        element.dispatchEvent(new Event('scroll'));
+      });
+      await expect
+        .poll(() => profileViewport.evaluate((element) => element.scrollTop))
+        .toBeGreaterThan(0);
+      await expect(
+        profile.getByRole('button', { name: 'Test playback (no input)' }),
+      ).toBeInViewport();
+      await profileViewport.evaluate((element) => {
+        element.scrollTop = 0;
+        element.dispatchEvent(new Event('scroll'));
+      });
+    }
     const popoverBounds = await page
       .locator('[role="dialog"][aria-label="Playback profile"]')
       .boundingBox();

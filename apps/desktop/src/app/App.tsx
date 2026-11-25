@@ -130,7 +130,7 @@ export function App({ bridge }: AppProps) {
   }, [settingsOpen, setSettingsOpen, toggleUtility, updateDialogOpen]);
 
   return (
-    <TooltipProvider delay={100} closeDelay={80}>
+    <TooltipProvider delay={350} closeDelay={80} timeout={450}>
       <BootstrapGate useStore={useStore}>
         {bootstrap?.gui_smoke === true && <PackagedSmokeTest bridge={bridge} useStore={useStore} />}
         {bootstrap && (

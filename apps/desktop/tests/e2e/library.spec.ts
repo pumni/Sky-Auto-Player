@@ -2560,7 +2560,7 @@ test('long sheet titles remain contained in the Track Browser, Utility, and Play
       const style = getComputedStyle(element);
       return style.overflow === 'hidden' && style.textOverflow === 'ellipsis';
     }),
-    utilityReasonOverflow: [...document.querySelectorAll('[data-slot="song-details"]')].some(
+    utilityReasonOverflow: [...document.querySelectorAll('[data-song-details]')].some(
       (element) => element.scrollWidth > element.clientWidth,
     ),
   }));
@@ -2569,41 +2569,20 @@ test('long sheet titles remain contained in the Track Browser, Utility, and Play
   expect(overflow.utilityReasonOverflow).toBe(false);
 });
 
-test('F3.2 classic scrollbar geometry stays stable across Built-in page 1 and page 2', async ({
+test('F3.2 custom scrollbar and grid geometry stays stable across Built-in page 1 and page 2', async ({
   page,
 }, testInfo) => {
   await page.setViewportSize({ width: 1366, height: 768 });
   await page.goto('/?mockCatalogCount=106');
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
-  await page.addStyleTag({
-    content: `
-      [role="grid"] {
-        box-sizing: border-box !important;
-        border-right: 0 solid transparent !important;
-      }
-      [role="grid"][data-f32-classic-gutter='reserved'] {
-        border-right-width: var(--f32-classic-gutter-extra) !important;
-      }
-    `,
-  });
-
-  const applyClassicScrollbarFixture = async () =>
-    page.locator('[role="grid"]').evaluate((table) => {
-      const element = table as HTMLElement;
-      element.dataset.f32ClassicGutter = 'free';
-      const nativeReservation = element.offsetWidth - element.clientWidth;
-      const stable = getComputedStyle(element).scrollbarGutter.includes('stable');
-      const overflowing = element.scrollHeight > element.clientHeight;
-      const targetReservation = stable || overflowing ? 16 : 0;
-      const fixtureReservation = Math.max(0, targetReservation - nativeReservation);
-      element.style.setProperty('--f32-classic-gutter-extra', `${fixtureReservation}px`);
-      element.dataset.f32ClassicGutter = targetReservation > 0 ? 'reserved' : 'free';
-    });
-
   const readColumns = async () =>
     page.locator('[role="grid"]').evaluate((table) => {
       const element = table as HTMLElement;
-      const style = getComputedStyle(element);
+      const root = element.closest<HTMLElement>('[data-slot="scroll-area"]');
+      const scrollbar = root?.querySelector<HTMLElement>(
+        '[data-slot="scroll-area-scrollbar"][data-orientation="vertical"]',
+      );
+      const thumb = scrollbar?.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
       const header = element.querySelector<HTMLElement>('[role="row"][aria-rowindex="1"]');
       const row = element.querySelector<HTMLElement>('[data-slot="track-row"]');
       const cells = (container: HTMLElement | null, selector: string) =>
@@ -2621,10 +2600,17 @@ test('F3.2 classic scrollbar geometry stays stable across Built-in page 1 and pa
           offsetWidth: element.offsetWidth,
           clientHeight: element.clientHeight,
           scrollHeight: element.scrollHeight,
-          scrollbarGutter: style.scrollbarGutter,
-          classicScrollbarReservation: element.offsetWidth - element.clientWidth,
-          fixtureReservation: Number.parseFloat(style.borderRightWidth) || 0,
+          hasVerticalOverflow: root?.hasAttribute('data-has-overflow-y') ?? false,
         },
+        scrollbar: scrollbar
+          ? {
+              visible: getComputedStyle(scrollbar).display !== 'none',
+              width: scrollbar.getBoundingClientRect().width,
+              height: scrollbar.getBoundingClientRect().height,
+              thumbWidth: thumb?.getBoundingClientRect().width ?? null,
+              thumbHeight: thumb?.getBoundingClientRect().height ?? null,
+            }
+          : null,
         header: {
           right: header?.getBoundingClientRect().right ?? null,
           columns: cells(header, '[role="columnheader"]'),
@@ -2646,20 +2632,27 @@ test('F3.2 classic scrollbar geometry stays stable across Built-in page 1 and pa
       String(viewport.width),
     );
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
-    await applyClassicScrollbarFixture();
     const pageOne = await readColumns();
-    expect(pageOne.scrollport.scrollHeight).toBeGreaterThan(pageOne.scrollport.clientHeight);
+    expect(pageOne.scrollport.hasVerticalOverflow).toBe(
+      pageOne.scrollport.scrollHeight > pageOne.scrollport.clientHeight,
+    );
+    expect(pageOne.scrollbar?.visible).toBe(true);
+    expect(pageOne.scrollbar?.width).toBe(10);
+    expect(pageOne.scrollbar?.thumbWidth).toBe(6);
+    expect(pageOne.scrollbar?.thumbHeight).toBeGreaterThan(0);
+    expect(pageOne.scrollbar?.thumbHeight).toBeLessThan(pageOne.scrollbar?.height ?? 0);
+    for (const [index, cell] of pageOne.firstRow.columns.entries()) {
+      expect(Math.abs(cell.x - pageOne.header.columns[index]!.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(cell.right - pageOne.header.columns[index]!.right)).toBeLessThanOrEqual(1);
+    }
     await page.getByRole('button', { name: 'Next page' }).click();
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
-    await applyClassicScrollbarFixture();
     const pageTwo = await readColumns();
-    if (viewport.width > 640) {
-      expect(pageTwo.scrollport.scrollHeight).toBeLessThanOrEqual(
-        pageTwo.scrollport.clientHeight + 1,
-      );
-    } else {
-      expect(pageTwo.scrollport.scrollHeight).toBeGreaterThan(pageTwo.scrollport.clientHeight);
-    }
+    expect(pageTwo.scrollport.hasVerticalOverflow).toBe(
+      pageTwo.scrollport.scrollHeight > pageTwo.scrollport.clientHeight,
+    );
+    expect(pageTwo.scrollport.clientWidth).toBe(pageOne.scrollport.clientWidth);
+    expect(pageTwo.scrollbar?.visible ?? false).toBe(pageTwo.scrollport.hasVerticalOverflow);
 
     expect(
       Math.abs(pageTwo.scrollport.clientWidth - pageOne.scrollport.clientWidth),
@@ -2682,14 +2675,13 @@ test('F3.2 classic scrollbar geometry stays stable across Built-in page 1 and pa
     measurements.push({ viewport, pageOne, pageTwo });
     await page.getByRole('button', { name: 'Previous page' }).click();
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
-    await applyClassicScrollbarFixture();
     expect(await readColumns()).toEqual(pageOne);
   }
-  await testInfo.attach('f3.2-classic-scrollbar-page-geometry.json', {
+  await testInfo.attach('f3.2-base-ui-scroll-area-page-geometry.json', {
     body: JSON.stringify(measurements, null, 2),
     contentType: 'application/json',
   });
-  console.info('[F3.2 classic scrollbar geometry]', JSON.stringify(measurements));
+  console.info('[F3.2 Base UI ScrollArea geometry]', JSON.stringify(measurements));
 });
 
 test('F3.2 stable track gutter covers 106, 500, 10000 songs and a one-row search', async ({
@@ -2699,6 +2691,10 @@ test('F3.2 stable track gutter covers 106, 500, 10000 songs and a one-row search
   const readScrollport = async () =>
     page.locator('[role="grid"]').evaluate((table) => {
       const element = table as HTMLElement;
+      const scrollArea = element.closest<HTMLElement>('[data-slot="scroll-area"]');
+      const verticalScrollbar = scrollArea?.querySelector<HTMLElement>(
+        '[data-slot="scroll-area-scrollbar"][data-orientation="vertical"]',
+      );
       const header = element
         .querySelector('[role="row"][aria-rowindex="1"]')
         ?.getBoundingClientRect();
@@ -2707,7 +2703,12 @@ test('F3.2 stable track gutter covers 106, 500, 10000 songs and a one-row search
         offsetWidth: element.offsetWidth,
         clientHeight: element.clientHeight,
         scrollHeight: element.scrollHeight,
-        scrollbarGutter: getComputedStyle(element).scrollbarGutter,
+        hasVerticalOverflow: scrollArea?.hasAttribute('data-has-overflow-y') ?? false,
+        scrollbarVisible:
+          verticalScrollbar !== undefined &&
+          verticalScrollbar !== null &&
+          getComputedStyle(verticalScrollbar).display !== 'none',
+        scrollbarWidth: verticalScrollbar?.getBoundingClientRect().width ?? null,
         headerRight: header?.right ?? null,
       };
     });
@@ -2717,14 +2718,16 @@ test('F3.2 stable track gutter covers 106, 500, 10000 songs and a one-row search
     await expect(page.getByText(`${catalogCount} songs`, { exact: true })).toBeVisible();
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
     const pageOne = await readScrollport();
-    expect(pageOne.scrollbarGutter).toContain('stable');
-    expect(pageOne.scrollHeight).toBeGreaterThan(pageOne.clientHeight);
+    expect(pageOne.hasVerticalOverflow).toBe(pageOne.scrollHeight > pageOne.clientHeight);
+    expect(pageOne.scrollbarVisible).toBe(pageOne.hasVerticalOverflow);
+    if (pageOne.hasVerticalOverflow) expect(pageOne.scrollbarWidth).toBe(10);
 
     await page.getByRole('button', { name: 'Next page' }).click();
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
     const pageTwo = await readScrollport();
-    expect(pageTwo.scrollbarGutter).toContain('stable');
     expect(pageTwo.clientWidth).toBe(pageOne.clientWidth);
+    expect(pageTwo.hasVerticalOverflow).toBe(pageTwo.scrollHeight > pageTwo.clientHeight);
+    expect(pageTwo.scrollbarVisible).toBe(pageTwo.hasVerticalOverflow);
     expect(pageTwo.headerRight).toBe(pageOne.headerRight);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       800,
@@ -2737,7 +2740,8 @@ test('F3.2 stable track gutter covers 106, 500, 10000 songs and a one-row search
       await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
       await expect(page.locator('[role="grid"]')).toHaveAttribute('aria-rowcount', '2');
       const searched = await readScrollport();
-      expect(searched.scrollbarGutter).toContain('stable');
+      expect(searched.hasVerticalOverflow).toBe(false);
+      expect(searched.scrollbarVisible).toBe(false);
       expect(searched.clientWidth).toBe(pageOne.clientWidth);
       expect(searched.scrollHeight).toBeLessThanOrEqual(searched.clientHeight + 1);
       expect(searched.headerRight).toBe(pageOne.headerRight);

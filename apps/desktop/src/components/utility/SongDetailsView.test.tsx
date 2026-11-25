@@ -17,7 +17,10 @@ describe('SongDetailsView', () => {
     expect(container.querySelector('svg[aria-hidden="true"]')).toHaveClass(
       'lucide-mouse-pointer-2',
     );
-    expect(screen.getByLabelText('Song details')).toHaveAttribute('data-scroll-region', '');
+    expect(screen.getByLabelText('Song details')).toHaveAttribute(
+      'data-slot',
+      'scroll-area-viewport',
+    );
   });
 
   async function selectFixture(index: number) {

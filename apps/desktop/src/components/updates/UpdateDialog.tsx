@@ -3,6 +3,13 @@ import type { UpdateErrorCode, UpdateRetryAction } from '../../bridge/DesktopBri
 import type { DesktopStoreHook } from '../../state/store';
 import { formatUpdateError } from '../../state/updateHelpers';
 import { Button } from '../ui/button';
+import {
+  ScrollAreaContent,
+  ScrollAreaRoot,
+  ScrollAreaScrollbar,
+  ScrollAreaThumb,
+  ScrollAreaViewport,
+} from '../ui/scroll-area';
 import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
 
 function getErrorHeading(
@@ -126,26 +133,33 @@ export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
         {isAvailable ? (
           <>
             {update.releaseNotes && (
-              <section
-                data-slot="update-notes-region"
-                aria-labelledby="update-release-notes-heading"
-                className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 overflow-auto overscroll-contain rounded-pane border border-border bg-surface p-3.5 text-text-secondary [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
-                role="region"
-                tabIndex={0}
-              >
-                <h3
-                  className="m-0 flex-none text-[11px] font-semibold uppercase tracking-wide text-text-tertiary"
-                  id="update-release-notes-heading"
+              <ScrollAreaRoot className="min-h-0 min-w-0 flex-1 rounded-pane border border-border bg-surface">
+                <ScrollAreaViewport
+                  data-slot="update-notes-region"
+                  aria-labelledby="update-release-notes-heading"
+                  className="size-full focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+                  role="region"
+                  tabIndex={0}
                 >
-                  What’s new
-                </h3>
-                <p
-                  data-slot="update-release-notes"
-                  className="m-0 break-words text-[13px] leading-relaxed text-text-secondary"
-                >
-                  {update.releaseNotes}
-                </p>
-              </section>
+                  <ScrollAreaContent className="grid min-w-0 gap-2 p-3.5 text-text-secondary">
+                    <h3
+                      className="m-0 flex-none text-[11px] font-semibold uppercase tracking-wide text-text-tertiary"
+                      id="update-release-notes-heading"
+                    >
+                      What’s new
+                    </h3>
+                    <p
+                      data-slot="update-release-notes"
+                      className="m-0 break-words text-[13px] leading-relaxed text-text-secondary"
+                    >
+                      {update.releaseNotes}
+                    </p>
+                  </ScrollAreaContent>
+                </ScrollAreaViewport>
+                <ScrollAreaScrollbar orientation="vertical">
+                  <ScrollAreaThumb />
+                </ScrollAreaScrollbar>
+              </ScrollAreaRoot>
             )}
             <div
               data-slot="update-dialog-actions"
@@ -213,13 +227,20 @@ export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
                 </h3>
               </div>
             </div>
-            <p
-              data-slot="update-error-region"
-              role="alert"
-              className="mt-2 min-h-0 flex-1 overflow-auto overscroll-contain break-words rounded-control border border-danger-border bg-danger-surface p-3 text-[13px] leading-relaxed text-danger [scrollbar-gutter:stable]"
-            >
-              {errorText}
-            </p>
+            <ScrollAreaRoot className="mt-2 min-h-0 flex-1 rounded-control border border-danger-border bg-danger-surface">
+              <ScrollAreaViewport
+                data-slot="update-error-region"
+                className="size-full"
+                role="alert"
+              >
+                <ScrollAreaContent className="break-words p-3 text-[13px] leading-relaxed text-danger">
+                  {errorText}
+                </ScrollAreaContent>
+              </ScrollAreaViewport>
+              <ScrollAreaScrollbar orientation="vertical">
+                <ScrollAreaThumb />
+              </ScrollAreaScrollbar>
+            </ScrollAreaRoot>
             <div
               data-slot="update-dialog-actions"
               className="mt-4 flex flex-none items-center justify-end gap-2 border-t border-border pt-3.5"

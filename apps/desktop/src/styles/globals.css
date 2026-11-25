@@ -149,36 +149,6 @@ body {
   background: var(--selection);
 }
 
-* {
-  scrollbar-color: transparent transparent;
-  scrollbar-width: thin;
-}
-
-*:hover,
-*:focus-within,
-*[data-scrolling] {
-  scrollbar-color: var(--muted-foreground) transparent;
-}
-
-*::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-*::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  background-clip: padding-box;
-}
-
-*:hover::-webkit-scrollbar-thumb,
-*:focus-within::-webkit-scrollbar-thumb,
-*[data-scrolling]::-webkit-scrollbar-thumb {
-  background: var(--muted-foreground);
-  background-clip: padding-box;
-}
-
 body[data-resizing] {
   cursor: col-resize;
   user-select: none;
@@ -506,14 +476,5 @@ html[data-color-mode='light'] {
   ::selection {
     color: HighlightText;
     background: Highlight;
-  }
-
-  * {
-    scrollbar-color: auto;
-  }
-
-  *::-webkit-scrollbar-thumb {
-    background: ButtonText;
-    background-clip: padding-box;
   }
 }

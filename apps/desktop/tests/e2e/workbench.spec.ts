@@ -97,7 +97,7 @@ async function readInspectorHeaderGeometry(page: Page) {
       '[role="tablist"][aria-label="Utility views"] [role="tab"]:nth-of-type(1)',
       '[role="tablist"][aria-label="Utility views"] [role="tab"]:nth-of-type(2)',
       '[data-slot="tabs-content"]',
-      '[data-slot="song-details"][aria-label="Song details"] p',
+      '[data-slot="scroll-area-viewport"][aria-label="Song details"] p',
       '#song-details-title',
     ];
     return Object.fromEntries(
@@ -576,7 +576,7 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
     }
     // The empty cue is centered; the populated Inspector starts at the top.
     expect(
-      geometryFor('empty', '[data-slot="song-details"][aria-label="Song details"] p').y,
+      geometryFor('empty', '[data-slot="scroll-area-viewport"][aria-label="Song details"] p').y,
     ).toBeGreaterThan(geometryFor('selected', '#song-details-title').y + 80);
     const widthOverflow = await page.evaluate(() =>
       [
@@ -981,7 +981,7 @@ test('long Song Details content scrolls independently in the compact overlay', a
     details.getByText(/This intentionally long timing-risk explanation verifies wrapping/),
   ).toBeVisible();
   await expectNoSeriousAccessibilityViolations(page);
-  const detailsContent = details.locator('[data-slot="song-details"]');
+  const detailsContent = details.locator('[data-song-details]');
   const contentSize = await detailsContent.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,
@@ -1034,7 +1034,9 @@ test('compact Runtime retains live metrics, event history, trace export, and ind
   await expect(senderSamples).toContainText(/[1-9]\d*/);
   await expect(diagnostics.getByText('Completion p95', { exact: true })).toBeVisible();
 
-  const runtimeView = diagnostics.locator('[data-slot="diagnostics-view"]');
+  const runtimeView = diagnostics
+    .getByRole('tabpanel')
+    .locator('[data-slot="scroll-area-viewport"]');
   const trackScrollTop = await page
     .locator('[role="grid"]')
     .evaluate((element) => element.scrollTop);
@@ -1058,21 +1060,20 @@ test('compact Runtime retains live metrics, event history, trace export, and ind
   await page.keyboard.press('ArrowRight');
   await expect(diagnostics.getByRole('img', { name: /SendInput pre-call lateness/ })).toBeVisible();
   await page.keyboard.press('ArrowRight');
-  const eventPanel = diagnostics.locator(
-    '[data-slot="tabs-content"][role="tabpanel"][data-scroll-region]',
-  );
+  const eventPanel = diagnostics.getByRole('tabpanel');
+  const eventScroll = eventPanel.locator('[data-slot="scroll-area-viewport"]');
   await expect(
     eventPanel.locator('li strong').filter({ hasText: 'playback.state_changed' }).first(),
   ).toBeVisible();
-  const eventPanelSize = await eventPanel.evaluate((element) => ({
+  const eventPanelSize = await eventScroll.evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight,
   }));
   expect(eventPanelSize.scrollHeight).toBeGreaterThan(eventPanelSize.clientHeight);
-  await eventPanel.evaluate((element) => {
+  await eventScroll.evaluate((element) => {
     element.scrollTop = element.scrollHeight;
   });
-  expect(await eventPanel.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+  expect(await eventScroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
 
   await runtimeView.evaluate((element) => {
     element.scrollTop = 0;

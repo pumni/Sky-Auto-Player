@@ -10,7 +10,6 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import {
   type DesktopStore,
   type DesktopStoreHook,
@@ -21,6 +20,13 @@ import {
 } from '../../state/store';
 import { VirtualTrackRow } from './TrackRow';
 import { TrackTableHeader } from './TrackTableHeader';
+import {
+  ScrollAreaContent,
+  ScrollAreaRoot,
+  ScrollAreaScrollbar,
+  ScrollAreaThumb,
+  ScrollAreaViewport,
+} from '../ui/scroll-area';
 
 export interface TrackTableHandle {
   locateSelected: () => Promise<void>;
@@ -114,14 +120,9 @@ function observeDimensions(
 
 export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
   const parentRef = useRef<HTMLDivElement>(null);
-  const scrollVisibilityRef = useScrollVisibility<HTMLDivElement>();
-  const setScrollElement = useCallback(
-    (element: HTMLDivElement | null) => {
-      parentRef.current = element;
-      scrollVisibilityRef(element);
-    },
-    [scrollVisibilityRef],
-  );
+  const setScrollElement = useCallback((element: HTMLDivElement | null) => {
+    parentRef.current = element;
+  }, []);
   const resultTotal = useStore((store) => store.library.resultTotal);
   const committedPage = useStore((store) => store.library.builtinPage.committedPage);
   const focusNowPlaying = useStore((store) => store.library.builtinPage.focusNowPlaying);
@@ -393,34 +394,44 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
   };
 
   return (
-    <div
-      ref={setScrollElement}
-      className="relative min-h-0 min-w-0 flex-1 overflow-auto bg-card [scrollbar-gutter:stable] focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
-      role="grid"
-      aria-label={isBuiltin ? `Built-in Songs, page ${committedPage}` : 'Songs'}
-      aria-activedescendant={activeDescendantId}
-      aria-rowcount={rowCount + 1}
-      aria-busy={pendingPage !== null || undefined}
-      aria-multiselectable="false"
-      tabIndex={0}
-      onKeyDown={onTableKeyDown}
-    >
-      <div data-slot="track-table-frame" className="relative min-h-full min-w-0">
-        <TrackTableHeader />
-        <div className="relative min-h-full w-full" style={{ height: virtualizer.getTotalSize() }}>
-          {renderedItems.map((virtualRow) => {
-            return (
-              <VirtualTrackRow
-                key={virtualRow.index}
-                index={virtualRow.index}
-                sourceIndex={pageOffset + virtualRow.index}
-                start={virtualRow.start}
-                useStore={useStore}
-              />
-            );
-          })}
-        </div>
-      </div>
-    </div>
+    <ScrollAreaRoot className="min-h-0 min-w-0 flex-1 bg-surface">
+      <ScrollAreaViewport
+        ref={setScrollElement}
+        className="size-full focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+        role="grid"
+        aria-label={isBuiltin ? `Built-in Songs, page ${committedPage}` : 'Songs'}
+        aria-activedescendant={activeDescendantId}
+        aria-rowcount={rowCount + 1}
+        aria-busy={pendingPage !== null || undefined}
+        aria-multiselectable="false"
+        tabIndex={0}
+        onKeyDown={onTableKeyDown}
+      >
+        <ScrollAreaContent className="relative min-h-full w-full bg-surface">
+          <div data-slot="track-table-frame" className="relative min-h-full min-w-0">
+            <TrackTableHeader />
+            <div
+              className="relative min-h-full w-full"
+              style={{ height: virtualizer.getTotalSize() }}
+            >
+              {renderedItems.map((virtualRow) => {
+                return (
+                  <VirtualTrackRow
+                    key={virtualRow.index}
+                    index={virtualRow.index}
+                    sourceIndex={pageOffset + virtualRow.index}
+                    start={virtualRow.start}
+                    useStore={useStore}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        </ScrollAreaContent>
+      </ScrollAreaViewport>
+      <ScrollAreaScrollbar orientation="vertical">
+        <ScrollAreaThumb />
+      </ScrollAreaScrollbar>
+    </ScrollAreaRoot>
   );
 }
