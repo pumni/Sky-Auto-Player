@@ -336,9 +336,13 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
   });
   await page.mouse.move(0, 0);
   await expectHidden();
+  const lightPreviousTop = await grid.evaluate((element) => element.scrollTop);
   await grid.hover();
   await page.mouse.wheel(0, 320);
   await page.mouse.wheel(0, 320);
+  await expect
+    .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
+    .toBeGreaterThan(lightPreviousTop);
   await expectActive();
   const lightColors = await scrollArea.evaluate((area) => {
     const track = area.querySelector<HTMLElement>('[role="grid"]');
