@@ -1060,7 +1060,9 @@ test('Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and
   expect(graphiteDark['--scrollbar-thumb-active']).toBe(computedRgb('#a4a6aa'));
   expect(graphiteDark['--scrim']).toBe(computedRgb('#08090c'));
 
-  // Content canvas vs chrome separation in Dark and Light
+  // Unified shell chrome and distinct content canvas in Dark and Light
+  const shell = page.locator('[data-app-shell]');
+  const titlebar = page.locator('[data-slot="titlebar"]');
   for (const mode of ['dark', 'light'] as const) {
     await page.emulateMedia({ colorScheme: mode });
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
@@ -1072,11 +1074,13 @@ test('Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and
       browser: getComputedStyle(document.querySelector('[data-pane="browser"]')!).backgroundColor,
       dock: getComputedStyle(document.querySelector('[data-slot="player-dock"]')!).backgroundColor,
     }));
-    expect(regions.titlebar).toBe(activeTheme['--card']);
+    await expect(shell).toHaveCSS('background-color', activeTheme['--card']);
+    await expect(titlebar).toHaveCSS('border-bottom-width', '0px');
+    expect(regions.titlebar).toBe('rgba(0, 0, 0, 0)');
     expect(regions.navigator).toBe(activeTheme['--card']);
     expect(regions.dock).toBe(activeTheme['--card']);
     expect(regions.browser).toBe(activeTheme['--surface']);
-    expect(regions.browser).not.toBe(regions.titlebar);
+    expect(regions.browser).not.toBe(activeTheme['--card']);
   }
 
   // Every saved dark palette resolves identical 47 shared Light roles and restores cleanly on Dark
@@ -1094,6 +1098,15 @@ test('Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and
     await page.emulateMedia({ colorScheme: 'dark' });
     await selectPalette(page, palette);
     const darkSnapshot = await resolvedComputedTheme(page);
+    await expect(shell).toHaveCSS(
+      'background-color',
+      darkSnapshot[palette === 'graphite' ? '--card' : '--background'],
+    );
+    await expect(titlebar).toHaveCSS(
+      'background-color',
+      palette === 'graphite' ? 'rgba(0, 0, 0, 0)' : darkSnapshot['--card'],
+    );
+    await expect(titlebar).toHaveCSS('border-bottom-width', palette === 'graphite' ? '0px' : '1px');
 
     if (palette !== 'graphite') {
       const baseline = BASELINE_NON_GRAPHITE_PALETTES[palette];
@@ -1127,6 +1140,9 @@ test('Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and
     await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
     const lightSnapshot = await resolvedComputedTheme(page);
     expect(lightSnapshot, `${palette} saved palette in Light`).toEqual(referenceLight);
+    await expect(shell).toHaveCSS('background-color', referenceLight['--card']);
+    await expect(titlebar).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(titlebar).toHaveCSS('border-bottom-width', '0px');
 
     await page.emulateMedia({ colorScheme: 'dark' });
     await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
@@ -1134,6 +1150,11 @@ test('Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and
     const restoredDark = await resolvedComputedTheme(page);
     expect(restoredDark, `${palette} restored after Light roundtrip`).toEqual(darkSnapshot);
   }
+
+  // Retain the existing structural separator in forced-colors mode.
+  await selectPalette(page, 'graphite');
+  await page.emulateMedia({ forcedColors: 'active' });
+  await expect(titlebar).toHaveCSS('border-bottom-width', '1px');
 });
 
 test('rendered control contrast, Switch visual cues, M15 child instant switch, and input boundaries hold in Dark and Light', async ({

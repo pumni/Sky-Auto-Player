@@ -47,8 +47,7 @@ control-hover track color.
 Playback confirmation (`PlaybackAdmission.tsx`) preserves native decision order, primary CTA
 (`use_recommended` when offered, otherwise `proceed`), initial focus, and `Not now` cancellation,
 using neutral note-registration warning copy and `aria-describedby`-linked per-option descriptions.
-Graphite 2.0 defines dual Dark (`#121314` / `#191a1b` / `#202122`) and Light
-(`#f5f6f8` / `#ffffff` / `#ffffff`) semantic tokens in `globals.css`, applying mode switches
+Graphite 2.0 defines dual Dark and Light semantic tokens in `globals.css`, applying mode switches
 instantly (`0ms`) via a transient `data-theme-applying` attribute in `applyAppearance.ts`.
 
 The Library's empty Playlists action uses an outline while Built-in Songs are available and a filled
@@ -226,6 +225,12 @@ chrome (`--card` `#191A1B`), and its selected and playing surfaces remain distin
 playing, control state, and success/warning/danger roles. Tailwind's `@theme inline` maps utilities
 to those CSS properties; its `dark` variant follows `data-color-mode`. There are no `--workbench-*`
 color aliases.
+
+Graphite Dark and shared Light use `--card` for the app-shell backdrop and workbench gutters.
+The 40 px Title Bar is transparent without a full-width bottom border in these appearances,
+so the chrome reads as one surface. Pane borders, content canvas, caption controls and the
+Player Dock separator remain unchanged. Other dark palettes and forced-colors mode retain
+their existing shell and Title Bar styling.
 
 Light keeps the saved dark palette while resolving its own tokens. Its action fill, hover, and
 pressed colors are `#3C54CF`, `#3248BA`, and `#293DA3`, with white primary foreground; its white

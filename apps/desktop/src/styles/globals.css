@@ -469,6 +469,18 @@ html[data-color-mode='light'] {
   --scrim: #16181b;
 }
 
+/* Graphite chrome continues through the shell gutters instead of a separate titlebar strip. */
+@media (forced-colors: none) {
+  html:is([data-palette='graphite'], [data-color-mode='light']) [data-app-shell] {
+    background-color: var(--card);
+  }
+
+  html:is([data-palette='graphite'], [data-color-mode='light']) [data-app-shell] > [data-slot='titlebar'] {
+    background-color: transparent;
+    border-bottom-width: 0;
+  }
+}
+
 @layer base {
   :where(button, input, select, textarea, [role='button'], [tabindex]):focus-visible {
     outline: 2px solid var(--ring);
