@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import { expectedUtilityPresentation } from './testHelpers';
 
 const workbenchStorageKey = 'sky.ui.workbench.v5';
@@ -93,8 +93,9 @@ async function readInspectorHeaderGeometry(page: Page) {
       '[data-slot="utility-header"] > button',
       '[data-slot="utility-header"] > button svg',
       '[role="tablist"][aria-label="Utility views"]',
-      '[role="tablist"][aria-label="Utility views"] [role="tab"]:first-child',
-      '[role="tablist"][aria-label="Utility views"] [role="tab"]:last-child',
+      '[role="tablist"][aria-label="Utility views"] [data-slot="tabs-indicator"]',
+      '[role="tablist"][aria-label="Utility views"] [role="tab"]:nth-of-type(1)',
+      '[role="tablist"][aria-label="Utility views"] [role="tab"]:nth-of-type(2)',
       '[data-slot="tabs-content"]',
       '[data-slot="song-details"][aria-label="Song details"] p',
       '#song-details-title',
@@ -154,6 +155,15 @@ async function readInspectorTabTextAlignment(page: Page) {
 }
 
 async function expectInspectorGeometry(page: Page, mode: 'docked' | 'overlay') {
+  if (mode === 'overlay') {
+    await expect
+      .poll(() =>
+        page
+          .locator('[data-pane="inspector"]')
+          .evaluate((element) => getComputedStyle(element).translate),
+      )
+      .toBe('none');
+  }
   const geometry = await readWorkbenchGeometry(page);
   expect(geometry.mode).toBe(mode);
   expect(geometry.workbench).not.toBeNull();
@@ -385,21 +395,38 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       >
     > = {};
     const record = async (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
-      if (state === 'empty' || state === 'runtime') {
-        const label = state === 'empty' ? 'Details' : 'Runtime';
-        const activeTab = inspector.getByRole('tab', { name: label });
-        const accentInk = await page.evaluate(() => {
-          const probe = document.createElement('span');
-          probe.style.color = 'var(--accent-ink)';
-          document.body.append(probe);
-          const color = getComputedStyle(probe).color;
-          probe.remove();
-          return color;
-        });
-        await expect
-          .poll(() => activeTab.evaluate((tab) => getComputedStyle(tab).color))
-          .toBe(accentInk);
-      }
+      const label = state === 'runtime' ? 'Runtime' : 'Details';
+      const activeTab = inspector.getByRole('tab', { name: label });
+      const accentInk = await page.evaluate(() => {
+        const probe = document.createElement('span');
+        probe.style.color = 'var(--accent-ink)';
+        document.body.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      });
+      await expect
+        .poll(() => activeTab.evaluate((tab) => getComputedStyle(tab).color))
+        .toBe(accentInk);
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const list = document.querySelector('[role="tablist"][aria-label="Utility views"]');
+            const active = list?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+            const indicator = list?.querySelector<HTMLElement>('[data-slot="tabs-indicator"]');
+            if (!active || !indicator) return false;
+            const tab = active.getBoundingClientRect();
+            const line = indicator.getBoundingClientRect();
+            return (
+              Math.abs(tab.x - line.x) <= 1 &&
+              Math.abs(tab.width - line.width) <= 1 &&
+              Math.abs(tab.bottom - line.bottom) <= 1 &&
+              Math.abs(line.height - 2) <= 0.1 &&
+              getComputedStyle(indicator).backgroundColor === getComputedStyle(active).color
+            );
+          }),
+        )
+        .toBe(true);
       measurements[state] = await readInspectorHeaderGeometry(page);
       tabTextAlignment[state] = await readInspectorTabTextAlignment(page);
     };
@@ -446,27 +473,35 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
     };
     const baselineHeader = geometryFor('empty', '[data-slot="utility-header"]');
     const baselineTabs = geometryFor('empty', '[role="tablist"][aria-label="Utility views"]');
+    const baselineIndicator = geometryFor(
+      'empty',
+      '[role="tablist"][aria-label="Utility views"] [data-slot="tabs-indicator"]',
+    );
     const baselineTitle = geometryFor('empty', '[data-slot="utility-header"] h2');
     const baselineClose = geometryFor('empty', '[data-slot="utility-header"] > button');
     const baselineCloseIcon = geometryFor('empty', '[data-slot="utility-header"] > button svg');
     const baselineSurface = geometryFor('empty', '[role="region"][aria-label^="Utility:"]');
     const baselineDetailsTab = geometryFor(
       'empty',
-      '[role="tablist"][aria-label="Utility views"] [role="tab"]:first-child',
+      '[role="tablist"][aria-label="Utility views"] [role="tab"]:nth-of-type(1)',
     );
     const baselineRuntimeTab = geometryFor(
       'empty',
-      '[role="tablist"][aria-label="Utility views"] [role="tab"]:last-child',
+      '[role="tablist"][aria-label="Utility views"] [role="tab"]:nth-of-type(2)',
     );
     const expectOriginalTabs = (state: 'empty' | 'selected' | 'cleared' | 'runtime') => {
       const tabs = geometryFor(state, '[role="tablist"][aria-label="Utility views"]');
       const details = geometryFor(
         state,
-        '[role="tablist"][aria-label="Utility views"] [role="tab"]:first-child',
+        '[role="tablist"][aria-label="Utility views"] [role="tab"]:nth-of-type(1)',
       );
       const runtime = geometryFor(
         state,
-        '[role="tablist"][aria-label="Utility views"] [role="tab"]:last-child',
+        '[role="tablist"][aria-label="Utility views"] [role="tab"]:nth-of-type(2)',
+      );
+      const indicator = geometryFor(
+        state,
+        '[role="tablist"][aria-label="Utility views"] [data-slot="tabs-indicator"]',
       );
       expect(tabs.borderBottomWidth).toBe('1px');
       expect(tabs.borderBottomStyle).toBe('solid');
@@ -484,17 +519,13 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       expect(Math.abs(details.y - runtime.y)).toBeLessThanOrEqual(1);
       const selectedTab = state === 'runtime' ? runtime : details;
       const inactiveTab = state === 'runtime' ? details : runtime;
-      for (const tab of [selectedTab, inactiveTab]) {
-        expect(tab.borderRadius).toBe('0px');
-        expect(tab.borderBottomWidth).toBe('2px');
-        expect(tab.borderBottomStyle).toBe('solid');
-      }
-      expect(selectedTab.backgroundColor).toBe('rgba(0, 0, 0, 0)');
       expect(selectedTab.color).toBe('rgb(154, 168, 255)');
-      expect(selectedTab.borderBottomColor).toBe('rgb(154, 168, 255)');
-      expect(inactiveTab.backgroundColor).toBe('rgba(0, 0, 0, 0)');
       expect(inactiveTab.color).toBe('rgb(166, 168, 173)');
-      expect(inactiveTab.borderBottomColor).toBe('rgba(0, 0, 0, 0)');
+      expect(indicator.backgroundColor).toBe('rgb(154, 168, 255)');
+      expect(Math.abs(indicator.x - selectedTab.x)).toBeLessThanOrEqual(1);
+      expect(Math.abs(indicator.width - selectedTab.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(indicator.height - 2)).toBeLessThanOrEqual(0.1);
+      expect(indicator.y + indicator.height).toBeLessThanOrEqual(tabs.y + tabs.height + 1);
       const textAlignment = tabTextAlignment[state];
       expect(textAlignment).toHaveLength(2);
       for (const alignment of textAlignment ?? []) {
@@ -505,11 +536,17 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
         ).toBeLessThanOrEqual(1.5);
       }
     };
-    await expect(inspector.getByRole('tab')).toHaveText(['Details', 'Runtime']);
+    await expect(
+      inspector.getByRole('tablist', { name: 'Utility views' }).getByRole('tab'),
+    ).toHaveText(['Details', 'Runtime']);
     expectOriginalTabs('empty');
     for (const state of ['selected', 'cleared', 'runtime'] as const) {
       const header = geometryFor(state, '[data-slot="utility-header"]');
       const tabs = geometryFor(state, '[role="tablist"][aria-label="Utility views"]');
+      const indicator = geometryFor(
+        state,
+        '[role="tablist"][aria-label="Utility views"] [data-slot="tabs-indicator"]',
+      );
       const headerTitle = geometryFor(state, '[data-slot="utility-header"] h2');
       const close = geometryFor(state, '[data-slot="utility-header"] > button');
       const closeIcon = geometryFor(state, '[data-slot="utility-header"] > button svg');
@@ -522,6 +559,7 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       expect(Math.abs(tabs.y - baselineTabs.y)).toBeLessThanOrEqual(1);
       expect(Math.abs(tabs.height - baselineTabs.height)).toBeLessThanOrEqual(1);
       expect(Math.abs(tabs.width - baselineTabs.width)).toBeLessThanOrEqual(1);
+      expect(Math.abs(indicator.height - baselineIndicator.height)).toBeLessThanOrEqual(0.1);
       expect(Math.abs(headerTitle.x - baselineTitle.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(headerTitle.width - baselineTitle.width)).toBeLessThanOrEqual(1);
       expect(Math.abs(close.x - baselineClose.x)).toBeLessThanOrEqual(1);

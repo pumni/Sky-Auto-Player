@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { palettes, selectPalette } from './testHelpers';
 
 test.beforeEach(async ({ page }) => {
@@ -237,7 +237,7 @@ test('Graphite workspace header compacts by viewport and browser width over one 
     expect(geometry.headerStyle?.background).toBe('rgb(21, 22, 24)');
     expect(geometry.sourceStyle?.background).toBe('rgba(0, 0, 0, 0)');
     expect(geometry.sourceStyle?.color).toBe('rgb(226, 228, 232)');
-    expect(geometry.titleStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '14px' : '13px');
+    expect(geometry.titleStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '20px' : '16px');
     expect(geometry.titleStyle?.fontWeight).toBe('600');
     expect(geometry.countStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '12px' : '11px');
     expect(geometry.browserStyle?.background).toBe('rgb(25, 26, 27)');
@@ -271,7 +271,7 @@ test('Graphite workspace header compacts by viewport and browser width over one 
   await expect(page.locator('[data-slot="track-browser-header"]')).toHaveCSS('height', '32px');
   await expect(page.locator('[data-slot="track-browser-header"] h1')).toHaveCSS(
     'font-size',
-    '13px',
+    '16px',
   );
   await browserPane.evaluate((element, flex) => {
     element.style.flex = flex;

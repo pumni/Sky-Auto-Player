@@ -1,20 +1,20 @@
 import { ChevronRight, FlaskConical, ListVideo, PanelRight, SlidersHorizontal } from 'lucide-react';
-import { useId, useRef, useState, type RefObject } from 'react';
+import { type RefObject, useId, useRef, useState } from 'react';
+import {
+  type DesktopStore,
+  type DesktopStoreHook,
+  playbackSessionStatusConcern,
+} from '../../state/store';
 import { TimingMarginControl } from '../settings/TimingMarginControl';
+import { Button } from '../ui/button';
 import {
   formatFpsFrameHint,
   formatHoldFramesHint,
   formatTempoHint,
 } from '../ui/playbackOptionFormatting';
-import { Button } from '../ui/button';
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
-import {
-  playbackSessionStatusConcern,
-  type DesktopStore,
-  type DesktopStoreHook,
-} from '../../state/store';
 
 interface PlayerToolsProps {
   useStore: DesktopStoreHook;
@@ -168,7 +168,7 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
               </header>
               <div
                 data-slot="profile-fields"
-                className="grid min-w-0 grid-cols-3 gap-x-2.5 gap-y-3"
+                className="grid min-w-0 grid-cols-2 gap-x-2.5 gap-y-3"
               >
                 <ProfileFields
                   defaults={defaults}
@@ -231,7 +231,9 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
         >
           <PanelRight size={16} aria-hidden="true" />
         </TooltipTrigger>
-        <TooltipContent>{utility.open ? 'Close Inspector' : 'Open Inspector'}</TooltipContent>
+        <TooltipContent>
+          {utility.open ? 'Close Inspector · Ctrl+I' : 'Open Inspector · Ctrl+I'}
+        </TooltipContent>
       </Tooltip>
     </div>
   );
@@ -328,56 +330,57 @@ function ProfileFields({ defaults, bootstrap, patchSettings }: ProfileFieldsProp
           </SelectContent>
         </Select>
       </div>
-      <div className="grid min-w-0 gap-1">
-        <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={fpsId}>
-          FPS
-        </label>
-        <Select
-          value={String(defaults.fps)}
-          onValueChange={(value) => {
-            if (value !== null) void patchSettings({ playbackDefaults: { fps: Number(value) } });
-          }}
-        >
-          <SelectTrigger id={fpsId} className="h-8" aria-label="FPS">
-            <SelectValue>{(value: string | null) => value ?? 'FPS'}</SelectValue>
-          </SelectTrigger>
-          <SelectContent className="min-w-40">
-            {fpsOptions.map((option) => (
-              <SelectItem key={option.value} value={option.value}>
-                <span>{option.label}</span>
-                <span className="text-text-tertiary">{option.hint}</span>
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <TimingMarginControl
-        value={defaults.timing_margin_us}
-        options={bootstrap.option_sets}
-        density="compact"
-        onChange={(value) =>
-          patchSettings({ playbackDefaults: { timingMarginUs: value } }).then(
-            (authoritative) => authoritative?.playback_defaults.timing_margin_us ?? null,
-          )
-        }
-      />
-      <details className="group min-w-0 border-t border-border pt-2">
-        <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-xs text-text-secondary hover:text-foreground">
+      <details className="group col-span-2 min-w-0 border-t border-border pt-2">
+        <summary className="flex cursor-pointer list-none items-center gap-1.5 py-1 text-[13px] font-medium text-text-secondary hover:text-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring">
           <ChevronRight
             className="size-3.5 transition-[rotate] duration-fast group-open:rotate-90 motion-reduce:transition-none"
             size={14}
             aria-hidden="true"
           />
-          <span>Calculated timing</span>
+          <span>Advanced timing</span>
         </summary>
-        <dl className="mt-2 grid grid-cols-[1fr_auto] gap-1 text-xs">
-          <div>
-            <dt className="text-text-tertiary">Target hold</dt>
+        <div className="mt-2 grid min-w-0 grid-cols-2 gap-x-2.5 gap-y-3">
+          <div className="grid min-w-0 gap-1">
+            <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={fpsId}>
+              FPS
+            </label>
+            <Select
+              value={String(defaults.fps)}
+              onValueChange={(value) => {
+                if (value !== null)
+                  void patchSettings({ playbackDefaults: { fps: Number(value) } });
+              }}
+            >
+              <SelectTrigger id={fpsId} className="h-8" aria-label="FPS">
+                <SelectValue>{(value: string | null) => value ?? 'FPS'}</SelectValue>
+              </SelectTrigger>
+              <SelectContent className="min-w-40">
+                {fpsOptions.map((option) => (
+                  <SelectItem key={option.value} value={option.value}>
+                    <span>{option.label}</span>
+                    <span className="text-text-tertiary">{option.hint}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <TimingMarginControl
+            value={defaults.timing_margin_us}
+            options={bootstrap.option_sets}
+            density="compact"
+            onChange={(value) =>
+              patchSettings({ playbackDefaults: { timingMarginUs: value } }).then(
+                (authoritative) => authoritative?.playback_defaults.timing_margin_us ?? null,
+              )
+            }
+          />
+          <dl className="col-span-2 m-0 grid grid-cols-[1fr_auto] gap-1 border-t border-border pt-2 text-xs">
+            <dt className="text-text-tertiary">Calculated target hold</dt>
             <dd className="m-0 font-mono tabular-nums text-foreground">
               {(minHoldUs / 1_000).toFixed(3)} ms
             </dd>
-          </div>
-        </dl>
+          </dl>
+        </div>
       </details>
     </>
   );

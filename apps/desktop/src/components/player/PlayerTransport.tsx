@@ -1,6 +1,5 @@
 import { LoaderCircle, Pause, Play, Shuffle, SkipBack, SkipForward, Square } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
-import { Button } from '../ui/button';
 import type { DesktopStoreHook } from '../../state/store';
 import {
   nextPlaybackPosition,
@@ -8,6 +7,7 @@ import {
   previousPlaybackPosition,
   selectSongById,
 } from '../../state/store';
+import { Button } from '../ui/button';
 import { formatPlayerDuration } from './playerFormatting';
 
 interface PlayerTransportProps {
@@ -52,9 +52,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     hasSession &&
     ['starting', 'playing', 'paused', 'stopping', 'finished', 'failed'].includes(playback.state);
   const contextCurrent =
-    playback.context !== null &&
-    playback.context.valid &&
-    playback.context.generation === libraryGeneration;
+    playback.context?.valid && playback.context.generation === libraryGeneration;
   const canNext = contextCurrent && nextPlaybackPosition(playback.context!) !== null;
   const transportOwnsControls = operationPending || confirmationPending || recoveryPending;
   const primaryPending =
@@ -63,12 +61,14 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     recoveryPending ||
     (hasSession && ['starting', 'stopping', 'finished', 'failed'].includes(playback.state));
   const primaryCanStartPrepared = playback.prepared?.admission === 'ready';
+  const primaryIsPlaying = active && playback.state === 'playing';
+  const primaryIsPaused = active && playback.state === 'paused';
   const primaryCanPlay = Boolean(selectedSongId || (playback.hasCurrentSong && contextCurrent));
   const stopCanAct =
     hasSession && ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
   const canPrevious = useStore((store) => {
     const context = store.playback.context;
-    if (!context || !context.valid || context.generation !== store.library.generation) {
+    if (!context?.valid || context.generation !== store.library.generation) {
       return false;
     }
     const snapshot = store.playback.snapshot;
@@ -154,80 +154,77 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             className="absolute left-1/2 top-1/2 grid size-[42px] -translate-x-1/2 -translate-y-1/2 place-items-center"
             data-testid="player-primary-slot"
           >
-            {primaryPending ? (
-              <Button
-                data-slot="primary-transport"
-                variant="default"
-                size="transport"
-                className="disabled:opacity-100"
-                type="button"
-                aria-label={transportStatus ?? 'Playback transition pending'}
-                title={transportStatus ?? 'Playback transition pending'}
-                disabled
-              >
-                <LoaderCircle
-                  className="animate-spin motion-reduce:animate-none"
-                  size={18}
-                  aria-hidden="true"
-                />
-              </Button>
-            ) : active && playback.state === 'playing' ? (
-              <Button
-                data-slot="primary-transport"
-                variant="default"
-                size="transport"
-                type="button"
-                aria-label="Pause"
-                title="Pause"
-                onClick={() => void pause()}
-              >
-                <Pause size={18} aria-hidden="true" />
-              </Button>
-            ) : active && playback.state === 'paused' ? (
-              <Button
-                data-slot="primary-transport"
-                variant="default"
-                size="transport"
-                type="button"
-                aria-label="Resume"
-                title="Resume"
-                onClick={() => void resume()}
-              >
-                <Play size={18} aria-hidden="true" />
-              </Button>
-            ) : (
-              <Button
-                data-slot="primary-transport"
-                variant="default"
-                size="transport"
-                type="button"
-                aria-label={
-                  primaryCanStartPrepared && playback.prepared?.config.dry_run
-                    ? 'Start test playback (no input)'
-                    : 'Play'
-                }
-                title={
-                  confirmationPending
-                    ? 'Playback confirmation required'
-                    : playback.prepared?.admission === 'blocked'
-                      ? 'Playback is blocked'
+            <Button
+              data-slot="primary-transport"
+              data-transport-state={
+                primaryPending
+                  ? 'pending'
+                  : primaryIsPlaying
+                    ? 'playing'
+                    : primaryIsPaused
+                      ? 'paused'
+                      : 'idle'
+              }
+              variant="default"
+              size="transport"
+              className="disabled:opacity-100"
+              type="button"
+              aria-label={
+                primaryPending
+                  ? (transportStatus ?? 'Playback transition pending')
+                  : primaryIsPlaying
+                    ? 'Pause'
+                    : primaryIsPaused
+                      ? 'Resume'
                       : primaryCanStartPrepared && playback.prepared?.config.dry_run
-                        ? 'Start test playback: no keyboard input'
-                        : 'Play: may send physical keyboard input'
-                }
-                disabled={
-                  transportOwnsControls ||
-                  (!primaryCanStartPrepared &&
+                        ? 'Start test playback (no input)'
+                        : 'Play'
+              }
+              aria-busy={primaryPending}
+              title={
+                primaryPending
+                  ? (transportStatus ?? 'Playback transition pending')
+                  : primaryIsPlaying
+                    ? 'Pause'
+                    : primaryIsPaused
+                      ? 'Resume'
+                      : confirmationPending
+                        ? 'Playback confirmation required'
+                        : playback.prepared?.admission === 'blocked'
+                          ? 'Playback is blocked'
+                          : primaryCanStartPrepared && playback.prepared?.config.dry_run
+                            ? 'Start test playback: no keyboard input'
+                            : 'Play: may send physical keyboard input'
+              }
+              disabled={
+                primaryPending ||
+                (!(primaryIsPlaying || primaryIsPaused) &&
+                  ((!primaryCanStartPrepared &&
                     (confirmationPending || playback.prepared?.admission === 'blocked')) ||
-                  (!primaryCanStartPrepared && !primaryCanPlay)
-                }
-                onClick={() =>
-                  primaryCanStartPrepared ? void start() : void prepareAndMaybeStart(false)
-                }
-              >
-                <Play size={18} aria-hidden="true" />
-              </Button>
-            )}
+                    (!primaryCanStartPrepared && !primaryCanPlay)))
+              }
+              onClick={() => {
+                if (primaryIsPlaying) void pause();
+                else if (primaryIsPaused) void resume();
+                else if (primaryCanStartPrepared) void start();
+                else void prepareAndMaybeStart(false);
+              }}
+            >
+              <span className="relative grid size-[18px] place-items-center" aria-hidden="true">
+                <Play
+                  className={`absolute inset-0 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${!primaryPending && !primaryIsPlaying ? 'opacity-100' : 'opacity-0'}`}
+                  size={18}
+                />
+                <Pause
+                  className={`absolute inset-0 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${!primaryPending && primaryIsPlaying ? 'opacity-100' : 'opacity-0'}`}
+                  size={18}
+                />
+                <LoaderCircle
+                  className={`absolute inset-0 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${primaryPending ? 'animate-spin opacity-100 motion-reduce:animate-none' : 'opacity-0'}`}
+                  size={18}
+                />
+              </span>
+            </Button>
           </div>
           <Button
             variant="ghost"

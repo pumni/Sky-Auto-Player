@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createMockBridge } from '../../bridge/mockBridge';
 import type { LibraryPlaylistImportResult } from '../../bridge/DesktopBridge';
+import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
 import { TrackBrowser } from './TrackBrowser';
 

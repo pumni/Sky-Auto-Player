@@ -3,13 +3,13 @@ import { useRef, useState } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { Button } from '../ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
-import { PlaylistCreateDialog } from './PlaylistCreateDialog';
-import { PlaylistNavItem } from './PlaylistNavItem';
-import { PlaylistRenameDialog } from './PlaylistRenameDialog';
 import { LibraryAddMenu } from './LibraryAddMenu';
 import { LibraryConfirmDialog } from './LibraryConfirmDialog';
 import { LibraryNavItem } from './LibraryNavItem';
 import { LibrarySection } from './LibrarySection';
+import { PlaylistCreateDialog } from './PlaylistCreateDialog';
+import { PlaylistNavItem } from './PlaylistNavItem';
+import { PlaylistRenameDialog } from './PlaylistRenameDialog';
 
 const playlistNameSegmenter =
   typeof Intl.Segmenter === 'undefined'
@@ -134,7 +134,7 @@ export function LibraryNavigator({
         className={`flex min-h-10 min-w-0 items-center justify-between ${collapsed ? 'mb-1 justify-center' : 'mb-1.5 pl-2'}`}
       >
         {!collapsed && (
-          <h2 className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[13px] font-semibold text-foreground">
+          <h2 className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold leading-5 text-foreground">
             Your Library
           </h2>
         )}

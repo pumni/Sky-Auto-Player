@@ -2,7 +2,7 @@ import { ChevronRight, X } from 'lucide-react';
 import type { RefObject } from 'react';
 import type { UtilityView } from '../../state/store';
 import { Button } from '../ui/button';
-import { TabsList, TabsTrigger } from '../ui/tabs';
+import { TabsIndicator, TabsList, TabsTrigger } from '../ui/tabs';
 
 interface UtilityHeaderProps {
   activeView: UtilityView;
@@ -61,17 +61,18 @@ export function UtilityHeader({
         activateOnFocus
       >
         <TabsTrigger
-          className="min-h-[34px] flex-none rounded-none border-0 border-b-2 border-b-transparent px-3 text-xs text-text-secondary duration-tab hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
+          className="min-h-[34px] flex-none rounded-none border-0 px-3 text-xs text-text-secondary duration-tab hover:bg-control-hover hover:text-foreground data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
           value="details"
         >
           <span>Details</span>
         </TabsTrigger>
         <TabsTrigger
-          className="min-h-[34px] flex-none rounded-none border-0 border-b-2 border-b-transparent px-3 text-xs text-text-secondary duration-tab hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
+          className="min-h-[34px] flex-none rounded-none border-0 px-3 text-xs text-text-secondary duration-tab hover:bg-control-hover hover:text-foreground data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
           value="diagnostics"
         >
           <span>Runtime</span>
         </TabsTrigger>
+        <TabsIndicator />
       </TabsList>
     </header>
   );

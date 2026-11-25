@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { collectRenderedTextContrast } from './renderedContrast';
 import {
   chooseSelectOption,
   expectNoSeriousAccessibilityViolations,
@@ -7,7 +8,6 @@ import {
   selectPalette,
   startSelectedSong,
 } from './testHelpers';
-import { collectRenderedTextContrast } from './renderedContrast';
 
 const surfaces = ['--background', '--surface', '--card', '--popover'] as const;
 const bodyTextRoles = [
@@ -157,11 +157,28 @@ test('primary actions use computed rest, hover, and pressed theme colors in ever
   await page.goto('/');
   const createPlaylist = page.locator('[data-slot="library-empty-playlists-create"]');
   await expect(createPlaylist).toBeVisible();
+  await page.getByRole('row', { name: /Blue Bird/ }).click();
+  const primaryAction = page
+    .getByRole('contentinfo', { name: 'Player controls' })
+    .getByRole('button', { name: 'Play', exact: true });
+  await expect(primaryAction).toBeVisible();
+  await expect(primaryAction).toBeEnabled();
 
   for (const palette of palettes) {
     await selectPalette(page, palette);
     const theme = await resolvedTheme(page);
-    const rest = await createPlaylist.evaluate((element) => {
+    const createRest = await createPlaylist.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return { background: style.backgroundColor, foreground: style.color };
+    });
+    expect(createRest.background).toBe(computedRgb(theme['--primary']));
+    expect(createRest.foreground).toBe(computedRgb(theme['--primary-foreground']));
+    await createPlaylist.hover();
+    await expect
+      .poll(() => createPlaylist.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .toBe(computedRgb(theme['--primary-hover']));
+
+    const rest = await primaryAction.evaluate((element) => {
       const style = getComputedStyle(element);
       return { background: style.backgroundColor, foreground: style.color };
     });
@@ -170,21 +187,17 @@ test('primary actions use computed rest, hover, and pressed theme colors in ever
       computedRgb(theme['--primary-foreground']),
     );
 
-    await createPlaylist.hover();
+    await primaryAction.hover();
     await expect
-      .poll(() => createPlaylist.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .poll(() => primaryAction.evaluate((element) => getComputedStyle(element).backgroundColor))
       .toBe(computedRgb(theme['--primary-hover']));
 
     await page.mouse.down();
     await expect
-      .poll(() => createPlaylist.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .poll(() => primaryAction.evaluate((element) => getComputedStyle(element).backgroundColor))
       .toBe(computedRgb(theme['--primary-pressed']));
-    await page.mouse.up();
-    const dialog = page.getByRole('dialog', { name: 'New playlist' });
-    await expect(dialog).toBeVisible();
-    await page.keyboard.press('Escape');
-    await expect(dialog).toBeHidden();
     await page.mouse.move(0, 0);
+    await page.mouse.up();
   }
 });
 
@@ -198,7 +211,7 @@ test('PlayerTransport Play uses the shared primary action states in Dark and Lig
     .getByRole('button', { name: 'Play', exact: true });
   await expect(play).toBeEnabled();
 
-  const assertPrimaryStates = async (label: string) => {
+  const assertPrimaryStates = async () => {
     const theme = await resolvedTheme(page);
     await expect
       .poll(async () => {

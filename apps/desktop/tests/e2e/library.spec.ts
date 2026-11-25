@@ -1,5 +1,12 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
-import { expectNoSeriousAccessibilityViolations, startSelectedSong } from './testHelpers';
+import { expect, type Page, test } from '@playwright/test';
+import {
+  beginFocusTraversalTrace,
+  expectAddSongsMenuAccessibility,
+  expectNoSeriousAccessibilityViolations,
+  expectSafeKeyboardFocusDestination,
+  finishFocusTraversalTrace,
+  startSelectedSong,
+} from './testHelpers';
 
 async function jumpToBuiltinPage(page: Page, target: number) {
   const trigger = page.locator('[data-slot="builtin-pager-jump-trigger"]');
@@ -376,7 +383,6 @@ async function readTrackBrowserVisualGeometry(page: Page, includePager = true) {
     const next = includePager ? required('[aria-label="Next page"]') : null;
     const player = includePager ? required('[data-slot="player-dock"]') : null;
     const titleStyle = getComputedStyle(title);
-    const countStyle = getComputedStyle(count);
     const countSeparatorStyle = getComputedStyle(count, '::before');
     const titleTextBaseline = baseline(title);
     const countTextBaseline = baseline(count);
@@ -1813,7 +1819,9 @@ test('populated library keeps playlist actions available without repeated onboar
 
   await navigator.getByRole('button', { name: 'Practice', exact: true }).click();
   await page.getByRole('button', { name: 'Add songs' }).click();
+  const addSongsMenu = page.getByRole('menu', { name: 'Add songs' });
   await page.getByRole('menuitem', { name: 'Import files…' }).click();
+  await expect(addSongsMenu).toHaveCount(0);
   await expect(page.locator('[data-slot="track-browser-import-feedback"]')).toHaveText(
     'Import complete: 1 song found in Practice.',
   );
@@ -1832,7 +1840,7 @@ test('populated library keeps playlist actions available without repeated onboar
 
 test('compact playlist source keeps Add, Import, Back, long-name access, and hit targets', async ({
   page,
-}) => {
+}, testInfo) => {
   const playlistName = 'Evening Practice Playlist With A Long Descriptive Name';
   await page.setViewportSize({ width: 640, height: 448 });
   const navigator = page.getByRole('navigation', { name: 'Library' });
@@ -1868,13 +1876,19 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
     expect(headerLayout.label.bottom).toBeLessThanOrEqual(headerLayout.header.bottom);
   }
 
-  await addButton.focus();
-  await page.keyboard.press('Enter');
+  await addButton.click();
   const menu = page.getByRole('menu', { name: 'Add songs' });
   const firstMenuItem = menu.getByRole('menuitem', { name: 'Browse Built-in Songs…' });
   await expect(firstMenuItem).toBeVisible();
+  await page.keyboard.press('ArrowDown');
   await expect(firstMenuItem).toBeFocused();
-  await expectNoSeriousAccessibilityViolations(page);
+  const accessibleMenuTree = await menu.ariaSnapshot();
+  expect(accessibleMenuTree).toContain('menu');
+  expect(accessibleMenuTree).toContain('Browse Built-in Songs');
+  await testInfo.attach('add-songs-menu-accessibility-tree.txt', {
+    body: accessibleMenuTree,
+    contentType: 'text/plain',
+  });
   const menuBounds = await menu.boundingBox();
   expect(menuBounds).not.toBeNull();
   if (menuBounds) {
@@ -1897,8 +1911,32 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
     }
   }
 
+  const forwardOrigin = await beginFocusTraversalTrace(page);
+  await page.keyboard.press('Tab');
+  await expect(menu).toHaveCount(0, { timeout: 1000 });
+  await expectSafeKeyboardFocusDestination(page);
+  const forwardTraversal = await finishFocusTraversalTrace(page, 'Tab', forwardOrigin, true);
+
+  await addButton.click();
+  await page.keyboard.press('ArrowDown');
+  await expect(firstMenuItem).toBeFocused();
+  const backwardOrigin = await beginFocusTraversalTrace(page);
+  await page.keyboard.press('Shift+Tab');
+  await expect(menu).toHaveCount(0, { timeout: 1000 });
+  await expectSafeKeyboardFocusDestination(page);
+  const backwardTraversal = await finishFocusTraversalTrace(
+    page,
+    'Shift+Tab',
+    backwardOrigin,
+    true,
+  );
+  await addButton.click();
+  await page.keyboard.press('ArrowDown');
+  await expect(firstMenuItem).toBeFocused();
+  await expectAddSongsMenuAccessibility(page, testInfo, [forwardTraversal, backwardTraversal]);
+
   await page.keyboard.press('Escape');
-  await expect(menu).toBeHidden();
+  await expect(menu).toHaveCount(0);
   await expect(addButton).toBeFocused();
   await expectNoSeriousAccessibilityViolations(page);
 
@@ -1931,7 +1969,7 @@ test('compact playlist source keeps Add, Import, Back, long-name access, and hit
     };
     return {
       header: box('[data-slot="track-browser-header"]'),
-      back: box('button:has-text("Back to playlist")'),
+      back: box('[data-slot="track-browser-header"] button'),
       source: box('[data-slot="track-browser-header"] h1'),
       count: box('[data-slot="track-browser-count"]'),
     };
@@ -2664,7 +2702,7 @@ test('F3.3 collapsed rail directly lists playlists and scrolls only its playlist
     'Quiet songs',
     ...Array.from(
       { length: 12 },
-      (_, index) => 'Practice set ' + String(index + 9).padStart(2, '0'),
+      (_, index) => `Practice set ${String(index + 9).padStart(2, '0')}`,
     ),
   ];
   const navigator = page.getByRole('navigation', { name: 'Library' });
@@ -2693,7 +2731,7 @@ test('F3.3 collapsed rail directly lists playlists and scrolls only its playlist
   const beforeScroll = await page.evaluate(() => {
     const rect = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector);
-      if (!element) throw new Error('Missing collapsed rail region: ' + selector);
+      if (!element) throw new Error(`Missing collapsed rail region: ${selector}`);
       const box = element.getBoundingClientRect();
       return { x: box.x, y: box.y, width: box.width, height: box.height };
     };
@@ -2813,7 +2851,7 @@ test('F3.4 page indicator opens an inline editor at every multi-page count', asy
   const measurements: Array<Record<string, unknown>> = [];
   for (const total of [106, 500]) {
     await page.setViewportSize({ width: 995, height: 706 });
-    await page.goto('/?mockCatalogCount=' + total);
+    await page.goto(`/?mockCatalogCount=${total}`);
     await expect(page.getByRole('grid', { name: 'Built-in Songs, page 1' })).toBeVisible();
     const pageCount = Math.ceil(total / 100);
     const pager = page.getByRole('navigation', { name: 'Built-in Songs pages' });

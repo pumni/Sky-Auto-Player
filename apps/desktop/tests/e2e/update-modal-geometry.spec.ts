@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, type Locator, test } from '@playwright/test';
 
 const viewports = [
   { width: 1366, height: 768 },

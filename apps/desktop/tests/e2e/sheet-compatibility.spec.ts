@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 
 const evidenceDirectory = resolve(process.cwd(), 'test-results/visual-evidence/issue-567-wp-c');
 

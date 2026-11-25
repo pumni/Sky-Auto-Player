@@ -68,7 +68,7 @@ describe('PlaybackAdmission recovery actions', () => {
     await act(async () => store.getState().prepareSelectedPlayback());
     const playback = store.getState().playback;
     const prepared = playback.prepared;
-    if (!prepared || prepared.admission !== 'confirmation_required') {
+    if (prepared?.admission !== 'confirmation_required') {
       throw new Error('expected a prepared playback requiring confirmation');
     }
     expect(prepared.decisions.map((decision) => decision.decision)).toEqual(['proceed', 'dry_run']);

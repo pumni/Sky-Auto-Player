@@ -1,14 +1,14 @@
 import { Download, RefreshCw, Settings } from 'lucide-react';
-import { useMemo, type RefObject } from 'react';
-import brandMarkDarkUrl from '../../assets/brand/mark-no-bg.svg';
+import { type RefObject, useMemo } from 'react';
 import brandMarkLightUrl from '../../assets/brand/mark-mono-dark.svg';
+import brandMarkDarkUrl from '../../assets/brand/mark-no-bg.svg';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
-import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { createWindowControls, type WindowControls } from '../../platform/windowControls';
-import { GlobalSearch } from './GlobalSearch';
-import { WindowCaptionControls } from './WindowCaptionControls';
+import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { Button } from '../ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { GlobalSearch } from './GlobalSearch';
+import { WindowCaptionControls } from './WindowCaptionControls';
 
 interface AppTitleBarProps {
   bootstrap: Bootstrap;
@@ -163,7 +163,7 @@ export function AppTitleBar({
               >
                 <Settings size={17} aria-hidden="true" />
               </TooltipTrigger>
-              <TooltipContent side="bottom">Open settings</TooltipContent>
+              <TooltipContent side="bottom">Settings · Ctrl+,</TooltipContent>
             </Tooltip>
           </div>
           <WindowCaptionControls controls={controls} />

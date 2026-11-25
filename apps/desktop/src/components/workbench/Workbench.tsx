@@ -1,34 +1,19 @@
 import {
+  type CSSProperties,
+  type RefObject,
+  type TransitionEventHandler,
   useCallback,
   useEffect,
   useEffectEvent,
   useLayoutEffect,
   useRef,
   useState,
-  type CSSProperties,
-  type RefObject,
-  type TransitionEventHandler,
 } from 'react';
 import type { DesktopStoreHook } from '../../state/store';
 import { LibraryNavigator } from '../library/LibraryNavigator';
 import { TrackBrowser } from '../tracks/TrackBrowser';
 import { UtilityPane } from '../utility/UtilityPane';
 import { ResizableSeparator, type ResizableSeparatorDragResult } from './ResizableSeparator';
-import {
-  MIN_TRACK_BROWSER_WIDTH,
-  getAvailableNavigatorWidth,
-  getNavigatorWidthMax,
-  getUtilityOverlayWidth,
-  getUtilityPresentationMode,
-  getUtilityWidthMax,
-} from './workbenchGeometry';
-import {
-  NAVIGATOR_COLLAPSE_THRESHOLD,
-  NAVIGATOR_EXPAND_THRESHOLD,
-  UTILITY_COLLAPSE_THRESHOLD,
-  UTILITY_EXPAND_THRESHOLD,
-  resolvePaneDrag,
-} from './workbenchDragPolicy';
 import {
   COMPACT_NAVIGATOR_WIDTH,
   COMPACT_UTILITY_WIDTH,
@@ -39,6 +24,21 @@ import {
   useWorkbenchLayout,
 } from './useWorkbenchLayout';
 import { WorkbenchPane } from './WorkbenchPane';
+import {
+  NAVIGATOR_COLLAPSE_THRESHOLD,
+  NAVIGATOR_EXPAND_THRESHOLD,
+  resolvePaneDrag,
+  UTILITY_COLLAPSE_THRESHOLD,
+  UTILITY_EXPAND_THRESHOLD,
+} from './workbenchDragPolicy';
+import {
+  getAvailableNavigatorWidth,
+  getNavigatorWidthMax,
+  getUtilityOverlayWidth,
+  getUtilityPresentationMode,
+  getUtilityWidthMax,
+  MIN_TRACK_BROWSER_WIDTH,
+} from './workbenchGeometry';
 
 interface WorkbenchProps {
   utilityTriggerRef: RefObject<HTMLButtonElement | null>;
@@ -102,14 +102,12 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
   const utility = useStore((store) => store.utility);
   const presentationMode = getUtilityPresentationMode(viewportWidth, utility.open);
   const utilityDocked = presentationMode === 'docked';
-  const [utilityMounted, setUtilityMounted] = useState(utility.open);
   const [utilityOverlayMounted, setUtilityOverlayMounted] = useState(
     utility.open && presentationMode === 'overlay',
   );
   useEffect(() => {
     return useStore.subscribe((state, previous) => {
       if (!previous.utility.open && state.utility.open) {
-        setUtilityMounted(true);
         setUtilityOverlayMounted(false);
         return;
       }
@@ -117,15 +115,13 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
         const shouldAnimateExit =
           presentationMode === 'overlay' &&
           !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-        setUtilityMounted(shouldAnimateExit);
         setUtilityOverlayMounted(shouldAnimateExit);
       }
     });
   }, [presentationMode, useStore]);
   const utilityOverlayPresented =
     presentationMode === 'overlay' || (!utility.open && utilityOverlayMounted);
-  const shouldRenderUtility =
-    utility.open || (utilityMounted && utilityOverlayPresented && utilityOverlayMounted);
+  const shouldRenderUtility = utility.open || (!utility.open && utilityOverlayMounted);
   const utilityOverlayWidth = getUtilityOverlayWidth(viewportWidth);
   const layout = useWorkbenchLayout(viewportWidth, utilityDocked, viewport.revision);
   const previousUtilityOpenRef = useRef(utility.open);
@@ -133,7 +129,6 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
 
   const finishUtilityExit = useCallback(() => {
     if (useStore.getState().utility.open || !utilityOverlayMounted) return;
-    setUtilityMounted(false);
     setUtilityOverlayMounted(false);
   }, [utilityOverlayMounted, useStore]);
   const handleUtilityTransitionEnd: TransitionEventHandler<HTMLDivElement> = (event) => {

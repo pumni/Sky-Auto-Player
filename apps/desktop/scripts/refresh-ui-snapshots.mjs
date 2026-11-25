@@ -61,7 +61,7 @@ if (run.status !== 0) throw new Error('Visual capture failed; canonical images w
 for (const file of Object.values(screenshots)) {
   const bytes = await readFile(resolve(captureDir, file));
   if (bytes.length < 24 || bytes.subarray(0, 8).toString('hex') !== '89504e470d0a1a0a') {
-    throw new Error('Invalid PNG capture: ' + file);
+    throw new Error(`Invalid PNG capture: ${file}`);
   }
 }
 await mkdir(destination, { recursive: true });
@@ -84,7 +84,5 @@ const manifest = {
     'diagnostics.png': 'Runtime diagnostics, dry run without physical keyboard input, 1366x768',
   },
 };
-await writeFile(resolve(destination, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
-console.log(
-  'Updated canonical UI screenshots at ' + sha + ': ' + Object.keys(screenshots).join(', '),
-);
+await writeFile(resolve(destination, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+console.log(`Updated canonical UI screenshots at ${sha}: ${Object.keys(screenshots).join(', ')}`);

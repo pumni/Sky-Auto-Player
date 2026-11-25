@@ -95,7 +95,12 @@ describe('PlayerTools playback modes and profile', () => {
       screen.getByRole('button', { name: 'Configure playback profile' }).click(),
     );
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
-    expect(within(dialog).getByText('Calculated timing')).toBeVisible();
+    const advancedTiming = within(dialog).getByText('Advanced timing');
+    expect(advancedTiming.closest('details')).not.toHaveAttribute('open');
+    expect(within(dialog).getByLabelText('FPS')).not.toBeVisible();
+    await act(async () => advancedTiming.closest('summary')?.click());
+    expect(within(dialog).getByLabelText('FPS')).toBeVisible();
+    expect(within(dialog).getByText('Calculated target hold')).toBeVisible();
     expect(within(dialog).getByText('Safe preview')).toBeVisible();
     expect(
       within(dialog).getByText(

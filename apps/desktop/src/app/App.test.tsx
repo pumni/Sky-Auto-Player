@@ -11,48 +11,55 @@ import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DesktopBridge, UiEvent } from '../bridge/DesktopBridge';
 import { createMockBridge } from '../bridge/mockBridge';
+import { STARTUP_WINDOW_REVEAL_FALLBACK_MS } from '../platform/startupWindowReveal';
 import { createDesktopStore, type DesktopStoreHook } from '../state/store';
 import { App } from './App';
 import { usePackagedSmokeTest } from './usePackagedSmokeTest';
-import { STARTUP_WINDOW_REVEAL_FALLBACK_MS } from '../platform/startupWindowReveal';
 
-const { isTauriRuntimeMock, nativeWindow, acknowledgeStartupReveal } = vi.hoisted(() => {
-  const themeListeners = new Set<(event: { payload: 'light' | 'dark' }) => void>();
-  const subscribeTheme = (listener: (event: { payload: 'light' | 'dark' }) => void) => {
-    themeListeners.add(listener);
-    return () => themeListeners.delete(listener);
-  };
-  const nativeWindow = {
-    show: vi.fn(async () => {}),
-    minimize: vi.fn(async () => {}),
-    toggleMaximize: vi.fn(async () => {}),
-    close: vi.fn(async () => {}),
-    isMaximized: vi.fn(async () => false),
-    onResized: vi.fn(async () => () => {}),
-    theme: vi.fn(async (): Promise<'light' | 'dark'> => 'dark'),
-    onThemeChanged: vi.fn(async (listener: (event: { payload: 'light' | 'dark' }) => void) =>
-      subscribeTheme(listener),
-    ),
-    emitTheme(payload: 'light' | 'dark') {
-      for (const listener of themeListeners) listener({ payload });
-    },
-    clearThemeListeners() {
-      themeListeners.clear();
-    },
-    activeThemeListenerCount() {
-      return themeListeners.size;
-    },
-    subscribeTheme,
-  };
-  return {
-    isTauriRuntimeMock: vi.fn(() => false),
-    nativeWindow,
-    acknowledgeStartupReveal: vi.fn(async () => undefined),
-  };
-});
+const { isTauriRuntimeMock, nativeWindow, acknowledgeStartupReveal, telemetryChannel } = vi.hoisted(
+  () => {
+    const themeListeners = new Set<(event: { payload: 'light' | 'dark' }) => void>();
+    const subscribeTheme = (listener: (event: { payload: 'light' | 'dark' }) => void) => {
+      themeListeners.add(listener);
+      return () => themeListeners.delete(listener);
+    };
+    const nativeWindow = {
+      show: vi.fn(async () => {}),
+      minimize: vi.fn(async () => {}),
+      toggleMaximize: vi.fn(async () => {}),
+      close: vi.fn(async () => {}),
+      isMaximized: vi.fn(async () => false),
+      onResized: vi.fn(async () => () => {}),
+      theme: vi.fn(async (): Promise<'light' | 'dark'> => 'dark'),
+      onThemeChanged: vi.fn(async (listener: (event: { payload: 'light' | 'dark' }) => void) =>
+        subscribeTheme(listener),
+      ),
+      emitTheme(payload: 'light' | 'dark') {
+        for (const listener of themeListeners) listener({ payload });
+      },
+      clearThemeListeners() {
+        themeListeners.clear();
+      },
+      activeThemeListenerCount() {
+        return themeListeners.size;
+      },
+      subscribeTheme,
+    };
+    class TelemetryChannel {}
+    return {
+      isTauriRuntimeMock: vi.fn(() => false),
+      nativeWindow,
+      acknowledgeStartupReveal: vi.fn(async (..._args: unknown[]) => undefined),
+      telemetryChannel: TelemetryChannel,
+    };
+  },
+);
 
 vi.mock('../platform/runtime', () => ({ isTauriRuntime: isTauriRuntimeMock }));
-vi.mock('@tauri-apps/api/core', () => ({ invoke: acknowledgeStartupReveal }));
+vi.mock('@tauri-apps/api/core', () => ({
+  Channel: telemetryChannel,
+  invoke: acknowledgeStartupReveal,
+}));
 vi.mock('@tauri-apps/api/window', () => ({ getCurrentWindow: () => nativeWindow }));
 
 let matchMediaDescriptor: PropertyDescriptor | undefined;
@@ -157,6 +164,8 @@ function authorizeGuiSmoke(bridge: DesktopBridge) {
 describe('desktop application shell', () => {
   afterEach(() => {
     delete (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__;
+    delete (window as Window & { __SKY_STARTUP_TELEMETRY_ENABLED__?: boolean })
+      .__SKY_STARTUP_TELEMETRY_ENABLED__;
     Reflect.deleteProperty(window, '__SKY_STARTUP_WINDOW_REVEAL_COORDINATOR__');
     cleanup();
     vi.useRealTimers();
@@ -207,6 +216,13 @@ describe('desktop application shell', () => {
       expect(screen.getByRole('region', { name: 'Utility: Song Details' })).toBeInTheDocument(),
     );
     expect(screen.getByText('Medium timing risk')).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Readiness' })).toHaveAttribute(
+      'data-readiness',
+      'review',
+    );
+    expect(screen.getByRole('region', { name: 'Readiness' })).toHaveTextContent(
+      'Check the timing risk guidance below before starting playback.',
+    );
 
     const settingsButton = screen.getByRole('button', { name: 'Open settings' });
     settingsButton.focus();
@@ -279,6 +295,53 @@ describe('desktop application shell', () => {
 
     expect(event.defaultPrevented).toBe(false);
     expect(document.activeElement).toBe(search);
+  });
+
+  it('opens Settings and toggles the Inspector from documented shortcuts', async () => {
+    render(<App bridge={createMockBridge()} />);
+    await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
+
+    fireEvent.keyDown(window, { key: ',', ctrlKey: true });
+    expect(await screen.findByRole('dialog', { name: 'Settings' })).toBeVisible();
+    fireEvent.keyDown(window, { key: 'i', ctrlKey: true });
+    expect(document.querySelector('[aria-label="Open utility panel"]')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Close settings' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Settings' })).toBeNull());
+
+    fireEvent.keyDown(window, { key: 'i', ctrlKey: true });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Close utility panel' })).toHaveAttribute(
+        'aria-expanded',
+        'true',
+      ),
+    );
+  });
+
+  it('keeps Ctrl+I and Ctrl+, from hijacking an editable field or modal', async () => {
+    render(<App bridge={createMockBridge()} />);
+    const search = await screen.findByRole('searchbox');
+    search.focus();
+    const inspectorEvent = createEvent.keyDown(search, { key: 'i', ctrlKey: true });
+    search.dispatchEvent(inspectorEvent);
+    expect(inspectorEvent.defaultPrevented).toBe(false);
+    expect(document.querySelector('[aria-label="Open utility panel"]')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+
+    search.blur();
+    fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
+    await screen.findByRole('dialog', { name: 'Settings' });
+    fireEvent.keyDown(window, { key: 'i', ctrlKey: true });
+    fireEvent.keyDown(window, { key: ',', ctrlKey: true });
+    expect(document.querySelector('[aria-label="Open utility panel"]')).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    );
+    expect(screen.getAllByRole('dialog', { name: 'Settings' })).toHaveLength(1);
   });
 
   it('filters library rows from global search input', async () => {
@@ -631,6 +694,61 @@ describe('desktop application shell', () => {
 
     expect(patchSettings).toHaveBeenCalledTimes(2);
     expect(setDiagnosticsEnabled).toHaveBeenCalledTimes(2);
+  });
+
+  it('flushes the catalog readiness marker before packaged smoke shutdown', async () => {
+    isTauriRuntimeMock.mockReturnValue(true);
+    (
+      window as Window & { __SKY_STARTUP_TELEMETRY_ENABLED__?: boolean }
+    ).__SKY_STARTUP_TELEMETRY_ENABLED__ = true;
+    (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ = true;
+    const telemetryStarted = deferred<void>();
+    const telemetryRelease = deferred<void>();
+    acknowledgeStartupReveal.mockImplementation(async (...args) => {
+      const [command, request] = args;
+      const marker =
+        typeof request === 'object' && request !== null && 'params' in request
+          ? (request as { params?: { marker?: unknown } }).params?.marker
+          : undefined;
+      if (command === 'subscribe_ui_events' && marker === 'react.catalog_ready') {
+        telemetryStarted.resolve();
+        await telemetryRelease.promise;
+      }
+    });
+
+    const bridge = createMockBridge();
+    authorizeGuiSmoke(bridge);
+    const searchSongs = vi.spyOn(bridge, 'searchSongs');
+    const shutdown = vi.spyOn(bridge, 'shutdown');
+    render(
+      <StrictMode>
+        <App bridge={bridge} />
+      </StrictMode>,
+    );
+
+    await telemetryStarted.promise;
+    expect(shutdown).not.toHaveBeenCalled();
+    telemetryRelease.resolve();
+    await waitFor(() => expect(shutdown).toHaveBeenCalledTimes(1), { timeout: 5_000 });
+
+    const catalogReadyCalls = acknowledgeStartupReveal.mock.calls.filter(([command, request]) => {
+      if (command !== 'subscribe_ui_events' || typeof request !== 'object' || request === null) {
+        return false;
+      }
+      return (
+        'params' in request &&
+        (request as { params?: { marker?: unknown } }).params?.marker === 'react.catalog_ready'
+      );
+    });
+    expect(catalogReadyCalls).toHaveLength(1);
+    const smokeSearch = searchSongs.mock.calls.find(([request]) => request.limit === 200);
+    expect(smokeSearch?.[0]).toMatchObject({
+      query: '',
+      offset: 0,
+      limit: 200,
+      source: { kind: 'smart', id: 'all' },
+    });
+    expect(smokeSearch?.[0]).not.toHaveProperty('generation');
   });
 
   it('native-authorized App starts from a post-mount event and stays one-shot', async () => {

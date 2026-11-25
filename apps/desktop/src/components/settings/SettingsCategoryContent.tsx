@@ -1,8 +1,8 @@
 import { RefreshCw } from 'lucide-react';
 import { useId } from 'react';
-import appIcon40 from '../../assets/brand/app-icon-40.png';
 import { resolveAppearance } from '../../appearance/resolveAppearance';
 import { useSystemAppearance } from '../../appearance/useSystemAppearance';
+import appIcon40 from '../../assets/brand/app-icon-40.png';
 import type {
   AppearanceMode,
   Bootstrap,
@@ -10,16 +10,16 @@ import type {
   SettingsPatch,
 } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { Button } from '../ui/button';
 import {
   formatFpsFrameHint,
   formatHoldFramesHint,
   formatTempoHint,
 } from '../ui/playbackOptionFormatting';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { AutoPlaySwitch } from './AutoPlaySwitch';
 import { DonateSettings } from './DonateSettings';
 import { TimingMarginControl } from './TimingMarginControl';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
-import { Button } from '../ui/button';
 
 export type SettingsCategory =
   | 'playback'
@@ -366,27 +366,50 @@ export function SettingsCategoryContent({
             )}
           </div>
           <div
-            className={`flex w-full max-w-[360px] items-center justify-between gap-3 rounded-control border border-border px-3 py-2.5 ${darkPaletteStandby ? 'bg-card' : 'bg-surface'}`}
-            aria-hidden="true"
+            data-slot="appearance-preview"
+            data-effective-mode={effectiveAppearance.colorMode}
+            role="img"
+            aria-label={`${darkPaletteStandby ? 'Light appearance active; previewing' : 'Dark appearance active'}: ${activePaletteMeta.label}`}
+            className="w-full max-w-[360px] overflow-hidden rounded-pane border border-border"
           >
-            <div className="grid min-w-0 gap-0.5">
-              <span className="text-xs font-semibold text-foreground">
-                {activePaletteMeta.label}
-              </span>
-              <span className="text-[11px] text-text-secondary">
-                {darkPaletteStandby ? 'Standby · Light active' : 'Active Dark surface tokens'}
-              </span>
+            <div
+              className="flex h-7 items-center gap-1.5 border-b border-foreground/10 px-2"
+              style={{ backgroundColor: activePaletteMeta.swatches[1] }}
+            >
+              <span
+                className="size-2 rounded-full"
+                style={{ backgroundColor: activePaletteMeta.swatches[3] }}
+              />
+              <span
+                className="h-1.5 w-14 rounded-full opacity-70"
+                style={{ backgroundColor: activePaletteMeta.swatches[3] }}
+              />
+              <span
+                className="ml-auto h-1.5 w-8 rounded-full opacity-50"
+                style={{ backgroundColor: activePaletteMeta.swatches[3] }}
+              />
             </div>
             <div
-              className={`flex flex-none items-center gap-1 ${darkPaletteStandby ? 'opacity-75' : ''}`}
+              className="grid grid-cols-[minmax(0,1fr)_68px] gap-2 p-2"
+              style={{ backgroundColor: activePaletteMeta.swatches[0] }}
             >
-              {activePaletteMeta.swatches.map((hex) => (
+              <div
+                className="grid h-10 grid-cols-[1fr_40px] items-center gap-2 rounded-control border border-foreground/10 px-2"
+                style={{ backgroundColor: activePaletteMeta.swatches[1] }}
+              >
                 <span
-                  key={`${activePaletteMeta.id}-${hex}`}
-                  className="size-5 rounded-[5px] border border-foreground/15"
-                  style={{ backgroundColor: hex }}
+                  className="h-1.5 rounded-full opacity-60"
+                  style={{ backgroundColor: activePaletteMeta.swatches[3] }}
                 />
-              ))}
+                <span
+                  className="h-5 rounded-control"
+                  style={{ backgroundColor: activePaletteMeta.swatches[3] }}
+                />
+              </div>
+              <div
+                className="h-10 rounded-control border border-foreground/10"
+                style={{ backgroundColor: activePaletteMeta.swatches[2] }}
+              />
             </div>
           </div>
           <p className="m-0 text-xs leading-relaxed text-text-tertiary">

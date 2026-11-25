@@ -2,8 +2,8 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
-import { SettingsCategoryContent, SETTINGS_CATEGORIES } from './SettingsCategoryContent';
 import type { SettingsCategory } from './SettingsCategoryContent';
+import { SETTINGS_CATEGORIES, SettingsCategoryContent } from './SettingsCategoryContent';
 
 afterEach(cleanup);
 
@@ -78,6 +78,37 @@ describe('SettingsCategoryContent', () => {
     await act(async () => screen.getByRole('option', { name: 'Slate' }).click());
     await waitFor(() => expect(store.getState().settings?.palette).toBe('slate'));
     expect(store.getState().settings?.appearance_mode).toBe('system');
+  });
+
+  it('previews the saved dark palette and labels the effective color mode', async () => {
+    const { store, bootstrap, settings } = await initializedStore();
+    const { rerender } = render(
+      <SettingsCategoryContent
+        category="appearance"
+        bootstrap={bootstrap}
+        settings={settings}
+        useStore={store}
+      />,
+    );
+
+    const darkPreview = screen.getByRole('img', {
+      name: 'Dark appearance active: Graphite (Default)',
+    });
+    expect(darkPreview).toHaveAttribute('data-effective-mode', 'dark');
+
+    rerender(
+      <SettingsCategoryContent
+        category="appearance"
+        bootstrap={bootstrap}
+        settings={{ ...settings, appearance_mode: 'light' }}
+        useStore={store}
+      />,
+    );
+    expect(
+      screen.getByRole('img', {
+        name: 'Light appearance active; previewing: Graphite (Default)',
+      }),
+    ).toHaveAttribute('data-effective-mode', 'light');
   });
 
   it('keeps theme choice independent from the saved dark palette', async () => {

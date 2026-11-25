@@ -1,11 +1,11 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Profiler } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createMockBridge } from '../../bridge/mockBridge';
 import type { SongRow } from '../../bridge/DesktopBridge';
+import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore, selectRowAtIndex } from '../../state/store';
 import { TrackBrowser } from './TrackBrowser';
-import { TrackRow, VirtualTrackRow, formatDuration } from './TrackRow';
+import { formatDuration, TrackRow, VirtualTrackRow } from './TrackRow';
 import { TrackTable } from './TrackTable';
 import { formatSongCount } from './trackFormatting';
 
@@ -414,13 +414,11 @@ describe('Track Browser primitives', () => {
     };
 
     render(
-      <>
-        {[0, 1, 2].map((index) => (
-          <Profiler key={index} id={String(index)} onRender={onRender}>
-            <VirtualTrackRow index={index} start={index * 46} useStore={store} />
-          </Profiler>
-        ))}
-      </>,
+      [0, 1, 2].map((index) => (
+        <Profiler key={index} id={String(index)} onRender={onRender}>
+          <VirtualTrackRow index={index} start={index * 46} useStore={store} />
+        </Profiler>
+      )),
     );
     await act(async () => {
       fireEvent.click(screen.getByRole('row', { name: /Aurora Landing/ }));

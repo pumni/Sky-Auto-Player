@@ -37,7 +37,20 @@ function TabsList({
     <TabsPrimitive.List
       data-slot="tabs-list"
       data-variant={variant}
-      className={cn(tabsListVariants({ variant }), className)}
+      className={cn('relative', tabsListVariants({ variant }), className)}
+      {...props}
+    />
+  );
+}
+
+function TabsIndicator({ className, ...props }: TabsPrimitive.Indicator.Props) {
+  return (
+    <TabsPrimitive.Indicator
+      data-slot="tabs-indicator"
+      className={cn(
+        'pointer-events-none absolute bottom-0 left-[var(--active-tab-left)] z-[1] h-0.5 w-[var(--active-tab-width)] bg-accent-ink transition-[left,width] duration-tab ease-standard motion-reduce:transition-none',
+        className,
+      )}
       {...props}
     />
   );
@@ -68,4 +81,4 @@ function TabsContent({ className, ...props }: TabsPrimitive.Panel.Props) {
   );
 }
 
-export { Tabs, TabsList, TabsTrigger, TabsContent };
+export { Tabs, TabsContent, TabsIndicator, TabsList, TabsTrigger };

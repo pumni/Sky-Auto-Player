@@ -47,6 +47,8 @@ outside controls remain usable. Modal Dialog and Alert Dialog backdrops use the 
 scrim. Overlay entrances and exits transition opacity/scale/translate through Base UI's lifecycle;
 the custom compact Inspector becomes inert and `aria-hidden` while its exit transition completes.
 Reduced-motion mode removes overlay movement and the Inspector unmounts without a timer.
+`Ctrl+I` toggles the Inspector and `Ctrl+,` opens Settings when no modal is active and focus is
+outside editable controls. Both shortcuts are also shown in their corresponding control tooltips.
 
 `apps/desktop/src/components/settings/SettingsPanel.tsx` retains Settings modal, category navigation,
 and focus ownership; `apps/desktop/src/components/settings/SettingsCategoryContent.tsx` renders the

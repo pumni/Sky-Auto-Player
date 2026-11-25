@@ -1,4 +1,4 @@
-import { recordStartupTelemetry } from '../bridge/startupTelemetry';
+import { recordCatalogReadyStartupTelemetry } from '../bridge/startupTelemetry';
 import type { DesktopStore, LibraryState } from './types';
 import type { LibrarySource } from '../bridge/DesktopBridge';
 import type { LibraryPlaybackCoordinator } from './libraryPlaybackCoordinator';
@@ -31,8 +31,6 @@ export function createLibraryCatalogActions(context: LibraryCatalogContext): Lib
     membershipRevisionFor,
   } = context;
   let catalogReconciliationTail: Promise<void> = Promise.resolve();
-  let catalogReadyRecorded = false;
-
   const syncCatalogGeneration = async (generation: number): Promise<void> => {
     const current = get().library;
     if (generation <= current.generation) return;
@@ -62,10 +60,7 @@ export function createLibraryCatalogActions(context: LibraryCatalogContext): Lib
         const settled = get().library;
         if (settled.error !== null || settled.loading || settled.generation !== requestedGeneration)
           continue;
-        if (!catalogReadyRecorded) {
-          catalogReadyRecorded = true;
-          recordStartupTelemetry('react.catalog_ready');
-        }
+        recordCatalogReadyStartupTelemetry();
         return;
       }
       // A catalog.changed event queues another bounded reconciliation attempt.

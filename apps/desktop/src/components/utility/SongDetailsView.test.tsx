@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Settings } from '../../bridge/DesktopBridge';
 import { createMockBridge } from '../../bridge/mockBridge';
-import { selectRowAtIndex, selectSelectedDetail, createDesktopStore } from '../../state/store';
+import { createDesktopStore, selectRowAtIndex, selectSelectedDetail } from '../../state/store';
 import { SongDetailsView } from './SongDetailsView';
 
 describe('SongDetailsView', () => {

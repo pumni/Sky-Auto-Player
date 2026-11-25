@@ -36,10 +36,10 @@ for (const viewport of [
     await expect(dock.locator('button[aria-label="Configure playback profile"]')).not.toContainText(
       'FPS',
     );
-    expect(await dock.locator('button[aria-label="Configure playback profile"]').innerText()).toBe(
-      '',
-    );
-    expect(await dock.getByRole('button', { name: 'Auto Play' }).innerText()).toBe('');
+    expect(
+      await dock.locator('button[aria-label="Configure playback profile"]').textContent(),
+    ).toBe('');
+    expect(await dock.getByRole('button', { name: 'Auto Play' }).textContent()).toBe('');
 
     const geometry = await page.evaluate(() => {
       const required = (selector: string) => {
@@ -88,30 +88,42 @@ for (const viewport of [
     const profile = page.getByRole('dialog', { name: 'Playback profile' });
     await expect(profile.getByRole('heading', { name: 'Playback profile' })).toBeVisible();
     await expect(profile.getByRole('button', { name: 'Test playback (no input)' })).toBeVisible();
-    await expect(profile.getByText('Calculated timing')).toBeVisible();
+    const advancedTiming = profile.getByText('Advanced timing');
+    await expect(advancedTiming).toBeVisible();
+    await expect(profile.getByLabel('FPS')).toBeHidden();
     await expect(
       profile.getByText(
         'Select a song to enable a dry-run preview. No keyboard input will be sent.',
       ),
     ).toBeVisible();
     const basicControls = await profile
-      .locator('[data-slot="profile-fields"] [data-slot="select-trigger"]')
+      .locator('[data-slot="profile-fields"] > div > [data-slot="select-trigger"]')
       .evaluateAll((selects) =>
         selects.map((select) => {
           const box = select.getBoundingClientRect();
           return { x: box.x, y: box.y, right: box.right, bottom: box.bottom, width: box.width };
         }),
       );
-    expect(basicControls).toHaveLength(3);
+    expect(basicControls).toHaveLength(2);
     expect(
       Math.max(...basicControls.map((box) => box.y)) -
         Math.min(...basicControls.map((box) => box.y)),
     ).toBeLessThanOrEqual(1);
     for (const control of basicControls) expect(control.width).toBeGreaterThanOrEqual(60);
+    await advancedTiming.click();
+    await expect(profile.getByLabel('FPS')).toBeVisible();
+    await expect(profile.getByText('Calculated target hold')).toBeVisible();
     const marginBounds = await profile.locator('[data-slot="timing-margin-control"]').boundingBox();
     expect(marginBounds).not.toBeNull();
-    expect(marginBounds!.y).toBeGreaterThanOrEqual(
-      Math.max(...basicControls.map((box) => box.bottom)) + 4,
+    const advancedBounds = await profile.locator('details[open]').boundingBox();
+    expect(advancedBounds).not.toBeNull();
+    expect(marginBounds!.x).toBeGreaterThanOrEqual(advancedBounds!.x);
+    expect(marginBounds!.x + marginBounds!.width).toBeLessThanOrEqual(
+      advancedBounds!.x + advancedBounds!.width,
+    );
+    expect(marginBounds!.y).toBeGreaterThanOrEqual(advancedBounds!.y);
+    expect(marginBounds!.y + marginBounds!.height).toBeLessThanOrEqual(
+      advancedBounds!.y + advancedBounds!.height,
     );
     const popoverBounds = await page
       .locator('[role="dialog"][aria-label="Playback profile"]')

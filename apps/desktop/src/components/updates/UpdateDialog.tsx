@@ -1,6 +1,6 @@
 import { AlertCircle, ArrowDownToLine, Check, LoaderCircle, Sparkles, X } from 'lucide-react';
-import type { DesktopStoreHook } from '../../state/store';
 import type { UpdateErrorCode, UpdateRetryAction } from '../../bridge/DesktopBridge';
+import type { DesktopStoreHook } from '../../state/store';
 import { formatUpdateError } from '../../state/updateHelpers';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
@@ -38,9 +38,10 @@ function getErrorHeading(
 
 interface UpdateDialogProps {
   useStore: DesktopStoreHook;
+  onCloseComplete?: () => void;
 }
 
-export function UpdateDialog({ useStore }: UpdateDialogProps) {
+export function UpdateDialog({ useStore, onCloseComplete }: UpdateDialogProps) {
   const update = useStore((store) => store.update);
   const close = useStore((store) => store.setUpdateDialogOpen);
   const check = useStore((store) => store.checkForUpdate);
@@ -73,6 +74,9 @@ export function UpdateDialog({ useStore }: UpdateDialogProps) {
       open={update.dialogOpen}
       onOpenChange={(open) => {
         if (!open && !busy) close(false);
+      }}
+      onOpenChangeComplete={(open) => {
+        if (!open) onCloseComplete?.();
       }}
     >
       <DialogContent

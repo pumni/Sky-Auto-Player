@@ -14,7 +14,7 @@ test('fresh System mode follows the OS while manual mode and dark palette stay i
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
   const theme = settings.getByLabel('Theme');
-  const palette = settings.getByLabel('Dark palette');
+  const palette = settings.getByRole('combobox', { name: 'Dark palette' });
 
   await expect(theme).toContainText('Follow Windows (recommended)');
   await expect(palette).toContainText('Graphite (Default)');

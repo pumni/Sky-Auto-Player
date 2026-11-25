@@ -1,11 +1,13 @@
-import { useEffect, useId, useRef, useState } from 'react';
 import { MousePointer2 } from 'lucide-react';
-import type { DesktopStore, DesktopStoreHook } from '../../state/store';
-import { selectSelectedDetail, selectSongById } from '../../state/store';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { SheetConversionMode, SheetPitch, SongRow } from '../../bridge/DesktopBridge';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { selectSelectedDetail, selectSongById } from '../../state/store';
 import { Button } from '../ui/button';
+import { StatusBadge } from '../ui/StatusBadge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
+import { resolveInspectorReadiness } from './inspectorReadiness';
 
 interface SongDetailsViewProps {
   useStore: DesktopStoreHook;
@@ -91,6 +93,13 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
   const summary = metadataSummary(selectedRow);
   const isPending = detail.state === 'loading' || !song;
   const detailError = detail.state === 'fatal' ? detail.error : null;
+  const readiness = resolveInspectorReadiness({
+    pending: detail.state === 'loading' || (!song && detail.state !== 'fatal'),
+    detailUnavailable: detailError !== null,
+    sheetReadiness: sheet?.readiness ?? null,
+    conversionConfirmed: sheet?.confirmation_received ?? false,
+    riskLevel: song?.risk.level ?? null,
+  });
   const showRiskGuidance =
     isPending ||
     detailError !== null ||
@@ -169,10 +178,43 @@ export function SongDetailsView({ useStore }: SongDetailsViewProps) {
         <p className="m-0 mt-1 text-xs text-text-secondary">{summary}</p>
       </div>
 
+      <section
+        data-slot="inspector-readiness"
+        data-readiness={readiness.state}
+        className="grid min-w-0 gap-1.5 border-b border-border pb-3"
+        aria-labelledby="inspector-readiness-title"
+        aria-busy={readiness.state === 'pending'}
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <h4
+            id="inspector-readiness-title"
+            className="m-0 text-sm font-semibold leading-5 text-foreground"
+          >
+            Readiness
+          </h4>
+          <StatusBadge
+            tone={
+              readiness.state === 'blocked'
+                ? 'danger'
+                : readiness.state === 'review'
+                  ? 'warning'
+                  : 'neutral'
+            }
+          >
+            {readiness.label}
+          </StatusBadge>
+        </div>
+        <p className="m-0 break-words text-xs leading-[1.45] text-text-secondary">
+          {readiness.detail}
+        </p>
+      </section>
+
       {sheet && (
         <section className="grid min-w-0 gap-2" aria-labelledby="sheet-analysis-title">
           <h4
-            className="mb-0 text-[13px] font-semibold text-text-secondary"
+            className="mb-0 text-sm font-semibold leading-5 text-text-secondary"
             id="sheet-analysis-title"
           >
             Sheet compatibility

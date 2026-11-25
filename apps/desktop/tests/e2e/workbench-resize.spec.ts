@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import { MIN_TRACK_BROWSER_WIDTH } from '../../src/components/workbench/workbenchGeometry';
 
 const key = 'sky.ui.workbench.v5';

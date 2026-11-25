@@ -2,9 +2,9 @@ import { ArrowLeft } from 'lucide-react';
 import { useRef, useState } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { Button } from '../ui/button';
+import { BuiltinPager } from './BuiltinPager';
 import { PlaylistAddSongsMenu, type PlaylistImportFeedback } from './PlaylistAddSongsMenu';
 import { TrackTable, type TrackTableHandle } from './TrackTable';
-import { BuiltinPager } from './BuiltinPager';
 import { formatSongCount } from './trackFormatting';
 
 interface TrackBrowserProps {
@@ -138,7 +138,7 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
           {isPlaylistAddMode && (
             <Button
               variant="outline"
-              className="h-8 flex-none whitespace-nowrap"
+              className="h-8 flex-none self-center whitespace-nowrap"
               onClick={() => void exitPlaylistAdd()}
             >
               <ArrowLeft size={14} aria-hidden="true" />
@@ -147,7 +147,7 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
           )}
           <div className="inline-flex min-w-0 max-w-full flex-[0_1_auto] items-center rounded-control pl-1.5">
             <h1
-              className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold leading-5 text-foreground @max-[1040px]:relative @max-[1040px]:top-[0.25px] @max-[1040px]:text-[13px] @max-[1040px]:leading-[1.4]"
+              className="min-w-0 overflow-hidden pb-1.5 text-ellipsis whitespace-nowrap text-xl font-semibold leading-7 tracking-tight text-foreground @max-[1040px]:text-base @max-[1040px]:leading-6"
               id="track-browser-title"
               title={heading}
             >

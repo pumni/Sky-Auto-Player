@@ -1,12 +1,12 @@
 import { Check, ChevronLeft, ChevronRight, LocateFixed } from 'lucide-react';
 import {
+  type FocusEvent,
+  type KeyboardEvent,
+  type RefObject,
   useEffect,
   useId,
   useRef,
   useState,
-  type FocusEvent,
-  type KeyboardEvent,
-  type RefObject,
 } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { LIBRARY_PAGE_SIZE } from '../../state/store';
@@ -46,9 +46,10 @@ function BuiltinPagerNavigation({
   }, [editing]);
 
   const pageDigits = String(pageCount).length;
-  // Reserve both tabular digit groups plus three ch for the spaced slash.
-  const indicatorCharacters = pageDigits * 2 + 3;
-  const indicatorWidth = `max(36px, ${indicatorCharacters}ch)`;
+  // Reserve tabular digits plus the spaced slash. The zero glyph's ch width is
+  // wider than the actual page label in several host fonts, which centered an
+  // over-wide control and broke its visual spacing on Linux.
+  const indicatorWidth = `max(36px, calc(${pageDigits * 1.1 + 0.6}em + 12px))`;
   const pagerWidth = `calc(${indicatorWidth} + 72px)`;
 
   const focusTrigger = () => {
@@ -237,7 +238,7 @@ function BuiltinPagerNavigation({
               variant="ghost"
               size="sm"
               ref={triggerRef}
-              className="h-8 w-full min-w-0 bg-transparent px-1.5 py-1 text-[11px] tabular-nums text-foreground hover:bg-control-hover"
+              className="h-8 w-full min-w-0 bg-transparent px-1 py-1 text-[11px] tabular-nums text-foreground hover:bg-control-hover"
               data-page-jump="true"
               data-slot="builtin-pager-jump-trigger"
               type="button"

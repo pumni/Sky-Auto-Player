@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, type Locator, test } from '@playwright/test';
 import { expectNoSeriousAccessibilityViolations } from './testHelpers';
 
 test.beforeEach(async ({ page }) => {
@@ -41,9 +41,12 @@ test('Playback Profile works through the narrow popover with focus restore', asy
   await expect(popover.getByRole('switch', { name: 'Auto Play' })).toHaveCount(0);
   await expect(popover.getByLabel('Hold')).toBeVisible();
   await expect(popover.getByLabel('Tempo')).toBeVisible();
+  const advancedTiming = popover.getByText('Advanced timing');
+  await expect(advancedTiming).toBeVisible();
+  await expect(popover.getByLabel('FPS')).toBeHidden();
+  await advancedTiming.click();
   await expect(popover.getByLabel('FPS')).toBeVisible();
-  await popover.getByText('Calculated timing').click();
-  await expect(popover.locator('details dt')).toHaveText(['Target hold']);
+  await expect(popover.locator('details dt')).toHaveText(['Calculated target hold']);
   await expect(popover.locator('[data-slot="timing-margin-control"]')).toContainText(
     'Timing Margin',
   );

@@ -17,14 +17,12 @@ const buttonVariants = cva(
           'hover:bg-accent hover:text-accent-foreground active:bg-control-pressed aria-expanded:bg-accent',
         destructive:
           'bg-destructive text-destructive-foreground hover:bg-destructive-hover active:bg-destructive-pressed',
-        link: 'text-primary underline-offset-4 hover:underline',
       },
       size: {
         default:
           'h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pr-2 has-data-[icon=inline-start]:pl-2',
         xs: "h-6 gap-1 rounded-control px-2 text-xs [&_svg:not([class*='size-'])]:size-3",
         sm: 'h-8 gap-1 px-2.5 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5',
-        lg: 'h-11 gap-1.5 px-3',
         icon: 'size-9',
         'icon-xs': "size-6 rounded-control [&_svg:not([class*='size-'])]:size-3",
         'icon-sm': 'size-8 rounded-control',

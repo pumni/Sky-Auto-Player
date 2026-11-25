@@ -2,20 +2,20 @@ import {
   Activity,
   Heart,
   Info,
+  type LucideIcon,
   Palette,
   RefreshCw,
   SlidersHorizontal,
   X,
-  type LucideIcon,
 } from 'lucide-react';
-import { useState, type ReactNode } from 'react';
+import { useState } from 'react';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
-import type { DesktopStore as StoreState, DesktopStoreHook } from '../../state/store';
-import { SETTINGS_CATEGORIES, SettingsCategoryContent } from './SettingsCategoryContent';
-import type { SettingsCategory } from './SettingsCategoryContent';
+import type { DesktopStoreHook, DesktopStore as StoreState } from '../../state/store';
 import { Button } from '../ui/button';
 import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
+import type { SettingsCategory } from './SettingsCategoryContent';
+import { SETTINGS_CATEGORIES, SettingsCategoryContent } from './SettingsCategoryContent';
 
 const CATEGORY_ICONS: Record<SettingsCategory, LucideIcon> = {
   playback: SlidersHorizontal,
@@ -30,15 +30,9 @@ interface SettingsPanelProps {
   bootstrap: Bootstrap;
   useStore: DesktopStoreHook;
   onUpdateDialogOpen?: () => void;
-  updateDialog?: ReactNode;
 }
 
-export function SettingsPanel({
-  bootstrap,
-  useStore,
-  onUpdateDialogOpen,
-  updateDialog,
-}: SettingsPanelProps) {
+export function SettingsPanel({ bootstrap, useStore, onUpdateDialogOpen }: SettingsPanelProps) {
   const settings = useStore((store: StoreState) => store.settings);
   const settingsError = useStore((store: StoreState) => store.settingsError);
   const open = useStore((store: StoreState) => store.settingsOpen);
@@ -133,7 +127,6 @@ export function SettingsPanel({
             <span aria-hidden="true" />
           )}
         </div>
-        {updateDialog}
       </DialogContent>
     </Dialog>
   );

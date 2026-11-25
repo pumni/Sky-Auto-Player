@@ -1,5 +1,12 @@
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 import AxeBuilder from '@axe-core/playwright';
-import { expect, type Locator, type Page } from '@playwright/test';
+import { expect, type Locator, type Page, type TestInfo } from '@playwright/test';
+import {
+  classifyBaseUiFocusGuardFinding,
+  type FocusGuardSelectorEvidence,
+  type FocusTraversalEvidence,
+} from '../../src/testing/baseUiFocusGuardAdjudication';
 
 export const palettes = [
   'graphite',
@@ -26,11 +33,417 @@ export async function expectNoSeriousAccessibilityViolations(page: Page) {
   ).toEqual([]);
 }
 
+interface AxeRelatedNode {
+  target?: unknown;
+}
+
+interface AxeResultNode {
+  target?: unknown;
+  all?: Array<{ relatedNodes?: AxeRelatedNode[] }>;
+  any?: Array<{ relatedNodes?: AxeRelatedNode[] }>;
+  none?: Array<{ relatedNodes?: AxeRelatedNode[] }>;
+}
+
+interface AxeViolation {
+  id: string;
+  impact: string | null;
+  nodes: AxeResultNode[];
+}
+
+function axeSelectors(target: unknown): string[] {
+  if (!Array.isArray(target)) return [];
+  return target.filter((selector): selector is string => typeof selector === 'string');
+}
+
+function selectorsForViolation(violation: AxeViolation): string[] {
+  const selectors: string[] = [];
+  for (const node of violation.nodes) {
+    selectors.push(...axeSelectors(node.target));
+    for (const checks of [node.all, node.any, node.none]) {
+      for (const check of checks ?? []) {
+        for (const related of check.relatedNodes ?? []) {
+          selectors.push(...axeSelectors(related.target));
+        }
+      }
+    }
+  }
+  return [...new Set(selectors)];
+}
+
+async function readFocusGuardSelectorEvidence(
+  page: Page,
+  selector: string,
+): Promise<FocusGuardSelectorEvidence> {
+  const locator = page.locator(selector);
+  const matchCount = await locator.count().catch(() => 0);
+  if (matchCount !== 1) return { selector, matchCount, placement: null, shape: null };
+  const shape = await locator.evaluate((node) => {
+    const element = node as HTMLElement;
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const hiddenAncestor = (() => {
+      for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+        const ancestorStyle = getComputedStyle(ancestor);
+        if (
+          ancestor.hidden ||
+          ancestor.inert ||
+          ancestor.getAttribute('aria-hidden') === 'true' ||
+          ancestorStyle.display === 'none' ||
+          ancestorStyle.visibility === 'hidden'
+        ) {
+          return true;
+        }
+      }
+      return false;
+    })();
+    const interactiveDescendants = element.querySelectorAll(
+      'a[href],button,input,select,textarea,[tabindex]:not([tabindex="-1"]),[contenteditable="true"],[role="button"],[role="link"],[role="menuitem"]',
+    );
+    const menu = document.querySelector('[role="menu"][aria-label="Add songs"]');
+    const trigger = document.querySelector('[data-slot="playlist-add-songs-button"]');
+    const placement = menu?.contains(element)
+      ? 'add-songs-menu'
+      : menu?.parentElement === element.parentElement && element.dataset.type === 'inside'
+        ? 'add-songs-menu'
+        : trigger?.parentElement === element.parentElement
+          ? 'add-songs-trigger'
+          : null;
+    const ancestors: string[] = [];
+    for (
+      let ancestor: HTMLElement | null = element.parentElement;
+      ancestor;
+      ancestor = ancestor.parentElement
+    ) {
+      ancestors.push(
+        `${ancestor.tagName.toLowerCase()}${ancestor.id ? `#${ancestor.id}` : ''}${ancestor.dataset.slot ? `[data-slot="${ancestor.dataset.slot}"]` : ''}${ancestor.getAttribute('role') ? `[role="${ancestor.getAttribute('role')}"]` : ''}`,
+      );
+      if (ancestor === document.body) break;
+    }
+    return {
+      placement,
+      context: {
+        dataType: element.getAttribute('data-type'),
+        sameTriggerParent: trigger?.parentElement === element.parentElement,
+        insideAddSongsMenu: menu?.contains(element) ?? false,
+        addSongsMenuOpen: menu !== null,
+        triggerSlotPresent: trigger !== null,
+        ancestors,
+      },
+      tagName: element.tagName,
+      marker: element.hasAttribute('data-base-ui-focus-guard'),
+      dataType: element.getAttribute('data-type'),
+      ariaHidden: element.getAttribute('aria-hidden'),
+      tabIndex: element.tabIndex,
+      role: element.getAttribute('role'),
+      text: element.textContent?.trim() ?? '',
+      childElementCount: element.childElementCount,
+      interactiveDescendantCount: interactiveDescendants.length,
+      width: rect.width,
+      height: rect.height,
+      clipPath: style.clipPath,
+      overflow: style.overflow,
+      position: style.position,
+      hiddenAncestor,
+    };
+  });
+  return {
+    selector,
+    matchCount,
+    placement: shape.placement as FocusGuardSelectorEvidence['placement'],
+    shape,
+  };
+}
+
+export async function beginFocusTraversalTrace(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    type TraceEntry = {
+      type: 'focusin' | 'focusout';
+      id: string;
+      timestamp: number;
+      sentinel: boolean;
+    };
+    type TraceWindow = Window & {
+      __wp2FocusTrace?: {
+        ids: WeakMap<Element, string>;
+        nextId: number;
+        entries: TraceEntry[];
+        startedAt: number;
+      };
+    };
+    const traceWindow = window as TraceWindow;
+    let trace = traceWindow.__wp2FocusTrace;
+    if (!trace) {
+      trace = {
+        ids: new WeakMap<Element, string>(),
+        nextId: 0,
+        entries: [],
+        startedAt: 0,
+      };
+      traceWindow.__wp2FocusTrace = trace;
+    }
+    if (!document.documentElement.dataset.wp2FocusTraceInstalled) {
+      const record = (event: FocusEvent) => {
+        if (!(event.target instanceof Element)) return;
+        let id = trace.ids.get(event.target);
+        if (!id) {
+          trace.nextId += 1;
+          id = `focus-${trace.nextId}`;
+          trace.ids.set(event.target, id);
+        }
+        trace.entries.push({
+          type: event.type as 'focusin' | 'focusout',
+          id,
+          timestamp: performance.now(),
+          sentinel: event.target.hasAttribute('data-base-ui-focus-guard'),
+        });
+      };
+      document.addEventListener('focusin', record, true);
+      document.addEventListener('focusout', record, true);
+      document.documentElement.dataset.wp2FocusTraceInstalled = 'true';
+    }
+    trace.entries = [];
+    trace.startedAt = performance.now();
+    const active = document.activeElement;
+    if (!active) return 'no-active-element';
+    let id = trace.ids.get(active);
+    if (!id) {
+      trace.nextId += 1;
+      id = `focus-${trace.nextId}`;
+      trace.ids.set(active, id);
+    }
+    return id;
+  });
+}
+
+export async function finishFocusTraversalTrace(
+  page: Page,
+  key: 'Tab' | 'Shift+Tab',
+  originId: string,
+  menuClosed: boolean,
+): Promise<FocusTraversalEvidence> {
+  return page.evaluate(
+    ({ key, originId, menuClosed }) => {
+      type TraceEntry = {
+        type: 'focusin' | 'focusout';
+        id: string;
+        timestamp: number;
+        sentinel: boolean;
+      };
+      type TraceWindow = Window & {
+        __wp2FocusTrace?: {
+          ids: WeakMap<Element, string>;
+          nextId: number;
+          entries: TraceEntry[];
+          startedAt: number;
+        };
+      };
+      const trace = (window as TraceWindow).__wp2FocusTrace;
+      const active = document.activeElement;
+      if (!trace || !active) {
+        return {
+          key,
+          originId,
+          startedAt: 0,
+          menuClosed,
+          events: [],
+          destination: {
+            id: 'no-active-element',
+            body: true,
+            hidden: true,
+            disabled: true,
+            sentinel: false,
+            visible: false,
+            timestamp: performance.now(),
+          },
+        };
+      }
+      let id = trace.ids.get(active);
+      if (!id) {
+        trace.nextId += 1;
+        id = `focus-${trace.nextId}`;
+        trace.ids.set(active, id);
+      }
+      const element = active instanceof HTMLElement ? active : null;
+      const style = element ? getComputedStyle(element) : null;
+      const hidden = (() => {
+        for (let current = element; current; current = current.parentElement) {
+          const currentStyle = getComputedStyle(current);
+          if (
+            current.hidden ||
+            current.inert ||
+            current.getAttribute('aria-hidden') === 'true' ||
+            currentStyle.display === 'none' ||
+            currentStyle.visibility === 'hidden'
+          ) {
+            return true;
+          }
+        }
+        return false;
+      })();
+      const rect = element?.getBoundingClientRect();
+      const events = trace.entries;
+      return {
+        key,
+        originId,
+        startedAt: trace.startedAt,
+        menuClosed,
+        events,
+        destination: {
+          id,
+          body: active === document.body || active === document.documentElement,
+          hidden,
+          disabled:
+            element instanceof HTMLButtonElement ||
+            element instanceof HTMLInputElement ||
+            element instanceof HTMLSelectElement ||
+            element instanceof HTMLTextAreaElement
+              ? element.disabled || element.getAttribute('aria-disabled') === 'true'
+              : element?.getAttribute('aria-disabled') === 'true',
+          sentinel: element?.hasAttribute('data-base-ui-focus-guard') ?? false,
+          visible:
+            element !== null &&
+            element.getClientRects().length > 0 &&
+            style?.display !== 'none' &&
+            style?.visibility !== 'hidden' &&
+            rect !== undefined &&
+            rect.width > 0 &&
+            rect.height > 0,
+          timestamp: performance.now(),
+        },
+      };
+    },
+    { key, originId, menuClosed },
+  );
+}
+
+export async function expectSafeKeyboardFocusDestination(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const active = document.activeElement;
+          if (!(active instanceof HTMLElement)) return false;
+          if (
+            active === document.body ||
+            active === document.documentElement ||
+            active.hasAttribute('data-base-ui-focus-guard') ||
+            active.getAttribute('aria-disabled') === 'true'
+          ) {
+            return false;
+          }
+          for (
+            let ancestor: HTMLElement | null = active;
+            ancestor;
+            ancestor = ancestor.parentElement
+          ) {
+            const style = getComputedStyle(ancestor);
+            if (
+              ancestor.hidden ||
+              ancestor.inert ||
+              ancestor.getAttribute('aria-hidden') === 'true' ||
+              style.display === 'none' ||
+              style.visibility === 'hidden'
+            ) {
+              return false;
+            }
+          }
+          const style = getComputedStyle(active);
+          const rect = active.getBoundingClientRect();
+          const disabled =
+            active instanceof HTMLButtonElement ||
+            active instanceof HTMLInputElement ||
+            active instanceof HTMLSelectElement ||
+            active instanceof HTMLTextAreaElement
+              ? active.disabled
+              : false;
+          return (
+            !disabled &&
+            style.display !== 'none' &&
+            style.visibility !== 'hidden' &&
+            active.getClientRects().length > 0 &&
+            rect.width > 0 &&
+            rect.height > 0
+          );
+        }),
+      { timeout: 1000 },
+    )
+    .toBe(true);
+}
+
+export async function expectAddSongsMenuAccessibility(
+  page: Page,
+  testInfo: TestInfo,
+  traversals: FocusTraversalEvidence[],
+) {
+  // This is deliberately a full, unfiltered Axe run. The raw result is attached before review.
+  const results = await new AxeBuilder({ page }).analyze();
+  const rawReport = JSON.stringify(results, null, 2);
+  await testInfo.attach('axe-full-unfiltered-add-songs.json', {
+    body: rawReport,
+    contentType: 'application/json',
+  });
+  const rawReportPath = testInfo.outputPath('axe-full-unfiltered-add-songs.json');
+  mkdirSync(dirname(rawReportPath), { recursive: true });
+  writeFileSync(rawReportPath, rawReport, 'utf8');
+  const serious = results.violations.filter(
+    (violation) => violation.impact === 'critical' || violation.impact === 'serious',
+  ) as AxeViolation[];
+  const blocking: AxeViolation[] = [];
+  const adjudicated: Array<{ id: string; selectors: string[]; reason: string }> = [];
+  const observations: Array<{
+    id: string;
+    selectors: string[];
+    evidence: FocusGuardSelectorEvidence[];
+    result: { adjudicated: boolean; reason: string };
+  }> = [];
+  for (const violation of serious) {
+    const selectors = selectorsForViolation(violation);
+    const evidence = await Promise.all(
+      selectors.map((selector) => readFocusGuardSelectorEvidence(page, selector)),
+    );
+    const result = classifyBaseUiFocusGuardFinding(violation, evidence, traversals);
+    observations.push({ id: violation.id, selectors, evidence, result });
+    if (!result.adjudicated) blocking.push(violation);
+    else {
+      adjudicated.push({
+        id: violation.id,
+        selectors,
+        placements: evidence.map(({ placement }) => placement),
+        reason: result.reason,
+      });
+    }
+  }
+  if (adjudicated.length > 0) {
+    testInfo.annotations.push({
+      type: 'D11 Base UI 1.9.0 focus sentinel adjudication',
+      description: JSON.stringify(adjudicated),
+    });
+  }
+  const adjudicationEvidence = JSON.stringify({ observations, traversals }, null, 2);
+  await testInfo.attach('axe-focus-guard-adjudication.json', {
+    body: adjudicationEvidence,
+    contentType: 'application/json',
+  });
+  const adjudicationEvidencePath = testInfo.outputPath('axe-focus-guard-adjudication.json');
+  mkdirSync(dirname(adjudicationEvidencePath), { recursive: true });
+  writeFileSync(adjudicationEvidencePath, adjudicationEvidence, 'utf8');
+  expect(
+    blocking,
+    `Serious or critical unadjudicated Axe violations remain: ${JSON.stringify({ violations: blocking.map(({ id, nodes }) => ({ id, nodes })), observations })}`,
+  ).toEqual([]);
+}
+
 export async function expectWorkbenchWithinBounds(
   page: Page,
   minimumTrackWidth = 420,
   minimumUtilityWidth = 280,
 ) {
+  const overlay = page.locator('[data-pane="inspector"][data-presentation-mode="overlay"]');
+  if (await overlay.count()) {
+    await expect
+      .poll(() => overlay.evaluate((element) => getComputedStyle(element).translate))
+      .toBe('none');
+  }
   const geometry = await page.evaluate(() => {
     const box = (selector: string) => {
       const element = document.querySelector<HTMLElement>(selector);

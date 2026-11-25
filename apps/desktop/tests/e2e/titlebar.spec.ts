@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, type Locator, type Page, test } from '@playwright/test';
 
 const viewports = [
   { width: 640, height: 448 },
@@ -38,7 +38,40 @@ test('titlebar icon actions expose their update, reload, and settings guidance',
 
   const settings = page.getByRole('button', { name: 'Open settings' });
   await settings.focus();
-  await expect(page.getByRole('tooltip', { name: 'Open settings' })).toHaveText('Open settings');
+  await expect(page.getByRole('tooltip', { name: 'Settings · Ctrl+,' })).toHaveText(
+    'Settings · Ctrl+,',
+  );
+});
+
+test('update dialog owns focus standalone and when opened from Settings', async ({ page }) => {
+  await page.goto('/?mockReleaseNotes=short');
+  const update = page.getByRole('button', { name: 'Open update 4.0.0-alpha.2-mock' });
+  const updateDialog = page
+    .getByRole('dialog')
+    .filter({ has: page.getByRole('button', { name: 'Close update' }) });
+
+  await update.click();
+  await expect(updateDialog).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await updateDialog.getByRole('button', { name: 'Close update' }).click();
+  await expect(updateDialog).toBeHidden();
+  await expect(update).toBeFocused();
+
+  const settings = page.getByRole('button', { name: 'Open settings' });
+  await settings.click();
+  const settingsDialog = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settingsDialog).toBeVisible();
+  await settingsDialog.getByRole('button', { name: 'Updates', exact: true }).click();
+  await settingsDialog.getByRole('button', { name: 'Check for updates' }).click();
+  await expect(updateDialog).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await updateDialog.getByRole('button', { name: 'Close update' }).click();
+  await expect(updateDialog).toBeHidden();
+  await expect(settingsDialog).toBeVisible();
+  await expect(page.getByRole('dialog')).toHaveCount(1);
+  await settingsDialog.getByRole('button', { name: 'Close settings' }).click();
+  await expect(settingsDialog).toBeHidden();
+  await expect(settings).toBeFocused();
 });
 
 async function createLongPlaylistSource(page: Page, updateAvailable: boolean) {

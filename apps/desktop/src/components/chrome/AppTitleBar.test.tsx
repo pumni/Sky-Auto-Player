@@ -2,8 +2,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
 import { createMockBridge } from '../../bridge/mockBridge';
-import { createDesktopStore } from '../../state/store';
 import type { WindowControls } from '../../platform/windowControls';
+import { createDesktopStore } from '../../state/store';
 import { AppTitleBar } from './AppTitleBar';
 
 async function testBootstrap(): Promise<{
@@ -239,6 +239,7 @@ describe('AppTitleBar', () => {
     unmount();
 
     expect(unsub).toHaveBeenCalled();
+    expect(listenerCount).toBe(0);
   });
 
   it('handles rejections in window control promises without crashing or unhandled errors', async () => {

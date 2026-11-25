@@ -1,13 +1,13 @@
-import { expect, test, type Locator } from '@playwright/test';
 import { readFileSync } from 'node:fs';
+import { expect, test } from '@playwright/test';
 import {
   expectedUtilityPresentation,
-  expectNoSeriousAccessibilityViolations,
-  expectWorkbenchWithinBounds,
-  readPlayerBarGeometry,
   expectFiveTransportControls,
+  expectNoSeriousAccessibilityViolations,
   expectPlayerBarGeometry,
   expectStablePlayerBar,
+  expectWorkbenchWithinBounds,
+  readPlayerBarGeometry,
 } from './testHelpers';
 
 test.beforeEach(async ({ page }) => {
@@ -183,6 +183,7 @@ test('Titlebar Search uses the available center axis and Player controls stay vi
     if (!leading || !trailing) throw new Error('Titlebar occupied boundaries are unavailable');
     return (leading.getBoundingClientRect().right + trailing.getBoundingClientRect().left) / 2;
   });
+  expect(titlebarFreeCenter).toBe(viewportCenter);
   const searchBox = await page.locator('[data-slot="global-search"]').boundingBox();
   const idleBox = await page.getByRole('button', { name: 'Play', exact: true }).boundingBox();
   expect(searchBox).not.toBeNull();
@@ -254,7 +255,7 @@ test('Player Bar geometry covers native desktop and Chromium fallback emulation'
     await expect(shuffle).toHaveAttribute('aria-pressed', 'false');
     await shuffle.click();
     await expect(shuffle).toHaveAttribute('aria-pressed', 'true');
-    const activeShuffleTone = await shuffle.evaluate((element) => {
+    const activeShuffleTone = await shuffle.evaluate(() => {
       const token =
         document.documentElement.dataset.palette === 'graphite' ? '--accent-ink' : '--accent';
       const probe = document.createElement('span');

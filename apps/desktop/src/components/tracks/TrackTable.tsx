@@ -1,5 +1,7 @@
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
+  type KeyboardEvent,
+  type Ref,
   useCallback,
   useEffect,
   useImperativeHandle,
@@ -7,17 +9,15 @@ import {
   useMemo,
   useRef,
   useState,
-  type KeyboardEvent,
-  type Ref,
 } from 'react';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
 import {
-  LIBRARY_PAGE_SIZE,
-  selectNowPlayingSongId,
-  selectRowAtIndex,
-  playbackContextMatchesLibrary,
   type DesktopStore,
   type DesktopStoreHook,
+  LIBRARY_PAGE_SIZE,
+  playbackContextMatchesLibrary,
+  selectNowPlayingSongId,
+  selectRowAtIndex,
 } from '../../state/store';
 import { VirtualTrackRow } from './TrackRow';
 import { TrackTableHeader } from './TrackTableHeader';
@@ -388,7 +388,7 @@ export function TrackTable({ useStore, locateSelectedRef }: TrackTableProps) {
       moveActive(rowCount - 1);
     } else if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
-      moveActive(activeIndex < 0 ? 0 : activeIndex);
+      moveActive(Math.max(activeIndex, 0));
     }
   };
 

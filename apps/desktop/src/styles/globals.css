@@ -155,8 +155,9 @@ body {
 }
 
 *:hover,
-*:focus-within {
-  scrollbar-color: color-mix(in srgb, var(--muted) 62%, transparent) transparent;
+*:focus-within,
+*[data-scrolling] {
+  scrollbar-color: var(--muted-foreground) transparent;
 }
 
 *::-webkit-scrollbar {
@@ -172,17 +173,9 @@ body {
 }
 
 *:hover::-webkit-scrollbar-thumb,
-*:focus-within::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--muted) 62%, transparent);
-  background-clip: padding-box;
-}
-
-*[data-scrolling] {
-  scrollbar-color: color-mix(in srgb, var(--muted) 62%, transparent) transparent;
-}
-
+*:focus-within::-webkit-scrollbar-thumb,
 *[data-scrolling]::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--muted) 62%, transparent);
+  background: var(--muted-foreground);
   background-clip: padding-box;
 }
 
@@ -233,9 +226,10 @@ progress[aria-disabled='true']::-moz-progress-bar {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .animate-\[update-progress-slide_1\.4s_ease-in-out_infinite\] {
-    animation: none !important;
+@starting-style {
+  [data-workbench-pane][data-pane='inspector'][data-presentation-mode='overlay'][data-open='true'] {
+    opacity: 0;
+    translate: 1rem 0;
   }
 }
 

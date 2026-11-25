@@ -7,6 +7,7 @@ interface StartupTelemetryWindow extends Window {
 
 const STARTUP_TELEMETRY_COMMAND = 'subscribe_ui_events';
 let telemetryQueue = Promise.resolve();
+let catalogReadyRecorded = false;
 
 export function recordStartupTelemetry(marker: string): void {
   if (!isTauriRuntime()) return;
@@ -21,4 +22,15 @@ export function recordStartupTelemetry(marker: string): void {
       .then(() => undefined)
       .catch(() => undefined),
   );
+}
+
+export function flushStartupTelemetry(): Promise<void> {
+  return telemetryQueue;
+}
+
+export function recordCatalogReadyStartupTelemetry(): void {
+  if (catalogReadyRecorded || !isTauriRuntime()) return;
+  if ((window as StartupTelemetryWindow).__SKY_STARTUP_TELEMETRY_ENABLED__ !== true) return;
+  catalogReadyRecorded = true;
+  recordStartupTelemetry('react.catalog_ready');
 }

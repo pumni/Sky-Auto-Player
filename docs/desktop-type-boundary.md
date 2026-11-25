@@ -50,9 +50,21 @@ behavior, and forced-colors feedback.
 Dropdown Menu roots use non-modal behavior for ordinary action menus. Modal dialogs retain their
 Base UI focus ownership; the compact Inspector is a non-modal workbench pane and applies `inert`
 plus `aria-hidden` immediately on close while its CSS exit completes. All popup transition utilities
-include the animated properties and reduced-motion override. Axe 4.14 currently reports Base UI
-1.9.0's `aria-hidden`/`tabindex="0"` Menu focus guards while an ordinary menu is open; this known
-R5 finding is recorded in the [WP1-R1 coverage migration ledger](ui/wp1-r1-coverage-migration.md).
+include the animated properties and reduced-motion override. The ordinary Add songs menu keeps
+Base UI 1.9.0 `modal={false}` behavior. The focused Axe 4.14 `aria-hidden-focus` result is reviewed
+only in the Add songs E2E checkpoint after the complete unfiltered Axe result is attached and saved
+with the test output. The test-side classifier requires every result and related-node selector to
+resolve to exactly one Base UI sentinel with its empty 1×1 clipped shape, `aria-hidden="true"`,
+`tabindex="0"`, no role or descendants, and no hidden ancestor. Untyped trigger guards and
+`data-type="outside"` guards must be direct siblings of the Add songs trigger; `data-type="inside"`
+guards must be adjacent to the open Add songs menu inside its portal. Real Tab and Shift+Tab focus
+traces must leave the menu for different visible, enabled destinations within the one-second
+sentinel-clearance bound. Hidden controls, mixed findings, spoofed markers, stuck guards, other Axe
+rules and critical findings remain blocking. The unit tests keep those negative controls. The
+behavior is version-bound to Base UI 1.9.0 and Axe 4.14.0 and must be
+removed when either dependency changes or upstream no longer emits the exact sentinel finding.
+No production DOM or Axe configuration is changed. Manual Narrator and NVDA qualification is
+NOT RUN by this browser test.
 
 ## Type and platform boundaries
 

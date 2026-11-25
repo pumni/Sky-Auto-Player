@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import type { DesktopStoreHook } from '../../state/store';
-import { Tabs, TabsList, TabsTrigger } from '../ui/tabs';
-import { Button } from '../ui/button';
 import { useScrollVisibility } from '../../hooks/useScrollVisibility';
+import type { DesktopStoreHook } from '../../state/store';
+import { Button } from '../ui/button';
+import { Tabs, TabsIndicator, TabsList, TabsTrigger } from '../ui/tabs';
 import { DiagnosticsEventsPanel } from './DiagnosticsEventsPanel';
 import { DiagnosticsPerformancePanel } from './DiagnosticsPerformancePanel';
 import { DiagnosticsPlaybackSummary } from './DiagnosticsPlaybackSummary';
@@ -101,23 +101,24 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
           activateOnFocus
         >
           <TabsTrigger
-            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
+            className="whitespace-nowrap rounded-none border-0 px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
             value="performance"
           >
             Performance
           </TabsTrigger>
           <TabsTrigger
-            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
+            className="whitespace-nowrap rounded-none border-0 px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
             value="timing"
           >
             Timing
           </TabsTrigger>
           <TabsTrigger
-            className="whitespace-nowrap rounded-none border-0 border-b-2 border-b-transparent px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:border-b-accent-ink data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
+            className="whitespace-nowrap rounded-none border-0 px-2.5 py-2 text-xs text-text-tertiary duration-tab hover:bg-control-hover hover:text-foreground data-active:bg-surface data-active:text-accent-ink motion-reduce:transition-none"
             value="events"
           >
             Events
           </TabsTrigger>
+          <TabsIndicator />
         </TabsList>
         <DiagnosticsPerformancePanel useStore={useStore} />
         <DiagnosticsTimingPanel useStore={useStore} />

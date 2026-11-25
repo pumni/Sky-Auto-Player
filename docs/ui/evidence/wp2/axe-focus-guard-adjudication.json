@@ -1,0 +1,335 @@
+{
+  "observations": [
+    {
+      "id": "aria-hidden-focus",
+      "selectors": [
+        ".flex-none.flex.items-center > span[data-base-ui-focus-guard=\"\"]:nth-child(1)",
+        ".flex-none.flex.items-center > span[data-base-ui-focus-guard=\"\"]:nth-child(3)",
+        "span[data-type=\"outside\"][data-base-ui-focus-guard=\"\"]:nth-child(4)",
+        "span[data-type=\"outside\"][data-base-ui-focus-guard=\"\"]:nth-child(6)",
+        "span[data-type=\"inside\"][data-base-ui-focus-guard=\"\"]:nth-child(1)",
+        "span[data-type=\"inside\"][data-base-ui-focus-guard=\"\"]:nth-child(3)"
+      ],
+      "evidence": [
+        {
+          "selector": ".flex-none.flex.items-center > span[data-base-ui-focus-guard=\"\"]:nth-child(1)",
+          "matchCount": 1,
+          "placement": "add-songs-trigger",
+          "shape": {
+            "placement": "add-songs-trigger",
+            "context": {
+              "dataType": null,
+              "sameTriggerParent": true,
+              "insideAddSongsMenu": false,
+              "addSongsMenuOpen": true,
+              "triggerSlotPresent": true,
+              "ancestors": [
+                "div",
+                "header[data-slot=\"track-browser-header\"]",
+                "section[data-slot=\"track-browser\"]",
+                "div",
+                "main[data-slot=\"workbench\"]",
+                "div",
+                "div#root",
+                "body"
+              ]
+            },
+            "tagName": "SPAN",
+            "marker": true,
+            "dataType": null,
+            "ariaHidden": "true",
+            "tabIndex": 0,
+            "role": null,
+            "text": "",
+            "childElementCount": 0,
+            "interactiveDescendantCount": 0,
+            "width": 1,
+            "height": 1,
+            "clipPath": "inset(50%)",
+            "overflow": "hidden",
+            "position": "fixed",
+            "hiddenAncestor": false
+          }
+        },
+        {
+          "selector": ".flex-none.flex.items-center > span[data-base-ui-focus-guard=\"\"]:nth-child(3)",
+          "matchCount": 1,
+          "placement": "add-songs-trigger",
+          "shape": {
+            "placement": "add-songs-trigger",
+            "context": {
+              "dataType": null,
+              "sameTriggerParent": true,
+              "insideAddSongsMenu": false,
+              "addSongsMenuOpen": true,
+              "triggerSlotPresent": true,
+              "ancestors": [
+                "div",
+                "header[data-slot=\"track-browser-header\"]",
+                "section[data-slot=\"track-browser\"]",
+                "div",
+                "main[data-slot=\"workbench\"]",
+                "div",
+                "div#root",
+                "body"
+              ]
+            },
+            "tagName": "SPAN",
+            "marker": true,
+            "dataType": null,
+            "ariaHidden": "true",
+            "tabIndex": 0,
+            "role": null,
+            "text": "",
+            "childElementCount": 0,
+            "interactiveDescendantCount": 0,
+            "width": 1,
+            "height": 1,
+            "clipPath": "inset(50%)",
+            "overflow": "hidden",
+            "position": "fixed",
+            "hiddenAncestor": false
+          }
+        },
+        {
+          "selector": "span[data-type=\"outside\"][data-base-ui-focus-guard=\"\"]:nth-child(4)",
+          "matchCount": 1,
+          "placement": "add-songs-trigger",
+          "shape": {
+            "placement": "add-songs-trigger",
+            "context": {
+              "dataType": "outside",
+              "sameTriggerParent": true,
+              "insideAddSongsMenu": false,
+              "addSongsMenuOpen": true,
+              "triggerSlotPresent": true,
+              "ancestors": [
+                "div",
+                "header[data-slot=\"track-browser-header\"]",
+                "section[data-slot=\"track-browser\"]",
+                "div",
+                "main[data-slot=\"workbench\"]",
+                "div",
+                "div#root",
+                "body"
+              ]
+            },
+            "tagName": "SPAN",
+            "marker": true,
+            "dataType": "outside",
+            "ariaHidden": "true",
+            "tabIndex": 0,
+            "role": null,
+            "text": "",
+            "childElementCount": 0,
+            "interactiveDescendantCount": 0,
+            "width": 1,
+            "height": 1,
+            "clipPath": "inset(50%)",
+            "overflow": "hidden",
+            "position": "fixed",
+            "hiddenAncestor": false
+          }
+        },
+        {
+          "selector": "span[data-type=\"outside\"][data-base-ui-focus-guard=\"\"]:nth-child(6)",
+          "matchCount": 1,
+          "placement": "add-songs-trigger",
+          "shape": {
+            "placement": "add-songs-trigger",
+            "context": {
+              "dataType": "outside",
+              "sameTriggerParent": true,
+              "insideAddSongsMenu": false,
+              "addSongsMenuOpen": true,
+              "triggerSlotPresent": true,
+              "ancestors": [
+                "div",
+                "header[data-slot=\"track-browser-header\"]",
+                "section[data-slot=\"track-browser\"]",
+                "div",
+                "main[data-slot=\"workbench\"]",
+                "div",
+                "div#root",
+                "body"
+              ]
+            },
+            "tagName": "SPAN",
+            "marker": true,
+            "dataType": "outside",
+            "ariaHidden": "true",
+            "tabIndex": 0,
+            "role": null,
+            "text": "",
+            "childElementCount": 0,
+            "interactiveDescendantCount": 0,
+            "width": 1,
+            "height": 1,
+            "clipPath": "inset(50%)",
+            "overflow": "hidden",
+            "position": "fixed",
+            "hiddenAncestor": false
+          }
+        },
+        {
+          "selector": "span[data-type=\"inside\"][data-base-ui-focus-guard=\"\"]:nth-child(1)",
+          "matchCount": 1,
+          "placement": "add-songs-menu",
+          "shape": {
+            "placement": "add-songs-menu",
+            "context": {
+              "dataType": "inside",
+              "sameTriggerParent": false,
+              "insideAddSongsMenu": false,
+              "addSongsMenuOpen": true,
+              "triggerSlotPresent": true,
+              "ancestors": [
+                "div[role=\"presentation\"]",
+                "div#_r_5j_",
+                "body"
+              ]
+            },
+            "tagName": "SPAN",
+            "marker": true,
+            "dataType": "inside",
+            "ariaHidden": "true",
+            "tabIndex": 0,
+            "role": null,
+            "text": "",
+            "childElementCount": 0,
+            "interactiveDescendantCount": 0,
+            "width": 1,
+            "height": 1,
+            "clipPath": "inset(50%)",
+            "overflow": "hidden",
+            "position": "fixed",
+            "hiddenAncestor": false
+          }
+        },
+        {
+          "selector": "span[data-type=\"inside\"][data-base-ui-focus-guard=\"\"]:nth-child(3)",
+          "matchCount": 1,
+          "placement": "add-songs-menu",
+          "shape": {
+            "placement": "add-songs-menu",
+            "context": {
+              "dataType": "inside",
+              "sameTriggerParent": false,
+              "insideAddSongsMenu": false,
+              "addSongsMenuOpen": true,
+              "triggerSlotPresent": true,
+              "ancestors": [
+                "div[role=\"presentation\"]",
+                "div#_r_5j_",
+                "body"
+              ]
+            },
+            "tagName": "SPAN",
+            "marker": true,
+            "dataType": "inside",
+            "ariaHidden": "true",
+            "tabIndex": 0,
+            "role": null,
+            "text": "",
+            "childElementCount": 0,
+            "interactiveDescendantCount": 0,
+            "width": 1,
+            "height": 1,
+            "clipPath": "inset(50%)",
+            "overflow": "hidden",
+            "position": "fixed",
+            "hiddenAncestor": false
+          }
+        }
+      ],
+      "result": {
+        "adjudicated": true,
+        "reason": "Base UI 1.9.0 focus guards matched the exact sentinel shape and both traversal checks passed."
+      }
+    }
+  ],
+  "traversals": [
+    {
+      "key": "Tab",
+      "originId": "focus-1",
+      "startedAt": 3139.8000000715256,
+      "menuClosed": true,
+      "events": [
+        {
+          "type": "focusout",
+          "id": "focus-1",
+          "timestamp": 3153.3000000715256,
+          "sentinel": false
+        },
+        {
+          "type": "focusin",
+          "id": "focus-2",
+          "timestamp": 3156.3000000715256,
+          "sentinel": true
+        },
+        {
+          "type": "focusout",
+          "id": "focus-2",
+          "timestamp": 3156.8000000715256,
+          "sentinel": true
+        },
+        {
+          "type": "focusin",
+          "id": "focus-3",
+          "timestamp": 3161.7000000476837,
+          "sentinel": true
+        },
+        {
+          "type": "focusout",
+          "id": "focus-3",
+          "timestamp": 3182,
+          "sentinel": true
+        },
+        {
+          "type": "focusin",
+          "id": "focus-4",
+          "timestamp": 3213.7000000476837,
+          "sentinel": false
+        }
+      ],
+      "destination": {
+        "id": "focus-4",
+        "body": false,
+        "hidden": false,
+        "disabled": false,
+        "sentinel": false,
+        "visible": true,
+        "timestamp": 3402.600000023842
+      }
+    },
+    {
+      "key": "Shift+Tab",
+      "originId": "focus-7",
+      "startedAt": 3648.2000000476837,
+      "menuClosed": true,
+      "events": [
+        {
+          "type": "focusout",
+          "id": "focus-7",
+          "timestamp": 3660.2000000476837,
+          "sentinel": false
+        },
+        {
+          "type": "focusin",
+          "id": "focus-5",
+          "timestamp": 3666.100000023842,
+          "sentinel": false
+        }
+      ],
+      "destination": {
+        "id": "focus-5",
+        "body": false,
+        "hidden": false,
+        "disabled": false,
+        "sentinel": false,
+        "visible": true,
+        "timestamp": 3763.9000000953674
+      }
+    }
+  ]
+}
