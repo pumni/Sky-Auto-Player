@@ -1,6 +1,8 @@
-import { Search } from 'lucide-react';
+import { Search, X } from 'lucide-react';
 import { useEffect, useRef, useState, type RefObject } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { Button } from '../ui/button';
+import { Input } from '../ui/input';
 
 interface GlobalSearchProps {
   inputRef?: RefObject<HTMLInputElement | null>;
@@ -28,6 +30,15 @@ export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
         : source.id === 'builtin'
           ? 'Search Built-in Songs'
           : 'Search Library';
+  const scopeText = playlistAddMode
+    ? 'Built-in'
+    : source.kind === 'playlist'
+      ? (playlistName ?? 'Playlist')
+      : source.id === 'liked'
+        ? 'Liked'
+        : source.id === 'builtin'
+          ? 'Built-in'
+          : 'Library';
   return (
     <SearchInput
       key={playlistAddMode?.playlistId ?? 'library'}
@@ -35,7 +46,8 @@ export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
       {...(inputRef ? { inputRef } : {})}
       useStore={useStore}
       searchLabel={searchLabel}
-      placeholder={playlistAddMode ? 'Search Built-in Songs…' : `${searchLabel}…`}
+      scopeText={scopeText}
+      placeholder={playlistAddMode ? 'Search songs…' : 'Search current source…'}
     />
   );
 }
@@ -43,6 +55,7 @@ export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
 interface SearchInputProps extends GlobalSearchProps {
   query: string;
   searchLabel: string;
+  scopeText: string;
   placeholder: string;
 }
 
@@ -52,7 +65,14 @@ interface SearchDraftState {
   inFlight: readonly string[];
 }
 
-function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: SearchInputProps) {
+function SearchInput({
+  inputRef,
+  query,
+  useStore,
+  searchLabel,
+  scopeText,
+  placeholder,
+}: SearchInputProps) {
   const search = useStore((store) => store.search);
   const [draftState, setDraftState] = useState<SearchDraftState | null>(null);
   const debounceTimerRef = useRef<number | null>(null);
@@ -121,11 +141,22 @@ function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: Se
   };
 
   return (
-    <label className="global-search" data-tauri-drag-region="false">
-      <Search size={16} aria-hidden="true" />
-      <span className="visually-hidden">{searchLabel}</span>
-      <input
+    <div
+      role="search"
+      data-slot="global-search"
+      className="flex h-8 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-card px-[9px] text-muted-foreground focus-within:border-ring focus-within:outline focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-ring"
+      data-tauri-drag-region="false"
+    >
+      <Search size={16} className="shrink-0" aria-hidden="true" />
+      <span
+        className="max-w-[72px] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border pr-2 text-[11px] text-text-tertiary"
+        aria-hidden="true"
+      >
+        {scopeText}
+      </span>
+      <Input
         ref={inputRef}
+        className="h-7 min-w-0 flex-1 border-0 bg-transparent px-0 py-0 text-[13px] text-foreground shadow-none placeholder:text-text-tertiary outline-none focus-visible:border-0 focus-visible:ring-0 dark:bg-transparent"
         value={inputValue}
         onChange={(event) => handleChange(event.target.value)}
         placeholder={placeholder}
@@ -134,7 +165,30 @@ function SearchInput({ inputRef, query, useStore, searchLabel, placeholder }: Se
         aria-label={searchLabel}
         data-tauri-drag-region="false"
       />
-      <kbd aria-hidden="true">/</kbd>
-    </label>
+      {inputValue.length > 0 && (
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          className="size-6 shrink-0 rounded-control p-0 text-text-secondary hover:bg-control-hover hover:text-foreground"
+          type="button"
+          aria-label="Clear search"
+          title="Clear search"
+          data-tauri-drag-region="false"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            handleChange('');
+            inputRef?.current?.focus();
+          }}
+        >
+          <X size={14} aria-hidden="true" />
+        </Button>
+      )}
+      <kbd
+        className="rounded border border-border px-1 text-xs leading-[18px] text-muted-foreground max-[1100px]:hidden"
+        aria-hidden="true"
+      >
+        /
+      </kbd>
+    </div>
   );
 }

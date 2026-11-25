@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createMockBridge } from '../../bridge/mockBridge';
 import type { LibraryPlaylistImportResult } from '../../bridge/DesktopBridge';
+import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
 import { TrackBrowser } from './TrackBrowser';
 
@@ -19,7 +19,7 @@ describe('TrackBrowser playlist import feedback', () => {
   async function chooseImport(action: 'Import files…' | 'Import folder…') {
     const trigger = screen.getByRole('button', { name: 'Add songs' });
     trigger.focus();
-    fireEvent.keyDown(trigger, { key: 'Enter' });
+    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
     await screen.findByRole('menu', { name: 'Add songs' });
     await act(async () => {
       fireEvent.click(screen.getByRole('menuitem', { name: action }));

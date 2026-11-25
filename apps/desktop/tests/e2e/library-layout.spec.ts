@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 import { palettes, selectPalette } from './testHelpers';
 
 test.beforeEach(async ({ page }) => {
@@ -9,7 +9,7 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
   test.setTimeout(120_000);
   const navigator = page.getByRole('navigation', { name: 'Library' });
   for (const name of ['Geometry playlist one', 'Geometry playlist two']) {
-    await navigator.locator('.library-add-button').click();
+    await navigator.locator('[data-slot="library-add-button"]').click();
     const dialog = page.getByRole('dialog', { name: 'New playlist' });
     await dialog.getByLabel('Playlist name').fill(name);
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
@@ -27,22 +27,24 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
         const box = element.getBoundingClientRect();
         return { x: box.x, y: box.y, right: box.right, width: box.width, height: box.height };
       };
-      const navigator = document.querySelector<HTMLElement>('.library-navigator');
-      const navigatorPane = document.querySelector('.navigator-workbench-pane');
-      const heading = document.querySelector<HTMLElement>('.library-navigator-heading');
-      const primaryItems = document.querySelector('.library-primary-items');
+      const navigator = document.querySelector<HTMLElement>('[data-slot="library-navigator"]');
+      const navigatorPane = document.querySelector('[data-pane="navigator"]');
+      const heading = document.querySelector<HTMLElement>(
+        '[data-slot="library-navigator-heading"]',
+      );
+      const primaryItems = document.querySelector('[data-slot="library-primary-items"]');
       const rows = Array.from(
         document.querySelectorAll<HTMLElement>(
-          '.library-primary-items .library-nav-item, .library-nav-action-row',
+          '[data-slot="library-primary-items"] [data-slot="library-nav-item"], [data-slot="playlist-nav-item"]',
         ),
       ).map((row) => {
-        const item = row.matches('.library-nav-action-row')
-          ? row.querySelector('.library-nav-item')
+        const item = row.matches('[data-slot="playlist-nav-item"]')
+          ? row.querySelector('[data-slot="library-nav-item"]')
           : row;
         return {
           row: rect(row),
-          icon: rect(item?.querySelector('.library-nav-item-icon') ?? null),
-          label: rect(item?.querySelector('.library-nav-item-label') ?? null),
+          icon: rect(item?.querySelector('[data-slot="library-nav-icon"]') ?? null),
+          label: rect(item?.querySelector('[data-slot="library-nav-label"]') ?? null),
         };
       });
       if (!navigator || !heading || !primaryItems) throw new Error('Library layout is incomplete');
@@ -60,9 +62,9 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
         headingMarginBottom: headingStyle.marginBottom,
         primaryRowGap: getComputedStyle(primaryItems).rowGap,
         rows,
-        trackHeader: rect(document.querySelector('.track-browser-header')),
-        columnHeader: rect(document.querySelector('.track-table-header')),
-        firstSong: rect(document.querySelector('.track-row')),
+        trackHeader: rect(document.querySelector('[data-slot="track-browser-header"]')),
+        columnHeader: rect(document.querySelector('[role="row"][aria-rowindex="1"]')),
+        firstSong: rect(document.querySelector('[data-slot="track-row"]')),
         documentWidth: document.documentElement.scrollWidth,
       };
     });
@@ -84,15 +86,16 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
     expect(expanded.documentWidth).toBeLessThanOrEqual(1366);
 
     await page.setViewportSize({ width: 640, height: 448 });
-    await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+    await expect(page.locator('[data-pane="navigator"]')).toHaveAttribute('data-collapsed', 'true');
     const compact = await page.evaluate(() => {
-      const pane = document.querySelector<HTMLElement>('.navigator-workbench-pane');
+      const pane = document.querySelector<HTMLElement>('[data-pane="navigator"]');
       if (!pane) throw new Error('Collapsed Library pane is missing');
       const paneRect = pane.getBoundingClientRect();
       const tiles = [
-        '.library-collapse-button',
-        '.library-nav-item',
-        '.library-add-button.is-collapsed',
+        'button[aria-label="Collapse library navigator"], button[aria-label="Expand library navigator"]',
+        '[data-slot="library-nav-item"]',
+        '[data-slot="library-add-button"][data-collapsed="true"]',
+        '[data-slot="collapsed-playlist-tile"]',
       ].flatMap((selector) =>
         Array.from(document.querySelectorAll<HTMLElement>(selector)).map((element) => {
           const box = element.getBoundingClientRect();
@@ -109,13 +112,14 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
         paneWidth: paneRect.width,
         paneCenterX: paneRect.x + paneRect.width / 2,
         tiles,
-        headerHeight: document.querySelector('.track-browser-header')?.getBoundingClientRect()
-          .height,
+        headerHeight: document
+          .querySelector('[data-slot="track-browser-header"]')
+          ?.getBoundingClientRect().height,
         documentWidth: document.documentElement.scrollWidth,
       };
     });
     expect(compact.paneWidth).toBe(48);
-    expect(compact.tiles.length).toBeGreaterThanOrEqual(5);
+    expect(compact.tiles).toHaveLength(6);
     for (const tile of compact.tiles) {
       expect(tile.width).toBe(40);
       expect(tile.height).toBe(40);
@@ -127,7 +131,7 @@ test('shared Library and Track Browser geometry stays fixed across palettes', as
   }
 });
 
-test('Graphite workspace header compacts by viewport and browser width over one canvas', async ({
+test('Graphite workspace header follows the Track Browser width without changing row height', async ({
   page,
 }) => {
   for (const viewport of [
@@ -136,8 +140,8 @@ test('Graphite workspace header compacts by viewport and browser width over one 
     { width: 640, height: 448 },
   ]) {
     await page.setViewportSize(viewport);
-    await expect(page.locator('.track-browser-header')).toBeVisible();
-    await expect(page.locator('.track-row').first()).toBeVisible();
+    await expect(page.locator('[data-slot="track-browser-header"]')).toBeVisible();
+    await expect(page.locator('[data-slot="track-row"]').first()).toBeVisible();
     const geometry = await page.evaluate(() => {
       const rect = (selector: string) => {
         const element = document.querySelector<HTMLElement>(selector);
@@ -151,14 +155,17 @@ test('Graphite workspace header compacts by viewport and browser width over one 
         const computed = getComputedStyle(element);
         return {
           background: computed.backgroundColor,
+          color: computed.color,
           fontSize: computed.fontSize,
+          lineHeight: computed.lineHeight,
           fontWeight: computed.fontWeight,
+          alignItems: computed.alignItems,
           borderBottomWidth: computed.borderBottomWidth,
           borderBottomColor: computed.borderBottomColor,
         };
       };
-      const browser = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
-      const tableHeader = document.querySelector<HTMLElement>('.track-table-header');
+      const browser = document.querySelector<HTMLElement>('[data-pane="browser"]');
+      const tableHeader = document.querySelector<HTMLElement>('[role="row"][aria-rowindex="1"]');
       const divider = (() => {
         if (!tableHeader) return null;
         const headerStyle = getComputedStyle(tableHeader);
@@ -180,20 +187,23 @@ test('Graphite workspace header compacts by viewport and browser width over one 
         browserWidth: browser?.clientWidth ?? 0,
         browserScrollWidth: browser?.scrollWidth ?? 0,
         documentWidth: document.documentElement.scrollWidth,
-        header: rect('.track-browser-header'),
-        source: rect('.track-browser-source-label'),
-        title: rect('.track-browser-header h1'),
-        count: rect('.track-browser-count'),
-        columnHeader: rect('.track-table-header'),
-        firstSong: rect('.track-row'),
-        headingTag: document.querySelector('.track-browser h1')?.tagName ?? null,
-        headerTablists: document.querySelectorAll('.track-browser-header [role="tablist"]').length,
-        headerStyle: style('.track-browser-header'),
-        sourceStyle: style('.track-browser-source-label'),
-        titleStyle: style('.track-browser-header h1'),
-        countStyle: style('.track-browser-count'),
-        browserStyle: style('.track-browser-workbench-pane'),
-        columnStyle: style('.track-table-header'),
+        header: rect('[data-slot="track-browser-header"]'),
+        source: rect('[data-slot="track-browser-header"] h1'),
+        title: rect('[data-slot="track-browser-header"] h1'),
+        count: rect('[data-slot="track-browser-count"]'),
+        columnHeader: rect('[role="row"][aria-rowindex="1"]'),
+        firstSong: rect('[data-slot="track-row"]'),
+        headingTag: document.querySelector('[data-slot="track-browser"] h1')?.tagName ?? null,
+        headerTablists: document.querySelectorAll(
+          '[data-slot="track-browser-header"] [role="tablist"]',
+        ).length,
+        headerStyle: style('[data-slot="track-browser-header"]'),
+        sourceStyle: style('[data-slot="track-browser-header"] h1'),
+        titleStyle: style('[data-slot="track-browser-header"] h1'),
+        countStyle: style('[data-slot="track-browser-count"]'),
+        headingContentStyle: style('[data-slot="track-browser-heading-content"]'),
+        browserStyle: style('[data-pane="browser"]'),
+        columnStyle: style('[role="row"][aria-rowindex="1"]'),
       };
     });
 
@@ -214,24 +224,22 @@ test('Graphite workspace header compacts by viewport and browser width over one 
       throw new Error('Graphite workspace header geometry is incomplete');
     }
 
-    const expectedHeaderHeight = viewport.width <= 900 || geometry.browserWidth <= 520 ? 32 : 40;
+    const expectedHeaderHeight = geometry.browserWidth < 680 ? 32 : 40;
     expect(geometry.header.height).toBe(expectedHeaderHeight);
     expect(geometry.columnHeader.height).toBe(32);
     expect(geometry.firstSong.height).toBe(46);
     expect(geometry.firstSong.y).toBeCloseTo(geometry.columnHeader.bottom, 0);
-    expect(
-      Math.abs(
-        geometry.title.y + geometry.title.height / 2 - geometry.count.y - geometry.count.height / 2,
-      ),
-    ).toBeLessThanOrEqual(1);
+    expect(geometry.headingContentStyle?.alignItems).toBe('baseline');
     expect(geometry.headingTag).toBe('H1');
     expect(geometry.headerTablists).toBe(0);
     expect(geometry.headerStyle?.background).toBe('rgb(21, 22, 24)');
-    expect(geometry.sourceStyle?.background).toBe('rgb(21, 22, 24)');
-    expect(geometry.titleStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '14px' : '13px');
+    expect(geometry.sourceStyle?.background).toBe('rgba(0, 0, 0, 0)');
+    expect(geometry.sourceStyle?.color).toBe('rgb(226, 228, 232)');
+    expect(geometry.titleStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '20px' : '16px');
+    expect(geometry.titleStyle?.lineHeight).toBe(expectedHeaderHeight === 40 ? '28px' : '22px');
     expect(geometry.titleStyle?.fontWeight).toBe('600');
     expect(geometry.countStyle?.fontSize).toBe(expectedHeaderHeight === 40 ? '12px' : '11px');
-    expect(geometry.browserStyle?.background).toBe('rgb(21, 22, 24)');
+    expect(geometry.browserStyle?.background).toBe('rgb(25, 26, 27)');
     expect(geometry.columnStyle?.background).toBe('rgb(21, 22, 24)');
     expect(geometry.columnStyle?.borderBottomWidth).toBe('0px');
     expect(geometry.divider).not.toBeNull();
@@ -251,7 +259,7 @@ test('Graphite workspace header compacts by viewport and browser width over one 
   }
 
   await page.setViewportSize({ width: 1366, height: 768 });
-  const browserPane = page.locator('.track-browser-workbench-pane');
+  const browserPane = page.locator('[data-pane="browser"]');
   const previousFlex = await browserPane.evaluate((element) => element.style.flex);
   await browserPane.evaluate((element) => {
     element.style.flex = '0 0 520px';
@@ -259,8 +267,11 @@ test('Graphite workspace header compacts by viewport and browser width over one 
   await expect
     .poll(() => browserPane.evaluate((element) => element.clientWidth))
     .toBeLessThanOrEqual(520);
-  await expect(page.locator('.track-browser-header')).toHaveCSS('height', '32px');
-  await expect(page.locator('.track-browser-header h1')).toHaveCSS('font-size', '13px');
+  await expect(page.locator('[data-slot="track-browser-header"]')).toHaveCSS('height', '32px');
+  await expect(page.locator('[data-slot="track-browser-header"] h1')).toHaveCSS(
+    'font-size',
+    '16px',
+  );
   await browserPane.evaluate((element, flex) => {
     element.style.flex = flex;
   }, previousFlex);
@@ -272,24 +283,23 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
   await page.setViewportSize({ width: 800, height: 560 });
   await page.goto('/');
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  const collapseButton = navigator.locator('.library-collapse-button');
+  const collapseButton = navigator.locator(
+    'button[aria-label="Collapse library navigator"], button[aria-label="Expand library navigator"]',
+  );
   await collapseButton.click();
   await expect(collapseButton).not.toHaveAttribute('aria-pressed');
   await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
-  const collapsedLabels = navigator.locator('.library-nav-item-label');
-  await expect(collapsedLabels).toHaveCount(2);
-  expect(
-    await collapsedLabels.evaluateAll((items) =>
-      items.every((item) => {
-        return getComputedStyle(item).display === 'none';
-      }),
-    ),
-  ).toBe(true);
+  await expect(navigator.getByRole('button', { name: 'Built-in Songs' })).toBeVisible();
+  await expect(navigator.getByRole('button', { name: 'Liked Songs' })).toBeVisible();
+  const collapsedLabels = navigator.locator('[data-slot="library-nav-label"]');
+  await expect(collapsedLabels).toHaveCount(0);
   const collapsedLayout = await page.evaluate(() => {
-    const navigator = document.querySelector<HTMLElement>('.library-navigator');
-    const launchers = document.querySelector<HTMLElement>('.library-collapsed-launchers');
-    const footer = document.querySelector<HTMLElement>('.library-navigator-footer');
+    const navigator = document.querySelector<HTMLElement>('[data-slot="library-navigator"]');
+    const launchers = document.querySelector<HTMLElement>(
+      '[data-slot="library-collapsed-playlists"]',
+    );
+    const footer = document.querySelector<HTMLElement>('[data-slot="library-navigator-footer"]');
     if (!navigator || !footer) throw new Error('Collapsed Library areas are missing');
     const navigatorStyle = getComputedStyle(navigator);
     const footerStyle = getComputedStyle(footer);
@@ -297,10 +307,11 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     return {
       paddingTop: navigatorStyle.paddingTop,
       paddingBottom: navigatorStyle.paddingBottom,
-      launcherCount: navigator.querySelectorAll('.library-collapsed-launchers').length,
+      launcherCount: navigator.querySelectorAll('[data-slot="library-collapsed-playlists"]').length,
       launcherItemCount:
-        launchers?.querySelectorAll('.library-collapsed-playlist-tile').length ?? 0,
-      secondarySectionCount: navigator.querySelectorAll('.library-secondary-sections').length,
+        launchers?.querySelectorAll('[data-slot="collapsed-playlist-tile"]').length ?? 0,
+      secondarySectionCount: navigator.querySelectorAll('[data-slot="library-secondary-sections"]')
+        .length,
       launcherMarginTop: launcherStyle?.marginTop ?? null,
       launcherPaddingTop: launcherStyle?.paddingTop ?? null,
       footerPaddingTop: footerStyle.paddingTop,
@@ -324,25 +335,32 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     background: 'rgba(0, 0, 0, 0)',
   });
   await collapseButton.hover();
-  const collapsedToggleHover = await collapseButton.evaluate((element) => {
-    const style = getComputedStyle(element);
-    return { color: style.color, background: style.backgroundColor };
-  });
-  expect(collapsedToggleHover).toEqual({
-    color: 'rgb(226, 228, 232)',
-    background: 'rgb(53, 54, 58)',
-  });
-  const pane = await page.locator('.navigator-workbench-pane').boundingBox();
+  await expect
+    .poll(() =>
+      collapseButton.evaluate((element) => {
+        const style = getComputedStyle(element);
+        return { color: style.color, background: style.backgroundColor };
+      }),
+    )
+    .toEqual({
+      color: 'rgb(226, 228, 232)',
+      background: 'rgb(53, 54, 58)',
+    });
+  const pane = await page.locator('[data-pane="navigator"]').boundingBox();
   expect(pane).not.toBeNull();
   if (pane) {
     expect(Math.round(pane.width)).toBe(48);
     const tiles = await navigator
-      .locator('.library-nav-item, .library-add-button.is-collapsed, .library-collapse-button')
+      .locator(
+        '[data-slot="library-nav-item"], [data-slot="library-add-button"][data-collapsed="true"], button[aria-label="Collapse library navigator"], button[aria-label="Expand library navigator"]',
+      )
       .evaluateAll((elements) =>
         elements.map((element) => {
           const rect = element.getBoundingClientRect();
           const hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
           return {
+            name: element.getAttribute('aria-label') ?? (element as HTMLElement).dataset.slot,
+            className: (element as HTMLElement).className,
             x: rect.x,
             y: rect.y,
             width: rect.width,
@@ -353,7 +371,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
       );
     expect(tiles.length).toBeGreaterThan(0);
     for (const tile of tiles) {
-      expect(tile.width).toBeCloseTo(40, 0);
+      expect(tile.width, JSON.stringify(tiles)).toBeCloseTo(40, 0);
       expect(tile.height).toBeCloseTo(40, 0);
       expect(Math.abs(tile.x + tile.width / 2 - (pane.x + pane.width / 2))).toBeLessThanOrEqual(1);
       expect(tile.hitTargeted).toBe(true);
@@ -363,7 +381,7 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
   await collapseButton.evaluate((element) => element.focus());
   expect(await collapseButton.evaluate((element) => element.matches(':focus-visible'))).toBe(true);
   const collapseBounds = await collapseButton.boundingBox();
-  const collapsedPaneBounds = await page.locator('.navigator-workbench-pane').boundingBox();
+  const collapsedPaneBounds = await page.locator('[data-pane="navigator"]').boundingBox();
   expect(collapseBounds).not.toBeNull();
   expect(collapsedPaneBounds).not.toBeNull();
   if (collapseBounds && collapsedPaneBounds) {
@@ -376,20 +394,24 @@ test('collapsed Library rail stays compact and keyboard-accessible at 800 and 64
     '2px',
   );
   await expect(page.getByRole('contentinfo', { name: 'Player controls' })).toBeVisible();
-  await expect(page.locator('.utility-workbench-pane')).toHaveCount(0);
+  await expect(page.locator('[data-pane="inspector"]')).toHaveCount(0);
 
   await navigator.getByRole('button', { name: 'Expand library navigator' }).click();
   await expect(navigator.getByText('Your Library')).toBeVisible();
   await page.setViewportSize({ width: 640, height: 448 });
-  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expect(page.locator('[data-pane="navigator"]')).toHaveAttribute('data-collapsed', 'true');
   await expect(navigator.getByRole('button', { name: 'Create playlist' })).toBeVisible();
-  const compactPadding = await page.locator('.library-navigator').evaluate((element) => {
-    const style = getComputedStyle(element);
-    return [style.paddingTop, style.paddingBottom];
-  });
+  const compactPadding = await page
+    .locator('[data-slot="library-navigator"]')
+    .evaluate((element) => {
+      const style = getComputedStyle(element);
+      return [style.paddingTop, style.paddingBottom];
+    });
   expect(compactPadding).toEqual(['8px', '8px']);
   const compactTileBounds = await navigator
-    .locator('.library-nav-item, .library-add-button.is-collapsed, .library-collapse-button')
+    .locator(
+      '[data-slot="library-nav-item"], [data-slot="library-add-button"][data-collapsed="true"], button[aria-label="Collapse library navigator"], button[aria-label="Expand library navigator"]',
+    )
     .evaluateAll((elements) =>
       elements.map((element) => {
         const rect = element.getBoundingClientRect();
@@ -422,7 +444,7 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
   await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
   const navigator = page.getByRole('navigation', { name: 'Library' });
   const createPlaylist = async (name: string) => {
-    await navigator.locator('.library-add-button').click();
+    await navigator.locator('[data-slot="library-add-button"]').click();
     const dialog = page.getByRole('dialog', { name: 'New playlist' });
     await dialog.getByLabel('Playlist name').fill(name);
     await dialog.getByRole('button', { name: 'Create', exact: true }).click();
@@ -445,28 +467,30 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
         centerX: rect.x + rect.width / 2,
       };
     };
-    const pane = document.querySelector('.navigator-workbench-pane');
-    const navigator = document.querySelector<HTMLElement>('.library-navigator');
-    const navigatorHeading = document.querySelector<HTMLElement>('.library-navigator-heading');
-    const heading = document.querySelector('.library-navigator-heading h2');
-    const sectionHeading = document.querySelector('.library-section-heading');
-    const headingActions = document.querySelector('.library-heading-actions');
-    const divider = document.querySelector('.library-secondary-sections');
-    const primaryItems = document.querySelector('.library-primary-items');
-    const footer = document.querySelector('.library-navigator-footer');
+    const pane = document.querySelector('[data-pane="navigator"]');
+    const navigator = document.querySelector<HTMLElement>('[data-slot="library-navigator"]');
+    const navigatorHeading = document.querySelector<HTMLElement>(
+      '[data-slot="library-navigator-heading"]',
+    );
+    const heading = document.querySelector('[data-slot="library-navigator-heading"] h2');
+    const sectionHeading = document.querySelector('[data-slot="library-section-heading"]');
+    const headingActions = document.querySelector('[data-slot="library-heading-actions"]');
+    const divider = document.querySelector('[data-slot="library-secondary-sections"]');
+    const primaryItems = document.querySelector('[data-slot="library-primary-items"]');
+    const footer = document.querySelector('[data-slot="library-navigator-footer"]');
     const rows = Array.from(
       document.querySelectorAll<HTMLElement>(
-        '.library-primary-items .library-nav-item, .library-nav-action-row',
+        '[data-slot="library-primary-items"] [data-slot="library-nav-item"], [data-slot="playlist-nav-item"]',
       ),
     ).map((row) => {
-      const item = row.matches('.library-nav-action-row')
-        ? row.querySelector('.library-nav-item')
+      const item = row.matches('[data-slot="playlist-nav-item"]')
+        ? row.querySelector('[data-slot="library-nav-item"]')
         : row;
-      const menu = row.querySelector('.library-more-button');
+      const menu = row.querySelector('button[aria-label^="More actions for"]');
       return {
         row: box(row),
-        icon: box(item?.querySelector('.library-nav-item-icon') ?? null),
-        label: box(item?.querySelector('.library-nav-item-label') ?? null),
+        icon: box(item?.querySelector('[data-slot="library-nav-icon"]') ?? null),
+        label: box(item?.querySelector('[data-slot="library-nav-label"]') ?? null),
         menu: menu ? box(menu) : null,
       };
     });
@@ -540,13 +564,17 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
 
   const expectCollapsedGeometry = async () => {
     const compact = await page.evaluate(() => {
-      const pane = document.querySelector<HTMLElement>('.navigator-workbench-pane');
-      const heading = document.querySelector<HTMLElement>('.library-navigator-heading');
-      const launchers = document.querySelector<HTMLElement>('.library-collapsed-launchers');
+      const pane = document.querySelector<HTMLElement>('[data-pane="navigator"]');
+      const heading = document.querySelector<HTMLElement>(
+        '[data-slot="library-navigator-heading"]',
+      );
+      const launchers = document.querySelector<HTMLElement>(
+        '[data-slot="library-collapsed-playlists"]',
+      );
       const selectors = [
-        '.library-collapse-button',
-        '.library-nav-item',
-        '.library-add-button.is-collapsed',
+        'button[aria-label="Collapse library navigator"], button[aria-label="Expand library navigator"]',
+        '[data-slot="library-nav-item"]',
+        '[data-slot="library-add-button"][data-collapsed="true"]',
       ];
       if (!pane || !heading) throw new Error('Collapsed Library geometry is missing');
       const paneRect = pane.getBoundingClientRect();
@@ -573,8 +601,9 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
           marginBottom: headingStyle.marginBottom,
           padding: headingStyle.padding,
         },
-        launcherItemCount: launchers?.querySelectorAll('.library-nav-item').length ?? 0,
-        launcherCount: pane.querySelectorAll('.library-collapsed-launchers').length,
+        launcherItemCount:
+          launchers?.querySelectorAll('[data-slot="collapsed-playlist-tile"]').length ?? 0,
+        launcherCount: pane.querySelectorAll('[data-slot="library-collapsed-playlists"]').length,
         launcher: launcherStyle
           ? { marginTop: launcherStyle.marginTop, paddingTop: launcherStyle.paddingTop }
           : null,
@@ -590,7 +619,7 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
     expect(compact.launcherItemCount).toBe(2);
     expect(compact.launcherCount).toBe(1);
     expect(compact.launcher).toEqual({ marginTop: '8px', paddingTop: '6px' });
-    expect(compact.tiles.length).toBeGreaterThanOrEqual(5);
+    expect(compact.tiles).toHaveLength(4);
     for (const tile of compact.tiles) {
       expect(tile.width).toBeCloseTo(40, 0);
       expect(tile.height).toBeCloseTo(40, 0);
@@ -600,36 +629,43 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
   };
 
   await page.setViewportSize({ width: 800, height: 560 });
-  const responsiveCollapse = navigator.locator('.library-collapse-button');
+  const responsiveCollapse = navigator.locator(
+    'button[aria-label="Collapse library navigator"], button[aria-label="Expand library navigator"]',
+  );
   await expect(responsiveCollapse).toBeVisible();
   if (
     !(await page
-      .locator('.navigator-workbench-pane')
-      .evaluate((pane) => pane.classList.contains('is-collapsed')))
+      .locator('[data-pane="navigator"]')
+      .evaluate((pane) => pane.dataset.collapsed === 'true'))
   ) {
     await responsiveCollapse.click();
   }
-  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expect(page.locator('[data-pane="navigator"]')).toHaveAttribute('data-collapsed', 'true');
   await expectCollapsedGeometry();
   await page.setViewportSize({ width: 640, height: 448 });
-  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expect(page.locator('[data-pane="navigator"]')).toHaveAttribute('data-collapsed', 'true');
   await expectCollapsedGeometry();
 
   await page.setViewportSize({ width: 1366, height: 768 });
-  const responsiveExpand = navigator.locator('.library-collapse-button');
+  const responsiveExpand = navigator.locator(
+    'button[aria-label="Collapse library navigator"], button[aria-label="Expand library navigator"]',
+  );
   await expect(responsiveExpand).toBeVisible();
   if (
     await page
-      .locator('.navigator-workbench-pane')
-      .evaluate((pane) => pane.classList.contains('is-collapsed'))
+      .locator('[data-pane="navigator"]')
+      .evaluate((pane) => pane.dataset.collapsed === 'true')
   ) {
     await responsiveExpand.click();
   }
-  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+  await expect(page.locator('[data-pane="navigator"]')).not.toHaveAttribute(
+    'data-collapsed',
+    'true',
+  );
   for (const name of ['Longest playlist title for alignment', 'Short list']) {
     await page.getByRole('button', { name: `More actions for ${name}` }).click();
     await page.getByRole('menuitem', { name: 'Delete playlist' }).click();
-    const dialog = page.getByRole('dialog', { name: /Delete/ });
+    const dialog = page.getByRole('alertdialog', { name: /Delete/ });
     await dialog.getByRole('button', { name: 'Delete playlist', exact: true }).click();
   }
   const empty = await page.evaluate(() => {
@@ -640,11 +676,11 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
       return { x: rect.x, right: rect.right, centerX: rect.x + rect.width / 2 };
     };
     return {
-      playlistCount: document.querySelectorAll('.library-nav-action-row').length,
-      sectionHeading: box('.library-section-heading'),
-      emptyAction: box('.library-empty-playlists-create'),
-      footer: box('.library-navigator-footer'),
-      pane: box('.navigator-workbench-pane'),
+      playlistCount: document.querySelectorAll('[data-slot="playlist-nav-item"]').length,
+      sectionHeading: box('[data-slot="library-section-heading"]'),
+      emptyAction: box('[data-slot="library-empty-playlists-create"]'),
+      footer: box('[data-slot="library-navigator-footer"]'),
+      pane: box('[data-pane="navigator"]'),
     };
   });
   expect(empty.playlistCount).toBe(0);
@@ -652,22 +688,25 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
   expect(Math.abs(empty.footer.centerX - empty.pane.centerX)).toBeLessThanOrEqual(1);
 
   await page.setViewportSize({ width: 800, height: 560 });
-  const emptyCollapseButton = navigator.locator('.library-collapse-button');
+  const emptyCollapseButton = navigator.locator(
+    'button[aria-label="Collapse library navigator"], button[aria-label="Expand library navigator"]',
+  );
   if (
     !(await page
-      .locator('.navigator-workbench-pane')
-      .evaluate((pane) => pane.classList.contains('is-collapsed')))
+      .locator('[data-pane="navigator"]')
+      .evaluate((pane) => pane.dataset.collapsed === 'true'))
   ) {
     await emptyCollapseButton.click();
   }
-  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expect(page.locator('[data-pane="navigator"]')).toHaveAttribute('data-collapsed', 'true');
   const emptyCollapsed = await navigator.evaluate((element) => ({
     playlistTileCount: element.querySelectorAll(
-      '.library-collapsed-playlist-scroller .library-collapsed-playlist-tile',
+      '[data-slot="library-collapsed-playlist-scroller"] [data-slot="collapsed-playlist-tile"]',
     ).length,
-    launchers: element.querySelectorAll('.library-collapsed-launchers').length,
-    expandedPlaylistSection: element.querySelectorAll('.library-secondary-sections').length,
-    children: Array.from(element.children).map((child) => (child as HTMLElement).className),
+    launchers: element.querySelectorAll('[data-slot="library-collapsed-playlists"]').length,
+    expandedPlaylistSection: element.querySelectorAll('[data-slot="library-secondary-sections"]')
+      .length,
+    children: Array.from(element.children).map((child) => (child as HTMLElement).dataset.slot),
   }));
   expect(emptyCollapsed).toEqual({
     playlistTileCount: 0,
@@ -676,7 +715,7 @@ test('Graphite Library keeps its headings, rows, actions, dividers, and compact 
     children: [
       'library-navigator-heading',
       'library-primary-items',
-      'library-collapsed-launchers',
+      'library-collapsed-playlists',
       'library-navigator-footer',
     ],
   });
@@ -708,22 +747,34 @@ test('Graphite automatic compact navigation preserves the saved expanded prefere
 
   await expect.poll(preference).toBe('expanded');
   await page.setViewportSize({ width: 640, height: 448 });
-  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expect(page.locator('[data-pane="navigator"]')).toHaveAttribute('data-collapsed', 'true');
   await expect(navigator.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
   await expect.poll(preference).toBe('expanded');
 
   await navigator.getByRole('button', { name: 'Expand library navigator' }).click();
-  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
-  await expect(page.locator('.workbench')).toHaveAttribute('data-layout-fits', 'true');
+  await expect(page.locator('[data-pane="navigator"]')).not.toHaveAttribute(
+    'data-collapsed',
+    'true',
+  );
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute('data-layout-fits', 'true');
   await expect.poll(preference).toBe('expanded');
 
   await page.setViewportSize({ width: 800, height: 560 });
-  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '800');
-  await expect(page.locator('.navigator-workbench-pane')).not.toHaveClass(/is-collapsed/);
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-workbench-width',
+    '800',
+  );
+  await expect(page.locator('[data-pane="navigator"]')).not.toHaveAttribute(
+    'data-collapsed',
+    'true',
+  );
   await expect.poll(preference).toBe('expanded');
   await page.setViewportSize({ width: 640, height: 448 });
-  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '640');
-  await expect(page.locator('.navigator-workbench-pane')).toHaveClass(/is-collapsed/);
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-workbench-width',
+    '640',
+  );
+  await expect(page.locator('[data-pane="navigator"]')).toHaveAttribute('data-collapsed', 'true');
   await expect.poll(preference).toBe('expanded');
   await expect
     .poll(() => page.evaluate(() => document.documentElement.scrollWidth))

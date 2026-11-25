@@ -69,6 +69,7 @@ describe('LibraryNavigator built-in source', () => {
     expect(builtin).toBeDisabled();
     expect(builtin).not.toHaveTextContent('0');
     expect(screen.getByRole('status')).toHaveTextContent(/aren’t available in this installation/i);
+    expect(screen.getByText('Create playlist', { selector: 'button' })).toHaveClass('bg-primary');
     expect(screen.queryByRole('button', { name: /All Songs/ })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Liked Songs/ })).toBeEnabled();
   });
@@ -87,6 +88,19 @@ describe('LibraryNavigator built-in source', () => {
     expect(builtin).toBeEnabled();
     expect(builtin).toHaveTextContent('0');
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    const createPlaylist = screen.getByText('Create playlist', { selector: 'button' });
+    expect(createPlaylist).toHaveClass('bg-primary');
+    expect(
+      screen.getByText('Create a playlist to collect songs or import local sheets.'),
+    ).toBeVisible();
+
+    act(() =>
+      store.setState((state) => ({
+        ...state,
+        library: { ...state.library, likedTotal: 1 },
+      })),
+    );
+    expect(createPlaylist).toHaveClass('border-border', 'bg-transparent');
   });
 
   it('offers a working retry after navigation loading fails', async () => {
@@ -202,10 +216,10 @@ describe('LibraryNavigator built-in source', () => {
         ),
       );
       if (count > 0) {
-        expect(tiles[0]?.querySelector('.library-playlist-monogram')).toHaveTextContent('Á');
+        expect(tiles[0]).toHaveTextContent('Á');
       }
       if (count > 2) {
-        expect(tiles[2]?.querySelector('.library-playlist-monogram')).toHaveTextContent('👨‍👩‍👧‍👦');
+        expect(tiles[2]).toHaveTextContent('👨‍👩‍👧‍👦');
       }
       expect(screen.queryByRole('button', { name: 'Playlists' })).toBeNull();
       expect(screen.queryByRole('menu', { name: 'Playlists' })).toBeNull();

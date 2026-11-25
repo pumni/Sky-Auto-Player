@@ -10,14 +10,14 @@ test('Built-in pager count has a readable left inset and no duplicate dock locat
     await page.setViewportSize(viewport);
     await page.goto('/?mockCatalogCount=112&mockPlaybackDurationMs=120000&mockStartDelayMs=10');
 
-    const inset = await page.locator('.builtin-pager-range').evaluate((element) => {
-      const wrap = element.closest('.builtin-pager-wrap');
+    const inset = await page.locator('[data-slot="builtin-pager-range"]').evaluate((element) => {
+      const wrap = element.closest('[data-slot="builtin-pager"]');
       if (!wrap) throw new Error('Built-in pager footer is missing');
       return element.getBoundingClientRect().left - wrap.getBoundingClientRect().left;
     });
     expect(inset).toBeGreaterThanOrEqual(17);
 
-    const locate = page.locator('.builtin-pager-wrap').getByRole('button', {
+    const locate = page.locator('[data-slot="builtin-pager"]').getByRole('button', {
       name: 'Locate selected',
     });
     await expect(locate).toHaveCount(1);
@@ -39,19 +39,19 @@ test('Locate selected in the pager footer centers an off-screen row on demand', 
   await page.goto('/?mockCatalogCount=112');
 
   const grid = page.getByRole('grid', { name: 'Built-in Songs, page 1' });
-  const selected = page.locator('.track-row[aria-rowindex="2"]');
-  const locate = page.locator('.builtin-pager-wrap').getByRole('button', {
+  const selected = page.locator('[data-slot="track-row"][aria-rowindex="2"]');
+  const locate = page.locator('[data-slot="builtin-pager"]').getByRole('button', {
     name: 'Locate selected',
   });
   await expect(locate).toBeDisabled();
-  await expect(locate.locator('svg')).toHaveClass(/lucide-locate-fixed/);
+  await expect(locate).toHaveAttribute('title', 'Go to selected song');
   const dock = page.getByRole('contentinfo', { name: 'Player controls' });
   await expect(dock.getByRole('button', { name: 'Locate selected' })).toHaveCount(0);
   await expect(dock.getByRole('button', { name: /Show now playing/ })).toHaveCount(0);
   await selected.click();
   await expect(selected).toHaveAttribute('aria-selected', 'true');
   await expect(locate).toBeEnabled();
-  await expect(page.locator('.track-browser-locate-button')).toHaveCount(0);
+  await expect(page.locator('[data-slot="track-browser-locate-button"]')).toHaveCount(0);
 
   await grid.evaluate((element) => {
     element.scrollTop = 70 * 46;
@@ -71,8 +71,8 @@ test('Locate selected in the pager footer restores the original built-in page', 
   await page.setViewportSize({ width: 987, height: 691 });
   await page.goto('/?mockCatalogCount=112');
 
-  const selected = page.locator('.track-row[aria-rowindex="2"]');
-  const locate = page.locator('.builtin-pager-wrap').getByRole('button', {
+  const selected = page.locator('[data-slot="track-row"][aria-rowindex="2"]');
+  const locate = page.locator('[data-slot="builtin-pager"]').getByRole('button', {
     name: 'Locate selected',
   });
   await selected.click();

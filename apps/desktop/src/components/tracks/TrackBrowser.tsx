@@ -1,10 +1,10 @@
 import { ArrowLeft } from 'lucide-react';
-import { Button } from 'react-aria-components';
 import { useRef, useState } from 'react';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { Button } from '../ui/button';
+import { BuiltinPager } from './BuiltinPager';
 import { PlaylistAddSongsMenu, type PlaylistImportFeedback } from './PlaylistAddSongsMenu';
 import { TrackTable, type TrackTableHandle } from './TrackTable';
-import { BuiltinPager } from './BuiltinPager';
 import { formatSongCount } from './trackFormatting';
 
 interface TrackBrowserProps {
@@ -126,28 +126,41 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
 
   return (
     <section
-      className={`track-browser${isPlaylist ? ' is-playlist' : ''}${
-        isPlaylistAddMode ? ' is-playlist-add-mode' : ''
-      }`}
+      className="@container/track-browser flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-surface"
       aria-labelledby="track-browser-title"
+      data-slot="track-browser"
     >
-      <header className="track-browser-header">
-        <div className="track-browser-heading">
+      <header
+        data-slot="track-browser-header"
+        className="relative flex h-8 min-h-8 flex-none items-center gap-1.5 bg-surface px-2 @min-[680px]/track-browser:h-10 @min-[680px]/track-browser:min-h-10 @min-[680px]/track-browser:gap-2 @min-[680px]/track-browser:px-3"
+      >
+        <div
+          data-slot="track-browser-heading-content"
+          className="flex min-w-0 flex-1 items-baseline gap-1.5"
+        >
           {isPlaylistAddMode && (
             <Button
-              className="button track-browser-back-button"
-              onPress={() => void exitPlaylistAdd()}
+              variant="outline"
+              className="h-8 flex-none self-center whitespace-nowrap"
+              onClick={() => void exitPlaylistAdd()}
             >
               <ArrowLeft size={14} aria-hidden="true" />
               <span>Back to playlist</span>
             </Button>
           )}
-          <div className="track-browser-source-label">
-            <h1 id="track-browser-title" title={heading}>
+          <div className="inline-flex min-w-0 max-w-full flex-[0_1_auto] items-center rounded-control pl-1.5">
+            <h1
+              className="min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-base font-semibold leading-[22px] tracking-tight text-foreground @min-[680px]/track-browser:text-xl @min-[680px]/track-browser:leading-7"
+              id="track-browser-title"
+              title={heading}
+            >
               {heading}
             </h1>
           </div>
-          <span className="track-browser-count">
+          <span
+            data-slot="track-browser-count"
+            className="flex-none whitespace-nowrap text-[11px] tabular-nums text-text-tertiary before:mr-1.5 before:content-['·'] @min-[680px]/track-browser:text-xs"
+          >
             {loading
               ? 'Updating…'
               : isPlaylistAddMode
@@ -162,13 +175,16 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
             navigationState === 'ready' &&
             builtinAvailable &&
             builtinSongCount === 0 && (
-              <span className="track-browser-guidance">
+              <span
+                data-slot="track-browser-guidance"
+                className="absolute left-3 top-full mt-1 text-xs text-text-secondary"
+              >
                 Create a playlist to import local sheets.
               </span>
             )}
         </div>
         {isPlaylist && !isPlaylistAddMode && (
-          <div className="playlist-actions">
+          <div className="flex flex-none items-center">
             <PlaylistAddSongsMenu
               playlistId={source.id}
               useStore={useStore}
@@ -179,7 +195,8 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
       </header>
       {importFeedbackText && (
         <p
-          className={`playlist-import-feedback is-${importFeedback?.state}`}
+          className={`mx-0 flex flex-none flex-wrap items-center gap-2 border-b px-3 py-1 text-xs ${importFeedback?.state === 'error' ? 'border-danger-border bg-danger-surface text-danger' : importFeedback?.state === 'complete' ? 'border-success-border bg-success-surface text-success' : 'border-border bg-surface text-text-secondary'}`}
+          data-slot="track-browser-import-feedback"
           role={importFeedback?.state === 'error' ? 'alert' : 'status'}
           aria-live={importFeedback?.state === 'error' ? 'assertive' : 'polite'}
         >
@@ -188,21 +205,23 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
       )}
       {((error && resultTotal > 0) || (isBuiltinSearch && failedBuiltinPage !== null)) && (
         <div
-          className="inline-error builtin-page-feedback"
+          className="flex flex-none flex-wrap items-center gap-x-2 gap-y-1 border-b border-danger-border bg-danger-surface px-[18px] py-1 text-xs text-danger"
           role={isBuiltinSearch && failedBuiltinPage !== null ? 'alert' : 'status'}
         >
           {error && resultTotal > 0 && <span>{error}</span>}
           {isBuiltinSearch && failedBuiltinPage !== null && (
             <>
               <span>Couldn’t load page {failedBuiltinPage}.</span>
-              <button
-                className="button"
+              <Button
+                variant="outline"
+                size="xs"
+                className="h-7 px-2 text-xs"
                 type="button"
                 onClick={() => {
                   void retryBuiltinPage().finally(() => {
                     window.setTimeout(() => {
                       const pagerTarget =
-                        document.querySelector<HTMLButtonElement>('.builtin-pager-jump-trigger') ??
+                        document.querySelector<HTMLButtonElement>('[data-page-jump="true"]') ??
                         document.querySelector<HTMLButtonElement>(
                           '[aria-label="Next page"]:not(:disabled)',
                         ) ??
@@ -215,31 +234,41 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
                 }}
               >
                 Retry page {failedBuiltinPage}
-              </button>
+              </Button>
             </>
           )}
         </div>
       )}
       {loading && resultTotal === 0 ? (
-        <div className="empty-state" role="status" aria-busy="true">
-          <strong>Loading library…</strong>
-          <span className="muted">Reading your song catalog.</span>
+        <div
+          data-slot="library-empty-state"
+          className="grid min-h-0 flex-1 content-center justify-items-center gap-2 p-6 text-center"
+          role="status"
+          aria-busy="true"
+        >
+          <strong className="font-semibold text-foreground">Loading library…</strong>
+          <span className="text-muted-foreground">Reading your song catalog.</span>
         </div>
       ) : error && resultTotal === 0 ? (
-        <div className="empty-state" role="alert">
-          <strong>
+        <div
+          data-slot="library-empty-state"
+          className="grid min-h-0 flex-1 content-center justify-items-center gap-2 p-6 text-center"
+          role="alert"
+        >
+          <strong className="font-semibold text-foreground">
             {isBuiltinSearch
               ? builtinUnavailable
                 ? 'Built-in Songs are unavailable'
                 : 'Built-in Songs could not be loaded'
               : 'Library unavailable'}
           </strong>
-          <span className="muted">
+          <span className="text-muted-foreground">
             {isBuiltinSearch && builtinUnavailable ? noResultsMessage : error}
           </span>
           <Button
-            className="button button-primary"
-            onPress={() =>
+            variant="default"
+            className="h-9"
+            onClick={() =>
               void (isBuiltinSearch && builtinUnavailable
                 ? loadLibraryNavigation()
                 : reloadLibrary())
@@ -249,13 +278,18 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
           </Button>
         </div>
       ) : !loading && resultTotal === 0 ? (
-        <div className="empty-state" role={builtinCatalogMissing ? 'alert' : undefined}>
-          <strong>{noResultsHeading}</strong>
-          <span className="muted">{noResultsMessage}</span>
+        <div
+          data-slot="library-empty-state"
+          className="grid min-h-0 flex-1 content-center justify-items-center gap-2 p-6 text-center"
+          role={builtinCatalogMissing ? 'alert' : undefined}
+        >
+          <strong className="font-semibold text-foreground">{noResultsHeading}</strong>
+          <span className="max-w-[42rem] text-muted-foreground">{noResultsMessage}</span>
           {isPlaylist && !isPlaylistAddMode && (
             <Button
-              className="button button-primary empty-state-add-songs-button"
-              onPress={() => void openPlaylistAdd(source.id)}
+              variant="default"
+              className="mt-2 h-9"
+              onClick={() => void openPlaylistAdd(source.id)}
             >
               Browse Built-in Songs…
             </Button>
@@ -263,8 +297,9 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
           {isBuiltinSearch &&
             (builtinUnavailable || builtinStatusUnknown || builtinCatalogMissing) && (
               <Button
-                className="button button-primary"
-                onPress={() =>
+                variant="default"
+                className="mt-2 h-9"
+                onClick={() =>
                   void (builtinUnavailable || builtinStatusUnknown
                     ? loadLibraryNavigation()
                     : reloadLibrary())
@@ -274,7 +309,7 @@ function TrackBrowserContent({ useStore }: TrackBrowserProps) {
               </Button>
             )}
           {hasSearch && (
-            <Button className="button" onPress={() => void search('')}>
+            <Button variant="outline" className="mt-2 h-9" onClick={() => void search('')}>
               Clear search
             </Button>
           )}

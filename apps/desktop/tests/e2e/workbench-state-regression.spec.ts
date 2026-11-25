@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 
 const viewports = [
   { width: 640, height: 448 },
@@ -14,7 +14,7 @@ async function openApp(page: Page, viewport: { width: number; height: number }, 
     await page.evaluate(() => window.localStorage.clear());
   }
   await page.goto(path);
-  await expect(page.locator('.app-shell')).toBeVisible();
+  await expect(page.locator('[data-app-shell]')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-palette', 'graphite');
 }
 
@@ -28,20 +28,22 @@ async function startDryRunWithSelection(page: Page) {
     .getByRole('button', { name: 'Test playback (no input)' })
     .click();
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
-  await expect(player.locator('.player-track-status')).toHaveText('Playing');
+  await expect(player.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
     'aria-selected',
     'true',
   );
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Candle Run',
+  );
   return player;
 }
 
 async function openInspector(page: Page, tab: 'Details' | 'Runtime' = 'Details') {
   const trigger = page.getByRole('button', { name: 'Open utility panel' });
   if ((await trigger.getAttribute('aria-expanded')) !== 'true') await trigger.click();
-  const inspector = page.locator('.utility-surface');
+  const inspector = page.locator('[role="region"][aria-label^="Utility:"]');
   await expect(inspector).toBeVisible();
   if (tab === 'Runtime') await inspector.getByRole('tab', { name: 'Runtime' }).click();
   else await inspector.getByRole('tab', { name: 'Details' }).click();
@@ -50,7 +52,7 @@ async function openInspector(page: Page, tab: 'Details' | 'Runtime' = 'Details')
 
 async function createPlaylist(page: Page, name = 'Practice') {
   const navigator = page.getByRole('navigation', { name: 'Library' });
-  await navigator.locator('.library-add-button').click();
+  await navigator.locator('[data-slot="library-add-button"]').click();
   const dialog = page.getByRole('dialog', { name: 'New playlist' });
   await dialog.getByLabel('Playlist name').fill(name);
   await dialog.getByRole('button', { name: 'Create', exact: true }).click();
@@ -71,7 +73,10 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
   await search.focus();
   await expect(search).toBeFocused();
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'docked');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'docked',
+  );
   const smokeNavigator = page.getByRole('navigation', { name: 'Library' });
   await smokeNavigator.getByRole('button', { name: 'Collapse library navigator' }).click();
   await expect(page.getByRole('button', { name: 'Expand library navigator' })).toBeVisible();
@@ -89,9 +94,11 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   await expect(runtimeInspector.getByRole('tab', { name: 'Runtime' })).toBeVisible();
 
   await openApp(page, viewports[1], '/?mockLibraryState=empty');
-  await expect(page.locator('.empty-state strong')).toHaveText('No Built-in Songs are available');
-  await expect(page.locator('.library-empty-playlists p')).toContainText(
-    'import local sheet files',
+  await expect(page.locator('[data-slot="library-empty-state"] strong')).toHaveText(
+    'No Built-in Songs are available',
+  );
+  await expect(page.locator('[data-slot="library-empty-playlists-guidance"]')).toHaveText(
+    'Create a playlist to collect songs or import local sheets.',
   );
 
   await openApp(page, viewports[1]);
@@ -103,7 +110,9 @@ test('workbench library, playback safety, keyboard, and diagnostics states remai
   await createPlaylist(page, 'Practice');
   await page.getByRole('button', { name: 'Add songs' }).click();
   await page.getByRole('menuitem', { name: 'Import files…' }).click();
-  await expect(page.getByRole('status')).toHaveText('Import complete: 1 song found in Practice.');
+  await expect(page.locator('[data-slot="track-browser-import-feedback"]')).toHaveText(
+    'Import complete: 1 song found in Practice.',
+  );
   await expect(page.getByRole('row', { name: /Local Song B/ })).toBeVisible();
 
   await openApp(page, viewports[3]);

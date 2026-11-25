@@ -22,7 +22,7 @@ test('production bundle boots the mock shell and supports a representative flow'
   await expect(songsGrid).toHaveAttribute('aria-rowcount', '2');
   const moonlitRow = page.getByRole('row', { name: /Moonlit Village/ });
   await expect(moonlitRow).toBeVisible();
-  await moonlitRow.locator('.track-title-text').click();
+  await moonlitRow.getByText('Moonlit Village', { exact: true }).click();
   await expect(moonlitRow).toHaveAttribute('aria-selected', 'true');
   await expect(songsGrid).toBeFocused();
   await page.getByRole('button', { name: 'Open utility panel' }).click();
@@ -41,6 +41,9 @@ test('production bundle boots the mock shell and supports a representative flow'
   await settings.getByRole('button', { name: 'Close settings' }).click();
   await expect(settings).toBeHidden();
   await page.getByRole('button', { name: /Open update/ }).click();
-  await expect(page.getByRole('dialog', { name: 'Software update' })).toBeVisible();
+  const updateDialog = page
+    .getByRole('dialog')
+    .filter({ has: page.getByRole('button', { name: 'Close update' }) });
+  await expect(updateDialog).toBeVisible();
   expect([...featureChunks].some((url) => /UpdateDialog-/.test(url))).toBe(true);
 });

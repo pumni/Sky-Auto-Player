@@ -9,7 +9,7 @@ changed behavior; follow its source/test references only as needed.
 | Native scheduling, admission, timing, cleanup, retirement | [Playback engine](playback-engine.md) |
 | Windows tests, calibration, evidence and authorization | [Playback verification](playback-verification.md) |
 | Desktop behavior, layout and preparation UI | [Workbench](desktop-workbench.md) |
-| React Aria typing and frontend dependencies | [Type boundary](desktop-type-boundary.md) |
+| Desktop frontend stack and type boundary | [Type boundary](desktop-type-boundary.md) |
 | App commands, browser runners and worktree isolation | [JavaScript tooling](desktop-tooling.md) |
 | Visual UI work | [Visual reference](ui/README.md) (check capture SHA) |
 | Library identity and membership | [Library V1](library-v1-contract.md) |

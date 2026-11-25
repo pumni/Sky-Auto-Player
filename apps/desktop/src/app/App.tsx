@@ -1,20 +1,21 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import type { DesktopBridge } from '../bridge/DesktopBridge';
-import { BootstrapGate } from './BootstrapGate';
-import { AppTitleBar } from '../components/chrome/AppTitleBar';
-import { PlayerBar } from '../components/player/PlayerBar';
-import { Workbench } from '../components/workbench/Workbench';
-import { createDesktopStore } from '../state/store';
-import { createWindowControls } from '../platform/windowControls';
-import { PackagedSmokeTest } from './usePackagedSmokeTest';
-import { recordStartupTelemetry } from '../bridge/startupTelemetry';
 import { applyAppearance } from '../appearance/applyAppearance';
 import { resolveAppearance } from '../appearance/resolveAppearance';
 import { useSystemAppearance } from '../appearance/useSystemAppearance';
+import type { DesktopBridge } from '../bridge/DesktopBridge';
+import { recordStartupTelemetry } from '../bridge/startupTelemetry';
+import { AppTitleBar } from '../components/chrome/AppTitleBar';
+import { PlayerBar } from '../components/player/PlayerBar';
+import { TooltipProvider } from '../components/ui/tooltip';
+import { Workbench } from '../components/workbench/Workbench';
 import {
   revealStartupWindow,
   scheduleStartupWindowRevealFallback,
 } from '../platform/startupWindowReveal';
+import { createWindowControls } from '../platform/windowControls';
+import { createDesktopStore } from '../state/store';
+import { BootstrapGate } from './BootstrapGate';
+import { PackagedSmokeTest } from './usePackagedSmokeTest';
 
 const SettingsPanel = lazy(() =>
   import('../components/settings/SettingsPanel').then(({ SettingsPanel: component }) => ({
@@ -54,8 +55,12 @@ export function App({ bridge }: AppProps) {
   const settings = useStore((store) => store.settings);
   const settingsOpen = useStore((store) => store.settingsOpen);
   const updateDialogOpen = useStore((store) => store.update.dialogOpen);
+  const setSettingsOpen = useStore((store) => store.setSettingsOpen);
+  const toggleUtility = useStore((store) => store.toggleUtility);
   const windowControls = useMemo(() => createWindowControls(), []);
   const [settingsMounted, setSettingsMounted] = useState(false);
+  const [updateMounted, setUpdateMounted] = useState(false);
+  const returnToSettingsAfterUpdateRef = useRef(false);
   const { mode: systemMode, ready: appearanceReady } = useSystemAppearance();
 
   useEffect(() => {
@@ -84,13 +89,37 @@ export function App({ bridge }: AppProps) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const hasActiveModal = document.querySelector('[aria-modal="true"]') !== null;
       const isFindShortcut = event.key.toLowerCase() === 'f' && event.ctrlKey;
+      const hasPlainControlModifier = event.ctrlKey && !event.metaKey && !event.altKey;
+      const isSettingsShortcut = event.key === ',' && hasPlainControlModifier;
+      const isInspectorShortcut =
+        event.key.toLowerCase() === 'i' &&
+        hasPlainControlModifier &&
+        !isEditableTarget(event.target);
       const isSlashShortcut =
         event.key === '/' &&
         !event.ctrlKey &&
         !event.metaKey &&
         !event.altKey &&
         !isEditableTarget(event.target);
+      if (
+        !settingsOpen &&
+        !updateDialogOpen &&
+        !hasActiveModal &&
+        !isEditableTarget(event.target) &&
+        isSettingsShortcut
+      ) {
+        event.preventDefault();
+        setSettingsMounted(true);
+        setSettingsOpen(true);
+        return;
+      }
+      if (!settingsOpen && !updateDialogOpen && !hasActiveModal && isInspectorShortcut) {
+        event.preventDefault();
+        toggleUtility();
+        return;
+      }
       if (!settingsOpen && (isFindShortcut || isSlashShortcut)) {
         event.preventDefault();
         searchInputRef.current?.focus();
@@ -98,35 +127,55 @@ export function App({ bridge }: AppProps) {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [settingsOpen, useStore]);
+  }, [settingsOpen, setSettingsOpen, toggleUtility, updateDialogOpen]);
 
   return (
-    <BootstrapGate useStore={useStore}>
-      {bootstrap?.gui_smoke === true && <PackagedSmokeTest bridge={bridge} useStore={useStore} />}
-      {bootstrap && (
-        <div className="app-shell">
-          <AppTitleBar
-            bootstrap={bootstrap}
-            useStore={useStore}
-            settingsTriggerRef={settingsTriggerRef}
-            searchInputRef={searchInputRef}
-            windowControls={windowControls}
-            onSettingsOpen={() => setSettingsMounted(true)}
-          />
-          <Workbench useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
-          <PlayerBar useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
-          <Suspense fallback={null}>
-            {(settingsOpen || settingsMounted) && (
-              <SettingsPanel
-                bootstrap={bootstrap}
-                useStore={useStore}
-                settingsTriggerRef={settingsTriggerRef}
-              />
-            )}
-            {updateDialogOpen && <UpdateDialog useStore={useStore} />}
-          </Suspense>
-        </div>
-      )}
-    </BootstrapGate>
+    <TooltipProvider delay={350} closeDelay={80} timeout={450}>
+      <BootstrapGate useStore={useStore}>
+        {bootstrap?.gui_smoke === true && <PackagedSmokeTest bridge={bridge} useStore={useStore} />}
+        {bootstrap && (
+          <div
+            data-app-shell
+            className="grid h-dvh min-h-0 w-full min-w-0 grid-rows-[40px_minmax(0,1fr)_92px] overflow-hidden bg-background"
+          >
+            <AppTitleBar
+              bootstrap={bootstrap}
+              useStore={useStore}
+              settingsTriggerRef={settingsTriggerRef}
+              searchInputRef={searchInputRef}
+              windowControls={windowControls}
+              onSettingsOpen={() => setSettingsMounted(true)}
+              onUpdateOpen={() => setUpdateMounted(true)}
+            />
+            <Workbench useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
+            <PlayerBar useStore={useStore} utilityTriggerRef={utilityTriggerRef} />
+            <Suspense fallback={null}>
+              {(settingsOpen || settingsMounted) && (
+                <SettingsPanel
+                  bootstrap={bootstrap}
+                  useStore={useStore}
+                  onUpdateDialogOpen={() => {
+                    returnToSettingsAfterUpdateRef.current = true;
+                    setUpdateMounted(true);
+                    setSettingsOpen(false);
+                  }}
+                />
+              )}
+              {(updateMounted || updateDialogOpen) && (
+                <UpdateDialog
+                  useStore={useStore}
+                  onCloseComplete={() => {
+                    if (returnToSettingsAfterUpdateRef.current) {
+                      returnToSettingsAfterUpdateRef.current = false;
+                      setSettingsOpen(true);
+                    }
+                  }}
+                />
+              )}
+            </Suspense>
+          </div>
+        )}
+      </BootstrapGate>
+    </TooltipProvider>
   );
 }

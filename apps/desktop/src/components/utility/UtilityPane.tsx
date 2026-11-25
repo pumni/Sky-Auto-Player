@@ -6,13 +6,13 @@ import {
   useEffect,
   useLayoutEffect,
   useRef,
-  useState,
   type ReactNode,
   type RefObject,
 } from 'react';
-import { Button, Tabs, TabPanel } from 'react-aria-components';
-import { Tooltip, TooltipTrigger } from 'react-aria-components/Tooltip';
 import type { DesktopStoreHook, UtilityView } from '../../state/store';
+import { Button } from '../ui/button';
+import { Tabs, TabsContent } from '../ui/tabs';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { SongDetailsView } from './SongDetailsView';
 import { UtilityHeader } from './UtilityHeader';
 
@@ -24,42 +24,37 @@ interface UtilityRailItemProps {
   label: string;
   active: boolean;
   icon: ReactNode;
-  onPress: () => void;
+  onSelect: () => void;
 }
 
-function UtilityRailItem({ label, active, icon, onPress }: UtilityRailItemProps) {
-  const [focusTooltipOpen, setFocusTooltipOpen] = useState(false);
-  const [interactionTooltipOpen, setInteractionTooltipOpen] = useState(false);
-
+function UtilityRailItem({ label, active, icon, onSelect }: UtilityRailItemProps) {
   return (
-    <TooltipTrigger
-      delay={350}
-      closeDelay={0}
-      isOpen={focusTooltipOpen || interactionTooltipOpen}
-      onOpenChange={setInteractionTooltipOpen}
-    >
-      <Button
-        className={`utility-rail-item${active ? ' is-active' : ''}`}
-        type="button"
-        aria-label={label}
-        aria-pressed={active}
-        onFocus={() => setFocusTooltipOpen(true)}
-        onBlur={() => setFocusTooltipOpen(false)}
-        onPress={onPress}
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            variant="ghost"
+            size="icon"
+            className="relative size-10 rounded-control p-0 text-text-secondary after:absolute after:inset-y-2.5 after:right-0.5 after:w-[3px] after:rounded-full after:bg-accent-ink after:opacity-0 hover:bg-control-hover hover:text-foreground aria-pressed:bg-selection aria-pressed:text-accent-ink aria-pressed:after:opacity-100"
+            type="button"
+            aria-label={label}
+            aria-pressed={active}
+            onClick={onSelect}
+          />
+        }
       >
-        <span className="utility-rail-item-icon" aria-hidden="true">
+        <span className="grid place-items-center" aria-hidden="true">
           {icon}
         </span>
-      </Button>
-      <Tooltip className="library-playlist-tooltip" placement="left">
-        {label}
-      </Tooltip>
-    </TooltipTrigger>
+      </TooltipTrigger>
+      <TooltipContent side="left">{label}</TooltipContent>
+    </Tooltip>
   );
 }
 
 interface UtilityPaneProps {
   presentationMode: 'docked' | 'overlay';
+  isExiting?: boolean;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   onExpand?: () => void;
@@ -69,6 +64,7 @@ interface UtilityPaneProps {
 
 export function UtilityPane({
   presentationMode,
+  isExiting = false,
   collapsed = false,
   onToggleCollapsed,
   onExpand,
@@ -146,7 +142,7 @@ export function UtilityPane({
     return () => document.removeEventListener('keydown', closeOnEscape);
   }, [close, presentationMode, utility.open]);
 
-  if (!utility.open) return null;
+  if (!utility.open && !isExiting) return null;
 
   const isCollapsedRail = presentationMode === 'docked' && collapsed;
 
@@ -155,7 +151,7 @@ export function UtilityPane({
       <section
         ref={paneRef}
         id="utility-inspector"
-        className="utility-surface is-collapsed"
+        className="flex min-h-0 min-w-0 flex-1 flex-col items-center bg-card px-[3px] py-2"
         role="region"
         tabIndex={-1}
         aria-label={`Utility: ${utility.activeView === 'diagnostics' ? 'Diagnostics' : 'Song Details'}`}
@@ -168,30 +164,32 @@ export function UtilityPane({
           }
         }}
       >
-        <div className="utility-collapsed-header">
-          <button
+        <div className="mb-1 flex min-h-10 w-full items-center justify-center">
+          <Button
+            variant="ghost"
+            size="icon-lg"
             ref={expandButtonRef}
-            className="icon-button icon-button-boxed utility-collapse-button"
+            className="size-10 p-0 hover:bg-control-hover"
             type="button"
             aria-label="Expand Inspector"
             title="Expand Inspector"
             onClick={handleToggleCollapsed}
           >
             <ChevronLeft size={17} aria-hidden="true" />
-          </button>
+          </Button>
         </div>
-        <div className="utility-collapsed-items" role="group" aria-label="Utility views">
+        <div className="grid justify-items-center gap-1" role="group" aria-label="Utility views">
           <UtilityRailItem
             label="Song Details"
             active={utility.activeView === 'details'}
             icon={<FileMusic size={18} />}
-            onPress={() => handleRailExpand('details')}
+            onSelect={() => handleRailExpand('details')}
           />
           <UtilityRailItem
             label="Runtime"
             active={utility.activeView === 'diagnostics'}
             icon={<Activity size={18} />}
-            onPress={() => handleRailExpand('diagnostics')}
+            onSelect={() => handleRailExpand('diagnostics')}
           />
         </div>
       </section>
@@ -202,7 +200,7 @@ export function UtilityPane({
     <section
       ref={paneRef}
       id="utility-inspector"
-      className="utility-surface"
+      className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-card"
       role="region"
       tabIndex={-1}
       aria-label={`Utility: ${utility.activeView === 'diagnostics' ? 'Diagnostics' : 'Song Details'}`}
@@ -215,10 +213,10 @@ export function UtilityPane({
       }}
     >
       <Tabs
-        className="utility-tabs"
-        selectedKey={utility.activeView}
-        onSelectionChange={(key) => {
-          if (key === 'details' || key === 'diagnostics') setUtilityView(key);
+        className="flex min-h-0 min-w-0 flex-1 flex-col gap-0"
+        value={utility.activeView}
+        onValueChange={(value) => {
+          if (value === 'details' || value === 'diagnostics') setUtilityView(value);
         }}
       >
         <UtilityHeader
@@ -228,15 +226,18 @@ export function UtilityPane({
           {...(onToggleCollapsed ? { onCollapse: handleToggleCollapsed } : {})}
           onClose={close}
         />
-        <div className="utility-content">
-          <TabPanel id="details">
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          <TabsContent className="flex min-h-0 min-w-0 flex-1" value="details">
             {utility.activeView === 'details' && <SongDetailsView useStore={useStore} />}
-          </TabPanel>
-          <TabPanel id="diagnostics">
+          </TabsContent>
+          <TabsContent className="flex min-h-0 min-w-0 flex-1" value="diagnostics">
             {utility.activeView === 'diagnostics' && (
               <Suspense
                 fallback={
-                  <div className="utility-loading" role="status">
+                  <div
+                    className="grid flex-1 place-items-center p-4 text-sm text-muted-foreground"
+                    role="status"
+                  >
                     Loading diagnostics…
                   </div>
                 }
@@ -244,7 +245,7 @@ export function UtilityPane({
                 <DiagnosticsView useStore={useStore} />
               </Suspense>
             )}
-          </TabPanel>
+          </TabsContent>
         </div>
       </Tabs>
     </section>

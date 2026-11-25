@@ -30,10 +30,8 @@ describe('PlayerTrackInfo', () => {
 
     render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(songA.title)).toBeInTheDocument();
-    expect(screen.getByText('Playing', { selector: '.player-track-status' })).toBeInTheDocument();
-    expect(document.querySelectorAll('.player-track-status')).toHaveLength(1);
-    expect(document.querySelector('.player-identity-label')).toBeNull();
-    expect(document.querySelector('.player-dry-run-label')).toBeNull();
+    expect(screen.getByText('Playing', { selector: '[role="status"]' })).toBeInTheDocument();
+    expect(document.querySelectorAll('[role="status"]')).toHaveLength(1);
     expect(screen.queryByText('Now Playing')).not.toBeInTheDocument();
     expect(screen.getByRole('group', { name: `Playback for ${songA.title}` })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add to Liked Songs' })).toBeInTheDocument();
@@ -99,9 +97,8 @@ describe('PlayerTrackInfo', () => {
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
     expect(store.getState().library.selectedSongSummary?.song_id).toBe(row.song_id);
-    expect(screen.getByText('Ready to play')).toBeInTheDocument();
-    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
-    expect(container.querySelector('.player-identity-label')).toBeNull();
+    expect(screen.getByText('Selected')).toBeInTheDocument();
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
     expect(screen.getByRole('button', { name: 'Add to Liked Songs' })).toBeInTheDocument();
   });
 
@@ -122,10 +119,8 @@ describe('PlayerTrackInfo', () => {
 
     render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
-    expect(
-      screen.getByText('Ready to play', { selector: '.player-track-status' }),
-    ).toBeInTheDocument();
-    expect(document.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(screen.getByText('Selected', { selector: '[role="status"]' })).toBeInTheDocument();
+    expect(document.querySelectorAll('[role="status"]')).toHaveLength(1);
     expect(screen.queryByText(/TXT ·/)).not.toBeInTheDocument();
     expect(screen.queryByText('Playback error')).not.toBeInTheDocument();
   });
@@ -152,9 +147,9 @@ describe('PlayerTrackInfo', () => {
 
     expect(screen.getByText(row.title)).toBeInTheDocument();
     expect(
-      screen.getByText('Playback status uncertain', { selector: '.player-track-status' }),
+      screen.getByText('Playback status uncertain', { selector: '[role="status"]' }),
     ).toBeInTheDocument();
-    expect(document.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(document.querySelectorAll('[role="status"]')).toHaveLength(1);
     expect(screen.queryByText('Session song')).not.toBeInTheDocument();
     expect(screen.queryByText('Now Playing')).not.toBeInTheDocument();
   });
@@ -210,14 +205,16 @@ describe('PlayerTrackInfo', () => {
           <DiagnosticsView useStore={store} />
         </>,
       );
-      const dockElement = container.querySelector<HTMLElement>('.player-track-info');
+      const dockElement = container.querySelector<HTMLElement>(
+        '[role="group"][aria-label^="Playback for"]',
+      );
       if (!dockElement) throw new Error('Player Dock identity was not rendered');
       const dock = within(dockElement);
       const runtime = within(screen.getByRole('region', { name: 'Playback identity and status' }));
 
       expect(dock.getByText(row.title)).toBeInTheDocument();
-      expect(dock.getByText(dockStatus, { selector: '.player-track-status' })).toBeInTheDocument();
-      expect(dockElement.querySelectorAll('.player-track-status')).toHaveLength(1);
+      expect(dock.getByText(dockStatus, { selector: '[role="status"]' })).toBeInTheDocument();
+      expect(dockElement.querySelectorAll('[role="status"]')).toHaveLength(1);
       expect(dock.queryByText('Session song')).not.toBeInTheDocument();
       expect(dock.queryByText('Now Playing')).not.toBeInTheDocument();
       expect(dock.queryByText('Playing')).not.toBeInTheDocument();
@@ -233,7 +230,7 @@ describe('PlayerTrackInfo', () => {
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText('Select a song from your Library')).toBeInTheDocument();
     expect(screen.getByText('No song selected')).toBeInTheDocument();
-    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 
   it.each([
@@ -258,10 +255,11 @@ describe('PlayerTrackInfo', () => {
 
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
-    expect(screen.getByText(label, { selector: '.player-track-status' })).toBeInTheDocument();
-    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
-    expect(container.querySelector('.player-mode-badge')).toBeNull();
-    expect(container.querySelector('.player-test-mode')).toBeNull();
+    expect(screen.getByText(label, { selector: '[role="status"]' })).toBeInTheDocument();
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
+    expect(
+      container.querySelector('[data-slot="status-badge"][data-appearance="plain"]'),
+    ).toBeNull();
     expect(screen.queryByText('Now Playing')).not.toBeInTheDocument();
   });
 
@@ -276,19 +274,21 @@ describe('PlayerTrackInfo', () => {
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
 
     const { container } = render(<PlayerTrackInfo useStore={store} />);
-    const status = container.querySelector<HTMLElement>('.player-track-status');
+    const status = container.querySelector<HTMLElement>('[role="status"]');
     expect(status).not.toBeNull();
     expect(status).toHaveTextContent('Playing');
     expect(status).toHaveAttribute(
       'aria-label',
       `${row.title}: Playing. Dry run; no physical input is sent.`,
     );
-    const testMode = container.querySelector<HTMLElement>('.player-test-mode');
+    const testMode = container.querySelector<HTMLElement>(
+      '[data-slot="status-badge"][data-appearance="plain"]',
+    );
     expect(testMode).toHaveTextContent('Test · no keys');
-    expect(testMode).toHaveClass('status-badge');
+    expect(testMode).toHaveAttribute('data-slot', 'status-badge');
     expect(testMode).toHaveAttribute('data-appearance', 'plain');
     expect(testMode).toHaveAttribute('aria-label', 'Dry run: no physical keyboard input is sent.');
-    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 
   it('keeps dry-run truth when native status confirmation is uncertain', async () => {
@@ -310,14 +310,16 @@ describe('PlayerTrackInfo', () => {
     );
 
     const { container } = render(<PlayerTrackInfo useStore={store} />);
-    const status = container.querySelector<HTMLElement>('.player-track-status');
+    const status = container.querySelector<HTMLElement>('[role="status"]');
     expect(status).toHaveTextContent('Playback status uncertain');
-    expect(container.querySelector('.player-test-mode')).toHaveTextContent('Test · no keys');
+    expect(
+      container.querySelector('[data-slot="status-badge"][data-appearance="plain"]'),
+    ).toHaveTextContent('Test · no keys');
     expect(status).toHaveAttribute(
       'aria-label',
       expect.stringContaining('no physical input is sent.'),
     );
-    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 
   it.each([
@@ -348,9 +350,11 @@ describe('PlayerTrackInfo', () => {
       );
 
       const { container } = render(<PlayerTrackInfo useStore={store} />);
-      const badge = container.querySelector<HTMLElement>('.player-risk');
+      const badge = container.querySelector<HTMLElement>(
+        `[data-slot="status-badge"][data-tone="${tone}"]`,
+      );
       expect(badge).toHaveTextContent(text);
-      expect(badge).toHaveClass('status-badge');
+      expect(badge).toHaveAttribute('data-slot', 'status-badge');
       expect(badge).toHaveAttribute('data-tone', tone);
       expect(badge).toHaveAttribute('aria-label', 'Timing review required');
       expect(badge).toHaveAttribute('title', 'Timing review required');
@@ -366,8 +370,8 @@ describe('PlayerTrackInfo', () => {
     await act(async () => store.getState().prepareSelectedPlayback());
 
     const prepared = render(<PlayerTrackInfo useStore={store} />);
-    expect(screen.getByText('Prepared', { selector: '.player-track-status' })).toBeInTheDocument();
-    expect(prepared.container.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(screen.getByText('Prepared', { selector: '[role="status"]' })).toBeInTheDocument();
+    expect(prepared.container.querySelectorAll('[role="status"]')).toHaveLength(1);
     prepared.unmount();
 
     await act(async () => store.getState().startPreparedPlayback('proceed'));
@@ -376,9 +380,7 @@ describe('PlayerTrackInfo', () => {
     await waitFor(() => expect(store.getState().playback.state).toBe('idle'));
     const { container } = render(<PlayerTrackInfo useStore={store} />);
     expect(screen.getByText(row.title)).toBeInTheDocument();
-    expect(
-      screen.getByText('Last played', { selector: '.player-track-status' }),
-    ).toBeInTheDocument();
-    expect(container.querySelectorAll('.player-track-status')).toHaveLength(1);
+    expect(screen.getByText('Last played', { selector: '[role="status"]' })).toBeInTheDocument();
+    expect(container.querySelectorAll('[role="status"]')).toHaveLength(1);
   });
 });

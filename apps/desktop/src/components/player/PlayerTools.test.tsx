@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
@@ -66,37 +66,40 @@ describe('PlayerTools playback modes and profile', () => {
     expect(trigger).toHaveAttribute('aria-expanded', 'true');
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
     expect(within(dialog).getByText(row.title)).toBeInTheDocument();
-    expect(
-      within(dialog).getByText('Try these settings without sending any physical keyboard input.'),
-    ).toBeInTheDocument();
-    await act(async () =>
-      within(dialog).getByRole('button', { name: 'Test playback (no input)' }).click(),
-    );
+    expect(within(dialog).getByText('No keyboard input is sent.')).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Test playback (no input)' }));
 
     await waitFor(() => expect(store.getState().playback.state).toBe('playing'));
     expect(store.getState().playback.context?.dryRun).toBe(true);
-    await act(async () =>
-      screen.getByRole('button', { name: 'Configure playback profile' }).click(),
-    );
+    fireEvent.click(screen.getByRole('button', { name: 'Configure playback profile' }));
     const runningDialog = screen.getByRole('dialog', { name: 'Playback profile' });
     expect(
       within(runningDialog).getByRole('button', { name: 'Test playback (no input)' }),
     ).toBeDisabled();
+    await act(async () => {
+      await store.getState().stopPlayback();
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    });
   });
 
   it('does not expose raw profile parameters or a Test button in the player dock', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
-    const { container } = render(<PlayerTools useStore={store} />);
+    render(<PlayerTools useStore={store} />);
 
-    expect(container.querySelector('.player-test-button')).toBeNull();
-    expect(container.querySelector('.profile-summary-button')?.textContent).toBe('');
-    expect(container.querySelector('.player-auto-play-label')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Test playback (no input)' })).toBeNull();
+    expect(screen.queryByLabelText('Base Hold')).toBeNull();
     await act(async () =>
       screen.getByRole('button', { name: 'Configure playback profile' }).click(),
     );
     const dialog = screen.getByRole('dialog', { name: 'Playback profile' });
-    expect(within(dialog).getByText('Calculated timing')).toBeVisible();
+    const advancedTiming = within(dialog).getByText('Advanced timing');
+    expect(advancedTiming.closest('details')).not.toHaveAttribute('open');
+    expect(within(dialog).getByLabelText('FPS')).not.toBeVisible();
+    await act(async () => advancedTiming.closest('summary')?.click());
+    expect(within(dialog).getByLabelText('FPS')).toBeVisible();
+    expect(within(dialog).getByText('Effective target hold')).toBeVisible();
+    expect(within(dialog).getByText('Frame duration')).toBeVisible();
     expect(within(dialog).getByText('Safe preview')).toBeVisible();
     expect(
       within(dialog).getByText(

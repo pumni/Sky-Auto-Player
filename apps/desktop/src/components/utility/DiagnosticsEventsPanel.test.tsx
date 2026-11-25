@@ -1,8 +1,8 @@
 import { cleanup, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { Tab, TabList, Tabs } from 'react-aria-components';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
+import { Tabs, TabsList, TabsTrigger } from '../ui/tabs';
 import { DiagnosticsEventsPanel } from './DiagnosticsEventsPanel';
 
 afterEach(cleanup);
@@ -23,10 +23,10 @@ describe('DiagnosticsEventsPanel', () => {
     });
 
     render(
-      <Tabs defaultSelectedKey="events">
-        <TabList aria-label="Diagnostics views">
-          <Tab id="events">Events</Tab>
-        </TabList>
+      <Tabs defaultValue="events">
+        <TabsList aria-label="Diagnostics views" variant="line">
+          <TabsTrigger value="events">Events</TabsTrigger>
+        </TabsList>
         <DiagnosticsEventsPanel useStore={store} />
       </Tabs>,
     );

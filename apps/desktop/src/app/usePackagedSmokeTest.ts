@@ -1,5 +1,9 @@
 import { useEffect, useRef } from 'react';
 import type { DesktopBridge } from '../bridge/DesktopBridge';
+import {
+  flushStartupTelemetry,
+  recordCatalogReadyStartupTelemetry,
+} from '../bridge/startupTelemetry';
 import type { DesktopStoreHook } from '../state/store';
 
 interface PackagedSmokeTestProps {
@@ -48,20 +52,20 @@ export function usePackagedSmokeTest({
 
       await waitForReady();
       const state = useStore.getState();
-      if (!document.querySelector('.app-shell')) {
+      if (!document.querySelector('[data-app-shell]')) {
         throw new Error('packaged GUI shell did not render');
       }
       await waitForStore(() => {
         const current = useStore.getState();
         return !current.library.loading && current.library.error === null;
       }, 'library');
-      const generation = useStore.getState().library.generation;
       const search = await bridge.searchSongs({
+        // Keep this readiness probe independent from the store's page generation; it validates
+        // the bridge's current-catalog search response before the smoke marker is acknowledged.
         query: '',
         offset: 0,
         limit: 200,
         source: { kind: 'smart', id: 'all' },
-        ...(generation > 0 ? { generation } : {}),
       });
       if (
         !Number.isInteger(search.generation) ||
@@ -73,6 +77,7 @@ export function usePackagedSmokeTest({
       ) {
         throw new Error('packaged GUI search postcondition failed');
       }
+      recordCatalogReadyStartupTelemetry();
       await waitForStore(() => {
         const current = useStore.getState();
         return !current.library.loading && current.library.error === null;
@@ -120,6 +125,7 @@ export function usePackagedSmokeTest({
       // The controlled-close command destroys this WebView after starting
       // bounded native cleanup. Do not wait for an invoke response from a
       // window that is intentionally being destroyed.
+      await flushStartupTelemetry();
       void bridge.shutdown();
     };
 

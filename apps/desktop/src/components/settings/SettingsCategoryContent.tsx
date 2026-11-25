@@ -1,8 +1,8 @@
 import { RefreshCw } from 'lucide-react';
 import { useId } from 'react';
-import appIcon40 from '../../assets/brand/app-icon-40.png';
 import { resolveAppearance } from '../../appearance/resolveAppearance';
 import { useSystemAppearance } from '../../appearance/useSystemAppearance';
+import appIcon40 from '../../assets/brand/app-icon-40.png';
 import type {
   AppearanceMode,
   Bootstrap,
@@ -10,8 +10,13 @@ import type {
   SettingsPatch,
 } from '../../bridge/DesktopBridge';
 import type { DesktopStore, DesktopStoreHook } from '../../state/store';
-import { AppSelect } from '../ui/AppSelect';
-import { formatFpsFrameHint, formatHoldFramesHint, formatTempoHint } from '../ui/appSelectHelpers';
+import { Button } from '../ui/button';
+import {
+  formatFpsFrameHint,
+  formatHoldFramesHint,
+  formatTempoHint,
+} from '../ui/playbackOptionFormatting';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../ui/select';
 import { AutoPlaySwitch } from './AutoPlaySwitch';
 import { DonateSettings } from './DonateSettings';
 import { TimingMarginControl } from './TimingMarginControl';
@@ -61,6 +66,7 @@ interface SettingsCategoryContentProps {
   bootstrap: Bootstrap;
   settings: NonNullable<DesktopStore['settings']>;
   useStore: DesktopStoreHook;
+  onUpdateDialogOpen?: () => void;
 }
 
 export function SettingsCategoryContent({
@@ -68,6 +74,7 @@ export function SettingsCategoryContent({
   bootstrap,
   settings,
   useStore,
+  onUpdateDialogOpen,
 }: SettingsCategoryContentProps) {
   const baseHoldId = useId();
   const tempoId = useId();
@@ -91,7 +98,6 @@ export function SettingsCategoryContent({
     systemColorMode,
     settings.palette,
   );
-  const darkPaletteStandby = effectiveAppearance.colorMode === 'light';
   const activePaletteMeta =
     palettes.find((item) => item.id === settings.palette) ?? DEFAULT_PALETTE;
   const defaults = settings.playback_defaults;
@@ -103,75 +109,130 @@ export function SettingsCategoryContent({
   return (
     <>
       {category === 'playback' && (
-        <section className="settings-section" aria-labelledby="playback-settings-title">
-          <h3 id="playback-settings-title">Playback</h3>
-          <div className="settings-playback-group">
-            <h4>Behavior</h4>
-            <AutoPlaySwitch
-              checked={settings.auto_play}
-              onChange={(autoPlay) => patch({ autoPlay })}
-            />
+        <section
+          data-settings-category={category}
+          data-slot="settings-category-content"
+          className="grid content-start gap-3 py-4"
+          aria-labelledby="playback-settings-title"
+        >
+          <h3
+            className="m-0 text-lg font-semibold leading-6 tracking-tight text-foreground"
+            id="playback-settings-title"
+          >
+            Playback
+          </h3>
+          <div className="grid gap-2 border-t border-border pt-2.5">
+            <h4 className="m-0 text-sm font-semibold leading-5 text-text-secondary">Behavior</h4>
+            <div className="rounded-control border border-border bg-surface px-3">
+              <AutoPlaySwitch
+                checked={settings.auto_play}
+                onChange={(autoPlay) => patch({ autoPlay })}
+              />
+            </div>
           </div>
-          <div className="settings-playback-group">
-            <h4>Playback defaults</h4>
-            <div className="settings-grid">
-              <div className="settings-field">
-                <label htmlFor={baseHoldId}>Base Hold</label>
-                <AppSelect
-                  id={baseHoldId}
-                  listboxLabel="Base Hold"
-                  popoverMinWidth={176}
+          <div className="grid gap-2 border-t border-border pt-2.5">
+            <h4 className="m-0 text-sm font-semibold leading-5 text-text-secondary">
+              Playback defaults
+            </h4>
+            <div className="grid min-w-0 grid-cols-1 gap-3 @min-[420px]/settings-content:grid-cols-2 @min-[560px]/settings-content:grid-cols-3">
+              <div className="grid min-w-0 content-start gap-1.5">
+                <label
+                  className="cursor-pointer text-[13px] font-medium text-text-secondary"
+                  htmlFor={baseHoldId}
+                >
+                  Base Hold
+                </label>
+                <Select
                   value={String(defaults.hold_frames)}
-                  options={bootstrap.option_sets.hold_frames.map((value) => ({
-                    value: String(value),
-                    label: `${value} ${value === 1 ? 'frame' : 'frames'}`,
-                    hint: formatHoldFramesHint(value, defaults.fps),
-                  }))}
-                  onChange={(nextValue) =>
-                    patch({ playbackDefaults: { holdFrames: Number(nextValue) } })
-                  }
-                />
+                  onValueChange={(nextValue) => {
+                    if (nextValue !== null)
+                      patch({ playbackDefaults: { holdFrames: Number(nextValue) } });
+                  }}
+                >
+                  <SelectTrigger id={baseHoldId} aria-label="Base Hold">
+                    <SelectValue>
+                      {(value: string | null) =>
+                        value === null
+                          ? 'Base Hold'
+                          : `${value} ${Number(value) === 1 ? 'frame' : 'frames'}`
+                      }
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent className="min-w-44">
+                    {bootstrap.option_sets.hold_frames.map((value) => (
+                      <SelectItem key={value} value={String(value)}>
+                        <span>{`${value} ${value === 1 ? 'frame' : 'frames'}`}</span>
+                        <span className="text-text-tertiary">
+                          {formatHoldFramesHint(value, defaults.fps)}
+                        </span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="settings-field">
-                <label htmlFor={tempoId}>Tempo</label>
-                <AppSelect
-                  id={tempoId}
-                  listboxLabel="Tempo"
-                  popoverMinWidth={154}
+              <div className="grid min-w-0 content-start gap-1.5">
+                <label
+                  className="cursor-pointer text-[13px] font-medium text-text-secondary"
+                  htmlFor={tempoId}
+                >
+                  Tempo
+                </label>
+                <Select
                   value={String(defaults.tempo_scale)}
-                  options={bootstrap.option_sets.tempo_scales.map((value) => {
-                    const hint = formatTempoHint(value);
-                    return {
-                      value: String(value),
-                      label: `${value}×`,
-                      ...(hint ? { hint } : {}),
-                    };
-                  })}
-                  onChange={(nextValue) =>
-                    patch({ playbackDefaults: { tempoScale: Number(nextValue) } })
-                  }
-                />
+                  onValueChange={(nextValue) => {
+                    if (nextValue !== null)
+                      patch({ playbackDefaults: { tempoScale: Number(nextValue) } });
+                  }}
+                >
+                  <SelectTrigger id={tempoId} aria-label="Tempo">
+                    <SelectValue>
+                      {(value: string | null) => (value === null ? 'Tempo' : `${value}×`)}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent className="min-w-40">
+                    {bootstrap.option_sets.tempo_scales.map((value) => {
+                      const hint = formatTempoHint(value);
+                      return (
+                        <SelectItem key={value} value={String(value)}>
+                          <span>{value}×</span>
+                          {hint && <span className="text-text-tertiary">{hint}</span>}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
               </div>
-              <div className="settings-field">
-                <label htmlFor={fpsId}>FPS</label>
-                <AppSelect
-                  id={fpsId}
-                  listboxLabel="FPS"
-                  popoverMinWidth={160}
+              <div className="grid min-w-0 content-start gap-1.5">
+                <label
+                  className="cursor-pointer text-[13px] font-medium text-text-secondary"
+                  htmlFor={fpsId}
+                >
+                  FPS
+                </label>
+                <Select
                   value={String(defaults.fps)}
-                  options={bootstrap.option_sets.fps.map((value) => ({
-                    value: String(value),
-                    label: String(value),
-                    hint: formatFpsFrameHint(value),
-                  }))}
-                  onChange={(nextValue) => patch({ playbackDefaults: { fps: Number(nextValue) } })}
-                />
+                  onValueChange={(nextValue) => {
+                    if (nextValue !== null) patch({ playbackDefaults: { fps: Number(nextValue) } });
+                  }}
+                >
+                  <SelectTrigger id={fpsId} aria-label="FPS">
+                    <SelectValue>{(value: string | null) => value ?? 'FPS'}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent className="min-w-40">
+                    {bootstrap.option_sets.fps.map((value) => (
+                      <SelectItem key={value} value={String(value)}>
+                        <span>{value}</span>
+                        <span className="text-text-tertiary">{formatFpsFrameHint(value)}</span>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
           </div>
-          <div className="settings-timing-group">
-            <h4>Timing</h4>
-            <div className="settings-timing-card">
+          <div className="mt-0 grid gap-2 border-t border-border pt-2.5">
+            <h4 className="m-0 text-sm font-semibold leading-5 text-text-secondary">Timing</h4>
+            <div className="grid gap-2.5 rounded-pane border border-border bg-surface p-3">
               <TimingMarginControl
                 value={defaults.timing_margin_us}
                 options={bootstrap.option_sets}
@@ -182,22 +243,28 @@ export function SettingsCategoryContent({
                   )
                 }
               />
-              <dl className="settings-timing-summary">
+              <dl className="m-0 grid grid-cols-2 gap-x-5 gap-y-1.5 border-t border-border pt-2.5 text-xs tabular-nums">
                 <div>
-                  <dt>1 frame</dt>
-                  <dd>{(frameUs / 1_000).toFixed(3)} ms</dd>
+                  <dt className="text-text-tertiary">1 frame</dt>
+                  <dd className="m-0 font-medium text-foreground">
+                    {(frameUs / 1_000).toFixed(3)} ms
+                  </dd>
                 </div>
                 <div>
-                  <dt>Base hold</dt>
-                  <dd>{(frameBaseHoldUs / 1_000).toFixed(3)} ms</dd>
+                  <dt className="text-text-tertiary">Base hold</dt>
+                  <dd className="m-0 font-medium text-foreground">
+                    {(frameBaseHoldUs / 1_000).toFixed(3)} ms
+                  </dd>
                 </div>
                 <div>
-                  <dt>Target hold</dt>
-                  <dd>{(minHoldUs / 1_000).toFixed(3)} ms</dd>
+                  <dt className="text-text-tertiary">Target hold</dt>
+                  <dd className="m-0 font-medium text-foreground">
+                    {(minHoldUs / 1_000).toFixed(3)} ms
+                  </dd>
                 </div>
               </dl>
             </div>
-            <p className="settings-note">
+            <p className="m-0 text-xs leading-relaxed text-text-tertiary">
               Changes apply to the next prepared session; an active session keeps its frozen timing
               values.
             </p>
@@ -206,104 +273,187 @@ export function SettingsCategoryContent({
       )}
 
       {category === 'appearance' && (
-        <section className="settings-section" aria-labelledby="appearance-settings-title">
-          <h3 id="appearance-settings-title">Appearance</h3>
-          <div className="settings-field-group">
-            <label htmlFor={themeId}>Theme</label>
-            <AppSelect<AppearanceMode>
-              id={themeId}
-              listboxLabel="Theme"
+        <section
+          data-settings-category={category}
+          data-slot="settings-category-content"
+          className="grid content-start gap-3 py-4"
+          aria-labelledby="appearance-settings-title"
+        >
+          <h3
+            className="m-0 text-lg font-semibold leading-6 tracking-tight text-foreground"
+            id="appearance-settings-title"
+          >
+            Appearance
+          </h3>
+          <div className="grid w-full max-w-[440px] gap-1.5">
+            <label className="text-[13px] font-medium text-text-secondary" htmlFor={themeId}>
+              Theme
+            </label>
+            <Select
               value={settings.appearance_mode}
-              options={[
-                { value: 'system', label: 'Follow Windows (recommended)', hint: 'Auto' },
-                { value: 'light', label: 'Light' },
-                { value: 'dark', label: 'Dark' },
-              ]}
-              onChange={(nextValue) => patch({ appearanceMode: nextValue })}
-            />
+              onValueChange={(nextValue) => {
+                if (nextValue !== null) patch({ appearanceMode: nextValue as AppearanceMode });
+              }}
+            >
+              <SelectTrigger id={themeId} aria-label="Theme">
+                <SelectValue>
+                  {(value: string | null) =>
+                    value === 'system'
+                      ? 'Follow Windows (recommended)'
+                      : value === 'light'
+                        ? 'Light'
+                        : value === 'dark'
+                          ? 'Dark'
+                          : 'Theme'
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="system">
+                  <span>Follow Windows (recommended)</span>
+                  <span className="text-text-tertiary">Auto</span>
+                </SelectItem>
+                <SelectItem value="light">Light</SelectItem>
+                <SelectItem value="dark">Dark</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-          <div
-            className={
-              darkPaletteStandby ? 'settings-field-group is-standby' : 'settings-field-group'
-            }
-          >
-            <label htmlFor={paletteId}>Dark palette</label>
-            <AppSelect<PaletteId>
-              id={paletteId}
-              listboxLabel="Dark palette"
+          <div className="grid w-full max-w-[440px] gap-1.5">
+            <label className="text-[13px] font-medium text-text-secondary" htmlFor={paletteId}>
+              Dark palette
+            </label>
+            <Select
               value={settings.palette}
-              ariaDescribedBy={darkPaletteStandby ? 'dark-palette-standby-hint' : undefined}
-              options={palettes.map((palette) => ({
-                value: palette.id,
-                label: palette.label,
-                swatches: [palette.swatches[1], palette.swatches[3]],
-              }))}
-              onChange={(nextValue) => patch({ palette: nextValue })}
-            />
-            {darkPaletteStandby && (
-              <span id="dark-palette-standby-hint" className="settings-field-hint">
-                Saved for Dark mode (Light mode is currently active).
-              </span>
-            )}
+              onValueChange={(nextValue) => {
+                if (nextValue !== null) patch({ palette: nextValue as PaletteId });
+              }}
+            >
+              <SelectTrigger id={paletteId} aria-label="Dark palette">
+                <SelectValue>
+                  {(value: string | null) =>
+                    palettes.find((item) => item.id === value)?.label ?? 'Dark palette'
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {palettes.map((palette) => (
+                  <SelectItem key={palette.id} value={palette.id}>
+                    <span className="inline-flex items-center gap-2">
+                      <span className="inline-flex gap-1" aria-hidden="true">
+                        {[palette.swatches[1], palette.swatches[3]].map((hex) => (
+                          <span
+                            key={hex}
+                            className="size-3 rounded-full border border-border"
+                            style={{ backgroundColor: hex }}
+                          />
+                        ))}
+                      </span>
+                      {palette.label}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div
-            className={`settings-palette-preview${darkPaletteStandby ? ' is-standby' : ''}`}
-            aria-hidden="true"
+            data-slot="appearance-preview"
+            data-effective-mode={effectiveAppearance.colorMode}
+            role="img"
+            aria-label={`${effectiveAppearance.colorMode === 'light' ? 'Light' : 'Dark'} appearance preview using saved palette ${activePaletteMeta.label}`}
+            className="w-full max-w-[440px] overflow-hidden rounded-pane border border-border bg-background text-foreground"
           >
-            <div className="settings-palette-preview-copy">
-              <span className="settings-palette-preview-label">{activePaletteMeta.label}</span>
-              <span className="settings-palette-preview-meta">
-                {darkPaletteStandby ? 'Standby · Light active' : 'Active Dark surface tokens'}
+            <div className="flex h-7 items-center gap-1.5 border-b border-border bg-card px-2">
+              <span className="size-2 rounded-full bg-primary" />
+              <span className="h-1.5 w-14 rounded-full bg-text-secondary opacity-70" />
+              <span className="ml-auto h-1.5 w-8 rounded-full bg-text-tertiary opacity-70" />
+            </div>
+            <div className="grid grid-cols-[minmax(0,1fr)_68px] gap-2 bg-background p-2">
+              <div className="grid h-10 grid-cols-[1fr_40px] items-center gap-2 rounded-control border border-border bg-surface px-2">
+                <span className="h-1.5 rounded-full bg-text-secondary opacity-70" />
+                <span className="h-5 rounded-control bg-selection" />
+              </div>
+              <div className="h-10 rounded-control border border-border bg-popover" />
+              <span
+                data-slot="appearance-preview-primary-action"
+                className="col-span-2 inline-flex w-fit items-center rounded-control bg-primary px-2 py-1 text-[10px] font-medium text-primary-foreground"
+              >
+                Primary action
               </span>
             </div>
-            <div className="settings-palette-swatches">
-              {activePaletteMeta.swatches.map((hex) => (
-                <span
-                  key={`${activePaletteMeta.id}-${hex}`}
-                  className="settings-palette-swatch"
-                  style={{ backgroundColor: hex }}
-                />
-              ))}
-            </div>
           </div>
-          <p className="settings-note">
-            The saved palette is used whenever Dark is effective. Follow Windows uses the Windows
-            app color preference while Theme is set to Follow Windows.
+          <p
+            data-slot="appearance-active-summary"
+            className="m-0 text-xs leading-relaxed text-foreground"
+          >
+            <strong>Active: {effectiveAppearance.colorMode === 'light' ? 'Light' : 'Dark'}.</strong>{' '}
+            Saved dark palette: {activePaletteMeta.label}.
+          </p>
+          <p className="m-0 text-xs leading-relaxed text-text-tertiary">
+            Follow Windows uses the Windows app color preference while Theme is set to Follow
+            Windows.
           </p>
         </section>
       )}
 
       {category === 'diagnostics' && (
-        <section className="settings-section" aria-labelledby="diagnostic-settings-title">
-          <h3 id="diagnostic-settings-title">Telemetry and diagnostics</h3>
-          <div className="settings-toggle-list">
-            <div className="settings-toggle-card">
-              <label className="checkbox-row" htmlFor={telemetryId}>
+        <section
+          data-settings-category={category}
+          data-slot="settings-category-content"
+          className="grid content-start gap-3 py-4"
+          aria-labelledby="diagnostic-settings-title"
+        >
+          <h3
+            className="m-0 text-lg font-semibold leading-6 tracking-tight text-foreground"
+            id="diagnostic-settings-title"
+          >
+            Telemetry and diagnostics
+          </h3>
+          <div className="grid gap-2.5">
+            <div className="grid gap-1 rounded-control border border-border bg-surface px-3.5 py-3">
+              <label
+                className="flex cursor-pointer items-center gap-2 text-[13px] text-text-secondary"
+                htmlFor={telemetryId}
+              >
                 <input
+                  className="size-[15px] flex-none cursor-pointer accent-primary"
                   id={telemetryId}
                   type="checkbox"
                   aria-describedby={telemetryDescId}
                   checked={settings.telemetry_enabled}
                   onChange={(event) => patch({ telemetryEnabled: event.target.checked })}
                 />
-                <span className="settings-toggle-title">Allow anonymous telemetry</span>
+                <span className="text-[13px] font-semibold text-foreground">
+                  Allow anonymous telemetry
+                </span>
               </label>
-              <p id={telemetryDescId} className="settings-toggle-description">
+              <p
+                id={telemetryDescId}
+                className="m-0 pl-6 text-xs leading-relaxed text-text-secondary"
+              >
                 Share anonymized diagnostics to help improve playback stability and timing quality.
               </p>
             </div>
-            <div className="settings-toggle-card">
-              <label className="checkbox-row" htmlFor={verboseHudId}>
+            <div className="grid gap-1 rounded-control border border-border bg-surface px-3.5 py-3">
+              <label
+                className="flex cursor-pointer items-center gap-2 text-[13px] text-text-secondary"
+                htmlFor={verboseHudId}
+              >
                 <input
+                  className="size-[15px] flex-none cursor-pointer accent-primary"
                   id={verboseHudId}
                   type="checkbox"
                   aria-describedby={verboseHudDescId}
                   checked={settings.verbose_hud}
                   onChange={(event) => patch({ verboseHud: event.target.checked })}
                 />
-                <span className="settings-toggle-title">Verbose playback HUD</span>
+                <span className="text-[13px] font-semibold text-foreground">
+                  Verbose playback HUD
+                </span>
               </label>
-              <p id={verboseHudDescId} className="settings-toggle-description">
+              <p
+                id={verboseHudDescId}
+                className="m-0 pl-6 text-xs leading-relaxed text-text-secondary"
+              >
                 Expose extended scheduling and native dispatch metrics in the diagnostics view.
               </p>
             </div>
@@ -312,11 +462,25 @@ export function SettingsCategoryContent({
       )}
 
       {category === 'updates' && (
-        <section className="settings-section" aria-labelledby="update-settings-title">
-          <h3 id="update-settings-title">Updates</h3>
-          <div className="settings-toggle-card">
-            <label className="checkbox-row" htmlFor={autoCheckId}>
+        <section
+          data-settings-category={category}
+          data-slot="settings-category-content"
+          className="grid content-start gap-3 py-4"
+          aria-labelledby="update-settings-title"
+        >
+          <h3
+            className="m-0 text-lg font-semibold leading-6 tracking-tight text-foreground"
+            id="update-settings-title"
+          >
+            Updates
+          </h3>
+          <div className="grid gap-1 rounded-control border border-border bg-surface px-3.5 py-3">
+            <label
+              className="flex cursor-pointer items-center gap-2 text-[13px] text-text-secondary"
+              htmlFor={autoCheckId}
+            >
               <input
+                className="size-[15px] flex-none cursor-pointer accent-primary"
                 id={autoCheckId}
                 type="checkbox"
                 aria-describedby={autoCheckDescId}
@@ -325,40 +489,63 @@ export function SettingsCategoryContent({
                   patch({ updatePreferences: { autoCheck: event.target.checked } })
                 }
               />
-              <span className="settings-toggle-title">Check for updates automatically</span>
+              <span className="text-[13px] font-semibold text-foreground">
+                Check for updates automatically
+              </span>
             </label>
-            <p id={autoCheckDescId} className="settings-toggle-description">
+            <p
+              id={autoCheckDescId}
+              className="m-0 pl-6 text-xs leading-relaxed text-text-secondary"
+            >
               Check for signed releases in the background when Sky Auto Player starts.
             </p>
           </div>
-          <div className="settings-field-group">
-            <label htmlFor={channelId}>Channel</label>
-            <AppSelect<'stable' | 'beta'>
-              id={channelId}
-              listboxLabel="Channel"
+          <div className="grid w-full max-w-[440px] gap-1.5">
+            <label className="text-[13px] font-medium text-text-secondary" htmlFor={channelId}>
+              Channel
+            </label>
+            <Select
               value={settings.update_preferences.channel}
-              options={[
-                { value: 'stable', label: 'Stable' },
-                { value: 'beta', label: 'Beta (unavailable)', disabled: true },
-              ]}
-              onChange={(nextValue) => patch({ updatePreferences: { channel: nextValue } })}
-            />
+              onValueChange={(nextValue) => {
+                if (nextValue === 'stable' || nextValue === 'beta') {
+                  patch({ updatePreferences: { channel: nextValue } });
+                }
+              }}
+            >
+              <SelectTrigger id={channelId} aria-label="Channel">
+                <SelectValue>
+                  {(value: string | null) => (value === 'beta' ? 'Beta (unavailable)' : 'Stable')}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="stable">Stable</SelectItem>
+                <SelectItem value="beta" disabled>
+                  Beta (unavailable)
+                </SelectItem>
+              </SelectContent>
+            </Select>
           </div>
-          <div className="settings-action-row">
-            <button
-              className="button settings-inline-action"
+          <div className="mt-0.5 flex flex-wrap items-center gap-3">
+            <Button
+              variant="outline"
+              className="h-9 w-auto justify-self-start gap-2 whitespace-nowrap"
               type="button"
               disabled={checkingUpdates}
-              onClick={() => void checkForUpdate('manual')}
+              onClick={() => {
+                onUpdateDialogOpen?.();
+                void checkForUpdate('manual');
+              }}
             >
               <RefreshCw
                 size={14}
-                className={checkingUpdates ? 'spin' : undefined}
+                className={checkingUpdates ? 'animate-spin motion-reduce:animate-none' : undefined}
                 aria-hidden="true"
               />
               {checkingUpdates ? 'Checking…' : 'Check for updates'}
-            </button>
-            <span className="settings-version-meta">Current version · {bootstrap.app_version}</span>
+            </Button>
+            <span className="text-xs tabular-nums text-text-tertiary">
+              Current version · {bootstrap.app_version}
+            </span>
           </div>
         </section>
       )}
@@ -366,47 +553,69 @@ export function SettingsCategoryContent({
       {category === 'donate' && <DonateSettings />}
 
       {category === 'about' && (
-        <section className="settings-section" aria-labelledby="about-settings-title">
-          <div className="about-brand-header">
+        <section
+          data-settings-category={category}
+          data-slot="settings-category-content"
+          className="grid content-start gap-3 py-4"
+          aria-labelledby="about-settings-title"
+        >
+          <div className="flex items-center gap-3">
             <img
-              className="about-brand-icon"
+              className="size-9 flex-none rounded-control"
               src={appIcon40}
               alt=""
               width={36}
               height={36}
               aria-hidden="true"
             />
-            <div className="about-brand-copy">
-              <h3 id="about-settings-title">About Sky Auto Player</h3>
-              <p className="about-intro">
+            <div className="grid min-w-0 gap-1">
+              <h3
+                className="m-0 text-lg font-semibold leading-6 text-foreground"
+                id="about-settings-title"
+              >
+                About Sky Auto Player
+              </h3>
+              <p className="m-0 max-w-[520px] text-[13px] leading-relaxed text-text-secondary">
                 A focused Windows workbench for preparing and playing Sky music sheets.
               </p>
             </div>
           </div>
-          <dl className="about-details">
-            <div>
-              <dt>Version</dt>
-              <dd>{bootstrap.app_version}</dd>
+          <dl className="m-0 grid gap-0 rounded-pane border border-border bg-surface px-3.5 py-0.5">
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] items-baseline gap-3 border-b border-border py-2 last:border-b-0">
+              <dt className="text-xs text-text-tertiary">Version</dt>
+              <dd className="m-0 min-w-0 break-words text-xs text-foreground">
+                {bootstrap.app_version}
+              </dd>
             </div>
-            <div>
-              <dt>Native version</dt>
-              <dd>{bootstrap.native_build.native_version}</dd>
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] items-baseline gap-3 border-b border-border py-2 last:border-b-0">
+              <dt className="text-xs text-text-tertiary">Native version</dt>
+              <dd className="m-0 min-w-0 break-words text-xs text-foreground">
+                {bootstrap.native_build.native_version}
+              </dd>
             </div>
-            <div>
-              <dt>Build commit</dt>
-              <dd>{bootstrap.native_build.native_build_commit}</dd>
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] items-baseline gap-3 border-b border-border py-2 last:border-b-0">
+              <dt className="text-xs text-text-tertiary">Build commit</dt>
+              <dd className="m-0 min-w-0 break-words text-xs text-foreground">
+                {bootstrap.native_build.native_build_commit}
+              </dd>
             </div>
-            <div>
-              <dt>Native ABI</dt>
-              <dd>{bootstrap.native_build.native_abi}</dd>
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] items-baseline gap-3 border-b border-border py-2 last:border-b-0">
+              <dt className="text-xs text-text-tertiary">Native ABI</dt>
+              <dd className="m-0 min-w-0 break-words text-xs text-foreground">
+                {bootstrap.native_build.native_abi}
+              </dd>
             </div>
-            <div>
-              <dt>Rust</dt>
-              <dd>{bootstrap.native_build.rustc_version}</dd>
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] items-baseline gap-3 border-b border-border py-2 last:border-b-0">
+              <dt className="text-xs text-text-tertiary">Rust</dt>
+              <dd className="m-0 min-w-0 break-words text-xs text-foreground">
+                {bootstrap.native_build.rustc_version}
+              </dd>
             </div>
-            <div>
-              <dt>Win32 backend</dt>
-              <dd>{bootstrap.native_build.win32_backend ? 'Enabled' : 'Disabled'}</dd>
+            <div className="grid grid-cols-[140px_minmax(0,1fr)] items-baseline gap-3 py-2">
+              <dt className="text-xs text-text-tertiary">Win32 backend</dt>
+              <dd className="m-0 min-w-0 break-words text-xs text-foreground">
+                {bootstrap.native_build.win32_backend ? 'Enabled' : 'Disabled'}
+              </dd>
             </div>
           </dl>
         </section>

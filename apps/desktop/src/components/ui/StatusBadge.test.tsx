@@ -5,10 +5,10 @@ import { StatusBadge } from './StatusBadge';
 afterEach(cleanup);
 
 describe('StatusBadge', () => {
-  it('shares neutral theme styling without inline color overrides', () => {
+  it('uses semantic neutral styling without inline color overrides', () => {
     render(<StatusBadge aria-label="Metadata loading">Loading</StatusBadge>);
     const badge = screen.getByText('Loading');
-    expect(badge).toHaveClass('status-badge');
+    expect(badge).toHaveClass('bg-secondary', 'text-secondary-foreground');
     expect(badge).toHaveAttribute('data-tone', 'neutral');
     expect(badge).toHaveAttribute('data-appearance', 'soft');
     expect(badge).toHaveAttribute('aria-label', 'Metadata loading');
@@ -24,6 +24,9 @@ describe('StatusBadge', () => {
         <StatusBadge tone="danger" aria-label="Playback blocked">
           High risk
         </StatusBadge>
+        <StatusBadge tone="success" appearance="plain" indicator={false} aria-label="Ready to play">
+          Ready
+        </StatusBadge>
         <StatusBadge appearance="plain">Test · no keys</StatusBadge>
       </>,
     );
@@ -31,6 +34,12 @@ describe('StatusBadge', () => {
     expect(screen.getByText('Review')).toHaveAttribute('title', 'Conversion review required');
     expect(screen.getByText('High risk')).toHaveAttribute('data-tone', 'danger');
     expect(screen.getByText('High risk')).toHaveAttribute('aria-label', 'Playback blocked');
+    expect(screen.getByText('Ready')).toHaveAttribute('data-tone', 'success');
+    expect(screen.getByText('Ready')).toHaveAttribute('data-appearance', 'plain');
     expect(screen.getByText('Test · no keys')).toHaveAttribute('data-appearance', 'plain');
+    expect(screen.getByText('Ready')).toHaveClass('border-0', 'bg-transparent', 'px-0', 'py-0');
+    expect(screen.getByText('Ready').querySelector('[aria-hidden="true"]')).toBeNull();
+    expect(screen.getByText('Review')).toHaveClass('px-1.5', 'gap-1');
+    expect(screen.getByText('Review').querySelector('[aria-hidden="true"]')).not.toBeNull();
   });
 });

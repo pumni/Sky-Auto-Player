@@ -1,11 +1,12 @@
 import { Download, RefreshCw, Settings } from 'lucide-react';
-import { Button } from 'react-aria-components';
-import { useMemo, type RefObject } from 'react';
-import brandMarkDarkUrl from '../../assets/brand/mark-no-bg.svg';
+import { type RefObject, useMemo } from 'react';
 import brandMarkLightUrl from '../../assets/brand/mark-mono-dark.svg';
+import brandMarkDarkUrl from '../../assets/brand/mark-no-bg.svg';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
-import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { createWindowControls, type WindowControls } from '../../platform/windowControls';
+import type { DesktopStore, DesktopStoreHook } from '../../state/store';
+import { Button } from '../ui/button';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { GlobalSearch } from './GlobalSearch';
 import { WindowCaptionControls } from './WindowCaptionControls';
 
@@ -16,6 +17,7 @@ interface AppTitleBarProps {
   settingsTriggerRef?: RefObject<HTMLButtonElement | null>;
   windowControls?: WindowControls;
   onSettingsOpen?: () => void;
+  onUpdateOpen?: () => void;
 }
 
 export function AppTitleBar({
@@ -24,6 +26,7 @@ export function AppTitleBar({
   settingsTriggerRef,
   windowControls,
   onSettingsOpen,
+  onUpdateOpen,
 }: AppTitleBarProps) {
   const controls = useMemo(() => windowControls ?? createWindowControls(), [windowControls]);
   const reload = useStore((store: DesktopStore) => store.reloadLibrary);
@@ -34,16 +37,21 @@ export function AppTitleBar({
 
   return (
     <header
-      className="app-titlebar"
+      className="relative z-10 grid h-10 min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,min(480px,42vw))_minmax(0,1fr)] items-center bg-background max-[1023px]:grid-cols-[minmax(0,1fr)_minmax(260px,min(480px,42vw))_auto]"
       aria-label="Sky Auto Player"
       data-tauri-drag-region="deep"
+      data-slot="titlebar"
       data-update-available={update.state === 'available' ? 'true' : 'false'}
     >
-      <div className="app-titlebar-left-zone" data-tauri-drag-region="deep">
-        <div className="app-titlebar-leading" data-tauri-drag-region="deep">
-          <div className="app-titlebar-brand">
+      <div
+        className="flex h-full min-w-min items-center"
+        data-tauri-drag-region="deep"
+        data-slot="titlebar-leading"
+      >
+        <div className="flex h-full flex-none items-center pl-3" data-tauri-drag-region="deep">
+          <div data-slot="titlebar-brand" className="grid size-8 flex-none place-items-center">
             <img
-              className="app-titlebar-icon app-titlebar-icon-dark"
+              className="hidden size-7 object-contain dark:block"
               src={brandMarkDarkUrl}
               alt=""
               width="28"
@@ -51,61 +59,112 @@ export function AppTitleBar({
               draggable={false}
             />
             <img
-              className="app-titlebar-icon app-titlebar-icon-light"
+              className="size-7 object-contain dark:hidden"
               src={brandMarkLightUrl}
               alt=""
               width="28"
               height="28"
               draggable={false}
             />
-            <span className="visually-hidden">Sky Auto Player</span>
+            <span className="sr-only">Sky Auto Player</span>
           </div>
+          <span
+            className="ml-2 whitespace-nowrap text-[13px] font-semibold text-foreground max-[1100px]:hidden"
+            data-slot="titlebar-product-name"
+            data-tauri-drag-region="deep"
+          >
+            Sky Auto Player
+          </span>
         </div>
-        <div className="titlebar-drag-space" aria-hidden="true" data-tauri-drag-region="true" />
-      </div>
-      <GlobalSearch {...(searchInputRef ? { inputRef: searchInputRef } : {})} useStore={useStore} />
-      <div className="app-titlebar-right-zone" data-tauri-drag-region="deep">
         <div
-          className="titlebar-drag-space-trailing"
+          className="h-full min-w-6 flex-1"
           aria-hidden="true"
           data-tauri-drag-region="true"
+          data-slot="titlebar-drag-space"
         />
-        <div className="app-titlebar-end" data-tauri-drag-region="false">
-          <div className="app-titlebar-actions" data-tauri-drag-region="false">
+      </div>
+      <GlobalSearch {...(searchInputRef ? { inputRef: searchInputRef } : {})} useStore={useStore} />
+      <div
+        className="flex h-full min-w-min items-center"
+        data-tauri-drag-region="deep"
+        data-slot="titlebar-trailing"
+      >
+        <div
+          className="h-full min-w-6 flex-1"
+          aria-hidden="true"
+          data-tauri-drag-region="true"
+          data-slot="titlebar-drag-space-trailing"
+        />
+        <div
+          className="flex h-10 flex-none items-stretch pl-2"
+          data-tauri-drag-region="false"
+          data-slot="titlebar-controls"
+        >
+          <div className="flex min-w-0 items-center gap-1 px-1" data-tauri-drag-region="false">
             {update.state === 'available' && (
-              <span
-                className="update-indicator-shell"
-                title={`Update available: ${updateVersion}. Open update details.`}
-              >
-                <Button
-                  className="update-indicator"
-                  aria-label={`Open update ${updateVersion}`}
-                  onPress={() => setUpdateDialogOpen(true)}
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <Button
+                      variant="ghost"
+                      className="relative size-[34px]"
+                      aria-label={`Open update ${updateVersion}`}
+                      onClick={() => {
+                        onUpdateOpen?.();
+                        setUpdateDialogOpen(true);
+                      }}
+                    />
+                  }
                 >
                   <Download size={15} aria-hidden="true" />
-                  <span className="update-indicator-dot" aria-hidden="true" />
-                  <span className="visually-hidden">Update available</span>
-                </Button>
-              </span>
+                  <span
+                    data-update-indicator
+                    className="pointer-events-none absolute right-[5px] top-[5px] size-1.5 rounded-full bg-accent-ink ring-2 ring-background"
+                    aria-hidden="true"
+                  />
+                  <span className="sr-only">Update available</span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {`Update available: ${updateVersion}. Open update details.`}
+                </TooltipContent>
+              </Tooltip>
             )}
-            <Button
-              className="icon-button"
-              aria-label="Reload library"
-              onPress={() => void reload()}
-            >
-              <RefreshCw size={17} aria-hidden="true" />
-            </Button>
-            <Button
-              ref={settingsTriggerRef}
-              className="icon-button"
-              aria-label="Open settings"
-              onPress={() => {
-                onSettingsOpen?.();
-                setSettingsOpen(true);
-              }}
-            >
-              <Settings size={17} aria-hidden="true" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    className="size-[34px]"
+                    aria-label="Reload library"
+                    onClick={() => void reload()}
+                  />
+                }
+              >
+                <RefreshCw size={17} aria-hidden="true" />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Reload library</TooltipContent>
+            </Tooltip>
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    ref={settingsTriggerRef}
+                    className="size-[34px]"
+                    aria-label="Open settings"
+                    onClick={() => {
+                      onSettingsOpen?.();
+                      setSettingsOpen(true);
+                    }}
+                  />
+                }
+              >
+                <Settings size={17} aria-hidden="true" />
+              </TooltipTrigger>
+              <TooltipContent side="bottom">Settings · Ctrl+,</TooltipContent>
+            </Tooltip>
           </div>
           <WindowCaptionControls controls={controls} />
         </div>

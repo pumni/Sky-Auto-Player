@@ -28,7 +28,7 @@ function createOpenStore() {
 afterEach(cleanup);
 
 describe('UtilityPane', () => {
-  it('navigates the utility views through React Aria tabs and loads Diagnostics lazily', async () => {
+  it('navigates the utility views through Base UI tabs and loads Diagnostics lazily', async () => {
     const store = createOpenStore();
     render(<Fixture store={store} />);
 

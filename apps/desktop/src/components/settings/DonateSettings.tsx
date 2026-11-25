@@ -26,28 +26,45 @@ export function DonateSettings() {
   }
 
   return (
-    <section className="settings-section donate-settings" aria-labelledby="donate-settings-title">
-      <div className="donate-heading">
-        <span className="donate-heading-icon" aria-hidden="true">
+    <section
+      data-settings-category="donate"
+      data-slot="settings-category-content"
+      className="grid content-start gap-3 py-4"
+      aria-labelledby="donate-settings-title"
+    >
+      <div data-slot="donate-heading" className="flex items-center gap-3">
+        <span
+          data-slot="donate-heading-icon"
+          className="grid size-9 flex-none place-items-center rounded-control border border-primary/30 bg-selection text-accent-ink"
+          aria-hidden="true"
+        >
           <HandHeart size={19} />
         </span>
-        <div>
-          <h3 id="donate-settings-title">Support Sky Auto Player</h3>
-          <p className="settings-note">Support ongoing development if you enjoy Sky Auto Player.</p>
+        <div className="min-w-0">
+          <h3 className="m-0 text-[15px] font-semibold text-foreground" id="donate-settings-title">
+            Support Sky Auto Player
+          </h3>
+          <p className="m-0 mt-1 text-xs leading-relaxed text-text-tertiary">
+            Support ongoing development if you enjoy Sky Auto Player.
+          </p>
         </div>
       </div>
 
-      <div className="donate-provider-grid">
-        <div className="donate-provider-card">
-          <div className="donate-provider-heading">
-            <Coffee size={17} aria-hidden="true" />
-            <div>
-              <h4>Ko-fi</h4>
-              <p>Support the project</p>
+      <div className="grid grid-cols-2 gap-3 max-[700px]:grid-cols-1">
+        <div
+          data-slot="donate-provider-card"
+          className="flex min-w-0 items-center justify-between gap-3 rounded-pane border border-border bg-surface p-3"
+        >
+          <div data-slot="donate-provider-heading" className="flex min-w-0 items-center gap-2.5">
+            <Coffee className="text-text-secondary" size={17} aria-hidden="true" />
+            <div className="min-w-0">
+              <h4 className="m-0 text-[13px] font-semibold text-foreground">Ko-fi</h4>
+              <p className="m-0 text-xs text-text-tertiary">Support the project</p>
             </div>
           </div>
           <a
-            className="button donate-external-link"
+            data-slot="donate-external-link"
+            className="inline-flex h-8 flex-none items-center gap-1.5 rounded-control border border-border bg-card px-2.5 text-xs font-medium text-text-secondary hover:bg-control-hover hover:text-foreground"
             href={DONATION_CONFIG.koFiUrl}
             aria-label="Open Ko-fi in browser"
             target="_blank"
@@ -57,16 +74,20 @@ export function DonateSettings() {
             Open <ExternalLink size={14} aria-hidden="true" />
           </a>
         </div>
-        <div className="donate-provider-card">
-          <div className="donate-provider-heading">
-            <WalletCards size={17} aria-hidden="true" />
-            <div>
-              <h4>PayPal</h4>
-              <p>International support</p>
+        <div
+          data-slot="donate-provider-card"
+          className="flex min-w-0 items-center justify-between gap-3 rounded-pane border border-border bg-surface p-3"
+        >
+          <div data-slot="donate-provider-heading" className="flex min-w-0 items-center gap-2.5">
+            <WalletCards className="text-text-secondary" size={17} aria-hidden="true" />
+            <div className="min-w-0">
+              <h4 className="m-0 text-[13px] font-semibold text-foreground">PayPal</h4>
+              <p className="m-0 text-xs text-text-tertiary">International support</p>
             </div>
           </div>
           <a
-            className="button donate-external-link"
+            data-slot="donate-external-link"
+            className="inline-flex h-8 flex-none items-center gap-1.5 rounded-control border border-border bg-card px-2.5 text-xs font-medium text-text-secondary hover:bg-control-hover hover:text-foreground"
             href={DONATION_CONFIG.paypalUrl}
             aria-label="Open PayPal in browser"
             target="_blank"
@@ -78,41 +99,65 @@ export function DonateSettings() {
         </div>
       </div>
 
-      <div className="donate-bank-card">
-        <div className="donate-provider-heading">
+      <div
+        data-slot="donate-bank-card"
+        className="grid gap-3 rounded-pane border border-border bg-surface p-3"
+      >
+        <div className="flex items-center gap-2.5">
           <Landmark size={17} aria-hidden="true" />
-          <h4>Bank transfer · VietQR</h4>
+          <h4 className="m-0 text-[13px] font-semibold text-foreground">Bank transfer · VietQR</h4>
         </div>
-        <div className="donate-bank-content">
-          <div className="donate-qr-frame">
+        <div className="grid min-w-0 grid-cols-[160px_minmax(0,1fr)] items-start gap-4 max-[700px]:grid-cols-1">
+          <div
+            data-slot="donate-qr-frame"
+            className="grid size-40 place-items-center rounded-control border border-border bg-white p-2"
+          >
             <img
               src={DONATION_CONFIG.vietQrImagePath}
               alt="VietQR bank transfer code"
+              className="size-full object-contain"
               width={200}
               height={200}
             />
           </div>
 
-          <div className="donate-bank-information">
-            <p className="donate-bank-guidance">
+          <div data-slot="donate-bank-information" className="min-w-0">
+            <p
+              data-slot="donate-bank-guidance"
+              className="m-0 text-xs leading-relaxed text-text-secondary"
+            >
               Scan with your phone’s banking app. Verify the recipient before confirming.
             </p>
-            <dl className="donate-bank-details">
-              <div>
-                <dt>Bank</dt>
-                <dd>{DONATION_CONFIG.bankName}</dd>
+            <dl data-slot="donate-bank-details" className="mb-0 mt-2 grid gap-0">
+              <div className="grid grid-cols-[110px_minmax(0,1fr)] items-baseline gap-3 border-b border-border py-1 last:border-b-0">
+                <dt className="text-xs text-text-tertiary">Bank</dt>
+                <dd className="m-0 min-w-0 break-words text-xs text-foreground">
+                  {DONATION_CONFIG.bankName}
+                </dd>
               </div>
-              <div>
-                <dt>Account holder</dt>
-                <dd>{DONATION_CONFIG.accountHolder}</dd>
+              <div className="grid grid-cols-[110px_minmax(0,1fr)] items-baseline gap-3 border-b border-border py-1 last:border-b-0">
+                <dt className="text-xs text-text-tertiary">Account holder</dt>
+                <dd className="m-0 min-w-0 break-words text-xs text-foreground">
+                  {DONATION_CONFIG.accountHolder}
+                </dd>
               </div>
-              <div className="donate-bank-reference-row">
-                <dt>Account number</dt>
-                <dd className="donate-bank-account">{DONATION_CONFIG.accountNumber}</dd>
+              <div
+                data-slot="donate-bank-reference-row"
+                className="grid grid-cols-[110px_minmax(0,1fr)] items-baseline gap-3 border-b border-border py-1 last:border-b-0"
+              >
+                <dt className="text-xs text-text-tertiary">Account number</dt>
+                <dd className="m-0 min-w-0 break-words font-mono text-xs font-semibold tabular-nums text-foreground">
+                  {DONATION_CONFIG.accountNumber}
+                </dd>
               </div>
-              <div className="donate-bank-reference-row">
-                <dt>Transfer note</dt>
-                <dd>{DONATION_CONFIG.transferMemo}</dd>
+              <div
+                data-slot="donate-bank-reference-row"
+                className="grid grid-cols-[110px_minmax(0,1fr)] items-baseline gap-3 py-1"
+              >
+                <dt className="text-xs text-text-tertiary">Transfer note</dt>
+                <dd className="m-0 min-w-0 break-words text-xs text-foreground">
+                  {DONATION_CONFIG.transferMemo}
+                </dd>
               </div>
             </dl>
           </div>
@@ -121,13 +166,13 @@ export function DonateSettings() {
 
       {notice && (
         <p
-          className={notice.kind === 'error' ? 'inline-error' : 'settings-note'}
+          className={`m-0 text-xs ${notice.kind === 'error' ? 'text-danger' : 'text-text-tertiary'}`}
           role={notice.kind === 'error' ? 'alert' : 'status'}
         >
           {notice.text}
         </p>
       )}
-      <p className="settings-note donate-disclaimer">
+      <p className="m-0 text-xs leading-relaxed text-text-tertiary [&_a]:inline-flex [&_a]:items-center [&_a]:gap-1 [&_a]:font-medium [&_a]:text-accent-ink [&_a]:underline-offset-2 hover:[&_a]:underline focus-within:[&_a]:outline-2 focus-within:[&_a]:outline-ring">
         Donations are optional. Sky Auto Player does not process or verify payments. You can also{' '}
         <a
           href={DONATION_CONFIG.githubUrl}

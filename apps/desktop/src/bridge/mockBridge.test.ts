@@ -102,7 +102,7 @@ describe('mock bridge timing contracts', () => {
 
     const event = events.find((candidate) => candidate.name === 'diagnostics.snapshot');
     expect(event).toBeDefined();
-    if (!event || event.name !== 'diagnostics.snapshot') throw new Error('missing diagnostics');
+    if (event?.name !== 'diagnostics.snapshot') throw new Error('missing diagnostics');
     expect(event.payload.missed_down_boundaries).toBe(0);
     expect(event.payload.missed_down_keys).toBe(0);
     expect(event.payload.missed_unobserved_backlog_boundaries).toBe(0);

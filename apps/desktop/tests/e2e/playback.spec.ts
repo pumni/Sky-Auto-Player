@@ -22,15 +22,15 @@ test('Play skips transient ready-plan popovers while retaining real risk confirm
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await page.evaluate(() => {
     document.documentElement.dataset.readyAdvisoryInsertions = '0';
-    const dock = document.querySelector('.player-bar');
+    const dock = document.querySelector('[data-slot="player-dock"]');
     if (!dock) throw new Error('Player Dock is missing');
     const observer = new MutationObserver((records) => {
       const inserted = records.some((record) =>
         Array.from(record.addedNodes).some(
           (node) =>
             node instanceof Element &&
-            (node.matches('.player-admission-timing') ||
-              node.querySelector('.player-admission-timing') !== null),
+            (node.matches('[data-slot="timing-advisory"]') ||
+              node.querySelector('[data-slot="timing-advisory"]') !== null),
         ),
       );
       if (inserted) document.documentElement.dataset.readyAdvisoryInsertions = '1';
@@ -41,7 +41,7 @@ test('Play skips transient ready-plan popovers while retaining real risk confirm
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-ready-advisory-insertions', '0');
-  await expect(player.locator('.player-admission')).toHaveCount(0);
+  await expect(player.locator('[data-slot="playback-admission"]')).toHaveCount(0);
   await player.getByRole('button', { name: 'Stop' }).click();
   await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible();
 
@@ -58,7 +58,7 @@ test('Player Bar communicates the no-selection state without actionable playback
   await page.goto('/');
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   const primary = player.getByRole('button', { name: 'Play', exact: true });
-  const labels = player.locator('.player-timeline-labels');
+  const labels = player.locator('[data-slot="player-timeline-labels"]');
 
   await expectFiveTransportControls(player, 'Play');
   await expect(player.getByRole('button', { name: 'Shuffle' })).toBeEnabled();
@@ -151,25 +151,27 @@ test('dock and transport toggles show palette-specific active state without layo
       const style = getComputedStyle(element);
       const box = element.getBoundingClientRect();
       const probe = document.createElement('span');
-      probe.style.color = 'var(--text-primary)';
+      probe.style.color = 'var(--foreground)';
       document.body.append(probe);
       const primary = getComputedStyle(probe).color;
       probe.style.color = 'var(--accent-ink)';
       const accentInk = getComputedStyle(probe).color;
-      probe.style.color = 'var(--accent-ink-hover)';
+      probe.style.color = 'var(--primary-hover)';
       const accentInkHover = getComputedStyle(probe).color;
       probe.style.color = 'var(--text-tertiary)';
       const tertiary = getComputedStyle(probe).color;
       probe.style.color = 'var(--text-secondary)';
       const secondary = getComputedStyle(probe).color;
-      probe.style.color = 'var(--workbench-control-disabled)';
+      probe.style.color = 'var(--control-disabled)';
       const disabled = getComputedStyle(probe).color;
-      probe.style.color = 'var(--workbench-toggle-on)';
+      probe.style.color = 'var(--accent-ink)';
       const toggleOn = getComputedStyle(probe).color;
-      probe.style.color = 'var(--workbench-toggle-off)';
+      probe.style.color = 'var(--text-tertiary)';
       const toggleOff = getComputedStyle(probe).color;
-      probe.style.backgroundColor = 'var(--workbench-control-hover)';
+      probe.style.backgroundColor = 'var(--control-hover)';
       const controlHover = getComputedStyle(probe).backgroundColor;
+      probe.style.backgroundColor = 'var(--accent)';
+      const accentSurface = getComputedStyle(probe).backgroundColor;
       probe.remove();
       return {
         color: style.color,
@@ -188,6 +190,7 @@ test('dock and transport toggles show palette-specific active state without layo
         toggleOn,
         toggleOff,
         controlHover,
+        accentSurface,
         palette: document.documentElement.dataset.palette,
       };
     });
@@ -199,6 +202,9 @@ test('dock and transport toggles show palette-specific active state without layo
     await expect
       .poll(async () => (await measureStyle(button)).color, { timeout: 2_000 })
       .toBe(before.primary);
+    await expect
+      .poll(async () => (await measureStyle(button)).background, { timeout: 2_000 })
+      .toBe(before.controlHover);
     const after = await measureStyle(button);
     expect(after.color).toBe(after.primary);
     expect(after.background).toBe(after.controlHover);
@@ -240,6 +246,7 @@ test('dock and transport toggles show palette-specific active state without layo
     .poll(async () => (await measureStyle(shuffle)).color, { timeout: 2_000 })
     .toBe(activeShuffleTone(await measureStyle(shuffle)));
   await page.mouse.move(0, 0);
+  await expect.poll(async () => (await measureStyle(shuffle)).background).toBe('rgba(0, 0, 0, 0)');
   const activeShuffleBefore = await measureStyle(shuffle);
   expect(activeShuffleBefore.color).toBe(activeShuffleTone(activeShuffleBefore));
   expect(activeShuffleBefore.color).not.toBe(inactiveShuffle.color);
@@ -250,6 +257,9 @@ test('dock and transport toggles show palette-specific active state without layo
   await expect
     .poll(async () => (await measureStyle(shuffle)).color, { timeout: 2_000 })
     .toBe(activeShuffleTone(await measureStyle(shuffle)));
+  await expect
+    .poll(async () => (await measureStyle(shuffle)).background, { timeout: 2_000 })
+    .toBe((await measureStyle(shuffle)).controlHover);
   const activeShuffleAfter = await measureStyle(shuffle);
   expect(activeShuffleAfter.color).toBe(activeShuffleTone(activeShuffleAfter));
   expect(activeShuffleAfter.background).toBe(activeShuffleAfter.controlHover);
@@ -276,10 +286,13 @@ test('dock and transport toggles show palette-specific active state without layo
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
     .toBe(hoveredAutoPlayTone(autoPlayBefore));
+  await expect
+    .poll(async () => (await measureStyle(autoPlay)).background, { timeout: 2_000 })
+    .toBe((await measureStyle(autoPlay)).accentSurface);
   const autoPlayHover = await measureStyle(autoPlay);
   expect(autoPlayHover.color).toBe(hoveredAutoPlayTone(autoPlayHover));
-  expect(autoPlayHover.background).toBe(autoPlayHover.controlHover);
-  expect(autoPlayHover.borderTop).toBe('0px');
+  expect(autoPlayHover.background).toBe(autoPlayHover.accentSurface);
+  expect(autoPlayHover.borderTop).toBe(autoPlayBefore.borderTop);
   expect(autoPlayHover.x).toBe(autoPlayBefore.x);
   expect(autoPlayHover.y).toBe(autoPlayBefore.y);
 
@@ -297,9 +310,12 @@ test('dock and transport toggles show palette-specific active state without layo
   await expect
     .poll(async () => (await measureStyle(autoPlay)).color, { timeout: 2_000 })
     .toBe(autoPlayOff.primary);
+  await expect
+    .poll(async () => (await measureStyle(autoPlay)).background, { timeout: 2_000 })
+    .toBe((await measureStyle(autoPlay)).accentSurface);
   const autoPlayOffHover = await measureStyle(autoPlay);
   expect(autoPlayOffHover.color).toBe(autoPlayOffHover.primary);
-  expect(autoPlayOffHover.background).toBe(autoPlayOffHover.controlHover);
+  expect(autoPlayOffHover.background).toBe(autoPlayOffHover.accentSurface);
 
   await page.mouse.move(0, 0);
   await autoPlay.focus();
@@ -340,7 +356,7 @@ test('Player transport geometry stays fixed when song timing labels appear', asy
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   const measure = async () => {
     const playBox = await player.getByRole('button', { name: 'Play', exact: true }).boundingBox();
-    const timelineBox = await player.locator('.player-timeline').boundingBox();
+    const timelineBox = await player.locator('[data-slot="player-timeline"]').boundingBox();
     expect(playBox).not.toBeNull();
     expect(timelineBox).not.toBeNull();
     if (!playBox || !timelineBox) throw new Error('player geometry is unavailable');
@@ -352,7 +368,10 @@ test('Player transport geometry stays fixed when song timing labels appear', asy
 
   const idleGeometry = await measure();
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
-  await expect(player.locator('.player-timeline-labels')).toHaveAttribute('aria-hidden', 'false');
+  await expect(player.locator('[data-slot="player-timeline-labels"]')).toHaveAttribute(
+    'aria-hidden',
+    'false',
+  );
   const selectedGeometry = await measure();
 
   expect(Math.abs(selectedGeometry.playCenterY - idleGeometry.playCenterY)).toBeLessThanOrEqual(1);
@@ -367,21 +386,24 @@ test('natural finish retires the old session and starts the next context song', 
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
-  await expect(player.locator('.player-track-status')).toHaveText('Playing');
-  const transition = player.getByRole('status');
+  await expect(player.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
+  const transition = player.locator('[data-slot="player-transport"] [role="status"]');
   await expect(async () => {
     const statusText = await transition.textContent().catch(() => null);
     const trackTitle = await player
-      .locator('.player-track-copy strong')
+      .locator('[role="group"][aria-label^="Playback for"] strong')
       .textContent()
       .catch(() => null);
     expect(statusText === 'Starting next song' || trackTitle === 'Candle Run').toBe(true);
   }).toPass({ timeout: 12_000 });
   const playingRow = page.getByRole('row', { name: /Blue Bird/ });
   await expect(playingRow).not.toHaveAttribute('aria-current', 'true');
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
-    timeout: 12_000,
-  });
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Candle Run',
+    {
+      timeout: 12_000,
+    },
+  );
   await expect(player.getByText('Playing', { exact: true })).toBeVisible({ timeout: 12_000 });
   await expect(page.getByRole('row', { name: /Candle Run/ })).toHaveAttribute(
     'aria-current',
@@ -396,7 +418,7 @@ test('Auto Play advances while Built-in browsing keeps selection and page separa
 }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
   await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
-  const list = page.locator('.track-table');
+  const list = page.locator('[role="grid"]');
   await page.getByRole('button', { name: 'Next page' }).click();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
   await page.getByRole('button', { name: 'Next page' }).click();
@@ -426,7 +448,9 @@ test('Auto Play advances while Built-in browsing keeps selection and page separa
     element.dispatchEvent(new Event('scroll'));
   });
   await player.getByRole('button', { name: 'Next' }).click();
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 250');
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Song 250',
+  );
 
   const nowPlayingRow = page.getByRole('row', { name: /Song 250/ });
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 3' })).toBeVisible();
@@ -447,7 +471,7 @@ test('natural Auto Play preserves the Built-in page and selection while advancin
 }) => {
   await page.setViewportSize({ width: 1200, height: 760 });
   await page.goto('/?mockPlaybackDurationMs=850,120000&mockStartDelayMs=10');
-  const list = page.locator('.track-table');
+  const list = page.locator('[role="grid"]');
   await page.getByRole('button', { name: 'Next page' }).click();
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 2' })).toBeVisible();
   await page.getByRole('button', { name: 'Next page' }).click();
@@ -468,10 +492,16 @@ test('natural Auto Play preserves the Built-in page and selection while advancin
     element.scrollTop = 0;
     element.dispatchEvent(new Event('scroll'));
   });
-  await expect(player.getByRole('status')).toHaveText('Starting next song', { timeout: 5_000 });
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Song 250', {
-    timeout: 5_000,
-  });
+  await expect(player.locator('[data-slot="player-transport"] [role="status"]')).toHaveText(
+    'Starting next song',
+    { timeout: 5_000 },
+  );
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Song 250',
+    {
+      timeout: 5_000,
+    },
+  );
 
   const nowPlayingRow = page.getByRole('row', { name: /Song 250/ });
   await expect(page.getByRole('grid', { name: 'Built-in Songs, page 3' })).toBeVisible();
@@ -497,15 +527,17 @@ test('Now Playing does not pull a browsed search context back to the playback co
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
 
   await page.getByLabel('Search Built-in Songs').fill('Song');
-  const list = page.locator('.track-table');
-  await expect(page.locator('.track-browser-count')).toHaveText('485 songs');
+  const list = page.locator('[role="grid"]');
+  await expect(page.locator('[data-slot="track-browser-count"]')).toHaveText('485 songs');
   await list.evaluate((element) => {
     element.scrollTop = 2800;
     element.dispatchEvent(new Event('scroll'));
   });
   const browsedScrollTop = await list.evaluate((element) => element.scrollTop);
   await player.getByRole('button', { name: 'Next' }).click();
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Candle Run',
+  );
   await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(browsedScrollTop);
 });
 
@@ -520,10 +552,16 @@ test('natural Auto Play continues its frozen context after browsing a search', a
   await search.fill('Moonlit');
   await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
 
-  await expect(player.getByRole('status')).toHaveText('Starting next song', { timeout: 10_000 });
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
-    timeout: 10_000,
-  });
+  await expect(player.locator('[data-slot="player-transport"] [role="status"]')).toHaveText(
+    'Starting next song',
+    { timeout: 10_000 },
+  );
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Candle Run',
+    {
+      timeout: 10_000,
+    },
+  );
   await expect(search).toHaveValue('Moonlit');
   await expect(page.getByRole('row', { name: /Moonlit Village/ })).toBeVisible();
 });
@@ -538,10 +576,10 @@ test('natural Auto Play keeps a newly browsed Library source during its handoff'
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
-  const transition = player.getByRole('status');
+  const transition = player.locator('[data-slot="player-transport"] [role="status"]');
   await expect(transition).toHaveText('Starting next song', { timeout: 10_000 });
 
-  const likedSongs = page.locator('.library-navigator').getByRole('button', {
+  const likedSongs = page.locator('[data-slot="library-navigator"]').getByRole('button', {
     name: 'Liked Songs',
   });
   const likedSongsButton = await likedSongs.elementHandle();
@@ -725,9 +763,12 @@ test('natural Auto Play keeps a newly browsed Library source during its handoff'
     });
   }
 
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
-    timeout: 10_000,
-  });
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Candle Run',
+    {
+      timeout: 10_000,
+    },
+  );
   await expect(likedSongsHeading).toBeVisible();
 });
 
@@ -738,12 +779,14 @@ test('browsing and liking another Library row keeps Player Bar identity on Now P
   const player = page.getByRole('contentinfo', { name: 'Player controls' });
   await page.getByRole('row', { name: /Blue Bird/ }).click();
   await player.getByRole('button', { name: 'Play', exact: true }).click();
-  await expect(player.locator('.player-track-status')).toHaveText('Playing');
+  await expect(player.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
 
   const selectedRow = page.getByRole('row', { name: /Candle Run/ });
   await selectedRow.click();
   await expect(selectedRow).toHaveAttribute('aria-selected', 'true');
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Blue Bird',
+  );
   await player.getByRole('button', { name: 'Add to Liked Songs' }).click();
   await expect(player.getByRole('button', { name: 'Remove from Liked Songs' })).toBeVisible();
   await expect(page.getByRole('row', { name: /Candle Run/ })).toBeVisible();
@@ -751,11 +794,13 @@ test('browsing and liking another Library row keeps Player Bar identity on Now P
   await player.getByRole('button', { name: 'Open utility panel' }).click();
   const details = page.getByRole('tabpanel', { name: 'Details' });
   await expect(details.getByRole('heading', { name: 'Candle Run' })).toBeVisible();
-  await expect(details.locator('.song-details-context')).toHaveCount(0);
+  await expect(details.locator('[data-slot="song-details-context"]')).toHaveCount(0);
 
   await player.getByRole('button', { name: 'Pause' }).click();
   await expect(player.getByRole('button', { name: 'Resume' })).toBeVisible();
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Blue Bird',
+  );
   const stop = player.getByRole('button', { name: 'Stop', exact: true });
   await stop.click();
   await expect(stop).toBeDisabled();
@@ -779,12 +824,10 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
   await player.getByRole('button', { name: 'Configure playback profile' }).click();
 
   const profile = page.getByRole('dialog', { name: 'Playback profile' });
-  await expect(
-    profile.getByText('Try these settings without sending any physical keyboard input.'),
-  ).toBeVisible();
+  await expect(profile.getByText('No keyboard input is sent.')).toBeVisible();
   await profile.getByRole('button', { name: 'Test playback (no input)' }).click();
 
-  const playbackStatus = player.locator('.player-track-status');
+  const playbackStatus = player.locator('[data-slot="player-track-status"]');
   await expect(playbackStatus).toHaveText('Playing');
   await expect(playbackStatus).toHaveAttribute('aria-label', /no physical input is sent/i);
   await expect(playbackStatus).toHaveCount(1);
@@ -811,9 +854,13 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
     await page.setViewportSize(viewport);
     await expect(playbackStatus).toHaveText('Playing');
     expectPlayerBarGeometry(await readPlayerBarGeometry(page));
-    const titleBox = await player.locator('.player-track-copy strong').boundingBox();
-    const trackInfoBox = await player.locator('.player-track-info').boundingBox();
-    const transportBox = await player.locator('.player-transport').boundingBox();
+    const titleBox = await player
+      .locator('[role="group"][aria-label^="Playback for"] strong')
+      .boundingBox();
+    const trackInfoBox = await player
+      .locator('[role="group"][aria-label^="Playback for"]')
+      .boundingBox();
+    const transportBox = await player.locator('[data-slot="player-transport"]').boundingBox();
     expect(titleBox).not.toBeNull();
     expect(trackInfoBox).not.toBeNull();
     expect(transportBox).not.toBeNull();
@@ -830,7 +877,9 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
   }
 
   await page.getByRole('row', { name: /Blue Bird/ }).click();
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Candle Run',
+  );
   await expect(page.getByRole('row', { name: /Blue Bird/ })).toHaveAttribute(
     'aria-selected',
     'true',
@@ -841,7 +890,7 @@ test('dry-run playback is labeled in the dock and explains that no physical inpu
   }
   const details = page.getByRole('tabpanel', { name: 'Details' });
   await expect(details.getByRole('heading', { name: 'Blue Bird' })).toBeVisible();
-  await expect(details.locator('.song-details-context')).toHaveCount(0);
+  await expect(details.locator('[data-slot="song-details-context"]')).toHaveCount(0);
 
   await expectNoSeriousAccessibilityViolations(page);
 
@@ -875,7 +924,7 @@ test('physical playback omits the dry-run indicator at responsive viewport sizes
     await page.setViewportSize(viewport);
     await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=10');
     const player = await startSelectedSong(page);
-    await expect(player.locator('.player-track-status')).toHaveText('Playing');
+    await expect(player.locator('[data-slot="player-track-status"]')).toHaveText('Playing');
     expectPlayerBarGeometry(await readPlayerBarGeometry(page));
   }
 });
@@ -888,7 +937,9 @@ test('Next waits for retirement and starts the next context song', async ({ page
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
 
   await player.getByRole('button', { name: 'Next' }).click();
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run');
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Candle Run',
+  );
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
   await expect(page.getByRole('alert', { name: 'Playback error' })).toHaveCount(0);
 });
@@ -905,9 +956,11 @@ test('Shuffle changes Next traversal without repeating visited songs', async ({ 
 
   const visited = ['Blue Bird'];
   for (let count = 0; count < 4; count += 1) {
-    const currentTitle = await player.locator('.player-track-copy strong').textContent();
+    const currentTitle = await player
+      .locator('[role="group"][aria-label^="Playback for"] strong')
+      .textContent();
     await player.getByRole('button', { name: 'Next' }).click();
-    const title = player.locator('.player-track-copy strong');
+    const title = player.locator('[role="group"][aria-label^="Playback for"] strong');
     const proceed = page.getByRole('button', { name: 'Proceed with current settings' });
     const playing = player.getByText('Playing', { exact: true });
     let confirmationAccepted = false;
@@ -945,19 +998,26 @@ test('Auto Play Off stays on the finished song, and a live On toggle advances it
 
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Blue Bird',
+  );
   await expect(player.getByRole('button', { name: 'Play', exact: true })).toBeVisible({
     timeout: 5_000,
   });
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Blue Bird');
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Blue Bird',
+  );
 
   await player.getByRole('button', { name: 'Play', exact: true }).click();
   await expect(player.getByText('Playing', { exact: true })).toBeVisible();
   await autoPlay.click();
   await expect(autoPlay).toHaveAttribute('aria-pressed', 'true');
-  await expect(player.locator('.player-track-copy strong')).toHaveText('Candle Run', {
-    timeout: 5_000,
-  });
+  await expect(player.locator('[role="group"][aria-label^="Playback for"] strong')).toHaveText(
+    'Candle Run',
+    {
+      timeout: 5_000,
+    },
+  );
 });
 
 test('Auto Play dock toggle mirrors Settings and stays outside the compact profile', async ({
@@ -976,7 +1036,7 @@ test('Auto Play dock toggle mirrors Settings and stays outside the compact profi
   await expect(profileDialog.getByRole('switch', { name: 'Auto Play' })).toHaveCount(0);
   const profileBox = await profileDialog.boundingBox();
   expect(profileBox).not.toBeNull();
-  if (profileBox) expect(profileBox.width).toBeLessThanOrEqual(350);
+  if (profileBox) expect(profileBox.width).toBeLessThanOrEqual(360);
   await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: 'Open settings' }).click();
@@ -990,6 +1050,8 @@ test('Auto Play dock toggle mirrors Settings and stays outside the compact profi
     'aria-checked',
     'true',
   );
+  await settings.getByRole('button', { name: 'Close settings' }).click();
+  await expect(settings).toBeHidden();
   await expect(dockAutoPlay).toHaveAttribute('aria-pressed', 'true');
 });
 
@@ -1039,7 +1101,7 @@ test('target startup failures remain actionable at desktop and Chromium fallback
   for (const viewport of [...supportedDesktopViewports, ...chromiumResponsiveFallbackViewports]) {
     await page.setViewportSize(viewport);
     await page.goto('/?mockStartFailure=target_not_found');
-    const player = await startSelectedSong(page);
+    const player = await startSelectedSong(page, { waitFor: 'recovery' });
     await expectRecoveryBannerWithinViewport(page);
     await expect(page.getByRole('alert')).toContainText('Sky window was not found');
     await expect(page.getByRole('alert')).toContainText(
@@ -1074,7 +1136,7 @@ test('Player Bar keeps transport geometry stable through its lifecycle', async (
   await expect(player.getByRole('button', { name: 'Previous' })).toBeDisabled();
   await expect(player.getByRole('button', { name: 'Next' })).toBeDisabled();
   await expect(confirmation.getByRole('button', { name: 'Not now' })).toBeEnabled();
-  const transportStatus = player.locator('.player-transport-status');
+  const transportStatus = player.locator('[data-slot="player-transport"] [role="status"]');
   await expect(transportStatus).toHaveText('Awaiting confirmation');
   const playerBox = await player.boundingBox();
   const statusBox = await transportStatus.boundingBox();

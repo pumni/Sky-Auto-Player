@@ -17,15 +17,27 @@ describe('SettingsPanel playback timing', () => {
     render(<SettingsPanel bootstrap={bootstrap} useStore={store} />);
 
     expect(screen.getByLabelText('Base Hold')).toBeInTheDocument();
-    expect(document.querySelector('.settings-content')).toHaveClass('scroll-surface');
+    const settingsContent = document.querySelector<HTMLElement>('[data-settings-content]');
+    expect(settingsContent).toBeInTheDocument();
+    if (!settingsContent) throw new Error('settings content should be available');
+    expect(settingsContent).toHaveAttribute('data-slot', 'scroll-area-viewport');
+    const settingsScrollArea = settingsContent.closest<HTMLElement>('[data-slot="scroll-area"]');
+    expect(settingsScrollArea).not.toBeNull();
+    expect(settingsScrollArea).toContainElement(settingsContent);
     const behaviorHeading = screen.getByRole('heading', { name: 'Behavior' });
     const defaultsHeading = screen.getByRole('heading', { name: 'Playback defaults' });
     expect(
       behaviorHeading.compareDocumentPosition(defaultsHeading) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     const autoPlay = screen.getByRole('switch', { name: 'Auto Play' });
-    expect(autoPlay.parentElement).toBe(behaviorHeading.parentElement);
-    expect(autoPlay).toHaveTextContent(
+    const autoPlayRow = screen
+      .getByText('Auto Play')
+      .closest('[data-slot="auto-play-setting-row"]');
+    expect(autoPlayRow).toContainElement(autoPlay);
+    expect(autoPlayRow).toHaveTextContent(
+      'Automatically continue to the next song after the current song finishes successfully.',
+    );
+    expect(autoPlay).toHaveAccessibleDescription(
       'Automatically continue to the next song after the current song finishes successfully.',
     );
     expect(autoPlay).toHaveAttribute('aria-checked', 'true');
@@ -86,21 +98,20 @@ describe('SettingsPanel playback timing', () => {
       fireEvent.click(palette);
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole('option', { name: 'Slate' }));
+      fireEvent.keyDown(screen.getByRole('option', { name: 'Slate' }), { key: 'Enter' });
     });
     await waitFor(() =>
       expect(screen.getByRole('alert')).toHaveTextContent('Could not save settings.'),
     );
     expect(screen.getByRole('dialog', { name: 'Settings' })).toBeInTheDocument();
     expect(store.getState().settings?.palette).toBe('graphite');
-    expect(palette).toHaveAttribute('data-value', 'graphite');
     expect(palette).toHaveTextContent('Graphite (Default)');
 
     await act(async () => {
       fireEvent.click(palette);
     });
     await act(async () => {
-      fireEvent.click(screen.getByRole('option', { name: 'Classic' }));
+      fireEvent.keyDown(screen.getByRole('option', { name: 'Classic' }), { key: 'Enter' });
     });
     await waitFor(() => expect(store.getState().settings?.palette).toBe('classic'));
     expect(screen.queryByRole('alert')).toBeNull();

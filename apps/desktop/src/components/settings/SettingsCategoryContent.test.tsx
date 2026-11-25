@@ -2,8 +2,8 @@ import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createMockBridge } from '../../bridge/mockBridge';
 import { createDesktopStore } from '../../state/store';
-import { SettingsCategoryContent, SETTINGS_CATEGORIES } from './SettingsCategoryContent';
 import type { SettingsCategory } from './SettingsCategoryContent';
+import { SETTINGS_CATEGORIES, SettingsCategoryContent } from './SettingsCategoryContent';
 
 afterEach(cleanup);
 
@@ -62,27 +62,60 @@ describe('SettingsCategoryContent', () => {
     );
 
     const palette = screen.getByRole('combobox', { name: 'Dark palette' });
-    expect(palette).toHaveAttribute('data-value', 'graphite');
+    expect(palette).toHaveTextContent('Graphite (Default)');
     await act(async () => palette.click());
 
     const options = screen.getAllByRole('option');
-    expect(
-      options.map((option) => [
-        option.getAttribute('data-value'),
-        option.querySelector('.app-select-option-label')?.textContent,
-      ]),
-    ).toEqual([
-      ['graphite', 'Graphite (Default)'],
-      ['aurora', 'Aurora'],
-      ['minimalist', 'Minimalist'],
-      ['slate', 'Slate'],
-      ['cyberpunk', 'Cyberpunk'],
-      ['classic', 'Classic'],
+    expect(options.map((option) => option.textContent?.trim())).toEqual([
+      'Graphite (Default)',
+      'Aurora',
+      'Minimalist',
+      'Slate',
+      'Cyberpunk',
+      'Classic',
     ]);
 
     await act(async () => screen.getByRole('option', { name: 'Slate' }).click());
     await waitFor(() => expect(store.getState().settings?.palette).toBe('slate'));
     expect(store.getState().settings?.appearance_mode).toBe('system');
+  });
+
+  it('previews the saved dark palette and labels the effective color mode', async () => {
+    const { store, bootstrap, settings } = await initializedStore();
+    const { rerender, container } = render(
+      <SettingsCategoryContent
+        category="appearance"
+        bootstrap={bootstrap}
+        settings={settings}
+        useStore={store}
+      />,
+    );
+
+    const darkPreview = screen.getByRole('img', {
+      name: 'Dark appearance preview using saved palette Graphite (Default)',
+    });
+    const appearanceSummary = container.querySelector('[data-slot="appearance-active-summary"]');
+    expect(darkPreview).toHaveAttribute('data-effective-mode', 'dark');
+    expect(appearanceSummary).toHaveTextContent(
+      'Active: Dark. Saved dark palette: Graphite (Default).',
+    );
+
+    rerender(
+      <SettingsCategoryContent
+        category="appearance"
+        bootstrap={bootstrap}
+        settings={{ ...settings, appearance_mode: 'light' }}
+        useStore={store}
+      />,
+    );
+    expect(
+      screen.getByRole('img', {
+        name: 'Light appearance preview using saved palette Graphite (Default)',
+      }),
+    ).toHaveAttribute('data-effective-mode', 'light');
+    expect(appearanceSummary).toHaveTextContent(
+      'Active: Light. Saved dark palette: Graphite (Default).',
+    );
   });
 
   it('keeps theme choice independent from the saved dark palette', async () => {
@@ -97,19 +130,14 @@ describe('SettingsCategoryContent', () => {
     );
 
     const theme = screen.getByRole('combobox', { name: 'Theme' });
-    expect(theme).toHaveAttribute('data-value', 'system');
+    expect(theme).toHaveTextContent('Follow Windows (recommended)');
     await act(async () => theme.click());
 
     const themeOptions = screen.getAllByRole('option');
-    expect(
-      themeOptions.map((option) => [
-        option.getAttribute('data-value'),
-        option.querySelector('.app-select-option-label')?.textContent,
-      ]),
-    ).toEqual([
-      ['system', 'Follow Windows (recommended)'],
-      ['light', 'Light'],
-      ['dark', 'Dark'],
+    expect(themeOptions.map((option) => option.textContent?.trim())).toEqual([
+      'Follow Windows (recommended)Auto',
+      'Light',
+      'Dark',
     ]);
 
     await act(async () => screen.getByRole('option', { name: 'Light' }).click());

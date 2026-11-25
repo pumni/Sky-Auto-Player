@@ -86,7 +86,7 @@ describe('useSystemAppearance', () => {
 
   it('handles ready rejection safely without throwing unhandled errors', async () => {
     vi.spyOn(runtime, 'isTauriRuntime').mockReturnValue(true);
-    let rejectReady!: (err: any) => void;
+    let rejectReady!: (reason: unknown) => void;
 
     vi.spyOn(systemAppearance, 'subscribeSystemAppearance').mockImplementation(() => ({
       ready: new Promise<void>((_, reject) => {

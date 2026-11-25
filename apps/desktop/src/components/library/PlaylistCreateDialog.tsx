@@ -1,5 +1,7 @@
-import { Dialog, Modal, ModalOverlay } from 'react-aria-components';
 import { useState } from 'react';
+import { Button } from '../ui/button';
+import { Dialog, DialogContent, DialogTitle } from '../ui/dialog';
+import { Input } from '../ui/input';
 
 interface PlaylistCreateDialogProps {
   open: boolean;
@@ -35,67 +37,83 @@ export function PlaylistCreateDialog({
   };
 
   return (
-    <ModalOverlay
-      isOpen={open}
-      isDismissable={!pending}
-      onOpenChange={onOpenChange}
-      className="modal-backdrop"
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (!pending || nextOpen) onOpenChange(nextOpen);
+      }}
     >
-      <Modal className="library-dialog">
-        <Dialog aria-label="New playlist">
-          <div className="dialog-heading">
-            <div>
-              <p className="eyebrow">YOUR LIBRARY</p>
-              <h2>New playlist</h2>
-            </div>
-            <button
-              className="icon-button icon-button-boxed"
+      <DialogContent
+        className="w-[min(420px,calc(100vw-32px))] gap-0 rounded-dialog border-border bg-card p-5"
+        aria-labelledby="playlist-create-title"
+        showCloseButton={false}
+      >
+        <div className="mb-4 flex items-start justify-between gap-4">
+          <div className="grid gap-px">
+            <p className="m-0 text-[11px] font-semibold tracking-wide text-text-tertiary">
+              YOUR LIBRARY
+            </p>
+            <DialogTitle
+              className="m-0 text-2xl font-semibold leading-8"
+              id="playlist-create-title"
+            >
+              New playlist
+            </DialogTitle>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="size-8 border-0 bg-transparent p-0 hover:bg-control-hover"
+            type="button"
+            aria-label="Close new playlist dialog"
+            onClick={() => onOpenChange(false)}
+            disabled={pending}
+          >
+            <span className="text-xl leading-none" aria-hidden="true">
+              ×
+            </span>
+          </Button>
+        </div>
+        <form
+          className="grid min-w-0 gap-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void submit();
+          }}
+        >
+          <label className="grid gap-1.5 text-xs font-medium text-text-secondary">
+            Playlist name
+            <Input
+              className="mt-1"
+              autoFocus
+              aria-label="Playlist name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              aria-invalid={validationError !== null}
+              aria-describedby={validationError ? 'playlist-create-error' : undefined}
+            />
+          </label>
+          {(validationError || error) && (
+            <p id="playlist-create-error" className="m-0 text-xs text-danger" role="alert">
+              {validationError ?? error}
+            </p>
+          )}
+          <div className="mt-2 flex justify-end gap-2">
+            <Button
+              variant="outline"
+              className="h-9"
               type="button"
-              aria-label="Close new playlist dialog"
               onClick={() => onOpenChange(false)}
               disabled={pending}
             >
-              ×
-            </button>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={pending}>
+              {pending ? 'Creating…' : 'Create'}
+            </Button>
           </div>
-          <form
-            className="library-dialog-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void submit();
-            }}
-          >
-            <label>
-              Playlist name
-              <input
-                autoFocus
-                value={name}
-                onChange={(event) => setName(event.target.value)}
-                aria-invalid={validationError !== null}
-                aria-describedby={validationError ? 'playlist-create-error' : undefined}
-              />
-            </label>
-            {(validationError || error) && (
-              <p id="playlist-create-error" className="inline-error" role="alert">
-                {validationError ?? error}
-              </p>
-            )}
-            <div className="library-dialog-actions">
-              <button
-                className="button"
-                type="button"
-                onClick={() => onOpenChange(false)}
-                disabled={pending}
-              >
-                Cancel
-              </button>
-              <button className="button button-primary" type="submit" disabled={pending}>
-                {pending ? 'Creating…' : 'Create'}
-              </button>
-            </div>
-          </form>
-        </Dialog>
-      </Modal>
-    </ModalOverlay>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import { Tab, TabList, Tabs } from 'react-aria-components';
 import type { DesktopStoreHook } from '../../state/store';
-import { useScrollVisibility } from '../../hooks/useScrollVisibility';
+import { Button } from '../ui/button';
+import { Tabs, TabsIndicator, TabsList, TabsTrigger } from '../ui/tabs';
 import { DiagnosticsEventsPanel } from './DiagnosticsEventsPanel';
 import { DiagnosticsPerformancePanel } from './DiagnosticsPerformancePanel';
 import { DiagnosticsPlaybackSummary } from './DiagnosticsPlaybackSummary';
@@ -14,7 +14,6 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
   const [traceExporting, setTraceExporting] = useState(false);
   const [traceExportError, setTraceExportError] = useState<string | null>(null);
   const [traceExportIdentity, setTraceExportIdentity] = useState<{ session: string } | null>(null);
-  const scrollRef = useScrollVisibility<HTMLDivElement>();
   const visibleTraceExportIdentity =
     traceExportIdentity !== null &&
     (sessionId === null || sessionId === traceExportIdentity.session)
@@ -50,46 +49,55 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
 
   return (
     <div
-      ref={scrollRef}
-      className="diagnostics-view scroll-surface"
+      className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 px-4 pb-4 pt-3"
       aria-labelledby="diagnostics-title"
+      data-slot="diagnostics-view"
     >
-      <h3 id="diagnostics-title" className="visually-hidden">
+      <h3 id="diagnostics-title" className="sr-only">
         Runtime diagnostics
       </h3>
       {diagnostics.error && (
-        <p className="inline-error" role="alert">
+        <p
+          className="rounded-control border border-danger-border bg-danger-surface px-2 py-1.5 text-xs text-danger"
+          role="alert"
+        >
           {diagnostics.error}
         </p>
       )}
       {diagnostics.enabled && <DiagnosticsPlaybackSummary useStore={useStore} />}
-      <div className="diagnostics-export">
-        <button
-          className="diagnostics-export-button"
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          variant="outline"
+          size="sm"
+          className="min-h-[30px] h-auto px-2.5 text-xs text-text-secondary hover:text-foreground disabled:cursor-progress disabled:opacity-70"
           type="button"
           title="Export the last available session envelope. Raw packet traces are not captured in production."
           disabled={traceExporting}
           onClick={() => void handleExportSenderTrace()}
         >
           {traceExporting ? 'Preparing sender metadata…' : 'Export sender metadata'}
-        </button>
-        <span role="status">
+        </Button>
+        <span className="text-xs text-text-tertiary" role="status">
           {visibleTraceExportIdentity
             ? 'Session metadata exported; raw packet trace was not captured in production.'
             : 'Exports the last available session, when present; no raw packet trace is recorded.'}
         </span>
       </div>
       {traceExportError && (
-        <p className="inline-error" role="alert">
+        <p
+          className="rounded-control border border-danger-border bg-danger-surface px-2 py-1.5 text-xs text-danger"
+          role="alert"
+        >
           {traceExportError}
         </p>
       )}
-      <Tabs className="diagnostics-tabs" defaultSelectedKey="performance">
-        <TabList aria-label="Diagnostics views">
-          <Tab id="performance">Performance</Tab>
-          <Tab id="timing">Timing</Tab>
-          <Tab id="events">Events</Tab>
-        </TabList>
+      <Tabs className="flex min-h-0 flex-1 flex-col gap-0" defaultValue="performance">
+        <TabsList aria-label="Diagnostics views" variant="segmented" activateOnFocus>
+          <TabsTrigger value="performance">Performance</TabsTrigger>
+          <TabsTrigger value="timing">Timing</TabsTrigger>
+          <TabsTrigger value="events">Events</TabsTrigger>
+          <TabsIndicator />
+        </TabsList>
         <DiagnosticsPerformancePanel useStore={useStore} />
         <DiagnosticsTimingPanel useStore={useStore} />
         <DiagnosticsEventsPanel useStore={useStore} />

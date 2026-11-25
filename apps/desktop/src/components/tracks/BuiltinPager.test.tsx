@@ -18,9 +18,7 @@ describe('BuiltinPager', () => {
     expect(action).toBeDisabled();
     expect(action).toHaveAttribute('title', 'Go to selected song');
     expect(action.querySelector('svg')).toHaveClass('lucide-locate-fixed');
-    expect(action.closest('.builtin-pager-leading')).toContainElement(
-      screen.getByText('1–100 of 112 songs'),
-    );
+    expect(screen.getByText('1–100 of 112 songs')).toBeVisible();
     const song = store.getState().library.pages.get(0)?.[1];
     if (!song) throw new Error('mock library is too small');
     await act(async () => store.getState().selectSong(song.song_id));
@@ -327,7 +325,6 @@ describe('BuiltinPager', () => {
 
       if (count === 0) {
         expect(screen.getByText('The built-in song catalog is empty.')).toBeInTheDocument();
-        expect(container.querySelector('.builtin-pager-range')).toBeNull();
         expect(container.querySelector('[aria-label="Built-in Songs pages"]')).toBeNull();
         expect(screen.queryByText(/Page 1 of 0/)).toBeNull();
         return;
@@ -340,7 +337,6 @@ describe('BuiltinPager', () => {
       );
       if (count <= 100) {
         expect(container.querySelector('[aria-label="Built-in Songs pages"]')).toBeNull();
-        expect(container.querySelectorAll('.builtin-pager-control')).toHaveLength(0);
         return;
       }
 
@@ -349,7 +345,6 @@ describe('BuiltinPager', () => {
       expect(pager.querySelectorAll('button')).toHaveLength(3);
       expect(screen.getByRole('button', { name: 'Previous page' })).toBeDisabled();
       expect(screen.getByRole('button', { name: 'Next page' })).toBeEnabled();
-      expect(pager.querySelector('.builtin-pager-static-indicator')).toBeNull();
       expect(
         screen.getByRole('button', {
           name: `1 / ${pageCount}, Page 1 of ${pageCount}. Jump to page`,

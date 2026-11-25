@@ -10,6 +10,23 @@ To replace them after a reviewed UI change, run from `apps/desktop/`:
 bun run ui:refresh
 ```
 
-This executes the existing opt-in Playwright visual capture, checks four PNGs, and replaces `current/` plus its manifest. It requires the UI source and tests to be committed first. The images show deterministic browser mock state, **not a native Windows/Tauri qualification**; the 640x448 overlay is browser-only. Native visual or input claims require separate native evidence and should never be inferred from these images.
+This executes the existing opt-in Playwright visual capture, checks the six canonical PNGs and the
+targeted VQC-R2 interaction, compact-layout, and palette evidence, then updates `current/`, its
+manifest, and the source-tagged [VQC-R2 evidence set](current/vqc/README.md). It requires the UI
+source and tests to be committed first. The images show deterministic browser mock state, **not a
+native Windows/Tauri qualification**; the 640x448 overlay is browser-only. Native visual or input
+claims require separate native evidence and should never be inferred from these images.
 
 Historic visual reviews remain available through immutable commit-pinned links in their original evidence reports. Review screenshots, one-off comparison captures, traces, and logs belong in ignored `test-results/` or PR/release artifacts—not a continually expanding set of screenshot folders under `docs/evidence/`.
+
+The WP1/WP2 work order, migration ledger, and performance captures are revision-bound history,
+indexed in [HISTORY.md](../HISTORY.md). Current Base UI focus-guard coverage is described in the
+[desktop type boundary](../desktop-type-boundary.md); the historical WP2 unfiltered Axe reports
+remain at [`axe-full-unfiltered-add-songs.json`](evidence/wp2/axe-full-unfiltered-add-songs.json) and
+[`axe-focus-guard-adjudication.json`](evidence/wp2/axe-focus-guard-adjudication.json).
+
+**D13 bundle policy:** emitted JavaScript size is advisory. There is no absolute or percentage
+acceptance ceiling, and no chunk split or UI simplification is required to match an earlier build.
+Preserve the approved visual behavior and judge performance with the revision-pinned WP2 profiles
+linked from [HISTORY.md](../HISTORY.md); do not treat those browser measurements as native timing
+qualification.

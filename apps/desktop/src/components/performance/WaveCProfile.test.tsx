@@ -199,7 +199,9 @@ describe('Wave C controlled UI profile', () => {
     await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
     observer.disconnect();
 
-    const title = container.querySelector('.player-track-info strong')?.textContent ?? null;
+    const title =
+      container.querySelector('[role="group"][aria-label^="Playback for"] strong')?.textContent ??
+      null;
     expect(title).toBe(scenario.playing ? playingRow.title : selectedRow?.title);
     expect(activeDescendantQueries).not.toHaveBeenCalled();
     expect(commits.get('track-info') ?? 0).toBe(0);
@@ -207,7 +209,9 @@ describe('Wave C controlled UI profile', () => {
     expect(commits.get('track-table') ?? 0).toBe(0);
     expect(searchCalls).not.toHaveBeenCalled();
     expect(viewportCalls).not.toHaveBeenCalled();
-    expect(container.querySelectorAll('.player-controls-row button')).toHaveLength(5);
+    expect(container.querySelectorAll('[data-testid="player-controls-row"] button')).toHaveLength(
+      5,
+    );
     const grid = container.querySelector('[role="grid"]');
     if (scenario.playing && scenario.selectedIndex === 250) {
       expect(grid).not.toHaveAttribute('aria-activedescendant');
@@ -235,7 +239,9 @@ describe('Wave C controlled UI profile', () => {
           playerTitle: title,
           progress: container.querySelector('progress')?.getAttribute('value'),
           transportButtons: Array.from(
-            container.querySelectorAll<HTMLButtonElement>('.player-controls-row button'),
+            container.querySelectorAll<HTMLButtonElement>(
+              '[data-testid="player-controls-row"] button',
+            ),
           ).map((button) => ({
             label: button.getAttribute('aria-label'),
             disabled: button.disabled,

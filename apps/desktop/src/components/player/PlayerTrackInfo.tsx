@@ -2,6 +2,7 @@ import { Heart, Music2 } from 'lucide-react';
 import type { DesktopStoreHook } from '../../state/store';
 import { playbackSessionStatusConcern, selectSongById } from '../../state/store';
 import { StatusBadge } from '../ui/StatusBadge';
+import { Button } from '../ui/button';
 import { playerStateLabel } from './playerFormatting';
 
 interface PlayerTrackInfoProps {
@@ -61,7 +62,7 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           ? 'Prepared'
           : hasCurrentSong
             ? 'Last played'
-            : 'Ready to play');
+            : 'Selected');
   const statusAccessibilityLabel =
     `${title}: ${baseStatus}` +
     (playbackMode === 'test'
@@ -72,15 +73,45 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
   const testModeDescription = 'Dry run: no physical keyboard input is sent.';
 
   return (
-    <div className="player-track-info" role="group" aria-label={`Playback for ${title}`}>
-      <span className="player-track-icon" aria-hidden="true">
+    <div
+      className="col-start-1 row-start-1 flex min-w-0 items-center gap-2.5"
+      role="group"
+      aria-label={`Playback for ${title}`}
+    >
+      <span
+        className="grid size-[30px] flex-none place-items-center rounded-control text-text-secondary max-[1100px]:hidden"
+        aria-hidden="true"
+      >
         <Music2 size={17} />
       </span>
-      <div className="player-track-copy">
-        <strong title={title}>{title}</strong>
-        <div className="player-track-subtitle">
+      <div className="@container/player-track-info grid min-w-0 flex-1 gap-0.5">
+        <div className="flex min-w-0 items-center gap-1.5 max-[700px]:gap-1">
+          <strong
+            className="min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-sm font-semibold text-foreground"
+            title={title}
+          >
+            {title}
+          </strong>
+          {likeSongId && (hasCurrentSong || fallbackIdentity) && (
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className={`size-[30px] max-[700px]:size-[28px] flex-none rounded-full p-0 text-text-tertiary hover:bg-control-hover hover:text-accent-ink focus-visible:text-accent-ink ${liked ? 'text-accent-ink' : ''}`}
+              type="button"
+              aria-label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+              aria-pressed={liked}
+              title={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
+              onClick={() => void setSongLiked(likeSongId, !liked)}
+            >
+              <Heart size={16} fill={liked ? 'currentColor' : 'none'} aria-hidden="true" />
+            </Button>
+          )}
+        </div>
+        <div className="flex min-w-0 items-center gap-1.5 max-[700px]:gap-1">
           <span
-            className={`muted player-track-status${active ? ' is-active' : ''}${sessionStatusConcern !== null ? ' is-attention' : ''}`}
+            data-slot="player-track-status"
+            className={`block min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-xs leading-4 ${sessionStatusConcern !== null ? 'text-warning' : active ? 'text-accent-ink' : 'text-muted-foreground'}`}
+            role="status"
             aria-label={statusAccessibilityLabel}
             aria-live="polite"
             aria-atomic="true"
@@ -90,38 +121,28 @@ export function PlayerTrackInfo({ useStore }: PlayerTrackInfoProps) {
           </span>
           {playbackMode === 'test' && (
             <StatusBadge
-              className="player-test-mode"
+              className="shrink-0"
               appearance="plain"
+              indicator={false}
               aria-label={testModeDescription}
               title={testModeDescription}
             >
-              Test<span className="player-test-mode-detail"> · no keys</span>
+              <span className="hidden @min-[180px]/player-track-info:inline">Test · no keys</span>
+              <span className="inline @min-[180px]/player-track-info:hidden">Dry run</span>
             </StatusBadge>
           )}
         </div>
+        {preparedRisk && ['medium', 'high'].includes(preparedRisk.level) && (
+          <StatusBadge
+            className="w-fit shrink-0"
+            tone={preparedRisk.level === 'high' ? 'danger' : 'warning'}
+            aria-label={preparedRisk.headline}
+            title={preparedRisk.headline}
+          >
+            {preparedRisk.level === 'high' ? 'High risk' : 'Medium risk'}
+          </StatusBadge>
+        )}
       </div>
-      {likeSongId && (hasCurrentSong || fallbackIdentity) && (
-        <button
-          className={`icon-button player-like-button${liked ? ' is-liked' : ''}`}
-          type="button"
-          aria-label={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
-          aria-pressed={liked}
-          title={liked ? 'Remove from Liked Songs' : 'Add to Liked Songs'}
-          onClick={() => void setSongLiked(likeSongId, !liked)}
-        >
-          <Heart size={16} fill={liked ? 'currentColor' : 'none'} aria-hidden="true" />
-        </button>
-      )}
-      {preparedRisk && ['medium', 'high'].includes(preparedRisk.level) && (
-        <StatusBadge
-          className="player-risk"
-          tone={preparedRisk.level === 'high' ? 'danger' : 'warning'}
-          aria-label={preparedRisk.headline}
-          title={preparedRisk.headline}
-        >
-          {preparedRisk.level === 'high' ? 'High risk' : 'Medium risk'}
-        </StatusBadge>
-      )}
     </div>
   );
 }

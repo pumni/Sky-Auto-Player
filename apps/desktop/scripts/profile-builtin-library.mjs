@@ -352,7 +352,7 @@ for (const size of widths) {
         .evaluate(() => ({
           href: location.href,
           title: document.title,
-          body: document.body?.innerText.slice(0, 1_000) ?? '',
+          body: document.body?.textContent.slice(0, 1_000) ?? '',
         }))
         .catch((diagnostic) => ({ error: String(diagnostic) }));
       throw new Error(

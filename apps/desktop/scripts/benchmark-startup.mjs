@@ -1,7 +1,7 @@
+import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { spawn, spawnSync } from 'node:child_process';
 import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 
@@ -166,7 +166,7 @@ function createAppData(root, fixture, persistent) {
 
 function waitForExit(child, timeoutMs) {
   return new Promise((resolvePromise, reject) => {
-    let timer = setTimeout(() => {
+    const timer = setTimeout(() => {
       if (process.platform === 'win32' && child.pid) {
         spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { stdio: 'ignore' });
       } else {

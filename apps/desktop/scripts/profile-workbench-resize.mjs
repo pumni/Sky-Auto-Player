@@ -42,7 +42,7 @@ const sourceHead = spawnSync('git', ['rev-parse', 'HEAD'], {
 }).stdout.trim();
 const exeSha256 = createHash('sha256').update(readFileSync(exe)).digest('hex');
 
-const pointerProgram = String.raw`
+const pointerProgram = `
 $ErrorActionPreference = 'Stop'
 $request = [Console]::In.ReadToEnd() | ConvertFrom-Json
 Add-Type -TypeDefinition @'
@@ -458,7 +458,7 @@ for (const count of counts) {
           width: innerWidth,
           dpr: devicePixelRatio,
           storage: localStorage.getItem('sky.ui.workbench.v5'),
-          body: document.body.innerText.slice(0, 2500),
+          body: document.body.textContent.slice(0, 2500),
         })),
       );
       await page.screenshot({ path: join(output, `${label}-failure.png`) });

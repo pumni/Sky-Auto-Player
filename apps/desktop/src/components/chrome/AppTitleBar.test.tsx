@@ -1,9 +1,9 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Bootstrap } from '../../bridge/DesktopBridge';
 import { createMockBridge } from '../../bridge/mockBridge';
-import { createDesktopStore } from '../../state/store';
 import type { WindowControls } from '../../platform/windowControls';
+import { createDesktopStore } from '../../state/store';
 import { AppTitleBar } from './AppTitleBar';
 
 async function testBootstrap(): Promise<{
@@ -37,11 +37,12 @@ describe('AppTitleBar', () => {
 
     const titlebar = screen.getByRole('banner', { name: 'Sky Auto Player' });
     expect(titlebar).toHaveAttribute('data-update-available', 'true');
-    expect(titlebar.querySelector('.titlebar-drag-space')).toHaveAttribute(
+    expect(titlebar.querySelector('[data-tauri-drag-region="true"]')).toHaveAttribute(
       'data-tauri-drag-region',
       'true',
     );
-    expect(screen.getByPlaceholderText('Search Built-in Songs…')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search current source…')).toBeInTheDocument();
+    expect(within(screen.getByRole('search')).getByText('Built-in')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Reload library' }).querySelector('svg')).toHaveClass(
       'lucide-refresh-cw',
     );
@@ -60,6 +61,7 @@ describe('AppTitleBar', () => {
 
   it('shows a subtle update indicator only when an update is available', async () => {
     const { bootstrap, useStore } = await testBootstrap();
+    const onUpdateOpen = vi.fn();
     const controls: WindowControls = {
       minimize: async () => undefined,
       toggleMaximize: async () => undefined,
@@ -80,7 +82,14 @@ describe('AppTitleBar', () => {
       });
     });
 
-    render(<AppTitleBar bootstrap={bootstrap} useStore={useStore} windowControls={controls} />);
+    render(
+      <AppTitleBar
+        bootstrap={bootstrap}
+        useStore={useStore}
+        windowControls={controls}
+        onUpdateOpen={onUpdateOpen}
+      />,
+    );
     expect(screen.queryByRole('button', { name: /Open update/ })).toBeNull();
     const titlebar = screen.getByRole('banner', { name: 'Sky Auto Player' });
     expect(titlebar).toHaveAttribute('data-update-available', 'false');
@@ -97,13 +106,13 @@ describe('AppTitleBar', () => {
 
     const indicator = await screen.findByRole('button', { name: 'Open update 4.0.2' });
     expect(titlebar).toHaveAttribute('data-update-available', 'true');
-    expect(indicator.closest('.update-indicator-shell')).toHaveAttribute(
-      'title',
-      'Update available: 4.0.2. Open update details.',
+    expect(indicator.querySelector('[data-update-indicator]')).toHaveAttribute(
+      'aria-hidden',
+      'true',
     );
-    expect(indicator.querySelector('.update-indicator-dot')).toHaveAttribute('aria-hidden', 'true');
 
     fireEvent.click(indicator);
+    expect(onUpdateOpen).toHaveBeenCalledOnce();
     expect(useStore.getState().update.dialogOpen).toBe(true);
 
     act(() => {
@@ -230,6 +239,7 @@ describe('AppTitleBar', () => {
     unmount();
 
     expect(unsub).toHaveBeenCalled();
+    expect(listenerCount).toBe(0);
   });
 
   it('handles rejections in window control promises without crashing or unhandled errors', async () => {

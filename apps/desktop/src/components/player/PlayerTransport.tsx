@@ -7,6 +7,7 @@ import {
   previousPlaybackPosition,
   selectSongById,
 } from '../../state/store';
+import { Button } from '../ui/button';
 import { formatPlayerDuration } from './playerFormatting';
 
 interface PlayerTransportProps {
@@ -51,9 +52,7 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     hasSession &&
     ['starting', 'playing', 'paused', 'stopping', 'finished', 'failed'].includes(playback.state);
   const contextCurrent =
-    playback.context !== null &&
-    playback.context.valid &&
-    playback.context.generation === libraryGeneration;
+    playback.context?.valid && playback.context.generation === libraryGeneration;
   const canNext = contextCurrent && nextPlaybackPosition(playback.context!) !== null;
   const transportOwnsControls = operationPending || confirmationPending || recoveryPending;
   const primaryPending =
@@ -62,12 +61,14 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
     recoveryPending ||
     (hasSession && ['starting', 'stopping', 'finished', 'failed'].includes(playback.state));
   const primaryCanStartPrepared = playback.prepared?.admission === 'ready';
+  const primaryIsPlaying = active && playback.state === 'playing';
+  const primaryIsPaused = active && playback.state === 'paused';
   const primaryCanPlay = Boolean(selectedSongId || (playback.hasCurrentSong && contextCurrent));
   const stopCanAct =
     hasSession && ['starting', 'playing', 'paused', 'stopping'].includes(playback.state);
   const canPrevious = useStore((store) => {
     const context = store.playback.context;
-    if (!context || !context.valid || context.generation !== store.library.generation) {
+    if (!context?.valid || context.generation !== store.library.generation) {
       return false;
     }
     const snapshot = store.playback.snapshot;
@@ -118,11 +119,16 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
   };
 
   return (
-    <div className="player-transport">
-      <div className="player-controls-row" data-testid="player-controls-row">
-        <div className="player-core-controls" data-testid="player-core-controls">
-          <button
-            className={`icon-button player-secondary-action player-shuffle-action${playback.shuffleEnabled ? ' is-active' : ''}`}
+    <div
+      data-slot="player-transport"
+      className="relative col-start-2 row-start-1 grid min-h-[70px] min-w-0 grid-rows-[44px_20px] content-center gap-1.5 [--player-primary-half:21px] [--player-control-gap:8px] [--player-secondary-target:34px] [--player-stop-gap:4px]"
+    >
+      <div className="relative h-11 min-w-0" data-testid="player-controls-row">
+        <div className="absolute inset-0" data-testid="player-core-controls">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="absolute left-[calc(50%-var(--player-primary-half)-var(--player-control-gap)-var(--player-secondary-target)-var(--player-control-gap)-var(--player-secondary-target))] top-1/2 size-[34px] -translate-y-1/2 rounded-full p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:!bg-transparent aria-pressed:text-accent-ink"
             type="button"
             aria-label="Shuffle"
             aria-pressed={playback.shuffleEnabled}
@@ -131,101 +137,124 @@ export function PlayerTransport({ useStore }: PlayerTransportProps) {
             onClick={() => setShuffleEnabled(!playback.shuffleEnabled)}
           >
             <Shuffle size={16} aria-hidden="true" />
-          </button>
-          <button
-            className="icon-button player-secondary-action player-previous-action"
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="absolute left-[calc(50%-var(--player-primary-half)-var(--player-control-gap)-var(--player-secondary-target))] top-1/2 size-[34px] -translate-y-1/2 rounded-full p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:!bg-transparent"
             type="button"
             aria-label="Previous"
             title="Previous"
             disabled={!canPrevious || transportOwnsControls}
             onClick={() => void previous()}
           >
-            <SkipBack size={16} aria-hidden="true" />
-          </button>
-          <div className="player-primary-slot" data-testid="player-primary-slot">
-            {primaryPending ? (
-              <button
-                className="icon-button button-primary player-primary-action is-pending"
-                type="button"
-                aria-label={transportStatus ?? 'Playback transition pending'}
-                title={transportStatus ?? 'Playback transition pending'}
-                disabled
-              >
-                <LoaderCircle size={18} aria-hidden="true" />
-              </button>
-            ) : active && playback.state === 'playing' ? (
-              <button
-                className="icon-button button-primary player-primary-action"
-                type="button"
-                aria-label="Pause"
-                title="Pause"
-                onClick={() => void pause()}
-              >
-                <Pause size={18} aria-hidden="true" />
-              </button>
-            ) : active && playback.state === 'paused' ? (
-              <button
-                className="icon-button button-primary player-primary-action"
-                type="button"
-                aria-label="Resume"
-                title="Resume"
-                onClick={() => void resume()}
-              >
-                <Play size={18} aria-hidden="true" />
-              </button>
-            ) : (
-              <button
-                className="icon-button button-primary player-primary-action"
-                type="button"
-                aria-label={
-                  primaryCanStartPrepared && playback.prepared?.config.dry_run
-                    ? 'Start test playback (no input)'
-                    : 'Play'
-                }
-                title={
-                  confirmationPending
-                    ? 'Playback confirmation required'
-                    : playback.prepared?.admission === 'blocked'
-                      ? 'Playback is blocked'
+            <SkipBack size={18} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
+          </Button>
+          <div
+            className="absolute left-1/2 top-1/2 grid size-[42px] -translate-x-1/2 -translate-y-1/2 place-items-center"
+            data-testid="player-primary-slot"
+          >
+            <Button
+              data-slot="primary-transport"
+              data-transport-state={
+                primaryPending
+                  ? 'pending'
+                  : primaryIsPlaying
+                    ? 'playing'
+                    : primaryIsPaused
+                      ? 'paused'
+                      : 'idle'
+              }
+              variant="default"
+              size="transport"
+              className="disabled:opacity-100"
+              type="button"
+              aria-label={
+                primaryPending
+                  ? (transportStatus ?? 'Playback transition pending')
+                  : primaryIsPlaying
+                    ? 'Pause'
+                    : primaryIsPaused
+                      ? 'Resume'
                       : primaryCanStartPrepared && playback.prepared?.config.dry_run
-                        ? 'Start test playback: no keyboard input'
-                        : 'Play: may send physical keyboard input'
-                }
-                disabled={
-                  transportOwnsControls ||
-                  (!primaryCanStartPrepared &&
+                        ? 'Start test playback (no input)'
+                        : 'Play'
+              }
+              aria-busy={primaryPending}
+              title={
+                primaryPending
+                  ? (transportStatus ?? 'Playback transition pending')
+                  : primaryIsPlaying
+                    ? 'Pause'
+                    : primaryIsPaused
+                      ? 'Resume'
+                      : confirmationPending
+                        ? 'Playback confirmation required'
+                        : playback.prepared?.admission === 'blocked'
+                          ? 'Playback is blocked'
+                          : primaryCanStartPrepared && playback.prepared?.config.dry_run
+                            ? 'Start test playback: no keyboard input'
+                            : 'Play: may send physical keyboard input'
+              }
+              disabled={
+                primaryPending ||
+                (!(primaryIsPlaying || primaryIsPaused) &&
+                  ((!primaryCanStartPrepared &&
                     (confirmationPending || playback.prepared?.admission === 'blocked')) ||
-                  (!primaryCanStartPrepared && !primaryCanPlay)
-                }
-                onClick={() =>
-                  primaryCanStartPrepared ? void start() : void prepareAndMaybeStart(false)
-                }
-              >
-                <Play size={18} aria-hidden="true" />
-              </button>
-            )}
+                    (!primaryCanStartPrepared && !primaryCanPlay)))
+              }
+              onClick={() => {
+                if (primaryIsPlaying) void pause();
+                else if (primaryIsPaused) void resume();
+                else if (primaryCanStartPrepared) void start();
+                else void prepareAndMaybeStart(false);
+              }}
+            >
+              <span className="grid size-[18px] place-items-center" aria-hidden="true">
+                <Play
+                  className={`col-start-1 row-start-1 size-4 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${!primaryPending && !primaryIsPlaying ? 'opacity-100' : 'opacity-0'}`}
+                  size={16}
+                  fill="currentColor"
+                  strokeWidth={1.5}
+                />
+                <Pause
+                  className={`col-start-1 row-start-1 size-4 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${!primaryPending && primaryIsPlaying ? 'opacity-100' : 'opacity-0'}`}
+                  size={16}
+                  fill="currentColor"
+                  strokeWidth={1.5}
+                />
+                <LoaderCircle
+                  className={`col-start-1 row-start-1 size-4 transition-opacity duration-[100ms] ease-standard motion-reduce:transition-none ${primaryPending ? 'animate-spin opacity-100 motion-reduce:animate-none' : 'opacity-0'}`}
+                  size={16}
+                />
+              </span>
+            </Button>
           </div>
-          <button
-            className="icon-button player-secondary-action player-next-action"
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="absolute left-[calc(50%+var(--player-primary-half)+var(--player-control-gap))] top-1/2 size-[34px] -translate-y-1/2 rounded-full p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:!bg-transparent"
             type="button"
             aria-label="Next"
             title="Next"
             disabled={!canNext || transportOwnsControls}
             onClick={() => void next()}
           >
-            <SkipForward size={16} aria-hidden="true" />
-          </button>
+            <SkipForward size={18} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
+          </Button>
         </div>
-        <button
-          className="icon-button player-secondary-action player-stop-action"
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className="absolute left-[calc(50%+var(--player-primary-half)+var(--player-control-gap)+var(--player-secondary-target)+var(--player-stop-gap))] top-1/2 size-[34px] -translate-y-1/2 rounded-full p-0 text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-default disabled:text-control-disabled disabled:opacity-100 disabled:hover:!bg-transparent"
           type="button"
           aria-label="Stop"
           title="Stop"
           disabled={!stopCanAct || playback.transportOperation === 'stopping'}
           onClick={() => void stop()}
         >
-          <Square size={14} aria-hidden="true" />
-        </button>
+          <Square size={13} fill="currentColor" strokeWidth={1.5} aria-hidden="true" />
+        </Button>
       </div>
       <PlayerTransportTimeline useStore={useStore} transportStatus={transportStatus} />
     </div>
@@ -259,24 +288,30 @@ function PlayerTransportTimeline({
 
   return (
     <div
-      className={`player-timeline${timelineSongExists ? '' : ' is-disabled'}`}
+      className={`grid min-h-6 min-w-0 grid-rows-[16px_6px] gap-[3px] ${timelineSongExists ? '' : 'text-text-tertiary'}`}
       aria-label={progressLabel}
+      data-slot="player-timeline"
     >
-      <div className="player-timeline-label-row">
+      <div className="relative grid h-4 min-w-0 items-center">
         <div
-          className={`player-timeline-labels${transportStatus ? ' is-hidden' : ''}`}
+          className="col-start-1 row-start-1 flex h-4 justify-between text-[11px] leading-4 tabular-nums text-text-tertiary aria-hidden:invisible"
           aria-hidden={!timelineSongExists || transportStatus !== null}
+          data-slot="player-timeline-labels"
         >
           <span>{timelineSongExists ? formatPlayerDuration(currentUs) : ''}</span>
           <span>{timelineSongExists ? formatPlayerDuration(totalUs) : ''}</span>
         </div>
         {transportStatus && (
-          <span className="player-transport-status" role="status">
+          <span
+            className="col-start-1 row-start-1 overflow-hidden text-center text-xs leading-4 text-text-tertiary"
+            role="status"
+          >
             {transportStatus}
           </span>
         )}
       </div>
       <progress
+        className="block h-1 w-full self-center appearance-none overflow-hidden rounded-full border-0 bg-control-hover accent-primary aria-disabled:bg-control-hover"
         value={timelineSongExists ? currentUs : 0}
         max={timelineSongExists ? totalUs || 1 : 1}
         aria-label={progressLabel}

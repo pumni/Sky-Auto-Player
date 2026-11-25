@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, type Page, test } from '@playwright/test';
 import { MIN_TRACK_BROWSER_WIDTH } from '../../src/components/workbench/workbenchGeometry';
 
 const key = 'sky.ui.workbench.v5';
@@ -29,9 +29,9 @@ async function bounds(page: Page) {
     const width = (selector: string) =>
       document.querySelector(selector)?.getBoundingClientRect().width ?? null;
     return {
-      navigator: width('.navigator-workbench-pane'),
-      tracks: width('.track-browser-workbench-pane'),
-      inspector: width('.utility-workbench-pane'),
+      navigator: width('[data-pane="navigator"]'),
+      tracks: width('[data-pane="browser"]'),
+      inspector: width('[data-pane="inspector"]'),
     };
   });
 }
@@ -70,7 +70,11 @@ for (const pane of ['utility', 'navigator'] as const) {
       // Pane width must not become an inherited input to every row/content node.
       expect(
         await page
-          .locator(pane === 'utility' ? '.utility-surface' : '.library-navigator')
+          .locator(
+            pane === 'utility'
+              ? '[role="region"][aria-label^="Utility:"]'
+              : '[data-slot="library-navigator"]',
+          )
           .evaluate(
             (element, property) => getComputedStyle(element).getPropertyValue(property),
             pane === 'utility' ? '--utility-pane-width' : '--navigator-pane-width',
@@ -79,7 +83,7 @@ for (const pane of ['utility', 'navigator'] as const) {
       expect(await page.evaluate((key) => localStorage.getItem(key), key)).toBe(before);
     }
     await page.mouse.up();
-    await expect(page.locator('body')).not.toHaveClass(/is-resizing/);
+    await expect(page.locator('body')).not.toHaveAttribute('data-resizing');
     expect(await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!), key)).toMatchObject(
       pane === 'utility'
         ? { utilityWidth: 288, expandedNavigatorWidth: 240 }
@@ -100,14 +104,14 @@ test('all palettes preserve Inspector 388/389/388 geometry and persist once', as
     await seed(page, 1024);
     expect(
       await page
-        .locator('.workbench')
+        .locator('[data-slot="workbench"]')
         .evaluate((element) =>
           getComputedStyle(element).getPropertyValue('--min-track-browser-width').trim(),
         ),
     ).toBe(`${MIN_TRACK_BROWSER_WIDTH}px`);
     expect(
       await page
-        .locator('.track-browser-workbench-pane')
+        .locator('[data-pane="browser"]')
         .evaluate((element) => getComputedStyle(element).minWidth),
     ).toBe(`${MIN_TRACK_BROWSER_WIDTH}px`);
     await page.locator('html').evaluate((root, value) => {
@@ -136,7 +140,7 @@ test('all palettes preserve Inspector 388/389/388 geometry and persist once', as
     }
     expect(await page.evaluate(() => Reflect.get(window, 'resizeWrites'))).toBe(0);
     await page.mouse.up();
-    await expect(page.locator('body')).not.toHaveClass(/is-resizing/);
+    await expect(page.locator('body')).not.toHaveAttribute('data-resizing');
     expect(await page.evaluate(() => Reflect.get(window, 'resizeWrites'))).toBe(1);
     trace.push({ palette, samples: paletteTrace });
     if (palette === 'graphite' && process.env.WORKBENCH_RESIZE_CAPTURE === '1') {
@@ -196,10 +200,10 @@ test('all palette IDs share workbench geometry across the dock and overlay thres
     };
     const readStableLayout = () =>
       page.evaluate(async () => {
-        const workbench = document.querySelector<HTMLElement>('.workbench');
-        const navigator = document.querySelector<HTMLElement>('.navigator-workbench-pane');
-        const tracks = document.querySelector<HTMLElement>('.track-browser-workbench-pane');
-        const inspector = document.querySelector<HTMLElement>('.utility-workbench-pane');
+        const workbench = document.querySelector<HTMLElement>('[data-slot="workbench"]');
+        const navigator = document.querySelector<HTMLElement>('[data-pane="navigator"]');
+        const tracks = document.querySelector<HTMLElement>('[data-pane="browser"]');
+        const inspector = document.querySelector<HTMLElement>('[data-pane="inspector"]');
         const read = () => {
           if (!workbench || !navigator || !tracks || !inspector) return null;
           const inspectorBounds = inspector.getBoundingClientRect();
@@ -233,22 +237,23 @@ test('all palette IDs share workbench geometry across the dock and overlay thres
           return [bounds.x, bounds.y, bounds.width, bounds.height];
         };
         return {
-          titlebar: rect('.app-titlebar'),
-          workbench: rect('.workbench'),
-          navigator: rect('.navigator-workbench-pane'),
-          tracks: rect('.track-browser-workbench-pane'),
-          inspector: rect('.utility-workbench-pane'),
-          trackHeader: rect('.track-browser-header'),
-          trackRow: rect('.track-row'),
-          player: rect('.player-bar'),
+          titlebar: rect('[data-slot="titlebar"]'),
+          workbench: rect('[data-slot="workbench"]'),
+          navigator: rect('[data-pane="navigator"]'),
+          tracks: rect('[data-pane="browser"]'),
+          inspector: rect('[data-pane="inspector"]'),
+          trackHeader: rect('[data-slot="track-browser-header"]'),
+          trackRow: rect('[data-slot="track-row"]'),
+          player: rect('[data-slot="player-dock"]'),
           separators: Array.from(
-            document.querySelectorAll<HTMLElement>('.resizable-separator'),
+            document.querySelectorAll<HTMLElement>('[data-slot="resizable-separator"]'),
           ).map((separator) => {
             const bounds = separator.getBoundingClientRect();
             return [bounds.x, bounds.y, bounds.width, bounds.height];
           }),
           presentation:
-            document.querySelector<HTMLElement>('.workbench')?.dataset.utilityPresentation,
+            document.querySelector<HTMLElement>('[data-slot="workbench"]')?.dataset
+              .utilityPresentation,
         };
       });
       expect(geometry.presentation).toBe(width < 764 ? 'overlay' : 'docked');
@@ -284,7 +289,7 @@ for (const [viewport, inspector] of [
         utilityWidth: Math.max(280, inspector!),
       },
     );
-    const trigger = page.locator('.player-utility-button');
+    const trigger = page.locator('button[aria-label$="utility panel"]');
     await trigger.click();
     await trigger.click();
     await expect(separator).toBeVisible();
@@ -322,10 +327,13 @@ test('wide and narrow drag geometry, overlay focus, and v5 preference survive vi
   await expect.poll(() => bounds(page)).toEqual({ navigator: 200, tracks: 420, inspector: 264 });
   const saved = await page.evaluate((key) => localStorage.getItem(key), key);
   await page.setViewportSize({ width: 640, height: 448 });
-  await expect(page.locator('.workbench')).toHaveAttribute('data-utility-presentation', 'overlay');
-  await expect(page.locator('body')).not.toHaveClass(/is-resizing/);
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-utility-presentation',
+    'overlay',
+  );
+  await expect(page.locator('body')).not.toHaveAttribute('data-resizing');
   await page.getByRole('button', { name: 'Close utility pane' }).click();
-  await expect(page.locator('.player-utility-button')).toBeFocused();
+  await expect(page.locator('button[aria-label$="utility panel"]')).toBeFocused();
   await page.setViewportSize({ width: 1024, height: 768 });
   const persisted = JSON.parse(saved!);
   expect(persisted).toMatchObject({
@@ -340,7 +348,10 @@ test('wide and narrow drag geometry, overlay focus, and v5 preference survive vi
     },
   );
   const navigatorSeparator = page.getByRole('separator', { name: 'Resize library navigator' });
-  await expect(page.locator('.workbench')).toHaveAttribute('data-workbench-width', '1024');
+  await expect(page.locator('[data-slot="workbench"]')).toHaveAttribute(
+    'data-workbench-width',
+    '1024',
+  );
   await expect(navigatorSeparator).toHaveAttribute('aria-valuenow', '300');
   await expect(navigatorSeparator).toHaveAttribute('tabindex', '0');
   await expect(navigatorSeparator).not.toHaveAttribute('aria-disabled', 'true');
@@ -362,11 +373,11 @@ test('closing the Inspector during capture cleans up without persisting a stale 
   await page.mouse.down();
   await page.mouse.move(box.x + 40, box.y + 80);
   await expect(separator).toHaveAttribute('aria-valuenow', '350');
-  const trigger = page.locator('.player-utility-button');
+  const trigger = page.locator('button[aria-label$="utility panel"]');
   await trigger.focus();
   await page.keyboard.press('Enter');
   await expect(separator).toHaveCount(0);
-  await expect(page.locator('body')).not.toHaveClass(/is-resizing/);
+  await expect(page.locator('body')).not.toHaveAttribute('data-resizing');
   await page.mouse.up();
   expect(
     await page.evaluate((key) => JSON.parse(localStorage.getItem(key)!).utilityWidth, key),
