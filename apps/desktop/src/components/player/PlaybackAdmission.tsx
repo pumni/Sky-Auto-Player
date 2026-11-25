@@ -23,6 +23,12 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
   const admissionRequired =
     prepared?.admission === 'confirmation_required' && prepared.prepared_id !== null;
   const issue = playbackIssuePresentation(playback);
+  const riskExplanation = prepared
+    ? prepared.risk.reasons.join(' ') ||
+      (prepared.risk.short_up_gap_repeat_count > 0
+        ? `${prepared.risk.short_up_gap_repeat_count} feasible same-key repeat(s) have an authored Up-to-Down gap shorter than one frame. The game may miss a short Up pulse.`
+        : 'Review the prepared schedule before starting.')
+    : '';
   const blockedMessage =
     prepared?.admission === 'blocked' ? (prepared.error_message ?? playback.error) : null;
 
@@ -39,7 +45,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
         role="group"
         data-slot="playback-admission"
         aria-labelledby="playback-confirmation-title"
-        aria-describedby="playback-confirmation-reason"
+        aria-describedby="playback-confirmation-reason playback-confirmation-consequence"
       >
         <div className="grid min-w-0 gap-1.5">
           <strong
@@ -55,12 +61,12 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
             id="playback-confirmation-reason"
             className="m-0 break-words text-xs leading-relaxed text-foreground"
           >
-            {prepared.risk.reasons.join(' ') || 'Review the selected song before starting.'}
+            {riskExplanation}
           </p>
-          <p className="m-0 break-words text-xs leading-relaxed text-muted-foreground">
-            {prepared.risk.short_up_gap_repeat_count > 0
-              ? `${prepared.risk.short_up_gap_repeat_count} feasible same-key repeat(s) have an authored Up-to-Down gap shorter than one frame. The game may miss a short Up pulse.`
-              : 'Review the prepared schedule before starting.'}{' '}
+          <p
+            id="playback-confirmation-consequence"
+            className="m-0 break-words text-xs leading-relaxed text-muted-foreground"
+          >
             Proceed keeps the authored timing and selected settings unchanged.
           </p>
         </div>

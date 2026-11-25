@@ -88,7 +88,7 @@ const manifest = {
     'appearance-settings-light.png':
       'Review-only Appearance settings state with Light active and Graphite saved, 1366x768',
     'compact-admission.png':
-      'Compact 640x448 dry-run risk confirmation with readable title and risk badge',
+      'Compact 640x448 pre-start timing-risk confirmation with readable title and risk badge',
   },
 };
 await writeFile(resolve(destination, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`);

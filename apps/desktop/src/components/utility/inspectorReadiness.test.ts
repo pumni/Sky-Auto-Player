@@ -18,6 +18,9 @@ describe('Inspector readiness summary', () => {
     );
     expect(resolveInspectorReadiness({ ...ready, riskLevel: null }).state).toBe('unavailable');
     expect(resolveInspectorReadiness({ ...ready, riskLevel: 'unknown' }).state).toBe('unavailable');
+    expect(resolveInspectorReadiness({ ...ready, riskLevel: 'unexpected' }).state).toBe(
+      'unavailable',
+    );
   });
 
   it('gives a live pending check precedence over an unavailable detail error', () => {

@@ -70,7 +70,7 @@ export function resolveInspectorReadiness({
   const sheetReady =
     sheetReadiness === 'ready' ||
     (sheetReadiness === 'requires_confirmation' && conversionConfirmed);
-  if (!sheetReady || riskLevel === null || riskLevel === 'unknown') {
+  if (!sheetReady || riskLevel !== 'low') {
     return {
       state: 'unavailable',
       label: 'Readiness unavailable',

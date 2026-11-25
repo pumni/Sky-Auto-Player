@@ -89,10 +89,18 @@ describe('LibraryNavigator built-in source', () => {
     expect(builtin).toHaveTextContent('0');
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
     const createPlaylist = screen.getByText('Create playlist', { selector: 'button' });
-    expect(createPlaylist).toHaveClass('border-border', 'bg-background');
+    expect(createPlaylist).toHaveClass('bg-primary');
     expect(
       screen.getByText('Create a playlist to collect songs or import local sheets.'),
     ).toBeVisible();
+
+    act(() =>
+      store.setState((state) => ({
+        ...state,
+        library: { ...state.library, likedTotal: 1 },
+      })),
+    );
+    expect(createPlaylist).toHaveClass('border-border', 'bg-background');
   });
 
   it('offers a working retry after navigation loading fails', async () => {

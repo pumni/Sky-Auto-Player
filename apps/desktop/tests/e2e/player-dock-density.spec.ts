@@ -245,9 +245,11 @@ test('compact dock keeps a prepared risk label and confirmation state visible at
     const title = info.locator('strong');
     const status = info.locator('[data-slot="player-track-status"]');
     const risk = info.locator('[data-slot="status-badge"]');
+    const like = info.locator('button[aria-pressed]');
     await expect(title).toHaveText('Aurora Landing');
     await expect(status).toBeVisible();
     await expect(risk).toHaveText('Medium risk');
+    await expect(like).toBeVisible();
 
     const state = await page.evaluate(() => {
       const dock = document.querySelector<HTMLElement>('[data-slot="player-dock"]');
@@ -255,19 +257,22 @@ test('compact dock keeps a prepared risk label and confirmation state visible at
       const title = info?.querySelector<HTMLElement>('strong');
       const status = info?.querySelector<HTMLElement>('[data-slot="player-track-status"]');
       const risk = info?.querySelector<HTMLElement>('[data-slot="status-badge"]');
+      const like = info?.querySelector<HTMLElement>('button[aria-pressed]');
       const rect = (element: HTMLElement | null | undefined) => {
         if (!element) return null;
         const box = element.getBoundingClientRect();
-        return { x: box.x, right: box.right, y: box.y, bottom: box.bottom };
+        return { x: box.x, right: box.right, y: box.y, bottom: box.bottom, height: box.height };
       };
       return {
         dock: rect(dock),
+        info: rect(info),
         title: rect(title),
         titleClipped: title ? title.scrollWidth > title.clientWidth : true,
         status: rect(status),
         statusClipped: status ? status.scrollWidth > status.clientWidth : true,
         risk: rect(risk),
         riskClipped: risk ? risk.scrollWidth > risk.clientWidth : true,
+        like: rect(like),
         width: document.documentElement.scrollWidth,
       };
     });
@@ -276,7 +281,7 @@ test('compact dock keeps a prepared risk label and confirmation state visible at
     expect(state.statusClipped, JSON.stringify(state)).toBe(false);
     expect(state.riskClipped, JSON.stringify(state)).toBe(false);
     expect(state.width).toBeLessThanOrEqual(viewport.width);
-    for (const element of [state.title, state.status, state.risk]) {
+    for (const element of [state.info, state.title, state.status, state.risk, state.like]) {
       expect(element).not.toBeNull();
       if (element && state.dock) {
         expect(element.x).toBeGreaterThanOrEqual(state.dock.x);
@@ -288,5 +293,97 @@ test('compact dock keeps a prepared risk label and confirmation state visible at
     expectPlayerBarGeometry(await readPlayerBarGeometry(page));
     await page.getByRole('button', { name: 'Not now' }).click();
     await expect(page.getByRole('group', { name: 'Playback confirmation' })).toHaveCount(0);
+  }
+});
+
+test('compact dock bounds a long prepared title with fallback fonts at 800 and 640', async ({
+  page,
+}) => {
+  const longTitle = 'A sheet with an intentionally long title for layout verification';
+  for (const viewport of [
+    { width: 800, height: 560 },
+    { width: 640, height: 448 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/?mockPlaybackDurationMs=120000');
+    await page.addStyleTag({
+      content: 'html, body, body * { font-family: sans-serif !important; }',
+    });
+    const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
+    await search.fill(longTitle);
+    const row = page.getByRole('row', { name: /A sheet with an intentionally long title/ });
+    await expect(row).toBeVisible();
+    await row.click();
+
+    const dock = page.getByRole('contentinfo', { name: 'Player controls' });
+    await dock.getByRole('button', { name: 'Play', exact: true }).click();
+    await expect(page.getByRole('group', { name: 'Playback confirmation' })).toBeVisible();
+    const info = dock.getByRole('group', { name: `Playback for ${longTitle}` });
+    const title = info.locator('strong');
+    const status = info.locator('[data-slot="player-track-status"]');
+    const risk = info.locator('[data-slot="status-badge"]');
+    const like = info.locator('button[aria-pressed]');
+    await expect(title).toHaveText(longTitle);
+    await expect(title).toHaveAttribute('title', longTitle);
+    await expect(status).toHaveText('Prepared');
+    await expect(risk).toHaveText('Medium risk');
+    await expect(like).toBeVisible();
+
+    const state = await page.evaluate(() => {
+      const dock = document.querySelector<HTMLElement>('[data-slot="player-dock"]');
+      const info = dock?.querySelector<HTMLElement>('[role="group"][aria-label^="Playback for"]');
+      const title = info?.querySelector<HTMLElement>('strong');
+      const status = info?.querySelector<HTMLElement>('[data-slot="player-track-status"]');
+      const risk = info?.querySelector<HTMLElement>('[data-slot="status-badge"]');
+      const like = info?.querySelector<HTMLElement>('button[aria-pressed]');
+      const rect = (element: HTMLElement | null | undefined) => {
+        if (!element) return null;
+        const box = element.getBoundingClientRect();
+        return { x: box.x, right: box.right, y: box.y, bottom: box.bottom, height: box.height };
+      };
+      return {
+        dock: rect(dock),
+        info: rect(info),
+        infoName: info?.getAttribute('aria-label'),
+        title: rect(title),
+        titleText: title?.textContent?.trim(),
+        titleAttribute: title?.getAttribute('title'),
+        titleClipped: title ? title.scrollWidth > title.clientWidth : false,
+        titleWhiteSpace: title ? getComputedStyle(title).whiteSpace : null,
+        titleOverflow: title ? getComputedStyle(title).overflow : null,
+        titleTextOverflow: title ? getComputedStyle(title).textOverflow : null,
+        status: rect(status),
+        statusClipped: status ? status.scrollWidth > status.clientWidth : true,
+        risk: rect(risk),
+        riskClipped: risk ? risk.scrollWidth > risk.clientWidth : true,
+        like: rect(like),
+        likeName: like?.getAttribute('aria-label'),
+        width: document.documentElement.scrollWidth,
+      };
+    });
+    expect(state.dock?.height, JSON.stringify(state)).toBe(92);
+    expect(state.dock?.bottom, JSON.stringify(state)).toBe(viewport.height);
+    expect(state.infoName, JSON.stringify(state)).toBe(`Playback for ${longTitle}`);
+    expect(state.titleText, JSON.stringify(state)).toBe(longTitle);
+    expect(state.titleAttribute, JSON.stringify(state)).toBe(longTitle);
+    expect(state.titleClipped, JSON.stringify(state)).toBe(true);
+    expect(state.titleWhiteSpace, JSON.stringify(state)).toBe('nowrap');
+    expect(state.titleOverflow, JSON.stringify(state)).toBe('hidden');
+    expect(state.titleTextOverflow, JSON.stringify(state)).toBe('ellipsis');
+    expect(state.statusClipped, JSON.stringify(state)).toBe(false);
+    expect(state.riskClipped, JSON.stringify(state)).toBe(false);
+    expect(state.likeName, JSON.stringify(state)).toMatch(/Liked Songs/);
+    expect(state.width, JSON.stringify(state)).toBeLessThanOrEqual(viewport.width);
+    for (const element of [state.info, state.title, state.status, state.risk, state.like]) {
+      expect(element, JSON.stringify(state)).not.toBeNull();
+      if (element && state.dock) {
+        expect(element.x, JSON.stringify(state)).toBeGreaterThanOrEqual(state.dock.x);
+        expect(element.right, JSON.stringify(state)).toBeLessThanOrEqual(state.dock.right);
+        expect(element.y, JSON.stringify(state)).toBeGreaterThanOrEqual(state.dock.y);
+        expect(element.bottom, JSON.stringify(state)).toBeLessThanOrEqual(state.dock.bottom);
+      }
+    }
+    expectPlayerBarGeometry(await readPlayerBarGeometry(page));
+    await page.getByRole('button', { name: 'Not now' }).click();
   }
 });

@@ -34,12 +34,17 @@ describe('PlaybackAdmission recovery actions', () => {
     await act(async () => store.getState().prepareSelectedPlayback());
 
     const { container } = render(<PlaybackAdmission useStore={store} />);
+    const prepared = store.getState().playback.prepared;
+    if (!prepared) throw new Error('expected a prepared playback');
+    const reason = container.querySelector('#playback-confirmation-reason');
+    const consequence = container.querySelector('#playback-confirmation-consequence');
+    expect(reason).toHaveTextContent(prepared.risk.reasons.join(' '));
     expect(
-      screen.getByText(/Proceed keeps the authored timing and selected settings unchanged/),
-    ).toBeInTheDocument();
-    expect(
-      screen.getAllByText(/2 feasible same-key repeats have an authored Up-to-Down gap/),
-    ).not.toHaveLength(0);
+      reason?.textContent?.match(/2 feasible same-key repeats have an authored Up-to-Down gap/g),
+    ).toHaveLength(1);
+    expect(consequence).toHaveTextContent(
+      'Proceed keeps the authored timing and selected settings unchanged.',
+    );
     expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
     const estimates = screen.getAllByText('Short same-key Up gap risk', { selector: 'summary' });
     expect(estimates).toHaveLength(2);

@@ -306,7 +306,12 @@ export function LibraryNavigator({
                   Create a playlist to collect songs or import local sheets.
                 </p>
                 <Button
-                  variant={navigation.builtinAvailable ? 'outline' : 'default'}
+                  variant={
+                    (navigation.builtinAvailable && navigation.builtinSongCount > 0) ||
+                    likedTotal > 0
+                      ? 'outline'
+                      : 'default'
+                  }
                   data-slot="library-empty-playlists-create"
                   className="h-9 justify-center text-[13px]"
                   type="button"
