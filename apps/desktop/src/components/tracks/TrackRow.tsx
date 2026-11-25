@@ -85,7 +85,7 @@ export const TrackRow = memo(function TrackRow({
   return (
     <div
       id={`song-row-${row.song_id}`}
-      className={`group absolute inset-x-1.5 grid min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 rounded-control border-l-2 px-[10px] pr-3 text-sm font-normal leading-5 outline-none transition-colors duration-fast hover:bg-row-hover focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/track-browser:right-1 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-2 @max-[520px]/track-browser:text-[13px] @max-[520px]/track-browser:font-medium @max-[440px]/track-browser:left-1 @max-[440px]/track-browser:right-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:pl-0.5 @max-[440px]/track-browser:pr-1 motion-reduce:transition-none ${selected ? 'border-l-accent-ink' : 'border-l-transparent'} ${selected ? 'bg-selection text-foreground' : playing ? 'bg-playing text-foreground' : 'text-foreground'} data-[state=selected]:hover:bg-selection data-[state=selected]:focus-visible:bg-selection data-[state=playing]:hover:bg-playing data-[state=playing]:focus-visible:bg-playing data-[state=selected-playing]:hover:bg-selection data-[state=selected-playing]:focus-visible:bg-selection`}
+      className={`group absolute inset-x-1.5 grid min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 rounded-control border-l-2 px-[10px] pr-3 text-sm font-normal leading-5 text-foreground outline-none transition-colors duration-fast hover:bg-row-hover focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/track-browser:right-1 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-2 @max-[520px]/track-browser:text-[13px] @max-[520px]/track-browser:font-medium @max-[440px]/track-browser:left-1 @max-[440px]/track-browser:right-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:pl-0.5 @max-[440px]/track-browser:pr-1 motion-reduce:transition-none ${selected ? 'border-l-accent-ink bg-selection' : playing ? 'border-l-transparent bg-playing' : 'border-l-transparent'} data-[state=selected]:hover:bg-selection data-[state=selected]:focus-visible:bg-selection data-[state=playing]:hover:bg-playing data-[state=playing]:focus-visible:bg-playing data-[state=selected-playing]:hover:bg-selection data-[state=selected-playing]:focus-visible:bg-selection`}
       data-selected={selected}
       data-playing={playing}
       data-state={
@@ -140,7 +140,7 @@ export const TrackRow = memo(function TrackRow({
               <span
                 ref={titleTextRef}
                 data-track-title
-                className={`min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap ${playing ? 'font-semibold text-accent-ink' : selected ? 'font-medium text-foreground' : 'text-foreground'}`}
+                className={`min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap ${playing ? 'font-semibold text-accent-ink' : selected ? 'font-medium' : ''}`}
               />
             }
             onPointerEnter={(event) => {

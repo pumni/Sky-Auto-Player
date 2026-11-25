@@ -414,7 +414,7 @@ export function Workbench({ utilityTriggerRef, useStore }: WorkbenchProps) {
       />
       <WorkbenchPane
         pane="browser"
-        className="min-w-[420px] flex-[1_1_0] bg-surface [container-name:track-browser] [container-type:inline-size]"
+        className="min-w-(--min-track-browser-width) flex-[1_1_0] bg-surface [container-name:track-browser] [container-type:inline-size]"
         style={{ minWidth: MIN_TRACK_BROWSER_WIDTH }}
       >
         <TrackBrowser useStore={useStore} />

@@ -78,6 +78,10 @@
   --ease-exit: cubic-bezier(0.4, 0, 1, 1);
 }
 
+@utility duration-* {
+  transition-duration: --value(--duration-*);
+}
+
 /* Workbench width interpolation stays on the two pane boundaries while resizing. */
 @property --navigator-pane-width {
   syntax: '<length>';
@@ -396,37 +400,6 @@ html[data-palette='classic'] {
 }
 
 html[data-palette='graphite'] {
-  --background: #121314;
-  --surface: #121314;
-  --card: #191a1b;
-  --popover: #202122;
-  --card-foreground: #e2e4e8;
-  --popover-foreground: #e2e4e8;
-  --foreground: #e2e4e8;
-  --secondary: #242526;
-  --secondary-foreground: #e2e4e8;
-  --muted: #242526;
-  --muted-foreground: #a4a6aa;
-  --text-secondary: #b3b5b8;
-  --text-tertiary: #a4a6aa;
-  --border: #2a2b2c;
-  --overlay-border: #454749;
-  --input: #898c90;
-  --primary: #8e9dff;
-  --primary-hover: #a3b0ff;
-  --primary-pressed: #7888f0;
-  --primary-foreground: #11131a;
-  --accent-ink: #9aa8ff;
-  --ring: #9aa8ff;
-  --accent: #303132;
-  --accent-foreground: #e2e4e8;
-  --selection: #303132;
-  --playing: #202326;
-  --control-hover: #303132;
-  --row-hover: #242526;
-  --control-pressed: #393a3c;
-  --control-active: #303132;
-  --control-disabled: #6c6e73;
   --scrollbar-thumb: #777a7e;
   --scrollbar-thumb-active: #a4a6aa;
 }

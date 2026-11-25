@@ -35,11 +35,9 @@ export function LibraryConfirmDialog({
         if (!pending || nextOpen) onOpenChange(nextOpen);
       }}
     >
-      <AlertDialogContent className="w-[min(520px,calc(100vw-32px))] gap-4 rounded-dialog border-border bg-card p-6">
+      <AlertDialogContent className="w-[min(520px,calc(100vw-32px))] gap-4 p-6">
         <AlertDialogHeader className="items-start text-left">
-          <p className="m-0 text-[11px] font-semibold tracking-wide text-text-tertiary">
-            CONFIRM ACTION
-          </p>
+          <p className="m-0 text-xs font-semibold leading-4 text-text-tertiary">Confirm action</p>
           <AlertDialogTitle>{title}</AlertDialogTitle>
           <AlertDialogDescription className="text-sm leading-relaxed text-muted-foreground">
             {message}
