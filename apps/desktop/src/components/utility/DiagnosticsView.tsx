@@ -69,7 +69,7 @@ export function DiagnosticsView({ useStore }: { useStore: DesktopStoreHook }) {
         <Button
           variant="outline"
           size="sm"
-          className="min-h-[30px] h-auto bg-surface px-2.5 text-xs text-text-secondary hover:bg-control-hover hover:text-foreground disabled:cursor-progress disabled:opacity-70"
+          className="min-h-[30px] h-auto px-2.5 text-xs text-text-secondary hover:text-foreground disabled:cursor-progress disabled:opacity-70"
           type="button"
           title="Export the last available session envelope. Raw packet traces are not captured in production."
           disabled={traceExporting}

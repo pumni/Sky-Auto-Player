@@ -125,14 +125,12 @@ async function capture(page: Page, name: string, movePointer = true) {
   });
 }
 
-async function capturePaletteContactSheet(page: Page) {
-  const captures = [
-    { label: 'Light', file: 'candidate-appearance-preview-light-1366x768.png' },
-    ...palettes.map((palette) => ({
-      label: palette,
-      file: `candidate-palette-${palette}-1366x768.png`,
-    })),
-  ].map(({ label, file }) => ({
+async function captureContactSheet(
+  page: Page,
+  outputFile: string,
+  items: { label: string; file: string }[],
+) {
+  const captures = items.map(({ label, file }) => ({
     label,
     data: readFileSync(resolve(evidenceDirectory, file)).toString('base64'),
   }));
@@ -164,10 +162,27 @@ async function capturePaletteContactSheet(page: Page) {
     }
     return canvas.toDataURL('image/png').slice('data:image/png;base64,'.length);
   }, captures);
-  writeFileSync(
-    resolve(evidenceDirectory, 'candidate-palette-comparison-contact-sheet.png'),
-    Buffer.from(png, 'base64'),
-  );
+  writeFileSync(resolve(evidenceDirectory, outputFile), Buffer.from(png, 'base64'));
+}
+
+async function capturePaletteContactSheet(page: Page) {
+  await captureContactSheet(page, 'candidate-palette-comparison-contact-sheet.png', [
+    { label: 'Light', file: 'candidate-appearance-preview-light-1366x768.png' },
+    ...palettes.map((palette) => ({
+      label: palette,
+      file: `candidate-palette-${palette}-1366x768.png`,
+    })),
+  ]);
+}
+
+async function captureWorkbenchPaletteContactSheet(page: Page) {
+  await captureContactSheet(page, 'candidate-workbench-palette-contact-sheet.png', [
+    { label: 'Light', file: 'candidate-light-1366x768.png' },
+    ...palettes.map((palette) => ({
+      label: palette,
+      file: `candidate-workbench-${palette}-1366x768.png`,
+    })),
+  ]);
 }
 
 function shouldCapture(view: string) {
@@ -786,6 +801,12 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   await expect(page.locator('[data-slot="select-content"]:visible')).toBeVisible();
   if (shouldCapture('profile-select'))
     await capture(page, 'candidate-profile-select-open-800x560.png');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+  if (shouldCapture('profile-select-light'))
+    await capture(page, 'candidate-profile-select-open-light-800x560.png');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
 
   await openApp(page, { width: 1366, height: 768 });
   await page.getByRole('row', { name: /Aurora Landing/ }).click();
@@ -854,7 +875,6 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   if (shouldCapture('appearance-preview-light'))
     await capture(page, 'candidate-appearance-preview-light-1366x768.png');
   await lightSettings.getByRole('button', { name: 'Close settings' }).click();
-  if (shouldCapture('light')) await capture(page, 'candidate-light-1366x768.png');
 
   for (const palette of palettes) {
     const paletteSettings = await appearanceSettings();
@@ -875,6 +895,84 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     await paletteSettings.getByRole('button', { name: 'Close settings' }).click();
   }
   if (shouldCapture('palette-contact-sheet')) await capturePaletteContactSheet(page);
+
+  await openApp(page, { width: 1366, height: 768 }, 'expanded', true);
+  await startDryRunWithSelection(page);
+  await openRuntimeDiagnostics(page);
+  const workbenchColors: Record<string, unknown> = {};
+  const captureUndimmedWorkbench = async (
+    label: string,
+    mode: 'light' | 'dark',
+    palette: string,
+    file: string,
+    viewKey: string,
+  ) => {
+    const dialog = await appearanceSettings();
+    await chooseSelectOption(page, dialog.getByRole('combobox', { name: 'Theme' }), mode);
+    if (mode === 'dark') {
+      await chooseSelectOption(
+        page,
+        dialog.getByRole('combobox', { name: 'Dark palette' }),
+        palette,
+      );
+    }
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
+    await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
+    await dialog.getByRole('button', { name: 'Close settings' }).click();
+    const idleRow = page.locator('[data-slot="track-row"][data-state="idle"]').first();
+    await idleRow.hover();
+    workbenchColors[label] = await page.evaluate(() => {
+      const idle = document.querySelector<HTMLElement>(
+        '[data-slot="track-row"][data-state="idle"]',
+      );
+      const selected = document.querySelector<HTMLElement>(
+        '[data-slot="track-row"][data-selected="true"]',
+      );
+      const playing = document.querySelector<HTMLElement>(
+        '[data-slot="track-row"][data-playing="true"]',
+      );
+      const indicator = document.querySelector<HTMLElement>(
+        '[data-variant="segmented"] [data-slot="tabs-indicator"]',
+      );
+      const activeTab = document.querySelector<HTMLElement>(
+        '[data-variant="segmented"] [data-slot="tabs-trigger"][aria-selected="true"]',
+      );
+      const createBtn = document.querySelector<HTMLElement>(
+        '[data-slot="library-empty-playlists-create"]',
+      );
+      return {
+        idleHoverBg: idle ? getComputedStyle(idle).backgroundColor : null,
+        selectedBg: selected ? getComputedStyle(selected).backgroundColor : null,
+        playingBg: playing ? getComputedStyle(playing).backgroundColor : null,
+        segmentedIndicatorBg: indicator ? getComputedStyle(indicator).backgroundColor : null,
+        segmentedIndicatorBorder: indicator ? getComputedStyle(indicator).borderColor : null,
+        segmentedActiveText: activeTab ? getComputedStyle(activeTab).color : null,
+        createButtonBg: createBtn ? getComputedStyle(createBtn).backgroundColor : null,
+        createButtonBorder: createBtn ? getComputedStyle(createBtn).borderColor : null,
+      };
+    });
+    if (shouldCapture(viewKey)) await capture(page, file, false);
+  };
+
+  await captureUndimmedWorkbench(
+    'light',
+    'light',
+    'graphite',
+    'candidate-light-1366x768.png',
+    'light',
+  );
+  for (const palette of palettes) {
+    await captureUndimmedWorkbench(
+      palette,
+      'dark',
+      palette,
+      `candidate-workbench-${palette}-1366x768.png`,
+      `workbench-${palette}`,
+    );
+  }
+  measurements.workbenchColors = workbenchColors;
+  if (shouldCapture('workbench-palette-contact-sheet'))
+    await captureWorkbenchPaletteContactSheet(page);
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openApp(page, { width: 640, height: 448 }, 'expanded', true);

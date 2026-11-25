@@ -100,7 +100,7 @@ describe('LibraryNavigator built-in source', () => {
         library: { ...state.library, likedTotal: 1 },
       })),
     );
-    expect(createPlaylist).toHaveClass('border-border', 'bg-background');
+    expect(createPlaylist).toHaveClass('border-border', 'bg-transparent');
   });
 
   it('offers a working retry after navigation loading fails', async () => {

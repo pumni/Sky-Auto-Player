@@ -92,6 +92,7 @@ describe('Sky Graphite 2 semantic theme', () => {
       ['--color-scrollbar-thumb', '--scrollbar-thumb'],
       ['--color-scrollbar-thumb-active', '--scrollbar-thumb-active'],
       ['--color-scrim', '--scrim'],
+      ['--color-overlay-border', '--overlay-border'],
     ] as const) {
       expect(tailwindTheme[utility], utility).toBe(`var(${token})`);
     }

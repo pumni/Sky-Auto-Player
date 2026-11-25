@@ -24,6 +24,7 @@ const themeRoles = [
   '--primary-pressed',
   '--primary-foreground',
   '--border',
+  '--overlay-border',
   '--secondary',
   '--secondary-foreground',
   '--control-hover',
@@ -194,14 +195,30 @@ test('primary and outlined actions use computed theme colors in every dark palet
     const theme = await resolvedTheme(page);
     const createRest = await createPlaylist.evaluate((element) => {
       const style = getComputedStyle(element);
-      return { background: style.backgroundColor, border: style.borderColor };
+      let ancestor = element.parentElement;
+      let surfaceBackground = 'rgba(0, 0, 0, 0)';
+      while (ancestor) {
+        const bg = getComputedStyle(ancestor).backgroundColor;
+        if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') {
+          surfaceBackground = bg;
+          break;
+        }
+        ancestor = ancestor.parentElement;
+      }
+      return {
+        background: style.backgroundColor,
+        border: style.borderColor,
+        color: style.color,
+        surfaceBackground,
+      };
     });
-    expect(createRest.background).toBe(computedRgb(theme['--background']));
+    expect(createRest.background).toBe('rgba(0, 0, 0, 0)');
     expect(createRest.border).toBe(computedRgb(theme['--border']));
+    expect(contrast(createRest.color, createRest.surfaceBackground)).toBeGreaterThanOrEqual(4.5);
     await createPlaylist.hover();
     await expect
       .poll(() => createPlaylist.evaluate((element) => getComputedStyle(element).backgroundColor))
-      .toBe(computedRgb(theme['--secondary']));
+      .toBe(computedRgb(theme['--control-hover']));
     await page.mouse.down();
     await expect
       .poll(() => createPlaylist.evaluate((element) => getComputedStyle(element).backgroundColor))
@@ -687,5 +704,81 @@ test('forced colors retain control feedback and reduced motion removes overlay m
         .split(',')
         .every((duration) => Number.parseFloat(duration) === 0),
   ).toBe(true);
+  await page.keyboard.press('Escape');
+});
+
+test('Light row hover, segmented boundary, forced-colors segmented label, and nested Select border meet design contracts', async ({
+  page,
+}) => {
+  await page.goto('/?mockPlaybackDurationMs=120000&mockStartDelayMs=5');
+  await page.emulateMedia({ colorScheme: 'light' });
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+  const lightTheme = await resolvedTheme(page);
+
+  // Light row hover vs selection vs playing vs card
+  await startSelectedSong(page);
+  await page.getByRole('row', { name: /Candle Run/ }).click();
+  const idleRow = page.locator('[data-slot="track-row"][data-state="idle"]').first();
+  await idleRow.hover();
+  await expect
+    .poll(() => idleRow.evaluate((el) => getComputedStyle(el).backgroundColor))
+    .toBe(computedRgb(lightTheme['--control-hover']));
+  expect(lightTheme['--control-hover']).not.toBe(lightTheme['--selection']);
+  expect(lightTheme['--control-hover']).not.toBe(lightTheme['--playing']);
+  expect(lightTheme['--control-hover']).not.toBe(lightTheme['--card']);
+  expect(
+    contrast(lightTheme['--text-secondary'], lightTheme['--control-hover']),
+  ).toBeGreaterThanOrEqual(4.5);
+
+  // Light segmented indicator boundary and contrast
+  await page.locator('button[aria-label$="utility panel"]').click();
+  const utility = page.getByRole('region', { name: 'Utility: Song Details' });
+  await expect(utility).toBeVisible();
+  await utility.getByRole('tab', { name: 'Runtime' }).click();
+  const diagnostics = page.getByRole('region', { name: 'Utility: Diagnostics' });
+  await expect(diagnostics).toBeVisible();
+  const segList = diagnostics.getByRole('tablist', { name: 'Diagnostics views' });
+  const segIndicator = segList.locator('[data-slot="tabs-indicator"]');
+  const activeTab = segList.getByRole('tab', { name: 'Performance' });
+  const segStyles = await Promise.all([
+    segIndicator.evaluate((el) => {
+      const s = getComputedStyle(el);
+      return { bg: s.backgroundColor, border: s.borderColor };
+    }),
+    activeTab.evaluate((el) => getComputedStyle(el).color),
+  ]);
+  expect(segStyles[0].bg).toBe(computedRgb(lightTheme['--control-active']));
+  expect(segStyles[0].border).toBe(computedRgb(lightTheme['--input']));
+  expect(contrast(segStyles[1], segStyles[0].bg)).toBeGreaterThanOrEqual(4.5);
+
+  // Light + forced-colors segmented active tab readability (HighlightText on Highlight)
+  await page.emulateMedia({ colorScheme: 'light', forcedColors: 'active' });
+  const forcedSeg = await Promise.all([
+    segIndicator.evaluate((el) => getComputedStyle(el).backgroundColor),
+    activeTab.evaluate((el) => getComputedStyle(el).color),
+  ]);
+  expect(forcedSeg[0]).not.toBe('rgba(0, 0, 0, 0)');
+  expect(forcedSeg[1]).not.toBe(forcedSeg[0]);
+
+  // Nested Select popup uses --overlay-border in Light and Graphite
+  await page.emulateMedia({ colorScheme: 'light', forcedColors: 'none' });
+  const player = page.getByRole('contentinfo', { name: 'Player controls' });
+  await player.getByRole('button', { name: 'Configure playback profile' }).click();
+  const profileDialog = page.getByRole('dialog', { name: 'Playback profile' });
+  await profileDialog.getByText('Advanced timing', { exact: true }).click();
+  await profileDialog.getByRole('combobox', { name: 'Base Hold' }).click();
+  const selectPopup = page.locator('[data-slot="select-content"]:visible');
+  await expect(selectPopup).toBeVisible();
+  expect(await selectPopup.evaluate((el) => getComputedStyle(el).borderColor)).toBe(
+    computedRgb(lightTheme['--overlay-border']),
+  );
+
+  await page.emulateMedia({ colorScheme: 'dark', forcedColors: 'none' });
+  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+  const darkTheme = await resolvedTheme(page);
+  await expect(selectPopup).toBeVisible();
+  expect(await selectPopup.evaluate((el) => getComputedStyle(el).borderColor)).toBe(
+    computedRgb(darkTheme['--overlay-border']),
+  );
   await page.keyboard.press('Escape');
 });

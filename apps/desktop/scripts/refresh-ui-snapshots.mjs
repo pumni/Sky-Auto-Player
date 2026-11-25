@@ -22,6 +22,7 @@ const vqcScreenshots = {
   'scrollbar-visible-dragged.png': 'candidate-scrollbar-dragging-workbench.png',
   'profile-expanded-800x560.png': 'candidate-profile-expanded-800x560.png',
   'profile-select-open-800x560.png': 'candidate-profile-select-open-800x560.png',
+  'profile-select-open-light-800x560.png': 'candidate-profile-select-open-light-800x560.png',
   'settings-categories-640x448.png': 'candidate-settings-nav-640x448.png',
   'settings-categories-640x320-scrolled.png': 'candidate-settings-nav-640x320-scrolled.png',
   'settings-select-open-640x320.png': 'candidate-settings-select-open-640x320.png',
@@ -29,8 +30,9 @@ const vqcScreenshots = {
   'inspector-runtime-performance.png': 'candidate-runtime-diagnostics-1366x768.png',
   'inspector-runtime-timing.png': 'candidate-runtime-timing-1366x768.png',
   'inspector-events-tab.png': 'candidate-runtime-events-1366x768.png',
-  'appearance-settings-light.png': 'candidate-appearance-preview-light-1366x768.png',
+  'light-workbench.png': 'candidate-light-1366x768.png',
   'palette-comparison-contact-sheet.png': 'candidate-palette-comparison-contact-sheet.png',
+  'workbench-palette-contact-sheet.png': 'candidate-workbench-palette-contact-sheet.png',
   'transport-play-idle.png': 'candidate-transport-play-idle-1366x768.png',
   'transport-pause-playing.png': 'candidate-transport-pause-playing-1366x768.png',
   'transport-resume-paused.png': 'candidate-transport-resume-paused-1366x768.png',
@@ -89,6 +91,7 @@ const run = spawnSync(
         'scrollbar-dragging',
         'profile-expanded',
         'profile-select',
+        'profile-select-light',
         'runtime-timing',
         'runtime-events',
         'settings-nav',
@@ -99,10 +102,11 @@ const run = spawnSync(
         'transport-paused',
         'transport-long-title',
         'light',
-        ...['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'].map(
-          (palette) => `palette-${palette}`,
+        ...['graphite', 'aurora', 'minimalist', 'slate', 'cyberpunk', 'classic'].flatMap(
+          (palette) => [`palette-${palette}`, `workbench-${palette}`],
         ),
         'palette-contact-sheet',
+        'workbench-palette-contact-sheet',
       ].join(','),
     },
   },
@@ -137,7 +141,9 @@ const vqcRows = {
     'The same Workbench while the thumb remains actively dragged after scrolling settles',
   'profile-expanded-800x560.png':
     'Playback Profile with Advanced timing expanded at 800x560; all fields fit without scrolling',
-  'profile-select-open-800x560.png': 'Playback Profile Base Hold Select open at 800x560',
+  'profile-select-open-800x560.png': 'Playback Profile Base Hold Select open at 800x560 (Graphite)',
+  'profile-select-open-light-800x560.png':
+    'Playback Profile Base Hold Select open at 800x560 (Light)',
   'settings-categories-640x448.png': 'All six vertical Settings categories visible at 640x448',
   'settings-categories-640x320-scrolled.png': 'Settings category navigation scrolled at 640x320',
   'settings-select-open-640x320.png': 'Settings Dark palette Select open at 640x320',
@@ -147,10 +153,12 @@ const vqcRows = {
   'inspector-runtime-timing.png': 'Runtime Timing tab with the segmented indicator moved to Timing',
   'inspector-events-tab.png':
     'Runtime Events with full-width detail rows beneath their timestamps and names',
-  'appearance-settings-light.png':
-    'Settings Appearance preview with Light active and Graphite saved',
+  'light-workbench.png':
+    '100% undimmed Light Workbench with selected/playing/hovered rows, Runtime indicator, and secondary action',
   'palette-comparison-contact-sheet.png':
     'Rendered Settings Appearance comparison for Light and all six dark palettes',
+  'workbench-palette-contact-sheet.png':
+    'Undimmed Workbench comparison across Light and all six dark palettes (selected, playing, hovered rows, Runtime indicator, Player, secondary action)',
   'transport-play-idle.png':
     'Idle transport with a selected short title and truthful Selected status',
   'transport-pause-playing.png':

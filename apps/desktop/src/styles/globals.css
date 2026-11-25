@@ -28,6 +28,7 @@
   --color-destructive-pressed: var(--destructive-pressed);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
+  --color-overlay-border: var(--overlay-border);
   --color-input: var(--input);
   --color-ring: var(--ring);
   --color-surface: var(--surface);
@@ -93,6 +94,7 @@
   --text-secondary: #a6a8ad;
   --text-tertiary: #94979e;
   --border: #2a2b2c;
+  --overlay-border: #454851;
   --input: #72777d;
   --primary: #8e9dff;
   --primary-hover: #a3b0ff;
@@ -224,6 +226,7 @@ html[data-palette='aurora'] {
   --text-secondary: #b7c2d1;
   --text-tertiary: #8a98ad;
   --border: #243145;
+  --overlay-border: #384a66;
   --input: #617390;
   --primary: #785ddd;
   --primary-hover: #825bdb;
@@ -256,6 +259,7 @@ html[data-palette='minimalist'] {
   --text-secondary: #c9ced4;
   --text-tertiary: #9da5ae;
   --border: #3d444d;
+  --overlay-border: #4e5662;
   --input: #77818d;
   --primary: #a0b8d5;
   --primary-hover: #c4d0df;
@@ -288,6 +292,7 @@ html[data-palette='slate'] {
   --text-secondary: #bad0dc;
   --text-tertiary: #8fa9b8;
   --border: #304755;
+  --overlay-border: #425e70;
   --input: #6a8699;
   --primary: #6ca7d8;
   --primary-hover: #83b8e3;
@@ -320,6 +325,7 @@ html[data-palette='cyberpunk'] {
   --text-secondary: #dbc6e4;
   --text-tertiary: #b297bd;
   --border: #4b2d59;
+  --overlay-border: #663d78;
   --input: #976595;
   --primary: #d95abf;
   --primary-hover: #ef78d4;
@@ -352,6 +358,7 @@ html[data-palette='classic'] {
   --text-secondary: #d2c2aa;
   --text-tertiary: #a89882;
   --border: #4b4033;
+  --overlay-border: #615342;
   --input: #897864;
   --primary: #c99242;
   --primary-hover: #e0aa5b;
@@ -385,6 +392,7 @@ html[data-color-mode='light'] {
   --text-secondary: #535f6c;
   --text-tertiary: #5d6976;
   --border: #dfe4eb;
+  --overlay-border: #c2cbd6;
   --input: #808a96;
   --primary: #3c54cf;
   --primary-hover: #3248ba;
@@ -394,8 +402,8 @@ html[data-color-mode='light'] {
   --ring: #3449b5;
   --accent: #eef2f6;
   --accent-foreground: #252a31;
-  --selection: #eaeffe;
-  --playing: #f4f6fe;
+  --selection: #dfe7fc;
+  --playing: #ebf0fe;
   --success: #1f7a47;
   --success-surface: #e9f5ed;
   --success-border: #1f7a47;
@@ -409,7 +417,7 @@ html[data-color-mode='light'] {
   --destructive-hover: #9f1f2a;
   --destructive-pressed: #861a23;
   --destructive-foreground: #fff;
-  --control-hover: #eef2f6;
+  --control-hover: #e5eaf1;
   --control-pressed: #e2e8f0;
   --control-active: #fff;
   --control-disabled: #8a94a0;
@@ -441,6 +449,7 @@ html[data-color-mode='light'] {
     --text-secondary: CanvasText;
     --text-tertiary: GrayText;
     --border: CanvasText;
+    --overlay-border: CanvasText;
     --input: ButtonText;
     --primary: Highlight;
     --primary-foreground: HighlightText;

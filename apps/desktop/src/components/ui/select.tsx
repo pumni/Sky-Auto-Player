@@ -62,7 +62,7 @@ function SelectContent({
         <SelectPrimitive.Popup
           data-slot="select-content"
           className={cn(
-            'relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 max-w-(--available-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-popover border border-border bg-popover p-1 text-popover-foreground shadow-xl transition-[opacity,scale,translate] duration-[150ms] ease-enter data-[starting-style]:scale-[0.98] data-[starting-style]:opacity-0 data-[starting-style]:duration-[150ms] data-[ending-style]:scale-[0.98] data-[ending-style]:opacity-0 data-[ending-style]:duration-[100ms] data-[ending-style]:ease-exit motion-reduce:transition-none',
+            'relative isolate z-50 max-h-(--available-height) w-(--anchor-width) min-w-36 max-w-(--available-width) origin-(--transform-origin) overflow-x-hidden overflow-y-auto rounded-popover border border-overlay-border bg-popover p-1 text-popover-foreground shadow-xl transition-[opacity,scale,translate] duration-[150ms] ease-enter data-[starting-style]:scale-[0.98] data-[starting-style]:opacity-0 data-[starting-style]:duration-[150ms] data-[ending-style]:scale-[0.98] data-[ending-style]:opacity-0 data-[ending-style]:duration-[100ms] data-[ending-style]:ease-exit motion-reduce:transition-none',
             className,
           )}
           {...props}
@@ -82,7 +82,7 @@ function SelectItem({ className, children, ...props }: SelectPrimitive.Item.Prop
       data-slot="select-item"
       data-value={typeof props.value === 'string' ? props.value : undefined}
       className={cn(
-        "relative flex min-h-8 w-full cursor-default items-center gap-2 rounded-control py-1.5 pr-8 pl-1.5 text-sm outline-none select-none focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        "relative flex min-h-8 w-full cursor-default items-center gap-2 rounded-control py-1.5 pr-8 pl-1.5 text-sm outline-none select-none data-selected:bg-selection data-selected:font-medium data-selected:text-foreground focus:bg-accent focus:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
         className,
       )}
       {...props}

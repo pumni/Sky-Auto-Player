@@ -45,6 +45,7 @@ function ScrollAreaScrollbar({
   onPointerDownCapture,
   onPointerUpCapture,
   onPointerCancelCapture,
+  onLostPointerCapture,
   ...props
 }: ScrollAreaPrimitive.Scrollbar.Props) {
   const beginDrag: NonNullable<ScrollAreaPrimitive.Scrollbar.Props['onPointerDownCapture']> = (
@@ -65,6 +66,12 @@ function ScrollAreaScrollbar({
     onPointerCancelCapture?.(event);
     delete event.currentTarget.dataset.dragging;
   };
+  const loseCapture: NonNullable<ScrollAreaPrimitive.Scrollbar.Props['onLostPointerCapture']> = (
+    event,
+  ) => {
+    onLostPointerCapture?.(event);
+    delete event.currentTarget.dataset.dragging;
+  };
 
   return (
     <ScrollAreaPrimitive.Scrollbar
@@ -76,6 +83,7 @@ function ScrollAreaScrollbar({
       onPointerDownCapture={beginDrag}
       onPointerUpCapture={endDrag}
       onPointerCancelCapture={cancelDrag}
+      onLostPointerCapture={loseCapture}
       {...props}
     />
   );
