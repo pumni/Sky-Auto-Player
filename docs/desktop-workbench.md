@@ -67,17 +67,29 @@ Reduced-motion mode removes overlay movement and the Inspector unmounts without 
 `Ctrl+I` toggles the Inspector and `Ctrl+,` opens Settings when no modal is active and focus is
 outside editable controls. Both shortcuts are also shown in their corresponding control tooltips.
 
-`apps/desktop/src/components/settings/SettingsPanel.tsx` retains Settings modal, category navigation,
-and focus ownership; `apps/desktop/src/components/settings/SettingsCategoryContent.tsx` renders the
-selected category and palette selector. `apps/desktop/src/components/utility/DiagnosticsView.tsx`
+`apps/desktop/src/components/settings/SettingsPanel.tsx` owns the unified Settings modal (`--card`
+shell, `--surface` inset content canvas, 164 px category navigation, focus management, content
+scroll reset on category switch, and conditional pending/error status region without a permanent
+persistence footer). `apps/desktop/src/components/settings/SettingsCategoryContent.tsx` routes to
+the six cohesive category owners (`PlaybackSettings.tsx`, `AppearanceSettings.tsx`,
+`DiagnosticsSettings.tsx`, `UpdateSettings.tsx`, `DonateSettings.tsx`, and `AboutSettings.tsx`),
+sharing `SettingsLayout.tsx`, `paletteMetadata.ts`, `AutoPlaySwitch.tsx`, and
+`TimingMarginControl.tsx`. Playback uses a shared `computePlaybackHoldTiming` helper with
+`PlayerTools.tsx`, Appearance uses a controlled `RadioGroup` for Theme (`Follow Windows
+(recommended)`, `Light`, `Dark`) plus the existing `Dark palette` Select and an active-token
+mini-workbench preview, Diagnostics presents flat switches with truthful persisted-preference copy,
+Updates summarizes live native updater state and opens `UpdateDialog` without duplicate checks, and
+About presents build metadata in a responsive definition list.
+`apps/desktop/src/components/utility/DiagnosticsView.tsx`
 composes Diagnostics, with `apps/desktop/src/components/utility/diagnosticsPresentation.ts` and the
 focused playback, readout, event, timing, and performance components owning presentation of their
 respective data. These UI splits do not change the canonical Zustand store, typed bridge, native
 settings schema, or native diagnostics authority.
 
-The Donate Settings category is informational and intentionally omits the native settings
-persistence footer. Ko-fi, PayPal, and GitHub links open in the system browser via the
-scope-limited Tauri opener capability.
+The Donate Settings category stacks Ko-fi and PayPal support rows on all widths and places the
+VietQR code beside bank transfer details at content widths of 440 px and above via container query.
+Ko-fi, PayPal, and GitHub links open in the system browser via the scope-limited Tauri opener
+capability.
 
 The MBBank VietQR is an offline PNG at
 `apps/desktop/public/donate-vietqr-mbbank.png`, generated with NAPAS QRIBFTTA account-transfer
