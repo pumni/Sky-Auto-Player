@@ -828,6 +828,7 @@ fn post_wake_reselect_with_observer_preserves_original_wait_and_fresh_dispatch_e
         super::super::PostWaitSelection::SendReady
     );
     let reselected = reselected.expect("reselected mixed candidate");
+    let expected_timing_window = reselected.timing_window;
     assert_eq!(
         reselected.packet_masks(),
         sky_dispatch_win32::input::PhysicalPacket::new(0b101, 0b010)
@@ -864,18 +865,43 @@ fn post_wake_reselect_with_observer_preserves_original_wait_and_fresh_dispatch_e
 
     let mut wait_obs = None;
     let mut down_obs = None;
+    let mut wait_count = 0usize;
+    let mut down_count = 0usize;
+    let mut up_count = 0usize;
     while let Some(item) = observer.pop_front() {
         match item {
-            DispatchObservation::Wait(w) => wait_obs = Some(w),
-            DispatchObservation::Down(d) => down_obs = Some(d),
-            DispatchObservation::Up(_) => {}
+            DispatchObservation::Wait(w) => {
+                wait_count += 1;
+                wait_obs = Some(w);
+            }
+            DispatchObservation::Down(d) => {
+                down_count += 1;
+                down_obs = Some(d);
+            }
+            DispatchObservation::Up(_) => {
+                up_count += 1;
+            }
         }
     }
+    assert_eq!(wait_count, 1, "expected exactly 1 WaitObservation");
+    assert_eq!(down_count, 1, "expected exactly 1 DownObservation");
+    assert_eq!(up_count, 0, "expected 0 UpObservations");
     let wait_obs = wait_obs.expect("WaitObservation");
     let down_obs = down_obs.expect("DownObservation");
     assert_eq!(
         wait_obs.physical_target_qpc, c1_authored,
         "original wait target must not be rewritten after late wake"
+    );
+    assert_eq!(
+        down_obs.physical_target_qpc,
+        expected_timing_window.authored_target_qpc
+    );
+    assert_eq!(down_obs.physical_timing_window, expected_timing_window);
+    assert_eq!(down_obs.up_slot_count, 2);
+    assert!(down_obs.up_slots.is_some(), "expected pooled up_slots");
+    assert!(
+        harness.runtime.pending_wait_observation.is_none(),
+        "pending_wait_observation must be consumed by dispatch"
     );
     assert_eq!(down_obs.wait_sequence, wait_obs.sequence);
     assert_eq!(down_obs.wake_qpc, Some(late_wake));

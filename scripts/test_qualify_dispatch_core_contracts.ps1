@@ -1993,21 +1993,33 @@ function ConvertTo-PclV3CheckoutFixture {
 }
 
 $pclV3TempRoot = Join-Path $env:TEMP ('pcl-v3-manifest-contract-' + [guid]::NewGuid().ToString('N'))
+$pclV3BareOriginRoot = Join-Path $pclV3TempRoot 'bare-origin.git'
 $pclV3BaselineRoot = Join-Path $pclV3TempRoot 'baseline-worktree'
 $pclV3RunnerRoot = Join-Path $pclV3TempRoot 'runner-worktree'
 $pclV3LineageRepoRoot = Join-Path $pclV3TempRoot 'lineage-topology-repo'
 New-Item -ItemType Directory -Path $pclV3TempRoot | Out-Null
 try {
+    $pclV3PinnedCommit = (& git -C $playbackCoreRepoRoot rev-parse 'bf0a2647^{commit}' 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $pclV3PinnedCommit -notmatch '^[0-9a-f]{40}$') {
+        throw 'could not resolve historical V3 pinned-lock commit bf0a2647'
+    }
+    & git clone --bare --shared --quiet $playbackCoreRepoRoot $pclV3BareOriginRoot
+    if ($LASTEXITCODE -ne 0) { throw 'could not create isolated bare origin for V3 contract tests' }
+    & git -C $pclV3BareOriginRoot update-ref 'refs/heads/refactor/playback-remove-release-gap' $pclV3PinnedCommit
+    if ($LASTEXITCODE -ne 0) { throw 'could not pin V3 bare origin candidate ref to historical bf0a2647' }
+    & git -C $pclV3BareOriginRoot update-ref $pclV3Profile.BaselineSuccessorRef $pclV3Profile.BaselineSuccessorRevision
+    if ($LASTEXITCODE -ne 0) { throw 'could not pin V3 bare origin baseline successor ref' }
+
     & git clone --shared --no-checkout --quiet $playbackCoreRepoRoot $pclV3LineageRepoRoot
     if ($LASTEXITCODE -ne 0) { throw 'could not create an isolated Git topology for V3 merged-B1 lineage contract tests' }
     & git -C $pclV3LineageRepoRoot config user.name 'Qualification Contract'
     if ($LASTEXITCODE -ne 0) { throw 'could not configure the isolated V3 lineage topology identity' }
     & git -C $pclV3LineageRepoRoot config user.email 'qualification-contract@example.invalid'
     if ($LASTEXITCODE -ne 0) { throw 'could not configure the isolated V3 lineage topology identity' }
-    & git -c core.autocrlf=false -c core.eol=lf -C $playbackCoreRepoRoot worktree add --detach $pclV3BaselineRoot $pclV3Profile.BaselineRevision | Out-Null
+    & git -c core.autocrlf=false -c core.eol=lf clone --shared --branch 'refactor/playback-remove-release-gap' --quiet $pclV3BareOriginRoot $pclV3RunnerRoot
+    if ($LASTEXITCODE -ne 0) { throw 'could not clone isolated V3 historical runner worktree from bare origin' }
+    & git -c core.autocrlf=false -c core.eol=lf -C $pclV3RunnerRoot worktree add --detach $pclV3BaselineRoot $pclV3Profile.BaselineRevision | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'could not create the pinned V3 baseline worktree for manifest contract tests' }
-    & git -c core.autocrlf=false -c core.eol=lf -C $playbackCoreRepoRoot worktree add $pclV3RunnerRoot 'refactor/playback-remove-release-gap' | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'could not create the pinned V3 historical runner worktree for manifest contract tests' }
     Import-Module (Join-Path $PSScriptRoot 'dispatch_harness_manifest.psm1') -Force
     Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_profiles.psm1') -Force
     $pclV3RunnerIdentity = Get-DispatchM3GitCheckoutIdentity $pclV3RunnerRoot
@@ -2146,20 +2158,17 @@ try {
     $pclV3ValidBaseline = New-PclV3ManifestFixture -Role Baseline
     $pclV3ValidCandidate = New-PclV3ManifestFixture -Role Candidate
     Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3ValidBaseline -ExpectedRole Baseline -RepositoryRoot $pclV3RunnerRoot | Out-Null
-    $pclV3CandidateMatchesPinnedLock = ($pclV3ValidCandidate.cargo_lock_sha256 -eq $pclV3Profile.BaselineSuccessorLockSha256)
-    if ($pclV3CandidateMatchesPinnedLock) {
-        Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3ValidCandidate -ExpectedRole Candidate -RepositoryRoot $pclV3RunnerRoot | Out-Null
-    } else {
-        $pclV3MovedLockRejected = $false
-        try {
-            Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3ValidCandidate -ExpectedRole Candidate -RepositoryRoot $pclV3RunnerRoot | Out-Null
-        } catch {
-            $pclV3MovedLockRejected = $_.Exception.Message.Contains('candidate lock hash differs from the pinned baseline successor lock')
-        }
-        if (-not $pclV3MovedLockRejected) {
-            throw 'PlaybackCoreLifecycleV3 failed to reject historical tip whose Cargo.lock moved past the pinned V3 lock hash'
-        }
-        Write-Host ("[HISTORICAL_V3_BLOCKER] Historical V3 candidate tip {0} has Cargo.lock {1} != pinned V3 lock {2}; validator rejection verified, positive V3 candidate preflight isolated as historical-only." -f $pclV3ValidCandidate.source_revision, $pclV3ValidCandidate.cargo_lock_sha256, $pclV3Profile.BaselineSuccessorLockSha256)
+    Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3ValidCandidate -ExpectedRole Candidate -RepositoryRoot $pclV3RunnerRoot | Out-Null
+    $pclV3MovedTipCandidate = $pclV3ValidCandidate | ConvertTo-Json -Depth 16 | ConvertFrom-Json
+    $pclV3MovedTipCandidate.cargo_lock_sha256 = '9b9ba6c03131d96029421bfa9f6f69f9ce331e003e32e095eac54a714e73021e'
+    $pclV3MovedLockRejected = $false
+    try {
+        Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3MovedTipCandidate -ExpectedRole Candidate -RepositoryRoot $pclV3RunnerRoot | Out-Null
+    } catch {
+        $pclV3MovedLockRejected = $_.Exception.Message.Contains('candidate lock hash differs from the pinned baseline successor lock')
+    }
+    if (-not $pclV3MovedLockRejected) {
+        throw 'PlaybackCoreLifecycleV3 failed to reject moved historical tip Cargo.lock mismatch'
     }
 
     function Write-PclV3CaseArtifactManifest {
@@ -2244,33 +2253,32 @@ try {
     }
     $pclV3BaselineCaseArtifact = New-PclV3CaseArtifact -Template $pclV3ValidBaseline -Name 'baseline'
     $pclV3CandidateCaseArtifact = New-PclV3CaseArtifact -Template $pclV3ValidCandidate -Name 'candidate'
-    if ($pclV3CandidateMatchesPinnedLock) {
-        foreach ($case in @(
-                [pscustomobject]@{ name = 'baseline-performance'; artifact = $pclV3BaselineCaseArtifact; role = 'Baseline'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; sample = 15; historical = $true },
-                [pscustomobject]@{ name = 'candidate-performance'; artifact = $pclV3CandidateCaseArtifact; role = 'Candidate'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; sample = 15; historical = $false },
-                [pscustomobject]@{ name = 'candidate-safety'; artifact = $pclV3CandidateCaseArtifact; role = 'Candidate'; scenario = 'owner-process-termination'; workload = 'safety-smoke'; sample = 0; historical = $false }
-            )) {
-            $result = Invoke-PclV3CaseEntryPreflight -Artifact $case.artifact -Name $case.name -Scenario $case.scenario `
-                -Workload $case.workload -SampleSeconds $case.sample -Historical $case.historical
-            if ($result.ExitCode -ne 0 -or $result.Output -notmatch ('CASE_PREFLIGHT_ONLY PASS profile=PlaybackCoreLifecycleV3 role=' + $case.role + ' schema=3') -or
-                $result.Output -notmatch 'receiver_started=false harness_started=false output_created=false' -or
-                (Test-Path -LiteralPath $result.OutputRoot)) {
-                throw ('PlaybackCoreLifecycleV3 direct case-runner no-send preflight failed for ' + $case.name + ': ' + $result.Output)
-            }
+    foreach ($case in @(
+            [pscustomobject]@{ name = 'baseline-performance'; artifact = $pclV3BaselineCaseArtifact; role = 'Baseline'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; sample = 15; historical = $true },
+            [pscustomobject]@{ name = 'candidate-performance'; artifact = $pclV3CandidateCaseArtifact; role = 'Candidate'; scenario = 'mixed-up-down'; workload = 'mixed-up-down'; sample = 15; historical = $false },
+            [pscustomobject]@{ name = 'candidate-safety'; artifact = $pclV3CandidateCaseArtifact; role = 'Candidate'; scenario = 'owner-process-termination'; workload = 'safety-smoke'; sample = 0; historical = $false }
+        )) {
+        $result = Invoke-PclV3CaseEntryPreflight -Artifact $case.artifact -Name $case.name -Scenario $case.scenario `
+            -Workload $case.workload -SampleSeconds $case.sample -Historical $case.historical
+        if ($result.ExitCode -ne 0 -or $result.Output -notmatch ('CASE_PREFLIGHT_ONLY PASS profile=PlaybackCoreLifecycleV3 role=' + $case.role + ' schema=3') -or
+            $result.Output -notmatch 'receiver_started=false harness_started=false output_created=false' -or
+            (Test-Path -LiteralPath $result.OutputRoot)) {
+            throw ('PlaybackCoreLifecycleV3 direct case-runner no-send preflight failed for ' + $case.name + ': ' + $result.Output)
         }
     }
     foreach ($mutation in @(
-            [pscustomobject]@{ name = 'wrong-schema'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.schema_version = 2 } },
-            [pscustomobject]@{ name = 'wrong-profile'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.qualification_profile = 'PlaybackCoreLifecycleV2'; $m.schema_version = 2 } },
-            [pscustomobject]@{ name = 'wrong-binary-hash'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.binary_sha256 = '0' * 64 } },
-            [pscustomobject]@{ name = 'wrong-role'; artifact = $pclV3CandidateCaseArtifact; apply = { param($m) $m.source_role = 'Baseline' } }
+            [pscustomobject]@{ name = 'wrong-schema'; artifact = $pclV3CandidateCaseArtifact; expectedError = 'manifest profile, source, runner, target, workload, or build identity is invalid'; apply = { param($m) $m.schema_version = 2 } },
+            [pscustomobject]@{ name = 'wrong-profile'; artifact = $pclV3CandidateCaseArtifact; expectedError = 'workload=playback-core-lifecycle-v3-cookie-0183-v1/playback-core-lifecycle-v2'; apply = { param($m) $m.qualification_profile = 'PlaybackCoreLifecycleV2'; $m.schema_version = 2 } },
+            [pscustomobject]@{ name = 'wrong-binary-hash'; artifact = $pclV3CandidateCaseArtifact; expectedError = 'immutable harness binary hash differs from manifest binary_sha256'; apply = { param($m) $m.binary_sha256 = '0' * 64 } },
+            [pscustomobject]@{ name = 'wrong-role'; artifact = $pclV3CandidateCaseArtifact; expectedError = 'manifest profile, source, runner, target, workload, or build identity is invalid'; apply = { param($m) $m.source_role = 'Baseline' } }
         )) {
         $mutatedArtifact = Copy-PclV3CaseArtifactMutation -Artifact $mutation.artifact -Name $mutation.name -Mutation $mutation.apply
         $result = Invoke-PclV3CaseEntryPreflight -Artifact $mutatedArtifact -Name ($mutation.name + '-reject') `
             -Scenario 'mixed-up-down' -Workload 'mixed-up-down' -SampleSeconds 15
         if ($result.ExitCode -eq 0 -or $result.Output -notmatch 'CASE_PREFLIGHT_ONLY REJECTED' -or
+            -not $result.Output.Contains($mutation.expectedError) -or
             (Test-Path -LiteralPath $result.OutputRoot)) {
-            throw ('PlaybackCoreLifecycleV3 case-runner preflight did not reject ' + $mutation.name + ' without creating output: ' + $result.Output)
+            throw ('PlaybackCoreLifecycleV3 case-runner preflight did not reject ' + $mutation.name + ' with expected reason "' + $mutation.expectedError + '": ' + $result.Output)
         }
     }
     $ownerSwitchRejected = Invoke-PclV3CaseEntryPreflight -Artifact $pclV3BaselineCaseArtifact -Name 'owner-switch-reject' `
@@ -2282,29 +2290,35 @@ try {
     }
 
     foreach ($mutation in @(
-            [pscustomobject]@{ name = 'baseline SHA'; role = 'Baseline'; apply = { param($m) $m.source_revision = '0' * 40 } },
-            [pscustomobject]@{ name = 'baseline tree'; role = 'Baseline'; apply = { param($m) $m.source_tree_sha = '0' * 40 } },
-            [pscustomobject]@{ name = 'lock hash'; role = 'Baseline'; apply = { param($m) $m.cargo_lock_sha256 = '0' * 64 } },
-            [pscustomobject]@{ name = 'dirty source'; role = 'Baseline'; apply = { param($m) $m.source_tree_clean = $false; $m.source_checkout_identity.clean = $false } },
-            [pscustomobject]@{ name = 'toolchain'; role = 'Baseline'; apply = { param($m) $m.rustc_version = 'release: 0.0.0' } },
-            [pscustomobject]@{ name = 'target'; role = 'Baseline'; apply = { param($m) $m.target = 'aarch64-pc-windows-msvc' } },
-            [pscustomobject]@{ name = 'features'; role = 'Baseline'; apply = { param($m) $m.cargo_features = @('wrong-feature') } },
-            [pscustomobject]@{ name = 'workload'; role = 'Baseline'; apply = { param($m) $m.workload_version = 'wrong-workload' } },
-            [pscustomobject]@{ name = 'successor ref'; role = 'Baseline'; apply = { param($m) $m.baseline_successor_ref = 'refs/heads/moved-baseline' } },
-            [pscustomobject]@{ name = 'candidate lock hash'; role = 'Candidate'; apply = { param($m) $m.cargo_lock_sha256 = '0' * 64 } }
+            [pscustomobject]@{ name = 'baseline SHA'; role = 'Baseline'; expectedError = 'manifest profile, source, runner, target, workload, or build identity is invalid'; apply = { param($m) $m.source_revision = '0' * 40 } },
+            [pscustomobject]@{ name = 'baseline tree'; role = 'Baseline'; expectedError = 'manifest profile, source, runner, target, workload, or build identity is invalid'; apply = { param($m) $m.source_tree_sha = '0' * 40 } },
+            [pscustomobject]@{ name = 'lock hash'; role = 'Baseline'; expectedError = 'baseline manifest lock hash differs from the pinned successor lock'; apply = { param($m) $m.cargo_lock_sha256 = '0' * 64 } },
+            [pscustomobject]@{ name = 'dirty source'; role = 'Baseline'; expectedError = 'manifest profile, source, runner, target, workload, or build identity is invalid'; apply = { param($m) $m.source_tree_clean = $false; $m.source_checkout_identity.clean = $false } },
+            [pscustomobject]@{ name = 'toolchain'; role = 'Baseline'; expectedError = 'manifest profile, source, runner, target, workload, or build identity is invalid'; apply = { param($m) $m.rustc_version = 'release: 0.0.0' } },
+            [pscustomobject]@{ name = 'target'; role = 'Baseline'; expectedError = 'manifest profile, source, runner, target, workload, or build identity is invalid'; apply = { param($m) $m.target = 'aarch64-pc-windows-msvc' } },
+            [pscustomobject]@{ name = 'features'; role = 'Baseline'; expectedError = 'manifest profile, source, runner, target, workload, or build identity is invalid'; apply = { param($m) $m.cargo_features = @('wrong-feature') } },
+            [pscustomobject]@{ name = 'workload'; role = 'Baseline'; expectedError = 'manifest profile, source, runner, target, workload, or build identity is invalid'; apply = { param($m) $m.workload_version = 'wrong-workload' } },
+            [pscustomobject]@{ name = 'successor ref'; role = 'Baseline'; expectedError = 'manifest lineage anchor or baseline-successor provenance is invalid'; apply = { param($m) $m.baseline_successor_ref = 'refs/heads/moved-baseline' } },
+            [pscustomobject]@{ name = 'candidate lock hash'; role = 'Candidate'; expectedError = 'candidate lock hash differs from the pinned baseline successor lock'; apply = { param($m) $m.cargo_lock_sha256 = '0' * 64 } }
         )) {
         $sourceFixture = if ($mutation.role -eq 'Baseline') { $pclV3ValidBaseline } else { $pclV3ValidCandidate }
         $mutatedFixture = $sourceFixture | ConvertTo-Json -Depth 16 | ConvertFrom-Json
         & $mutation.apply $mutatedFixture
         $rejected = $false
-        try { Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $mutatedFixture -ExpectedRole $mutation.role -RepositoryRoot $pclV3RunnerRoot | Out-Null } catch { $rejected = $true }
-        if (-not $rejected) { throw ('PlaybackCoreLifecycleV3 accepted a mismatched ' + $mutation.name) }
+        $errMsg = ''
+        try { Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $mutatedFixture -ExpectedRole $mutation.role -RepositoryRoot $pclV3RunnerRoot | Out-Null } catch {
+            $errMsg = $_.Exception.Message
+            $rejected = $errMsg.Contains($mutation.expectedError)
+        }
+        if (-not $rejected) { throw ('PlaybackCoreLifecycleV3 did not reject mismatched ' + $mutation.name + ' with "' + $mutation.expectedError + '" (got: ' + $errMsg + ')') }
     }
     $pclV3WrongSchema = $pclV3ValidCandidate | ConvertTo-Json -Depth 16 | ConvertFrom-Json
     $pclV3WrongSchema.qualification_profile = 'PlaybackCoreLifecycleV2'
     $pclV3WrongSchema.schema_version = 2
     $pclV3WrongSchemaRejected = $false
-    try { Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3WrongSchema -ExpectedRole Candidate -RepositoryRoot $pclV3RunnerRoot | Out-Null } catch { $pclV3WrongSchemaRejected = $true }
+    try { Assert-PlaybackCoreLifecycleManifestIdentity -Manifest $pclV3WrongSchema -ExpectedRole Candidate -RepositoryRoot $pclV3RunnerRoot | Out-Null } catch {
+        $pclV3WrongSchemaRejected = $_.Exception.Message.Contains('workload=playback-core-lifecycle-v3-cookie-0183-v1/playback-core-lifecycle-v2')
+    }
     if (-not $pclV3WrongSchemaRejected) { throw 'PlaybackCoreLifecycleV2 accepted a V3 manifest contract' }
 } finally {
     $resolvedTempRoot = [System.IO.Path]::GetFullPath($pclV3TempRoot)
@@ -2314,12 +2328,8 @@ try {
         throw 'refusing to remove an unexpected V3 qualification test directory'
     }
     if (Test-Path -LiteralPath $pclV3BaselineRoot) {
-        & git -C $playbackCoreRepoRoot worktree remove --force $pclV3BaselineRoot | Out-Null
+        & git -C $pclV3RunnerRoot worktree remove --force $pclV3BaselineRoot | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'could not remove the temporary V3 baseline contract worktree' }
-    }
-    if (Test-Path -LiteralPath $pclV3RunnerRoot) {
-        & git -C $playbackCoreRepoRoot worktree remove --force $pclV3RunnerRoot | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'could not remove the temporary V3 historical runner contract worktree' }
     }
     if (Test-Path -LiteralPath $pclV3TempRoot) { Remove-Item -LiteralPath $pclV3TempRoot -Recurse -Force }
 }
@@ -2874,46 +2884,199 @@ if ($capV1Profile.Name -ne 'CompletionAnchoredPulseV1' -or
     $capV1Profile.BaselineTree -ne 'c15bcacb45245f1a29f9a4a7043dbdf33839a468' -or
     $capV1Profile.ConfiguredHUs -ne 17167 -or
     ($capV1Profile.PairedPerformanceWorkloads -join ',') -ne 'dense-alternating,near-minimum-retrigger,long-idle' -or
-    ($capV1Profile.ExcludedFromPairedPerformance -join ',') -ne 'mixed-up-down,canonical-max-chord') {
+    ($capV1Profile.ExcludedFromPairedPerformance -join ',') -ne 'mixed-up-down,canonical-max-chord' -or
+    $capV1Profile.SafetyScenarios.Count -ne 15) {
     throw 'CompletionAnchoredPulseV1 profile constants do not match the frozen C3 specification'
+}
+foreach ($s in $capV1Profile.SafetyScenarios) {
+    if ([string]::IsNullOrWhiteSpace([string]$s.id) -or
+        [string]::IsNullOrWhiteSpace([string]$s.scenario) -or
+        $s.configured_H_us -ne 17167 -or
+        [string]::IsNullOrWhiteSpace([string]$s.control_trigger) -or
+        [string]::IsNullOrWhiteSpace([string]$s.expected_active_obligation_mask) -or
+        [string]::IsNullOrWhiteSpace([string]$s.proof_criteria) -or
+        [string]::IsNullOrWhiteSpace([string]$s.harness_classification)) {
+        throw ('CompletionAnchoredPulseV1 safety scenario is missing structured fields: ' + $s.id)
+    }
+}
+$capV1AmbiguousScenario = @($capV1Profile.SafetyScenarios | Where-Object { $_.id -eq 'ambiguous-packet' })[0]
+if ($null -eq $capV1AmbiguousScenario -or -not $capV1AmbiguousScenario.harness_classification.Contains('Inconclusive')) {
+    throw 'CompletionAnchoredPulseV1 ambiguous-packet scenario must record Inconclusive fallback classification'
 }
 $capV1Head = (& git -C $playbackCoreRepoRoot rev-parse HEAD).Trim()
 if (-not (Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $playbackCoreRepoRoot -CandidateRevision $capV1Head -RemoteTipRevision $capV1Head -SourceRole Candidate)) {
     throw 'CompletionAnchoredPulseV1 candidate lineage check failed on current branch'
 }
 $capV1StaleRejected = $false
-try { [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $playbackCoreRepoRoot -CandidateRevision $capV1Head -RemoteTipRevision ('0' * 40) -SourceRole Candidate) } catch { $capV1StaleRejected = $true }
+try { [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $playbackCoreRepoRoot -CandidateRevision $capV1Head -RemoteTipRevision ('0' * 40) -SourceRole Candidate) } catch {
+    $capV1StaleRejected = $_.Exception.Message.Contains('must match the exact pushed branch tip')
+}
 if (-not $capV1StaleRejected) { throw 'CompletionAnchoredPulseV1 accepted a stale candidate tip' }
 $capV1NonAncestorRejected = $false
-try { [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $playbackCoreRepoRoot -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' -SourceRole Candidate) } catch { $capV1NonAncestorRejected = $true }
+try { [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $playbackCoreRepoRoot -CandidateRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' -RemoteTipRevision '2544daa13eb23fdf03bd922e65b96fcffaba421c' -SourceRole Candidate) } catch {
+    $capV1NonAncestorRejected = $_.Exception.Message.Contains('does not descend from pinned baseline 1901cff6')
+}
 if (-not $capV1NonAncestorRejected) { throw 'CompletionAnchoredPulseV1 accepted a candidate outside 1901cff6 lineage' }
 $capV1WrongBaseTreeRejected = $false
-try { [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $playbackCoreRepoRoot -CandidateRevision $capV1Profile.BaselineRevision -RemoteTipRevision $capV1Profile.BaselineRevision -SourceRole Baseline -SourceTreeSha ('0' * 40)) } catch { $capV1WrongBaseTreeRejected = $true }
+try { [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $playbackCoreRepoRoot -CandidateRevision $capV1Profile.BaselineRevision -RemoteTipRevision $capV1Profile.BaselineRevision -SourceRole Baseline -SourceTreeSha ('0' * 40)) } catch {
+    $capV1WrongBaseTreeRejected = $_.Exception.Message.Contains('baseline tree is missing or differs')
+}
 if (-not $capV1WrongBaseTreeRejected) { throw 'CompletionAnchoredPulseV1 accepted a baseline with the wrong tree SHA' }
+$capV1MissingBaseTreeRejected = $false
+try { [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $playbackCoreRepoRoot -CandidateRevision $capV1Profile.BaselineRevision -RemoteTipRevision $capV1Profile.BaselineRevision -SourceRole Baseline) } catch {
+    $capV1MissingBaseTreeRejected = $_.Exception.Message.Contains('baseline tree is missing or differs')
+}
+if (-not $capV1MissingBaseTreeRejected) { throw 'CompletionAnchoredPulseV1 accepted a baseline without SourceTreeSha' }
 $capV1OwnerRejected = $false
-try { [void](New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $playbackCoreRepoRoot -PlanOnly -OwnerApprovedReceiveOnlyRun) } catch { $capV1OwnerRejected = $true }
+try { [void](New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $playbackCoreRepoRoot -PlanOnly -OwnerApprovedReceiveOnlyRun) } catch {
+    $capV1OwnerRejected = $_.Exception.Message.Contains('-OwnerApprovedReceiveOnlyRun cannot be combined with -PlanOnly')
+}
 if (-not $capV1OwnerRejected) { throw 'CompletionAnchoredPulseV1 PlanOnly accepted -OwnerApprovedReceiveOnlyRun' }
 $capV1NoPlanRejected = $false
-try { [void](New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $playbackCoreRepoRoot) } catch { $capV1NoPlanRejected = $true }
+try { [void](New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $playbackCoreRepoRoot) } catch {
+    $capV1NoPlanRejected = $_.Exception.Message.Contains('requires explicit owner authorization')
+}
 if (-not $capV1NoPlanRejected) { throw 'CompletionAnchoredPulseV1 allowed execution without -PlanOnly' }
+
+$capV1ParityEvidence = @(
+    [pscustomobject]@{
+        workload = 'dense-alternating'
+        baseline_verified = $true
+        candidate_verified = $true
+        baseline_event_count = 896
+        candidate_event_count = 896
+        baseline_group_count = 896
+        candidate_group_count = 896
+        baseline_first_us = 50000
+        candidate_first_us = 50000
+        baseline_last_us = 15414465
+        candidate_last_us = 15414465
+        baseline_sha256 = '802e84e0d9fa26cec3b293ed20af9a03202b5eb49b5f0cf66531d5b81f41fe73'
+        candidate_sha256 = '802e84e0d9fa26cec3b293ed20af9a03202b5eb49b5f0cf66531d5b81f41fe73'
+    },
+    [pscustomobject]@{
+        workload = 'near-minimum-retrigger'
+        baseline_verified = $true
+        candidate_verified = $true
+        baseline_event_count = 880
+        candidate_event_count = 880
+        baseline_group_count = 880
+        candidate_group_count = 880
+        baseline_first_us = 50000
+        candidate_first_us = 50000
+        baseline_last_us = 15139793
+        candidate_last_us = 15139793
+        baseline_sha256 = '2a01c69071ecfc28deafcfe719e3c35be882c15bcd41b291ba99d0a63306247c'
+        candidate_sha256 = '2a01c69071ecfc28deafcfe719e3c35be882c15bcd41b291ba99d0a63306247c'
+    },
+    [pscustomobject]@{
+        workload = 'long-idle'
+        baseline_verified = $true
+        candidate_verified = $true
+        baseline_event_count = 32
+        candidate_event_count = 32
+        baseline_group_count = 32
+        candidate_group_count = 32
+        baseline_first_us = 50000
+        candidate_first_us = 50000
+        baseline_last_us = 16324672
+        candidate_last_us = 16324672
+        baseline_sha256 = '7da0dce05f83dc76ee9429b3d5a2b820a43dea2274c12b18ce1e00774459f672'
+        candidate_sha256 = '7da0dce05f83dc76ee9429b3d5a2b820a43dea2274c12b18ce1e00774459f672'
+    }
+)
+
 $capV1CleanTemp = Join-Path $env:TEMP ('cap-v1-plan-' + [guid]::NewGuid().ToString('N'))
+$capV1BareOrigin = Join-Path $capV1CleanTemp 'bare-origin.git'
+$capV1Repo = Join-Path $capV1CleanTemp 'candidate-repo'
+New-Item -ItemType Directory -Path $capV1CleanTemp | Out-Null
 try {
-    & git -c core.autocrlf=false -c core.eol=lf clone --shared --quiet $playbackCoreRepoRoot $capV1CleanTemp | Out-Null
+    & git clone --bare --shared --quiet $playbackCoreRepoRoot $capV1BareOrigin | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'could not clone bare origin for CompletionAnchoredPulseV1 contract fixture' }
+    & git -c core.autocrlf=false -c core.eol=lf clone --shared --quiet $capV1BareOrigin $capV1Repo | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'could not clone clean CompletionAnchoredPulseV1 contract fixture' }
-    $capV1Plan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1CleanTemp -PlanOnly
+    & git -C $capV1Repo config user.name 'Qualification Contract'
+    & git -C $capV1Repo config user.email 'qualification-contract@example.invalid'
+    & git -C $capV1Repo checkout -B $capV1Profile.CandidateLineageBranch $capV1Head --quiet
+    if ($LASTEXITCODE -ne 0) { throw 'could not checkout candidate branch in CompletionAnchoredPulseV1 fixture' }
+    & git -C $capV1Repo push --force --quiet origin $capV1Profile.CandidateLineageBranch
+    if ($LASTEXITCODE -ne 0) { throw 'could not push candidate branch to isolated bare origin' }
+
+    $capV1Plan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1ParityEvidence
     if ($capV1Plan.qualification_profile -ne 'CompletionAnchoredPulseV1' -or
         -not $capV1Plan.plan_only -or
         $capV1Plan.receiver_started -or
         $capV1Plan.harness_started -or
+        -not $capV1Plan.no_native_invocation -or
+        $capV1Plan.native_build_status -ne 'NOT BUILT' -or
+        $capV1Plan.native_manifest_status -ne 'NOT VERIFIED' -or
+        $capV1Plan.binary_sha256 -ne 'NOT_BUILT' -or
         $capV1Plan.sendinput_calls -ne 0 -or
+        -not $capV1Plan.baseline_identity_verified_from_git_objects -or
+        $capV1Plan.remote_tip_revision -ne $capV1Head -or
+        $capV1Plan.paired_eligibility_status -ne 'VERIFIED_ALL_PAIRED_WORKLOADS' -or
         $capV1Plan.planned_paired_session_count -ne 72 -or
         -not $capV1Plan.locks_identical) {
         throw 'CompletionAnchoredPulseV1 PlanOnly output did not satisfy nonphysical 72-session contract'
     }
+
+    $capV1NoParityPlan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly
+    if ($capV1NoParityPlan.planned_paired_session_count -ne 0 -or
+        $capV1NoParityPlan.paired_eligibility_status -ne 'UNVERIFIED_NO_PARITY_EVIDENCE_SUPPLIED') {
+        throw 'CompletionAnchoredPulseV1 PlanOnly without parity evidence must exclude unverified workloads'
+    }
+
+    $capV1MismatchParity = @($capV1ParityEvidence | ForEach-Object { $_ | ConvertTo-Json -Depth 4 | ConvertFrom-Json })
+    $capV1MismatchParity[2].candidate_sha256 = '0' * 64
+    $capV1PartialPlan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1MismatchParity
+    if ($capV1PartialPlan.planned_paired_session_count -ne 48 -or
+        $capV1PartialPlan.paired_eligibility_status -ne 'PARTIAL_PARITY_VERIFIED' -or
+        ($capV1PartialPlan.excluded_due_to_unverified_parity -join ',') -ne 'long-idle') {
+        throw 'CompletionAnchoredPulseV1 PlanOnly must exclude mismatched workload from paired eligibility'
+    }
+
+    $capV1WrongBranchRejected = $false
+    & git -C $capV1Repo checkout --detach --quiet
+    try { [void](New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1ParityEvidence) } catch {
+        $capV1WrongBranchRejected = $_.Exception.Message.Contains('requires branch refactor/completion-anchored-pulse-engine')
+    }
+    if (-not $capV1WrongBranchRejected) { throw 'CompletionAnchoredPulseV1 PlanOnly accepted detached HEAD' }
+    & git -C $capV1Repo checkout $capV1Profile.CandidateLineageBranch --quiet
+
+    [System.IO.File]::WriteAllText((Join-Path $capV1Repo 'dirty-contract.tmp'), 'dirty')
+    $capV1DirtyRejected = $false
+    try { [void](New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1ParityEvidence) } catch {
+        $capV1DirtyRejected = $_.Exception.Message.Contains('requires a clean checkout')
+    }
+    if (-not $capV1DirtyRejected) { throw 'CompletionAnchoredPulseV1 PlanOnly accepted a dirty checkout' }
+    Remove-Item -LiteralPath (Join-Path $capV1Repo 'dirty-contract.tmp') -Force
+
+    & git -C $capV1Repo commit --allow-empty -m 'unpushed ahead' --quiet
+    $capV1AheadRejected = $false
+    try { [void](New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1ParityEvidence) } catch {
+        $capV1AheadRejected = $_.Exception.Message.Contains('must match the exact pushed branch tip')
+    }
+    if (-not $capV1AheadRejected) { throw 'CompletionAnchoredPulseV1 PlanOnly accepted unpushed local commit ahead of origin' }
+
+    & git -C $capV1Repo push --quiet origin $capV1Profile.CandidateLineageBranch
+    & git -C $capV1Repo reset --hard HEAD~1 --quiet
+    $capV1BehindRejected = $false
+    try { [void](New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1ParityEvidence) } catch {
+        $capV1BehindRejected = $_.Exception.Message.Contains('must match the exact pushed branch tip')
+    }
+    if (-not $capV1BehindRejected) { throw 'CompletionAnchoredPulseV1 PlanOnly accepted local commit behind origin' }
+
+    & git -C $capV1BareOrigin update-ref -d ('refs/heads/' + $capV1Profile.CandidateLineageBranch)
+    if ($LASTEXITCODE -ne 0) { throw 'could not delete remote branch ref in bare origin fixture' }
+    $capV1MissingRemoteRejected = $false
+    try { [void](New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1ParityEvidence) } catch {
+        $capV1MissingRemoteRejected = $_.Exception.Message.Contains('does not advertise exactly one remote tip')
+    }
+    if (-not $capV1MissingRemoteRejected) { throw 'CompletionAnchoredPulseV1 PlanOnly accepted missing remote branch tip' }
 } finally {
     if (Test-Path -LiteralPath $capV1CleanTemp) { Remove-Item -LiteralPath $capV1CleanTemp -Recurse -Force }
 }
-Write-Host 'PASS: CompletionAnchoredPulseV1 nonphysical profile, lineage, 72-session paired geometry, and fail-closed authorization contracts'
+Write-Host 'PASS: CompletionAnchoredPulseV1 nonphysical profile, remote-tip/baseline validation, parity-gated 72-session geometry, and fail-closed authorization contracts'
 $pclWrongHashRows = @(Copy-PclTestRows $pclRows)
 $pclWrongHashRows[0].manifest_sha256 = 'e' * 64
 $pclWrongHashRejected = $false

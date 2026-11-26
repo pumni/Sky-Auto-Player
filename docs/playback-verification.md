@@ -416,6 +416,21 @@ Native ReceiveOnly requires a later owner decision and an explicitly controlled,
 safe receiver. Do not substitute gameplay for the ReceiveOnly harness.
 PlanOnly, mocks, builds, and desktop tests are not gameplay acceptance.
 
+### CompletionAnchoredPulseV1 nonphysical plan
+
+Generate the nonphysical qualification plan from a clean checkout matching the pushed `origin/refactor/completion-anchored-pulse-engine` tip with:
+
+    Import-Module ./scripts/dispatch_qualification_profiles.psm1 -Force
+    New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot . -PlanOnly -ParityEvidence $parityEvidence
+
+Limitations of `-PlanOnly`:
+
+- `native_build_status` is `NOT BUILT`, `native_manifest_status` is `NOT VERIFIED`, and `binary_sha256` is `NOT_BUILT` (no harness build or execution occurs).
+- `receiver_started` and `harness_started` are `false` with `no_native_invocation = true`.
+- Paired session eligibility (72 sessions: 3 workloads x 2 loads x 6 AB/BA pairs x 2 arms) is conditional on verified identical authored streams supplied in `-ParityEvidence` (`dense-alternating`, `near-minimum-retrigger`, `long-idle`); unverified or mismatched workloads are excluded from planned paired sessions.
+- `mixed-up-down` and `canonical-max-chord` are excluded from paired performance comparison and retained as candidate-only fixed-pulse geometry checks.
+- `ambiguous-packet` is classified `Inconclusive` if the mixed packet state is not reached during execution.
+
 Record native results only for work actually run. Until separately authorized
 and performed, report:
 

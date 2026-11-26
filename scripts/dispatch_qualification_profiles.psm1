@@ -597,21 +597,156 @@ function Get-CompletionAnchoredPulseV1Profile {
         ExcludedFromPairedPerformance = @('mixed-up-down', 'canonical-max-chord')
         CandidateOnlyGeometryWorkloads = @('mixed-up-down', 'canonical-max-chord')
         SafetyScenarios = @(
-            'focus-loss',
-            'owner-mismatch',
-            'owner-process-termination',
-            'pause-resume',
-            'pause-resume-active-cleanup',
-            'suspend-resume',
-            'stop-cleanup',
-            'skip-cleanup',
-            'supervisor-lease-expiry',
-            'short-up-gap-stress',
-            'target-hwnd-change',
-            'modifier-held-final-boundary',
-            'modifier-held-after-owned',
-            'ambiguous-packet',
-            'preflight-user-held'
+            [pscustomobject][ordered]@{
+                id = 'focus-loss'
+                scenario = 'focus-loss'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Foreground focus leaves target HWND while keys are held'
+                expected_active_obligation_mask = 'nonzero_at_trigger_cleared_to_zero'
+                proof_criteria = 'Verified terminal/focus-loss release of all owned keys; zero sends after release'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'owner-mismatch'
+                scenario = 'owner-mismatch'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Target HWND belongs to unexpected process/owner'
+                expected_active_obligation_mask = 'zero_pre_send_aborted'
+                proof_criteria = 'Dispatch aborts before SendInput with zero owned keys leaked'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'owner-process-termination'
+                scenario = 'owner-process-termination'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Target process exits during active hold'
+                expected_active_obligation_mask = 'nonzero_at_trigger_cleared_to_zero'
+                proof_criteria = 'Supervisor detects process exit and completes bounded cleanup within margin'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'pause-resume'
+                scenario = 'pause-resume'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Pause during hold followed by Resume'
+                expected_active_obligation_mask = 'nonzero_at_pause_zero_while_paused'
+                proof_criteria = 'Verified cleanup on Pause; zero sends while paused; fresh due Down on Resume'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'pause-resume-active-cleanup'
+                scenario = 'pause-resume-active-cleanup'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Pause during active hold with isolated long H so keys remain held at trigger'
+                expected_active_obligation_mask = 'nonzero_at_pause_zero_while_paused'
+                proof_criteria = 'Active held keys released and verified on Pause; zero sends while paused; clean Resume'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'suspend-resume'
+                scenario = 'suspend-resume'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'System suspend/resume signal during active hold'
+                expected_active_obligation_mask = 'nonzero_at_suspend_zero_on_resume'
+                proof_criteria = 'All owned keys released before suspend completes; clean post-resume state'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'stop-cleanup'
+                scenario = 'stop-cleanup'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Stop command issued while keys are actively held'
+                expected_active_obligation_mask = 'nonzero_at_stop_cleared_to_zero'
+                proof_criteria = 'Terminal cleanup releases all held keys within margin; raw_calls recorded'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'skip-cleanup'
+                scenario = 'skip-cleanup'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Skip/seek control issued while keys are actively held'
+                expected_active_obligation_mask = 'nonzero_at_skip_cleared_to_zero'
+                proof_criteria = 'Owned keys released before schedule jump; zero stuck keys'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'supervisor-lease-expiry'
+                scenario = 'supervisor-lease-expiry'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Supervisor heartbeat/lease expires without renewal'
+                expected_active_obligation_mask = 'nonzero_at_expiry_cleared_to_zero'
+                proof_criteria = 'Watchdog/lease expiry triggers terminal release within bounded deadline'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'short-up-gap-stress'
+                scenario = 'short-up-gap-stress'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Minimum-gap Up-to-Down retrigger cadence under completion-anchored floor'
+                expected_active_obligation_mask = 'alternating_held_and_released'
+                proof_criteria = 'Zero Up/Down inversion; every physical release satisfies completion_qpc + H_ticks'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'target-hwnd-change'
+                scenario = 'target-hwnd-change'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Foreground HWND switches away from pinned target HWND'
+                expected_active_obligation_mask = 'nonzero_at_switch_cleared_to_zero'
+                proof_criteria = 'Focus-guard aborts further sends and releases active keys'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'modifier-held-final-boundary'
+                scenario = 'modifier-held-final-boundary'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Modifier key held across final boundary'
+                expected_active_obligation_mask = 'modifier_tracked_through_final_release'
+                proof_criteria = 'Modifier/owned state cleanly reconciled at final boundary'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'modifier-held-after-owned'
+                scenario = 'modifier-held-after-owned'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'User holds modifier after owned playback keys release'
+                expected_active_obligation_mask = 'owned_cleared_user_modifier_preserved'
+                proof_criteria = 'Owned keys released without interfering with user-held external modifier'
+                harness_classification = 'DeterministicPassOrFail'
+            },
+            [pscustomobject][ordered]@{
+                id = 'ambiguous-packet'
+                scenario = 'ambiguous-packet'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'Control trigger during mixed Up+Down packet dispatch'
+                expected_active_obligation_mask = 'mixed_packet_active_keys_nonzero'
+                proof_criteria = 'If mixed packet is reached, all active keys are released and verified; otherwise Inconclusive'
+                harness_classification = 'Inconclusive if mixed packet not reached; Pass when mixed packet active keys released and verified'
+            },
+            [pscustomobject][ordered]@{
+                id = 'preflight-user-held'
+                scenario = 'preflight-user-held'
+                workload = 'safety-smoke'
+                configured_H_us = 17167
+                control_trigger = 'User holds playback key prior to session start'
+                expected_active_obligation_mask = 'zero_pre_start_aborted'
+                proof_criteria = 'Preflight detects pre-held key and refuses dispatch before first SendInput'
+                harness_classification = 'DeterministicPassOrFail'
+            }
         )
         TargetIdentity = [ordered]@{
             target_class = 'project-owned-non-game-receive-only'
@@ -671,12 +806,12 @@ function Assert-CompletionAnchoredPulseV1Lineage {
         if ($CandidateRevision -ne $profile.BaselineRevision) {
             throw 'CompletionAnchoredPulseV1 baseline revision differs from pinned 1901cff6'
         }
-        if (-not [string]::IsNullOrWhiteSpace($SourceTreeSha) -and $SourceTreeSha -ne $profile.BaselineTree) {
-            throw 'CompletionAnchoredPulseV1 baseline tree differs from pinned 1901cff6 tree'
+        if ([string]::IsNullOrWhiteSpace($SourceTreeSha) -or $SourceTreeSha -ne $profile.BaselineTree) {
+            throw 'CompletionAnchoredPulseV1 baseline tree is missing or differs from pinned 1901cff6 tree'
         }
         return $true
     }
-    if ($CandidateRevision -ne $RemoteTipRevision) {
+    if ([string]::IsNullOrWhiteSpace($RemoteTipRevision) -or $CandidateRevision -ne $RemoteTipRevision) {
         throw 'CompletionAnchoredPulseV1 candidate must match the exact pushed branch tip'
     }
     if (-not (Test-DispatchGitAncestor -RepositoryRoot $RepositoryRoot -AncestorRevision $profile.BaselineRevision -DescendantRevision $CandidateRevision)) {
@@ -685,11 +820,36 @@ function Assert-CompletionAnchoredPulseV1Lineage {
     $true
 }
 
+function Get-GitObjectRawSha256 {
+    param(
+        [Parameter(Mandatory)] [string]$RepositoryRoot,
+        [Parameter(Mandatory)] [string]$ObjectSpec
+    )
+    $psi = [System.Diagnostics.ProcessStartInfo]::new('git', ('-C "' + $RepositoryRoot + '" cat-file blob ' + $ObjectSpec))
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $proc = [System.Diagnostics.Process]::Start($psi)
+    $ms = [System.IO.MemoryStream]::new()
+    $proc.StandardOutput.BaseStream.CopyTo($ms)
+    $errText = $proc.StandardError.ReadToEnd()
+    $proc.WaitForExit()
+    if ($proc.ExitCode -ne 0) {
+        throw ('git cat-file blob failed for ' + $ObjectSpec + ': ' + $errText.Trim())
+    }
+    $bytes = $ms.ToArray()
+    if ([Array]::IndexOf($bytes, [byte]13) -ge 0) {
+        throw ('Git blob ' + $ObjectSpec + ' contains CR bytes; LF bytes required')
+    }
+    [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::HashData($bytes)).Replace('-', '').ToLowerInvariant()
+}
+
 function New-CompletionAnchoredPulseV1NonphysicalPlan {
     param(
         [Parameter(Mandatory)] [string]$RepositoryRoot,
         [switch]$PlanOnly,
-        [switch]$OwnerApprovedReceiveOnlyRun
+        [switch]$OwnerApprovedReceiveOnlyRun,
+        [object[]]$ParityEvidence
     )
     if ($PlanOnly -and $OwnerApprovedReceiveOnlyRun) {
         throw '-OwnerApprovedReceiveOnlyRun cannot be combined with -PlanOnly'
@@ -705,10 +865,92 @@ function New-CompletionAnchoredPulseV1NonphysicalPlan {
     if ($identity.branch -ne $profile.CandidateLineageBranch) {
         throw ('CompletionAnchoredPulseV1 PlanOnly requires branch ' + $profile.CandidateLineageBranch)
     }
-    $candidateLock = Assert-CompletionAnchoredPulseV1LockfileBytes -RepositoryRoot $RepositoryRoot -SourceRole Candidate
-    [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $RepositoryRoot -CandidateRevision $identity.revision -RemoteTipRevision $identity.revision -SourceRole Candidate)
-    $plannedPairedSessions = @()
+
+    # Verify actual pushed remote tip on origin via git ls-remote
+    $remoteRef = 'refs/heads/' + $profile.CandidateLineageBranch
+    $remoteLines = @(& git -C $identity.root ls-remote origin $remoteRef 2>&1)
+    $remoteExit = $LASTEXITCODE
+    if ($remoteExit -ne 0) {
+        throw ('CompletionAnchoredPulseV1 could not verify remote branch tip against origin: ' + ($remoteLines -join ' '))
+    }
+    $remoteRows = @($remoteLines | ForEach-Object { [string]$_ } | Where-Object { $_ -match ('^([0-9a-f]{40})\s+' + [regex]::Escape($remoteRef) + '$') })
+    if ($remoteRows.Count -ne 1) {
+        throw ('origin does not advertise exactly one remote tip for ' + $remoteRef)
+    }
+    $remoteTipRevision = [regex]::Match($remoteRows[0], '^([0-9a-f]{40})').Groups[1].Value
+
+    # Independently validate baseline commit, tree, and lockfile from immutable Git objects
+    $actualBaselineCommit = (& git -C $identity.root rev-parse --verify ($profile.BaselineRevision + '^{commit}') 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $actualBaselineCommit -ne $profile.BaselineRevision) {
+        throw ('CompletionAnchoredPulseV1 baseline commit ' + $profile.BaselineRevision + ' is missing or unresolvable in repository')
+    }
+    $actualBaselineTree = (& git -C $identity.root rev-parse --verify ($profile.BaselineRevision + '^{tree}') 2>$null | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0 -or $actualBaselineTree -ne $profile.BaselineTree) {
+        throw ('CompletionAnchoredPulseV1 baseline tree mismatch: expected ' + $profile.BaselineTree + ', got ' + $actualBaselineTree)
+    }
+    [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $identity.root -CandidateRevision $actualBaselineCommit -RemoteTipRevision $actualBaselineCommit -SourceRole Baseline -SourceTreeSha $actualBaselineTree)
+    $actualBaselineLockSha = Get-GitObjectRawSha256 -RepositoryRoot $identity.root -ObjectSpec ($profile.BaselineRevision + ':rust/Cargo.lock')
+    if ($actualBaselineLockSha -ne $profile.BaselineLockSha256) {
+        throw ('CompletionAnchoredPulseV1 baseline rust/Cargo.lock SHA-256 mismatch: expected ' + $profile.BaselineLockSha256 + ', got ' + $actualBaselineLockSha)
+    }
+
+    $candidateLock = Assert-CompletionAnchoredPulseV1LockfileBytes -RepositoryRoot $identity.root -SourceRole Candidate
+    [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $identity.root -CandidateRevision $identity.revision -RemoteTipRevision $remoteTipRevision -SourceRole Candidate)
+
+    # Validate authored-stream parity evidence for paired eligibility
+    $parityByWorkload = @{}
+    if ($null -ne $ParityEvidence) {
+        foreach ($item in $ParityEvidence) {
+            if ($null -ne $item -and -not [string]::IsNullOrWhiteSpace([string]$item.workload)) {
+                $parityByWorkload[[string]$item.workload] = $item
+            }
+        }
+    }
+    $eligiblePairedWorkloads = @()
+    $excludedByParity = @()
+    $paritySummary = @()
     foreach ($workload in $profile.PairedPerformanceWorkloads) {
+        $entry = $parityByWorkload[$workload]
+        $verified = $false
+        $reason = 'no parity evidence supplied'
+        if ($null -ne $entry) {
+            $bOk = ($entry.baseline_verified -eq $true)
+            $cOk = ($entry.candidate_verified -eq $true)
+            $shaMatch = (-not [string]::IsNullOrWhiteSpace([string]$entry.baseline_sha256)) -and ([string]$entry.baseline_sha256 -eq [string]$entry.candidate_sha256)
+            $geomMatch = ($entry.baseline_event_count -eq $entry.candidate_event_count) -and
+                ($entry.baseline_group_count -eq $entry.candidate_group_count) -and
+                ($entry.baseline_first_us -eq $entry.candidate_first_us) -and
+                ($entry.baseline_last_us -eq $entry.candidate_last_us)
+            if ($bOk -and $cOk -and $shaMatch -and $geomMatch) {
+                $verified = $true
+                $reason = 'verified identical authored stream at baseline and candidate'
+            } else {
+                $reason = 'authored-stream parity mismatch or incomplete verification'
+            }
+        }
+        $paritySummary += [pscustomobject][ordered]@{
+            workload = $workload
+            verified = $verified
+            reason = $reason
+            baseline_sha256 = if ($null -ne $entry) { $entry.baseline_sha256 } else { $null }
+            candidate_sha256 = if ($null -ne $entry) { $entry.candidate_sha256 } else { $null }
+        }
+        if ($verified) {
+            $eligiblePairedWorkloads += $workload
+        } else {
+            $excludedByParity += $workload
+        }
+    }
+    $pairedEligibilityStatus = if ($eligiblePairedWorkloads.Count -eq $profile.PairedPerformanceWorkloads.Count) {
+        'VERIFIED_ALL_PAIRED_WORKLOADS'
+    } elseif ($eligiblePairedWorkloads.Count -gt 0) {
+        'PARTIAL_PARITY_VERIFIED'
+    } else {
+        'UNVERIFIED_NO_PARITY_EVIDENCE_SUPPLIED'
+    }
+
+    $plannedPairedSessions = @()
+    foreach ($workload in $eligiblePairedWorkloads) {
         foreach ($load in $profile.LoadCells) {
             for ($pair = 1; $pair -le $profile.PairCount; $pair++) {
                 $firstRole = if (($pair % 2) -eq 1) { 'Baseline' } else { 'Candidate' }
@@ -736,18 +978,28 @@ function New-CompletionAnchoredPulseV1NonphysicalPlan {
         plan_only = $true
         receiver_started = $false
         harness_started = $false
+        no_native_invocation = $true
+        native_build_status = 'NOT BUILT'
+        native_manifest_status = 'NOT VERIFIED'
+        binary_sha256 = 'NOT_BUILT'
         sendinput_calls = 0
-        baseline_revision = $profile.BaselineRevision
-        baseline_tree = $profile.BaselineTree
-        baseline_lock_sha256 = $profile.BaselineLockSha256
+        baseline_revision = $actualBaselineCommit
+        baseline_tree = $actualBaselineTree
+        baseline_lock_sha256 = $actualBaselineLockSha
+        baseline_identity_verified_from_git_objects = $true
         candidate_revision = $identity.revision
+        remote_tip_revision = $remoteTipRevision
         candidate_tree = $identity.tree
         candidate_branch = $identity.branch
         candidate_lock_sha256 = $candidateLock
-        locks_identical = ($candidateLock -eq $profile.BaselineLockSha256)
-        paired_performance_workloads = @($profile.PairedPerformanceWorkloads)
+        locks_identical = ($candidateLock -eq $actualBaselineLockSha)
+        paired_eligibility_status = $pairedEligibilityStatus
+        paired_performance_workloads = @($eligiblePairedWorkloads)
+        excluded_due_to_unverified_parity = @($excludedByParity)
+        parity_verification = @($paritySummary)
         excluded_from_paired_performance = @($profile.ExcludedFromPairedPerformance)
         planned_paired_session_count = $plannedPairedSessions.Count
+        planned_paired_session_count_if_all_verified = ($profile.PairedPerformanceWorkloads.Count * $profile.LoadCells.Count * $profile.PairCount * 2)
         planned_paired_sessions = $plannedPairedSessions
         candidate_only_geometry_workloads = @($profile.CandidateOnlyGeometryWorkloads)
         safety_scenarios = @($profile.SafetyScenarios)
