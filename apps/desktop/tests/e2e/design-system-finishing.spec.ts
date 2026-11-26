@@ -5,6 +5,24 @@ function channels(color: string): [number, number, number] {
   const rgbMatch = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
   if (rgbMatch) return [Number(rgbMatch[1]), Number(rgbMatch[2]), Number(rgbMatch[3])];
 
+  // CSS Color 4 sRGB components are already encoded, on a 0–1 scale.
+  const srgbMatch = color.match(
+    /^color\(srgb\s+([^\s()/]+)\s+([^\s()/]+)\s+([^\s()/]+)(?:\s*\/\s*([^\s()/]+))?\s*\)$/,
+  );
+  if (srgbMatch) {
+    const [, red, green, blue, alpha = '1'] = srgbMatch;
+    const components = [red, green, blue, alpha];
+    const cssNumber = /^[+-]?(?:[0-9]*\.[0-9]+|[0-9]+)(?:e[+-]?[0-9]+)?$/i;
+    const [r, g, b, opacity] = components.map(Number);
+    if (
+      components.every((component) => cssNumber.test(component)) &&
+      [r, g, b].every((channel) => Number.isFinite(channel) && channel >= 0 && channel <= 1) &&
+      opacity === 1
+    ) {
+      return [r * 255, g * 255, b * 255];
+    }
+  }
+
   const oklabMatch = color.match(
     /^oklab\(\s*([+-]?(?:\d+\.?\d*|\.\d+))\s+([+-]?(?:\d+\.?\d*|\.\d+))\s+([+-]?(?:\d+\.?\d*|\.\d+))/,
   );
@@ -42,6 +60,36 @@ function contrast(first: string, second: string): number {
   const right = luminance(second);
   return (Math.max(left, right) + 0.05) / (Math.min(left, right) + 0.05);
 }
+
+test('contrast accepts opaque Chromium sRGB serialization without rounding', () => {
+  const dark = channels('color(srgb 0.476863 0.483529 0.498431)');
+  const light = channels('color(srgb 0.500863 0.535686 0.573412 / 1)');
+  for (const [actual, expected] of [...dark, ...light].map((channel, index) => [
+    channel,
+    [121.600065, 123.299895, 127.099905, 127.720065, 136.59993, 146.22006][index],
+  ])) {
+    expect(actual).toBeCloseTo(expected, 8);
+  }
+  expect(contrast('color(srgb 0.2 0.4 0.6)', 'rgb(51, 102, 153)')).toBeCloseTo(1, 10);
+  expect(contrast('color(srgb 0 0 0)', 'rgb(255, 255, 255)')).toBe(21);
+  expect(contrast('rgb(20, 30, 40)', 'rgb(20, 30, 40)')).toBe(1);
+});
+
+test('contrast rejects unsupported or malformed sRGB serialization', () => {
+  for (const value of [
+    'color(display-p3 0 0 0)',
+    'color(srgb 0 0)',
+    'color(srgb 0 0 1.1)',
+    'color(srgb 0 0 -0.1)',
+    'color(srgb 0 0 0x1)',
+    'color(srgb 0 0 1e999)',
+    'color(srgb 0 0 NaN)',
+    'color(srgb 0 0 0 / 0.5)',
+    'color(srgb 0 0 0) trailing',
+  ]) {
+    expect(() => channels(value)).toThrow('Unsupported computed color');
+  }
+});
 
 test('Runtime tabs fill the available width and use one raised segmented indicator', async ({
   page,
