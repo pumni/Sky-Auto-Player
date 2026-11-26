@@ -60,11 +60,38 @@ pub(super) fn scenario_plan_with_sample_seconds(
     scenario_plan_for_settings(scenario, timing_margin_us, 60, sample_seconds)
 }
 
+pub(super) const PILOT_CHORD_ONSET_COUNT: usize = 150;
+pub(super) const PILOT_FIRST_ONSET_US: u64 = 50_000;
+pub(super) const PILOT_CADENCE_US: u64 = 100_000;
+
+/// Deterministic rotating canonical key subset for `chord-width-pilot-v1`:
+/// `start = (onset_index * width) % 15`, taking `width` consecutive slots modulo 15,
+/// sorted ascending so packet slot order matches canonical ascending order.
+pub(super) fn pilot_rotating_slots(onset_index: usize, width: usize) -> Vec<usize> {
+    let start = (onset_index * width) % MAX_KEYS;
+    let mut slots = (0..width)
+        .map(|offset| (start + offset) % MAX_KEYS)
+        .collect::<Vec<_>>();
+    slots.sort_unstable();
+    slots
+}
+
+#[cfg(test)]
 pub(super) fn scenario_plan_for_settings(
     scenario: Scenario,
     timing_margin_us: u64,
     game_fps: u16,
     sample_seconds: Option<u8>,
+) -> Result<ScenarioPlan, String> {
+    scenario_plan_for_settings_with_pilot(scenario, timing_margin_us, game_fps, sample_seconds, None)
+}
+
+pub(super) fn scenario_plan_for_settings_with_pilot(
+    scenario: Scenario,
+    timing_margin_us: u64,
+    game_fps: u16,
+    sample_seconds: Option<u8>,
+    pilot_chord_width: Option<u8>,
 ) -> Result<ScenarioPlan, String> {
     if !matches!(game_fps, 60 | 120) {
         return Err("acceptance workload game FPS must be 60 or 120".to_string());
@@ -320,11 +347,52 @@ pub(super) fn scenario_plan_for_settings(
                 vec![0, 1],
                 false,
             ),
+            Scenario::ChordWidthPilotV1 => {
+                if game_fps != 60 || timing_margin_us != 500 || sample_seconds != Some(15) {
+                    return Err(
+                        "chord-width-pilot-v1 requires fixed 60 FPS, 500 us timing margin (H=17167 us), and 15s sample"
+                            .to_string(),
+                    );
+                }
+                let width = match pilot_chord_width {
+                    Some(w @ (1 | 5 | 15)) => usize::from(w),
+                    _ => {
+                        return Err(
+                            "chord-width-pilot-v1 requires --pilot-chord-width in {1, 5, 15}"
+                                .to_string(),
+                        );
+                    }
+                };
+                let mut chords = Vec::with_capacity(PILOT_CHORD_ONSET_COUNT);
+                let mut down_slots = Vec::with_capacity(PILOT_CHORD_ONSET_COUNT * width);
+                let mut up_slots = Vec::with_capacity(PILOT_CHORD_ONSET_COUNT * width);
+                for index in 0..PILOT_CHORD_ONSET_COUNT {
+                    let scheduled_us = PILOT_FIRST_ONSET_US
+                        .checked_add(
+                            u64::try_from(index)
+                                .map_err(|_| "pilot chord index overflow")?
+                                .checked_mul(PILOT_CADENCE_US)
+                                .ok_or("pilot chord timestamp overflow")?,
+                        )
+                        .ok_or("pilot chord timestamp overflow")?;
+                    let slots = pilot_rotating_slots(index, width);
+                    chords.push(onset(
+                        u32::try_from(index).map_err(|_| "pilot source action index overflow")?,
+                        scheduled_us,
+                        &slots,
+                    ));
+                    down_slots.extend_from_slice(&slots);
+                    up_slots.extend_from_slice(&slots);
+                }
+                (chords, None, down_slots, up_slots, false)
+            }
         };
     let mut chords = chords;
     let mut expected_down_slots = expected_down_slots;
     let mut expected_up_slots = expected_up_slots;
-    if let Some(sample_seconds) = sample_seconds {
+    if let Some(sample_seconds) = sample_seconds
+        && scenario != Scenario::ChordWidthPilotV1
+    {
         if !scenario.supports_timed_sample() {
             return Err(format!(
                 "{scenario:?} does not support a repeated timed sample"
@@ -441,6 +509,7 @@ pub(super) fn workload_definition_identity(scenario: Scenario) -> &'static str {
         Scenario::DenseAlternating => "dense-alternating-fixed-pulse-v1",
         Scenario::NearMinimumRetrigger => "near-minimum-retrigger-fixed-pulse-v1",
         Scenario::LongIdle => "long-idle-fixed-pulse-v1",
+        Scenario::ChordWidthPilotV1 => "chord-width-pilot-v1",
         _ => scenario.label(),
     }
 }

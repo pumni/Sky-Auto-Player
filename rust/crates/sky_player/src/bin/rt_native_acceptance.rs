@@ -34,7 +34,7 @@ use sink_event_log::read_log_window_status;
 use acceptance_limits::*;
 pub(super) use entrypoint::main;
 use generation_stress::{attach_sink_window_provenance, generation_stress_scenario_plan, healthy_generation_qualification, production_visibility_qualification};
-use scenarios::{expected_physical_keys, onset, scenario_plan_for_settings};
+use scenarios::{expected_physical_keys, onset, scenario_plan_for_settings_with_pilot};
 #[cfg(test)]
 use scenarios::{acceptance_min_hold_us, scenario_plan};
 use arguments::{CalibrationPlacement, ParsedCommand, RunArgs, Scenario, parse_args};
@@ -561,11 +561,12 @@ fn run_windows(args: RunArgs) -> i32 {
     {
         inconclusive!("receive-only sink could not be made the exact foreground HWND", json!({}));
     }
-    let plan = match scenario_plan_for_settings(
+    let plan = match scenario_plan_for_settings_with_pilot(
         args.scenario,
         args.timing_margin_us,
         args.game_fps,
         args.sample_seconds,
+        args.pilot_chord_width,
     ) {
         Ok(plan) => plan,
         Err(error) => return write_report(&args, Verdict::Fail, &error, json!({})),
@@ -1093,6 +1094,11 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("scenario_hold_us".to_string(), json!(scenario_hold_us));
         object.insert("scenario_uses_isolated_long_hold".to_string(), json!(scenario_uses_isolated_long_hold));
         object.insert("workload_definition_identity".to_string(), json!(workload_definition_identity));
+        if args.scenario == Scenario::ChordWidthPilotV1 {
+            object.insert("pilot_chord_width".to_string(), json!(args.pilot_chord_width));
+            object.insert("pilot_cadence_us".to_string(), json!(self::scenarios::PILOT_CADENCE_US));
+            object.insert("pilot_onset_count".to_string(), json!(self::scenarios::PILOT_CHORD_ONSET_COUNT));
+        }
         object.insert("observed_telemetry_mixed_packet_count".to_string(), json!(observed_telemetry_mixed_packet_count));
         object.insert("physical_packet_attempt_count".to_string(), json!(snapshot.precision_packet_attempts));
         object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "pause_cleanup_verified": pause_cleanup_verified, "pause_cleanup_obligation_mask": pause_cleanup_obligation_mask, "pause_requested_qpc_ticks": pause_requested_qpc_ticks, "pause_cleanup_verified_qpc_ticks": pause_cleanup_verified_qpc_ticks, "resume_requested_qpc_ticks": resume_requested_qpc_ticks, "resume_call_completed_qpc_ticks": resume_call_completed_qpc_ticks, "resume_worker_commit_qpc_ticks": resume_worker_commit_qpc_ticks, "resume_worker_commit_elapsed_ticks": resume_worker_commit_elapsed_ticks, "resume_down_sender_pre_call_qpc_ticks": resume_down_sender_pre_call_qpc_ticks, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));

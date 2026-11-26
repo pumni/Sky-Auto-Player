@@ -255,3 +255,120 @@ fn timing_observer_is_opt_in_for_qualification_runs_only() {
     args.push("--timing-observer-for-qualification".to_string());
     assert!(parse_args(args).is_err(), "duplicate observer flag is rejected");
 }
+
+#[test]
+fn chord_width_pilot_v1_geometry_rotation_digests_and_trace_capacities() {
+    use sha2::{Digest, Sha256};
+
+    assert_eq!(
+        super::super::scenarios::workload_definition_identity(Scenario::ChordWidthPilotV1),
+        "chord-width-pilot-v1"
+    );
+
+    // Reject invalid settings/widths at plan builder boundary
+    assert!(
+        super::super::scenarios::scenario_plan_for_settings_with_pilot(
+            Scenario::ChordWidthPilotV1,
+            500,
+            60,
+            Some(15),
+            Some(3),
+        )
+        .is_err()
+    );
+    assert!(
+        super::super::scenarios::scenario_plan_for_settings_with_pilot(
+            Scenario::ChordWidthPilotV1,
+            500,
+            120,
+            Some(15),
+            Some(5),
+        )
+        .is_err()
+    );
+
+    let mut digests = Vec::new();
+    for width in [1_u8, 5, 15] {
+        let plan = super::super::scenarios::scenario_plan_for_settings_with_pilot(
+            Scenario::ChordWidthPilotV1,
+            500,
+            60,
+            Some(15),
+            Some(width),
+        )
+        .expect("valid pilot plan");
+
+        assert!(plan.profile.is_none(), "pilot uses canonical 15-key profile");
+        assert!(!plan.allow_unpaired_cleanup_ups);
+        assert_eq!(plan.schedule.hold_us(), 17_167);
+        assert_eq!(plan.schedule.chords().len(), 150);
+        assert_eq!(plan.schedule.chords().first().unwrap().scheduled_us, 50_000);
+        assert_eq!(
+            plan.schedule.chords().last().unwrap().scheduled_us,
+            14_950_000
+        );
+        assert_eq!(
+            plan.expected_down_slots.len(),
+            150 * usize::from(width)
+        );
+        assert_eq!(plan.expected_up_slots.len(), 150 * usize::from(width));
+
+        // Verify deterministic rotation & non-overlap (100_000 us cadence > 17_167 us hold)
+        let mut slot_hits = [0usize; 15];
+        for (idx, chord) in plan.schedule.chords().iter().enumerate() {
+            assert_eq!(chord.scheduled_us, 50_000 + (idx as u64) * 100_000);
+            assert_eq!(chord.key_mask.count_ones(), u32::from(width));
+            let expected_slots =
+                super::super::scenarios::pilot_rotating_slots(idx, usize::from(width));
+            let mut expected_mask = 0u16;
+            for s in expected_slots {
+                expected_mask |= 1u16 << s;
+                slot_hits[s] += 1;
+            }
+            assert_eq!(chord.key_mask, expected_mask);
+        }
+        let expected_hits_per_slot = (150 * usize::from(width)) / 15;
+        assert_eq!(slot_hits, [expected_hits_per_slot; 15]);
+
+        let projection = super::super::authored_timestamp_group_projection(&plan.schedule);
+        assert_eq!(projection.len(), 300, "150 Down + 150 Up non-overlapping groups");
+        assert_eq!(projection.first().unwrap()["scheduled_us"], 50_000);
+        assert_eq!(projection.last().unwrap()["scheduled_us"], 14_967_167);
+
+        // Verify sender/receiver observation capacities fit with zero production buffer changes
+        let healthy_packets = 300usize;
+        let up_slot_entries = 150usize * usize::from(width);
+        let receiver_events = 2usize * 150usize * usize::from(width);
+        assert!(healthy_packets <= 1_024, "fits sender TelemetryOptions capacity 1024");
+        assert!(
+            up_slot_entries <= 4_096,
+            "fits NATIVE_UP_SLOT_TRACE_CAPACITY (4096)"
+        );
+        assert!(receiver_events <= 32_768, "fits SchedulerQueuedV2 ring capacity");
+
+        let mut events = Vec::new();
+        for group in &projection {
+            let ts = group["scheduled_us"].as_u64().unwrap();
+            let up = group["up_mask"].as_u64().unwrap();
+            let down = group["down_mask"].as_u64().unwrap();
+            if up != 0 {
+                events.push(format!("{ts}:up:{up}"));
+            }
+            if down != 0 {
+                events.push(format!("{ts}:down:{down}"));
+            }
+        }
+        let digest = Sha256::digest(events.join("|").as_bytes());
+        let hex: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        let expected_hex = match width {
+            1 => "b0810a9f997ec63598caacc63bc15c798efd86be420a82c22bb396764f4d735a",
+            5 => "81a047f01d0c919b0c6f775e2d175126138203bab6d060deefcc24cc8b4ad1d0",
+            15 => "58c787d47ec23e0d575f4295fd592e4682dd7b537dcc6f25aeddec914b5ea07b",
+            _ => unreachable!(),
+        };
+        assert_eq!(hex, expected_hex, "pilot width {width} digest changed");
+        digests.push(hex);
+    }
+    assert_ne!(digests[0], digests[1]);
+    assert_ne!(digests[1], digests[2]);
+}
