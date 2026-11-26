@@ -135,8 +135,9 @@ export const homeEn: HomeContent = {
     signatureNote: 'The .exe.sig file is for the updater, not manual installation.',
     installScope: 'Installs for the current Windows user.',
     signingValue: 'Unsigned installer; Windows may show Unknown Publisher or SmartScreen.',
-    safetyNote:
-      'Uses Windows SendInput. It does not inspect game memory or change game files; this cannot guarantee account safety.',
+    safetyNote: 'Sends keystrokes using Windows SendInput.',
+    safetyBoundary: 'Does not inspect game memory or change game files.',
+    safetyRisk: 'This cannot guarantee account safety.',
     safetyTitle: 'Account safety',
     safetyLink: 'Read about account risk',
     supportLabel: 'Need help?',

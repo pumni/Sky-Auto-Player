@@ -92,6 +92,8 @@ export interface HomeContent {
     installScope: string;
     signingValue: string;
     safetyNote: string;
+    safetyBoundary: string;
+    safetyRisk: string;
     safetyTitle: string;
     safetyLink: string;
     supportLabel: string;

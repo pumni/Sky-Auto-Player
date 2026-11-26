@@ -26,7 +26,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       </div>
       <div class="trust-download__cta-action">
         <a class="trust-download__button" href={SITE.stableReleaseUrl}>
-          {data.releaseLinkLabel}
+          <span>{data.releaseLinkLabel}</span>
           <span aria-hidden="true">↗</span>
         </a>
         <p class="trust-download__destination">{data.releaseDestinationNote}</p>
@@ -36,7 +36,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
     <div class="trust-download__details">
       <div>
         <h3>{data.installationTitle}</h3>
-        <ul class="trust-download__install-list">
+        <ul class="trust-download__detail-list">
           <li>
             {data.installerGuidance} <code>{data.installerSuffix}</code>.
           </li>
@@ -47,9 +47,14 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       </div>
       <div>
         <h3>{data.safetyTitle}</h3>
-        <p>{data.safetyNote}</p>
+        <ul class="trust-download__detail-list">
+          <li>{data.safetyNote}</li>
+          <li>{data.safetyBoundary}</li>
+        </ul>
+        <p class="trust-download__warning">{data.safetyRisk}</p>
         <a class="trust-download__safety-link" href={safetyUrl}>
-          {data.safetyLink}
+          <span>{data.safetyLink}</span>
+          <span aria-hidden="true">→</span>
         </a>
       </div>
     </div>
@@ -59,7 +64,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
         {data.supportLinks.map((link) => (
           <li>
             <a href={withBase(link.href)}>
-              {link.label}
+              <span>{link.label}</span>
               <span aria-hidden="true">→</span>
             </a>
           </li>
@@ -76,14 +81,14 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
     }
     .trust-download__layout {
       display: grid;
-      gap: 2rem;
+      gap: 1.75rem;
     }
     .trust-download__cta {
       display: grid;
       align-items: center;
       gap: 1rem;
-      padding-block: 1.875rem;
-      border-block: 1px solid var(--line-default);
+      padding-block-start: 1.875rem;
+      border-block-start: 1px solid var(--line-default);
     }
     .trust-download__cta h2 {
       margin: 0;
@@ -109,10 +114,15 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       min-block-size: 44px;
       color: var(--color-text-primary);
       font-weight: 600;
+      text-decoration: none;
+      font-size: 0.9375rem;
+    }
+    .trust-download__button > span:first-child,
+    .trust-download__safety-link > span:first-child,
+    .trust-download__support-links a > span:first-child {
       text-decoration: underline;
       text-decoration-color: var(--color-info);
       text-underline-offset: 0.25em;
-      font-size: 0.9375rem;
     }
     .trust-download__safety-link:hover,
     .trust-download__support-links a:hover {
@@ -139,7 +149,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       font-size: 1.25rem;
       line-height: 1.35;
     }
-    .trust-download__install-list {
+    .trust-download__detail-list {
       display: grid;
       gap: 0.5rem;
       max-inline-size: 56ch;
@@ -147,7 +157,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       padding-inline-start: 1.125rem;
       list-style: disc;
     }
-    .trust-download__install-list li::marker {
+    .trust-download__detail-list li::marker {
       color: var(--color-text-tertiary);
     }
     .trust-download__button {
@@ -158,12 +168,15 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
     }
     .trust-download__details p {
       max-inline-size: 56ch;
-      margin: 0.5rem 0 0;
+      margin: 0;
     }
     .trust-download__details .trust-download__warning {
-      margin-block-start: 1.25rem;
+      margin-block-start: 1rem;
       padding-inline-start: 1rem;
       border-inline-start: 2px solid var(--color-action);
+    }
+    .trust-download__safety-link {
+      margin-block-start: 0.25rem;
     }
     .trust-download code {
       overflow-wrap: anywhere;
@@ -172,18 +185,16 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
     }
     .trust-download__support {
       display: grid;
-      align-items: start;
-      gap: 0.5rem;
-      padding-block-start: 1.375rem;
+      align-items: center;
+      gap: 0.25rem;
+      padding-block-start: 1.25rem;
       border-block-start: 1px solid var(--line-default);
     }
     .trust-download__support > span {
       color: var(--color-text-primary);
       font-size: 1.125rem;
       font-weight: 600;
-      min-block-size: 44px;
-      display: flex;
-      align-items: center;
+      line-height: 1.4;
     }
     .trust-download__support-links {
       display: flex;
@@ -192,6 +203,12 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       padding: 0;
       margin: 0;
       list-style: none;
+    }
+    @media (max-width: 47.99rem) {
+      .trust-download__support-links {
+        flex-direction: column;
+        align-items: flex-start;
+      }
     }
     @media (min-width: 48rem) {
       .trust-download__cta {
@@ -208,6 +225,11 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       }
     }
     @media (forced-colors: active) {
+      .trust-download__button,
+      .trust-download__safety-link,
+      .trust-download__support-links a {
+        color: LinkText;
+      }
       .trust-download__cta,
       .trust-download__support,
       .trust-download__warning {

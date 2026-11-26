@@ -136,8 +136,9 @@ export const homeVi: HomeContent = {
     installScope: 'Cài đặt cho tài khoản Windows hiện tại.',
     signingValue:
       'Bộ cài không có chữ ký Authenticode; Windows có thể hiển thị Unknown Publisher hoặc SmartScreen.',
-    safetyNote:
-      'Ứng dụng gửi phím qua Windows SendInput, không đọc bộ nhớ hoặc sửa tệp game. Cách này không bảo đảm an toàn tài khoản.',
+    safetyNote: 'Ứng dụng gửi phím qua Windows SendInput.',
+    safetyBoundary: 'Không đọc bộ nhớ hoặc sửa tệp game.',
+    safetyRisk: 'Cách này không bảo đảm an toàn tài khoản.',
     safetyTitle: 'An toàn tài khoản',
     safetyLink: 'Đọc về rủi ro tài khoản',
     supportLabel: 'Bạn cần trợ giúp?',
