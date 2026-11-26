@@ -45,11 +45,13 @@ test.describe('accessibility and responsive contracts', () => {
       await expect(page.locator('.home-language')).toBeVisible();
       await expect(page.locator('.trust-download__button')).toHaveAttribute('href', releaseUrl);
       await expect(page.locator('#formats code')).toHaveText(['.json', '.skysheet', '.txt']);
-      await expect(page.locator('#formats p')).toContainText('JSON');
-      await expect(page.locator('.quick-start__setup a')).toHaveAttribute(
-        'href',
-        /guides\/windows-setup\/$/,
-      );
+      await expect(page.locator('.quick-start__formats-note')).toContainText('JSON');
+      await expect(
+        page.locator('.quick-start__step').nth(0).locator('.quick-start__resource-link'),
+      ).toHaveAttribute('href', /guides\/windows-setup\/$/);
+      await expect(
+        page.locator('.quick-start__step').nth(1).locator('.quick-start__resource-link'),
+      ).toHaveAttribute('href', /guides\/sheet-formats\/$/);
       await expect(page.locator('#faq-preview a')).toHaveCount(2);
       await expect(page.locator('#faq-preview a').nth(0)).toHaveAttribute('href', /faq\/$/);
       await expect(page.locator('#faq-preview a').nth(1)).toHaveAttribute(
@@ -209,7 +211,7 @@ test.describe('accessibility and responsive contracts', () => {
             Math.max(bounds('#top').bottom, bounds('#product').bottom),
           bounds('#playback').top - bounds('.product-showcase__features').bottom,
           bounds('.quick-start__layout').top - bounds('#playback').bottom,
-          bounds('.trust-download__layout').top - bounds('.quick-start__resources').bottom,
+          bounds('.trust-download__layout').top - bounds('.quick-start__steps').bottom,
         ];
         const footer = document.querySelector('.site-footer__layout')!.getBoundingClientRect();
         const rails = [
@@ -232,7 +234,7 @@ test.describe('accessibility and responsive contracts', () => {
       expect(spacing.gaps).toHaveLength(4);
       const [opening, firstBand, secondBand, closing] = spacing.gaps;
       const band = Math.min(116, Math.max(64, width * 0.08));
-      const closingBand = Math.min(64, Math.max(40, width * 0.04));
+      const closingBand = Math.min(80, Math.max(48, width * 0.05));
       expect(opening).toBeGreaterThanOrEqual(27);
       expect(opening).toBeLessThanOrEqual(77);
       expect(Math.abs(firstBand)).toBeLessThanOrEqual(2);
@@ -276,8 +278,30 @@ test.describe('accessibility and responsive contracts', () => {
       { width: 320, height: 768 },
       { width: 844, height: 390 },
     ];
+    const expectedHelp = {
+      '/': {
+        labels: [
+          'Common questions Setup, formats, compatibility and account safety.',
+          'Troubleshoot playback Resolve playback, timing and input issues.',
+        ],
+        descriptions: [
+          'Setup, formats, compatibility and account safety.',
+          'Resolve playback, timing and input issues.',
+        ],
+      },
+      '/vi/': {
+        labels: [
+          'Câu hỏi thường gặp Cài đặt, định dạng, tương thích và an toàn tài khoản.',
+          'Khắc phục sự cố phát nhạc Xử lý lỗi phát nhạc, thời gian phát và gửi phím.',
+        ],
+        descriptions: [
+          'Cài đặt, định dạng, tương thích và an toàn tài khoản.',
+          'Xử lý lỗi phát nhạc, thời gian phát và gửi phím.',
+        ],
+      },
+    };
 
-    for (const route of ['/', '/vi/']) {
+    for (const route of ['/', '/vi/'] as const) {
       for (const viewport of viewports) {
         await page.setViewportSize(viewport);
         await page.goto(`/Sky-Auto-Player${route}`);
@@ -291,19 +315,68 @@ test.describe('accessibility and responsive contracts', () => {
               top: rect.top,
               bottom: rect.bottom,
               width: rect.width,
+              height: rect.height,
             };
           };
-          const stepHeadings = [...document.querySelectorAll('.quick-start__step h3')].map(
-            (element) => {
-              const rect = element.getBoundingClientRect();
-              return { left: rect.left, top: rect.top };
-            },
-          );
-          const trustHeadings = [...document.querySelectorAll('.trust-download__details h3')].map(
-            (element) => element.getBoundingClientRect().top,
-          );
-          const ctaButton = bounds('.trust-download__button');
-          const ctaNote = bounds('.trust-download__destination');
+          const rect = (element: Element) => {
+            const box = element.getBoundingClientRect();
+            return {
+              left: box.left,
+              right: box.right,
+              top: box.top,
+              bottom: box.bottom,
+              width: box.width,
+              height: box.height,
+            };
+          };
+          const stepElements = [...document.querySelectorAll('.quick-start__step')];
+          const steps = stepElements.map((element) => {
+            const number = element.querySelector('.quick-start__number')!;
+            const heading = element.querySelector('h3')!;
+            const content = element.querySelector('.quick-start__step-content')!;
+            return {
+              row: rect(element),
+              number: rect(number),
+              heading: rect(heading),
+              content: rect(content),
+              resourceLinks: [...element.querySelectorAll('.quick-start__resource-link')].map(
+                (link) => {
+                  const previous = link.previousElementSibling!;
+                  return {
+                    top: link.getBoundingClientRect().top,
+                    previousBottom: previous.getBoundingClientRect().bottom,
+                  };
+                },
+              ),
+            };
+          });
+          const helpLinks = [
+            ...document.querySelectorAll<HTMLAnchorElement>('.trust-download__support-links a'),
+          ].map((link) => {
+            const title = link.querySelector('.trust-download__support-title');
+            const description = document.getElementById(
+              link.getAttribute('aria-describedby') ?? '',
+            );
+            return {
+              box: rect(link),
+              name: [title?.textContent, description?.textContent]
+                .map((text) => text?.replace(/\s+/g, ' ').trim() ?? '')
+                .filter(Boolean)
+                .join(' '),
+              description: description?.textContent?.trim() ?? '',
+              href: link.getAttribute('href'),
+            };
+          });
+          const panel = bounds('.trust-download__panel');
+          const release = bounds('.trust-download__release');
+          const installation = bounds('.trust-download__installation');
+          const safety = bounds('.trust-download__safety');
+          const safetyList = bounds('.trust-download__safety .trust-download__detail-list');
+          const safetyAction = bounds('.trust-download__safety-action');
+          const safetyWarning = bounds('.trust-download__safety-action .trust-download__warning');
+          const safetyLink = bounds('.trust-download__safety-link');
+          const support = bounds('.trust-download__support');
+          const supportList = bounds('.trust-download__support-links');
           return {
             documentWidth: document.documentElement.scrollWidth,
             viewportWidth: document.documentElement.clientWidth,
@@ -317,20 +390,18 @@ test.describe('accessibility and responsive contracts', () => {
             hero: bounds('#top'),
             product: bounds('#product'),
             productSelector: bounds('.product-selector'),
-            setupGuide: bounds('.quick-start__setup'),
+            quickStartLayout: bounds('.quick-start__layout'),
+            quickStartSteps: bounds('.quick-start__steps'),
+            steps,
             formats: bounds('.quick-start__formats'),
-            resourceLinkSpacing: [
-              ...document.querySelectorAll<HTMLAnchorElement>('.quick-start__resource-link'),
-            ].map((link) => {
-              const content = link.parentElement!;
-              const body =
-                content.querySelector<HTMLElement>('.quick-start__resource-body') ??
-                content.querySelector<HTMLElement>('p')!;
-              return {
-                linkTop: link.getBoundingClientRect().top,
-                lastBodyBottom: body.getBoundingClientRect().bottom,
-              };
-            }),
+            resources: [...document.querySelectorAll('.quick-start__resource-link')].map(
+              (link) => ({
+                step: stepElements.indexOf(link.closest('.quick-start__step')!),
+                href: link.getAttribute('href'),
+              }),
+            ),
+            closingGap:
+              bounds('.trust-download__layout').top - bounds('.quick-start__steps').bottom,
             playbackHeader: bounds('.playback-demo__header'),
             playbackStage: bounds('.playback-demo__stage'),
             playbackSupport: bounds('.playback-demo__support'),
@@ -341,28 +412,17 @@ test.describe('accessibility and responsive contracts', () => {
                 '#playback .playback-demo__header, #playback .playback-demo__stage, #playback .playback-demo__support',
               ),
             ].map((element) => element.className),
-            quickStartSteps: [...document.querySelectorAll('.quick-start__step')].map((element) => {
-              const rect = element.getBoundingClientRect();
-              return { left: rect.left, top: rect.top, width: rect.width };
-            }),
-            stepHeadings,
-            trustHeadings,
-            ctaCopy: bounds('.trust-download__cta-copy'),
-            ctaAction: bounds('.trust-download__cta-action'),
-            ctaButton,
-            ctaNote,
-            featureSecond: bounds('.product-showcase__features > div:nth-child(2)'),
-            trustSecond: bounds('.trust-download__details > div:nth-child(2)'),
-            supportLinks: bounds('.trust-download__support-links'),
-            supportLinksDirection: getComputedStyle(
-              document.querySelector('.trust-download__support-links')!,
-            ).flexDirection,
-            supportLinkItems: [
-              ...document.querySelectorAll('.trust-download__support-links > li'),
-            ].map((element) => {
-              const rect = element.getBoundingClientRect();
-              return { left: rect.left, top: rect.top, bottom: rect.bottom };
-            }),
+            panel,
+            release,
+            installation,
+            safety,
+            safetyList,
+            safetyAction,
+            safetyWarning,
+            safetyLink,
+            support,
+            supportList,
+            helpLinks,
             navigation: bounds('.site-nav'),
             headerRail: bounds('.site-header__inner'),
           };
@@ -387,9 +447,8 @@ test.describe('accessibility and responsive contracts', () => {
         ]);
         expect(geometry.playbackKeys.top).toBeGreaterThan(geometry.playbackTimeline.bottom);
         expect(geometry.productSelector.bottom).toBeLessThanOrEqual(geometry.productImage.top);
-        if (viewport.width >= 1440) {
-          expect(product.width).toBeCloseTo(1280, 0);
-        }
+        expect(geometry.steps).toHaveLength(3);
+        if (viewport.width >= 1440) expect(product.width).toBeCloseTo(1280, 0);
         if (viewport.width >= 1024) {
           expect(geometry.product.left).toBeGreaterThan(geometry.hero.right);
           const navCenter = (geometry.navigation.left + geometry.navigation.right) / 2;
@@ -407,53 +466,94 @@ test.describe('accessibility and responsive contracts', () => {
           );
         }
 
-        if (viewport.width >= 768) {
-          expect(geometry.quickStartSteps[0].left).toBeLessThan(geometry.quickStartSteps[1].left);
-          expect(geometry.quickStartSteps[1].left).toBeLessThan(geometry.quickStartSteps[2].left);
-          const headingTop = geometry.stepHeadings[0].top;
-          for (const heading of geometry.stepHeadings.slice(1)) {
-            expect(Math.abs(heading.top - headingTop)).toBeLessThanOrEqual(1);
-          }
-          const trustHeadingTop = geometry.trustHeadings[0];
-          for (const headingTopValue of geometry.trustHeadings.slice(1)) {
-            expect(Math.abs(headingTopValue - trustHeadingTop)).toBeLessThanOrEqual(1);
-          }
-          expect(geometry.ctaAction.left).toBeGreaterThan(geometry.ctaCopy.left);
-          expect(geometry.formats.left).toBeGreaterThan(geometry.setupGuide.right);
-          for (const aligned of [
-            geometry.featureSecond,
-            geometry.trustSecond,
-            geometry.supportLinks,
-            geometry.ctaAction,
-          ]) {
-            expect(Math.abs(aligned.left - geometry.formats.left)).toBeLessThanOrEqual(1);
-          }
-          expect(geometry.supportLinksDirection).toBe('row');
-        } else {
-          expect(geometry.supportLinksDirection).toBe('column');
-          for (let index = 1; index < geometry.supportLinkItems.length; index += 1) {
-            expect(geometry.supportLinkItems[index].top).toBeGreaterThan(
-              geometry.supportLinkItems[index - 1].bottom,
-            );
-          }
-          expect(geometry.formats.top).toBeGreaterThan(geometry.setupGuide.bottom);
-          expect(geometry.quickStartSteps[0].top).toBeLessThan(geometry.quickStartSteps[1].top);
-          expect(geometry.quickStartSteps[1].top).toBeLessThan(geometry.quickStartSteps[2].top);
-          expect(geometry.quickStartSteps[0].left).toBeCloseTo(geometry.quickStartSteps[1].left, 0);
-          expect(geometry.stepHeadings[0].left).toBeGreaterThan(
-            geometry.quickStartSteps[0].left + 24,
+        const [firstStep, secondStep, thirdStep] = geometry.steps;
+        for (let index = 1; index < geometry.steps.length; index += 1) {
+          expect(geometry.steps[index].row.top).toBeGreaterThan(geometry.steps[index - 1].row.top);
+          expect(geometry.steps[index].row.top).toBeGreaterThanOrEqual(
+            geometry.steps[index - 1].row.bottom,
           );
         }
-        for (const resource of geometry.resourceLinkSpacing) {
-          expect(resource.linkTop - resource.lastBodyBottom).toBeGreaterThanOrEqual(7.5);
-          expect(resource.linkTop - resource.lastBodyBottom).toBeLessThanOrEqual(8.5);
+        for (const step of geometry.steps) {
+          expect(step.number.left).toBeCloseTo(firstStep.number.left, 0);
+          expect(step.heading.left).toBeGreaterThan(step.number.right);
+          expect(step.heading.top).toBeGreaterThanOrEqual(step.row.top);
+          expect(step.heading.bottom).toBeLessThanOrEqual(step.row.bottom);
+          expect(step.content.bottom).toBeLessThanOrEqual(step.row.bottom);
         }
-        expect(geometry.ctaButton.bottom).toBeLessThanOrEqual(geometry.ctaNote.top);
-        expect(geometry.ctaNote.top - geometry.ctaButton.bottom).toBeLessThanOrEqual(12);
+        if (viewport.width >= 768) {
+          for (const step of geometry.steps.slice(1)) {
+            expect(Math.abs(step.heading.left - firstStep.heading.left)).toBeLessThanOrEqual(1);
+            expect(Math.abs(step.content.left - firstStep.content.left)).toBeLessThanOrEqual(1);
+          }
+          expect(firstStep.content.left).toBeGreaterThan(firstStep.heading.right);
+        } else {
+          for (const step of geometry.steps) {
+            expect(Math.abs(step.content.left - step.heading.left)).toBeLessThanOrEqual(1);
+            expect(step.content.top).toBeGreaterThanOrEqual(step.heading.bottom + 8);
+          }
+        }
+        expect(firstStep.resourceLinks).toHaveLength(1);
+        expect(secondStep.resourceLinks).toHaveLength(1);
+        expect(thirdStep.resourceLinks).toHaveLength(0);
+        for (const step of [firstStep, secondStep]) {
+          expect(
+            step.resourceLinks[0].top - step.resourceLinks[0].previousBottom,
+          ).toBeGreaterThanOrEqual(7.5);
+          expect(
+            step.resourceLinks[0].top - step.resourceLinks[0].previousBottom,
+          ).toBeLessThanOrEqual(8.5);
+        }
+        expect(geometry.resources).toEqual([
+          { step: 0, href: expect.stringMatching(/guides\/windows-setup\/$/) },
+          { step: 1, href: expect.stringMatching(/guides\/sheet-formats\/$/) },
+        ]);
+        expect(geometry.formats.top).toBeGreaterThan(secondStep.heading.top);
+        expect(geometry.formats.bottom).toBeLessThanOrEqual(secondStep.row.bottom);
+
+        const expectedClosingGap = Math.min(80, Math.max(48, viewport.width * 0.05));
+        expect(Math.abs(geometry.closingGap - expectedClosingGap)).toBeLessThanOrEqual(1);
+        expect(geometry.panel.left).toBeGreaterThanOrEqual(geometry.rail[3].left - 1);
+        expect(geometry.panel.right).toBeLessThanOrEqual(geometry.rail[3].right + 1);
+        expect(geometry.support.top).toBeGreaterThanOrEqual(geometry.panel.bottom);
+        expect(geometry.support.left).toBeCloseTo(geometry.rail[3].left, 0);
+        expect(geometry.support.right).toBeCloseTo(geometry.rail[3].right, 0);
+        expect(geometry.helpLinks).toHaveLength(2);
+        expect(geometry.helpLinks.map((link) => link.name)).toEqual(expectedHelp[route].labels);
+        expect(geometry.helpLinks.map((link) => link.description)).toEqual(
+          expectedHelp[route].descriptions,
+        );
+        expect(geometry.helpLinks[0].href).toMatch(/faq\/$/);
+        expect(geometry.helpLinks[1].href).toMatch(/guides\/troubleshooting\/$/);
+        for (let index = 0; index < geometry.helpLinks.length; index += 1) {
+          const link = geometry.helpLinks[index].box;
+          expect(link.left).toBeCloseTo(geometry.supportList.left, 0);
+          expect(link.right).toBeCloseTo(geometry.supportList.right, 0);
+          expect(link.height).toBeGreaterThanOrEqual(44);
+          if (index > 0) {
+            expect(link.top).toBeGreaterThanOrEqual(geometry.helpLinks[index - 1].box.bottom);
+          }
+        }
+
+        expect(geometry.safety.top).toBeGreaterThanOrEqual(geometry.installation.bottom);
+        expect(geometry.safety.left).toBeCloseTo(geometry.release.left, 0);
+        if (viewport.width >= 768) {
+          expect(geometry.installation.left).toBeGreaterThan(geometry.release.left);
+          expect(Math.abs(geometry.installation.top - geometry.release.top)).toBeLessThanOrEqual(1);
+          expect(geometry.safety.right).toBeCloseTo(geometry.installation.right, 0);
+        } else {
+          expect(geometry.installation.top).toBeGreaterThanOrEqual(geometry.release.bottom);
+          expect(geometry.safety.right).toBeCloseTo(geometry.release.right, 0);
+        }
+        expect(geometry.safetyWarning.top).toBeGreaterThanOrEqual(geometry.safetyList.top);
+        expect(geometry.safetyLink.top).toBeGreaterThanOrEqual(geometry.safetyWarning.bottom);
+        if (viewport.width >= 1024) {
+          expect(geometry.safetyAction.left).toBeGreaterThan(geometry.safetyList.left);
+        } else {
+          expect(geometry.safetyAction.top).toBeGreaterThanOrEqual(geometry.safetyList.bottom);
+        }
       }
     }
   });
-
   test('both locales expose a meaningful portion of the real preview on the opening fold', async ({
     page,
   }) => {
@@ -1313,11 +1413,26 @@ test.describe('accessibility and responsive contracts', () => {
       await expect(page.locator('#timing-model')).toContainText(
         route === '/' ? 'No audio' : 'không có âm thanh',
       );
-      await expect(page.locator('#how-it-works ol li')).toHaveCount(3);
+      await expect(page.locator('#how-it-works ol > li')).toHaveCount(3);
       await expect(page.locator('#how-it-works ol')).toContainText('15');
       await expect(
-        page.locator('#how-it-works .quick-start__setup .quick-start__resource-link'),
+        page
+          .locator('#how-it-works .quick-start__step')
+          .nth(0)
+          .locator('.quick-start__resource-link'),
       ).toHaveAttribute('href', /windows-setup\/$/);
+      await expect(
+        page
+          .locator('#how-it-works .quick-start__step')
+          .nth(1)
+          .locator('.quick-start__formats-note'),
+      ).toContainText('JSON');
+      await expect(
+        page
+          .locator('#how-it-works .quick-start__step')
+          .nth(1)
+          .locator('.quick-start__resource-link'),
+      ).toHaveAttribute('href', /sheet-formats\/$/);
     }
   });
 
@@ -1343,12 +1458,12 @@ test.describe('accessibility and responsive contracts', () => {
       const trust = page.locator('#technical');
       await expect(trust.getByRole('heading', { level: 3 })).toHaveText(
         route === '/'
-          ? ['Choose the right installer', 'Account safety']
-          : ['Chọn đúng bộ cài', 'An toàn tài khoản'],
+          ? ['Choose the right installer', 'Account safety', 'Need a hand?']
+          : ['Chọn đúng bộ cài', 'An toàn tài khoản', 'Bạn cần trợ giúp?'],
       );
       await expect(trust).toContainText(/SmartScreen/);
-      const installation = trust.locator('.trust-download__details > div').nth(0);
-      const safety = trust.locator('.trust-download__details > div').nth(1);
+      const installation = trust.locator('.trust-download__installation');
+      const safety = trust.locator('.trust-download__safety');
       await expect(installation.locator('.trust-download__detail-list > li')).toHaveCount(3);
       await expect(installation.locator('.trust-download__detail-list')).toContainText(
         route === '/'
@@ -1374,6 +1489,27 @@ test.describe('accessibility and responsive contracts', () => {
           : 'Cách này không bảo đảm an toàn tài khoản.',
       );
       await expect(trust.locator('a[href*="account-safety"]')).toBeVisible();
+      await expect(
+        page.getByRole('link', {
+          name:
+            route === '/'
+              ? 'Common questions Setup, formats, compatibility and account safety.'
+              : 'Câu hỏi thường gặp Cài đặt, định dạng, tương thích và an toàn tài khoản.',
+        }),
+      ).toHaveAttribute('aria-describedby', 'home-help-description-0');
+      await expect(page.locator('#home-help-description-0')).toHaveText(
+        route === '/'
+          ? 'Setup, formats, compatibility and account safety.'
+          : 'Cài đặt, định dạng, tương thích và an toàn tài khoản.',
+      );
+      await expect(
+        page.getByRole('link', {
+          name:
+            route === '/'
+              ? 'Troubleshoot playback Resolve playback, timing and input issues.'
+              : 'Khắc phục sự cố phát nhạc Xử lý lỗi phát nhạc, thời gian phát và gửi phím.',
+        }),
+      ).toHaveAttribute('aria-describedby', 'home-help-description-1');
       await expect(page.locator('#technical')).not.toContainText('100% safe');
     }
     await expect(page.locator('#faq-preview a')).toHaveCount(2);

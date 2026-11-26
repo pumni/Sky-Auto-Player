@@ -141,10 +141,19 @@ export const homeVi: HomeContent = {
     safetyTitle: 'An toàn tài khoản',
     safetyLink: 'Đọc về rủi ro tài khoản',
     supportLabel: 'Bạn cần trợ giúp?',
-    supportDescription: 'Tìm câu trả lời trước khi chơi hoặc khắc phục sự cố để tiếp tục phát nhạc.',
+    supportDescription:
+      'Tìm câu trả lời trước khi chơi hoặc khắc phục sự cố để tiếp tục phát nhạc.',
     supportLinks: [
-      { label: 'Câu hỏi thường gặp', description: 'Cài đặt, định dạng, tương thích và an toàn tài khoản.', href: '/vi/faq/' },
-      { label: 'Khắc phục sự cố phát nhạc', description: 'Xử lý lỗi phát nhạc, thời gian phát và gửi phím.', href: '/vi/guides/troubleshooting/' },
+      {
+        label: 'Câu hỏi thường gặp',
+        description: 'Cài đặt, định dạng, tương thích và an toàn tài khoản.',
+        href: '/vi/faq/',
+      },
+      {
+        label: 'Khắc phục sự cố phát nhạc',
+        description: 'Xử lý lỗi phát nhạc, thời gian phát và gửi phím.',
+        href: '/vi/guides/troubleshooting/',
+      },
     ],
   },
 };

@@ -142,8 +142,16 @@ export const homeEn: HomeContent = {
     supportLabel: 'Need a hand?',
     supportDescription: 'Find answers before your first song or get back to playing.',
     supportLinks: [
-      { label: 'Common questions', description: 'Setup, formats, compatibility and account safety.', href: '/faq/' },
-      { label: 'Troubleshoot playback', description: 'Resolve playback, timing and input issues.', href: '/guides/troubleshooting/' },
+      {
+        label: 'Common questions',
+        description: 'Setup, formats, compatibility and account safety.',
+        href: '/faq/',
+      },
+      {
+        label: 'Troubleshoot playback',
+        description: 'Resolve playback, timing and input issues.',
+        href: '/guides/troubleshooting/',
+      },
     ],
   },
 };

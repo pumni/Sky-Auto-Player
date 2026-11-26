@@ -24,7 +24,9 @@ const { data } = Astro.props;
     <ol class="quick-start__steps" role="list">
       {data.items.map((item, index) => (
         <li class="quick-start__step">
-          <span class="quick-start__number" aria-hidden="true">0{index + 1}</span>
+          <span class="quick-start__number" aria-hidden="true">
+            0{index + 1}
+          </span>
           <h3>{item.title}</h3>
           <div class="quick-start__step-content">
             <p>{item.description}</p>
@@ -36,10 +38,14 @@ const { data } = Astro.props;
             )}
             {index === 1 && (
               <div class="quick-start__formats" id="formats">
-                <p class="quick-start__formats-label" id="formats-title">{data.formatsLabel}</p>
+                <p class="quick-start__formats-label" id="formats-title">
+                  {data.formatsLabel}
+                </p>
                 <ul class="quick-start__format-list" aria-labelledby="formats-title" role="list">
                   {data.formats.map((format) => (
-                    <li><code>{format}</code></li>
+                    <li>
+                      <code>{format}</code>
+                    </li>
                   ))}
                 </ul>
                 <p class="quick-start__formats-note">{data.formatsNote}</p>
