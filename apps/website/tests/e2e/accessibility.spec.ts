@@ -1287,7 +1287,9 @@ test.describe('accessibility and responsive contracts', () => {
       );
       const trust = page.locator('#technical');
       await expect(trust.getByRole('heading', { level: 3 })).toHaveText(
-        route === '/' ? ['Installation', 'Account safety'] : ['Cài đặt', 'An toàn tài khoản'],
+        route === '/'
+          ? ['Choose the right installer', 'Account safety']
+          : ['Chọn đúng bộ cài', 'An toàn tài khoản'],
       );
       await expect(trust).toContainText(/SmartScreen/);
       await expect(trust.locator('a[href*="account-safety"]')).toBeVisible();
