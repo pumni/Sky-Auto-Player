@@ -1,4 +1,4 @@
-function Get-DispatchSessionRedesignM3Profile {
+﻿function Get-DispatchSessionRedesignM3Profile {
     $safetyCases = @(
         [pscustomobject]@{ Id = 'focus-loss'; Scenario = 'focus-loss'; Workload = 'safety-smoke'; Load = 'Quiet'; GameFps = 60; TimingMarginUs = 500; SampleSeconds = 0 },
         [pscustomobject]@{ Id = 'stop-cleanup'; Scenario = 'stop-cleanup'; Workload = 'safety-smoke'; Load = 'Quiet'; GameFps = 60; TimingMarginUs = 500; SampleSeconds = 0 },
@@ -567,4 +567,192 @@ function Assert-PlaybackCoreLifecycleSourceCheckout {
     $identity
 }
 
-Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-PlaybackCoreLifecycleProfileForName, Test-DispatchGitAncestor, Assert-PlaybackCoreLifecycleV3BaselineSuccessor, Assert-PlaybackCoreLifecycleV3CandidateLineage, Assert-PlaybackCoreLifecyclePairLineage, Assert-PlaybackCoreLifecycleV3LockfileBytes, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout
+function Get-CompletionAnchoredPulseV1Profile {
+    [pscustomobject]@{
+        Name = 'CompletionAnchoredPulseV1'
+        WorkloadVersion = 'completion-anchored-pulse-v1'
+        HarnessManifestSchemaVersion = 4
+        BaselineRevision = '1901cff6e2db3617b57145c7eae8d44a6c877fa2'
+        BaselineTree = 'c15bcacb45245f1a29f9a4a7043dbdf33839a468'
+        BaselineLockSha256 = '9b9ba6c03131d96029421bfa9f6f69f9ce331e003e32e095eac54a714e73021e'
+        CandidateLineageBranch = 'refactor/completion-anchored-pulse-engine'
+        Target = 'x86_64-pc-windows-msvc'
+        CargoProfile = 'dist'
+        RequiredFeatures = @('real-input-acceptance')
+        RustVersion = '1.99.1'
+        CargoVersion = '1.99.1'
+        ObserverMode = 'SchedulerQueuedV3Compat3'
+        ObserverVersion = 'scheduler-receiveonly-queue-v3-compat3'
+        ObserverSchemaVersion = 3
+        ObserverEventSchemaVersion = 3
+        GameFps = 60
+        ConfiguredHUs = 17167
+        PerformanceTimingMarginUs = 500
+        SafetyTimingMarginUs = 500
+        PairCount = 6
+        SampleSeconds = 15
+        PairOrder = 'AB/BA alternating'
+        LoadCells = @('Quiet', 'Contention')
+        PairedPerformanceWorkloads = @('dense-alternating', 'near-minimum-retrigger', 'long-idle')
+        ExcludedFromPairedPerformance = @('mixed-up-down', 'canonical-max-chord')
+        CandidateOnlyGeometryWorkloads = @('mixed-up-down', 'canonical-max-chord')
+        SafetyScenarios = @(
+            'focus-loss',
+            'owner-mismatch',
+            'owner-process-termination',
+            'pause-resume',
+            'pause-resume-active-cleanup',
+            'suspend-resume',
+            'stop-cleanup',
+            'skip-cleanup',
+            'supervisor-lease-expiry',
+            'short-up-gap-stress',
+            'target-hwnd-change',
+            'modifier-held-final-boundary',
+            'modifier-held-after-owned',
+            'ambiguous-packet',
+            'preflight-user-held'
+        )
+        TargetIdentity = [ordered]@{
+            target_class = 'project-owned-non-game-receive-only'
+            target_name = 'Sky Auto Player — Native Acceptance Sink'
+            game_target = $false
+            capture_status = 'NOT_RUN'
+            required_at_run = 'owner-approved exact project-owned ReceiveOnly HWND, PID, and retained process identity'
+        }
+        RunnerProvenancePaths = @(
+            'scripts/build_dispatch_core_harness.ps1',
+            'scripts/dispatch_harness_manifest.psm1',
+            'scripts/dispatch_qualification_profiles.psm1',
+            'scripts/qualify_dispatch_core.ps1',
+            'scripts/run_native_acceptance_case.ps1',
+            'scripts/dispatch_qualification_report.psm1',
+            'scripts/dispatch_qualification_orchestration.psm1',
+            'scripts/dispatch_pair_screen.psm1',
+            'scripts/native_acceptance_sink.ps1',
+            'scripts/test_qualify_dispatch_core_contracts.ps1',
+            'docs/playback-verification.md'
+        )
+    }
+}
+
+function Assert-CompletionAnchoredPulseV1LockfileBytes {
+    param(
+        [Parameter(Mandatory)] [string]$RepositoryRoot,
+        [Parameter(Mandatory)] [ValidateSet('Baseline', 'Candidate')] [string]$SourceRole
+    )
+    $profile = Get-CompletionAnchoredPulseV1Profile
+    $root = Get-DispatchM3PathIdentity $RepositoryRoot
+    $lockPath = Join-Path $root 'rust\Cargo.lock'
+    if (-not (Test-Path -LiteralPath $lockPath -PathType Leaf)) {
+        throw ('CompletionAnchoredPulseV1 ' + $SourceRole + ' checkout is missing rust/Cargo.lock')
+    }
+    $bytes = [System.IO.File]::ReadAllBytes($lockPath)
+    if ([Array]::IndexOf($bytes, [byte]13) -ge 0) {
+        throw ('CompletionAnchoredPulseV1 ' + $SourceRole + ' rust/Cargo.lock contains CR bytes; LF bytes required')
+    }
+    $actualHash = (Get-FileHash -LiteralPath $lockPath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($actualHash -ne $profile.BaselineLockSha256) {
+        throw ('CompletionAnchoredPulseV1 ' + $SourceRole + ' rust/Cargo.lock SHA-256 confounder: expected ' + $profile.BaselineLockSha256 + ', got ' + $actualHash)
+    }
+    $actualHash
+}
+
+function Assert-CompletionAnchoredPulseV1Lineage {
+    param(
+        [Parameter(Mandatory)] [string]$RepositoryRoot,
+        [Parameter(Mandatory)] [string]$CandidateRevision,
+        [Parameter(Mandatory)] [string]$RemoteTipRevision,
+        [Parameter(Mandatory)] [ValidateSet('Baseline', 'Candidate')] [string]$SourceRole = 'Candidate',
+        [string]$SourceTreeSha = ''
+    )
+    $profile = Get-CompletionAnchoredPulseV1Profile
+    if ($SourceRole -eq 'Baseline') {
+        if ($CandidateRevision -ne $profile.BaselineRevision) {
+            throw 'CompletionAnchoredPulseV1 baseline revision differs from pinned 1901cff6'
+        }
+        if (-not [string]::IsNullOrWhiteSpace($SourceTreeSha) -and $SourceTreeSha -ne $profile.BaselineTree) {
+            throw 'CompletionAnchoredPulseV1 baseline tree differs from pinned 1901cff6 tree'
+        }
+        return $true
+    }
+    if ($CandidateRevision -ne $RemoteTipRevision) {
+        throw 'CompletionAnchoredPulseV1 candidate must match the exact pushed branch tip'
+    }
+    if (-not (Test-DispatchGitAncestor -RepositoryRoot $RepositoryRoot -AncestorRevision $profile.BaselineRevision -DescendantRevision $CandidateRevision)) {
+        throw 'CompletionAnchoredPulseV1 candidate does not descend from pinned baseline 1901cff6'
+    }
+    $true
+}
+
+function New-CompletionAnchoredPulseV1NonphysicalPlan {
+    param(
+        [Parameter(Mandatory)] [string]$RepositoryRoot,
+        [switch]$PlanOnly,
+        [switch]$OwnerApprovedReceiveOnlyRun
+    )
+    if ($PlanOnly -and $OwnerApprovedReceiveOnlyRun) {
+        throw '-OwnerApprovedReceiveOnlyRun cannot be combined with -PlanOnly'
+    }
+    if (-not $PlanOnly) {
+        throw 'CompletionAnchoredPulseV1 physical execution requires explicit owner authorization (use -PlanOnly for nonphysical plan)'
+    }
+    $profile = Get-CompletionAnchoredPulseV1Profile
+    $identity = Get-DispatchM3GitCheckoutIdentity $RepositoryRoot
+    if (-not $identity.clean) {
+        throw 'CompletionAnchoredPulseV1 PlanOnly requires a clean checkout'
+    }
+    if ($identity.branch -ne $profile.CandidateLineageBranch) {
+        throw ('CompletionAnchoredPulseV1 PlanOnly requires branch ' + $profile.CandidateLineageBranch)
+    }
+    $candidateLock = Assert-CompletionAnchoredPulseV1LockfileBytes -RepositoryRoot $RepositoryRoot -SourceRole Candidate
+    [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $RepositoryRoot -CandidateRevision $identity.revision -RemoteTipRevision $identity.revision -SourceRole Candidate)
+    $plannedPairedSessions = @()
+    foreach ($workload in $profile.PairedPerformanceWorkloads) {
+        foreach ($load in $profile.LoadCells) {
+            for ($pair = 1; $pair -le $profile.PairCount; $pair++) {
+                $firstRole = if (($pair % 2) -eq 1) { 'Baseline' } else { 'Candidate' }
+                $secondRole = if ($firstRole -eq 'Baseline') { 'Candidate' } else { 'Baseline' }
+                foreach ($role in @($firstRole, $secondRole)) {
+                    $plannedPairedSessions += [pscustomobject][ordered]@{
+                        workload = $workload
+                        load = $load
+                        pair_index = $pair
+                        role = $role
+                        game_fps = $profile.GameFps
+                        timing_margin_us = $profile.PerformanceTimingMarginUs
+                        configured_H_us = $profile.ConfiguredHUs
+                        sample_seconds = $profile.SampleSeconds
+                        observer_mode = $profile.ObserverMode
+                    }
+                }
+            }
+        }
+    }
+    [pscustomobject][ordered]@{
+        qualification_profile = $profile.Name
+        workload_version = $profile.WorkloadVersion
+        schema_version = $profile.HarnessManifestSchemaVersion
+        plan_only = $true
+        receiver_started = $false
+        harness_started = $false
+        sendinput_calls = 0
+        baseline_revision = $profile.BaselineRevision
+        baseline_tree = $profile.BaselineTree
+        baseline_lock_sha256 = $profile.BaselineLockSha256
+        candidate_revision = $identity.revision
+        candidate_tree = $identity.tree
+        candidate_branch = $identity.branch
+        candidate_lock_sha256 = $candidateLock
+        locks_identical = ($candidateLock -eq $profile.BaselineLockSha256)
+        paired_performance_workloads = @($profile.PairedPerformanceWorkloads)
+        excluded_from_paired_performance = @($profile.ExcludedFromPairedPerformance)
+        planned_paired_session_count = $plannedPairedSessions.Count
+        planned_paired_sessions = $plannedPairedSessions
+        candidate_only_geometry_workloads = @($profile.CandidateOnlyGeometryWorkloads)
+        safety_scenarios = @($profile.SafetyScenarios)
+        target_identity = $profile.TargetIdentity
+    }
+}
+
+Export-ModuleMember -Function Get-DispatchSessionRedesignM3Profile, Get-DispatchCleanupM3Profile, Get-PlaybackCoreLifecycleProfile, Get-PlaybackCoreLifecycleProfileForName, Test-DispatchGitAncestor, Assert-PlaybackCoreLifecycleV3BaselineSuccessor, Assert-PlaybackCoreLifecycleV3CandidateLineage, Assert-PlaybackCoreLifecyclePairLineage, Assert-PlaybackCoreLifecycleV3LockfileBytes, Get-DispatchM3PathIdentity, Test-DispatchM3PathOutside, Get-DispatchM3GitCheckoutIdentity, Assert-DispatchCleanupM3SourceCheckout, Get-DispatchCleanupM3RunnerIdentity, Get-DispatchSessionRedesignM3RunnerIdentity, Assert-DispatchSessionRedesignM3SourceCheckout, Get-PlaybackCoreLifecycleRunnerIdentity, Assert-PlaybackCoreLifecycleSourceCheckout, Get-CompletionAnchoredPulseV1Profile, Assert-CompletionAnchoredPulseV1LockfileBytes, Assert-CompletionAnchoredPulseV1Lineage, New-CompletionAnchoredPulseV1NonphysicalPlan

@@ -468,7 +468,8 @@ fn timely_due_reuses_staged_candidate_and_late_due_handles_multiple_ups_blocked_
         StagedDispatchOutcome::Dispatched
     );
 
-    // 1. Timely unchanged candidate: stage Chord 2 for +30ms, wake at +30ms (still before both Ups? Wait: +10ms + 17.167ms = +27.167ms, so at +20ms? Let's test timely reuse on Chord 2 when waking at +30ms? No, +17.167ms and +27.167ms are already due at +30ms! Instead, test timely reuse by waking at +30ms when both Ups are NOT due? No, at +30ms both Ups ARE due -> tests multiple due releases! And then for Chord 3, test timely reuse!)
+    // 1. Stage slot 0's Up before +17.167ms, then simulate a late wake at +30ms
+    //    where slot 0 Up, slot 1 Up, and Chord 2 Down are all due.
     let t30 = epoch
         .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
             qpc_offset(&harness, 30_000).as_u64(),
@@ -587,12 +588,18 @@ fn timely_due_reuses_staged_candidate_and_late_due_handles_multiple_ups_blocked_
     );
     assert!(c3_early.is_none());
 
-    // Verify control/focus/lease/suspend after wait reject at final admission without sending.
+    // Verify focus, manual pause, quit, skip, panic, lease expiry, system suspend,
+    // and target invalidation after post-wake reselection all fail closed / replan
+    // without sending a new Down.
     let (u3, d3, w3) = staged_send_at(&mut harness, t35, epoch);
-    let c3_focus = harness
-        .stage_candidate_with_scheduler_window_for_test(u3, d3, w3)
-        .expect("stage c3 focus")
-        .expect("c3 focus");
+    let stage_c3 = |h: &mut ProductionDispatchTestHarness| {
+        h.stage_candidate_with_scheduler_window_for_test(u3, d3, w3)
+            .expect("stage c3")
+            .expect("c3")
+    };
+
+    // Focus loss -> Replan
+    let c3_focus = stage_c3(&mut harness);
     harness.config.focus.require_focus = true;
     harness
         .focus_active
@@ -606,6 +613,108 @@ fn timely_due_reuses_staged_candidate_and_late_due_handles_multiple_ups_blocked_
         .store(true, std::sync::atomic::Ordering::Release);
     harness.config.focus.require_focus = false;
 
+    // Manual pause -> Replan
+    let c3_pause = stage_c3(&mut harness);
+    harness
+        .desired_pause
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(c3_pause, false),
+        StagedDispatchOutcome::Replan
+    );
+    harness
+        .desired_pause
+        .store(false, std::sync::atomic::Ordering::Release);
+
+    // Quit, Skip, Panic -> Exit with no new Down
+    for kind in ["quit", "skip", "panic"] {
+        let c3_ctrl = stage_c3(&mut harness);
+        match kind {
+            "quit" => harness
+                .quit_requested
+                .store(true, std::sync::atomic::Ordering::Release),
+            "skip" => harness
+                .skip_requested
+                .store(true, std::sync::atomic::Ordering::Release),
+            _ => harness
+                .panic_requested
+                .store(true, std::sync::atomic::Ordering::Release),
+        }
+        // Down-bearing final admission returns Replan so the outer worker loop
+        // exits via process_command_control without sending the Down.
+        assert_eq!(
+            harness.dispatch_staged_candidate_for_test(c3_ctrl, false),
+            StagedDispatchOutcome::Replan
+        );
+        match kind {
+            "quit" => harness
+                .quit_requested
+                .store(false, std::sync::atomic::Ordering::Release),
+            "skip" => harness
+                .skip_requested
+                .store(false, std::sync::atomic::Ordering::Release),
+            _ => harness
+                .panic_requested
+                .store(false, std::sync::atomic::Ordering::Release),
+        }
+    }
+
+    // Supervisor lease expiry -> Replan (outer loop exits via process_command_control)
+    let c3_lease = stage_c3(&mut harness);
+    harness.supervisor_expired.latch_expired();
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(c3_lease, false),
+        StagedDispatchOutcome::Replan
+    );
+
+    // System suspend -> Replan (outer loop exits via process_command_control), no send
+    let mut suspend_harness = ProductionDispatchTestHarness::create_harness(&chords);
+    let suspend_packets = suspend_harness.configure_mock_packet_sender_for_test(&[0]);
+    suspend_harness
+        .attach_executor_for_test()
+        .expect("attach suspend");
+    suspend_harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor suspend");
+    let c0_s = suspend_harness
+        .stage_candidate_for_test(
+            0,
+            suspend_harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage suspend c0")
+        .expect("c0_s");
+    suspend_harness
+        .system_power
+        .notify(true, &suspend_harness.interrupt);
+    assert_eq!(
+        suspend_harness.dispatch_staged_candidate_for_test(c0_s, false),
+        StagedDispatchOutcome::Replan
+    );
+    assert!(suspend_packets.lock().expect("suspend packets").is_empty());
+
+    // Target invalidation during post-wake reselection -> TargetInvalidated, no send
+    let mut inv_harness = ProductionDispatchTestHarness::create_harness(&chords);
+    inv_harness.attach_executor_for_test().expect("attach inv");
+    inv_harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor inv");
+    let mut inv_staged = None;
+    inv_harness.target.invalidate_target();
+    assert_eq!(
+        super::super::reselect_candidate_after_wait(
+            &mut inv_staged,
+            epoch,
+            epoch,
+            false,
+            &inv_harness.target,
+            &mut inv_harness.resources,
+            &mut inv_harness.runtime,
+        )
+        .expect("invalidated target reselect"),
+        super::super::PostWaitSelection::TargetInvalidated
+    );
+
     let sent = packets.lock().expect("packets");
     assert_eq!(sent.len(), 4);
     assert_eq!(
@@ -616,4 +725,163 @@ fn timely_due_reuses_staged_candidate_and_late_due_handles_multiple_ups_blocked_
         sent[3].0,
         sky_dispatch_win32::input::PhysicalPacket::new(0, 0b100)
     );
+}
+
+#[test]
+fn post_wake_reselect_with_observer_preserves_original_wait_and_fresh_dispatch_evidence() {
+    use crate::engine::worker::dispatch::observation::DispatchObservation;
+    use sky_dispatch_win32::wait::{WaitOutcome, WaitResult};
+
+    fn chord(index: u32, scheduled_us: u64, scans: &[u16]) -> OnsetChordInput {
+        OnsetChordInput {
+            source_action_index: index,
+            scheduled_us,
+            scan_codes: scans.iter().copied().collect(),
+        }
+    }
+
+    // Slot 0 = 0x15, Slot 1 = 0x16, Slot 2 = 0x17.
+    // Chord 0 (0x15 | 0x17 = 0b101) at 0us; Chord 1 (0x16 = 0b010) at 10ms.
+    let chords = [chord(200, 0, &[0x15, 0x17]), chord(201, 10_000, &[0x16])];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
+    let clock = harness.resources.clock;
+    let epoch = clock
+        .now()
+        .expect("epoch")
+        .checked_add_duration(clock.duration_from_us(1_000_000).expect("offset"))
+        .expect("future epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor");
+    let _packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    harness.attach_executor_for_test().expect("attach");
+
+    // Dispatch Chord 0 (slots 0 & 2 active).
+    let c0 = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage c0")
+        .expect("c0");
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(c0, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    // Stage Chord 1 (slot 1 Down) at +10ms before Chord 0's Ups are due.
+    let c1_authored = epoch
+        .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+            qpc_offset(&harness, 10_000).as_u64(),
+        ))
+        .expect("c1_authored");
+    let (u1, d1, w1) = staged_send_at(&mut harness, c1_authored, epoch);
+    let c1 = harness
+        .stage_candidate_with_scheduler_window_for_test(u1, d1, w1)
+        .expect("stage c1")
+        .expect("c1");
+    let c1_authored_ticks = c1.authored_target_ticks;
+
+    // Simulate Due wake at +25ms (beyond Chord 0's H=17.167ms).
+    let late_wake = epoch
+        .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+            qpc_offset(&harness, 25_000).as_u64(),
+        ))
+        .expect("late_wake");
+    let observer = crate::engine::worker::dispatch::observer::PendingObservationQueue::default();
+    harness.runtime.pending_wait_observation = crate::engine::worker::dispatch::record_wait_attempt(
+        Some(&observer),
+        Some(WaitResult {
+            outcome: WaitOutcome::Deadline,
+            wake_qpc: Some(late_wake),
+            spin_ticks: sky_dispatch_core::time::DurationTicks::ZERO,
+            timer_return_qpc: Some(late_wake),
+            timer_arm_target_qpc: Some(c1_authored),
+            timer_arm_qpc: None,
+            timer_arm_generation: None,
+            timer_return_generation: None,
+        }),
+        c1_authored,
+        sky_dispatch_core::time::DurationTicks::from_raw(100),
+        c1_authored_ticks,
+        epoch,
+        None,
+        &mut harness.local_metrics,
+    );
+    harness.runtime.last_dispatch_deadline_wake_qpc = Some(late_wake);
+    harness.runtime.last_dispatch_deadline_target_qpc = Some(c1_authored);
+
+    let mut reselected = Some(c1);
+    assert_eq!(
+        super::super::reselect_candidate_after_wait(
+            &mut reselected,
+            late_wake,
+            epoch,
+            true,
+            &harness.target,
+            &mut harness.resources,
+            &mut harness.runtime,
+        )
+        .expect("reselect with observer"),
+        super::super::PostWaitSelection::SendReady
+    );
+    let reselected = reselected.expect("reselected mixed candidate");
+    assert_eq!(
+        reselected.packet_masks(),
+        sky_dispatch_win32::input::PhysicalPacket::new(0b101, 0b010)
+    );
+    harness.set_mock_sender_start_qpc_for_test(late_wake);
+    let ctx = super::super::StagedDispatchContext {
+        target: &harness.target,
+        config: &harness.config,
+        control: super::super::StagedControlSignals {
+            focus_active: &harness.focus_active,
+            quit_requested: &harness.quit_requested,
+            skip_requested: &harness.skip_requested,
+            panic_requested: &harness.panic_requested,
+            desired_pause: &harness.desired_pause,
+            supervisor_expired: &harness.supervisor_expired,
+            system_power: &harness.system_power,
+        },
+        timing: &harness.timing,
+        qpc_clock: clock,
+        progress_clock: &harness.progress_clock,
+        metrics: &harness.metrics,
+    };
+    assert_eq!(
+        super::super::dispatch_staged_candidate(
+            reselected,
+            ctx,
+            &mut harness.resources,
+            &mut harness.runtime,
+            &mut harness.local_metrics,
+            Some(&observer),
+        ),
+        super::super::DispatchAttemptOutcome::Dispatched
+    );
+
+    let mut wait_obs = None;
+    let mut down_obs = None;
+    while let Some(item) = observer.pop_front() {
+        match item {
+            DispatchObservation::Wait(w) => wait_obs = Some(w),
+            DispatchObservation::Down(d) => down_obs = Some(d),
+            DispatchObservation::Up(_) => {}
+        }
+    }
+    let wait_obs = wait_obs.expect("WaitObservation");
+    let down_obs = down_obs.expect("DownObservation");
+    assert_eq!(
+        wait_obs.physical_target_qpc, c1_authored,
+        "original wait target must not be rewritten after late wake"
+    );
+    assert_eq!(down_obs.wait_sequence, wait_obs.sequence);
+    assert_eq!(down_obs.wake_qpc, Some(late_wake));
+    assert_eq!(
+        down_obs.requested_packet,
+        sky_dispatch_win32::input::PhysicalPacket::new(0b101, 0b010)
+    );
+    assert_eq!(down_obs.up_slot_count, 2);
 }

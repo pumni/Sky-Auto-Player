@@ -414,8 +414,9 @@ impl PreparedDispatchSchedule {
 }
 
 /// Diagnostic timing and attribution for an active key slot being released.
-/// `nominal_up_offset_ticks` is derived on demand from `ceil((onset_us + hold_us) * f / 1e6)`
-/// and is diagnostic only — it is never an execution gate.
+/// `nominal_up_offset_ticks` is precomputed once per successful Down activation
+/// from `ceil((onset_us + hold_us) * f / 1e6)` and is diagnostic only — it is
+/// never an execution gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UpSlotTiming {
     pub slot: u8,
