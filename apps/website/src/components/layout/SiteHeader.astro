@@ -123,7 +123,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 
     <div class="site-actions">
       <a
-        class="button button--primary button--small header-download"
+        class="button button--secondary button--small header-download"
         href={SITE.stableReleaseUrl}
         aria-label={
           isVi
@@ -131,8 +131,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
             : 'Download for Windows from GitHub Releases'
         }
       >
-        <span class="header-download__compact">{nav.release}</span>
-        <span class="header-download__full">{content.downloadCta}</span>
+        {nav.release}
       </a>
     </div>
   </div>
@@ -143,7 +142,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     .site-header {
       position: relative;
       z-index: 100;
-      border-bottom: 1px solid var(--line-faint);
+      border-bottom: 1px solid var(--line-default);
       background: var(--color-page);
       padding-block: 0.75rem;
     }
@@ -161,11 +160,11 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       display: inline-flex;
       min-width: 0;
       align-items: center;
-      gap: var(--space-2);
+      gap: 0.625rem;
       color: var(--color-text-primary);
-      font-size: var(--type-small);
-      font-weight: 700;
-      letter-spacing: -0.01em;
+      font-size: var(--type-body);
+      font-weight: 650;
+      letter-spacing: -0.025em;
       order: 0;
     }
 
@@ -184,7 +183,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       flex: 1 0 100%;
       flex-direction: column;
       align-items: stretch;
-      gap: 0;
+      gap: 0.25rem;
       padding-block: var(--space-3) var(--space-2);
       border-top: 1px solid var(--line-faint);
       order: 2;
@@ -198,8 +197,11 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       border-bottom: 1px solid var(--line-faint);
       color: var(--color-text-secondary);
       font-size: var(--type-small);
-      font-weight: 600;
+      font-weight: 500;
       text-decoration: none;
+      padding-inline: 0.75rem;
+      border-radius: var(--radius-sm);
+      transition: color var(--duration-fast) var(--ease-standard), background-color var(--duration-fast) var(--ease-standard);
     }
 
     .site-nav__link:hover,
@@ -220,6 +222,16 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       content: '';
     }
 
+    .site-nav__link:hover,
+    .site-nav__link:focus-visible {
+      background: var(--color-surface-instrument);
+    }
+
+    .site-nav__link[aria-current='page'],
+    .site-nav__link[data-section-active='true'] {
+      background: var(--color-surface-quiet);
+    }
+
     .site-actions {
       display: flex;
       flex: 1 0 100%;
@@ -228,12 +240,11 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       order: 3;
     }
 
-    .header-download__full {
-      display: none;
-    }
-
     .header-download {
       white-space: nowrap;
+      background: var(--color-surface-instrument);
+      border-color: var(--color-interactive-border);
+      font-weight: 600;
     }
 
     .menu-toggle {
@@ -308,8 +319,13 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     .locale-switch {
       display: inline-flex;
       align-items: center;
-      gap: var(--space-1);
-      padding-block-start: var(--space-2);
+      gap: 0.125rem;
+      padding: 0.125rem;
+      border: 1px solid var(--line-default);
+      border-radius: var(--radius-md);
+      background: var(--color-surface-quiet);
+      align-self: start;
+      margin-block-start: 0.75rem;
     }
 
     .locale-switch__option {
@@ -322,7 +338,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       color: var(--color-text-secondary);
       font-family: var(--font-body);
       font-size: var(--type-label);
-      font-weight: 650;
+      font-weight: 600;
       text-decoration: none;
     }
 
@@ -362,13 +378,6 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     }
 
     @media (min-width: 64rem) {
-      .header-download__compact {
-        display: none;
-      }
-      .header-download__full {
-        display: inline;
-      }
-
       .site-header {
         position: sticky;
         top: 0;
@@ -392,7 +401,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         flex-direction: row;
         align-items: center;
         justify-content: center;
-        gap: clamp(0.45rem, 1.1vw, 1.4rem);
+        gap: clamp(0.125rem, 0.4vw, 0.5rem);
         padding: 0;
         border: 0;
         order: 1;
@@ -401,11 +410,14 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       .site-nav__link {
         min-height: 44px;
         border: 0;
-        font-size: var(--type-label);
+        font-size: var(--type-small);
+        padding-inline: clamp(0.25rem, 0.65vw, 0.75rem);
       }
 
       .site-nav__link[aria-current='page']::after,
       .site-nav__link[data-section-active='true']::after {
+        right: 0.5rem;
+        left: 0.5rem;
         bottom: 0.25rem;
         height: 1px;
       }
@@ -417,7 +429,9 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       }
 
       .locale-switch {
-        padding: 0;
+        align-self: center;
+        margin-block-start: 0;
+        margin-inline-start: 0.75rem;
       }
     }
 
@@ -436,9 +450,9 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       flex: initial;
       flex-direction: column;
       align-items: stretch;
-      gap: 0;
+      gap: 0.25rem;
       overflow-y: auto;
-      padding: var(--space-3) var(--gutter) var(--space-5);
+      padding: var(--space-4) var(--gutter) var(--space-5);
       border-top: 0;
       border-bottom: 1px solid var(--color-interactive-border);
       background: var(--color-page);
@@ -475,11 +489,6 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 
     :global(html[data-nav-viewport='mobile']) .menu-toggle {
       display: inline-grid;
-    }
-
-    :global(html[data-nav-viewport='mobile']) .locale-switch {
-      align-self: flex-start;
-      padding-block-start: var(--space-2);
     }
 
     @media (forced-colors: active) {

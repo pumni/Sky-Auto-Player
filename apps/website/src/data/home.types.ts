@@ -13,10 +13,7 @@ export interface HomeContent {
     release: string;
   };
   hero: {
-    eyebrow: string;
-    titleStart: string;
-    titleEmphasis: string;
-    titleEnd: string;
+    title: string;
     description: string;
     secondaryCta: string;
     meta: string;
@@ -45,10 +42,13 @@ export interface HomeContent {
   quickStart: {
     title: string;
     items: { title: string; description: string }[];
+    setupGuideTitle: string;
+    setupGuideDescription: string;
     setupGuideLabel: string;
     setupGuideHref: string;
     formatsLabel: string;
-    formatsValue: string;
+    formats: readonly string[];
+    formatsNote: string;
     formatsLinkLabel: string;
     formatsHref: string;
   };
@@ -79,6 +79,7 @@ export interface HomeContent {
   trust: {
     title: string;
     platformSummary: string;
+    releaseLinkLabel: string;
     releaseDestinationNote: string;
     installationTitle: string;
     installerGuidance: string;

@@ -38,6 +38,15 @@ test.describe('accessibility and responsive contracts', () => {
         .toEqual(homepageSections);
       await expect(page.locator('.hero__primary')).toContainText(locale.cta);
       await expect(page.locator('.hero__primary')).toHaveAttribute('href', releaseUrl);
+      await expect(page.locator('.site-header .button--primary, main .button--primary')).toHaveCount(1);
+      await expect(page.locator('.header-download')).toHaveAttribute('href', releaseUrl);
+      await expect(page.locator('.trust-download__button')).toHaveAttribute('href', releaseUrl);
+      await expect(page.locator('#formats code')).toHaveText(['.json', '.skysheet', '.txt']);
+      await expect(page.locator('#formats p')).toContainText('JSON');
+      await expect(page.locator('.quick-start__setup a')).toHaveAttribute('href', /guides\/windows-setup\/$/);
+      await expect(page.locator('#faq-preview a')).toHaveCount(2);
+      await expect(page.locator('#faq-preview a').nth(0)).toHaveAttribute('href', /faq\/$/);
+      await expect(page.locator('#faq-preview a').nth(1)).toHaveAttribute('href', /guides\/troubleshooting\/$/);
       await expect(page.locator('.hero__secondary')).toHaveAttribute('href', '#product');
       await expect(page.locator('.hero__description')).not.toContainText(
         /QPC|SendInput|foreground/i,
@@ -294,6 +303,7 @@ test.describe('accessibility and responsive contracts', () => {
             productSelector: bounds('.product-selector'),
             setupGuide: bounds('.quick-start__setup'),
             formats: bounds('.quick-start__formats'),
+            resourceLinks: [...document.querySelectorAll('.quick-start__resource-link')].map((link) => link.getBoundingClientRect().top),
             playbackHeader: bounds('.playback-demo__header'),
             playbackStage: bounds('.playback-demo__stage'),
             playbackSupport: bounds('.playback-demo__support'),
@@ -363,6 +373,7 @@ test.describe('accessibility and responsive contracts', () => {
           }
           expect(geometry.ctaAction.left).toBeGreaterThan(geometry.ctaCopy.left);
           expect(geometry.formats.left).toBeGreaterThan(geometry.setupGuide.right);
+          expect(Math.abs(geometry.resourceLinks[0] - geometry.resourceLinks[1])).toBeLessThanOrEqual(1);
         } else {
           expect(geometry.formats.top).toBeGreaterThan(geometry.setupGuide.bottom);
           expect(geometry.quickStartSteps[0].top).toBeLessThan(geometry.quickStartSteps[1].top);
@@ -374,7 +385,6 @@ test.describe('accessibility and responsive contracts', () => {
         }
         expect(geometry.ctaButton.bottom).toBeLessThanOrEqual(geometry.ctaNote.top);
         expect(geometry.ctaNote.top - geometry.ctaButton.bottom).toBeLessThanOrEqual(12);
-
 
       }
     }
@@ -1245,7 +1255,7 @@ test.describe('accessibility and responsive contracts', () => {
       await expect(trust.locator('a[href*="account-safety"]')).toBeVisible();
       await expect(page.locator('#technical')).not.toContainText('100% safe');
     }
-    await expect(page.locator('#faq-preview a')).toHaveCount(3);
+    await expect(page.locator('#faq-preview a')).toHaveCount(2);
     await expect(page.locator('.site-footer__brand img')).toHaveAttribute('src', /favicon\.svg/);
   });
 

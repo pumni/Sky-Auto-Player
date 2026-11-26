@@ -183,7 +183,7 @@ const timingGuide = withBase(
   @layer components {
     .playback-demo {
       padding-block: var(--home-band-space);
-      background: radial-gradient(ellipse at 80% 20%, var(--home-halo-cool), transparent 65%), var(--color-surface-quiet);
+      background: var(--color-surface-quiet);
       border-block: 1px solid var(--line-default);
     }
     .playback-demo__layout,
@@ -219,9 +219,9 @@ const timingGuide = withBase(
       min-inline-size: 0;
       padding: clamp(1rem, 3.5vw, 3rem);
       border: 1px solid var(--line-default);
-      border-radius: 1.25rem;
+      border-radius: 1rem;
       background: var(--color-surface-instrument);
-      box-shadow: var(--stage-elevation);
+      box-shadow: none;
     }
     .playback-demo__support {
       display: grid;
@@ -233,10 +233,10 @@ const timingGuide = withBase(
       align-content: start;
       gap: 0.75rem;
       min-inline-size: 0;
-      padding: 1.5rem;
-      border: 1px solid var(--line-default);
-      border-radius: 0.9rem;
-      background: var(--color-surface-instrument);
+      padding: 1.25rem 0 0;
+      border: 0;
+
+      border-block-start: 1px solid var(--line-default);
     }
     .playback-demo__dry-run h3 {
       margin: 0;
@@ -256,10 +256,10 @@ const timingGuide = withBase(
       min-block-size: 2.75rem;
       align-items: center;
       justify-self: start;
-      color: var(--color-action);
+      color: var(--color-text-primary);
       font-size: var(--type-small);
       text-decoration: underline;
-      text-decoration-color: var(--line-accent);
+      text-decoration-color: var(--color-info);
       text-underline-offset: 0.22em;
     }
     .playback-demo__time {
@@ -275,7 +275,7 @@ const timingGuide = withBase(
       .playback-demo__support {
         grid-template-columns: repeat(2, minmax(0, 1fr));
         align-items: stretch;
-        gap: 1rem;
+        gap: clamp(2rem, 5vw, 4rem);
       }
     }
     @media (min-width: 64rem) {
@@ -455,6 +455,7 @@ const timingGuide = withBase(
       min-block-size: 3rem;
       min-inline-size: 0;
       border-radius: var(--radius-sm);
+      background: var(--color-surface-active);
     }
 
     .playback-demo__step {

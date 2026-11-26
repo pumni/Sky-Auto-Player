@@ -52,14 +52,14 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
   @layer components {
     .site-footer {
       border-top: 1px solid var(--line-faint);
-      padding-block: var(--section-compact);
-      color: var(--color-text-tertiary);
+      padding-block: clamp(2.5rem, 5vw, 4.5rem);
+      color: var(--color-text-secondary);
       font-size: var(--type-small);
     }
 
     .site-footer__layout {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1.7fr);
       gap: clamp(2rem, 4vw, 4rem);
       align-items: start;
     }
@@ -70,8 +70,9 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
     }
 
     .site-footer__identity p {
-      max-inline-size: 34rem;
+      max-inline-size: 35ch;
       line-height: 1.7;
+      margin: 0;
     }
 
     .site-footer__brand {
@@ -91,17 +92,13 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
 
     .site-footer__links {
       display: grid;
-
-
       gap: 1.5rem;
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .site-footer__group {
       display: grid;
-
       gap: 0.125rem;
-
 
       align-content: start;
       justify-items: start;
@@ -110,8 +107,8 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
     .site-footer__group-title {
       color: var(--color-text-primary);
       font-size: var(--type-small);
-      font-weight: 650;
-      margin-block-end: 0.5rem;
+      font-weight: 600;
+      margin-block-end: 0.375rem;
     }
 
     @media (min-width: 40rem) {
@@ -125,7 +122,7 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
       min-height: 44px;
       align-items: center;
       color: var(--color-text-secondary);
-      text-decoration: underline;
+      text-decoration: none;
       text-decoration-color: var(--line-default);
       text-underline-offset: 0.2em;
     }
@@ -134,6 +131,7 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
     .site-footer__links a:focus-visible {
       color: var(--color-text-primary);
       text-decoration-color: var(--color-focus);
+      text-decoration: underline;
     }
 
     @media (max-width: 48rem) {

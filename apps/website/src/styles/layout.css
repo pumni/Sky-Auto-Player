@@ -7,13 +7,13 @@
   .home-page {
     --home-rail-max: 70rem;
     --container-max: var(--home-rail-max);
-    --home-heading: clamp(2rem, 1.45rem + 2.3vw, 3.5rem);
+    --home-heading: clamp(1.875rem, 1.35rem + 2vw, 3.25rem);
     --home-lead: clamp(1rem, 0.9rem + 0.5vw, 1.25rem);
     --home-content-gap: clamp(1.5rem, 3.5vw, 3.5rem);
     --home-band-space: clamp(4rem, 8vw, 8rem);
-    --home-halo-warm: #29252c;
-    --home-halo-cool: #172631;
-    --home-halo-download: #3e342c;
+    --home-halo-warm: #171a22;
+    --home-halo-cool: #14232d;
+    --font-display: var(--font-body);
   }
 
   .home-intro {
