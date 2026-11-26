@@ -80,7 +80,7 @@ export function resolveInspectorReadiness({
 
   return {
     state: 'ready',
-    label: 'Ready to play',
+    label: 'Sheet ready',
     detail:
       'Sheet checks are clear. Native target and focus gates are checked when playback starts.',
   };

@@ -62,7 +62,7 @@ test('update dialog owns focus standalone and when opened from Settings', async 
   const settingsDialog = page.getByRole('dialog', { name: 'Settings' });
   await expect(settingsDialog).toBeVisible();
   await settingsDialog.getByRole('button', { name: 'Updates', exact: true }).click();
-  await settingsDialog.getByRole('button', { name: 'Check for updates' }).click();
+  await settingsDialog.getByRole('button', { name: 'View update', exact: true }).click();
   await expect(updateDialog).toBeVisible();
   await expect(page.getByRole('dialog')).toHaveCount(1);
   await updateDialog.getByRole('button', { name: 'Close update' }).click();
@@ -314,7 +314,7 @@ async function expectCaptionHover(
     };
   });
   expect(rest.background).toBe('rgba(0, 0, 0, 0)');
-  expect(rest.foreground).toBe('rgb(166, 168, 173)');
+  expect(rest.foreground).toBe('rgb(179, 181, 184)');
   expect(rest.borderWidth).toBe('0px');
   expect(rest.borderRadius).toBe('0px');
   expect(rest.boxShadow).toBe('none');
@@ -328,17 +328,17 @@ test('Graphite caption roles preserve their hover states over full safe hit targ
   await page.goto('/?mockPlaybackDurationMs=120000&mockUpdateState=current');
   const minimize = page.getByRole('button', { name: 'Minimize window' });
   await expect(minimize).toHaveAccessibleName('Minimize window');
-  await expectCaptionHover(page, minimize, 'rgb(53, 54, 58)', 'rgb(226, 228, 232)');
+  await expectCaptionHover(page, minimize, 'rgb(48, 49, 50)', 'rgb(226, 228, 232)');
 
   const maximize = page.getByRole('button', { name: 'Maximize window' });
   await expect(maximize).toHaveAccessibleName('Maximize window');
-  await expectCaptionHover(page, maximize, 'rgba(0, 0, 0, 0)', 'rgb(166, 168, 173)');
+  await expectCaptionHover(page, maximize, 'rgba(0, 0, 0, 0)', 'rgb(179, 181, 184)');
   await maximize.click();
 
   const restore = page.getByRole('button', { name: 'Restore window' });
   await expect(restore).toBeVisible();
   await expect(restore).toHaveAccessibleName('Restore window');
-  await expectCaptionHover(page, restore, 'rgba(0, 0, 0, 0)', 'rgb(166, 168, 173)');
+  await expectCaptionHover(page, restore, 'rgba(0, 0, 0, 0)', 'rgb(179, 181, 184)');
   await restore.click();
   const restoredMaximize = page.getByRole('button', { name: 'Maximize window' });
   await expect(restoredMaximize).toBeVisible();

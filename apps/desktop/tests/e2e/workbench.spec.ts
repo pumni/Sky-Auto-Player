@@ -520,7 +520,7 @@ test('Inspector header geometry stays stable at desktop and Chromium fallback wi
       const selectedTab = state === 'runtime' ? runtime : details;
       const inactiveTab = state === 'runtime' ? details : runtime;
       expect(selectedTab.color).toBe('rgb(154, 168, 255)');
-      expect(inactiveTab.color).toBe('rgb(148, 151, 158)');
+      expect(inactiveTab.color).toBe('rgb(164, 166, 170)');
       expect(indicator.backgroundColor).toBe('rgb(154, 168, 255)');
       expect(Math.abs(indicator.x - selectedTab.x)).toBeLessThanOrEqual(1);
       expect(Math.abs(indicator.width - selectedTab.width)).toBeLessThanOrEqual(1);
@@ -702,13 +702,13 @@ test('compact Player Dock presents one readable dry-run status without moving tr
 
   await expect(title).toHaveText('Blue Bird');
   await expect(status).toHaveText('Playing');
-  await expect(status).toHaveAttribute('aria-label', /no physical input is sent/i);
-  await expect(player.locator('[data-slot="status-badge"][data-appearance="plain"]')).toContainText(
-    'Test',
+  await expect(status).toHaveAttribute('aria-label', /no keyboard input is sent/i);
+  await expect(player.locator('[data-slot="status-badge"][data-appearance="plain"]')).toHaveText(
+    'Test mode',
   );
   await expect(
     player.locator('[data-slot="status-badge"][data-appearance="plain"]'),
-  ).toHaveAttribute('aria-label', /no physical keyboard input is sent/i);
+  ).toHaveAttribute('aria-label', /no keyboard input is sent/i);
   await expect(status).toHaveCount(1);
   await expect(player.getByRole('button', { name: 'Pause' })).toBeVisible();
   await expect(player.getByRole('button', { name: 'Add to Liked Songs' })).toBeVisible();

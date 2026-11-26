@@ -1,14 +1,14 @@
 {
   "status": "captured",
-  "source_sha": "0a7e81a5f0322d39ca952ea09ea4b6253385d0e8",
-  "desktop_tree_sha": "1443a2b6ec4aa45a9ae38151f46ee73f6d30bc89",
-  "captured_at_utc": "2026-11-25T16:08:09.826Z",
+  "source_sha": "a50ae1f6beb8956f427ac031ca26113c913c0781",
+  "desktop_tree_sha": "fda41c163aab27f133664c79cf30568f3fd4b485",
+  "captured_at_utc": "2026-11-25T21:13:01.288Z",
   "environment": "Playwright Chromium with deterministic desktop mock bridge; not native Tauri/Windows",
   "generated_by": "bun run ui:refresh (apps/desktop)",
   "targeted_evidence": {
     "directory": "vqc/",
-    "source_sha": "0a7e81a5f0322d39ca952ea09ea4b6253385d0e8",
-    "desktop_tree_sha": "1443a2b6ec4aa45a9ae38151f46ee73f6d30bc89",
+    "source_sha": "a50ae1f6beb8956f427ac031ca26113c913c0781",
+    "desktop_tree_sha": "fda41c163aab27f133664c79cf30568f3fd4b485",
     "scenes": [
       "tooltip-open.png",
       "scrollbar-idle-workbench.png",
@@ -20,6 +20,17 @@
       "settings-categories-640x448.png",
       "settings-categories-640x320-scrolled.png",
       "settings-select-open-640x320.png",
+      "settings-playback-dark.png",
+      "settings-playback-light.png",
+      "settings-appearance-dark.png",
+      "settings-diagnostics-dark.png",
+      "settings-diagnostics-light.png",
+      "settings-updates-dark.png",
+      "settings-updates-light.png",
+      "settings-donate-dark.png",
+      "settings-donate-light.png",
+      "settings-about-dark.png",
+      "settings-about-light.png",
       "inspector-details-tab.png",
       "inspector-runtime-performance.png",
       "inspector-runtime-timing.png",
@@ -30,7 +41,12 @@
       "transport-play-idle.png",
       "transport-pause-playing.png",
       "transport-resume-paused.png",
-      "transport-long-title-compact.png"
+      "transport-long-title-compact.png",
+      "admission-light-640x448.png",
+      "recovery-dark-800x560.png",
+      "recovery-light-800x560.png",
+      "update-dark-800x560.png",
+      "update-light-800x560.png"
     ]
   },
   "scenes": {

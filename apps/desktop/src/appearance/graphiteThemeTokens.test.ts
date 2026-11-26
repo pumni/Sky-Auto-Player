@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { PALETTES } from '../components/settings/SettingsCategoryContent';
+import { PALETTES } from '../components/settings/paletteMetadata';
 
 const globalsCss = readFileSync(resolve(__dirname, '../styles/globals.css'), 'utf8');
 const startupCss = readFileSync(resolve(__dirname, '../../public/startup.css'), 'utf8');
@@ -46,7 +46,11 @@ function contrast(first: string, second: string): number {
 }
 
 describe('Sky Graphite 2 semantic theme', () => {
-  const graphite = block(/:root\s*\{([\s\S]*?)\r?\n\}/);
+  const root = block(/:root\s*\{([\s\S]*?)\r?\n\}/);
+  const graphite = {
+    ...root,
+    ...block(/html\[data-palette=['"]graphite['"]\]\s*\{([\s\S]*?)\r?\n\}/),
+  };
   const light = block(/html\[data-color-mode=['"]light['"]\]\s*\{([\s\S]*?)\r?\n\}/);
   const startupDark = block(/:root\s*\{([\s\S]*?)\r?\n\}/, startupCss);
   const startupLight = block(
@@ -99,10 +103,46 @@ describe('Sky Graphite 2 semantic theme', () => {
     }
   });
 
-  it('keeps text and primary action pairs above WCAG AA contrast', () => {
+  it('keeps text, scrollbar, input, focus, and action pairs above WCAG AA contrast', () => {
     for (const [mode, theme, surfaces] of [
-      ['dark', graphite, ['--background', '--surface', '--card']],
-      ['light', light, ['--background', '--surface', '--card']],
+      [
+        'dark',
+        graphite,
+        [
+          '--background',
+          '--surface',
+          '--card',
+          '--popover',
+          '--selection',
+          '--playing',
+          '--row-hover',
+          '--control-hover',
+          '--control-pressed',
+          '--control-active',
+          '--secondary',
+          '--muted',
+          '--accent',
+        ],
+      ],
+      [
+        'light',
+        light,
+        [
+          '--background',
+          '--surface',
+          '--card',
+          '--popover',
+          '--selection',
+          '--playing',
+          '--row-hover',
+          '--control-hover',
+          '--control-pressed',
+          '--control-active',
+          '--secondary',
+          '--muted',
+          '--accent',
+        ],
+      ],
     ] as const) {
       for (const textRole of [
         '--foreground',
@@ -121,6 +161,18 @@ describe('Sky Graphite 2 semantic theme', () => {
           ).toBeGreaterThanOrEqual(4.5);
         }
       }
+      for (const nonTextRole of ['--ring', '--input'] as const) {
+        const ink = theme[nonTextRole];
+        if (!ink) throw new Error(`${mode} theme is missing ${nonTextRole}`);
+        for (const surfaceRole of surfaces) {
+          const surface = theme[surfaceRole];
+          if (!surface) throw new Error(`${mode} theme is missing ${surfaceRole}`);
+          expect(
+            contrast(ink, surface),
+            `${mode} ${nonTextRole} on ${surfaceRole}`,
+          ).toBeGreaterThanOrEqual(3);
+        }
+      }
       for (const fillRole of ['--primary', '--primary-hover', '--primary-pressed']) {
         const fill = theme[fillRole];
         const ink = theme['--primary-foreground'];
@@ -130,17 +182,34 @@ describe('Sky Graphite 2 semantic theme', () => {
           `${mode} primary foreground on ${fillRole}`,
         ).toBeGreaterThanOrEqual(4.5);
       }
+      for (const surfaceRole of ['--surface', '--card', '--popover'] as const) {
+        expect(
+          contrast(theme['--scrollbar-thumb']!, theme[surfaceRole]!),
+          `${mode} scrollbar-thumb on ${surfaceRole}`,
+        ).toBeGreaterThanOrEqual(3);
+      }
     }
     expect(graphite['--selection']).not.toBe(graphite['--playing']);
     expect(light['--selection']).not.toBe(light['--playing']);
+    expect(tailwindTheme['--radius-control']).toBe('6px');
+    expect(tailwindTheme['--radius-pane']).toBe('8px');
+    expect(tailwindTheme['--radius-popover']).toBe('10px');
+    expect(tailwindTheme['--radius-dialog']).toBe('12px');
   });
 
-  it('keeps all six dark palettes color-only and matches Settings preview swatches', () => {
+  it('keeps all six dark palettes color-only, avoids duplicate Graphite declarations, preserves non-Graphite inherited roles, and matches Settings preview swatches', () => {
     const paletteRules = [
       ...globalsCss.matchAll(/html\[data-palette=['"]([\w-]+)['"]\]\s*\{([\s\S]*?)\r?\n\}/g),
     ];
-    expect(paletteRules).toHaveLength(5);
-    const themes = new Map<string, Record<string, string>>([['graphite', graphite]]);
+    expect(paletteRules).toHaveLength(6);
+    expect(root['--scrollbar-thumb']).toBe(
+      'color-mix(in srgb, var(--text-secondary) 70%, var(--background))',
+    );
+    expect(root['--scrollbar-thumb-active']).toBe('var(--text-secondary)');
+    expect(Object.keys(root).filter((key) => key !== '--focus-gap')).toHaveLength(47);
+    expect(Object.keys(light)).toHaveLength(47);
+
+    const themes = new Map<string, Record<string, string>>();
     for (const rule of paletteRules) {
       const id = rule[1];
       const declarations = rule[2];
@@ -153,14 +222,23 @@ describe('Sky Graphite 2 semantic theme', () => {
       expect(declarations).not.toMatch(
         /(?:min|max)?(?:width|height)|gap|padding|margin|radius|font|transition/i,
       );
+      if (id === 'graphite') {
+        expect(Object.keys(tokens).sort()).toEqual([
+          '--scrollbar-thumb',
+          '--scrollbar-thumb-active',
+        ]);
+        for (const [name, value] of Object.entries(tokens)) {
+          expect(value, `graphite ${name} must not duplicate :root`).not.toBe(root[name]);
+        }
+      }
       for (const [name, value] of Object.entries(tokens)) {
-        if (name === '--playing') {
+        if (name === '--playing' && id !== 'graphite') {
           expect(value).toMatch(/^color-mix\(in srgb, #[\da-f]{6} \d+%, #[\da-f]{6}\)$/i);
         } else {
           expect(value).toMatch(/^#[\da-f]{3}(?:[\da-f]{3})?$/i);
         }
       }
-      themes.set(id, tokens);
+      themes.set(id, { ...root, ...tokens });
     }
 
     for (const palette of PALETTES) {

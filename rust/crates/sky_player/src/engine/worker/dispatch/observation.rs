@@ -74,8 +74,6 @@ pub enum DispatchObservation {
     #[cfg(any(test, feature = "test-support"))]
     Up(UpObservation),
     Wait(WaitObservation),
-    #[cfg(any(test, feature = "test-support"))]
-    StaleMetadata(StaleMetadataObservation),
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -86,13 +84,6 @@ pub struct UpSlotObservation {
     pub packet_not_before_qpc: QpcTicks,
     pub completion_qpc: QpcTicks,
     pub confirmed: bool,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct StaleMetadataObservation {
-    pub source_action_index: u32,
-    pub effective_scheduled_ticks: TimelineTicks,
-    pub suppressed_intent_count: usize,
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -715,7 +715,7 @@ mod tests {
     #[cfg(feature = "tauri-test")]
     #[test]
     fn stable_callback_context_routes_current_epoch_and_ignores_retired_epoch() {
-        use sky_player::adapter_support::{ActionKind, KeyActionInput, compile_runtime_intents};
+        use sky_player::adapter_support::{OnsetChordInput, build_onset_plan};
         use sky_player::engine::{
             BackendConfig, DispatchProfile, FocusOptions, NativeDispatchSession,
             NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions, TimingOptions,
@@ -723,26 +723,6 @@ mod tests {
         };
 
         let options = || {
-            let schedule = compile_runtime_intents(
-                &[
-                    KeyActionInput {
-                        source_action_index: 0,
-                        kind: ActionKind::Down,
-                        scheduled_us: 0,
-                        scan_codes: smallvec::smallvec![0x15],
-                        reason: "callback-test-down".into(),
-                    },
-                    KeyActionInput {
-                        source_action_index: 1,
-                        kind: ActionKind::Up,
-                        scheduled_us: 100_000,
-                        scan_codes: smallvec::smallvec![0x15],
-                        reason: "callback-test-up".into(),
-                    },
-                ],
-                &[0x15],
-            )
-            .expect("callback-test runtime schedule");
             let timing = TimingOptions {
                 game_fps: 60,
                 min_hold_us: 500,
@@ -754,12 +734,23 @@ mod tests {
                 strict_up_completion_late_us: 2_000,
                 input_path_warn_us: 300,
             };
+            let plan = build_onset_plan(
+                &[OnsetChordInput {
+                    source_action_index: 0,
+                    scheduled_us: 0,
+                    scan_codes: smallvec::smallvec![0x15],
+                }],
+                &[0x15],
+                timing.min_hold_us,
+            )
+            .expect("callback-test onset plan")
+            .with_trailing_end_offset_us(100_000)
+            .expect("callback-test end offset");
             let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
             let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
-                &schedule,
+                &plan,
                 qpc.frequency_hz(),
-                timing.min_hold_us,
-                schedule.compile_memory.caller_retained_capacity_bytes,
+                plan.compile_memory().caller_retained_capacity_bytes,
             )
             .expect("prepare callback-test schedule before session admission");
             NativeSessionOptions {

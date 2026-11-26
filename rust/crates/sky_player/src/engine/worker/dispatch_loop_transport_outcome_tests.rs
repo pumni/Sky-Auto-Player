@@ -1,7 +1,7 @@
-use super::support::{candidate_at, target_at, test_action, wait_until_qpc};
+use super::support::{candidate_at, target_at, test_chord, wait_until_qpc};
 use crate::engine::test_support::ProductionDispatchTestHarness;
 use crate::engine::worker::StagedDispatchOutcome;
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::model::OnsetChordInput;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
@@ -19,7 +19,7 @@ fn dispatch_with_source(
     candidate: crate::engine::worker::StagedCandidate,
     expected_source_action: &AtomicU32,
 ) {
-    expected_source_action.store(candidate.source_action_index, Ordering::Release);
+    expected_source_action.store(candidate.source_action_index(), Ordering::Release);
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
         StagedDispatchOutcome::Dispatched
@@ -27,13 +27,8 @@ fn dispatch_with_source(
 }
 
 fn assert_up_only_anomaly_terminates(fault: UpOnlyQpcFault) {
-    let actions = [
-        test_action(10, ActionKind::Down, 0, 0x15),
-        test_action(11, ActionKind::Up, 20_000, 0x15),
-        test_action(12, ActionKind::Down, 70_000, 0x16),
-        test_action(13, ActionKind::Up, 90_000, 0x16),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(10, 0, 0x15), test_chord(12, 70_000, 0x16)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -51,7 +46,7 @@ fn assert_up_only_anomaly_terminates(fault: UpOnlyQpcFault) {
             .expect("packet attempt log")
             .push((source_action, packet));
         let started = clock.now().expect("pre-call QPC");
-        let completed = if source_action != 11 {
+        let completed = if packet.up_mask == 0 {
             Some(started)
         } else {
             match fault {
@@ -82,14 +77,14 @@ fn assert_up_only_anomaly_terminates(fault: UpOnlyQpcFault) {
     harness.attach_executor_for_test().expect("attach executor");
 
     let first = candidate_at(&mut harness, epoch, epoch);
-    assert_eq!(first.source_action_index, 10);
+    assert_eq!(first.source_action_index(), 10);
     dispatch_with_source(&mut harness, first, source.as_ref());
 
     let up_a_target = target_at(&harness, epoch, 20_000);
     wait_until_qpc(&harness, up_a_target);
     let up_a = candidate_at(&mut harness, up_a_target, epoch);
-    assert_eq!(up_a.source_action_index, 11);
-    assert_eq!(up_a.packet_masks, PhysicalPacket::new(1, 0));
+    assert_eq!(up_a.source_action_index(), 10);
+    assert_eq!(up_a.packet_masks(), PhysicalPacket::new(1, 0));
     let qualified_before = (
         harness.local_metrics.authored_lateness_samples,
         harness.local_metrics.residual_lateness_samples,
@@ -97,7 +92,7 @@ fn assert_up_only_anomaly_terminates(fault: UpOnlyQpcFault) {
         harness.local_metrics.sendinput_envelope_samples,
         harness.local_metrics.physical_floor_displacement_samples,
     );
-    source.store(11, Ordering::Release);
+    source.store(10, Ordering::Release);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(up_a, false),
         StagedDispatchOutcome::Exit,
@@ -120,7 +115,7 @@ fn assert_up_only_anomaly_terminates(fault: UpOnlyQpcFault) {
         .attempted_dispatch_anomaly
         .detail()
         .expect("attempted anomaly detail");
-    assert!(anomaly.contains("source_action=11"), "{anomaly}");
+    assert!(anomaly.contains("source_action=10"), "{anomaly}");
     assert!(
         anomaly.contains("up_mask=0x0001 down_mask=0x0000"),
         "{anomaly}"
@@ -156,7 +151,7 @@ fn assert_up_only_anomaly_terminates(fault: UpOnlyQpcFault) {
             .as_slice(),
         &[
             (10, PhysicalPacket::new(0, 1)),
-            (11, PhysicalPacket::new(1, 0)),
+            (10, PhysicalPacket::new(1, 0)),
         ],
         "no retry of the Up and no later Down after the first anomaly"
     );
@@ -292,13 +287,8 @@ fn sender_anomaly_survives_late_skip_and_suspend_before_finalize() {
 
 #[test]
 fn up_only_anomaly_preserves_residual_when_late_suspend_arrives_before_finalize() {
-    let actions = [
-        test_action(0, ActionKind::Down, 0, 0x15),
-        test_action(1, ActionKind::Up, 20_000, 0x15),
-        test_action(2, ActionKind::Down, 70_000, 0x16),
-        test_action(3, ActionKind::Up, 90_000, 0x16),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(0, 0, 0x15), test_chord(2, 70_000, 0x16)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -320,7 +310,7 @@ fn up_only_anomaly_preserves_residual_when_late_suspend_arrives_before_finalize(
             .expect("packet attempt log")
             .push((source_action, packet));
         let started = clock.now().expect("sender QPC");
-        let completed = if source_action == 1 {
+        let completed = if packet.up_mask != 0 {
             Some(QpcTicks::from_raw(
                 started.as_u64().checked_sub(1).expect("reversed QPC"),
             ))
@@ -352,8 +342,8 @@ fn up_only_anomaly_preserves_residual_when_late_suspend_arrives_before_finalize(
     let up_target = target_at(&harness, epoch, 20_000);
     wait_until_qpc(&harness, up_target);
     let up = candidate_at(&mut harness, up_target, epoch);
-    assert_eq!(up.source_action_index, 1);
-    source.store(1, Ordering::Release);
+    assert_eq!(up.source_action_index(), 0);
+    source.store(0, Ordering::Release);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(up, false),
         StagedDispatchOutcome::Exit
@@ -366,7 +356,7 @@ fn up_only_anomaly_preserves_residual_when_late_suspend_arrives_before_finalize(
             .as_slice(),
         &[
             (0, PhysicalPacket::new(0, 1)),
-            (1, PhysicalPacket::new(1, 0)),
+            (0, PhysicalPacket::new(1, 0)),
         ],
         "the attempted Up is not replayed and no later Down is sent"
     );
@@ -398,23 +388,18 @@ fn up_only_anomaly_preserves_residual_when_late_suspend_arrives_before_finalize(
     assert_eq!(observation.terminal_metrics_publication_count, 1);
 }
 
-fn chord_action(index: u32, kind: ActionKind, scheduled_us: u64, scans: &[u16]) -> KeyActionInput {
-    KeyActionInput {
+fn chord_input(index: u32, scheduled_us: u64, scans: &[u16]) -> OnsetChordInput {
+    OnsetChordInput {
         source_action_index: index,
-        kind,
         scheduled_us,
         scan_codes: smallvec::SmallVec::from_slice(scans),
-        reason: "production dispatch regression".into(),
     }
 }
 
 #[test]
 fn suspend_during_partial_progress_down_terminates_error_with_retained_suspend_context() {
-    let actions = [
-        chord_action(0, ActionKind::Down, 0, &[0x15, 0x16]),
-        chord_action(1, ActionKind::Up, 20_000, &[0x15, 0x16]),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [chord_input(0, 0, &[0x15, 0x16])];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -455,7 +440,7 @@ fn suspend_during_partial_progress_down_terminates_error_with_retained_suspend_c
         )
         .expect("stage Down")
         .expect("Down candidate");
-    assert_eq!(candidate.packet_masks, PhysicalPacket::new(0, 3));
+    assert_eq!(candidate.packet_masks(), PhysicalPacket::new(0, 3));
 
     let dispatch_outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
     assert_eq!(
@@ -524,11 +509,8 @@ fn suspend_during_partial_progress_down_terminates_error_with_retained_suspend_c
 
 #[test]
 fn suspend_before_send_or_zero_progress_terminates_system_suspended_without_attempted_down() {
-    let actions = [
-        chord_action(0, ActionKind::Down, 0, &[0x15, 0x16]),
-        chord_action(1, ActionKind::Up, 20_000, &[0x15, 0x16]),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [chord_input(0, 0, &[0x15, 0x16])];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -596,11 +578,8 @@ fn suspend_before_send_or_zero_progress_terminates_system_suspended_without_atte
 
 #[test]
 fn healthy_send_with_suspend_control_case_terminates_system_suspended() {
-    let actions = [
-        chord_action(0, ActionKind::Down, 0, &[0x15, 0x16]),
-        chord_action(1, ActionKind::Up, 20_000, &[0x15, 0x16]),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [chord_input(0, 0, &[0x15, 0x16])];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)

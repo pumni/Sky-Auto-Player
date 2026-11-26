@@ -7,10 +7,24 @@ is [playback-engine.md](playback-engine.md); security rules are in
 timing or gameplay evidence.
 
 Production dispatch executes pure **Control A** for all Down, Up, and mixed
-actions with `ProcessQosPolicy` pinned to **Default** and a frozen pre-spin
-window. Experimental B/C process QoS and runtime adaptive spin are not deployed.
-Physical SendInput tests require interactive foreground authorization; in
-unattended CI and automated runs, physical SendInput remains **NOT RUN**.
+actions over the onset-only chord plan with completion-anchored releases
+(`release_not_before = completion_qpc + H_ticks`), `ProcessQosPolicy` pinned to
+**Default**, and a frozen pre-spin window. Experimental B/C process QoS and
+runtime adaptive spin are not deployed. Physical SendInput tests require
+interactive foreground authorization; in unattended CI and automated runs,
+physical SendInput remains **NOT RUN**.
+
+In `rt-native-acceptance`, isolated safety/cleanup fixtures (`Hold`,
+`CleanupFullRelease`, `StopCleanup`, `SkipCleanup`,
+`PauseResumeActiveCleanup`, `SuspendResume`, `ModifierHeldAfterOwned`) use
+explicit scenario-local fixed long `H` values recorded in the report
+(`scenario_hold_us`, `scenario_uses_isolated_long_hold`) so control triggers
+reach actively held keys without altering production defaults. Fixed-pulse
+candidate workloads carry distinct identities
+(`mixed-up-down-fixed-pulse-v1`, `canonical-max-chord-fixed-pulse-v1`) and do
+not claim identity with immutable historical 50 ms / 40 ms variable-hold
+baselines. Historical V1/V2/V3 qualification profiles remain immutable and
+branch-pinned.
 
 ## Evidence reachability
 
@@ -401,6 +415,73 @@ native lifecycle measurements.
 Native ReceiveOnly requires a later owner decision and an explicitly controlled,
 safe receiver. Do not substitute gameplay for the ReceiveOnly harness.
 PlanOnly, mocks, builds, and desktop tests are not gameplay acceptance.
+
+### CompletionAnchoredPulseV1 nonphysical plan
+
+Generate the nonphysical qualification plan from a clean checkout matching the pushed `origin/refactor/completion-anchored-pulse-engine` tip with:
+
+    Import-Module ./scripts/dispatch_qualification_profiles.psm1 -Force
+    New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot . -PlanOnly -ParityEvidence $parityEvidence
+
+Limitations of `-PlanOnly`:
+
+- `native_build_status` is `NOT BUILT`, `native_manifest_status` is `NOT VERIFIED`, and `binary_sha256` is `NOT_BUILT` (no harness build or execution occurs).
+- `receiver_started` and `harness_started` are `false` with `no_native_invocation = true`.
+- Paired session eligibility (72 sessions: 3 workloads x 2 loads x 6 AB/BA pairs x 2 arms) is conditional on **caller-supplied** authored-stream parity evidence (`-ParityEvidence`) for `dense-alternating`, `near-minimum-retrigger` and `long-idle`. The plan does not execute the parity test; it only binds the supplied records to the identities it verified itself (below). Unbound, malformed, stale, mismatched or duplicated workloads are excluded with an explicit per-workload `reason`; unknown or null entries are listed in `parity_evidence_rejections`. Status values are `EVIDENCE_BOUND_ALL_PAIRED_WORKLOADS`, `PARTIAL_EVIDENCE_BOUND` and `UNVERIFIED_NO_PARITY_EVIDENCE_SUPPLIED`; the plan records `parity_evidence_origin = caller_supplied_test_output` and `parity_executed_by_plan = false`.
+- `mixed-up-down` and `canonical-max-chord` are excluded from paired performance comparison and retained as candidate-only fixed-pulse geometry checks.
+- Safety rows (`safety_scenarios`, 16) carry the effective hold from `scenarios.rs` (`17167` us acceptance floor; `450000` for `pause-resume-active-cleanup` and `suspend-resume`; `9950000` for `stop-cleanup`, `skip-cleanup` and `cleanup-full-release`; `100000` for `modifier-held-after-owned`), the trigger, obligation at trigger, expected mask, verdict contract, `evidence_class` (`planned native`, `controlled mock` or `conditional`) and the Rust source reference. `owner-mismatch`, `owner-process-termination`, `supervisor-lease-expiry`, `target-hwnd-change`, `modifier-held-final-boundary` and `preflight-user-held` are pre-Down fail-closed cases with zero sink events and a zero obligation. `suspend-resume` injects a synthetic suspend notification only: it proves terminal cleanup of the held key and blocked Down, not cleanup before a real OS suspend completes, and exercises no resume phase. Ordinary `pause-resume` pauses between notes (zero obligation) and is distinct from `pause-resume-active-cleanup`. `modifier-held-*` use a test-support modifier seam, not physical input; the modifier is never journal-owned. `ambiguous-packet` is `Inconclusive` unless the mixed-packet injection is reached. `scripts/test_qualify_dispatch_core_contracts.ps1` parses `scenarios.rs`, `generation_stress.rs`, `owner_identity.rs` and `modifier_guard.rs` and fails when a row's hold, pre-Down status or contract token drifts. These are plans for a later owner-authorized ReceiveOnly run, not results.
+
+#### Parity evidence object
+
+One object per paired workload, flat properties, all required:
+
+| Property | Contract |
+| --- | --- |
+| `workload` | one of the three paired workloads; duplicates exclude that workload |
+| `evidence_origin` | nonempty string naming the producer, e.g. `caller-supplied-test-output` |
+| `game_fps`, `timing_margin_us`, `configured_H_us`, `sample_seconds` | integers equal to `60`, `500`, `17167`, `15` |
+| `baseline_revision`, `candidate_revision` | 40 lowercase hex; must equal the commit the plan verified (profile baseline; clean pushed candidate tip) |
+| `baseline_tree`, `candidate_tree` | 40 lowercase hex; must equal the verified trees |
+| `baseline_lock_sha256`, `candidate_lock_sha256` | 64 lowercase hex; must equal the verified `rust/Cargo.lock` hashes |
+| `baseline_verified`, `candidate_verified` | boolean `true` (the authored-stream test passed in that tree) |
+| `<role>_event_count`, `<role>_group_count` | integers >= 1, group <= event |
+| `<role>_first_us`, `<role>_last_us` | integers >= 0, last >= first |
+| `<role>_sha256` | 64 lowercase hex |
+
+### ChordWidthPilotV1 nonphysical preflight and offline analyzer
+
+The bounded chord-width pilot (`ChordWidthPilotV1`, workload `chord-width-pilot-v1`) prepares a quiet-only three-session ReceiveOnly characterization across chord widths `1`, `5`, and `15` at `60` FPS, `500` us timing margin, `H = 17167` us, `100000` us cadence, `150` onsets (`15` s sample), Control A admission, baseline calibration placement, and the qualification observer enabled.
+
+- **Observer protocol**: Uses the existing `SchedulerQueuedV3Compat3` (`scheduler-receiveonly-queue-v3-compat3`) protocol with event schema `3`, QPC timestamps (`observed_qpc_ticks`), ready schema `3`, summary schema `1`, and queue capacity `32768`. Historical V1/V2/V3/M3 profiles remain untouched.
+- **Preflight entry point**: `scripts/prepare_chord_width_pilot_v1.ps1` enforces a clean checkout (tracked and untracked) on `refactor/completion-anchored-pulse-engine` descending from `e7293877a6ce58a387cb8edfe0a88399a85d2b15`, matching `origin/refactor/completion-anchored-pulse-engine`, frozen LF `rust/Cargo.lock` (`9b9ba6c03131d96029421bfa9f6f69f9ce331e003e32e095eac54a714e73021e`), pinned `1.99.1` toolchain, external non-reparse `OutputRoot` (and fresh nonexistent external `target` dir for `-BuildHarness` with post-build HEAD/tree/remote-tip/lock recheck), PE `MZ` header, and full manifest/script hashes. In `-Mode PreflightOnly`, it runs `scripts/run_native_acceptance_case.ps1 -QualificationProfile ChordWidthPilotV1 ... -PreflightOnly` for every planned session without launching a receiver, harness, or `SendInput`. Direct case-runner entry enforces the same frozen lock, remote tip, and script-hash provenance checks.
+- **Provenance boundary**: `-BuildHarness` records `build_provenance = fresh_pinned_dist_build` (`binary_provenance_verified_by_fresh_build = true`) with exact command and exit code. Reusing `-HarnessManifestPath` verifies schema, PE header, and hashes only, recording `build_provenance = reused_manifest_hash_verified_only_not_rebuilt` (`binary_provenance_verified_by_fresh_build = false`, `authorized_to_execute = false`).
+- **Offline analyzer**: `node scripts/analyze_chord_reception.mjs --report <rt-native-acceptance.jsonl> --invocation <invocation.json> --sink-ready <sink-ready.json> --sink-events <sink-events.jsonl> --observer-summary <sink-observer-summary.json> --manifest <manifest.json> --width <1|5|15>` consumes the actual Rust JSONL report (`status: "PASS"`, flat `details`) and case `invocation.json`, enforces lossless 64-bit FILETIME identity matching, literal alternating `Down(i)/Up(i)` geometry with exact checked-ceil authored offsets (`50000` us + `100000` us cadence), exact same-domain epoch consistency, completion-anchored hold floor `S_up >= C_down + ceil(H_ticks)`, exact epoch-relative `UpSlotTrace.up_not_before_offset_ticks == (C_down + ceil(H_ticks)) - epoch`, and cross-thread `R + 1 >= S`; any invalid run returns `valid = false`, `accepted_for_aggregation = false`, `metrics = null`, and exit code `1`.
+- **Execution entry gate**: `scripts/prepare_chord_width_pilot_v1.ps1 -Mode Execute` remains unconditionally `LOCKED` (preparation only, never a second execution authority). `scripts/run_native_acceptance_case.ps1 -QualificationProfile ChordWidthPilotV1` (without `-PreflightOnly`) enforces a fail-closed entry gate before any directory, receiver, or harness creation, requiring explicit `-OwnerApprovedReceiveOnlyRun`, `-ApprovedPreflightPlanPath`, and all five independently supplied `-ExpectedApproved*` hashes (`SourceRevision`, `SourceTree`, `ManifestSha256`, `BinarySha256`, `PreflightPlanSha256`) bound to a `fresh_pinned_dist_build` plan with 3/3 passing `CASE_PREFLIGHT_ONLY PASS` results in width order `15 -> 1 -> 5`, plus immediate pre-launch rechecks. Hash agreement is integrity binding, not proof of an independently trusted authority. These branch-bound pilot scripts and analyzer are preserved as revision-specific reproducibility tools, not a new general native qualification workflow on `main`.
+
+#### Exploratory ReceiveOnly results at `ffaec326`
+
+Owner-supervised ReceiveOnly runs were executed at immutable source `ffaec3266d9f11d82db8ed86bfe2a8d6fda429bd` (tree `f1a29c1d3fa8fe55a12902e3972cf5891192475b`, frozen `rust/Cargo.lock` `9b9ba6c03131d96029421bfa9f6f69f9ce331e003e32e095eac54a714e73021e`, `rt-native-acceptance.exe` SHA-256 `0988195440d8e4fd360c93feed9943fe58748e452888d9972d98f319714c7915`, manifest `8e0af747b939c21298c8e897a039ef9be2dc33c0330b489aa90bfaadfd11eda8`, preflight plan `c04996d43104ef790a76fe27a81779891921cc6bc2ee2c09cf9b3672165cf802`) on one Windows 11 Home `10.0.26300` host (`AMD Ryzen 5 5500U`, `10 MHz` QPC, Balanced power plan, quiet load). Full per-session inventories and hashes live in PR #685 (`#issuecomment-7189883687`, `#issuecomment-7190327830`, `#issuecomment-7191033015`, `#issuecomment-7191460106`).
+
+- **D1 (`width=15`, active IME, `native-case-20261126T174338-3d9c1bf7`)**: **FAIL** (`valid = false`, `metrics = null`, `3,362 / 4,500` events written before close, `1,138` unobserved with upstream location `UNKNOWN`). Raw `sink-events.jsonl` recorded `1,234` `VK_PROCESSKEY (0xE5)` letter `WM_KEYDOWN` events (`0` on punctuation/Up); censored diagnostic `down_skew` `p50` was `111.07 ms` with `+43.25 ms/chord` lag accumulation. Preserved as `FAIL`.
+- **D2 (`width=15`, `native-case-20261126T183202-ac825e90`, ENG US, pre-send receiver-thread HKL `NOT RECORDED`, post-run `0` `0xE5` and `4500/4500` US VK)** and **D3 (`width=1` `native-case-20261126T185602-a05915ee`, `width=5` `native-case-20261126T185738-0ae84ae7`, both pre-send receiver-thread HKL `0x04090409`)**: exploratory **PASS** (`valid = true`, `total_invalid_count = 0`, `6,300 / 6,300` events, `900 / 900` packets, `3,150 / 3,150` `UpSlotTrace`, zero drops, clean retirement):
+
+| Run / Width | Sender `S - D` `p50 / max` (µs) | Down `C - S` `p50 / max` (µs) | `down_skew` `p50 / max` (µs) | `common_chord_hold` `min / p50` (µs) | `per_key_hold` `min / p50` (µs) | `< 1/60 s` chords | Model 60 Hz `P_full_state` / `P_same_sample_down` mean |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| D3-1 / `1` | `28.8 / 264.5` | `347.6 / 723.5` | `N/A (0)` | `13,498.3 / 17,520.0` | `13,498.3 / 17,520.0` | `2 / 150` | `0.9985` / `0.9985` |
+| D3-2 / `5` | `30.1 / 207.7` | `1,435.5 / 2,338.1` | `261.4 / 2,626.9` | `15,278.2 / 18,271.8` | `16,222.4 / 18,607.1` | `2 / 150` | `0.9992` / `0.9791` |
+| D2 / `15` | `29.5 / 457.2` | `3,391.4 / 4,545.1` | `2,393.9 / 5,091.2` | `14,839.5 / 18,249.3` | `17,271.8 / 20,493.4` | `14 / 150` | `0.9970` / `0.8409` |
+
+- **Limitations & scope**: These runs bind to `ffaec326` (not later documentation commits) and are exploratory one-run-per-width ReceiveOnly WndProc measurements on one host — not Sky gameplay acceptance, paired baseline comparison, or rare-tail qualification. The 60 Hz uniform-phase model uses each chord's raw WndProc intervals (`100 ms` cadence equals exactly 6 ideal 60 Hz frames, so phases correlate across a song and means are expectations rather than independent Bernoulli trials). The 72-session `CompletionAnchoredPulseV1` paired parity/native matrix and native safety scenarios remain **NOT REGENERATED / NOT RUN**.
+
+
+
+Each role's digest and geometry must also equal the immutable expected stream in the profile (`ExpectedAuthoredStreams`, the digests asserted by `benchmark_schedule_tests.rs::paired_workloads_match_the_immutable_pr_base_authored_streams`). A missing field is never compared as equal.
+
+Generate the evidence by running the existing no-send test in a clean checkout of each exact source tree, with the pinned toolchain:
+
+    node scripts/toolchain-pin.mjs exec -- cargo test --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance paired_workloads_match_the_immutable_pr_base_authored_streams
+
+The test asserts the expected digest and geometry itself and sends no input; record the command, exit code, revision, tree and lock hash per role, and write the object file outside tracked source. Use `ConvertFrom-Json` on that file as `$parityEvidence`. Any new commit invalidates the candidate record; rerun it before reusing the evidence.
 
 Record native results only for work actually run. Until separately authorized
 and performed, report:

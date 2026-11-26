@@ -7,6 +7,7 @@ import {
   ScrollAreaThumb,
   ScrollAreaViewport,
 } from '../ui/scroll-area';
+import { TEST_MODE_TIMING_UNMEASURED_TITLE } from '../player/playerFormatting';
 import { backendStatusLabel, measure, playbackStatusLabel } from './diagnosticsPresentation';
 import {
   DiagnosticsEmptyState,
@@ -41,10 +42,7 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
   const playbackIsActive = useStore((store: DesktopStore) =>
     ['starting', 'playing', 'paused', 'stopping'].includes(store.playback.state),
   );
-  const dryRun = useStore(
-    (store: DesktopStore) =>
-      store.playback.context?.dryRun ?? store.playback.prepared?.config.dry_run ?? false,
-  );
+  const dryRun = useStore((store: DesktopStore) => store.playback.context?.dryRun ?? false);
   const latest = diagnostics.samples[diagnostics.samples.length - 1];
   const nativeSessionActive = diagnostics.enabled && playbackIsActive && sessionId !== null;
   const activeSession = nativeSessionActive && latest?.session_id === sessionId;
@@ -193,7 +191,7 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
               />
             ) : dryRun ? (
               <DiagnosticsEmptyState
-                title="Dry run · sender timing not measured"
+                title={TEST_MODE_TIMING_UNMEASURED_TITLE}
                 detail="This session sends no physical keyboard input. Start normal playback to collect physical sender measurements."
               />
             ) : (
@@ -259,7 +257,7 @@ export function DiagnosticsPerformancePanel({ useStore }: { useStore: DesktopSto
                     value={`${(latest.frame_base_hold_us / 1_000).toFixed(3)} ms`}
                   />
                   <Metric
-                    label="Configured Timing Margin"
+                    label="Configured timing margin"
                     value={`${latest.timing_margin_us} µs`}
                   />
                   <Metric

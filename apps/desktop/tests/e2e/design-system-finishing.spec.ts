@@ -285,30 +285,25 @@ async function verifyScrollbarPalette(
       .poll(() => scrollbar.evaluate((element) => element.hasAttribute('data-scrolling')))
       .toBe(false);
   };
-  const beginScrollRevealObservation = async () => {
+
+  // Observe the transient reveal before input, even if the test worker is delayed afterward.
+  const expectScrollRevealObserved = async (scroll: () => Promise<void>) => {
     await scrollbar.evaluate((element) => {
-      const state = {
-        sawDataScrolling: element.hasAttribute('data-scrolling'),
-        sawPointerAuto: getComputedStyle(element).pointerEvents === 'auto',
-        maxOpacity: Number.parseFloat(getComputedStyle(element).opacity),
-      };
+      const state = { sawActiveReveal: false };
+      let frame: number | null = null;
       const record = () => {
-        if (element.hasAttribute('data-scrolling')) state.sawDataScrolling = true;
+        if (state.sawActiveReveal || !element.hasAttribute('data-scrolling')) return;
         const style = getComputedStyle(element);
-        if (style.pointerEvents === 'auto') state.sawPointerAuto = true;
-        const opacity = Number.parseFloat(style.opacity);
-        if (opacity > state.maxOpacity) state.maxOpacity = opacity;
-      };
-      const observer = new MutationObserver(() => {
-        record();
-        if (element.hasAttribute('data-scrolling')) {
-          const sample = () => {
+        if (Number.parseFloat(style.opacity) > 0 && style.pointerEvents === 'auto') {
+          state.sawActiveReveal = true;
+        } else if (frame === null) {
+          frame = requestAnimationFrame(() => {
+            frame = null;
             record();
-            if (element.hasAttribute('data-scrolling')) requestAnimationFrame(sample);
-          };
-          requestAnimationFrame(sample);
+          });
         }
-      });
+      };
+      const observer = new MutationObserver(record);
       observer.observe(element, { attributes: true, attributeFilter: ['data-scrolling'] });
       (
         window as unknown as {
@@ -316,40 +311,39 @@ async function verifyScrollbarPalette(
         }
       ).__scrollRevealObservation = {
         state,
-        stop: () => observer.disconnect(),
+        stop: () => {
+          observer.disconnect();
+          if (frame !== null) cancelAnimationFrame(frame);
+        },
       };
     });
-  };
-  const expectScrollRevealObserved = async () => {
-    await expect
-      .poll(
-        () =>
-          page.evaluate(() => {
-            const obs = (
-              window as unknown as {
-                __scrollRevealObservation?: {
-                  state: {
-                    sawDataScrolling: boolean;
-                    sawPointerAuto: boolean;
-                    maxOpacity: number;
-                  };
-                };
-              }
-            ).__scrollRevealObservation;
-            return Boolean(
-              obs?.state.sawDataScrolling && obs.state.sawPointerAuto && obs.state.maxOpacity > 0,
-            );
-          }),
-        { intervals: [10, 20, 40] },
-      )
-      .toBe(true);
-    await page.evaluate(() => {
-      const win = window as unknown as {
-        __scrollRevealObservation?: { stop: () => void };
-      };
-      win.__scrollRevealObservation?.stop();
-      delete win.__scrollRevealObservation;
-    });
+    try {
+      await scroll();
+      await expect
+        .poll(
+          () =>
+            page.evaluate(() => {
+              const obs = (
+                window as unknown as {
+                  __scrollRevealObservation?: { state: { sawActiveReveal: boolean } };
+                }
+              ).__scrollRevealObservation;
+              return obs?.state.sawActiveReveal === true;
+            }),
+          { intervals: [10, 20, 40] },
+        )
+        .toBe(true);
+    } finally {
+      if (!page.isClosed()) {
+        await page.evaluate(() => {
+          const win = window as unknown as {
+            __scrollRevealObservation?: { stop: () => void };
+          };
+          win.__scrollRevealObservation?.stop();
+          delete win.__scrollRevealObservation;
+        });
+      }
+    }
   };
   const readContrastColors = async () =>
     scrollArea.evaluate((area) => {
@@ -381,12 +375,13 @@ async function verifyScrollbarPalette(
       await expectHidden();
       const previousTop = await grid.evaluate((element) => element.scrollTop);
       await grid.hover();
-      await page.mouse.wheel(0, 320);
-      await page.mouse.wheel(0, 320);
-      await expect
-        .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
-        .toBeGreaterThan(previousTop);
-      await expectActive();
+      await expectScrollRevealObserved(async () => {
+        await page.mouse.wheel(0, 320);
+        await page.mouse.wheel(0, 320);
+        await expect
+          .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
+          .toBeGreaterThan(previousTop);
+      });
       const colors = await readContrastColors();
       expect(colors).not.toBeNull();
       if (colors) expect(contrast(colors.thumb, colors.surface)).toBeGreaterThanOrEqual(3);
@@ -429,13 +424,13 @@ async function verifyScrollbarPalette(
       await expect(grid).toBeFocused();
       await expectHidden();
       const previousTop = await grid.evaluate((element) => element.scrollTop);
-      await beginScrollRevealObservation();
-      await page.keyboard.press('PageDown');
-      await page.keyboard.press('PageDown');
-      await expect
-        .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
-        .toBeGreaterThan(previousTop);
-      await expectScrollRevealObserved();
+      await expectScrollRevealObserved(async () => {
+        await page.keyboard.press('PageDown');
+        await page.keyboard.press('PageDown');
+        await expect
+          .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
+          .toBeGreaterThan(previousTop);
+      });
       await waitForScrollToSettle();
       await expectHidden();
     });
@@ -444,13 +439,13 @@ async function verifyScrollbarPalette(
   await test.step('reveal the scrollbar during wheel scrolling and retain contrast', async () => {
     const previousTop = await grid.evaluate((element) => element.scrollTop);
     await grid.hover();
-    await beginScrollRevealObservation();
-    await page.mouse.wheel(0, 320);
-    await page.mouse.wheel(0, 320);
-    await expect
-      .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
-      .toBeGreaterThan(previousTop);
-    await expectScrollRevealObserved();
+    await expectScrollRevealObserved(async () => {
+      await page.mouse.wheel(0, 320);
+      await page.mouse.wheel(0, 320);
+      await expect
+        .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
+        .toBeGreaterThan(previousTop);
+    });
 
     const colors = await readContrastColors();
     expect(colors).not.toBeNull();
@@ -593,7 +588,7 @@ test('expanded Playback Profile fits at 800 by 560 and keeps Select inside the v
 
   await page.setViewportSize({ width: 800, height: 560 });
 
-  const baseHold = profile.getByRole('combobox', { name: 'Base Hold' });
+  const baseHold = profile.getByRole('combobox', { name: 'Base hold' });
   await baseHold.click();
   const select = page.locator('[data-slot="select-content"]:visible');
   await expect(select).toBeVisible();

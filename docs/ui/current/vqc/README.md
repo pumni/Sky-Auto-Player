@@ -1,6 +1,6 @@
 # VQC-R2 visual evidence
 
-Captured from desktop source [`0a7e81a5f032`](https://github.com/pumni/Sky-Auto-Player/commit/0a7e81a5f0322d39ca952ea09ea4b6253385d0e8) (desktop tree `1443a2b6ec4aa45a9ae38151f46ee73f6d30bc89`) with Playwright Chromium and the deterministic browser mock bridge. These are rendered app states, not native Tauri or gameplay evidence. The Profile captures use 800x560; the compact Settings captures use 640x448 and 640x320.
+Captured from desktop source [`a50ae1f6beb8`](https://github.com/pumni/Sky-Auto-Player/commit/a50ae1f6beb8956f427ac031ca26113c913c0781) (desktop tree `fda41c163aab27f133664c79cf30568f3fd4b485`) with Playwright Chromium and the deterministic browser mock bridge. These are rendered app states, not native Tauri or gameplay evidence. The Profile captures use 800x560; the compact Settings captures use 640x448 and 640x320.
 
 | Capture | Rendered state |
 | --- | --- |
@@ -14,6 +14,17 @@ Captured from desktop source [`0a7e81a5f032`](https://github.com/pumni/Sky-Auto-
 | [settings-categories-640x448.png](settings-categories-640x448.png) | All six vertical Settings categories visible at 640x448 |
 | [settings-categories-640x320-scrolled.png](settings-categories-640x320-scrolled.png) | Settings category navigation scrolled at 640x320 |
 | [settings-select-open-640x320.png](settings-select-open-640x320.png) | Settings Dark palette Select open at 640x320 |
+| [settings-playback-dark.png](settings-playback-dark.png) | Settings Playback category in Graphite Dark at 1366x768 |
+| [settings-playback-light.png](settings-playback-light.png) | Settings Playback category in Graphite Light at 1366x768 |
+| [settings-appearance-dark.png](settings-appearance-dark.png) | Settings Appearance category in Graphite Dark at 1366x768 (paired with canonical ../appearance-settings-light.png) |
+| [settings-diagnostics-dark.png](settings-diagnostics-dark.png) | Settings Diagnostics category in Graphite Dark at 1366x768 |
+| [settings-diagnostics-light.png](settings-diagnostics-light.png) | Settings Diagnostics category in Graphite Light at 1366x768 |
+| [settings-updates-dark.png](settings-updates-dark.png) | Settings Updates category in Graphite Dark at 1366x768 |
+| [settings-updates-light.png](settings-updates-light.png) | Settings Updates category in Graphite Light at 1366x768 |
+| [settings-donate-dark.png](settings-donate-dark.png) | Settings Donate category in Graphite Dark at 1366x768 |
+| [settings-donate-light.png](settings-donate-light.png) | Settings Donate category in Graphite Light at 1366x768 |
+| [settings-about-dark.png](settings-about-dark.png) | Settings About category in Graphite Dark at 1366x768 |
+| [settings-about-light.png](settings-about-light.png) | Settings About category in Graphite Light at 1366x768 |
 | [inspector-details-tab.png](inspector-details-tab.png) | Inspector Details selected with the Readiness state visible |
 | [inspector-runtime-performance.png](inspector-runtime-performance.png) | Runtime Performance tab in deterministic dry-run browser state |
 | [inspector-runtime-timing.png](inspector-runtime-timing.png) | Runtime Timing tab with the segmented indicator moved to Timing |
@@ -25,5 +36,10 @@ Captured from desktop source [`0a7e81a5f032`](https://github.com/pumni/Sky-Auto-
 | [transport-pause-playing.png](transport-pause-playing.png) | Filled Pause control while browser-mock dry-run playback is active |
 | [transport-resume-paused.png](transport-resume-paused.png) | Filled Resume control while browser-mock dry-run playback is paused |
 | [transport-long-title-compact.png](transport-long-title-compact.png) | Compact Player Dock with a long title and readable selected/prepared status |
+| [admission-light-640x448.png](admission-light-640x448.png) | Compact 640x448 timing-risk confirmation in Light mode (paired with canonical Dark compact-admission.png) |
+| [recovery-dark-800x560.png](recovery-dark-800x560.png) | Actionable target_not_found playback recovery alert in Graphite Dark at 800x560 |
+| [recovery-light-800x560.png](recovery-light-800x560.png) | Actionable target_not_found playback recovery alert in Graphite Light at 800x560 |
+| [update-dark-800x560.png](update-dark-800x560.png) | Update dialog with release notes in Graphite Dark at 800x560 |
+| [update-light-800x560.png](update-light-800x560.png) | Update dialog with release notes in Graphite Light at 800x560 |
 
 The palette contact sheet contains the Settings Appearance view in Light and each dark palette. The separate interactive checks cover idle, wheel, keyboard, settled, active drag, release, cancellation, no-overflow unmount, reduced-motion, and forced-colors behavior.

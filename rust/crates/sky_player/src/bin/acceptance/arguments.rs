@@ -86,6 +86,7 @@ pub(super) enum Scenario {
     TimingMarginSweep,
     LongIdle,
     HolInterleaved,
+    ChordWidthPilotV1,
 }
 
 impl Scenario {
@@ -123,6 +124,7 @@ impl Scenario {
             "timing-margin-sweep" => Ok(Self::TimingMarginSweep),
             "long-idle" => Ok(Self::LongIdle),
             "hol-interleaved" => Ok(Self::HolInterleaved),
+            "chord-width-pilot-v1" => Ok(Self::ChordWidthPilotV1),
             _ => Err(format!("unsupported scenario: {value}")),
         }
     }
@@ -161,6 +163,7 @@ impl Scenario {
             Self::TimingMarginSweep => "timing-margin-sweep",
             Self::LongIdle => "long-idle",
             Self::HolInterleaved => "hol-interleaved",
+            Self::ChordWidthPilotV1 => "chord-width-pilot-v1",
         }
     }
 
@@ -177,6 +180,7 @@ impl Scenario {
                 | Self::NearMinimumRetrigger
                 | Self::LongIdle
                 | Self::HolInterleaved
+                | Self::ChordWidthPilotV1
         )
     }
 }
@@ -188,6 +192,7 @@ pub(super) struct RunArgs {
     pub(super) sink_events: PathBuf,
     pub(super) target_hwnd: isize,
     pub(super) scenario: Scenario,
+    pub(super) pilot_chord_width: Option<u8>,
     pub(super) admission_variant: AdmissionVariantChoice,
     pub(super) calibration_placement: CalibrationPlacement,
     pub(super) timing_observer_for_qualification: bool,
@@ -281,6 +286,7 @@ where
     let mut sink_events = None;
     let mut target_hwnd = None;
     let mut scenario = None;
+    let mut pilot_chord_width = None;
     let mut admission_variant = None;
     let mut calibration_placement = None;
     let mut timing_observer_for_qualification = false;
@@ -347,6 +353,20 @@ where
             "--scenario" => {
                 unique!(scenario, "--scenario");
                 scenario = Some(Scenario::parse(&next_value!("--scenario"))?);
+            }
+            "--pilot-chord-width" => {
+                unique!(pilot_chord_width, "--pilot-chord-width");
+                let value = next_value!("--pilot-chord-width");
+                let parsed = value.parse::<u8>().map_err(|_| {
+                    "--pilot-chord-width must be 1, 5, or 15 for chord-width-pilot-v1".to_string()
+                })?;
+                if !matches!(parsed, 1 | 5 | 15) {
+                    return Err(
+                        "--pilot-chord-width must be 1, 5, or 15 for chord-width-pilot-v1"
+                            .to_string(),
+                    );
+                }
+                pilot_chord_width = Some(parsed);
             }
             "--admission-variant" => {
                 unique!(admission_variant, "--admission-variant");
@@ -457,6 +477,7 @@ where
         sink_events: sink_events.ok_or_else(|| "--sink-events is required".to_string())?,
         target_hwnd: target_hwnd.ok_or_else(|| "--target-hwnd is required".to_string())?,
         scenario,
+        pilot_chord_width,
         admission_variant: admission_variant.unwrap_or(AdmissionVariantChoice::ControlA),
         calibration_placement: calibration_placement.unwrap_or(CalibrationPlacement::Baseline),
         timing_observer_for_qualification,
@@ -496,8 +517,47 @@ where
     }
     if run.sample_seconds.is_some() && !run.scenario.supports_timed_sample() {
         return Err(
-            "--sample-seconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, and long-idle"
+            "--sample-seconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, long-idle, hol-interleaved, and chord-width-pilot-v1"
                 .to_string(),
+        );
+    }
+    if run.scenario == Scenario::ChordWidthPilotV1 {
+        if !matches!(run.pilot_chord_width, Some(1 | 5 | 15)) {
+            return Err(
+                "chord-width-pilot-v1 requires --pilot-chord-width with value 1, 5, or 15"
+                    .to_string(),
+            );
+        }
+        if run.game_fps != 60 {
+            return Err("chord-width-pilot-v1 requires fixed --game-fps 60".to_string());
+        }
+        if run.timing_margin_us != 500 {
+            return Err("chord-width-pilot-v1 requires fixed --timing-margin-us 500".to_string());
+        }
+        if run.sample_seconds != Some(15) {
+            return Err("chord-width-pilot-v1 requires --sample-seconds 15".to_string());
+        }
+        if run.admission_variant != AdmissionVariantChoice::ControlA {
+            return Err("chord-width-pilot-v1 requires --admission-variant control-a".to_string());
+        }
+        if run.calibration_placement != CalibrationPlacement::Baseline {
+            return Err(
+                "chord-width-pilot-v1 requires --calibration-placement baseline".to_string(),
+            );
+        }
+        if !run.timing_observer_for_qualification {
+            return Err(
+                "chord-width-pilot-v1 requires --timing-observer-for-qualification".to_string(),
+            );
+        }
+        if run.hol_stall_us != 0 || run.hol_cycles.is_some() {
+            return Err(
+                "chord-width-pilot-v1 does not allow --hol-stall-us or --hol-cycles".to_string(),
+            );
+        }
+    } else if run.pilot_chord_width.is_some() {
+        return Err(
+            "--pilot-chord-width is valid only for scenario chord-width-pilot-v1".to_string(),
         );
     }
     Ok(ParsedCommand::Run(Box::new(run)))
@@ -540,5 +600,99 @@ mod tests {
     fn retired_adaptive_guard_cli_input_is_rejected() {
         let error = parse_args(args("adaptive")).expect_err("adaptive mode is retired");
         assert!(error.contains("adaptive guard mode is retired"));
+    }
+
+    fn pilot_args(
+        width: &str,
+        fps: &str,
+        margin: &str,
+        sample_seconds: Option<&str>,
+        calibration_placement: &str,
+        include_observer: bool,
+    ) -> Vec<String> {
+        let mut out = vec![
+            "run",
+            "--allow-real-input",
+            "--run-id",
+            "pilot-parse-check",
+            "--sink-ready",
+            "sink-ready.json",
+            "--sink-events",
+            "sink-events.jsonl",
+            "--target-hwnd",
+            "123",
+            "--scenario",
+            "chord-width-pilot-v1",
+            "--pilot-chord-width",
+            width,
+            "--game-fps",
+            fps,
+            "--timing-margin-us",
+            margin,
+            "--calibration-placement",
+            calibration_placement,
+            "--evidence",
+            "evidence.json",
+        ]
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        if include_observer {
+            out.push("--timing-observer-for-qualification".to_string());
+        }
+        if let Some(secs) = sample_seconds {
+            out.push("--sample-seconds".to_string());
+            out.push(secs.to_string());
+        }
+        out
+    }
+
+    #[test]
+    fn chord_width_pilot_v1_accepts_only_bounded_widths_and_fixed_settings() {
+        for width in ["1", "5", "15"] {
+            let ParsedCommand::Run(run) =
+                parse_args(pilot_args(width, "60", "500", Some("15"), "baseline", true))
+                    .expect("valid pilot args")
+            else {
+                panic!("expected run");
+            };
+            assert_eq!(run.pilot_chord_width, Some(width.parse::<u8>().unwrap()));
+            assert_eq!(run.game_fps, 60);
+            assert_eq!(run.timing_margin_us, 500);
+            assert_eq!(run.sample_seconds, Some(15));
+            assert_eq!(
+                run.calibration_placement,
+                super::CalibrationPlacement::Baseline
+            );
+            assert!(run.timing_observer_for_qualification);
+        }
+        for bad_width in ["0", "2", "3", "8", "16"] {
+            assert!(
+                parse_args(pilot_args(
+                    bad_width,
+                    "60",
+                    "500",
+                    Some("15"),
+                    "baseline",
+                    true
+                ))
+                .is_err()
+            );
+        }
+        assert!(parse_args(pilot_args("5", "120", "500", Some("15"), "baseline", true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "0", Some("15"), "baseline", true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "1000", Some("15"), "baseline", true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "500", None, "baseline", true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "500", Some("15"), "candidate", true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "500", Some("15"), "baseline", false)).is_err());
+        let mut with_hol = pilot_args("5", "60", "500", Some("15"), "baseline", true);
+        with_hol.extend(["--hol-stall-us".to_string(), "1000".to_string()]);
+        assert!(parse_args(with_hol).is_err());
+        let mut dup = pilot_args("5", "60", "500", Some("15"), "baseline", true);
+        dup.extend(["--pilot-chord-width".to_string(), "5".to_string()]);
+        assert!(parse_args(dup).is_err());
+        let mut wrong_scenario = args("frozen");
+        wrong_scenario.extend(["--pilot-chord-width".to_string(), "5".to_string()]);
+        assert!(parse_args(wrong_scenario).is_err());
     }
 }

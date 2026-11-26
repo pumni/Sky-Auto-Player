@@ -59,8 +59,8 @@ pub(super) fn checked_note_gap_us(previous_ms: i64, current_ms: i64) -> Option<u
 mod tests {
     use super::*;
     use crate::song::{
-        ActionKind, Note, SKY_SCAN_CODES, Song, SongError, analyze_schedule_with_context,
-        build_schedule, build_schedule_from_scaled_onsets, build_schedule_with_policy,
+        Note, SKY_SCAN_CODES, Song, SongError, analyze_schedule_with_context, build_schedule,
+        build_schedule_from_scaled_onsets, build_schedule_with_policy,
     };
 
     #[test]
@@ -189,10 +189,11 @@ mod tests {
             }],
         };
         let schedule = build_schedule_with_policy(&at_zero, 1.0, &policy).expect("exact max");
-        assert_eq!(schedule.actions[1].at_us, u64::MAX);
+        assert_eq!(schedule.chords.len(), 1);
+        assert_eq!(schedule.chords[0].at_us, 0);
+        assert_eq!(schedule.hold_us, u64::MAX);
         assert_eq!(schedule.source_duration_us, u64::MAX);
-        assert_eq!(schedule.actions[0].kind, ActionKind::Down);
-        assert_eq!(schedule.actions[1].kind, ActionKind::Up);
+        assert_eq!(schedule.duration_us, u64::MAX);
 
         let after_zero = Song {
             notes: vec![Note {

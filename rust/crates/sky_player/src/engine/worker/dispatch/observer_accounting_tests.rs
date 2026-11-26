@@ -2,12 +2,11 @@ use super::{
     DispatchObservation, ObserverRuntime, PendingObservationQueue, observer_test_hook_guard,
     set_observer_abort_after_drains, set_observer_artificial_cost_us,
 };
-use crate::engine::worker::dispatch::observation::{DownObservation, StaleMetadataObservation};
+use crate::engine::worker::dispatch::observation::DownObservation;
 use crate::engine::{
     DispatchHealthOptions, NativeTelemetryOutput, SharedMetrics, TelemetryCollector, TelemetryMode,
     WorkerTimingState,
 };
-use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::QpcClock;
 use std::sync::Arc;
 use std::time::Instant;
@@ -27,16 +26,11 @@ fn queue_down_with_up_slots(queue: &PendingObservationQueue, sequence: u64, coun
     assert_eq!(dropped_samples, 0);
 }
 
-fn queue_stale_metadata(queue: &PendingObservationQueue, source_action_index: u32) {
+fn queue_down_without_up_slots(queue: &PendingObservationQueue, source_action_index: u32) {
+    let mut observation = DownObservation::test_fixture(0);
+    observation.trace.event_index = source_action_index;
     let mut dropped_samples = 0;
-    assert!(queue.push(
-        DispatchObservation::StaleMetadata(StaleMetadataObservation {
-            source_action_index,
-            effective_scheduled_ticks: TimelineTicks::from_raw(u64::from(source_action_index)),
-            suppressed_intent_count: 1,
-        }),
-        &mut dropped_samples,
-    ));
+    assert!(queue.push(DispatchObservation::Down(observation), &mut dropped_samples));
     assert_eq!(dropped_samples, 0);
 }
 
@@ -101,7 +95,7 @@ fn observer_abort_before_first_drain_accounts_all_queued_up_slots() {
 fn observer_abort_after_partial_drain_counts_only_stranded_up_slots() {
     let _guard = observer_test_hook_guard();
     let queue = PendingObservationQueue::default();
-    queue_stale_metadata(&queue, 1);
+    queue_down_without_up_slots(&queue, 1);
     queue_down_with_up_slots(&queue, 2, 2);
     set_observer_abort_after_drains(1);
     let (runtime, telemetry) = start_observer(&queue, 2);
@@ -129,7 +123,7 @@ fn slow_observer_does_not_block_the_producer_and_tears_down_after_recording() {
     let (runtime, telemetry) = start_observer(&queue, 0);
 
     let enqueue_started = Instant::now();
-    queue_stale_metadata(&queue, 11);
+    queue_down_without_up_slots(&queue, 11);
     let enqueue_elapsed = enqueue_started.elapsed();
     assert!(
         enqueue_elapsed < std::time::Duration::from_millis(50),

@@ -1,9 +1,8 @@
 use super::replan_timing::stage_from_worker_outer_evaluation;
-use super::support::{qpc_offset, staged_send_at, test_action};
+use super::support::{qpc_offset, staged_send_at, test_chord};
 use crate::engine::test_support::ProductionDispatchTestHarness;
 use crate::engine::worker::{FinalDownAdmissionResult, StagedDispatchOutcome};
 use sky_dispatch_core::executor::DispatchDecision;
-use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{
     InstrumentPhysicalState, PacketRetryReason, PhysicalPacket, SendEvidence,
@@ -14,15 +13,12 @@ use std::sync::{Arc, Mutex};
 
 #[test]
 fn attempted_mixed_down_terminates_after_one_packet_and_verified_cleanup() {
-    let actions = [
-        test_action(10, ActionKind::Down, 0, 0x15),
-        test_action(11, ActionKind::Up, 20_000, 0x15),
-        test_action(12, ActionKind::Down, 20_000, 0x16),
-        test_action(13, ActionKind::Down, 21_000, 0x17),
-        test_action(14, ActionKind::Up, 40_000, 0x16),
-        test_action(15, ActionKind::Up, 42_000, 0x17),
+    let chords = [
+        test_chord(10, 0, 0x15),
+        test_chord(12, 20_000, 0x16),
+        test_chord(13, 21_000, 0x17),
     ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -40,7 +36,7 @@ fn attempted_mixed_down_terminates_after_one_packet_and_verified_cleanup() {
         )
         .expect("stage authored onset 10")
         .expect("first Down candidate");
-    assert_eq!(first.source_action_index, 10);
+    assert_eq!(first.source_action_index(), 10);
     harness.set_mock_sender_start_qpc_for_test(first_now);
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(first, false),
@@ -63,8 +59,8 @@ fn attempted_mixed_down_terminates_after_one_packet_and_verified_cleanup() {
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage mixed packet")
         .expect("mixed candidate");
-    assert_eq!(mixed.source_action_index, 12);
-    assert_eq!(mixed.packet_masks, PhysicalPacket::new(0b0001, 0b0010));
+    assert_eq!(mixed.source_action_index(), 12);
+    assert_eq!(mixed.packet_masks(), PhysicalPacket::new(0b0001, 0b0010));
 
     let anomaly_packets = Arc::new(Mutex::new(Vec::with_capacity(1)));
     let captured_anomaly_packets = Arc::clone(&anomaly_packets);
@@ -160,7 +156,7 @@ fn failed_post_call_cleanup_keeps_attempted_down_blocked_with_pending_release_ob
         )
         .expect("stage Down")
         .expect("Down candidate");
-    let mask = candidate.packet_masks.down_mask;
+    let mask = candidate.packet_masks().down_mask;
     harness
         .resources
         .backend
@@ -228,11 +224,8 @@ fn musical_up_only_fresh_foreground_loss_pauses_without_crossing_sender_boundary
     }
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
-    let actions = [
-        test_action(20, ActionKind::Down, 0, 0x15),
-        test_action(21, ActionKind::Up, 20_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(20, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -271,7 +264,7 @@ fn musical_up_only_fresh_foreground_loss_pauses_without_crossing_sender_boundary
         .stage_candidate_with_scheduler_window_for_test(up_mask, down, window)
         .expect("stage musical Up-only")
         .expect("Up candidate");
-    assert_eq!(up.source_action_index, 21);
+    assert_eq!(up.source_action_index(), 20);
     harness.set_final_gate_before_syscall_hook(move || {
         sky_dispatch_win32::focus::set_foreground_window_for_test(Some(2));
         sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(202)));
@@ -315,11 +308,8 @@ fn focus_loss_before_first_down_keeps_onset_unattempted_until_safe_resume() {
     }
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
-    let actions = [
-        test_action(25, ActionKind::Down, 0, 0x15),
-        test_action(26, ActionKind::Up, 30_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(25, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -375,7 +365,7 @@ fn focus_loss_before_first_down_keeps_onset_unattempted_until_safe_resume() {
         )
         .expect("re-stage same onset after focus restore")
         .expect("same unattempted Down");
-    assert_eq!(resumed.source_action_index, 25);
+    assert_eq!(resumed.source_action_index(), 25);
     harness.set_mock_sender_start_qpc_for_test(restored_at);
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(resumed, false),
@@ -396,13 +386,8 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
     }
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
-    let actions = [
-        test_action(6660, ActionKind::Down, 0, 0x15),
-        test_action(6661, ActionKind::Down, 150_000, 0x16),
-        test_action(6662, ActionKind::Up, 500_000, 0x15),
-        test_action(6663, ActionKind::Up, 600_000, 0x16),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(6660, 0, 0x15), test_chord(6661, 150_000, 0x16)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let clock = harness.resources.clock;
     let sampled_now = clock.now().expect("current QPC");
     let historical_offset = clock
@@ -434,8 +419,9 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
         )
         .expect("stage committed A")
         .expect("A candidate");
-    assert_eq!(first.packet_masks, PhysicalPacket::new(0, 1));
-    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(first.packet_masks(), PhysicalPacket::new(0, 1));
+    let first_now = clock.now().expect("first A QPC");
+    harness.set_mock_sender_start_qpc_for_test(first_now);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(first, false),
         StagedDispatchOutcome::Dispatched
@@ -456,8 +442,8 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
     let b_eval_qpc = clock.now().expect("due B scheduler QPC");
     let (b, evaluations) = stage_from_worker_outer_evaluation(&mut harness, b_eval_qpc);
     assert_eq!(evaluations, 1);
-    assert_eq!(b.source_action_index, 6661);
-    assert_eq!(b.packet_masks, PhysicalPacket::new(0, 2));
+    assert_eq!(b.source_action_index(), 6661);
+    assert_eq!(b.packet_masks(), PhysicalPacket::new(0, 2));
     assert!(b.timing_window.packet_not_before_qpc <= b_eval_qpc);
     assert_eq!(
         harness.pre_wait_candidate_admission_for_test(&b),
@@ -680,14 +666,15 @@ fn fresh_foreground_rejection_enters_focus_pause_and_recovers_after_grace_cleanu
             up_mask: 0,
             down_chord: Some(chord),
             timing_window,
+            ..
         } if chord.source_action_index == 6661
             && timing_window.packet_not_before_qpc <= resumed_at
     ));
     let resumed_qpc = clock.now().expect("resumed B scheduler QPC");
     let (b, evaluations) = stage_from_worker_outer_evaluation(&mut harness, resumed_qpc);
     assert_eq!(evaluations, 1);
-    assert_eq!(b.source_action_index, 6661);
-    assert_eq!(b.packet_masks, PhysicalPacket::new(0, 2));
+    assert_eq!(b.source_action_index(), 6661);
+    assert_eq!(b.packet_masks(), PhysicalPacket::new(0, 2));
     assert!(b.timing_window.packet_not_before_qpc <= resumed_qpc);
     assert_eq!(
         harness.pre_wait_candidate_admission_for_test(&b),
@@ -734,11 +721,8 @@ fn cleanup_probe_rechecks_owner_before_accepting_all_up() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
 
-    let actions = [
-        test_action(6668, ActionKind::Down, 0, 0x15),
-        test_action(6669, ActionKind::Up, 500_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(6668, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     harness.configure_focus_owner_for_test(1, 101);
     let cleanup = harness.configure_mock_cleanup_emitter_for_test();
     harness.resources.backend.active_mask = 1;
@@ -791,11 +775,8 @@ fn focus_recovery_cleanup_rejects_invalidated_session_target() {
     let _foreground_reset = ForegroundReset;
 
     for replacement_hwnd in [2, 1] {
-        let actions = [
-            test_action(6670, ActionKind::Down, 0, 0x15),
-            test_action(6671, ActionKind::Up, 500_000, 0x15),
-        ];
-        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let chords = [test_chord(6670, 0, 0x15)];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
         let epoch = harness.qpc_now_for_test().expect("owner recovery epoch");
         harness
             .reanchor_playback_clock_for_test(epoch)
@@ -867,11 +848,8 @@ fn fresh_focus_rejection_keeps_qpc_failure_terminal() {
     }
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
-    let actions = [
-        test_action(6688, ActionKind::Down, 0, 0x15),
-        test_action(6689, ActionKind::Up, 100_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(6688, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness
         .qpc_now_for_test()
         .expect("QPC failure fixture epoch");
@@ -890,7 +868,7 @@ fn fresh_focus_rejection_keeps_qpc_failure_terminal() {
         )
         .expect("stage pending onset")
         .expect("Down candidate");
-    assert_eq!(candidate.source_action_index, 6688);
+    assert_eq!(candidate.source_action_index(), 6688);
 
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(2));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(202)));
@@ -937,13 +915,8 @@ fn fresh_focus_rejection_keeps_qpc_failure_terminal() {
 
 #[test]
 fn attempted_musical_up_only_is_not_replayed_and_terminates_before_next_down() {
-    let actions = [
-        test_action(40, ActionKind::Down, 0, 0x15),
-        test_action(41, ActionKind::Up, 20_000, 0x15),
-        test_action(42, ActionKind::Down, 30_000, 0x16),
-        test_action(43, ActionKind::Up, 50_000, 0x16),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(40, 0, 0x15), test_chord(42, 30_000, 0x16)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -981,7 +954,7 @@ fn attempted_musical_up_only_is_not_replayed_and_terminates_before_next_down() {
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage A Up-only")
         .expect("Up-only packet");
-    assert_eq!(up.source_action_index, 41);
+    assert_eq!(up.source_action_index(), 40);
 
     let up_packets = Arc::new(Mutex::new(Vec::with_capacity(1)));
     let captured_up = Arc::clone(&up_packets);
@@ -1036,7 +1009,7 @@ fn attempted_musical_up_only_is_not_replayed_and_terminates_before_next_down() {
         .attempted_dispatch_anomaly
         .detail()
         .expect("Up anomaly");
-    assert!(anomaly.contains("source_action=41"), "{anomaly}");
+    assert!(anomaly.contains("source_action=40"), "{anomaly}");
     assert!(
         anomaly.contains("up_mask=0x0001 down_mask=0x0000"),
         "{anomaly}"
@@ -1066,11 +1039,8 @@ fn target_invalidation_keeps_down_unattempted_and_cannot_restage() {
     }
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
-    let actions = [
-        test_action(30, ActionKind::Down, 0, 0x15),
-        test_action(31, ActionKind::Up, 20_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(30, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -1097,13 +1067,8 @@ fn target_invalidation_keeps_down_unattempted_and_cannot_restage() {
 }
 #[test]
 fn mixed_packet_with_final_modifier_rejection_replans_as_up_only() {
-    let actions = [
-        test_action(32, ActionKind::Down, 0, 0x15),
-        test_action(33, ActionKind::Up, 20_000, 0x15),
-        test_action(34, ActionKind::Down, 20_000, 0x16),
-        test_action(35, ActionKind::Up, 40_000, 0x16),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(32, 0, 0x15), test_chord(34, 20_000, 0x16)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -1140,7 +1105,7 @@ fn mixed_packet_with_final_modifier_rejection_replans_as_up_only() {
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage mixed packet")
         .expect("mixed candidate");
-    assert_eq!(mixed.packet_masks, PhysicalPacket::new(1, 2));
+    assert_eq!(mixed.packet_masks(), PhysicalPacket::new(1, 2));
 
     let modifier_held = Arc::new(AtomicBool::new(false));
     let held_for_query = Arc::clone(&modifier_held);
@@ -1285,11 +1250,8 @@ fn terminal_control_races_at_final_gate_do_not_attempt_up_only() {
         Race::SystemSuspend,
         Race::LeaseExpiry,
     ] {
-        let actions = [
-            test_action(1, ActionKind::Down, 0, 0x15),
-            test_action(2, ActionKind::Up, 20_000, 0x15),
-        ];
-        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let chords = [test_chord(1, 0, 0x15)];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
         let epoch = harness.qpc_now_for_test().expect("test epoch");
         harness
             .reanchor_playback_clock_for_test(epoch)
@@ -1391,11 +1353,8 @@ fn up_only_target_invalidated_or_owner_mismatch_at_crossing_fails_closed() {
 
     // Case 1: Owner mismatch at crossing
     {
-        let actions = [
-            test_action(1, ActionKind::Down, 0, 0x15),
-            test_action(2, ActionKind::Up, 20_000, 0x15),
-        ];
-        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let chords = [test_chord(1, 0, 0x15)];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
         let epoch = harness.qpc_now_for_test().expect("test epoch");
         harness
             .reanchor_playback_clock_for_test(epoch)
@@ -1449,11 +1408,8 @@ fn up_only_target_invalidated_or_owner_mismatch_at_crossing_fails_closed() {
 
     // Case 2: Target invalidated at crossing
     {
-        let actions = [
-            test_action(1, ActionKind::Down, 0, 0x15),
-            test_action(2, ActionKind::Up, 20_000, 0x15),
-        ];
-        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let chords = [test_chord(1, 0, 0x15)];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
         let epoch = harness.qpc_now_for_test().expect("test epoch");
         harness
             .reanchor_playback_clock_for_test(epoch)
@@ -1510,11 +1466,8 @@ fn up_only_process_exit_at_crossing_fails_closed() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
 
-    let actions = [
-        test_action(1, ActionKind::Down, 0, 0x15),
-        test_action(2, ActionKind::Up, 20_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(1, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -1582,11 +1535,8 @@ fn post_focus_race_hook_flips_focus_active_aborts_down_only() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
 
-    let actions = [
-        test_action(1, ActionKind::Down, 0, 0x15),
-        test_action(2, ActionKind::Up, 20_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(1, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -1636,11 +1586,8 @@ fn post_focus_race_hook_invalidates_target_fails_closed_down_only() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
 
-    let actions = [
-        test_action(1, ActionKind::Down, 0, 0x15),
-        test_action(2, ActionKind::Up, 20_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(1, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -1691,13 +1638,8 @@ fn post_focus_race_hook_flips_focus_active_mixed_dispatches_safe_up_and_aborts_d
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
 
-    let actions = [
-        test_action(32, ActionKind::Down, 0, 0x15),
-        test_action(33, ActionKind::Up, 20_000, 0x15),
-        test_action(34, ActionKind::Down, 20_000, 0x16),
-        test_action(35, ActionKind::Up, 40_000, 0x16),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(32, 0, 0x15), test_chord(34, 20_000, 0x16)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -1737,7 +1679,7 @@ fn post_focus_race_hook_flips_focus_active_mixed_dispatches_safe_up_and_aborts_d
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage mixed packet")
         .expect("mixed candidate");
-    assert_eq!(mixed.packet_masks, PhysicalPacket::new(1, 2));
+    assert_eq!(mixed.packet_masks(), PhysicalPacket::new(1, 2));
 
     harness.set_post_focus_revalidation_race_hook(|focus_active, _target, _, _, _, _, _| {
         focus_active.store(false, Ordering::Release);
@@ -1790,13 +1732,8 @@ fn post_focus_race_hook_invalidates_target_mixed_fails_closed_without_down() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
 
-    let actions = [
-        test_action(32, ActionKind::Down, 0, 0x15),
-        test_action(33, ActionKind::Up, 20_000, 0x15),
-        test_action(34, ActionKind::Down, 20_000, 0x16),
-        test_action(35, ActionKind::Up, 40_000, 0x16),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(32, 0, 0x15), test_chord(34, 20_000, 0x16)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -1838,7 +1775,7 @@ fn post_focus_race_hook_invalidates_target_mixed_fails_closed_without_down() {
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage mixed packet")
         .expect("mixed candidate");
-    assert_eq!(mixed.packet_masks, PhysicalPacket::new(1, 2));
+    assert_eq!(mixed.packet_masks(), PhysicalPacket::new(1, 2));
 
     harness.set_post_focus_revalidation_race_hook(|_focus_active, target, _, _, _, _, _| {
         target.invalidate_target();
@@ -1890,11 +1827,8 @@ fn post_focus_race_hook_flips_focus_active_up_only_focus_required_replans_and_ab
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
 
-    let actions = [
-        test_action(40, ActionKind::Down, 0, 0x15),
-        test_action(41, ActionKind::Up, 20_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(40, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -1932,7 +1866,7 @@ fn post_focus_race_hook_flips_focus_active_up_only_focus_required_replans_and_ab
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage up-only packet")
         .expect("up-only candidate");
-    assert_eq!(up_only.packet_masks, PhysicalPacket::new(1, 0));
+    assert_eq!(up_only.packet_masks(), PhysicalPacket::new(1, 0));
 
     harness.set_post_focus_revalidation_race_hook(|focus_active, _target, _, _, _, _, _| {
         focus_active.store(false, Ordering::Release);
@@ -1985,11 +1919,8 @@ fn post_focus_race_hook_invalidates_target_up_only_focus_required_fails_closed_w
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundReset;
 
-    let actions = [
-        test_action(50, ActionKind::Down, 0, 0x15),
-        test_action(51, ActionKind::Up, 20_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(50, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -2026,7 +1957,7 @@ fn post_focus_race_hook_invalidates_target_up_only_focus_required_fails_closed_w
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage up-only packet")
         .expect("up-only candidate");
-    assert_eq!(up_only.packet_masks, PhysicalPacket::new(1, 0));
+    assert_eq!(up_only.packet_masks(), PhysicalPacket::new(1, 0));
 
     harness.set_post_focus_revalidation_race_hook(|_focus_active, target, _, _, _, _, _| {
         target.invalidate_target();
@@ -2068,11 +1999,8 @@ fn post_focus_race_hook_invalidates_target_up_only_focus_required_fails_closed_w
 
 #[test]
 fn post_focus_race_hook_invalidates_target_up_only_focus_not_required_fails_closed_without_up() {
-    let actions = [
-        test_action(60, ActionKind::Down, 0, 0x15),
-        test_action(61, ActionKind::Up, 20_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(60, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     harness.config.focus.require_focus = false;
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness

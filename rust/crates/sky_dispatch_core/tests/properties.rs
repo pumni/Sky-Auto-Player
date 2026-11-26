@@ -1,91 +1,86 @@
-use proptest::prelude::*;
-use sky_dispatch_core::compile::{CompileError, compile_runtime_intents};
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+//! Admission and validation property tests for `sky_dispatch_core::plan`.
 
-fn action(
-    source_action_index: u32,
-    kind: ActionKind,
-    scheduled_us: u64,
-    scan_codes: Vec<u16>,
-) -> KeyActionInput {
-    KeyActionInput {
-        source_action_index,
-        kind,
-        scheduled_us,
-        scan_codes: scan_codes.into(),
-        reason: "property".into(),
-    }
+use sky_dispatch_core::model::{MAX_KEYS, OnsetChordInput};
+use sky_dispatch_core::plan::{PlanError, build_onset_plan, build_onset_plan_with_cancellation};
+
+const ALLOWED_15: [u16; MAX_KEYS] = [
+    0x15, 0x16, 0x17, 0x18, 0x19, 0x23, 0x24, 0x25, 0x26, 0x27, 0x31, 0x32, 0x33, 0x34, 0x35,
+];
+
+#[test]
+fn noncanonical_scan_code_profile_maps_to_canonical_slots() {
+    let custom = [0x02u16, 0x03, 0x04];
+    let chords = vec![
+        OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: vec![0x04, 0x02].into(),
+        },
+        OnsetChordInput {
+            source_action_index: 1,
+            scheduled_us: 16_667,
+            scan_codes: vec![0x03, 0x02].into(),
+        },
+    ];
+    let plan = build_onset_plan(&chords, &custom, 16_667).expect("custom profile valid");
+    assert_eq!(plan.chords()[0].key_mask, (1 << 0) | (1 << 2));
+    assert_eq!(plan.chords()[1].key_mask, (1 << 0) | (1 << 1));
+    assert_eq!(plan.generation_count(), 4);
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+#[test]
+fn plan_cancellation_stops_large_builds_early() {
+    let chords: Vec<OnsetChordInput> = (0..10_000u32)
+        .map(|i| OnsetChordInput {
+            source_action_index: i,
+            scheduled_us: u64::from(i) * 20_000,
+            scan_codes: vec![ALLOWED_15[0]].into(),
+        })
+        .collect();
+    let mut polls = 0usize;
+    let err = build_onset_plan_with_cancellation(&chords, &ALLOWED_15, 16_667, || {
+        polls += 1;
+        polls >= 5
+    })
+    .unwrap_err();
+    assert_eq!(err, PlanError::Cancelled);
+}
 
-    #[test]
-    fn compiler_accepts_non_overlapping_retrigger_and_rejects_overlap(
-        scan_code in 2_u16..=16,
-        gap_us in 1_u64..=50_000,
-    ) {
-        let valid = vec![
-            action(10, ActionKind::Down, 0, vec![scan_code]),
-            action(20, ActionKind::Up, gap_us, vec![scan_code]),
-            action(30, ActionKind::Down, gap_us + 1, vec![scan_code]),
-            action(40, ActionKind::Up, gap_us * 2 + 1, vec![scan_code]),
-        ];
-        prop_assert!(compile_runtime_intents(&valid, &[scan_code]).is_ok());
-
-        let overlapping = vec![
-            action(10, ActionKind::Down, 0, vec![scan_code]),
-            action(20, ActionKind::Down, gap_us, vec![scan_code]),
-        ];
-        let rejected_overlap = matches!(
-            compile_runtime_intents(&overlapping, &[scan_code]),
-            Err(CompileError::OverlappingSameKeyDown { .. })
-        );
-        prop_assert!(rejected_overlap);
-    }
-
-    /// Generation order follows the immutable key registry regardless of the
-    /// order in which a chord's scan codes were authored.
-    #[test]
-    fn canonical_chord_order_is_stable(
-        mut scan_codes in prop::collection::vec(2_u16..=16, 2..=15),
-        rotation in any::<usize>(),
-    ) {
-        scan_codes.sort_unstable();
-        scan_codes.dedup();
-        prop_assume!(scan_codes.len() >= 2);
-
-        let mut allowed = scan_codes.clone();
-        let allowed_len = allowed.len();
-        allowed.rotate_left(rotation % allowed_len);
-        let mut authored = allowed.clone();
-        authored.reverse();
-        let actions = vec![
-            action(1, ActionKind::Down, 0, authored.clone()),
-            action(2, ActionKind::Up, 1_000, authored),
-        ];
-        let schedule = compile_runtime_intents(&actions, &allowed)
-            .expect("unique allowed chord must compile");
-        let actual: Vec<u16> = schedule.down_chords[0]
-            .intents
-            .iter()
-            .map(|intent| intent.scan_code)
-            .collect();
-        prop_assert_eq!(actual, allowed);
-    }
-
-    /// Actions with scan codes outside the registered allowlist fail closed.
-    #[test]
-    fn unregistered_scan_code_actions_are_rejected(
-        allowed_code in 2_u16..=10,
-        unregistered_code in 11_u16..=20,
-    ) {
-        let actions = vec![
-            action(1, ActionKind::Down, 0, vec![unregistered_code]),
-            action(2, ActionKind::Up, 1_000, vec![unregistered_code]),
-        ];
-        let err = compile_runtime_intents(&actions, &[allowed_code]);
-        let rejected = matches!(err, Err(CompileError::ScanCodeNotAllowed { .. }));
-        prop_assert!(rejected);
-    }
+#[test]
+fn rejects_duplicate_allowed_scan_codes_and_empty_chords() {
+    assert_eq!(
+        build_onset_plan(&[], &[0x15, 0x15], 16_667),
+        Err(PlanError::DuplicateAllowedScanCode(0x15))
+    );
+    assert_eq!(
+        build_onset_plan(&[], &[], 16_667),
+        Err(PlanError::InvalidAllowedScanCodeCount)
+    );
+    assert_eq!(
+        build_onset_plan(
+            &[OnsetChordInput {
+                source_action_index: 0,
+                scheduled_us: 0,
+                scan_codes: smallvec::SmallVec::new(),
+            }],
+            &ALLOWED_15,
+            16_667,
+        ),
+        Err(PlanError::InvalidChordSize { action_index: 0 })
+    );
+    assert_eq!(
+        build_onset_plan(
+            &[OnsetChordInput {
+                source_action_index: 0,
+                scheduled_us: 0,
+                scan_codes: vec![ALLOWED_15[0], ALLOWED_15[0]].into(),
+            }],
+            &ALLOWED_15,
+            16_667,
+        ),
+        Err(PlanError::DuplicateChordScanCode {
+            action_index: 0,
+            scan_code: ALLOWED_15[0],
+        })
+    );
 }

@@ -250,6 +250,32 @@ describe('UpdateDialog', () => {
     expect(handoffSpy).toHaveBeenCalledOnce();
   });
 
+  it('renders pending handoff as Preparing update… instead of Installing or No update available', async () => {
+    const bridge = createMockBridge();
+    const useStore = createDesktopStore(bridge);
+    await act(async () => useStore.getState().initialize());
+
+    act(() => {
+      useStore.setState({
+        update: {
+          ...useStore.getState().update,
+          state: 'available',
+          availableVersion: '4.2.0',
+          dialogOpen: true,
+          installRequestPending: true,
+          progress: null,
+        },
+      });
+    });
+
+    render(<UpdateDialog useStore={useStore} />);
+
+    expect(screen.getByRole('heading', { name: 'Preparing update…' })).toBeInTheDocument();
+    expect(screen.getByText('Starting the update handoff…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Close update' })).toBeDisabled();
+    expect(screen.queryByText('No update available')).not.toBeInTheDocument();
+  });
+
   it('disables buttons when busy installing or checking', async () => {
     const bridge = createMockBridge();
     const useStore = createDesktopStore(bridge);

@@ -135,10 +135,9 @@ fn dispatch_next(
                 up_mask,
                 down_chord,
                 timing_window,
+                ..
             } => {
-                let down_chord: Option<sky_dispatch_core::executor::DownChordMetadata> =
-                    down_chord.map(Into::into);
-                let down_mask = down_chord.as_ref().map_or(0, |chord| chord.down_mask);
+                let down_mask = down_chord.as_ref().map_or(0, |chord| chord.key_mask);
                 let candidate = harness
                     .stage_candidate_with_scheduler_window_for_test(
                         up_mask,
@@ -288,7 +287,8 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
                 up_mask,
                 down_chord,
                 timing_window,
-            } => (up_mask, down_chord.map(Into::into), timing_window),
+                ..
+            } => (up_mask, down_chord, timing_window),
             decision => {
                 return Err(format!(
                     "scheduler did not admit its authored Down after Resume: {decision:?}"

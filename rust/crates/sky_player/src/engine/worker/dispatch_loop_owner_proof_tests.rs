@@ -1,7 +1,6 @@
-use super::support::{candidate_at, target_at, test_action, wait_until_qpc};
+use super::support::{candidate_at, target_at, test_chord, wait_until_qpc};
 use crate::engine::test_support::ProductionDispatchTestHarness;
 use crate::engine::worker::StagedDispatchOutcome;
-use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_win32::input::PhysicalPacket;
 
 struct ForegroundTestReset;
@@ -17,11 +16,8 @@ impl Drop for ForegroundTestReset {
 fn immutable_session_target_loss_withholds_origin_up_and_keeps_release_obligation() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundTestReset;
-    let actions = [
-        test_action(1, ActionKind::Down, 0, 0x15),
-        test_action(2, ActionKind::Up, 20_000, 0x15),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(1, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("test epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)

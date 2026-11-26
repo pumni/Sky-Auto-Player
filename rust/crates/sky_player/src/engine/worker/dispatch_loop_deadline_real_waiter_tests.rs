@@ -1,12 +1,8 @@
-use super::replan_timing::{timing_action, timing_harness_without_focus};
-use super::support::ActionKind;
+use super::replan_timing::{timing_chord, timing_harness_without_focus};
 #[test]
 fn real_waiter_smoke_wakes_for_a_future_qpc_deadline() {
-    let actions = [
-        timing_action(6674, ActionKind::Down, 0),
-        timing_action(6675, ActionKind::Up, 1_000_000),
-    ];
-    let (mut harness, _, _) = timing_harness_without_focus(&actions, &[]);
+    let chords = [timing_chord(6674, 0)];
+    let (mut harness, _, _) = timing_harness_without_focus(&chords, &[]);
     let start_qpc = harness.qpc_now_for_test().expect("real waiter start QPC");
     let deadline_qpc = start_qpc
         .checked_add_duration(

@@ -1,8 +1,7 @@
-use super::{ACCEPTANCE_HOLD_FRAMES, ACCEPTANCE_FRAME_US, Scenario, ScenarioPlan, Verdict, action};
+use super::{ACCEPTANCE_HOLD_FRAMES, ACCEPTANCE_FRAME_US, Scenario, ScenarioPlan, Verdict, onset};
 use sky_dispatch_core::accounting::GenerationAccounting;
-use sky_dispatch_core::model::ActionKind;
 use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
-use sky_player::adapter_support::compile_runtime_intents;
+use sky_player::adapter_support::build_onset_plan;
 use sky_player::engine::NativeDispatchSession;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -95,19 +94,19 @@ pub(super) fn generation_stress_scenario_plan(
     timing_margin_us: u64,
 ) -> Result<ScenarioPlan, String> {
     let hold_us = ACCEPTANCE_HOLD_FRAMES * ACCEPTANCE_FRAME_US + timing_margin_us;
-    let mut actions = Vec::with_capacity(SHORT_UP_GAP_STRESS_CYCLES * 2);
+    let mut chords = Vec::with_capacity(SHORT_UP_GAP_STRESS_CYCLES);
     let mut next_down_us = 50_000_u64;
     for cycle in 0..SHORT_UP_GAP_STRESS_CYCLES {
-        let down_index = u32::try_from(cycle * 2).map_err(|error| error.to_string())?;
-        let up_us = next_down_us.checked_add(hold_us).ok_or("stress schedule overflow")?;
-        actions.push(action(down_index, ActionKind::Down, next_down_us, &[0]));
-        actions.push(action(down_index + 1, ActionKind::Up, up_us, &[0]));
-        // The next same-key Down is authored exactly at the paired Up. The
+        let down_index = u32::try_from(cycle).map_err(|error| error.to_string())?;
+        chords.push(onset(down_index, next_down_us, &[0]));
+        // The next same-key Down is authored exactly at onset + H. The
         // executor must send Up first, commit it, then re-evaluate Down.
-        next_down_us = up_us;
+        next_down_us = next_down_us
+            .checked_add(hold_us)
+            .ok_or("stress schedule overflow")?;
     }
-    let schedule = compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
-        .map_err(|error| format!("short-Up-gap stress schedule compilation failed: {error}"))?;
+    let schedule = build_onset_plan(&chords, &PHYSICAL_INSTRUMENT_SCAN_CODES, hold_us)
+        .map_err(|error| format!("short-Up-gap stress onset plan failed: {error}"))?;
     Ok(ScenarioPlan {
         schedule,
         profile: None,

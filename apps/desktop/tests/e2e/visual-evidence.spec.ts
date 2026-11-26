@@ -1,6 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { expect, type Page, test } from '@playwright/test';
+import { expect, type Locator, type Page, test } from '@playwright/test';
 import { chooseSelectOption, palettes } from './testHelpers';
 
 const captureStage = process.env.GRAPHITE_WORKSPACE_CAPTURE;
@@ -651,10 +651,10 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   const runtimePlayer = await startDryRunWithSelection(page);
   const runtime = await openRuntimeDiagnostics(page);
   await expect(
-    runtime.getByText('Mode: Dry run · no physical input sent', { exact: true }),
+    runtime.getByText('Mode: Test mode (dry run) · no physical input sent', { exact: true }),
   ).toBeVisible();
   await expect(
-    runtime.getByText('Dry run · sender timing not measured', { exact: true }),
+    runtime.getByText('Test mode (dry run) · sender timing not measured', { exact: true }),
   ).toBeVisible();
   await expect(
     runtime.getByText(
@@ -797,7 +797,7 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   await expect(compactProfile.getByLabel('FPS')).toBeVisible();
   if (shouldCapture('profile-expanded'))
     await capture(page, 'candidate-profile-expanded-800x560.png');
-  await compactProfile.getByRole('combobox', { name: 'Base Hold' }).click();
+  await compactProfile.getByRole('combobox', { name: 'Base hold' }).click();
   await expect(page.locator('[data-slot="select-content"]:visible')).toBeVisible();
   if (shouldCapture('profile-select'))
     await capture(page, 'candidate-profile-select-open-800x560.png');
@@ -869,8 +869,47 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     await dialog.getByRole('button', { name: 'Appearance', exact: true }).click();
     return dialog;
   };
+  const selectThemeRadio = async (dialog: Locator, mode: 'light' | 'dark') => {
+    await dialog
+      .getByRole('radiogroup', { name: 'Theme' })
+      .getByRole('radio', { name: mode === 'light' ? 'Light' : 'Dark', exact: true })
+      .click();
+  };
+
+  // Capture all six Settings categories in Graphite Dark and Light at matched 1366x768 viewport
+  const pairedCategories = [
+    { id: 'playback', label: 'Playback' },
+    { id: 'appearance', label: 'Appearance' },
+    { id: 'diagnostics', label: 'Diagnostics' },
+    { id: 'updates', label: 'Updates' },
+    { id: 'donate', label: 'Donate' },
+    { id: 'about', label: 'About' },
+  ] as const;
+  const anyPairedSettingsCapture = pairedCategories.some(
+    ({ id }) => shouldCapture(`settings-${id}-dark`) || shouldCapture(`settings-${id}-light`),
+  );
+  if (anyPairedSettingsCapture) {
+    const pairedDialog = await appearanceSettings();
+    await selectThemeRadio(pairedDialog, 'dark');
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'dark');
+    for (const { id, label } of pairedCategories) {
+      await pairedDialog.getByRole('button', { name: label, exact: true }).click();
+      if (shouldCapture(`settings-${id}-dark`))
+        await capture(page, `candidate-settings-${id}-dark-1366x768.png`);
+    }
+    await pairedDialog.getByRole('button', { name: 'Appearance', exact: true }).click();
+    await selectThemeRadio(pairedDialog, 'light');
+    await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+    for (const { id, label } of pairedCategories) {
+      await pairedDialog.getByRole('button', { name: label, exact: true }).click();
+      if (shouldCapture(`settings-${id}-light`))
+        await capture(page, `candidate-settings-${id}-light-1366x768.png`);
+    }
+    await pairedDialog.getByRole('button', { name: 'Close settings' }).click();
+  }
+
   const lightSettings = await appearanceSettings();
-  await chooseSelectOption(page, lightSettings.getByRole('combobox', { name: 'Theme' }), 'light');
+  await selectThemeRadio(lightSettings, 'light');
   await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
   if (shouldCapture('appearance-preview-light'))
     await capture(page, 'candidate-appearance-preview-light-1366x768.png');
@@ -878,11 +917,7 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
 
   for (const palette of palettes) {
     const paletteSettings = await appearanceSettings();
-    await chooseSelectOption(
-      page,
-      paletteSettings.getByRole('combobox', { name: 'Theme' }),
-      'dark',
-    );
+    await selectThemeRadio(paletteSettings, 'dark');
     await chooseSelectOption(
       page,
       paletteSettings.getByRole('combobox', { name: 'Dark palette' }),
@@ -908,7 +943,7 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
     viewKey: string,
   ) => {
     const dialog = await appearanceSettings();
-    await chooseSelectOption(page, dialog.getByRole('combobox', { name: 'Theme' }), mode);
+    await selectThemeRadio(dialog, mode);
     if (mode === 'dark') {
       await chooseSelectOption(
         page,
@@ -973,6 +1008,52 @@ test('captures selected Graphite workspace evidence views on request', async ({ 
   measurements.workbenchColors = workbenchColors;
   if (shouldCapture('workbench-palette-contact-sheet'))
     await captureWorkbenchPaletteContactSheet(page);
+
+  // Paired Wave B captures: Light admission, Dark/Light playback recovery, Dark/Light Update dialog
+  if (shouldCapture('admission-light')) {
+    await page.emulateMedia({ colorScheme: 'light', reducedMotion: 'no-preference' });
+    await openApp(page, { width: 640, height: 448 }, 'expanded', true);
+    await page.getByRole('row', { name: /Aurora Landing/ }).click();
+    await page
+      .getByRole('contentinfo', { name: 'Player controls' })
+      .getByRole('button', { name: 'Play', exact: true })
+      .click();
+    const lightAdmission = page.locator('[data-slot="playback-admission"]');
+    await expect(lightAdmission).toBeVisible();
+    await expect
+      .poll(() => lightAdmission.evaluate((el) => getComputedStyle(el).opacity))
+      .toBe('1');
+    await capture(page, 'candidate-admission-light-640x448.png');
+  }
+
+  for (const mode of ['dark', 'light'] as const) {
+    if (shouldCapture(`recovery-${mode}`)) {
+      await page.emulateMedia({ colorScheme: mode, reducedMotion: 'no-preference' });
+      await page.setViewportSize({ width: 800, height: 560 });
+      await page.goto('/?mockStartFailure=target_not_found');
+      await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
+      await page.getByRole('row', { name: /Blue Bird/ }).click();
+      const recPlayer = page.getByRole('contentinfo', { name: 'Player controls' });
+      await recPlayer.getByRole('button', { name: 'Play', exact: true }).click();
+      const proceed = recPlayer.getByRole('button', { name: 'Proceed with current settings' });
+      if (await proceed.isVisible().catch(() => false)) await proceed.click();
+      const recovery = page.getByRole('alert');
+      await expect(recovery).toContainText('Sky window was not found');
+      await expect.poll(() => recovery.evaluate((el) => getComputedStyle(el).opacity)).toBe('1');
+      await capture(page, `candidate-recovery-${mode}-800x560.png`);
+    }
+    if (shouldCapture(`update-${mode}`)) {
+      await page.emulateMedia({ colorScheme: mode, reducedMotion: 'no-preference' });
+      await page.setViewportSize({ width: 800, height: 560 });
+      await page.goto('/?mockReleaseNotes=short');
+      await expect(page.locator('html')).toHaveAttribute('data-color-mode', mode);
+      await page.getByRole('button', { name: /Open update 4\.0\.0-alpha\.2-mock/ }).click();
+      const updateDialog = page.getByRole('dialog');
+      await expect(updateDialog).toContainText('Version 4.0.0-alpha.2-mock is available');
+      await capture(page, `candidate-update-${mode}-800x560.png`);
+    }
+  }
+  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'no-preference' });
 
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await openApp(page, { width: 640, height: 448 }, 'expanded', true);

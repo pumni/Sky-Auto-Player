@@ -1,7 +1,6 @@
 use super::support::*;
 use super::*;
 use crate::engine::snapshot::WorkerProgressState;
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 use sky_dispatch_win32::focus::WindowIdentityContinuity;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -34,26 +33,16 @@ fn wait_until(timeout: Duration, condition: impl Fn() -> bool, description: &'st
     }
 }
 
-fn schedule_long(keys: &[u16]) -> sky_dispatch_core::model::RuntimeSchedule {
+fn schedule_long(keys: &[u16]) -> sky_dispatch_core::model::OnsetPlan {
     let scan_codes = smallvec::SmallVec::from_slice(keys);
-    sky_dispatch_core::compile::compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: scan_codes.clone(),
-                reason: "initial-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 10_000_000,
-                scan_codes,
-                reason: "distant-up".into(),
-            },
-        ],
+    sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes,
+        }],
         keys,
+        10_000_000,
     )
     .expect("compile long schedule")
 }

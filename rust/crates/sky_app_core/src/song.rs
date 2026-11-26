@@ -171,24 +171,16 @@ pub fn scan_code_for_key(key: &str) -> Option<u16> {
         .map(|index| SKY_SCAN_CODES[index])
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ActionKind {
-    Down,
-    Up,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct KeyAction {
+pub struct OnsetChord {
     pub at_us: u64,
     pub scan_codes: Vec<u16>,
-    pub kind: ActionKind,
-    pub reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ScheduleMetadata {
-    pub actions: Vec<KeyAction>,
+    pub chords: Vec<OnsetChord>,
+    pub hold_us: u64,
     pub source_duration_us: u64,
     pub playback_duration_us: u64,
     pub duration_us: u64,
@@ -199,7 +191,7 @@ pub struct ScheduleMetadata {
     pub max_polyphony: usize,
     pub shortest_same_key_interval_us: Option<u64>,
     pub min_same_key_up_gap_us: Option<u64>,
-    /// Physically feasible repeats whose authored Up-to-Down gap is shorter
+    /// Physically feasible repeats whose nominal Up-to-Down gap is shorter
     /// than one configured frame.
     pub short_up_gap_repeat_count: usize,
     pub recommended_hold_frames: Option<f64>,
@@ -292,10 +284,9 @@ pub(crate) fn build_schedule_from_scaled_onsets(
     if !tempo_scale.is_finite() || tempo_scale <= 0.0 {
         return Err(SongError::InvalidTempo);
     }
-    // The authored Up follows the Down by H. Same-key repeats need no second
-    // post-Up floor; an Up at the next Down timestamp is ordered first.
-    let target_hold_us = policy.min_hold_us;
-    let min_hold_us = policy.min_hold_us;
+    // All onset chords share the materialized hold floor H; nominal Up-to-Down
+    // gaps and polyphony below are diagnostic only.
+    let hold_us = policy.min_hold_us;
     let raw_count = drafts.len();
     let mut seen = BTreeSet::new();
     drafts.retain(|(at, scan, _)| seen.insert((*at, *scan)));
@@ -307,7 +298,7 @@ pub(crate) fn build_schedule_from_scaled_onsets(
         next.insert(*scan, *at);
     }
 
-    let mut actions = Vec::with_capacity(drafts.len() * 2);
+    let mut chords_by_time = BTreeMap::<u64, Vec<u16>>::new();
     let mut impossible = 0;
     let mut short_up_gap_repeat_count = 0;
     let mut shortest = None;
@@ -317,77 +308,43 @@ pub(crate) fn build_schedule_from_scaled_onsets(
         if let Some(next_at) = next_at {
             let interval = next_at.saturating_sub(*at);
             shortest = Some(shortest.map_or(interval, |current: u64| current.min(interval)));
-            if interval < min_hold_us {
+            if interval < hold_us {
                 impossible += 1;
-            } else if interval - min_hold_us < policy.frame_us {
+            } else if interval - hold_us < policy.frame_us {
                 short_up_gap_repeat_count += 1;
             }
-        }
-        let actual_hold = target_hold_us;
-        if let Some(next_at) = next_at {
-            let gap = next_at.saturating_sub(*at).saturating_sub(actual_hold);
+            let gap = interval.saturating_sub(hold_us);
             min_up_gap = Some(min_up_gap.map_or(gap, |current: u64| current.min(gap)));
         }
-        let release_at_us = at
-            .checked_add(actual_hold)
-            .ok_or(SongError::TimingOverflow)?;
-        actions.push(KeyAction {
-            at_us: *at,
-            scan_codes: vec![*scan],
-            kind: ActionKind::Down,
-            reason: "onset".into(),
-        });
-        actions.push(KeyAction {
-            at_us: release_at_us,
-            scan_codes: vec![*scan],
-            kind: ActionKind::Up,
-            reason: if next_at.is_some() {
-                "repeat_release".into()
-            } else {
-                "release".into()
-            },
-        });
+        // Validate that every onset can accommodate the materialized pulse hold.
+        at.checked_add(hold_us).ok_or(SongError::TimingOverflow)?;
+        let entry = chords_by_time.entry(*at).or_default();
+        if !entry.contains(scan) {
+            entry.push(*scan);
+        }
     }
-    let mut grouped = BTreeMap::<(u64, ActionKind), (Vec<u16>, BTreeSet<String>)>::new();
-    for action in actions {
-        let entry = grouped.entry((action.at_us, action.kind)).or_default();
-        entry.0.extend(action.scan_codes);
-        entry.1.insert(action.reason);
-    }
-    let mut final_actions = grouped
+    let chords = chords_by_time
         .into_iter()
-        .map(|((at_us, kind), (mut scans, reasons))| {
-            let mut unique_scans = Vec::with_capacity(scans.len());
-            for scan in scans.drain(..) {
-                if !unique_scans.contains(&scan) {
-                    unique_scans.push(scan);
-                }
-            }
-            KeyAction {
-                at_us,
-                scan_codes: unique_scans,
-                kind,
-                reason: if reasons.len() == 1 {
-                    reasons.into_iter().next().unwrap_or_default()
-                } else {
-                    "mixed".into()
-                },
-            }
-        })
+        .map(|(at_us, scan_codes)| OnsetChord { at_us, scan_codes })
         .collect::<Vec<_>>();
-    final_actions.sort_by_key(|action| (action.at_us, matches!(action.kind, ActionKind::Down)));
-    let max_polyphony = max_polyphony(&final_actions);
-    let duration = final_actions
+    let max_polyphony = max_polyphony(&chords, hold_us);
+    let duration = chords
         .last()
-        .map(|action| action.at_us)
+        .map(|chord| {
+            chord
+                .at_us
+                .checked_add(hold_us)
+                .ok_or(SongError::TimingOverflow)
+        })
+        .transpose()?
         .unwrap_or_default();
     let mut warnings = Vec::new();
     let (recommended_hold_frames, recommended_tempo_scale) = if impossible > 0 {
         if let Some(shortest) = shortest {
-            let suggestion = bounded_tempo_scale_recommendation(if min_hold_us == 0 {
+            let suggestion = bounded_tempo_scale_recommendation(if hold_us == 0 {
                 tempo_scale
             } else {
-                tempo_scale * shortest as f64 / min_hold_us as f64
+                tempo_scale * shortest as f64 / hold_us as f64
             });
             if suggestion.is_none() {
                 warnings.push(
@@ -407,10 +364,11 @@ pub(crate) fn build_schedule_from_scaled_onsets(
         .map(|(at, _, _)| *at)
         .max()
         .unwrap_or_default()
-        .checked_add(target_hold_us)
+        .checked_add(hold_us)
         .ok_or(SongError::TimingOverflow)?;
     Ok(ScheduleMetadata {
-        actions: final_actions,
+        chords,
+        hold_us,
         source_duration_us,
         playback_duration_us: duration,
         duration_us: duration,
@@ -428,21 +386,17 @@ pub(crate) fn build_schedule_from_scaled_onsets(
     })
 }
 
-fn max_polyphony(actions: &[KeyAction]) -> usize {
-    let mut active = BTreeSet::new();
+fn max_polyphony(chords: &[OnsetChord], hold_us: u64) -> usize {
+    let mut active_release_by_scan = HashMap::<u16, u64>::new();
     let mut maximum = 0;
-    for action in actions {
-        match action.kind {
-            ActionKind::Down => {
-                active.extend(action.scan_codes.iter().copied());
-                maximum = maximum.max(active.len());
-            }
-            ActionKind::Up => {
-                for scan in &action.scan_codes {
-                    active.remove(scan);
-                }
-            }
+    for chord in chords {
+        // Equal release and onset timestamps order Up before Down.
+        active_release_by_scan.retain(|_, release_at| *release_at > chord.at_us);
+        let release_at = chord.at_us.saturating_add(hold_us);
+        for &scan in &chord.scan_codes {
+            active_release_by_scan.insert(scan, release_at);
         }
+        maximum = maximum.max(active_release_by_scan.len());
     }
     maximum
 }
@@ -464,11 +418,7 @@ pub fn analyze_schedule_with_context(
     current_hold_frames: f64,
     current_tempo_scale: f64,
 ) -> RiskReport {
-    let downs = schedule
-        .actions
-        .iter()
-        .filter(|action| matches!(action.kind, ActionKind::Down))
-        .collect::<Vec<_>>();
+    let downs = &schedule.chords;
     let mut dense: Vec<DenseCluster> = Vec::new();
     let mut left = 0usize;
     for right in 0..downs.len() {
@@ -642,16 +592,16 @@ pub fn analyze_schedule_with_context(
         recommendations,
         dense_clusters: dense,
         average_notes_per_second: average,
-        peak_notes_per_second_1s: peak_density(&downs),
+        peak_notes_per_second_1s: peak_density(downs),
         max_polyphony: schedule.max_polyphony,
         max_chord_size: downs
             .iter()
-            .map(|action| action.scan_codes.len())
+            .map(|chord| chord.scan_codes.len())
             .max()
             .unwrap_or_default(),
         chords_count: downs
             .iter()
-            .filter(|action| action.scan_codes.len() > 1)
+            .filter(|chord| chord.scan_codes.len() > 1)
             .count(),
         timing_stress_rate: if schedule.note_count == 0 {
             0.0
@@ -666,12 +616,12 @@ pub fn analyze_schedule_with_context(
     }
 }
 
-fn peak_density(downs: &[&KeyAction]) -> f64 {
+fn peak_density(downs: &[OnsetChord]) -> f64 {
     let mut peak = 0usize;
-    for (index, action) in downs.iter().enumerate() {
+    for (index, chord) in downs.iter().enumerate() {
         let count = downs[index..]
             .iter()
-            .take_while(|next| next.at_us.saturating_sub(action.at_us) <= 1_000_000)
+            .take_while(|next| next.at_us.saturating_sub(chord.at_us) <= 1_000_000)
             .count();
         peak = peak.max(count);
     }
@@ -713,7 +663,7 @@ mod tests {
         };
         let schedule = build_schedule(&song, 1.0, 1.0, 60).unwrap();
         assert_eq!(schedule.duplicate_note_count, 1);
-        assert_eq!(schedule.actions[0].scan_codes, vec![0x15, 0x16]);
+        assert_eq!(schedule.chords[0].scan_codes, vec![0x15, 0x16]);
     }
 
     #[test]
@@ -734,7 +684,7 @@ mod tests {
             ],
         };
         let schedule = build_schedule(&song, 1.0, 1.0, 60).unwrap();
-        assert_eq!(schedule.actions[0].scan_codes, vec![0x16, 0x15]);
+        assert_eq!(schedule.chords[0].scan_codes, vec![0x16, 0x15]);
     }
 
     #[test]
@@ -760,11 +710,11 @@ mod tests {
             .expect("valid margin");
         let feasible = build_schedule_with_policy(&song, 1.0, &margin_800).expect("schedule");
         assert_eq!(feasible.impossible_same_key_repeats, 0);
-        assert_eq!(feasible.actions[1].at_us, margin_800.min_hold_us);
+        assert_eq!(feasible.hold_us, margin_800.min_hold_us);
 
         let margin_change = build_schedule_with_policy(&song, 1.0, &margin_900).expect("schedule");
         assert_eq!(margin_change.impossible_same_key_repeats, 0);
-        assert_eq!(margin_change.actions[1].at_us, margin_900.min_hold_us);
+        assert_eq!(margin_change.hold_us, margin_900.min_hold_us);
     }
 
     #[test]
@@ -785,30 +735,17 @@ mod tests {
                 schedule.impossible_same_key_repeats, conflicts,
                 "interval={interval}"
             );
-            assert_eq!(
-                schedule
-                    .actions
-                    .iter()
-                    .find(|action| action.kind == ActionKind::Up)
-                    .map(|action| action.at_us),
-                Some(h),
-                "interval={interval}"
-            );
+            assert_eq!(schedule.hold_us, h, "interval={interval}");
+            assert_eq!(schedule.chords.len(), 2, "interval={interval}");
+            assert_eq!(schedule.chords[0].at_us, 0, "interval={interval}");
+            assert_eq!(schedule.chords[1].at_us, interval, "interval={interval}");
             assert_eq!(schedule.min_same_key_up_gap_us, Some(up_gap));
             assert_eq!(
                 schedule.short_up_gap_repeat_count, short_gap_count,
                 "interval={interval}"
             );
             if interval == h {
-                assert_eq!(
-                    schedule
-                        .actions
-                        .iter()
-                        .filter(|action| action.at_us == h)
-                        .map(|action| action.kind)
-                        .collect::<Vec<_>>(),
-                    [ActionKind::Up, ActionKind::Down]
-                );
+                assert_eq!(schedule.max_polyphony, 1);
                 let risk = analyze_schedule(&schedule);
                 assert_eq!(risk.severity, "medium");
                 assert_eq!(risk.short_up_gap_repeat_count, 1);
@@ -882,7 +819,7 @@ mod tests {
             60,
         )
         .expect("empty songs produce an empty schedule");
-        assert!(schedule.actions.is_empty());
+        assert!(schedule.chords.is_empty());
         assert_eq!(schedule.source_duration_us, 17_167);
     }
 

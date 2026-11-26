@@ -15,6 +15,7 @@ import {
   ScrollAreaViewport,
 } from '../ui/scroll-area';
 import {
+  computePlaybackHoldTiming,
   formatFpsFrameHint,
   formatHoldFramesHint,
   formatTempoHint,
@@ -152,12 +153,12 @@ export function PlayerTools({ useStore, utilityTriggerRef }: PlayerToolsProps) {
               side="top"
               align="end"
               sideOffset={8}
-              className="flex h-max max-h-(--available-height) max-[700px]:max-h-[min(360px,var(--available-height))] w-[min(360px,calc(100vw-24px))] min-w-[min(320px,calc(100vw-24px))] max-w-[calc(100vw-24px)] flex-col overflow-hidden rounded-pane border border-border bg-popover p-0 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              className="flex h-max max-h-(--available-height) max-[700px]:max-h-[min(360px,var(--available-height))] w-[min(360px,calc(100vw-24px))] min-w-[min(320px,calc(100vw-24px))] max-w-[calc(100vw-24px)] flex-col overflow-hidden p-0 shadow-2xl focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
               role="dialog"
               aria-label="Playback profile"
             >
               <ScrollAreaRoot className="min-h-0 flex-1">
-                <ScrollAreaViewport className="rounded-pane">
+                <ScrollAreaViewport className="rounded-popover">
                   <ScrollAreaContent className="grid min-w-0 gap-2.5 p-4">
                     <header className="flex min-w-0 items-baseline justify-between gap-2">
                       <h3 className="m-0 shrink-0 text-sm font-semibold leading-5 text-foreground">
@@ -264,15 +265,19 @@ function ProfileFields({
   onAdvancedTimingOpenChange,
 }: ProfileFieldsProps) {
   const holdId = useId();
+  const holdHintId = useId();
   const tempoId = useId();
   const fpsId = useId();
+  const fpsHintId = useId();
 
   if (!defaults || !bootstrap) {
     return <span className="text-muted-foreground">Profile unavailable</span>;
   }
-  const frameUs = Math.ceil(1_000_000 / defaults.fps);
-  const frameBaseHoldUs = Math.ceil(defaults.hold_frames * frameUs);
-  const minHoldUs = frameBaseHoldUs + defaults.timing_margin_us;
+  const { frameUs, frameBaseHoldUs, minHoldUs } = computePlaybackHoldTiming(
+    defaults.fps,
+    defaults.hold_frames,
+    defaults.timing_margin_us,
+  );
 
   const holdOptions = bootstrap.option_sets.hold_frames.map((value) => ({
     value: String(value),
@@ -297,7 +302,7 @@ function ProfileFields({
     <>
       <div className="grid min-w-0 gap-0.5">
         <label className="flex items-center gap-1 text-xs text-text-tertiary" htmlFor={holdId}>
-          Base Hold
+          Base hold
         </label>
         <Select
           value={String(defaults.hold_frames)}
@@ -306,9 +311,14 @@ function ProfileFields({
               void patchSettings({ playbackDefaults: { holdFrames: Number(value) } });
           }}
         >
-          <SelectTrigger id={holdId} className="h-8" aria-label="Base Hold">
+          <SelectTrigger
+            id={holdId}
+            className="h-8"
+            aria-label="Base hold"
+            aria-describedby={holdHintId}
+          >
             <SelectValue>
-              {(value: string | null) => (value === null ? 'Base Hold' : `${value}f`)}
+              {(value: string | null) => (value === null ? 'Base hold' : `${value}f`)}
             </SelectValue>
           </SelectTrigger>
           <SelectContent className="min-w-40">
@@ -320,7 +330,7 @@ function ProfileFields({
             ))}
           </SelectContent>
         </Select>
-        <span className="text-xs leading-4 text-text-tertiary">
+        <span id={holdHintId} className="text-xs leading-4 text-text-tertiary">
           {formatHoldFramesHint(defaults.hold_frames, defaults.fps)}
         </span>
       </div>
@@ -378,7 +388,12 @@ function ProfileFields({
                   void patchSettings({ playbackDefaults: { fps: Number(value) } });
               }}
             >
-              <SelectTrigger id={fpsId} className="h-8" aria-label="FPS">
+              <SelectTrigger
+                id={fpsId}
+                className="h-8"
+                aria-label="FPS"
+                aria-describedby={fpsHintId}
+              >
                 <SelectValue>{(value: string | null) => value ?? 'FPS'}</SelectValue>
               </SelectTrigger>
               <SelectContent className="min-w-40">
@@ -390,6 +405,9 @@ function ProfileFields({
                 ))}
               </SelectContent>
             </Select>
+            <span id={fpsHintId} className="sr-only">
+              Frames per second ({formatFpsFrameHint(defaults.fps)})
+            </span>
           </div>
           <TimingMarginControl
             value={defaults.timing_margin_us}

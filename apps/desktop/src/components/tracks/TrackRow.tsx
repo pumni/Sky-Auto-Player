@@ -8,6 +8,8 @@ import { Button } from '../ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { TrackActionsMenu } from './TrackActionsMenu';
 
+export const TRACK_ROW_HEIGHT_PX = 46;
+
 interface TrackRowProps {
   index: number;
   ordinal?: number;
@@ -75,12 +77,15 @@ export const TrackRow = memo(function TrackRow({
 }: TrackRowProps) {
   const [clippedHoverSongId, setClippedHoverSongId] = useState<string | null>(null);
   const titleTextRef = useRef<HTMLSpanElement>(null);
-  const style: CSSProperties = { transform: `translateY(${start}px)` };
+  const style: CSSProperties = {
+    height: TRACK_ROW_HEIGHT_PX,
+    transform: `translateY(${start}px)`,
+  };
   const metadata = row.metadata_state === 'ready' ? null : metadataStatus(row.metadata_state);
   return (
     <div
       id={`song-row-${row.song_id}`}
-      className={`group absolute inset-x-1.5 grid h-[46px] min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 rounded-control border-l-2 px-[10px] pr-3 text-[13px] font-medium outline-none transition-colors duration-fast hover:bg-row-hover focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/track-browser:right-1 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-2 @max-[440px]/track-browser:left-1 @max-[440px]/track-browser:right-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:pl-0.5 @max-[440px]/track-browser:pr-1 motion-reduce:transition-none ${selected ? 'border-l-accent-ink' : 'border-l-transparent'} ${selected ? 'bg-selection font-semibold text-foreground' : playing ? 'bg-playing text-text-secondary' : 'text-text-secondary'} data-[state=selected]:hover:bg-selection data-[state=selected]:focus-visible:bg-selection data-[state=playing]:hover:bg-playing data-[state=playing]:focus-visible:bg-playing data-[state=selected-playing]:hover:bg-selection data-[state=selected-playing]:focus-visible:bg-selection`}
+      className={`group absolute inset-x-1.5 grid min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 rounded-control border-l-2 px-[10px] pr-3 text-sm font-normal leading-5 text-foreground outline-none transition-colors duration-fast hover:bg-row-hover focus-visible:ring-2 focus-visible:ring-ring @max-[520px]/track-browser:right-1 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-2 @max-[520px]/track-browser:text-[13px] @max-[520px]/track-browser:font-medium @max-[440px]/track-browser:left-1 @max-[440px]/track-browser:right-1 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:pl-0.5 @max-[440px]/track-browser:pr-1 motion-reduce:transition-none ${selected ? 'border-l-accent-ink bg-selection' : playing ? 'border-l-transparent bg-playing' : 'border-l-transparent'} data-[state=selected]:hover:bg-selection data-[state=selected]:focus-visible:bg-selection data-[state=playing]:hover:bg-playing data-[state=playing]:focus-visible:bg-playing data-[state=selected-playing]:hover:bg-selection data-[state=selected-playing]:focus-visible:bg-selection`}
       data-selected={selected}
       data-playing={playing}
       data-state={
@@ -135,7 +140,7 @@ export const TrackRow = memo(function TrackRow({
               <span
                 ref={titleTextRef}
                 data-track-title
-                className={`min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap ${playing ? 'font-semibold text-accent-ink' : ''}`}
+                className={`min-w-0 flex-[0_1_auto] overflow-hidden text-ellipsis whitespace-nowrap ${playing ? 'font-semibold text-accent-ink' : selected ? 'font-medium' : ''}`}
               />
             }
             onPointerEnter={(event) => {
@@ -186,12 +191,15 @@ export const TrackRow = memo(function TrackRow({
         </Button>
       </span>
       <span
-        className="min-w-0 text-right tabular-nums text-text-secondary @max-[520px]/track-browser:hidden"
+        className="min-w-0 text-right text-xs leading-[18px] tabular-nums text-text-secondary @max-[520px]/track-browser:hidden"
         role="gridcell"
       >
         {metadata ? '—' : (row.note_count ?? '—')}
       </span>
-      <span className="min-w-0 text-right tabular-nums text-text-secondary" role="gridcell">
+      <span
+        className="min-w-0 text-right text-xs leading-[18px] tabular-nums text-text-secondary"
+        role="gridcell"
+      >
         {metadata ? '—' : formatDuration(row.duration_us)}
       </span>
     </div>
@@ -226,11 +234,11 @@ export const VirtualTrackRow = memo(function VirtualTrackRow({
   if (!row) {
     return (
       <div
-        className="absolute inset-x-1.5 grid h-[46px] min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 px-[10px] pr-3 text-[13px] text-text-tertiary opacity-70 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-2 @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:px-0.5 @max-[440px]/track-browser:pr-1"
+        className="absolute inset-x-1.5 grid min-w-0 grid-cols-[36px_minmax(0,1fr)_32px_72px_76px] items-center gap-2 px-[10px] pr-3 text-sm leading-5 text-text-tertiary opacity-70 @max-[520px]/track-browser:grid-cols-[30px_minmax(0,1fr)_32px_76px] @max-[520px]/track-browser:px-1 @max-[520px]/track-browser:pr-2 @max-[520px]/track-browser:text-[13px] @max-[440px]/track-browser:grid-cols-[26px_minmax(0,1fr)_32px_70px] @max-[440px]/track-browser:gap-[5px] @max-[440px]/track-browser:px-0.5 @max-[440px]/track-browser:pr-1"
         role="row"
         aria-busy="true"
         aria-rowindex={index + 2}
-        style={{ transform: `translateY(${start}px)` }}
+        style={{ height: TRACK_ROW_HEIGHT_PX, transform: `translateY(${start}px)` }}
       >
         <span className="min-w-0 text-center tabular-nums" role="gridcell">
           {sourceIndex + 1}

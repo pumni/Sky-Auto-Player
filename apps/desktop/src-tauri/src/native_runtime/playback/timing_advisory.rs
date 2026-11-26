@@ -25,7 +25,7 @@ pub(super) fn analyze_variant(
     if let Err(reason) = validate_policy(config, policy) {
         return unavailable(result, &reason);
     }
-    if schedule.actions.len() > MAX_TIMING_ADVISORY_GENERATIONS.saturating_mul(2) {
+    if schedule.chords.len() > MAX_TIMING_ADVISORY_GENERATIONS {
         return unavailable(
             result,
             "The authored schedule exceeds the generation advisory limit.",
@@ -35,15 +35,14 @@ pub(super) fn analyze_variant(
         Ok(compiled) => analyze_compiled_stream(&compiled, result, policy, cancelled, || {}),
         Err(error) => unavailable(
             result,
-            &format!("The canonical generation schedule could not be inspected: {error}"),
+            &format!("The canonical onset plan could not be inspected: {error}"),
         ),
     }
 }
 
 #[cfg(test)]
 pub(super) fn analyze_compiled_variant_with_model_hook(
-    _source_action_count: usize,
-    compiled: &sky_player::adapter_support::RuntimeSchedule,
+    compiled: &sky_player::adapter_support::OnsetPlan,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,
@@ -62,8 +61,7 @@ pub(super) fn analyze_compiled_variant_with_model_hook(
 
 #[cfg(not(test))]
 pub(super) fn analyze_compiled_variant(
-    _source_action_count: usize,
-    compiled: &sky_player::adapter_support::RuntimeSchedule,
+    compiled: &sky_player::adapter_support::OnsetPlan,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,
@@ -73,7 +71,6 @@ pub(super) fn analyze_compiled_variant(
 }
 
 pub(super) fn unavailable_compiled_variant(
-    _source_action_count: usize,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,
@@ -91,7 +88,7 @@ pub(super) fn unavailable_compiled_variant(
 }
 
 fn analyze_compiled_variant_with_hook(
-    compiled: &sky_player::adapter_support::RuntimeSchedule,
+    compiled: &sky_player::adapter_support::OnsetPlan,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,
@@ -111,8 +108,79 @@ fn analyze_compiled_variant_with_hook(
     analyze_compiled_stream(compiled, result, policy, cancelled, before_analysis)
 }
 
+/// Count the distinct union of authored onset timestamps (`chord.scheduled_us`)
+/// and nominal release timestamps (`chord.scheduled_us + hold_us`) in O(n) time
+/// and O(1) extra space using two sorted cursors, with bounded cancellation checks.
+#[cfg(test)]
+pub(crate) fn count_authored_timestamp_groups(
+    chords: &[sky_player::adapter_support::OnsetChord],
+    hold_us: u64,
+) -> Result<u64, String> {
+    count_authored_timestamp_groups_with_cancellation(chords, hold_us, &AtomicBool::new(false))
+}
+
+pub(crate) fn count_authored_timestamp_groups_with_cancellation(
+    chords: &[sky_player::adapter_support::OnsetChord],
+    hold_us: u64,
+    cancelled: &AtomicBool,
+) -> Result<u64, String> {
+    const CHECKPOINT_INTERVAL: usize = 4096;
+    let n = chords.len();
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut count = 0u64;
+    let mut steps = 0usize;
+    while i < n && j < n {
+        if steps.is_multiple_of(CHECKPOINT_INTERVAL) && cancelled.load(Ordering::Acquire) {
+            return Err("analysis was cancelled during timestamp group scan".to_string());
+        }
+        steps += 1;
+        let onset_us = chords[i].scheduled_us;
+        let release_us = chords[j]
+            .scheduled_us
+            .checked_add(hold_us)
+            .ok_or_else(|| "nominal release timestamp overflow".to_string())?;
+        match onset_us.cmp(&release_us) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                i += 1;
+                j += 1;
+            }
+        }
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| "timestamp group count overflow".to_string())?;
+    }
+    while j < n {
+        if steps.is_multiple_of(CHECKPOINT_INTERVAL) && cancelled.load(Ordering::Acquire) {
+            return Err("analysis was cancelled during timestamp group scan".to_string());
+        }
+        steps += 1;
+        chords[j]
+            .scheduled_us
+            .checked_add(hold_us)
+            .ok_or_else(|| "nominal release timestamp overflow".to_string())?;
+        j += 1;
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| "timestamp group count overflow".to_string())?;
+    }
+    while i < n {
+        if steps.is_multiple_of(CHECKPOINT_INTERVAL) && cancelled.load(Ordering::Acquire) {
+            return Err("analysis was cancelled during timestamp group scan".to_string());
+        }
+        steps += 1;
+        i += 1;
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| "timestamp group count overflow".to_string())?;
+    }
+    Ok(count)
+}
+
 fn analyze_compiled_stream(
-    compiled: &sky_player::adapter_support::RuntimeSchedule,
+    compiled: &sky_player::adapter_support::OnsetPlan,
     mut result: GenerationTimingAdvisoryDto,
     policy: &MaterializedTimingPolicy,
     cancelled: &AtomicBool,
@@ -124,14 +192,21 @@ fn analyze_compiled_stream(
             "analysis was cancelled before generation inspection",
         );
     }
-    let generation_count = match usize::try_from(compiled.generation_count) {
+    let generation_count = match usize::try_from(compiled.generation_count()) {
         Ok(count) => count,
         Err(_) => return unavailable(result, "The generation count exceeds addressable memory."),
     };
-    result.total_authored_timestamp_group_count =
-        Some(compiled.authored_timestamp_group_count as u64);
-    result.down_generation_count = Some(compiled.generation_count);
-    result.unmatched_up_count = Some(compiled.unmatched_ups.len() as u64);
+    let timestamp_group_count = match count_authored_timestamp_groups_with_cancellation(
+        compiled.chords(),
+        compiled.hold_us(),
+        cancelled,
+    ) {
+        Ok(count) => count,
+        Err(reason) => return unavailable(result, &reason),
+    };
+    result.total_authored_timestamp_group_count = Some(timestamp_group_count);
+    result.down_generation_count = Some(compiled.generation_count());
+    result.unmatched_up_count = Some(0);
     if generation_count > MAX_TIMING_ADVISORY_GENERATIONS {
         return unavailable(
             result,
@@ -174,14 +249,15 @@ fn analyze_compiled_stream(
     result.working_memory_limit_bytes = MAX_TIMING_ADVISORY_MEMORY_BYTES;
 
     // Test callers can stop at the canonical adapter boundary to exercise
-    // cancellation while generation pairs are being inspected.
+    // cancellation while onset intervals are being inspected.
     before_analysis();
     if cancelled.load(Ordering::Acquire) {
-        return unavailable(result, "analysis was cancelled before paired-Up inspection");
+        return unavailable(result, "analysis was cancelled before onset inspection");
     }
 
-    let mut prior_up_by_slot = [None; sky_player::adapter_support::MAX_KEYS];
-    for (index, chord) in compiled.down_chords.iter().enumerate() {
+    let mut prior_onset_by_slot: [Option<u64>; sky_player::adapter_support::MAX_KEYS] =
+        [None; sky_player::adapter_support::MAX_KEYS];
+    for (index, chord) in compiled.chords().iter().enumerate() {
         if index % 256 == 0 && cancelled.load(Ordering::Acquire) {
             return unavailable(
                 result,
@@ -191,32 +267,31 @@ fn analyze_compiled_stream(
         if chord.chord_index != index {
             return unavailable(
                 result,
-                "The canonical Down chord identifiers are not contiguous.",
+                "The canonical onset chord identifiers are not contiguous.",
             );
         }
-        for generation in &chord.intents {
-            let slot = usize::from(generation.key_slot);
-            let Some(prior_up) = prior_up_by_slot.get_mut(slot) else {
+        let mut remaining = chord.key_mask;
+        while remaining != 0 {
+            let slot = remaining.trailing_zeros() as usize;
+            remaining &= remaining - 1;
+            let Some(prior_onset) = prior_onset_by_slot.get_mut(slot) else {
                 return unavailable(result, "A generation refers to an invalid key slot.");
             };
-            if let Some(up_us) = *prior_up {
-                let Some(gap_us) = chord.scheduled_us.checked_sub(up_us) else {
+            if let Some(prev_onset_us) = *prior_onset {
+                let Some(nominal_up_us) = prev_onset_us.checked_add(policy.min_hold_us) else {
+                    return unavailable(result, "A nominal release timestamp overflowed.");
+                };
+                let Some(gap_us) = chord.scheduled_us.checked_sub(nominal_up_us) else {
                     return unavailable(
                         result,
-                        "A same-key Down precedes the prior paired authored Up.",
+                        "A same-key onset interval is shorter than the required hold floor.",
                     );
                 };
                 if gap_us < policy.frame_us {
                     result.short_up_gap_repeat_count += 1;
                 }
             }
-            if generation.paired_up_offset_us < chord.scheduled_us {
-                return unavailable(
-                    result,
-                    "A generation's paired authored Up precedes its Down.",
-                );
-            }
-            *prior_up = Some(generation.paired_up_offset_us);
+            *prior_onset = Some(chord.scheduled_us);
         }
     }
     result.status = if result.short_up_gap_repeat_count > 0 {
@@ -226,11 +301,11 @@ fn analyze_compiled_stream(
     };
     result.explanation = if result.short_up_gap_repeat_count > 0 {
         format!(
-            "{} feasible same-key repeat(s) have an authored Up-to-Down gap shorter than one frame.",
+            "{} feasible same-key repeat(s) have a nominal Up-to-Down gap shorter than one frame.",
             result.short_up_gap_repeat_count
         )
     } else {
-        "No feasible same-key repeat has an authored Up-to-Down gap shorter than one frame.".into()
+        "No feasible same-key repeat has a nominal Up-to-Down gap shorter than one frame.".into()
     };
 
     let simulated = match simulate_dispatch_schedule(compiled, policy, cancelled) {
@@ -291,33 +366,41 @@ struct DispatchSimulationSummary {
 }
 
 fn simulate_dispatch_schedule(
-    schedule: &sky_player::adapter_support::RuntimeSchedule,
+    plan: &sky_player::adapter_support::OnsetPlan,
     policy: &MaterializedTimingPolicy,
     cancelled: &AtomicBool,
 ) -> Result<DispatchSimulationSummary, String> {
-    let hold_ticks = us_to_ticks_ceil(policy.min_hold_us, MODEL_QPC_FREQUENCY_HZ)?;
-    let mut executor = sky_player::adapter_support::DispatchExecutor::new_with_cancellation(
-        schedule,
-        sky_player::adapter_support::DurationTicks::from_raw(hold_ticks),
-        |us| {
-            us_to_ticks_ceil(us, MODEL_QPC_FREQUENCY_HZ)
-                .map(sky_player::adapter_support::TimelineTicks::from_raw)
-        },
-        || {
-            if cancelled.load(Ordering::Acquire) {
-                Err("cancelled".into())
-            } else {
-                Ok(())
-            }
-        },
-    )?;
-    let compiled_metrics = schedule
+    if plan.hold_us() != policy.min_hold_us {
+        return Err(format!(
+            "onset plan hold_us ({}) does not match policy min_hold_us ({})",
+            plan.hold_us(),
+            policy.min_hold_us
+        ));
+    }
+    let model_qpc_hz = std::num::NonZeroU64::new(MODEL_QPC_FREQUENCY_HZ)
+        .ok_or_else(|| "model QPC frequency must be nonzero".to_string())?;
+    let prepared =
+        sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
+            plan,
+            model_qpc_hz,
+            0,
+            || {
+                if cancelled.load(Ordering::Acquire) {
+                    Err("cancelled".into())
+                } else {
+                    Ok(())
+                }
+            },
+        )?;
+    let mut executor =
+        sky_player::adapter_support::DispatchExecutor::from_prepared_schedule(prepared);
+    let compiled_metrics = plan
         .memory_metrics()
-        .map_err(|error| format!("compiled schedule memory accounting failed: {error}"))?;
+        .map_err(|error| format!("compiled plan memory accounting failed: {error}"))?;
     let retained_schedule_bytes = compiled_metrics
         .heap_payload_bytes
         .checked_add(compiled_metrics.struct_bytes)
-        .ok_or_else(|| "compiled schedule memory accounting overflow".to_string())?
+        .ok_or_else(|| "compiled plan memory accounting overflow".to_string())?
         .max(compiled_metrics.compile_memory.phase_peak_capacity_bytes);
     let actual_executor_bytes = executor
         .try_memory_metrics()
@@ -329,14 +412,12 @@ fn simulate_dispatch_schedule(
             bytes > usize::try_from(MAX_TIMING_ADVISORY_MEMORY_BYTES).unwrap_or(usize::MAX)
         })
     {
-        return Err("the prepared generation schedule and executor exceed the offline advisory memory budget".into());
+        return Err(
+            "the prepared onset plan and executor exceed the offline advisory memory budget".into(),
+        );
     }
     let epoch = sky_player::adapter_support::QpcTicks::ZERO;
-    // Every generation can produce a Down and a paired Up. Each physical send
-    // can be preceded by one advancing Wait, followed by an optional schedule
-    // end Wait and the final Finished evaluation. Bound work by that event
-    // topology rather than a small fixed allowance that rejects sparse plans.
-    let max_iterations = usize::try_from(schedule.generation_count)
+    let max_iterations = usize::try_from(plan.generation_count())
         .ok()
         .and_then(|count| count.checked_mul(4))
         .and_then(|count| count.checked_add(2))
@@ -373,8 +454,9 @@ fn simulate_dispatch_schedule(
                 up_mask,
                 down_chord,
                 timing_window,
+                ..
             } => {
-                let down_mask = down_chord.map_or(0, |chord| chord.down_mask);
+                let down_mask = down_chord.map_or(0, |chord| chord.key_mask);
                 if up_mask & down_mask != 0 || up_mask | down_mask == 0 {
                     return Err("the executor returned an invalid physical send mask".into());
                 }
@@ -382,12 +464,11 @@ fn simulate_dispatch_schedule(
                 let mut h_constraint = 0u64;
                 let mut h_displacement = 0u64;
                 for timing in executor.up_slot_timings(up_mask) {
-                    let authored_up = timing.authored_up_offset_ticks.as_u64();
-                    let prepared_up_floor = timing.paired_up_not_before_offset_ticks.as_u64();
+                    let nominal_up = timing.nominal_up_offset_ticks.as_u64();
                     let physical_up_floor = timing.release_not_before_qpc.as_u64();
-                    let floor = authored_up.max(prepared_up_floor).max(physical_up_floor);
+                    let floor = nominal_up.max(physical_up_floor);
                     h_constraint = h_constraint.max(floor);
-                    h_displacement = h_displacement.max(floor.saturating_sub(authored_up));
+                    h_displacement = h_displacement.max(floor.saturating_sub(nominal_up));
                 }
                 let floor_ready = authored_target.max(h_constraint);
                 let constraint_ready = h_constraint.max(previous_worker_free.unwrap_or(0));
@@ -455,15 +536,6 @@ fn simulate_dispatch_schedule(
         return Err("cancelled".into());
     }
     Ok(summary)
-}
-
-fn us_to_ticks_ceil(microseconds: u64, frequency_hz: u64) -> Result<u64, String> {
-    let numerator = u128::from(microseconds)
-        .checked_mul(u128::from(frequency_hz))
-        .and_then(|value| value.checked_add(999_999))
-        .ok_or_else(|| "microseconds-to-QPC conversion overflow".to_string())?;
-    u64::try_from(numerator / 1_000_000)
-        .map_err(|_| "microseconds-to-QPC result exceeds the timeline range".to_string())
 }
 
 fn dispatch_model_unavailable(
@@ -544,7 +616,7 @@ fn unavailable(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sky_app_core::song::{ActionKind, KeyAction, ScheduleMetadata};
+    use sky_app_core::song::{OnsetChord, ScheduleMetadata};
 
     fn config(dry_run: bool) -> PlaybackConfigDto {
         PlaybackConfigDto {
@@ -565,19 +637,17 @@ mod tests {
         .expect("valid timing policy")
     }
 
-    fn schedule(actions: &[(ActionKind, u64, u16)]) -> ScheduleMetadata {
-        let actions = actions
+    fn schedule(chords: &[(u64, u16)], hold_us: u64) -> ScheduleMetadata {
+        let chords = chords
             .iter()
-            .enumerate()
-            .map(|(index, (kind, at_us, scan_code))| KeyAction {
-                at_us: *at_us,
-                scan_codes: vec![*scan_code],
-                kind: *kind,
-                reason: format!("action-{index}"),
+            .map(|&(at_us, scan_code)| OnsetChord {
+                at_us,
+                scan_codes: vec![scan_code],
             })
             .collect::<Vec<_>>();
         ScheduleMetadata {
-            actions,
+            chords,
+            hold_us,
             source_duration_us: 0,
             playback_duration_us: 0,
             duration_us: 0,
@@ -596,16 +666,10 @@ mod tests {
     }
 
     #[test]
-    fn reports_canonical_generation_and_authored_group_counts() {
+    fn reports_canonical_generation_and_onset_group_counts() {
         let config = config(false);
         let policy = policy(&config);
-        let authored = schedule(&[
-            (ActionKind::Down, 0, 0x15),
-            (ActionKind::Up, 17_467, 0x15),
-            (ActionKind::Down, 17_467, 0x15),
-            (ActionKind::Up, 34_934, 0x15),
-            (ActionKind::Up, 40_000, 0x16),
-        ]);
+        let authored = schedule(&[(0, 0x15), (17_467, 0x15)], policy.min_hold_us);
         let advisory = analyze_variant(
             &authored,
             &config,
@@ -614,9 +678,9 @@ mod tests {
             &AtomicBool::new(false),
         );
         assert_eq!(advisory.status, TimingAdvisoryStatus::ShortUpGapRisk);
-        assert_eq!(advisory.total_authored_timestamp_group_count, Some(4));
+        assert_eq!(advisory.total_authored_timestamp_group_count, Some(3));
         assert_eq!(advisory.down_generation_count, Some(2));
-        assert_eq!(advisory.unmatched_up_count, Some(1));
+        assert_eq!(advisory.unmatched_up_count, Some(0));
         assert_eq!(advisory.short_up_gap_repeat_count, 1);
         assert_eq!(advisory.effective_hold_floor_h_us, Some(policy.min_hold_us));
         assert_eq!(
@@ -627,17 +691,45 @@ mod tests {
     }
 
     #[test]
-    fn exact_one_frame_authored_up_gap_is_not_short_gap_risk() {
+    fn authored_timestamp_group_union_counts_empty_single_coincident_disjoint_and_overflow() {
+        use sky_player::adapter_support::OnsetChord;
+
+        let chord = |chord_index, scheduled_us| OnsetChord {
+            chord_index,
+            scheduled_us,
+            key_mask: 1,
+            source_action_index: chord_index as u32,
+        };
+        assert_eq!(count_authored_timestamp_groups(&[], 17_467).unwrap(), 0);
+        assert_eq!(
+            count_authored_timestamp_groups(&[chord(0, 1_000)], 17_467).unwrap(),
+            2
+        );
+        assert_eq!(
+            count_authored_timestamp_groups(&[chord(0, 1_000)], 0).unwrap(),
+            1
+        );
+        // Coincident: onsets {0, H} U releases {H, 2H} = {0, H, 2H} -> 3 groups
+        assert_eq!(
+            count_authored_timestamp_groups(&[chord(0, 0), chord(1, 17_467)], 17_467).unwrap(),
+            3
+        );
+        // Disjoint: onsets {0, 40_000} U releases {17_467, 57_467} -> 4 groups
+        assert_eq!(
+            count_authored_timestamp_groups(&[chord(0, 0), chord(1, 40_000)], 17_467).unwrap(),
+            4
+        );
+        // Overflow: scheduled_us + hold_us > u64::MAX
+        assert!(count_authored_timestamp_groups(&[chord(0, u64::MAX)], 1).is_err());
+    }
+
+    #[test]
+    fn exact_one_frame_nominal_up_gap_is_not_short_gap_risk() {
         let config = config(false);
         let policy = policy(&config);
         let frame_us = policy.frame_us;
-        let up_us = policy.min_hold_us;
-        let authored = schedule(&[
-            (ActionKind::Down, 0, 0x15),
-            (ActionKind::Up, up_us, 0x15),
-            (ActionKind::Down, up_us + frame_us, 0x15),
-            (ActionKind::Up, up_us * 2 + frame_us, 0x15),
-        ]);
+        let h = policy.min_hold_us;
+        let authored = schedule(&[(0, 0x15), (h + frame_us, 0x15)], h);
         let advisory = analyze_variant(
             &authored,
             &config,
@@ -650,17 +742,13 @@ mod tests {
     }
 
     #[test]
-    fn sparse_nine_note_schedule_with_unpaired_tail_finishes_the_bounded_executor_model() {
+    fn sparse_nine_note_schedule_finishes_the_bounded_executor_model() {
         let config = config(false);
         let policy = policy(&config);
-        let mut actions = Vec::with_capacity(19);
-        for note in 1..=9_u64 {
-            let down_us = note * 100_000;
-            actions.push((ActionKind::Down, down_us, 0x15));
-            actions.push((ActionKind::Up, down_us + policy.min_hold_us, 0x15));
-        }
-        actions.push((ActionKind::Up, 1_000_000, 0x16));
-        let authored = schedule(&actions);
+        let chords = (1..=9_u64)
+            .map(|note| (note * 100_000, 0x15))
+            .collect::<Vec<_>>();
+        let authored = schedule(&chords, policy.min_hold_us);
 
         let advisory = analyze_variant(
             &authored,
@@ -672,7 +760,7 @@ mod tests {
 
         assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
         assert_eq!(advisory.down_generation_count, Some(9));
-        assert_eq!(advisory.unmatched_up_count, Some(1));
+        assert_eq!(advisory.unmatched_up_count, Some(0));
         assert_eq!(advisory.modeled_send_count, 18);
         assert_ne!(
             advisory.dispatch_model_status,
@@ -681,19 +769,12 @@ mod tests {
     }
 
     #[test]
-    fn executor_model_reports_late_up_and_hol_independently_of_one_frame_authored_gap() {
+    fn executor_model_reports_late_up_and_hol_independently_of_one_frame_nominal_gap() {
         let config = config(false);
         let policy = policy(&config);
         let h = policy.min_hold_us;
         let frame = policy.frame_us;
-        let authored = schedule(&[
-            (ActionKind::Down, 0, 0x15),
-            (ActionKind::Down, 10, 0x16),
-            (ActionKind::Up, h, 0x15),
-            (ActionKind::Up, h + 10, 0x16),
-            (ActionKind::Down, h + frame, 0x15),
-            (ActionKind::Up, h * 2 + frame, 0x15),
-        ]);
+        let authored = schedule(&[(0, 0x15), (10, 0x16), (h + frame, 0x15)], h);
 
         let advisory = analyze_variant(
             &authored,
@@ -721,7 +802,7 @@ mod tests {
     fn cancelled_and_invalid_schedules_fail_closed_as_advisory_only() {
         let config = config(false);
         let policy = policy(&config);
-        let authored = schedule(&[(ActionKind::Down, 0, 0x15), (ActionKind::Up, 20_000, 0x15)]);
+        let authored = schedule(&[(0, 0x15)], policy.min_hold_us);
         let cancelled = analyze_variant(
             &authored,
             &config,
@@ -731,10 +812,7 @@ mod tests {
         );
         assert_eq!(cancelled.status, TimingAdvisoryStatus::Unavailable);
 
-        let invalid_order = schedule(&[
-            (ActionKind::Down, 20_000, 0x15),
-            (ActionKind::Up, 10_000, 0x15),
-        ]);
+        let invalid_order = schedule(&[(20_000, 0x15), (10_000, 0x15)], policy.min_hold_us);
         let invalid = analyze_variant(
             &invalid_order,
             &config,
@@ -750,7 +828,7 @@ mod tests {
     fn dry_run_advisory_is_fingerprint_specific_and_hypothetical() {
         let config = config(true);
         let policy = policy(&config);
-        let authored = schedule(&[(ActionKind::Down, 0, 0x15), (ActionKind::Up, 50_000, 0x15)]);
+        let authored = schedule(&[(0, 0x15)], policy.min_hold_us);
         let first = analyze_variant(
             &authored,
             &config,

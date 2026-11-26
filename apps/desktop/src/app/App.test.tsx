@@ -432,16 +432,14 @@ describe('desktop application shell', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
     await screen.findByRole('dialog', { name: 'Settings' });
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
-    const theme = await screen.findByLabelText('Theme');
-    fireEvent.click(theme);
-    fireEvent.keyDown(screen.getByRole('option', { name: 'Light' }), { key: 'Enter' });
+    const lightRadio = await screen.findByRole('radio', { name: 'Light' });
+    fireEvent.click(lightRadio);
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('light'));
 
     nativeWindow.emitTheme('dark');
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('light'));
 
-    fireEvent.click(theme);
-    fireEvent.keyDown(screen.getByRole('option', { name: /Follow Windows/ }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('radio', { name: 'System' }));
     await waitFor(() => expect(document.documentElement.dataset.colorMode).toBe('dark'));
   });
 
