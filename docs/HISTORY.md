@@ -1,5 +1,21 @@
 # Historical source snapshots
 
+## Completion-anchored pulse engine work order
+
+The completed PR #685 temporary branch work order was archived during final closeout of
+`refactor/completion-anchored-pulse-engine` after Leader acceptance of the exploratory
+ReceiveOnly D1–D3 checkpoints (`#issuecomment-7191567834`). Its immutable source is the
+reviewed research commit
+[`ffaec3266d9f11d82db8ed86bfe2a8d6fda429bd`](https://github.com/pumni/Sky-Auto-Player/tree/ffaec3266d9f11d82db8ed86bfe2a8d6fda429bd).
+Active contracts live in [architecture.md](architecture.md), [playback-engine.md](playback-engine.md),
+[song-planning.md](song-planning.md), and [playback-verification.md](playback-verification.md).
+This archive entry records historical provenance only and does not grant merge, release, or
+native execution authorization.
+
+| Archived file at `ffaec326` source | Bytes | SHA-256 |
+| --- | ---: | --- |
+| [Completion-anchored pulse engine work order](https://github.com/pumni/Sky-Auto-Player/blob/ffaec3266d9f11d82db8ed86bfe2a8d6fda429bd/docs/work-orders/completion-anchored-pulse-engine.md) | 23,813 | `B0EE302ADA25AF52D0E58B73C5F9F00E14783CA79AA60679DD6623C46C12E7EA` |
+
 ## Graphite 2.0 desktop workbench redesign records
 
 The completed Graphite 2.0 design specification and execution plan were removed from the active

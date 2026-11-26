@@ -64,7 +64,7 @@ Sky Auto Player is built around a Rust real-time playback engine (`sky_player`),
 
 - **Consistent musical targets:** The runtime preserves authored schedule offsets and uses Windows high-resolution timers with QueryPerformanceCounter (QPC) scheduling.
 - **Chords dispatched together:** Notes belonging to the same chord are grouped into a single Windows `SendInput` batch to reduce sender-side skew.
-- **Frame-aware holds:** Minimum key-hold and release-gap policies account for the selected game FPS and timing margin.
+- **Frame-aware completion-anchored holds:** Minimum key-hold durations account for the selected game FPS and timing margin and are anchored to each key-down completion; short nominal release gaps are reported as advisory diagnostics rather than enforced as a separate runtime floor.
 - **Focus-aware handling:** When the target game loses focus, new key-down events are blocked and playback timing is paused; recovery and key-release cleanup remain conservative.
 
 The engine uses MMCSS scheduling when available and records diagnostics for analysis. These mechanisms improve control over *sender-side* timing; they are **not a guarantee of sub-millisecond in-game or audible accuracy**.
@@ -98,6 +98,13 @@ No. The supported desktop application depends on Windows-specific timing and inp
 <summary><strong>What kinds of music sheets work?</strong></summary>
 
 The app accepts supported JSON-based Sky sheets in `.json`, `.skysheet`, and JSON-compatible `.txt` files. Not every historical or versioned sheet can be played losslessly: Song Details shows compatibility information and may ask you to review conversion losses.
+
+</details>
+
+<details>
+<summary><strong>What if notes or chords are missing or delayed during playback?</strong></summary>
+
+Switch Windows manually to a plain, non-composing keyboard layout for the target foreground window before starting playback, then restore your preferred input method afterward. Active composing IMEs can intercept key-down events and add substantial per-key latency on Windows. **English (United States) — US keyboard** was tested on a project-owned ReceiveOnly sink; the app does not require English-only input, switch layouts automatically, or inspect IME state on the send path. This diagnostic evidence comes from a single Windows host against a ReceiveOnly sink, not live Sky gameplay.
 
 </details>
 
