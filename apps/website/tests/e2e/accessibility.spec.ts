@@ -341,6 +341,11 @@ test.describe('accessibility and responsive contracts', () => {
             ctaAction: bounds('.trust-download__cta-action'),
             ctaButton,
             ctaNote,
+            featureSecond: bounds('.product-showcase__features > div:nth-child(2)'),
+            trustSecond: bounds('.trust-download__details > div:nth-child(2)'),
+            supportLinks: bounds('.trust-download__support-links'),
+            navigation: bounds('.site-nav'),
+            headerRail: bounds('.site-header__inner'),
           };
         });
 
@@ -368,6 +373,9 @@ test.describe('accessibility and responsive contracts', () => {
         }
         if (viewport.width >= 1024) {
           expect(geometry.product.left).toBeGreaterThan(geometry.hero.right);
+          const navCenter = (geometry.navigation.left + geometry.navigation.right) / 2;
+          const headerCenter = (geometry.headerRail.left + geometry.headerRail.right) / 2;
+          expect(Math.abs(navCenter - headerCenter)).toBeLessThanOrEqual(1);
           expect(geometry.playbackStage.left).toBeGreaterThan(geometry.playbackHeader.right);
           expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(
             geometry.playbackHeader.bottom,
@@ -393,6 +401,14 @@ test.describe('accessibility and responsive contracts', () => {
           }
           expect(geometry.ctaAction.left).toBeGreaterThan(geometry.ctaCopy.left);
           expect(geometry.formats.left).toBeGreaterThan(geometry.setupGuide.right);
+          for (const aligned of [
+            geometry.featureSecond,
+            geometry.trustSecond,
+            geometry.supportLinks,
+            geometry.ctaAction,
+          ]) {
+            expect(Math.abs(aligned.left - geometry.formats.left)).toBeLessThanOrEqual(1);
+          }
           expect(
             Math.abs(geometry.resourceLinks[0] - geometry.resourceLinks[1]),
           ).toBeLessThanOrEqual(1);

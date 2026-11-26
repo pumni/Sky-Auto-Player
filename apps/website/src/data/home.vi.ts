@@ -21,7 +21,7 @@ export const homeVi: HomeContent = {
     titleStart: 'Âm nhạc của bạn.',
     titleEnd: 'Trong Sky.',
     description:
-      'Tự động phát sheet nhạc trong Sky: Children of the Light. Chọn bài có sẵn hoặc nhập sheet của bạn.',
+      'Tự động chơi nhạc trong Sky: Children of the Light từ bài có sẵn hoặc sheet nhạc của bạn.',
     secondaryCta: 'Bắt đầu',
     meta: 'Windows 11 64-bit · GitHub Releases',
     riskNote:
@@ -70,7 +70,7 @@ export const homeVi: HomeContent = {
     ],
   },
   playback: {
-    kicker: 'Phát nhạc và timing',
+    kicker: 'Điều khiển phát nhạc',
     demoTitle: 'Minh họa phát nhạc',
     title: 'Chủ động với nhịp điệu.',
     description:
@@ -111,7 +111,7 @@ export const homeVi: HomeContent = {
       {
         title: 'Phát nhạc trong Sky',
         description:
-          'Mở nhạc cụ 15 phím tương thích trong Sky. Chọn bài, nhấn Play trong ứng dụng rồi đưa tiêu điểm về cửa sổ Sky.',
+          'Mở nhạc cụ 15 phím tương thích trong Sky. Chọn bài, nhấn Play trong ứng dụng rồi chuyển lại cửa sổ Sky.',
       },
     ],
     setupGuideTitle: 'Thiết lập lần đầu',
@@ -127,9 +127,9 @@ export const homeVi: HomeContent = {
   trust: {
     title: 'Trước khi cài đặt.',
     platformSummary: 'Windows 11 64-bit · Miễn phí, mã nguồn mở',
-    releaseLinkLabel: 'Lấy bộ cài ổn định',
+    releaseLinkLabel: 'Xem bản phát hành ổn định',
     releaseDestinationNote: 'Mở GitHub Releases',
-    installationTitle: 'Cài đặt',
+    installationTitle: 'Chọn đúng bộ cài',
     installerGuidance: 'Chọn bộ cài Windows ổn định có tên kết thúc bằng',
     installerSuffix: '_x64-setup.exe',
     signatureNote: 'Tệp .exe.sig dành cho trình cập nhật, không cần khi cài thủ công.',

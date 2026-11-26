@@ -193,8 +193,8 @@ const timingGuide = withBase(
     }
     .playback-demo__kicker {
       margin: 0 0 1rem;
-      font-size: 0.8125rem;
-      color: var(--color-text-tertiary);
+      font-size: 0.875rem;
+      color: var(--color-text-secondary);
       font-weight: 550;
     }
     .playback-demo__header h2 {
@@ -226,14 +226,14 @@ const timingGuide = withBase(
       align-items: center;
       flex-wrap: wrap;
       gap: 0.5rem;
-      font-size: 0.875rem;
+      font-size: 1rem;
     }
     .playback-demo__time {
       display: flex;
       gap: 0.25rem;
       margin: 0;
       color: var(--color-text-secondary);
-      font: 500 0.8125rem/1.4 var(--font-mono);
+      font: 500 0.875rem/1.4 var(--font-mono);
     }
     .playback-demo__support {
       padding-block-start: 1.5rem;
@@ -248,16 +248,18 @@ const timingGuide = withBase(
       max-inline-size: 55ch;
       margin: 0.5rem 0 0;
       color: var(--color-text-secondary);
-      font-size: 0.9375rem;
+      font-size: 1rem;
       line-height: 1.65;
     }
     .playback-demo__note {
       display: grid;
       justify-items: start;
-      gap: 0.25rem;
+      gap: 0.125rem;
+      border-block-start: 1px solid var(--line-default);
+      padding-block-start: 1rem;
     }
     .playback-demo__timing-note {
-      font-size: 0.8125rem;
+      font-size: 0.875rem;
       margin: 0;
     }
     .playback-demo__timing-link {
@@ -265,7 +267,7 @@ const timingGuide = withBase(
       min-block-size: 44px;
       align-items: center;
       color: var(--color-text-primary);
-      font-size: 0.8125rem;
+      font-size: 0.875rem;
       text-decoration: underline;
       text-decoration-color: var(--color-info);
       text-underline-offset: 0.22em;
@@ -355,7 +357,7 @@ const timingGuide = withBase(
       padding-inline-start: 0.5rem;
       border-inline-start: 2px solid transparent;
       color: var(--color-text-secondary);
-      font-size: 0.8125rem;
+      font-size: 0.875rem;
       line-height: 1.35;
     }
 
@@ -406,7 +408,7 @@ const timingGuide = withBase(
       border-radius: 0.5rem;
       background: var(--color-surface-quiet);
       color: var(--color-text-secondary);
-      font-size: 0.875rem;
+      font-size: 0.9375rem;
       font-variant-numeric: tabular-nums;
       transition:
         background-color var(--duration-press) var(--ease-standard),
@@ -513,7 +515,8 @@ const timingGuide = withBase(
         border-color: CanvasText;
       }
       .playback-demo__stage,
-      .playback-demo__support {
+      .playback-demo__support,
+      .playback-demo__note {
         border-color: CanvasText;
       }
 

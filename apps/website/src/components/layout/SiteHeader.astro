@@ -29,7 +29,7 @@ const isFaqPage = routePath === faqPath;
 const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
 ---
 
-<header class="site-header">
+<header class:list={['site-header', isHome && 'site-header--home']}>
   <div class="container site-header__inner">
     <a
       class="brand"
@@ -434,6 +434,20 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         flex-wrap: nowrap;
       }
 
+      :global(html:not([data-nav-viewport='mobile'])) .site-header--home .site-header__inner {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      }
+
+      .site-header--home .brand {
+        justify-self: start;
+        font-size: 1rem;
+      }
+
+      .site-header--home .site-actions {
+        justify-self: end;
+      }
+
       .site-nav {
         position: static;
         flex: 0 1 auto;
@@ -451,6 +465,14 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         border: 0;
         font-size: 0.875rem;
         padding-inline: 0.25rem;
+      }
+
+      .site-header--home .site-nav {
+        gap: clamp(0.625rem, 1.25vw, 1.375rem);
+      }
+
+      .site-header--home .site-nav__link {
+        font-size: 0.9375rem;
       }
 
       .site-nav__link[aria-current='page']::after,

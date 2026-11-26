@@ -96,8 +96,8 @@ const defaultView = data.views[0];
       margin: 0;
       font-family: var(--font-body);
       font-weight: 600;
-      font-size: 0.8125rem;
-      color: var(--color-text-secondary);
+      font-size: 0.9375rem;
+      color: var(--color-text-primary);
       line-height: 1.35;
     }
     .product-selector[hidden],
@@ -118,7 +118,7 @@ const defaultView = data.views[0];
       background: transparent;
       color: var(--color-text-secondary);
       cursor: pointer;
-      font-size: 0.8125rem;
+      font-size: 0.875rem;
       font-weight: 500;
       line-height: 1.25;
       overflow-wrap: anywhere;
@@ -166,19 +166,22 @@ const defaultView = data.views[0];
       gap: 0.375rem 1rem;
       padding-block-start: 1rem;
       color: var(--color-text-secondary);
-      font-size: 0.875rem;
+      font-size: 0.9375rem;
       line-height: 1.5;
+      align-items: start;
     }
     .product-showcase__caption a {
       display: inline-flex;
       min-block-size: 44px;
-      align-items: center;
+      align-items: flex-start;
       align-self: start;
       color: var(--color-text-primary);
-      font-size: 0.8125rem;
+      font-size: 0.875rem;
       text-decoration: underline;
       text-decoration-color: var(--color-info);
       text-underline-offset: 0.2em;
+      line-height: 1.5;
+      padding-block-start: 0.0625rem;
     }
     .product-showcase__caption a:hover {
       color: var(--color-action);
@@ -186,7 +189,7 @@ const defaultView = data.views[0];
     .product-showcase__provenance {
       margin: 0.375rem 0 0;
       color: var(--color-text-tertiary);
-      font-size: 0.75rem;
+      font-size: 0.8125rem;
       line-height: 1.45;
     }
     .product-showcase__status {
@@ -219,6 +222,9 @@ const defaultView = data.views[0];
         gap: 0.375rem;
         margin-block-end: 0.5625rem;
       }
+      .product-showcase__intro h2 {
+        font-size: 0.875rem;
+      }
       .product-selector {
         inline-size: 100%;
       }
@@ -241,6 +247,8 @@ const defaultView = data.views[0];
       }
       .product-showcase__caption a {
         justify-self: start;
+        align-items: center;
+        padding-block-start: 0;
       }
     }
     @media (forced-colors: active) {

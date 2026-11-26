@@ -21,7 +21,7 @@ export const homeEn: HomeContent = {
     titleStart: 'Your music.',
     titleEnd: 'Into Sky.',
     description:
-      'Automatically play music sheets in Sky: Children of the Light. Choose a song or import your own sheet.',
+      'Automatically play music in Sky: Children of the Light. Choose a built-in song or import your own sheet.',
     secondaryCta: 'Getting started',
     meta: 'Windows 11 x64 · GitHub Releases',
     riskNote: 'Unofficial project. Automated playback may conflict with Sky’s Terms of Service.',
@@ -127,9 +127,9 @@ export const homeEn: HomeContent = {
   trust: {
     title: 'Before you install.',
     platformSummary: 'Windows 11 x64 · Free and open source',
-    releaseLinkLabel: 'Get the stable installer',
+    releaseLinkLabel: 'View stable release',
     releaseDestinationNote: 'Opens GitHub Releases',
-    installationTitle: 'Installation',
+    installationTitle: 'Choose the right installer',
     installerGuidance: 'Choose the stable Windows installer ending in',
     installerSuffix: '_x64-setup.exe',
     signatureNote: 'The .exe.sig file is for the updater, not manual installation.',

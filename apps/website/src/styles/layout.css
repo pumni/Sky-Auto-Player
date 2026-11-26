@@ -13,6 +13,7 @@
     --home-heading: clamp(2rem, 3.2vw, 3rem);
     --home-lead: clamp(1rem, 1.45vw, 1.25rem);
     --home-content-gap: clamp(1.75rem, 3.5vw, 3.5rem);
+    --home-pair-gap: clamp(1.5rem, 4vw, 3rem);
     --home-band-space: clamp(4rem, 8vw, 7.25rem);
     --font-display: var(--font-body);
   }
@@ -34,8 +35,8 @@
 
   .product-showcase__features {
     display: grid;
-    gap: clamp(1.5rem, 5vw, 5rem);
-    padding-block: 2.25rem 2.75rem;
+    gap: 1.5rem var(--home-pair-gap);
+    padding-block: 2.5rem 3rem;
     border-block-start: 1px solid var(--line-default);
   }
 
@@ -62,7 +63,7 @@
     max-inline-size: 52ch;
     margin: 0.5rem 0 0;
     color: var(--color-text-secondary);
-    font-size: 0.9375rem;
+    font-size: 1rem;
     line-height: 1.65;
   }
 
