@@ -27,7 +27,7 @@ The production build is written to `dist/`. Functional tests cover routing, meta
 
 Global styles use the declared cascade order in `src/styles/tokens.css`: reset, tokens, theme, base, layout, patterns, components, and utilities. Shared semantic color, type, spacing, and motion tokens live in that file; shared controls live in `src/styles/components.css`. Astro component styles belong to the components layer.
 
-Non-home pages retain the shared section spacing roles. The homepage uses one 75rem container with 16–40px side gutters, a six-to-seven text-to-image opening grid on wide screens, and a 32–80px chapter rhythm. Its footer aligns to the same container only on localized home routes.
+The shared `.container` is capped at 75rem with 16–40px side gutters; tablet layouts cap it at 56rem. The homepage changes from a bounded single-column opening to a six-to-seven text-to-image grid at 64rem and keeps a 32–80px chapter rhythm. Header, page content, and footer use the same container on every route.
 
 The shared header and footer are rendered by `BaseLayout` on every route. Navigation copy is typed in `src/data/home.types.ts` and localized in `src/data/home.en.ts` and `src/data/home.vi.ts`. Keep both locale shapes aligned and check product claims against their owning desktop, security, and distribution contracts.
 
@@ -37,7 +37,17 @@ The shared header and footer are rendered by `BaseLayout` on every route. Naviga
 
 The product selector enhances direct full-size image links and commits the latest successfully loaded selection as one update. The playback demonstration and its browser behavior share the fixed three-event model in `src/data/playback-demo.ts`; it has one timeline, one elapsed display, one key grid, and user-triggered controls. Its static markup remains useful without JavaScript.
 
-Product images are desktop interface captures documented in [the UI asset guide](../../docs/ui/README.md). They show the interface and are not claims about current release qualification.
+Product images are browser mock previews of the current desktop source, not native Tauri captures or gameplay evidence. They use example data and are named `desktop-*-browser-preview-1366x768.png`; the screenshot source and method are recorded below. The older `docs/ui` capture manifest names a different desktop tree and was not reused.
+
+### Homepage screenshot provenance
+
+| Asset                                                                         | View              | Resolution |
+| ----------------------------------------------------------------------------- | ----------------- | ---------- |
+| `public/assets/images/desktop-library-browser-preview-1366x768.png`           | Library           | 1366 × 768 |
+| `public/assets/images/desktop-song-detail-browser-preview-1366x768.png`       | Song detail       | 1366 × 768 |
+| `public/assets/images/desktop-settings-playback-browser-preview-1366x768.png` | Playback settings | 1366 × 768 |
+
+The previews were captured from desktop source commit `711201a1392cd34a3ff191de22a58c554a640a05`, whose `apps/desktop` tree SHA is `155e9e999f4f072e81cb15fb224347c967088ff5`. The existing desktop Vite and Playwright Chromium test harness rendered the current interface with its deterministic browser mock bridge and example song data. These assets describe the rendered desktop source at that revision; they do not show a native Tauri window, a Windows release build, or live gameplay. No capture framework or dependency was added.
 
 ## Published application version
 

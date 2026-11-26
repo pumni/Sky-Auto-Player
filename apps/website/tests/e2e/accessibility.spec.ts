@@ -232,11 +232,11 @@ test.describe('accessibility and responsive contracts', () => {
     expect(dimensions.heroBottom).toBeGreaterThan(0);
   });
 
-  test('player view selector updates the selected capture, caption, alt text, and full-size link', async ({
+  test('player view selector commits only the latest loaded preview and keeps links in sync', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.route('**/detail-real-tauri.png', async (route) => {
+    await page.route('**/desktop-song-detail-browser-preview-1366x768.png', async (route) => {
       await new Promise((resolve) => setTimeout(resolve, 300));
       await route.continue();
     });
@@ -250,18 +250,31 @@ test.describe('accessibility and responsive contracts', () => {
       'aria-pressed',
       'true',
     );
-    await expect(image).toHaveAttribute('src', /library-real-tauri\.png/);
-    await expect(image).toHaveAttribute('alt', /song library and playlists/);
-    await expect(fullSize).toHaveAttribute('href', /library-real-tauri\.png/);
+    await expect(image).toHaveAttribute('src', /desktop-library-browser-preview-1366x768\.png/);
+    await expect(image).toHaveAttribute('alt', /song library/);
+    await expect(fullSize).toHaveAttribute('href', /desktop-library-browser-preview-1366x768\.png/);
 
     await group.getByRole('button', { name: 'Song Detail' }).click();
+    const settings = group.getByRole('button', { name: 'Settings' });
+    await settings.click();
+    await expect(settings).toHaveAttribute('aria-pressed', 'true');
+    await expect(image).toHaveAttribute(
+      'src',
+      /desktop-settings-playback-browser-preview-1366x768\.png/,
+    );
+    await page.waitForTimeout(350);
+    await expect(image).toHaveAttribute(
+      'src',
+      /desktop-settings-playback-browser-preview-1366x768\.png/,
+    );
+
     await group.getByRole('button', { name: 'Library' }).click();
     await expect(group.getByRole('button', { name: 'Library' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
     await page.waitForTimeout(350);
-    await expect(image).toHaveAttribute('src', /library-real-tauri\.png/);
+    await expect(image).toHaveAttribute('src', /desktop-library-browser-preview-1366x768\.png/);
     await expect(page.locator('[data-product-caption]')).toHaveText(
       'Browse songs, favorites, and playlists.',
     );
@@ -275,21 +288,29 @@ test.describe('accessibility and responsive contracts', () => {
       'aria-pressed',
       'false',
     );
-    await expect(image).toHaveAttribute('src', /detail-real-tauri\.png/);
-    await expect(image).toHaveAttribute('alt', /selected song and its sheet details/);
+    await expect(image).toHaveAttribute('src', /desktop-song-detail-browser-preview-1366x768\.png/);
+    await expect(image).toHaveAttribute('alt', /selected example song and its sheet details/);
     await expect(page.locator('[data-product-caption]')).toHaveText(
       'Review a song before you play it.',
     );
-    await expect(fullSize).toHaveAttribute('href', /detail-real-tauri\.png/);
+    await expect(fullSize).toHaveAttribute(
+      'href',
+      /desktop-song-detail-browser-preview-1366x768\.png/,
+    );
     await expect
       .poll(() => image.evaluate((element) => (element as HTMLImageElement).naturalWidth))
       .toBeGreaterThan(0);
-    const settings = group.getByRole('button', { name: 'Settings' });
     await settings.focus();
     await page.keyboard.press('Enter');
     await expect(settings).toHaveAttribute('aria-pressed', 'true');
-    await expect(image).toHaveAttribute('src', /settings-real-tauri\.png/);
-    await expect(fullSize).toHaveAttribute('href', /settings-real-tauri\.png/);
+    await expect(image).toHaveAttribute(
+      'src',
+      /desktop-settings-playback-browser-preview-1366x768\.png/,
+    );
+    await expect(fullSize).toHaveAttribute(
+      'href',
+      /desktop-settings-playback-browser-preview-1366x768\.png/,
+    );
     await expect(page.locator('[data-product-caption]')).toHaveText(
       'Choose playback options for your setup.',
     );
@@ -298,7 +319,9 @@ test.describe('accessibility and responsive contracts', () => {
   test('failed capture selection preserves the current image and accessible selection', async ({
     page,
   }) => {
-    await page.route('**/settings-real-tauri.png', (route) => route.abort());
+    await page.route('**/desktop-settings-playback-browser-preview-1366x768.png', (route) =>
+      route.abort(),
+    );
     await page.goto('/Sky-Auto-Player/');
     const group = page.getByRole('group', { name: 'Choose a player view' });
     const image = page.locator('[data-product-image]');
@@ -307,11 +330,11 @@ test.describe('accessibility and responsive contracts', () => {
       'aria-pressed',
       'true',
     );
-    await expect(image).toHaveAttribute('src', /library-real-tauri\.png/);
-    await expect(image).toHaveAttribute('alt', /song library and playlists/);
+    await expect(image).toHaveAttribute('src', /desktop-library-browser-preview-1366x768\.png/);
+    await expect(image).toHaveAttribute('alt', /song library/);
     await expect(page.locator('[data-product-full-size]')).toHaveAttribute(
       'href',
-      /library-real-tauri\.png/,
+      /desktop-library-browser-preview-1366x768\.png/,
     );
     await expect(page.locator('[data-product-caption]')).toHaveText(
       'Browse songs, favorites, and playlists.',
@@ -319,7 +342,14 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('.product-showcase__fallback')).toBeVisible();
     await expect(
       page.locator('.product-showcase__fallback').getByRole('link', { name: 'Settings' }),
-    ).toHaveAttribute('href', /settings-real-tauri\.png/);
+    ).toHaveAttribute('href', /desktop-settings-playback-browser-preview-1366x768\.png/);
+
+    await group.getByRole('button', { name: 'Song Detail' }).click();
+    await expect(group.getByRole('button', { name: 'Song Detail' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await expect(page.locator('.product-showcase__fallback')).toBeHidden();
   });
 
   test('Vietnamese player view selector has localized labels, descriptions, and captions', async ({
@@ -334,18 +364,18 @@ test.describe('accessibility and responsive contracts', () => {
     await group.getByRole('button', { name: 'Chi tiết bài hát' }).click();
     await expect(page.locator('[data-product-image]')).toHaveAttribute(
       'alt',
-      /bài hát đã chọn và chi tiết sheet/,
+      /bài hát mẫu đã chọn và chi tiết sheet/,
     );
     await expect(page.locator('[data-product-caption]')).toHaveText(
       'Xem lại bài hát trước khi phát.',
     );
     await expect(page.locator('[data-product-full-size]')).toHaveAttribute(
       'href',
-      /detail-real-tauri\.png/,
+      /desktop-song-detail-browser-preview-1366x768\.png/,
     );
   });
 
-  test('the desktop capture remains contained and the site favicon contract is visible', async ({
+  test('the desktop browser preview remains contained and the site favicon contract is visible', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -362,8 +392,8 @@ test.describe('accessibility and responsive contracts', () => {
         insideFrame: box.left >= frame.left && box.right <= frame.right + 1,
       };
     });
-    expect(metrics.naturalWidth).toBe(1214);
-    expect(metrics.naturalHeight).toBe(798);
+    expect(metrics.naturalWidth).toBe(1366);
+    expect(metrics.naturalHeight).toBe(768);
     expect(metrics.insideFrame).toBe(true);
     await expect(page.locator('link[rel="icon"][type="image/png"][sizes="16x16"]')).toHaveAttribute(
       'href',
@@ -441,6 +471,51 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(progress).toHaveAttribute('aria-valuenow', '2600');
     await expect(elapsed).toHaveText('2.6');
     await expect(main).toHaveText('Replay phrase');
+  });
+
+  test('timeline marker keeps a fixed width and reaches both ends as events advance', async ({
+    page,
+  }) => {
+    await page.goto('/Sky-Auto-Player/');
+    const demo = page.locator('[data-playback-demo]');
+    const track = demo.locator('[data-demo-progress]');
+
+    const start = await page.evaluate(() => {
+      const track = document.querySelector<HTMLElement>('[data-demo-progress]')!;
+      const marker = document.querySelector<HTMLElement>('[data-playhead]')!;
+      const trackBox = track.getBoundingClientRect();
+      const markerBox = marker.getBoundingClientRect();
+      return { width: markerBox.width, leftGap: markerBox.left - trackBox.left };
+    });
+    expect(start.width).toBe(3);
+    expect(Math.abs(start.leftGap)).toBeLessThanOrEqual(1);
+    await expect(demo.locator('.playback-key.is-active').first()).toHaveCSS(
+      'border-block-end-width',
+      '4px',
+    );
+    await expect(demo.locator('[data-demo-event="0"]')).toHaveCSS(
+      'border-inline-start-width',
+      '2px',
+    );
+    const segmentGrid = await demo.locator('.playback-timeline__segments').getAttribute('style');
+    expect(await demo.locator('.playback-timeline__legend').getAttribute('style')).toBe(
+      segmentGrid,
+    );
+
+    const next = demo.locator('[data-action="next"]');
+    await next.click();
+    await next.click();
+    await next.click();
+    await expect(track).toHaveAttribute('aria-valuenow', '2600');
+    const end = await page.evaluate(() => {
+      const track = document.querySelector<HTMLElement>('[data-demo-progress]')!;
+      const marker = document.querySelector<HTMLElement>('[data-playhead]')!;
+      const trackBox = track.getBoundingClientRect();
+      const markerBox = marker.getBoundingClientRect();
+      return { width: markerBox.width, rightGap: trackBox.right - markerBox.right };
+    });
+    expect(end.width).toBe(3);
+    expect(Math.abs(end.rightGap)).toBeLessThanOrEqual(1);
   });
 
   test('manual stepping respects boundaries and pauses playback without a cancel control', async ({
@@ -610,7 +685,7 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('.product-showcase__fallback a')).toHaveCount(3);
     await expect(page.locator('[data-product-image]')).toHaveAttribute(
       'src',
-      /library-real-tauri\.png/,
+      /desktop-library-browser-preview-1366x768\.png/,
     );
     await expect(page.locator('[data-demo-controls]')).toBeHidden();
     await expect(page.locator('[data-demo-event]')).toHaveCount(3);
@@ -702,7 +777,11 @@ test.describe('accessibility and responsive contracts', () => {
         route === '/' ? 'Windows 11 x64' : 'Windows 11 64-bit',
       );
       await expect(page.locator('#technical')).toContainText('NSIS');
+      await expect(page.locator('#technical')).toContainText('Sky.Auto.Player_4.3.0_x64-setup.exe');
       await expect(page.locator('#technical')).toContainText('.exe.sig');
+      await expect(page.locator('#technical')).toContainText(
+        route === '/' ? 'stable Windows installer' : 'bộ cài Windows ổn định',
+      );
       await expect(page.locator('#technical a[href*="account-safety"]')).toBeVisible();
       await expect(page.locator('#technical')).not.toContainText('100% safe');
     }
@@ -720,6 +799,106 @@ test.describe('accessibility and responsive contracts', () => {
       await page.goto(`/Sky-Auto-Player${route}`);
     }
     expect(errors).toEqual([]);
+  });
+
+  test('FAQ groups are visible on mobile and hash links open the matching answer in both locales', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const locale of [
+      {
+        route: '/faq/',
+        topics: ['Setup & use', 'Sheet formats', 'Safety', 'Troubleshooting'],
+      },
+      {
+        route: '/vi/faq/',
+        topics: ['Cài đặt & sử dụng', 'Định dạng sheet', 'An toàn', 'Khắc phục sự cố'],
+      },
+    ]) {
+      await page.goto(`/Sky-Auto-Player${locale.route}`);
+      await expect(page.locator('main h1')).toBeVisible();
+      await expect(page.locator('.faq-toc nav')).toBeVisible();
+      await expect(page.locator('.faq-toc nav a')).toHaveCount(4);
+      for (const topic of locale.topics) {
+        await expect(page.locator('.faq-toc nav')).toContainText(topic);
+      }
+
+      await page.goto(`/Sky-Auto-Player${locale.route}#account-safety`);
+      const safetyAnswer = page.locator('#account-safety');
+      await expect(safetyAnswer).toHaveAttribute('open', '');
+      await page.evaluate(() => {
+        window.location.hash = 'network';
+      });
+      const networkAnswer = page.locator('#network');
+      await expect(networkAnswer).toHaveAttribute('open', '');
+      await expect(networkAnswer.locator('summary')).toBeFocused();
+    }
+  });
+
+  test('FAQ deep links still reach native disclosures without JavaScript', async ({ browser }) => {
+    const context = await browser.newContext({
+      javaScriptEnabled: false,
+      viewport: { width: 390, height: 844 },
+    });
+    const page = await context.newPage();
+    await page.goto('/Sky-Auto-Player/faq/#account-safety');
+    const safetyAnswer = page.locator('#account-safety');
+    await expect(safetyAnswer.locator('summary')).toBeVisible();
+    await safetyAnswer.locator('summary').click();
+    await expect(safetyAnswer).toHaveJSProperty('open', true);
+    await expect(page.locator('.faq-toc nav a')).toHaveCount(4);
+    await context.close();
+  });
+
+  test('guide table of contents follows rendered headings and stays responsive in both locales', async ({
+    page,
+  }) => {
+    for (const route of ['/guides/windows-setup/', '/vi/guides/windows-setup/']) {
+      for (const width of [390, 1440]) {
+        await page.setViewportSize({ width, height: 900 });
+        await page.goto(`/Sky-Auto-Player${route}`);
+        const toc = page.locator('.guide-toc');
+        await expect(toc).toBeVisible();
+        const tocLinks = toc.locator('a');
+        expect(await tocLinks.count()).toBeGreaterThanOrEqual(4);
+        const linksMatchHeadings = await tocLinks.evaluateAll((links) =>
+          links.every((link) => {
+            const target = document.querySelector<HTMLElement>(link.getAttribute('href') || '');
+            return target && /^H[23]$/.test(target.tagName) && target.id;
+          }),
+        );
+        expect(linksMatchHeadings).toBe(true);
+        await expect(page.locator('.related-guides')).toBeVisible();
+        await expect(page.locator('.guide-page__cta')).toHaveCount(0);
+        const widthMetrics = await page.evaluate(() => ({
+          document: document.documentElement.scrollWidth,
+          viewport: document.documentElement.clientWidth,
+        }));
+        expect(widthMetrics.document).toBeLessThanOrEqual(widthMetrics.viewport + 1);
+      }
+    }
+  });
+
+  test('Markdown tables and architecture diagrams scroll inside their article on mobile', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    for (const route of ['/guides/sheet-formats/', '/guides/how-it-works/']) {
+      await page.goto(`/Sky-Auto-Player${route}`);
+      const localOverflow = await page.evaluate(() => {
+        const element = document.querySelector<HTMLElement>('table, .arch-diagram');
+        if (!element) return null;
+        return {
+          client: element.clientWidth,
+          content: element.scrollWidth,
+          document: document.documentElement.scrollWidth,
+          viewport: document.documentElement.clientWidth,
+        };
+      });
+      expect(localOverflow).not.toBeNull();
+      expect(localOverflow!.content).toBeGreaterThanOrEqual(localOverflow!.client);
+      expect(localOverflow!.document).toBeLessThanOrEqual(localOverflow!.viewport + 1);
+    }
   });
 
   test('FAQ pages expose FAQPage JSON-LD and stable fonts', async ({ page }) => {

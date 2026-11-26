@@ -13,7 +13,7 @@ interface Props {
 const { content } = Astro.props;
 ---
 
-<div class="home-opening home-container">
+<div class="home-opening container">
   <Hero data={content.hero} downloadCta={content.downloadCta} locale={content.locale} />
   <ProductShowcase data={content.product} />
 </div>

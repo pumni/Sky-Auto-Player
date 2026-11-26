@@ -211,10 +211,9 @@ test.describe('published route and asset contracts', () => {
       '/assets/sky-auto-player-mark-mono.svg',
       '/assets/sky-auto-player-mark-no-bg.svg',
       '/assets/og-banner.jpg',
-      '/assets/images/library-real-tauri.png',
-      '/assets/images/minimum-real-tauri.png',
-      '/assets/images/detail-real-tauri.png',
-      '/assets/images/settings-real-tauri.png',
+      '/assets/images/desktop-library-browser-preview-1366x768.png',
+      '/assets/images/desktop-song-detail-browser-preview-1366x768.png',
+      '/assets/images/desktop-settings-playback-browser-preview-1366x768.png',
       '/assets/images/og-banner.jpg',
     ];
 
@@ -225,8 +224,9 @@ test.describe('published route and asset contracts', () => {
 
     const home = await request.get(origin + '/');
     const html = await home.text();
-    expect(html).toContain('Desktop interface capture');
-    expect(html).toContain('/assets/images/library-real-tauri.png');
+    expect(html).toContain('Browser mock preview');
+    expect(html).toContain('/assets/images/desktop-library-browser-preview-1366x768.png');
+    expect(html).toContain('not a native Tauri capture');
     expect(html).not.toContain('terminal picker');
     const localUrls = Array.from(
       html.matchAll(/(?:href|src)="(\/Sky-Auto-Player\/[^"#?]+)"/g),

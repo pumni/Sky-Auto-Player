@@ -3,15 +3,14 @@ import { render, type CollectionEntry } from 'astro:content';
 
 interface Props {
   faq: CollectionEntry<'faq'>;
-  isOpen?: boolean;
 }
 
-const { faq, isOpen = false } = Astro.props;
+const { faq } = Astro.props;
 const { Content } = await render(faq);
 ---
 
-<details class="faq-item" id={faq.data.key} open={isOpen}>
-  <summary>{faq.data.question}</summary>
+<details class="faq-item" id={faq.data.key} data-faq-item>
+  <summary data-faq-question>{faq.data.question}</summary>
   <div class="faq-answer">
     <Content />
   </div>
@@ -21,15 +20,19 @@ const { Content } = await render(faq);
   @layer components {
     .faq-item {
       border-bottom: 1px solid var(--line-faint);
-      padding-block: var(--space-4);
+      scroll-margin-top: 6rem;
+      padding-block: var(--space-2);
     }
     .faq-item summary {
+      display: flex;
+      min-block-size: 44px;
+      align-items: center;
       font-weight: 600;
-      font-size: var(--type-lead);
+      font-size: var(--type-body);
       cursor: pointer;
       list-style: none;
       position: relative;
-      padding-right: var(--space-6);
+      padding-inline-end: var(--space-6);
     }
     .faq-item summary::-webkit-details-marker {
       display: none;
@@ -37,7 +40,7 @@ const { Content } = await render(faq);
     .faq-item summary::after {
       content: '+';
       position: absolute;
-      right: 0;
+      inset-inline-end: 0;
       top: 50%;
       transform: translateY(-50%);
       font-size: 1.5rem;
@@ -67,5 +70,42 @@ const { Content } = await render(faq);
       border-radius: 3px;
       font-size: 0.9em;
     }
+
+    @media (forced-colors: active) {
+      .faq-item summary::after {
+        color: CanvasText;
+      }
+    }
   }
 </style>
+
+<script>
+  const listeners = new AbortController();
+  const options = { signal: listeners.signal };
+
+  const openFragmentAnswer = (focus: boolean) => {
+    let key: string;
+    try {
+      key = decodeURIComponent(window.location.hash.slice(1));
+    } catch {
+      return;
+    }
+    if (!key) return;
+    const item = document.getElementById(key);
+    if (!(item instanceof HTMLDetailsElement) || !item.matches('[data-faq-item]')) return;
+    item.open = true;
+    if (focus) {
+      item.querySelector<HTMLElement>('[data-faq-question]')?.focus({ preventScroll: true });
+    }
+  };
+
+  openFragmentAnswer(false);
+  window.addEventListener('hashchange', () => openFragmentAnswer(true), options);
+  window.addEventListener(
+    'pagehide',
+    (event) => {
+      if (!(event as PageTransitionEvent).persisted) listeners.abort();
+    },
+    options,
+  );
+</script>

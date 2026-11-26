@@ -2,14 +2,18 @@
 import BaseLayout from './BaseLayout.astro';
 import GuideBreadcrumb from '../components/guide/GuideBreadcrumb.astro';
 import RelatedGuides from '../components/guide/RelatedGuides.astro';
-import { PRODUCT_RELEASE } from '../data/product-release';
 import { SITE, type Locale } from '../data/site';
 import { withBase } from '../utils/urls';
 
 interface RelatedGuide {
   title: string;
   slug: string;
-  locale: Locale;
+}
+
+interface GuideHeading {
+  depth: number;
+  slug: string;
+  text: string;
 }
 
 interface Props {
@@ -28,18 +32,39 @@ interface Props {
     updated: string;
     evidence: { category: string; label: string; url: string }[];
     slug: string;
+    headings: GuideHeading[];
   };
   relatedGuides?: RelatedGuide[];
 }
 
 const { locale, seo, guide, relatedGuides = [] } = Astro.props;
 const isVi = locale === 'vi';
-
 const currentPath = Astro.url.pathname;
 const canonicalUrl = new URL(currentPath, SITE.productionOrigin).href;
 const guideBaseUrl = isVi ? '/vi/guides/' : '/guides/';
+const categoryNames: Record<string, string> = isVi
+  ? {
+      'getting-started': 'Bắt đầu',
+      'playback-timing': 'Phát nhạc & timing',
+      'technical-safety': 'Kỹ thuật & an toàn',
+      support: 'Hỗ trợ',
+    }
+  : {
+      'getting-started': 'Getting started',
+      'playback-timing': 'Playback & timing',
+      'technical-safety': 'Technical & safety',
+      support: 'Support',
+    };
+const categoryLabel = categoryNames[guide.category] ?? guide.category;
+const visibleHeadings = guide.headings.filter(
+  (heading) => heading.depth === 2 || heading.depth === 3,
+);
+const hasTableOfContents = visibleHeadings.length >= 4;
+const updatedDate = new Intl.DateTimeFormat(isVi ? 'vi-VN' : 'en-US', {
+  dateStyle: 'long',
+  timeZone: 'UTC',
+}).format(new Date(`${guide.updated}T00:00:00Z`));
 
-// Article + BreadcrumbList JSON-LD
 const structuredData = [
   {
     '@context': 'https://schema.org',
@@ -100,288 +125,340 @@ const structuredData = [
   structuredData={structuredData}
 >
   <article class="guide-page" aria-labelledby="guide-title">
-    <div class="guide-page__header section-shell section-shell--feature section-shell--after-header">
-      <div class="container">
-        <GuideBreadcrumb locale={locale} guideTitle={guide.title} guideSlug={guide.slug} />
-        <p class="guide-page__category kicker">{guide.category.replace(/-/g, ' ')}</p>
-        <h1 id="guide-title">{guide.title}</h1>
-        <p class="guide-page__summary">{guide.summary}</p>
-        <p class="guide-page__updated">
-          {isVi ? `Cập nhật: ${guide.updated}` : `Updated: ${guide.updated}`}
-        </p>
-      </div>
-    </div>
+    <header class="guide-page__header container">
+      <GuideBreadcrumb locale={locale} guideTitle={guide.title} />
+      <p class="guide-page__category">{categoryLabel}</p>
+      <h1 id="guide-title">{guide.title}</h1>
+      <p class="guide-page__summary">{guide.summary}</p>
+      <p class="guide-page__updated">
+        {isVi ? 'Cập nhật' : 'Updated'}
+        <time datetime={guide.updated}>{updatedDate}</time>
+      </p>
+    </header>
 
-    <div class="container guide-page__body">
+    <div
+      class:list={['guide-page__body', 'container', hasTableOfContents && 'guide-page__body--toc']}
+    >
+      {hasTableOfContents && (
+        <aside class="guide-page__navigation">
+          <details class="guide-toc" open>
+            <summary>{isVi ? 'Trong bài viết' : 'On this page'}</summary>
+            <nav aria-label={isVi ? 'Mục lục bài viết' : 'Article contents'}>
+              <ol>
+                {visibleHeadings.map((heading) => (
+                  <li class:list={[heading.depth === 3 && 'guide-toc__subheading']}>
+                    <a href={`#${heading.slug}`}>{heading.text}</a>
+                  </li>
+                ))}
+              </ol>
+            </nav>
+          </details>
+        </aside>
+      )}
+
       <div class="guide-page__content">
-        <slot />
+        <div class="guide-page__prose">
+          <slot />
+        </div>
 
         {guide.evidence.length > 0 && (
-          <aside
-            class="guide-page__evidence"
-            aria-label={isVi ? 'Nguồn kỹ thuật' : 'Technical evidence'}
-          >
-            <h2 class="guide-page__evidence-title">
-              {isVi ? 'Nguồn kỹ thuật' : 'Technical evidence'}
-            </h2>
-            <ul class="guide-page__evidence-list">
-              {guide.evidence.map((src) => (
+          <aside class="guide-page__evidence" aria-label={isVi ? 'Nguồn kỹ thuật' : 'Sources'}>
+            <h2>{isVi ? 'Nguồn kỹ thuật' : 'Sources'}</h2>
+            <ul>
+              {guide.evidence.map((source) => (
                 <li>
-                  <span class="guide-page__evidence-category">{src.category}</span>
-                  <a href={src.url} class="guide-page__evidence-link">
-                    {src.label}
-                  </a>
+                  <span>{source.category}</span>
+                  <a href={source.url}>{source.label}</a>
                 </li>
               ))}
             </ul>
           </aside>
         )}
-      </div>
 
-      {relatedGuides.length > 0 && <RelatedGuides locale={locale} guides={relatedGuides} />}
+        {relatedGuides.length > 0 && <RelatedGuides locale={locale} guides={relatedGuides} />}
+      </div>
     </div>
-
-    <section
-      class="guide-page__cta section-shell section-shell--feature"
-      aria-labelledby="guide-cta-title"
-    >
-      <div class="container guide-page__cta-layout">
-        <div>
-          <h2 id="guide-cta-title">{isVi ? 'Sẵn sàng thử chưa?' : 'Ready to try it?'}</h2>
-          <p>
-            {isVi
-              ? `Tải Sky Auto Player v${PRODUCT_RELEASE.version} và bắt đầu phát nhạc trên Windows.`
-              : `Download Sky Auto Player v${PRODUCT_RELEASE.version} and start playing on Windows.`}
-          </p>
-        </div>
-        <div class="guide-page__cta-actions">
-          <a class="button button--primary" href={SITE.releaseUrl}>
-            {isVi ? 'Xem bản phát hành' : 'Browse releases'}
-          </a>
-          <a class="button button--secondary" href={withBase(guideBaseUrl)}>
-            {isVi ? 'Tất cả hướng dẫn' : 'All guides'}
-          </a>
-        </div>
-      </div>
-    </section>
   </article>
 </BaseLayout>
 
 <style>
   @layer components {
     .guide-page__header {
-      border-top: 0;
+      padding-block: clamp(1.5rem, 3vw, 2.75rem) var(--space-5);
     }
 
     .guide-page__category {
-      font-weight: 700;
-      color: var(--color-text-secondary);
-      text-transform: uppercase;
+      margin-block: 0 var(--space-2);
+      color: var(--color-text-tertiary);
       font-size: var(--type-small);
-      letter-spacing: 0.1em;
-      margin-bottom: var(--space-2);
+      font-weight: 650;
     }
 
     .guide-page__header h1 {
-      margin-block: var(--space-3) var(--space-4);
+      max-inline-size: 26ch;
+      margin-block: 0 var(--space-3);
+      font-size: clamp(2rem, 1.55rem + 1.9vw, 3.15rem);
+      line-height: 1.14;
+      letter-spacing: -0.025em;
+    }
+
+    :global(:lang(vi)) .guide-page__header h1 {
+      line-height: 1.22;
+      letter-spacing: 0;
     }
 
     .guide-page__summary {
-      font-size: var(--type-lead);
+      max-inline-size: 65ch;
+      margin-block-end: var(--space-2);
       color: var(--color-text-secondary);
-      max-inline-size: 60ch;
-      margin-block-end: var(--space-4);
-      line-height: var(--leading-lead);
+      font-size: var(--type-body);
+      line-height: 1.6;
     }
 
     .guide-page__updated {
-      font-size: var(--type-small);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.35rem;
+      margin: 0;
       color: var(--color-text-tertiary);
-      font-family: var(--font-mono);
+      font-size: var(--type-small);
     }
 
     .guide-page__body {
       display: grid;
-      gap: var(--space-8);
-      padding-block: var(--space-10);
+      padding-block: var(--space-2) var(--space-8);
     }
 
-    @media (min-width: 64rem) {
-      .guide-page__body {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 280px);
-      }
+    .guide-page__body--toc {
+      gap: var(--space-6);
     }
 
     .guide-page__content {
-      min-width: 0;
+      min-inline-size: 0;
+      max-inline-size: 74ch;
     }
 
-    /* Prose styles for guide markdown content */
-    .guide-page__content :global(h2) {
-      margin-block: var(--space-8) var(--space-4);
-      font-size: clamp(1.25rem, 2vw, 1.75rem);
-      color: var(--color-text-primary);
+    .guide-page__prose {
+      min-inline-size: 0;
+      font-size: var(--type-body);
+      line-height: 1.7;
     }
 
-    .guide-page__content :global(h3) {
-      margin-block: var(--space-6) var(--space-3);
-      font-size: clamp(1.1rem, 1.5vw, 1.35rem);
-      color: var(--color-text-primary);
+    .guide-page__prose :global(h2),
+    .guide-page__prose :global(h3) {
+      scroll-margin-top: 6rem;
+      font-family: var(--font-body);
+      font-weight: 650;
+      letter-spacing: -0.02em;
     }
 
-    .guide-page__content :global(p) {
+    .guide-page__prose :global(h2) {
+      margin-block: var(--space-7) var(--space-3);
+      font-size: clamp(1.35rem, 1.2rem + 0.55vw, 1.65rem);
+      line-height: 1.32;
+    }
+
+    .guide-page__prose :global(h3) {
+      margin-block: var(--space-6) var(--space-2);
+      font-size: 1.16rem;
+      line-height: 1.4;
+    }
+
+    .guide-page__prose :global(p) {
+      max-inline-size: 70ch;
       margin-block-end: var(--space-4);
       color: var(--color-text-secondary);
-      line-height: var(--leading-body, 1.7);
-      max-inline-size: 72ch;
     }
 
-    .guide-page__content :global(ul),
-    .guide-page__content :global(ol) {
+    .guide-page__prose :global(ul),
+    .guide-page__prose :global(ol) {
+      max-inline-size: 70ch;
       margin-block-end: var(--space-5);
-      padding-inline-start: var(--space-5);
+      padding-inline-start: 1.4em;
       color: var(--color-text-secondary);
-      line-height: var(--leading-body, 1.7);
-      max-inline-size: 72ch;
     }
 
-    .guide-page__content :global(li) {
+    .guide-page__prose :global(li) {
+      padding-inline-start: 0.15em;
       margin-block-end: var(--space-2);
     }
 
-    .guide-page__content :global(code) {
-      font-family: var(--font-mono);
-      font-size: 0.875em;
+    .guide-page__prose :global(code) {
+      overflow-wrap: anywhere;
+      border-radius: var(--radius-xs);
       background: var(--color-surface-instrument);
+      padding: 0.08em 0.3em;
+      color: var(--color-text-primary);
+      font-family: var(--font-mono);
+      font-size: 0.86em;
+    }
+
+    .guide-page__prose :global(pre) {
+      max-inline-size: 100%;
+      margin-block-end: var(--space-5);
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
       border: 1px solid var(--line-faint);
       border-radius: var(--radius-sm);
-      padding: 0.1em 0.35em;
-      color: var(--color-text-primary);
-    }
-
-    .guide-page__content :global(pre) {
-      background: var(--color-surface-instrument);
-      border: 1px solid var(--line-default);
-      border-radius: var(--radius-sm);
+      background: var(--color-surface-quiet);
       padding: var(--space-4);
-      overflow-x: auto;
-      margin-block-end: var(--space-5);
     }
 
-    .guide-page__content :global(pre code) {
-      background: none;
-      border: none;
+    .guide-page__prose :global(pre code) {
+      overflow-wrap: normal;
       padding: 0;
+      background: transparent;
       font-size: var(--type-small);
     }
 
-    .guide-page__content :global(a) {
+    .guide-page__prose :global(table) {
+      display: block;
+      max-inline-size: 100%;
+      min-inline-size: 0;
+      margin-block-end: var(--space-5);
+      overflow-x: auto;
+      overscroll-behavior-inline: contain;
+      border-collapse: collapse;
+    }
+
+    .guide-page__prose :global(th),
+    .guide-page__prose :global(td) {
+      min-inline-size: 7rem;
+      padding: 0.55rem 0.7rem;
+      border-block-end: 1px solid var(--line-faint);
+      text-align: start;
+      vertical-align: top;
+    }
+
+    .guide-page__prose :global(th) {
+      color: var(--color-text-primary);
+      font-size: var(--type-small);
+      font-weight: 650;
+    }
+
+    .guide-page__prose :global(td) {
+      color: var(--color-text-secondary);
+      font-size: var(--type-small);
+    }
+
+    .guide-page__prose :global(a) {
       color: var(--color-action);
       text-decoration: underline;
       text-underline-offset: 0.2em;
-      text-decoration-color: color-mix(in oklch, var(--color-action) 50%, transparent);
-      transition: text-decoration-color var(--duration-fast) var(--ease-standard);
     }
 
-    .guide-page__content :global(a:hover),
-    .guide-page__content :global(a:focus-visible) {
-      text-decoration-color: var(--color-action);
-    }
-
-    .guide-page__content :global(blockquote) {
-      border-inline-start: 3px solid var(--line-accent);
-      padding-inline-start: var(--space-4);
+    .guide-page__prose :global(blockquote) {
+      max-inline-size: 70ch;
       margin-inline: 0;
+      border-inline-start: 2px solid var(--line-default);
+      padding-inline-start: var(--space-4);
       color: var(--color-text-tertiary);
     }
 
-    /* Evidence section */
-    .guide-page__evidence {
-      margin-block-start: var(--space-10);
-      padding: var(--space-5);
-      border: 1px solid var(--line-default);
-      border-radius: var(--radius-sm);
-      background: var(--color-surface-instrument);
+    .guide-toc {
+      max-block-size: none;
     }
 
-    .guide-page__evidence-title {
+    .guide-toc summary {
+      min-block-size: 44px;
+      display: flex;
+      align-items: center;
+      color: var(--color-text-primary);
       font-size: var(--type-small);
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      color: var(--color-text-tertiary);
-      margin-block-end: var(--space-3);
+      font-weight: 650;
+      cursor: pointer;
     }
 
-    .guide-page__evidence-list {
-      list-style: none;
-      padding: 0;
+    .guide-toc ol {
+      display: grid;
+      gap: 0.15rem;
       margin: 0;
+      padding: 0 0 var(--space-2);
+      list-style: none;
+    }
+
+    .guide-toc a {
+      display: block;
+      min-block-size: 44px;
+      padding-block: 0.65rem;
+      color: var(--color-text-tertiary);
+      font-size: var(--type-small);
+      line-height: 1.4;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.2em;
+    }
+
+    .guide-toc a:hover {
+      color: var(--color-text-primary);
+    }
+
+    .guide-toc__subheading {
+      padding-inline-start: var(--space-3);
+    }
+
+    .guide-page__evidence {
+      margin-block-start: var(--space-7);
+      border-block-start: 1px solid var(--line-faint);
+      padding-block-start: var(--space-4);
+    }
+
+    .guide-page__evidence h2 {
+      margin-block-end: var(--space-2);
+      color: var(--color-text-primary);
+      font-family: var(--font-body);
+      font-size: var(--type-body);
+      font-weight: 650;
+    }
+
+    .guide-page__evidence ul {
       display: grid;
       gap: var(--space-2);
+      margin: 0;
+      padding: 0;
+      list-style: none;
     }
 
-    .guide-page__evidence-list li {
-      display: flex;
-      align-items: baseline;
+    .guide-page__evidence li {
+      display: grid;
+      grid-template-columns: minmax(6rem, max-content) minmax(0, 1fr);
       gap: var(--space-3);
       font-size: var(--type-small);
     }
 
-    .guide-page__evidence-category {
-      flex: 0 0 auto;
-      font-family: var(--font-mono);
-      font-size: var(--type-micro);
-      text-transform: uppercase;
-      letter-spacing: 0.06em;
+    .guide-page__evidence li span {
       color: var(--color-text-tertiary);
-      min-width: 7rem;
     }
 
-    .guide-page__evidence-link {
+    .guide-page__evidence a {
       color: var(--color-text-secondary);
       text-underline-offset: 0.2em;
+      overflow-wrap: anywhere;
     }
 
-    .guide-page__evidence-link:hover {
+    .guide-page__evidence a:hover {
       color: var(--color-text-primary);
     }
 
-    /* CTA */
-    .guide-page__cta {
-      background: var(--color-surface-quiet);
-      text-align: center;
-      border-top: 1px solid var(--line-faint);
-      margin-block-start: var(--space-10);
+    @media (min-width: 64rem) {
+      .guide-page__body--toc {
+        grid-template-columns: minmax(0, 14rem) minmax(0, 1fr);
+        align-items: start;
+        gap: var(--space-7);
+      }
+
+      .guide-toc {
+        position: sticky;
+        top: 5.5rem;
+        max-block-size: calc(100dvh - 6.5rem);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
     }
 
-    .guide-page__cta-layout {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: var(--space-6);
-    }
-
-    .guide-page__cta h2 {
-      margin-block-end: var(--space-3);
-    }
-
-    .guide-page__cta p {
-      color: var(--color-text-secondary);
-    }
-
-    .guide-page__cta-actions {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: var(--space-4);
-    }
-
-    @media (max-width: 40rem) {
-      .guide-page__cta-actions {
-        flex-direction: column;
-        align-items: stretch;
-        width: min(100%, 22rem);
+    @media (max-width: 32rem) {
+      .guide-page__evidence li {
+        grid-template-columns: 1fr;
+        gap: 0.15rem;
       }
     }
   }

@@ -290,11 +290,13 @@ const descId = `${diagramId}-desc`;
     .arch-diagram {
       margin: var(--space-7) 0;
       overflow-x: auto;
+      overscroll-behavior-inline: contain;
     }
 
     .arch-diagram__svg {
       display: block;
       width: 100%;
+      min-width: 42rem;
       max-width: 760px;
       height: auto;
       color: var(--color-text-primary);

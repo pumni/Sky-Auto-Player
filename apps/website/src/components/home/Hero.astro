@@ -41,15 +41,16 @@ const { data, downloadCta, locale } = Astro.props;
 
     .hero h1 {
       margin-block-end: 1.25rem;
-      font-size: 4rem;
       letter-spacing: -0.025em;
-      line-height: 1.06;
+      line-height: 1.08;
+      max-inline-size: 14ch;
       text-wrap: balance;
     }
 
     .hero--vi h1 {
       letter-spacing: 0;
-      line-height: 1.15;
+      line-height: 1.16;
+      max-inline-size: 15ch;
     }
 
     .hero__description {
@@ -102,17 +103,7 @@ const { data, downloadCta, locale } = Astro.props;
       line-height: 1.5;
     }
 
-    @media (max-width: 71.99rem) {
-      .hero h1 {
-        font-size: clamp(3rem, 6vw, 3.75rem);
-      }
-    }
-
     @media (max-width: 39.99rem) {
-      .hero h1 {
-        font-size: clamp(2.25rem, 7vw, 2.75rem);
-      }
-
       .hero {
         padding-block: 0;
       }

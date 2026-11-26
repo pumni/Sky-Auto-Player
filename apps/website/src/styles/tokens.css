@@ -49,12 +49,11 @@
     --type-body: clamp(1rem, 0.97rem + 0.15vw, 1.1rem);
     --type-lead: clamp(1.16rem, 1.08rem + 0.3vw, 1.42rem);
     --type-h3: clamp(1.24rem, 1.12rem + 0.45vw, 1.62rem);
-    --type-h2: clamp(2.15rem, 1.55rem + 2.1vw, 4rem);
-    --type-hero: clamp(3rem, 4.7vw, 5.5rem);
+    --type-h2: clamp(1.75rem, 1.35rem + 1.5vw, 2.5rem);
+    --type-hero: clamp(2.25rem, 1.55rem + 2.6vw, 3.8rem);
 
     --leading-ui: 1.35;
     --leading-body: 1.65;
-    --leading-lead: 1.5;
     --leading-heading: 1.06;
     --leading-display: 0.98;
 
@@ -66,20 +65,14 @@
     --space-6: 2rem;
     --space-7: 3rem;
     --space-8: 4rem;
-    --space-10: 8rem;
-
     --section-compact: clamp(2rem, 4vw, 4rem);
     --section-default: clamp(3rem, 6vw, 6rem);
-    --section-feature: clamp(4rem, 7vw, 8rem);
-    --section-transition: clamp(2.5rem, 4vw, 4rem);
-    --section-product: clamp(5rem, 8vw, 9rem);
 
     --radius-xs: 0.25rem;
     --radius-sm: 0.45rem;
     --radius-md: 0.75rem;
-    --container-max: 84rem;
-    --content-max: 44rem;
-    --gutter: clamp(0.75rem, 3.2vw, 3.5rem);
+    --container-max: 75rem;
+    --gutter: clamp(1rem, 3vw, 2.5rem);
     --duration-press: 110ms;
     --duration-fast: 150ms;
     --ease-standard: cubic-bezier(0.2, 0.8, 0.2, 1);

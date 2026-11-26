@@ -12,69 +12,45 @@ const { locale, guides } = Astro.props;
 const isVi = locale === 'vi';
 const guideBase = isVi ? '/vi/guides/' : '/guides/';
 
-// Category display config
-const categoryConfig = {
-  'getting-started': {
+const categories = [
+  {
+    key: 'getting-started',
     label: isVi ? 'Bắt đầu' : 'Getting started',
-    description: isVi
-      ? 'Cài đặt, tải xuống và bước đầu sử dụng'
-      : 'Installation, download and first steps',
   },
-  'playback-timing': {
+  {
+    key: 'playback-timing',
     label: isVi ? 'Phát nhạc & timing' : 'Playback & timing',
-    description: isVi
-      ? 'Cách Sky Auto Player xử lý nhạc và timing'
-      : 'How Sky Auto Player handles music and timing',
   },
-  'technical-safety': {
+  {
+    key: 'technical-safety',
     label: isVi ? 'Kỹ thuật & an toàn' : 'Technical & safety',
-    description: isVi
-      ? 'Ranh giới kỹ thuật, bảo mật và mã nguồn'
-      : 'Technical boundaries, security and source code',
   },
-  support: {
+  {
+    key: 'support',
     label: isVi ? 'Hỗ trợ' : 'Support',
-    description: isVi ? 'Xử lý sự cố và câu hỏi thường gặp' : 'Troubleshooting and common issues',
   },
-} as const;
+] as const;
 
-type Category = keyof typeof categoryConfig;
-
-// Group non-draft guides by category in display order
-const categoryOrder: Category[] = [
-  'getting-started',
-  'playback-timing',
-  'technical-safety',
-  'support',
-];
-
-const byCategory = Object.fromEntries(
-  categoryOrder.map((cat) => [
-    cat,
-    guides
-      .filter((g) => g.data.category === cat && !g.data.draft)
-      .sort((a, b) => a.data.order - b.data.order),
-  ]),
-) as Record<Category, CollectionEntry<'guides'>[]>;
+const byCategory = categories.map((category) => ({
+  ...category,
+  guides: guides
+    .filter((guide) => guide.data.category === category.key)
+    .sort((a, b) => a.data.order - b.data.order),
+}));
 ---
 
 <div class="guide-hub">
-  {categoryOrder
-    .filter((cat) => byCategory[cat].length > 0)
-    .map((cat) => (
-      <section class="guide-hub__category" aria-labelledby={`cat-${cat}`}>
-        <div class="guide-hub__category-header">
-          <h2 id={`cat-${cat}`} class="guide-hub__category-title">
-            {categoryConfig[cat].label}
-          </h2>
-          <p class="guide-hub__category-desc">{categoryConfig[cat].description}</p>
-        </div>
-        <ul class="guide-hub__list">
-          {byCategory[cat].map((guide) => (
-            <li class="guide-hub__item">
-              <a class="guide-hub__link" href={withBase(`${guideBase}${guide.data.slug}/`)}>
-                <span class="guide-hub__link-title">{guide.data.title}</span>
-                <span class="guide-hub__link-summary">{guide.data.summary}</span>
+  {byCategory
+    .filter((category) => category.guides.length > 0)
+    .map((category) => (
+      <section class="guide-hub__category" aria-labelledby={`guide-category-${category.key}`}>
+        <h2 id={`guide-category-${category.key}`}>{category.label}</h2>
+        <ul>
+          {category.guides.map((guide) => (
+            <li>
+              <a href={withBase(`${guideBase}${guide.data.slug}/`)}>
+                {guide.data.title}
+                <span aria-hidden="true"> ↗</span>
               </a>
             </li>
           ))}
@@ -87,74 +63,62 @@ const byCategory = Object.fromEntries(
   @layer components {
     .guide-hub {
       display: grid;
-      gap: var(--space-8);
+      gap: var(--space-6);
     }
 
     .guide-hub__category {
-      padding-block-start: var(--space-6);
-      border-block-start: 1px solid var(--line-faint);
+      min-inline-size: 0;
     }
 
-    .guide-hub__category:first-child {
-      padding-block-start: 0;
-      border-block-start: none;
-    }
-
-    .guide-hub__category-header {
-      margin-block-end: var(--space-5);
-    }
-
-    .guide-hub__category-title {
-      font-size: clamp(1.1rem, 1.5vw, 1.4rem);
-      color: var(--color-text-primary);
+    .guide-hub__category h2 {
       margin-block-end: var(--space-2);
+      font-family: var(--font-body);
+      font-size: var(--type-h3);
+      font-weight: 650;
     }
 
-    .guide-hub__category-desc {
+    .guide-hub__category ul {
+      display: grid;
+      margin: 0;
+      padding: 0;
+      border-block-start: 1px solid var(--line-faint);
+      list-style: none;
+    }
+
+    .guide-hub__category li {
+      min-inline-size: 0;
+      border-block-end: 1px solid var(--line-faint);
+    }
+
+    .guide-hub__category a {
+      display: flex;
+      min-block-size: 44px;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      padding-block: 0.4rem;
+      color: var(--color-text-secondary);
       font-size: var(--type-small);
+      line-height: 1.45;
+      text-decoration-thickness: 1px;
+      text-underline-offset: 0.2em;
+    }
+
+    .guide-hub__category a:hover {
+      color: var(--color-text-primary);
+    }
+
+    .guide-hub__category a span {
+      flex: 0 0 auto;
       color: var(--color-text-tertiary);
     }
 
-    .guide-hub__list {
-      list-style: none;
-      padding: 0;
-      margin: 0;
-      display: grid;
-      gap: var(--space-3);
-    }
-
     @media (min-width: 48rem) {
-      .guide-hub__list {
+      .guide-hub {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+        column-gap: var(--space-7);
+        row-gap: var(--space-6);
       }
-    }
-
-    .guide-hub__link {
-      display: grid;
-      gap: var(--space-2);
-      padding: var(--space-5);
-      border: 1px solid var(--line-default);
-      border-radius: var(--radius-sm);
-      background: var(--color-surface-instrument);
-      transition: border-color var(--duration-fast) var(--ease-standard);
-      text-decoration: none;
-    }
-
-    .guide-hub__link:hover {
-      border-color: var(--line-accent);
-    }
-
-    .guide-hub__link-title {
-      font-weight: 650;
-      font-size: var(--type-body);
-      color: var(--color-text-primary);
-      line-height: 1.3;
-    }
-
-    .guide-hub__link-summary {
-      font-size: var(--type-small);
-      color: var(--color-text-secondary);
-      line-height: 1.5;
     }
   }
 </style>

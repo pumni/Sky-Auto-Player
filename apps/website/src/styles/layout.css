@@ -4,12 +4,6 @@
     margin-inline: auto;
   }
 
-  .home-container,
-  .page-layout--home .site-footer__layout {
-    inline-size: min(calc(100% - 2 * clamp(1rem, 2.8vw, 2.5rem)), 75rem);
-    margin-inline: auto;
-  }
-
   .home-opening {
     display: grid;
     align-items: center;
@@ -22,13 +16,19 @@
     scroll-margin-top: 6rem;
   }
 
-  @media (min-width: 72rem) {
+  @media (min-width: 64rem) {
     .home-opening {
       grid-template-columns: minmax(0, 6fr) minmax(0, 7fr);
     }
 
     .home-chapter {
       margin-block-start: clamp(3rem, 5vw, 5rem);
+    }
+  }
+
+  @media (min-width: 48rem) and (max-width: 63.99rem) {
+    :root {
+      --container-max: 56rem;
     }
   }
 
@@ -46,32 +46,12 @@
     scroll-margin-top: 6rem;
   }
 
-  .section-shell--bordered {
-    border-top: 1px solid var(--line-faint);
-  }
-
   .section-shell--compact {
     padding-block: var(--section-compact);
-  }
-
-  .section-shell--feature {
-    padding-block: var(--section-feature);
-  }
-
-  .section-shell--transition {
-    padding-block: var(--section-transition);
-  }
-
-  .section-shell--product {
-    padding-block: var(--section-product);
   }
 
   /* First section under site header: pull content up without killing feature bottom space. */
   .section-shell--after-header {
     padding-top: clamp(2.25rem, 3.5vw, 3.25rem);
-  }
-
-  .section-shell--intro.section-shell--after-header {
-    padding-top: clamp(1.25rem, 2.5vw, 2.5rem);
   }
 }

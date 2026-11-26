@@ -1,58 +1,77 @@
 ---
-import type { CollectionEntry } from 'astro:content';
 import type { Locale } from '../../data/site';
+
+interface FaqGroup {
+  id: string;
+  label: string;
+}
 
 interface Props {
   locale: Locale;
-  faqs: CollectionEntry<'faq'>[];
+  groups: FaqGroup[];
 }
 
-const { locale, faqs } = Astro.props;
+const { locale, groups } = Astro.props;
 ---
 
-<nav class="faq-toc" aria-label={locale === 'vi' ? 'Mục FAQ' : 'FAQ sections'}>
-  <p class="faq-toc__label">{locale === 'vi' ? 'Trong trang này' : 'On this page'}</p>
-  <ul>
-    {faqs.map((faq) => (
-      <li>
-        <a href={`#${faq.data.key}`}>{faq.data.question}</a>
-      </li>
-    ))}
-  </ul>
-</nav>
+<details class="faq-toc" open>
+  <summary>{locale === 'vi' ? 'Chủ đề' : 'Topics'}</summary>
+  <nav aria-label={locale === 'vi' ? 'Chủ đề FAQ' : 'FAQ topics'}>
+    <ul>
+      {groups.map((group) => (
+        <li>
+          <a href={`#${group.id}`}>{group.label}</a>
+        </li>
+      ))}
+    </ul>
+  </nav>
+</details>
 
 <style>
   @layer components {
     .faq-toc {
-      position: sticky;
-      top: 6rem;
       align-self: start;
-      display: none;
     }
-    @media (min-width: 64rem) {
-      .faq-toc {
-        display: block;
-      }
-    }
-    .faq-toc__label {
-      font-weight: 700;
-      color: var(--color-text-secondary);
-      text-transform: uppercase;
-      font-size: var(--type-label);
-      letter-spacing: 0.1em;
-      margin-bottom: var(--space-4);
-    }
-    .faq-toc ul {
+
+    .faq-toc summary {
       display: flex;
-      flex-direction: column;
-      gap: var(--space-2);
+      min-block-size: 44px;
+      align-items: center;
+      color: var(--color-text-primary);
+      font-size: var(--type-small);
+      font-weight: 650;
+      cursor: pointer;
     }
+
+    .faq-toc ul {
+      display: grid;
+      gap: 0.2rem;
+      margin: 0;
+      padding: 0 0 var(--space-2);
+      list-style: none;
+    }
+
     .faq-toc a {
+      display: flex;
+      min-block-size: 44px;
+      align-items: center;
       color: var(--color-text-tertiary);
       font-size: var(--type-small);
+      text-underline-offset: 0.2em;
     }
+
     .faq-toc a:hover {
       color: var(--color-text-primary);
+    }
+
+    @media (min-width: 64rem) {
+      .faq-toc {
+        position: sticky;
+        top: 5.5rem;
+        max-block-size: calc(100dvh - 6.5rem);
+        overflow-y: auto;
+        overscroll-behavior: contain;
+      }
     }
   }
 </style>

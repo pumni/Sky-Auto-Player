@@ -5,7 +5,6 @@ import '../styles/tokens.css';
 import '../styles/reset.css';
 import '../styles/global.css';
 import '../styles/layout.css';
-import '../styles/patterns.css';
 import '../styles/components.css';
 import '../styles/utilities.css';
 
@@ -41,7 +40,6 @@ interface Props {
 const { locale, seo, structuredData } = Astro.props;
 const isVi = locale === 'vi';
 const currentPath = Astro.url.pathname;
-const isHome = currentPath === withBase(isVi ? '/vi/' : '/');
 const canonicalUrl = seo.canonical ?? new URL(currentPath, SITE.productionOrigin).href;
 const hreflangEn = new URL(localizedPath(currentPath, 'en'), SITE.productionOrigin).href;
 const hreflangVi = new URL(localizedPath(currentPath, 'vi'), SITE.productionOrigin).href;
@@ -111,7 +109,7 @@ const structuredDataJson = structuredData ? JSON.stringify(structuredData) : nul
       <script is:inline type="application/ld+json" set:html={structuredDataJson} />
     )}
   </head>
-  <body class={`page-layout page-layout--${locale}${isHome ? ' page-layout--home' : ''}`}>
+  <body>
     <a class="skip-link" href="#main-content">
       {isVi ? 'Chuyển đến nội dung chính' : 'Skip to content'}
     </a>

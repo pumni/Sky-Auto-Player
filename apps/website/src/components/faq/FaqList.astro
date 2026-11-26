@@ -1,29 +1,46 @@
 ---
 import type { CollectionEntry } from 'astro:content';
-import type { Locale } from '../../data/site';
 import FaqItem from './FaqItem.astro';
 
-interface Props {
-  locale: Locale;
+interface FaqGroup {
+  id: string;
+  label: string;
   faqs: CollectionEntry<'faq'>[];
 }
 
-const { locale, faqs } = Astro.props;
+interface Props {
+  groups: FaqGroup[];
+}
+
+const { groups } = Astro.props;
 ---
 
-<article class="faq-content">
-  <h2>{locale === 'vi' ? 'Câu hỏi và trả lời' : 'Questions and answers'}</h2>
-  <div class="faq-list">
-    {faqs.map((faq, index) => (
-      <FaqItem faq={faq} isOpen={index < 2} />
-    ))}
-  </div>
-</article>
+<div class="faq-list">
+  {groups.map((group) => (
+    <section class="faq-list__group" id={group.id} aria-labelledby={`${group.id}-title`}>
+      <h2 id={`${group.id}-title`}>{group.label}</h2>
+      {group.faqs.map((faq) => (
+        <FaqItem faq={faq} />
+      ))}
+    </section>
+  ))}
+</div>
 
 <style>
   @layer components {
-    .faq-content h2 {
-      margin-bottom: var(--space-6);
+    .faq-list {
+      min-inline-size: 0;
+    }
+
+    .faq-list__group + .faq-list__group {
+      margin-block-start: var(--space-6);
+    }
+
+    .faq-list__group h2 {
+      margin-block-end: var(--space-2);
+      font-family: var(--font-body);
+      font-size: var(--type-h3);
+      font-weight: 650;
     }
   }
 </style>

@@ -38,8 +38,8 @@ const defaultView = data.views[0];
       class="product-showcase__image"
       src={withBase(defaultView.src)}
       alt={defaultView.alt}
-      width="1214"
-      height="798"
+      width="1366"
+      height="768"
       loading="eager"
       fetchpriority="high"
       decoding="async"
@@ -53,6 +53,7 @@ const defaultView = data.views[0];
       </a>
     </figcaption>
   </figure>
+  <p class="product-showcase__provenance">{data.captureNote}</p>
 
   <ul class="product-showcase__fallback" aria-label={data.fallbackLabel}>
     {data.views.map((view) => (
@@ -85,7 +86,7 @@ const defaultView = data.views[0];
     }
 
     .product-selector__button {
-      min-block-size: 40px;
+      min-block-size: 44px;
       padding: 0.4rem 0.7rem;
       border: 0;
       border-radius: var(--radius-sm);
@@ -115,7 +116,7 @@ const defaultView = data.views[0];
       background: var(--color-surface-quiet);
       inline-size: 100%;
       block-size: auto;
-      aspect-ratio: 1214 / 798;
+      aspect-ratio: 1366 / 768;
       object-fit: contain;
     }
 
@@ -142,6 +143,13 @@ const defaultView = data.views[0];
       text-decoration-color: var(--color-focus);
     }
 
+    .product-showcase__provenance {
+      margin-block: 0.4rem 0;
+      color: var(--color-text-tertiary);
+      font-size: var(--type-micro);
+      line-height: 1.45;
+    }
+
     .product-showcase__fallback {
       display: flex;
       flex-wrap: wrap;
@@ -153,7 +161,7 @@ const defaultView = data.views[0];
 
     .product-showcase__fallback a {
       display: inline-flex;
-      min-block-size: 40px;
+      min-block-size: 44px;
       align-items: center;
       color: var(--color-action);
     }
@@ -196,6 +204,7 @@ const defaultView = data.views[0];
             image.alt = alt;
             fullSizeLink.href = src;
             caption.textContent = nextCaption;
+            fallback.hidden = true;
             for (const candidate of buttons) {
               candidate.setAttribute('aria-pressed', String(candidate === button));
             }

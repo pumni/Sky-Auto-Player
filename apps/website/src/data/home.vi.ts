@@ -29,24 +29,26 @@ export const homeVi: HomeContent = {
     selectorLabel: 'Chọn giao diện trình phát',
     fullSizeLabel: 'Xem ảnh kích thước đầy đủ',
     fallbackLabel: 'Mở giao diện trình phát khác',
+    captureNote:
+      'Ảnh xem trước bằng browser mock từ mã nguồn desktop hiện tại, dùng dữ liệu mẫu; không phải ảnh chụp Tauri native.',
     views: [
       {
         label: 'Thư viện',
-        alt: 'Ảnh chụp giao diện desktop hiển thị thư viện bài hát và playlist của Sky Auto Player.',
+        alt: 'Ảnh xem trước bằng browser mock của thư viện bài hát desktop hiện tại với bài hát và playlist mẫu.',
         caption: 'Duyệt bài hát, mục yêu thích và playlist.',
-        src: '/assets/images/library-real-tauri.png',
+        src: '/assets/images/desktop-library-browser-preview-1366x768.png',
       },
       {
         label: 'Chi tiết bài hát',
-        alt: 'Ảnh chụp giao diện desktop hiển thị bài hát đã chọn và chi tiết sheet.',
+        alt: 'Ảnh xem trước bằng browser mock của bài hát mẫu đã chọn và chi tiết sheet trên giao diện desktop hiện tại.',
         caption: 'Xem lại bài hát trước khi phát.',
-        src: '/assets/images/detail-real-tauri.png',
+        src: '/assets/images/desktop-song-detail-browser-preview-1366x768.png',
       },
       {
         label: 'Thiết lập',
-        alt: 'Ảnh chụp giao diện desktop hiển thị thiết lập phát nhạc và ứng dụng.',
+        alt: 'Ảnh xem trước bằng browser mock của thiết lập phát nhạc desktop hiện tại với dữ liệu mẫu.',
         caption: 'Chọn thiết lập phát phù hợp.',
-        src: '/assets/images/settings-real-tauri.png',
+        src: '/assets/images/desktop-settings-playback-browser-preview-1366x768.png',
       },
     ],
   },

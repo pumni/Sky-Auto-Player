@@ -20,7 +20,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
   aria-labelledby="trust-download-title"
   data-home-section="trust-download"
 >
-  <div class="home-container trust-download__layout">
+  <div class="container trust-download__layout">
     <div class="trust-download__lead">
       <div>
         <h2 id="trust-download-title">{data.title}</h2>
@@ -34,6 +34,15 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
     </div>
 
     <div class="trust-download__details">
+      <p class="trust-download__installer">
+        {locale === 'vi'
+          ? 'Trong GitHub Releases, tải bộ cài Windows ổn định:'
+          : 'In GitHub Releases, download the stable Windows installer:'}
+        <code>Sky.Auto.Player_{PRODUCT_RELEASE.version}_x64-setup.exe</code>
+        {locale === 'vi'
+          ? '. Tệp .exe.sig chỉ dùng làm chữ ký updater.'
+          : '. The .exe.sig file is only the updater signature.'}
+      </p>
       <p>{data.signingValue}</p>
       <p>{data.updaterValue}</p>
     </div>
@@ -54,6 +63,10 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
 
 <style>
   @layer components {
+    .trust-download {
+      padding-block-end: clamp(2rem, 4vw, 3rem);
+    }
+
     .trust-download__layout {
       display: grid;
       gap: 1.25rem;

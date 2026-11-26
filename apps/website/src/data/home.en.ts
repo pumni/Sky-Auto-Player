@@ -29,24 +29,26 @@ export const homeEn: HomeContent = {
     selectorLabel: 'Choose a player view',
     fullSizeLabel: 'View full size',
     fallbackLabel: 'Open another player view',
+    captureNote:
+      'Browser mock preview from the current desktop source, with example data; not a native Tauri capture.',
     views: [
       {
         label: 'Library',
-        alt: 'Desktop interface capture showing the Sky Auto Player song library and playlists.',
+        alt: 'Browser mock preview of the current desktop song library with example songs and playlists.',
         caption: 'Browse songs, favorites, and playlists.',
-        src: '/assets/images/library-real-tauri.png',
+        src: '/assets/images/desktop-library-browser-preview-1366x768.png',
       },
       {
         label: 'Song Detail',
-        alt: 'Desktop interface capture showing a selected song and its sheet details.',
+        alt: 'Browser mock preview of a selected example song and its sheet details in the current desktop interface.',
         caption: 'Review a song before you play it.',
-        src: '/assets/images/detail-real-tauri.png',
+        src: '/assets/images/desktop-song-detail-browser-preview-1366x768.png',
       },
       {
         label: 'Settings',
-        alt: 'Desktop interface capture showing playback and application settings.',
+        alt: 'Browser mock preview of the current desktop playback settings with example data.',
         caption: 'Choose playback options for your setup.',
-        src: '/assets/images/settings-real-tauri.png',
+        src: '/assets/images/desktop-settings-playback-browser-preview-1366x768.png',
       },
     ],
   },

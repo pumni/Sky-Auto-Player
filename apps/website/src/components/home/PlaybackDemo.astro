@@ -30,7 +30,7 @@ const timingGuide = withBase(
   aria-labelledby="playback-title"
   data-home-section="playback"
 >
-  <div class="home-container playback-demo__layout">
+  <div class="container playback-demo__layout">
     <header class="playback-demo__intro">
       <h2 id="playback-title">{data.title}</h2>
       <p>{data.description}</p>
@@ -83,7 +83,11 @@ const timingGuide = withBase(
           </span>
           <span class="playback-timeline__playhead" aria-hidden="true" data-playhead></span>
         </div>
-        <ol class="playback-timeline__legend" id="playback-legend">
+        <ol
+          class="playback-timeline__legend"
+          id="playback-legend"
+          style={`grid-template-columns: ${timelineColumns}`}
+        >
           {PLAYBACK_DEMO_EVENTS.map((event, index) => (
             <li
               aria-current={index === 0 ? 'step' : undefined}
@@ -124,7 +128,7 @@ const timingGuide = withBase(
           data-demo-controls
         >
           <button
-            class="button button--primary playback-demo__play"
+            class="button button--secondary playback-demo__play"
             type="button"
             data-action="play"
           >
@@ -225,20 +229,20 @@ const timingGuide = withBase(
 
     .playback-timeline__segment[aria-current='step'] {
       background: var(--color-action);
+      box-shadow: inset 0 -2px var(--color-text-primary);
     }
 
     .playback-timeline__playhead {
       position: absolute;
       inset: 0 auto 0 0;
-      inline-size: 100%;
-      border-inline-end: 2px solid var(--color-text-primary);
-      transform: scaleX(0);
-      transform-origin: left center;
+      inline-size: 3px;
+      border-radius: 999px;
+      background: var(--color-text-primary);
+      transform: translateX(0);
     }
 
     .playback-timeline__legend {
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 0.75rem 1rem;
       margin: 0.7rem 0 0;
       padding: 0;
@@ -246,13 +250,29 @@ const timingGuide = withBase(
     }
 
     .playback-timeline__legend li {
+      min-block-size: 2.75rem;
       display: grid;
       gap: 0.1rem;
       min-inline-size: 0;
+      padding-inline-start: 0.6rem;
+      border-inline-start: 2px solid transparent;
       color: var(--color-text-tertiary);
       font-size: var(--type-small);
       line-height: 1.35;
       overflow-wrap: anywhere;
+    }
+
+    .playback-timeline__legend li[aria-current='step'] {
+      border-inline-start-color: var(--color-action);
+      color: var(--color-text-primary);
+      font-weight: 600;
+    }
+
+    .playback-timeline__legend li[aria-current='step'] strong {
+      text-decoration: underline;
+      text-decoration-color: var(--color-action);
+      text-decoration-thickness: 2px;
+      text-underline-offset: 0.18em;
     }
 
     .playback-timeline__legend strong {
@@ -293,7 +313,8 @@ const timingGuide = withBase(
     }
 
     .playback-key.is-active {
-      border-color: var(--color-action);
+      border: 1px solid var(--color-action);
+      border-block-end-width: 4px;
       background: var(--color-surface-active);
       color: var(--color-text-primary);
     }
@@ -320,7 +341,7 @@ const timingGuide = withBase(
 
     .playback-demo__play {
       min-block-size: 2.75rem;
-      min-inline-size: 6rem;
+      min-inline-size: 10rem;
       border-radius: var(--radius-sm);
     }
 
@@ -375,7 +396,12 @@ const timingGuide = withBase(
 
     @media (forced-colors: active) {
       .playback-key.is-active {
-        outline: 1px solid Highlight;
+        outline: 2px solid Highlight;
+        outline-offset: 1px;
+      }
+
+      .playback-timeline__legend li[aria-current='step'] {
+        border-inline-start-color: Highlight;
       }
 
       .playback-demo__step[aria-disabled='true'] {
@@ -434,6 +460,14 @@ const timingGuide = withBase(
       let frameId = 0;
       let semanticState = '';
       let lastVisibleTime = '';
+      let markerTravel = 0;
+
+      const measureMarkerTravel = () => {
+        markerTravel = Math.max(0, progress.clientWidth - playhead.offsetWidth);
+        render();
+      };
+      const markerSizeObserver = new ResizeObserver(measureMarkerTravel);
+      markerSizeObserver.observe(progress);
 
       const currentEventIndex = () =>
         PLAYBACK_DEMO_EVENTS.findIndex(
@@ -524,8 +558,12 @@ const timingGuide = withBase(
 
       const render = () => {
         const ratio = Math.min(1, Math.max(0, elapsedMs / PLAYBACK_DEMO_DURATION_MS));
-        playhead.style.transform = `scaleX(${ratio})`;
-        progress.setAttribute('aria-valuenow', String(Math.floor(elapsedMs)));
+        playhead.style.transform = `translateX(${Math.round(markerTravel * ratio)}px)`;
+        const accessibleElapsed =
+          elapsedMs >= PLAYBACK_DEMO_DURATION_MS
+            ? PLAYBACK_DEMO_DURATION_MS
+            : Math.floor(elapsedMs / 100) * 100;
+        progress.setAttribute('aria-valuenow', String(accessibleElapsed));
         const visibleTime = formatPlaybackTime(elapsedMs, locale);
         if (visibleTime !== lastVisibleTime) {
           elapsed.textContent = visibleTime;
@@ -643,6 +681,7 @@ const timingGuide = withBase(
           settlePlayback();
           if (!(event as PageTransitionEvent).persisted) {
             reducedMotion.removeEventListener('change', onMotionChange);
+            markerSizeObserver.disconnect();
             listeners.abort();
           }
         },

@@ -1,8 +1,7 @@
 ---
 import { getCollection, type CollectionEntry } from 'astro:content';
 import BaseLayout from '../../layouts/BaseLayout.astro';
-import { SITE, type Locale } from '../../data/site';
-import { withBase } from '../../utils/urls';
+import type { Locale } from '../../data/site';
 import FaqToc from './FaqToc.astro';
 import FaqList from './FaqList.astro';
 
@@ -19,6 +18,27 @@ const isVi = locale === 'vi';
 const faqs = (await getCollection('faq', ({ data }) => data.locale === locale)).sort(
   (a, b) => a.data.order - b.data.order,
 );
+const categoryOrder = ['General', 'Formats', 'Safety', 'Troubleshooting'];
+const categoryLabels: Record<string, string> = isVi
+  ? {
+      General: 'Cài đặt & sử dụng',
+      Formats: 'Định dạng sheet',
+      Safety: 'An toàn',
+      Troubleshooting: 'Khắc phục sự cố',
+    }
+  : {
+      General: 'Setup & use',
+      Formats: 'Sheet formats',
+      Safety: 'Safety',
+      Troubleshooting: 'Troubleshooting',
+    };
+const groups = categoryOrder
+  .map((category) => ({
+    id: `faq-group-${category.toLowerCase()}`,
+    label: categoryLabels[category],
+    faqs: faqs.filter((faq) => faq.data.category === category),
+  }))
+  .filter((group) => group.faqs.length > 0);
 
 function plainText(markdown: string): string {
   return markdown
@@ -44,103 +64,48 @@ const structuredData = {
 ---
 
 <BaseLayout locale={locale} seo={seo} structuredData={structuredData}>
-  <section
-    class="faq-hero section-shell section-shell--feature section-shell--after-header"
-    aria-labelledby="faq-title"
-  >
-    <div class="container">
-      <p class="kicker">Sky Auto Player · {isVi ? 'Tham khảo' : 'Reference'}</p>
-      <h1 id="faq-title">{isVi ? 'Câu hỏi thường gặp' : 'Frequently asked questions'}</h1>
-      <p class="faq-hero__copy">
-        {isVi
-          ? 'Cài đặt, định dạng sheet, hỗ trợ Windows, giới hạn kỹ thuật và xử lý lỗi cho trình phát nhạc ưu tiên timing.'
-          : 'Setup, sheet formats, Windows support, technical boundaries and troubleshooting for the timing-first music player.'}
-      </p>
-    </div>
-  </section>
+  <header class="faq-header container" aria-labelledby="faq-title">
+    <h1 id="faq-title">{isVi ? 'Câu hỏi thường gặp' : 'FAQ'}</h1>
+    <p>
+      {isVi
+        ? 'Câu trả lời ngắn về cài đặt, định dạng, an toàn và khắc phục sự cố.'
+        : 'Quick answers about setup, formats, safety, and troubleshooting.'}
+    </p>
+  </header>
 
   <div class="container faq-layout">
-    <FaqToc locale={locale} faqs={faqs} />
-    <FaqList locale={locale} faqs={faqs} />
+    <FaqToc locale={locale} groups={groups} />
+    <FaqList groups={groups} />
   </div>
-
-  <section class="final-cta section-shell section-shell--feature" aria-labelledby="faq-cta-title">
-    <div class="container final-cta__layout">
-      <div>
-        <h2 id="faq-cta-title">{isVi ? 'Sẵn sàng thử một sheet?' : 'Ready to try a sheet?'}</h2>
-        <p>
-          {isVi
-            ? 'Mở trang bản phát hành rồi mở Library khi bài hát của bạn đã sẵn sàng.'
-            : 'Browse the releases, then open the Library when your song is ready.'}
-        </p>
-      </div>
-      <div class="final-cta__actions">
-        <a class="button button--primary" href={SITE.releaseUrl}>
-          {isVi ? 'Xem bản phát hành' : 'Browse releases'}
-        </a>
-        <a class="button button--secondary" href={withBase(isVi ? '/vi/' : '/')}>
-          {isVi ? 'Về trang chủ' : 'Back to landing page'}
-        </a>
-      </div>
-    </div>
-  </section>
 </BaseLayout>
 
 <style>
   @layer components {
     .faq-layout {
       display: grid;
-      gap: var(--space-8);
+      gap: var(--space-6);
       margin-bottom: var(--section-default);
     }
+
     @media (min-width: 64rem) {
       .faq-layout {
-        grid-template-columns: minmax(0, 240px) minmax(0, 1fr);
+        grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
       }
     }
-    .kicker {
-      font-weight: 700;
+
+    .faq-header {
+      padding-block: clamp(2rem, 4vw, 3rem) var(--space-5);
+    }
+
+    .faq-header h1 {
+      margin-block-end: var(--space-2);
+    }
+
+    .faq-header p {
+      max-inline-size: 58ch;
+      margin: 0;
       color: var(--color-text-secondary);
-      text-transform: uppercase;
-      font-size: var(--type-label);
-      letter-spacing: 0.1em;
-      margin-bottom: var(--space-2);
-    }
-    .faq-hero__copy {
-      font-size: var(--type-lead);
-      color: var(--color-text-tertiary);
-      margin-top: var(--space-4);
-      max-width: var(--content-max);
-    }
-    .final-cta {
-      background: var(--color-surface-quiet);
-      text-align: center;
-      border-top: 1px solid var(--line-default);
-    }
-    .final-cta__layout {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: var(--space-6);
-    }
-    .final-cta h2 {
-      margin-bottom: var(--space-4);
-    }
-    .final-cta p {
-      color: var(--color-text-tertiary);
-    }
-    .final-cta__actions {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: var(--space-4);
-    }
-    @media (max-width: 40rem) {
-      .final-cta__actions {
-        flex-direction: column;
-        align-items: stretch;
-        width: min(100%, 22rem);
-      }
+      font-size: var(--type-body);
     }
   }
 </style>

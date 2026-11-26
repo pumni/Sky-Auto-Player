@@ -2,6 +2,7 @@
 import { getCollection, render } from 'astro:content';
 import GuideLayout from '../../../layouts/GuideLayout.astro';
 import ArchitectureDiagram from '../../../components/guide/ArchitectureDiagram.astro';
+import { resolveRelatedGuides } from '../../../utils/related-guides';
 
 export async function getStaticPaths() {
   const guides = await getCollection('guides', (g) => g.data.locale === 'vi' && !g.data.draft);
@@ -12,39 +13,9 @@ export async function getStaticPaths() {
 }
 
 const { guide } = Astro.props;
-const { Content } = await render(guide);
-
-// Resolve related guides by explicit key (guide.data.related) instead of category-match.
-// Strictly validates missing key, self-reference, duplicate key, and draft target.
+const { Content, headings } = await render(guide);
 const allGuides = await getCollection('guides', (g) => g.data.locale === 'vi' && !g.data.draft);
-const guideByKey = new Map(allGuides.map((g) => [g.data.key, g]));
-const seenKeys = new Set<string>();
-
-const relatedGuides = guide.data.related.map((relKey) => {
-  if (relKey === guide.data.key) {
-    throw new Error(
-      `[related-guides] Guide "${guide.data.slug}" (${guide.data.locale}) self-references its own key: "${relKey}"`,
-    );
-  }
-  if (seenKeys.has(relKey)) {
-    throw new Error(
-      `[related-guides] Guide "${guide.data.slug}" (${guide.data.locale}) has duplicate related key: "${relKey}"`,
-    );
-  }
-  seenKeys.add(relKey);
-
-  const target = guideByKey.get(relKey);
-  if (!target) {
-    throw new Error(
-      `[related-guides] Guide "${guide.data.slug}" (${guide.data.locale}) references missing or draft target key: "${relKey}"`,
-    );
-  }
-  return {
-    title: target.data.title,
-    slug: target.data.slug,
-    locale: target.data.locale as 'en' | 'vi',
-  };
-});
+const relatedGuides = resolveRelatedGuides(guide, allGuides);
 ---
 
 <GuideLayout
@@ -62,6 +33,7 @@ const relatedGuides = guide.data.related.map((relKey) => {
     updated: guide.data.updated,
     evidence: guide.data.evidence,
     slug: guide.data.slug,
+    headings,
   }}
   relatedGuides={relatedGuides}
 >
