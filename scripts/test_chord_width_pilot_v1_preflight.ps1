@@ -197,12 +197,25 @@ try {
     Write-Manifest -Path $badObsManifest -Overrides @{ receiveonly_observer_mode = 'SchedulerQueuedV2'; receiveonly_observer_event_schema_version = 4 }
     Assert-CommandFails 'Wrong observer protocol/schema in manifest' { & pwsh -NoProfile -File $isoPrepare -RepositoryRoot $workRepo -Mode PreflightOnly -HarnessManifestPath $badObsManifest }
 
-    # --- Negative checks: direct run_native_acceptance_case.ps1 locks & bounds ---
-    Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 execution locked' {
+    # --- Negative checks: direct run_native_acceptance_case.ps1 locks, owner approval, remote tip, script hashes ---
+    Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 missing -OwnerApprovedReceiveOnlyRun rejected before lock' {
+        & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 5 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -HarnessPath $fakeBin -HarnessManifestPath $validManifest -OutputRoot (Join-Path $extOut 'direct-no-owner')
+    }
+    Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 execution locked even with -OwnerApprovedReceiveOnlyRun' {
         & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 5 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -HarnessPath $fakeBin -HarnessManifestPath $validManifest -OutputRoot (Join-Path $extOut 'direct-exec') -OwnerApprovedReceiveOnlyRun
+    }
+    Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 rejects tampered script hash in manifest' {
+        & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 5 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -HarnessPath $fakeBin -HarnessManifestPath $badScriptHashManifest -OutputRoot (Join-Path $extOut 'direct-bad-script') -PreflightOnly
     }
     Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 rejects CpuContention' {
         & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 5 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -CpuContention -HarnessPath $fakeBin -HarnessManifestPath $validManifest -OutputRoot (Join-Path $extOut 'direct-cpu') -PreflightOnly
+    }
+
+    # Pre-existing target directory rejected by -BuildHarness
+    $existingBuildRoot = Join-Path $extOut 'preexisting-build'
+    New-Item -ItemType Directory -Force -Path (Join-Path $existingBuildRoot 'target') | Out-Null
+    Assert-CommandFails 'BuildHarness rejects pre-existing external target directory' {
+        & pwsh -NoProfile -File $isoPrepare -RepositoryRoot $workRepo -Mode PreflightOnly -BuildHarness -OutputRoot $existingBuildRoot
     }
 
     # --- Negative checks: Git cleanliness, branch, remote tip ---

@@ -22,6 +22,7 @@ Import-Module (Join-Path $scriptRoot 'dispatch_qualification_profiles.psm1') -Fo
 $expectedBranch = 'refactor/completion-anchored-pulse-engine'
 $frozenBaselineSha = 'e7293877a6ce58a387cb8edfe0a88399a85d2b15'
 $frozenBaselineTree = '1e2aa8c1a6b1d48a46cd419d89536a1051510890'
+$frozenCargoLockSha256 = '9b9ba6c03131d96029421bfa9f6f69f9ce331e003e32e095eac54a714e73021e'
 $expectedObserverMode = 'SchedulerQueuedV3Compat3'
 $expectedObserverVersion = 'scheduler-receiveonly-queue-v3-compat3'
 $expectedObserverSchemaVersion = 3
@@ -183,6 +184,9 @@ if ($lockBytes -contains [byte]13) {
     throw 'Fail-closed: rust/Cargo.lock contains CR bytes; LF bytes are required.'
 }
 $lockSha256 = Get-FileSha256 $lockPath
+if ($lockSha256 -ne $frozenCargoLockSha256) {
+    throw "Fail-closed: rust/Cargo.lock LF SHA-256 ($lockSha256) does not match frozen expected lock ($frozenCargoLockSha256)."
+}
 
 Push-Location $repoFull
 try {
@@ -222,6 +226,9 @@ $nativeBuildStatus = 'NOT BUILT'
 $nativeManifestStatus = 'NOT VERIFIED'
 $buildProvenance = 'not_built'
 $binaryProvenanceVerifiedByFreshBuild = $false
+$authorizedToExecute = $false
+$cargoBuildCommand = $null
+$cargoBuildExitCode = $null
 $binarySha256 = 'NOT_BUILT'
 $binaryPath = $null
 $manifestSha256 = 'NOT_VERIFIED'
@@ -231,20 +238,36 @@ if ($BuildHarness) {
     if ([string]::IsNullOrWhiteSpace($outFull)) {
         throw 'Fail-closed: -BuildHarness requires an external -OutputRoot outside the repository.'
     }
-    New-Item -ItemType Directory -Force -Path $outFull | Out-Null
     $targetDir = Join-Path $outFull 'target'
+    if (Test-Path -LiteralPath $targetDir) {
+        throw "Fail-closed: -BuildHarness requires a fresh nonexistent external target directory ($targetDir already exists)."
+    }
+    New-Item -ItemType Directory -Force -Path $outFull | Out-Null
+    $cargoBuildCommand = "node scripts/toolchain-pin.mjs exec -- cargo build --locked --profile dist --target $expectedTarget --target-dir $targetDir --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance"
     Push-Location $repoFull
     try {
         & node scripts/toolchain-pin.mjs exec -- cargo build --locked --profile dist --target $expectedTarget --target-dir $targetDir --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance
-        if ($LASTEXITCODE -ne 0) {
-            throw "Fail-closed: pinned dist harness build failed with exit code $LASTEXITCODE."
+        $cargoBuildExitCode = $LASTEXITCODE
+        if ($cargoBuildExitCode -ne 0) {
+            throw "Fail-closed: pinned dist harness build failed with exit code $cargoBuildExitCode."
         }
     } finally {
         Pop-Location
     }
+    # Post-build re-verification of cleanliness, HEAD, tree, origin remote tip, and frozen Cargo.lock
     $postBuildStatus = Invoke-GitStrict -RepoPath $repoFull -GitArgs @('status', '--porcelain', '--untracked-files=all') -FailureMessage 'could not recheck git status after build'
     if (-not [string]::IsNullOrWhiteSpace(($postBuildStatus -join "`n"))) {
         throw 'Fail-closed: repository checkout became dirty during harness build.'
+    }
+    $postHead = ((Invoke-GitStrict -RepoPath $repoFull -GitArgs @('rev-parse', 'HEAD') -FailureMessage 'post-build rev-parse HEAD failed') -join '').Trim()
+    $postTree = ((Invoke-GitStrict -RepoPath $repoFull -GitArgs @('rev-parse', 'HEAD^{tree}') -FailureMessage 'post-build rev-parse tree failed') -join '').Trim()
+    $postRemote = @(Invoke-GitStrict -RepoPath $repoFull -GitArgs @('ls-remote', '--heads', 'origin', $remoteRef) -FailureMessage 'post-build ls-remote failed' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+    $postRemoteTip = if ($postRemote.Count -eq 1) { ($postRemote[0].Trim() -split '\s+')[0] } else { '' }
+    $postLockBytes = [System.IO.File]::ReadAllBytes($lockPath)
+    $postLockSha = Get-FileSha256 $lockPath
+    if ($postHead -ne $headSha -or $postTree -ne $treeSha -or $postRemoteTip -ne $remoteTipSha -or
+        ($postLockBytes -contains [byte]13) -or $postLockSha -ne $frozenCargoLockSha256) {
+        throw 'Fail-closed: repository HEAD, tree, remote tip, or Cargo.lock changed during harness build.'
     }
     $binaryPath = Join-Path $targetDir "$expectedTarget\dist\rt-native-acceptance.exe"
     Assert-ValidPeHeader -Path $binaryPath
@@ -271,6 +294,8 @@ if ($BuildHarness) {
         cargo_lock_sha256 = $lockSha256
         cargo_profile = 'dist'
         cargo_features = @('real-input-acceptance')
+        cargo_build_command = $cargoBuildCommand
+        cargo_build_exit_code = $cargoBuildExitCode
         qpc_read_counting = $false
         observer_mode = 'qualification-on'
         guard_mode = 'frozen'
@@ -467,6 +492,9 @@ $plan = [ordered]@{
     native_manifest_status = $nativeManifestStatus
     build_provenance = $buildProvenance
     binary_provenance_verified_by_fresh_build = $binaryProvenanceVerifiedByFreshBuild
+    authorized_to_execute = $authorizedToExecute
+    cargo_build_command = $cargoBuildCommand
+    cargo_build_exit_code = $cargoBuildExitCode
     manifest_sha256 = $manifestSha256
     binary_sha256 = $binarySha256
     receiver_started = $false

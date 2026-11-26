@@ -402,6 +402,9 @@ try {
     if ($isPlaybackCoreLifecycle -and -not $OwnerApprovedReceiveOnlyRun -and -not $PreflightOnly) {
         throw 'PlaybackCoreLifecycle native case requires -OwnerApprovedReceiveOnlyRun after explicit owner approval of this Windows machine and project-owned receiver'
     }
+    if ($isChordWidthPilotV1 -and -not $OwnerApprovedReceiveOnlyRun -and -not $PreflightOnly) {
+        throw 'ChordWidthPilotV1 native case requires -OwnerApprovedReceiveOnlyRun after explicit owner approval of this Windows machine and project-owned receiver'
+    }
     if (-not $PreflightOnly -and -not [Environment]::UserInteractive) {
         throw 'Windows is not interactive; refusing physical acceptance'
     }
@@ -528,12 +531,37 @@ try {
             }
             & git -C $manifestSourceRoot merge-base --is-ancestor 'e7293877a6ce58a387cb8edfe0a88399a85d2b15' HEAD
             if ($LASTEXITCODE -ne 0) { throw 'ChordWidthPilotV1 candidate does not descend from frozen baseline e7293877a6ce58a387cb8edfe0a88399a85d2b15' }
+            $pilotRemoteRef = 'refs/heads/refactor/completion-anchored-pulse-engine'
+            $pilotRemoteLines = @(& git -C $manifestSourceRoot ls-remote --heads origin $pilotRemoteRef 2>&1 | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($LASTEXITCODE -ne 0 -or $pilotRemoteLines.Count -ne 1) {
+                throw 'ChordWidthPilotV1 could not verify unique origin/refactor/completion-anchored-pulse-engine remote tip'
+            }
+            $pilotRemoteTip = ($pilotRemoteLines[0].Trim() -split '\s+')[0]
+            if ($pilotRemoteTip -ne $head -or $harnessManifest.remote_tip_revision -ne $pilotRemoteTip) {
+                throw 'ChordWidthPilotV1 local HEAD or manifest remote_tip_revision does not match pushed origin tip'
+            }
             $pilotLockPath = Join-Path $manifestSourceRoot 'rust\Cargo.lock'
             if (-not (Test-Path -LiteralPath $pilotLockPath -PathType Leaf)) { throw 'ChordWidthPilotV1 rust/Cargo.lock is missing' }
             $pilotLockBytes = [System.IO.File]::ReadAllBytes($pilotLockPath)
             if ($pilotLockBytes -contains [byte]13) { throw 'ChordWidthPilotV1 rust/Cargo.lock contains CR bytes' }
-            if ($harnessManifest.cargo_lock_sha256 -ne (Get-Sha256 $pilotLockPath)) {
-                throw 'ChordWidthPilotV1 manifest cargo_lock_sha256 mismatch'
+            $pilotActualLockSha = Get-Sha256 $pilotLockPath
+            if ($pilotActualLockSha -ne '9b9ba6c03131d96029421bfa9f6f69f9ce331e003e32e095eac54a714e73021e' -or
+                $harnessManifest.cargo_lock_sha256 -ne $pilotActualLockSha) {
+                throw 'ChordWidthPilotV1 rust/Cargo.lock LF SHA-256 does not match frozen expected lock or manifest'
+            }
+            $pilotCargoVer = ((& cargo --version) -join ' ').Trim()
+            if ($LASTEXITCODE -ne 0 -or $pilotCargoVer -notmatch '^cargo 1\.99\.1(?:\s|$)' -or $harnessManifest.cargo_version -ne $pilotCargoVer) {
+                throw 'ChordWidthPilotV1 manifest cargo_version mismatch'
+            }
+            $pilotSinkSha = Get-Sha256 (Join-Path $manifestSourceRoot 'scripts\native_acceptance_sink.ps1')
+            $pilotAnalyzerSha = Get-Sha256 (Join-Path $manifestSourceRoot 'scripts\analyze_chord_reception.mjs')
+            $pilotCaseRunnerSha = Get-Sha256 (Join-Path $manifestSourceRoot 'scripts\run_native_acceptance_case.ps1')
+            $pilotPrepareSha = Get-Sha256 (Join-Path $manifestSourceRoot 'scripts\prepare_chord_width_pilot_v1.ps1')
+            if ($harnessManifest.sink_script_sha256 -ne $pilotSinkSha -or
+                $harnessManifest.analyzer_script_sha256 -ne $pilotAnalyzerSha -or
+                $harnessManifest.case_runner_script_sha256 -ne $pilotCaseRunnerSha -or
+                $harnessManifest.preflight_script_sha256 -ne $pilotPrepareSha) {
+                throw 'ChordWidthPilotV1 manifest script SHA-256 provenance mismatch'
             }
             $peHeader = New-Object byte[] 2
             $fs = [System.IO.File]::OpenRead($harness)
@@ -656,7 +684,7 @@ try {
         if (Test-Path -LiteralPath $evidenceRoot) {
             throw '-PreflightOnly requires a nonexistent output root so it cannot create or alter case evidence'
         }
-        $pilotExtra = if ($isChordWidthPilotV1) { ' pilot_chord_width=' + $PilotChordWidth + ' observer_mode=SchedulerQueuedV3Compat3 event_schema=3' } else { '' }
+        $pilotExtra = if ($isChordWidthPilotV1) { ' pilot_chord_width=' + $PilotChordWidth + ' observer_mode=SchedulerQueuedV3Compat3 event_schema=3 manifest_hash_verified_only=true manifest_build_provenance=' + [string]$harnessManifest.build_provenance } else { '' }
         Write-Output ('CASE_PREFLIGHT_ONLY PASS profile=' + $QualificationProfile + ' role=' + $harnessManifest.source_role +
             ' schema=' + $harnessManifest.schema_version + ' scenario=' + $Scenario + ' workload=' + $Workload + $pilotExtra +
             ' manifest_sha256=' + $harnessManifestHash + ' binary_sha256=' + $harnessManifest.binary_sha256 +

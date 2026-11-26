@@ -344,7 +344,10 @@ fn chord_width_pilot_v1_geometry_rotation_digests_and_trace_capacities() {
             up_slot_entries <= 4_096,
             "fits NATIVE_UP_SLOT_TRACE_CAPACITY (4096)"
         );
-        assert!(receiver_events <= 32_768, "fits SchedulerQueuedV2 ring capacity");
+        assert!(
+            receiver_events <= 32_768,
+            "fits SchedulerQueuedV3Compat3 ring capacity"
+        );
 
         let mut events = Vec::new();
         for group in &projection {
@@ -371,4 +374,460 @@ fn chord_width_pilot_v1_geometry_rotation_digests_and_trace_capacities() {
     }
     assert_ne!(digests[0], digests[1]);
     assert_ne!(digests[1], digests[2]);
+}
+
+#[test]
+fn chord_width_pilot_v1_real_serializer_to_analyzer_cli_roundtrip() {
+    use serde_json::json;
+    use sky_dispatch_win32::input::ReleaseAllOutcome;
+    use sky_player::engine::NativeDispatchSession;
+    use std::path::PathBuf;
+    use std::process::Command;
+
+    const WIDTH: u8 = 5;
+    const QPC_FREQ: u64 = 10_000_000;
+    const US_TO_TICKS: u64 = 10;
+    const RUN_ID: &str = "rust-serializer-roundtrip-w5";
+    const EVENT_LOG_ID: &str = "evtlog-rust-serializer-001";
+    const PID: u32 = 42424;
+    const HWND: u64 = 196608;
+    const START_FILETIME: u64 = 133_900_000_000_000_001;
+    const SOURCE_SHA: &str = "77c03d2bdeaf9873c42ae2e7ab9da49e3973585f";
+    const SOURCE_TREE: &str = "0ad933679b346e2139351b0f2d46fccc9cec7538";
+    const BINARY_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const CANONICAL_SCANS: [u16; 15] = [
+        0x15, 0x16, 0x17, 0x18, 0x19, 0x23, 0x24, 0x25, 0x26, 0x27, 0x31, 0x32, 0x33, 0x34, 0x35,
+    ];
+
+    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(|p| p.parent())
+        .and_then(|p| p.parent())
+        .expect("repo root")
+        .to_path_buf();
+    let analyzer_script = repo_root.join("scripts").join("analyze_chord_reception.mjs");
+    assert!(analyzer_script.is_file(), "analyzer script missing");
+
+    let temp_dir = std::env::temp_dir().join(format!(
+        "sky-pilot-rust-ser-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+    let report_path = temp_dir.join("rt-native-acceptance.jsonl");
+    let inv_path = temp_dir.join("invocation.json");
+    let ready_path = temp_dir.join("sink-ready.json");
+    let events_path = temp_dir.join("sink-events.jsonl");
+    let summary_path = temp_dir.join("sink-observer-summary.json");
+    let manifest_path = temp_dir.join("manifest.json");
+
+    let plan = super::super::scenarios::scenario_plan_for_settings_with_pilot(
+        Scenario::ChordWidthPilotV1,
+        500,
+        60,
+        Some(15),
+        Some(WIDTH),
+    )
+    .expect("pilot plan");
+    let hold_us = plan.schedule.hold_us();
+    let hold_ticks = hold_us * US_TO_TICKS;
+    let mut records = Vec::with_capacity(300);
+    let mut up_slots = Vec::with_capacity(150 * usize::from(WIDTH));
+    let mut rx_lines = Vec::with_capacity(1 + 300 * usize::from(WIDTH));
+    let mut seq: u64 = 0;
+
+    rx_lines.push(
+        json!({
+            "schema_version": 3,
+            "run_id": RUN_ID,
+            "role": "ReceiveOnly",
+            "event_log_id": EVENT_LOG_ID,
+            "target_hwnd": HWND,
+            "target_pid": PID,
+            "sequence": seq,
+            "kind": "stream_start",
+            "observer_mode": "SchedulerQueuedV3Compat3",
+            "observer_version": "scheduler-receiveonly-queue-v3-compat3",
+            "observed_qpc_ticks": 1_000_000_u64,
+        })
+        .to_string(),
+    );
+    seq += 1;
+
+    let epoch_qpc: u64 = 10_000_000;
+    let mut trace_idx: u32 = 0;
+    for (onset_idx, chord) in plan.schedule.chords().iter().enumerate() {
+        let mut slots: Vec<usize> = (0..15)
+            .filter(|slot| (chord.key_mask & (1_u16 << slot)) != 0)
+            .collect();
+        slots.sort_unstable();
+        assert_eq!(slots.len(), usize::from(WIDTH));
+
+        let authored_offset_ticks = chord.scheduled_us * US_TO_TICKS;
+        let down_due_qpc = epoch_qpc + authored_offset_ticks;
+        let down_wake_qpc = down_due_qpc + 20 * US_TO_TICKS;
+        let down_pre_qpc = down_due_qpc + 30 * US_TO_TICKS;
+        let down_post_qpc = down_pre_qpc + 25 * US_TO_TICKS;
+
+        records.push(json!({
+            "trace_record_index": trace_idx,
+            "flags": 0,
+            "send_status": 0,
+            "transport_anomaly": false,
+            "send_attempts": 1,
+            "requested_count": WIDTH,
+            "sent_count": WIDTH,
+            "up_mask": 0,
+            "down_mask": chord.key_mask,
+            "authored_down_chord_index_available": true,
+            "authored_down_chord_index": onset_idx,
+            "source_action_index": onset_idx,
+            "authored_offset_ticks": authored_offset_ticks,
+            "authored_lateness_available": true,
+            "authored_lateness_ticks": (down_pre_qpc - down_due_qpc) as i64,
+            "physical_eligibility_qpc_available": true,
+            "physical_eligibility_qpc_ticks": down_due_qpc,
+            "wake_qpc_available": true,
+            "wake_qpc_ticks": down_wake_qpc,
+            "timer_arm_target_qpc_available": true,
+            "timer_arm_target_qpc_ticks": down_due_qpc,
+            "pre_call_qpc_available": true,
+            "pre_call_qpc_ticks": down_pre_qpc,
+            "sendinput_completion_qpc_available": true,
+            "sendinput_completion_qpc_ticks": down_post_qpc,
+        }));
+        trace_idx += 1;
+
+        for (k, &slot) in slots.iter().enumerate() {
+            let rx_qpc = down_pre_qpc + (10 + k as u64 * 2) * US_TO_TICKS;
+            rx_lines.push(
+                json!({
+                    "schema_version": 3,
+                    "run_id": RUN_ID,
+                    "role": "ReceiveOnly",
+                    "event_log_id": EVENT_LOG_ID,
+                    "target_hwnd": HWND,
+                    "target_pid": PID,
+                    "foreground_hwnd": HWND,
+                    "foreground_pid": PID,
+                    "sequence": seq,
+                    "kind": "key_press",
+                    "message": 0x0100,
+                    "scan_code": CANONICAL_SCANS[slot],
+                    "extended": false,
+                    "observer_mode": "SchedulerQueuedV3Compat3",
+                    "observer_version": "scheduler-receiveonly-queue-v3-compat3",
+                    "observed_qpc_ticks": rx_qpc,
+                })
+                .to_string(),
+            );
+            seq += 1;
+        }
+
+        let up_due_qpc = down_post_qpc + hold_ticks;
+        let up_wake_qpc = up_due_qpc + 18 * US_TO_TICKS;
+        let up_pre_qpc = up_due_qpc + 28 * US_TO_TICKS;
+        let up_post_qpc = up_pre_qpc + 24 * US_TO_TICKS;
+        let up_trace_idx = trace_idx;
+        records.push(json!({
+            "trace_record_index": up_trace_idx,
+            "flags": 0,
+            "send_status": 0,
+            "transport_anomaly": false,
+            "send_attempts": 1,
+            "requested_count": WIDTH,
+            "sent_count": WIDTH,
+            "up_mask": chord.key_mask,
+            "down_mask": 0,
+            "authored_down_chord_index_available": false,
+            "authored_down_chord_index": 0,
+            "source_action_index": onset_idx,
+            "authored_offset_ticks": authored_offset_ticks + hold_ticks,
+            "authored_lateness_available": false,
+            "authored_lateness_ticks": 0,
+            "physical_eligibility_qpc_available": true,
+            "physical_eligibility_qpc_ticks": up_due_qpc,
+            "wake_qpc_available": true,
+            "wake_qpc_ticks": up_wake_qpc,
+            "timer_arm_target_qpc_available": true,
+            "timer_arm_target_qpc_ticks": up_due_qpc,
+            "pre_call_qpc_available": true,
+            "pre_call_qpc_ticks": up_pre_qpc,
+            "sendinput_completion_qpc_available": true,
+            "sendinput_completion_qpc_ticks": up_post_qpc,
+        }));
+        trace_idx += 1;
+
+        for (k, &slot) in slots.iter().enumerate() {
+            up_slots.push(json!({
+                "trace_record_index": up_trace_idx,
+                "slot": slot,
+                "scan_code": CANONICAL_SCANS[slot],
+                "source_action_index": onset_idx,
+                "authored_offset_ticks": authored_offset_ticks + hold_ticks,
+                "up_not_before_offset_ticks": hold_ticks,
+                "floor_displacement_ticks": 0,
+                "pre_call_qpc_ticks": up_pre_qpc,
+                "completion_qpc_ticks": up_post_qpc,
+                "residual_ticks": 0,
+                "confirmed": true,
+            }));
+            let rx_qpc = up_pre_qpc + (12 + k as u64 * 2) * US_TO_TICKS;
+            rx_lines.push(
+                json!({
+                    "schema_version": 3,
+                    "run_id": RUN_ID,
+                    "role": "ReceiveOnly",
+                    "event_log_id": EVENT_LOG_ID,
+                    "target_hwnd": HWND,
+                    "target_pid": PID,
+                    "foreground_hwnd": HWND,
+                    "foreground_pid": PID,
+                    "sequence": seq,
+                    "kind": "key_release",
+                    "message": 0x0101,
+                    "scan_code": CANONICAL_SCANS[slot],
+                    "extended": false,
+                    "observer_mode": "SchedulerQueuedV3Compat3",
+                    "observer_version": "scheduler-receiveonly-queue-v3-compat3",
+                    "observed_qpc_ticks": rx_qpc,
+                })
+                .to_string(),
+            );
+            seq += 1;
+        }
+    }
+
+    let total_rx = 300 * usize::from(WIDTH);
+    let (options, _, _) = super::super::modifier_guard::native_session_options(
+        plan.schedule,
+        plan.profile,
+        500,
+        Scenario::ChordWidthPilotV1,
+        60,
+    )
+    .expect("no-send session options");
+    let session = NativeDispatchSession::new(options).expect("no-send session");
+    let mut snapshot = session.snapshot();
+    snapshot.release_outcome = Some(ReleaseAllOutcome {
+        attempted_mask: 0,
+        transport_anomaly: false,
+        released_successfully: true,
+        stuck_mask: 0,
+        verification_inconclusive: false,
+        attempts: 0,
+    });
+    let mut details = super::super::snapshot_report::snapshot_json(&snapshot);
+    let obj = details.as_object_mut().expect("details object");
+    obj.insert("calibration_placement".into(), json!("baseline"));
+    obj.insert("timing_observer_for_qualification".into(), json!(true));
+    obj.insert(
+        "workload_definition_identity".into(),
+        json!("chord-width-pilot-v1"),
+    );
+    obj.insert("pilot_chord_width".into(), json!(WIDTH));
+    obj.insert(
+        "pilot_cadence_us".into(),
+        json!(super::super::scenarios::PILOT_CADENCE_US),
+    );
+    obj.insert(
+        "pilot_onset_count".into(),
+        json!(super::super::scenarios::PILOT_CHORD_ONSET_COUNT),
+    );
+    obj.insert("scenario_hold_us".into(), json!(hold_us));
+    obj.insert("sink_event_log_id".into(), json!(EVENT_LOG_ID));
+    obj.insert("expected_sink_event_count".into(), json!(total_rx));
+    obj.insert("observed_sink_event_count".into(), json!(total_rx));
+    obj.insert("sink_event_count".into(), json!(total_rx));
+    obj.insert("native_timing_telemetry_available".into(), json!(true));
+    obj.insert(
+        "native_timing_telemetry".into(),
+        json!({
+            "schema_version": 28,
+            "qpc_frequency_hz": QPC_FREQ,
+            "truncated": false,
+            "dropped": 0,
+            "observer_queue_dropped": 0,
+            "attempted": records.len(),
+            "accepted": records.len(),
+            "records": records,
+            "up_slot_accounting_status": "valid",
+            "up_slot_records_expected": up_slots.len(),
+            "up_slot_records_dropped": 0,
+            "up_slot_records": up_slots,
+        }),
+    );
+
+    let ParsedCommand::Run(run_args) = parse_args(vec![
+        "run".into(),
+        "--allow-real-input".into(),
+        "--run-id".into(),
+        RUN_ID.into(),
+        "--sink-ready".into(),
+        ready_path.to_string_lossy().into_owned(),
+        "--sink-events".into(),
+        events_path.to_string_lossy().into_owned(),
+        "--target-hwnd".into(),
+        HWND.to_string(),
+        "--scenario".into(),
+        "chord-width-pilot-v1".into(),
+        "--pilot-chord-width".into(),
+        WIDTH.to_string(),
+        "--game-fps".into(),
+        "60".into(),
+        "--timing-margin-us".into(),
+        "500".into(),
+        "--sample-seconds".into(),
+        "15".into(),
+        "--timing-observer-for-qualification".into(),
+        "--evidence".into(),
+        report_path.to_string_lossy().into_owned(),
+    ])
+    .expect("valid pilot RunArgs")
+    else {
+        panic!("expected RunArgs");
+    };
+
+    let report_exit = super::super::evidence_report::write_report(
+        &run_args,
+        super::super::Verdict::Pass,
+        "no-send serializer fixture",
+        details,
+    );
+    assert_eq!(report_exit, 0);
+
+    std::fs::write(&events_path, rx_lines.join("\n") + "\n").unwrap();
+    std::fs::write(
+        &ready_path,
+        format!(
+            r#"{{"schema_version":3,"event_schema_version":3,"run_id":"{RUN_ID}","role":"ReceiveOnly","game_target":false,"pid":{PID},"hwnd":{HWND},"process_start_time_filetime":{START_FILETIME},"event_log_id":"{EVENT_LOG_ID}","observer_mode":"SchedulerQueuedV3Compat3","observer_version":"scheduler-receiveonly-queue-v3-compat3","observer_queue_capacity":32768,"observer_qpc_frequency_hz":{QPC_FREQ}}}"#
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        &summary_path,
+        json!({
+            "schema_version": 1,
+            "run_id": RUN_ID,
+            "role": "ReceiveOnly",
+            "event_log_id": EVENT_LOG_ID,
+            "target_hwnd": HWND,
+            "target_pid": PID,
+            "observer_mode": "SchedulerQueuedV3Compat3",
+            "observer_version": "scheduler-receiveonly-queue-v3-compat3",
+            "queue_capacity": 32768,
+            "qpc_frequency_hz": QPC_FREQ,
+            "stream_header_flushed": true,
+            "events_flushed": true,
+            "consumer_stopped": true,
+            "queue_drained": true,
+            "observer_startup_failures": 0,
+            "writer_failures": 0,
+            "observer_internal_failures": 0,
+            "queue_dropped": 0,
+            "queue_overflow": false,
+            "events_seen": total_rx,
+            "events_enqueued": total_rx,
+            "events_written": total_rx,
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let inv_json = format!(
+        r#"{{"run_id":"{RUN_ID}","qualification_profile":"ChordWidthPilotV1","workload":"chord-width-pilot-v1","workload_version":"chord-width-pilot-v1","source_revision":"{SOURCE_SHA}","source_tree_sha":"{SOURCE_TREE}","source_tree_clean":true,"configured_H_us":{hold_us},"harness_source_revision":"{SOURCE_SHA}","harness_source_tree_sha":"{SOURCE_TREE}","harness_source_role":"Candidate","harness_binary_sha256":"{BINARY_SHA}","scenario":"chord-width-pilot-v1","calibration_placement":"baseline","cpu_contention":false,"timing_margin_us":500,"game_fps":60,"sample_seconds":15,"exit_code":0,"status":"PASS","event_log_id":"{EVENT_LOG_ID}","owner_approved_receive_only_run":true,"report_window_match":true,"receiveonly_observer_mode":"SchedulerQueuedV3Compat3","receiveonly_observer_version":"scheduler-receiveonly-queue-v3-compat3","target_identity":{{"role":"ReceiveOnly","game_target":false,"pid":{PID},"hwnd":{HWND},"process_start_time_filetime":{START_FILETIME},"event_log_id":"{EVENT_LOG_ID}"}}}}"#
+    );
+    std::fs::write(&inv_path, &inv_json).unwrap();
+    std::fs::write(
+        &manifest_path,
+        json!({
+            "qualification_profile": "ChordWidthPilotV1",
+            "source_role": "Candidate",
+            "source_revision": SOURCE_SHA,
+            "source_tree_sha": SOURCE_TREE,
+            "binary_sha256": BINARY_SHA,
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // Positive: real Rust-serialized report -> real analyzer CLI must exit 0 and pass!
+    let out = Command::new("node")
+        .arg(&analyzer_script)
+        .args(["--report", report_path.to_str().unwrap()])
+        .args(["--invocation", inv_path.to_str().unwrap()])
+        .args(["--sink-ready", ready_path.to_str().unwrap()])
+        .args(["--sink-events", events_path.to_str().unwrap()])
+        .args(["--observer-summary", summary_path.to_str().unwrap()])
+        .args(["--manifest", manifest_path.to_str().unwrap()])
+        .args(["--width", "5"])
+        .output()
+        .expect("invoke node analyzer CLI");
+    assert!(
+        out.status.success(),
+        "analyzer CLI failed on real Rust-serialized report: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("valid JSON output");
+    assert_eq!(parsed["valid"], true);
+    assert_eq!(parsed["accepted_for_aggregation"], true);
+    assert_eq!(parsed["metrics"]["common_chord_hold"]["n"], 150);
+    assert_eq!(parsed["metrics"]["s_minus_d"]["n"], 150);
+
+    // Negative: mutate source_revision in invocation.json -> CLI must exit 1 with metrics: null
+    let bad_inv_path = temp_dir.join("invocation-bad-src.json");
+    std::fs::write(
+        &bad_inv_path,
+        inv_json.replace(SOURCE_SHA, "0000000000000000000000000000000000000000"),
+    )
+    .unwrap();
+    let bad_out = Command::new("node")
+        .arg(&analyzer_script)
+        .args(["--report", report_path.to_str().unwrap()])
+        .args(["--invocation", bad_inv_path.to_str().unwrap()])
+        .args(["--sink-ready", ready_path.to_str().unwrap()])
+        .args(["--sink-events", events_path.to_str().unwrap()])
+        .args(["--observer-summary", summary_path.to_str().unwrap()])
+        .args(["--manifest", manifest_path.to_str().unwrap()])
+        .args(["--width", "5"])
+        .output()
+        .expect("invoke node analyzer CLI (negative)");
+    assert_eq!(bad_out.status.code(), Some(1));
+    let bad_parsed: serde_json::Value =
+        serde_json::from_slice(&bad_out.stdout).expect("valid JSON");
+    assert_eq!(bad_parsed["valid"], false);
+    assert!(bad_parsed["metrics"].is_null());
+
+    // Negative: 1-tick FILETIME mismatch -> CLI must exit 1 with metrics: null
+    let bad_ft_inv_path = temp_dir.join("invocation-bad-ft.json");
+    std::fs::write(
+        &bad_ft_inv_path,
+        inv_json.replace(
+            &START_FILETIME.to_string(),
+            &(START_FILETIME + 1).to_string(),
+        ),
+    )
+    .unwrap();
+    let bad_ft_out = Command::new("node")
+        .arg(&analyzer_script)
+        .args(["--report", report_path.to_str().unwrap()])
+        .args(["--invocation", bad_ft_inv_path.to_str().unwrap()])
+        .args(["--sink-ready", ready_path.to_str().unwrap()])
+        .args(["--sink-events", events_path.to_str().unwrap()])
+        .args(["--observer-summary", summary_path.to_str().unwrap()])
+        .args(["--manifest", manifest_path.to_str().unwrap()])
+        .args(["--width", "5"])
+        .output()
+        .expect("invoke node analyzer CLI (negative filetime)");
+    assert_eq!(bad_ft_out.status.code(), Some(1));
+    let bad_ft_parsed: serde_json::Value =
+        serde_json::from_slice(&bad_ft_out.stdout).expect("valid JSON");
+    assert_eq!(bad_ft_parsed["valid"], false);
+    assert!(bad_ft_parsed["metrics"].is_null());
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
 }
