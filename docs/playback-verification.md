@@ -448,6 +448,17 @@ One object per paired workload, flat properties, all required:
 | `<role>_first_us`, `<role>_last_us` | integers >= 0, last >= first |
 | `<role>_sha256` | 64 lowercase hex |
 
+### ChordWidthPilotV1 nonphysical preflight and offline analyzer
+
+The bounded chord-width pilot (`ChordWidthPilotV1`, workload `chord-width-pilot-v1`) prepares a quiet-only three-session ReceiveOnly characterization across chord widths `1`, `5`, and `15` at `60` FPS, `500` us timing margin, `H = 17167` us, `100000` us cadence, `150` onsets (`15` s sample), Control A admission, baseline calibration placement, and the qualification observer enabled.
+
+- **Observer protocol**: Uses the existing `SchedulerQueuedV3Compat3` (`scheduler-receiveonly-queue-v3-compat3`) protocol with event schema `3`, QPC timestamps (`observed_qpc_ticks`), ready schema `3`, summary schema `1`, and queue capacity `32768`. Historical V1/V2/V3/M3 profiles remain untouched.
+- **Preflight entry point**: `scripts/prepare_chord_width_pilot_v1.ps1` enforces a clean checkout (tracked and untracked) on `refactor/completion-anchored-pulse-engine` descending from `e7293877a6ce58a387cb8edfe0a88399a85d2b15`, matching `origin/refactor/completion-anchored-pulse-engine`, LF `rust/Cargo.lock`, pinned `1.99.1` toolchain, external non-reparse `OutputRoot`, PE `MZ` header, and full manifest/script hashes. In `-Mode PreflightOnly`, it runs `scripts/run_native_acceptance_case.ps1 -QualificationProfile ChordWidthPilotV1 ... -PreflightOnly` for every planned session without launching a receiver, harness, or `SendInput`.
+- **Provenance boundary**: `-BuildHarness` records `build_provenance = fresh_pinned_dist_build` (`binary_provenance_verified_by_fresh_build = true`). Reusing `-HarnessManifestPath` verifies schema, PE header, and hashes only, recording `build_provenance = reused_manifest_hash_verified_only_not_rebuilt` (`binary_provenance_verified_by_fresh_build = false`).
+- **Offline analyzer**: `node scripts/analyze_chord_reception.mjs --report <path> --sink-ready <path> --sink-events <path> --observer-summary <path> --width <1|5|15>` validates full 150-onset pilot completeness, identity/protocol consistency, finalized observer summary flags, monotonic QPC ticks, and confirmed `UpSlotTrace` attribution; any invalid run returns `valid = false`, `accepted_for_aggregation = false`, `metrics = null`, and exit code `1`.
+- **Execution lock**: Both `scripts/prepare_chord_width_pilot_v1.ps1 -Mode Execute` and `scripts/run_native_acceptance_case.ps1 -QualificationProfile ChordWidthPilotV1` (without `-PreflightOnly`) fail closed (`LOCKED`) until explicit Leader review and separate scoped owner authorization.
+
+
 Each role's digest and geometry must also equal the immutable expected stream in the profile (`ExpectedAuthoredStreams`, the digests asserted by `benchmark_schedule_tests.rs::paired_workloads_match_the_immutable_pr_base_authored_streams`). A missing field is never compared as equal.
 
 Generate the evidence by running the existing no-send test in a clean checkout of each exact source tree, with the pinned toolchain:

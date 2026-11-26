@@ -1,561 +1,583 @@
-import assert from 'node:assert/strict';
 import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import {
   CANONICAL_SCAN_CODES,
   EXPECTED_SENDER_TELEMETRY_SCHEMA,
-  TRACE_FLAG_RECOVERY,
-  adaptAcceptanceReportToSenderInput,
-  analyzeRun,
+  EXPECTED_RECEIVER_OBSERVER_MODE,
+  EXPECTED_RECEIVER_OBSERVER_VERSION,
+  EXPECTED_RECEIVER_EVENT_SCHEMA,
+  EXPECTED_RECEIVER_READY_SCHEMA,
+  EXPECTED_RECEIVER_SUMMARY_SCHEMA,
+  EXPECTED_RECEIVER_QUEUE_CAPACITY,
+  PILOT_ONSET_COUNT,
+  PILOT_HOLD_US,
+  PILOT_CADENCE_US,
+  pilotRotatingSlots,
+  slotsToMask,
+  analyzePilotRun,
 } from './analyze_chord_reception.mjs';
 
-function makeBaseSummary(overrides = {}) {
-  return {
-    schema_version: 1,
-    observer_mode: 'SchedulerQueuedV2',
-    observer_version: 'scheduler-receiveonly-queue-v2',
-    run_id: 'fixture-run',
+const QPC_FREQ = 10_000_000;
+const US_TO_TICKS = 10;
+const RUN_ID = 'pilot-test-run-001';
+const EVENT_LOG_ID = 'evtlog-test-001';
+const PID = 42424;
+const HWND = 196608;
+const START_FILETIME = 133900000000000000;
+const SOURCE_SHA = 'bf00158ddad6d5702ccfc8ea5efb21bdd33a755c';
+const BINARY_SHA = 'a'.repeat(64);
+
+function buildValidPilotFixture(width, opts = {}) {
+  const onsets = opts.onsets ?? PILOT_ONSET_COUNT;
+  const senderRecords = [];
+  const upSlotRecords = [];
+  const receiverLines = [];
+
+  const sinkReady = {
+    schema_version: EXPECTED_RECEIVER_READY_SCHEMA,
+    event_schema_version: EXPECTED_RECEIVER_EVENT_SCHEMA,
+    run_id: RUN_ID,
     role: 'ReceiveOnly',
-    event_log_id: 'log-1',
-    target_hwnd: 4096,
-    target_pid: 1234,
-    qpc_frequency_hz: 10_000_000,
-    queue_capacity: 65536,
-    events_seen: 0,
-    events_enqueued: 0,
-    events_written: 0,
-    queue_dropped: 0,
-    queue_overflow: false,
+    sink_kind: 'SkyAutoPlayer.NativeAcceptanceSink',
+    target_class: 'project-owned-non-game-receive-only',
+    target_name: 'Sky Auto Player — Native Acceptance Sink',
+    game_target: false,
+    title: 'Sky Auto Player — Native Acceptance Sink',
+    process: 'native_acceptance_sink.ps1',
+    input_policy: 'receives_only; benchmark must use SendInput',
+    pid: PID,
+    hwnd: HWND,
+    process_start_time_filetime: START_FILETIME,
+    event_log_id: EVENT_LOG_ID,
+    observer_mode: EXPECTED_RECEIVER_OBSERVER_MODE,
+    observer_version: EXPECTED_RECEIVER_OBSERVER_VERSION,
+    observer_queue_capacity: EXPECTED_RECEIVER_QUEUE_CAPACITY,
+    observer_qpc_frequency_hz: QPC_FREQ,
+  };
+
+  let seq = 0;
+  receiverLines.push(
+    JSON.stringify({
+      schema_version: EXPECTED_RECEIVER_EVENT_SCHEMA,
+      run_id: RUN_ID,
+      role: 'ReceiveOnly',
+      event_log_id: EVENT_LOG_ID,
+      target_hwnd: HWND,
+      target_pid: PID,
+      sequence: seq++,
+      kind: 'stream_start',
+      observer_mode: EXPECTED_RECEIVER_OBSERVER_MODE,
+      observer_version: EXPECTED_RECEIVER_OBSERVER_VERSION,
+      observed_qpc_ticks: 1_000_000,
+    }),
+  );
+
+  const baseQpc = 10_000_000;
+  let traceIndex = 0;
+
+  for (let i = 0; i < onsets; i++) {
+    const slots = pilotRotatingSlots(i, width);
+    const mask = slotsToMask(slots);
+
+    const downDueQpc = baseQpc + i * PILOT_CADENCE_US * US_TO_TICKS;
+    const downWakeQpc = downDueQpc + 20 * US_TO_TICKS;
+    const downPreQpc = downDueQpc + 30 * US_TO_TICKS;
+    const downPostQpc = downPreQpc + (15 + width * 3) * US_TO_TICKS;
+
+    const downTraceIdx = traceIndex++;
+    senderRecords.push({
+      trace_record_index: downTraceIdx,
+      flags: 0,
+      send_status: 0,
+      transport_anomaly: false,
+      send_attempts: 1,
+      requested_count: width,
+      sent_count: width,
+      up_mask: 0,
+      down_mask: mask,
+      authored_down_chord_index_available: true,
+      authored_down_chord_index: i,
+      source_action_index: i,
+      due_qpc_available: true,
+      due_qpc_ticks: downDueQpc,
+      physical_eligibility_qpc_available: true,
+      physical_eligibility_qpc_ticks: downDueQpc,
+      wake_qpc_available: true,
+      wake_qpc_ticks: downWakeQpc,
+      timer_arm_target_qpc_available: opts.omitTimerArmTarget ? false : true,
+      timer_arm_target_qpc_ticks: opts.omitTimerArmTarget ? 0 : downDueQpc,
+      pre_call_qpc_available: true,
+      pre_call_qpc_ticks: downPreQpc,
+      sendinput_completion_qpc_available: true,
+      sendinput_completion_qpc_ticks: downPostQpc,
+    });
+
+    for (let k = 0; k < slots.length; k++) {
+      const slot = slots[k];
+      const sc = CANONICAL_SCAN_CODES[slot];
+      const recvDownQpc = downPreQpc + (20 + k * 4) * US_TO_TICKS;
+      const ev = {
+        schema_version: EXPECTED_RECEIVER_EVENT_SCHEMA,
+        run_id: RUN_ID,
+        role: 'ReceiveOnly',
+        event_log_id: EVENT_LOG_ID,
+        target_hwnd: HWND,
+        target_pid: PID,
+        foreground_hwnd: HWND,
+        foreground_pid: PID,
+        sequence: seq++,
+        kind: 'key_press',
+        message: 0x0100,
+        scan_code: sc,
+        extended: false,
+        observer_mode: EXPECTED_RECEIVER_OBSERVER_MODE,
+        observer_version: EXPECTED_RECEIVER_OBSERVER_VERSION,
+        observed_qpc_ticks: recvDownQpc,
+      };
+      if (opts.omitObservedQpc) {
+        delete ev.observed_qpc_ticks;
+      }
+      receiverLines.push(JSON.stringify(ev));
+    }
+
+    const upDueQpc = downPostQpc + PILOT_HOLD_US * US_TO_TICKS;
+    const upWakeQpc = upDueQpc + 18 * US_TO_TICKS;
+    const upPreQpc = upDueQpc + 28 * US_TO_TICKS;
+    const upPostQpc = upPreQpc + (14 + width * 3) * US_TO_TICKS;
+
+    const upTraceIdx = traceIndex++;
+    senderRecords.push({
+      trace_record_index: upTraceIdx,
+      flags: 0,
+      send_status: 0,
+      transport_anomaly: false,
+      send_attempts: 1,
+      requested_count: width,
+      sent_count: width,
+      up_mask: mask,
+      down_mask: 0,
+      authored_down_chord_index_available: false,
+      authored_down_chord_index: 0,
+      source_action_index: i,
+      due_qpc_available: true,
+      due_qpc_ticks: upDueQpc,
+      physical_eligibility_qpc_available: true,
+      physical_eligibility_qpc_ticks: upDueQpc,
+      wake_qpc_available: true,
+      wake_qpc_ticks: upWakeQpc,
+      timer_arm_target_qpc_available: opts.omitTimerArmTarget ? false : true,
+      timer_arm_target_qpc_ticks: opts.omitTimerArmTarget ? 0 : upDueQpc,
+      pre_call_qpc_available: true,
+      pre_call_qpc_ticks: upPreQpc,
+      sendinput_completion_qpc_available: true,
+      sendinput_completion_qpc_ticks: upPostQpc,
+    });
+
+    for (let k = 0; k < slots.length; k++) {
+      const slot = slots[k];
+      const sc = CANONICAL_SCAN_CODES[slot];
+      upSlotRecords.push({
+        trace_record_index: upTraceIdx,
+        slot,
+        scan_code: sc,
+        source_action_index: i,
+        confirmed: true,
+      });
+      const recvUpQpc = upPreQpc + (22 + k * 4) * US_TO_TICKS;
+      const ev = {
+        schema_version: EXPECTED_RECEIVER_EVENT_SCHEMA,
+        run_id: RUN_ID,
+        role: 'ReceiveOnly',
+        event_log_id: EVENT_LOG_ID,
+        target_hwnd: HWND,
+        target_pid: PID,
+        foreground_hwnd: HWND,
+        foreground_pid: PID,
+        sequence: seq++,
+        kind: 'key_release',
+        message: 0x0101,
+        scan_code: sc,
+        extended: false,
+        observer_mode: EXPECTED_RECEIVER_OBSERVER_MODE,
+        observer_version: EXPECTED_RECEIVER_OBSERVER_VERSION,
+        observed_qpc_ticks: recvUpQpc,
+      };
+      if (opts.omitObservedQpc) {
+        delete ev.observed_qpc_ticks;
+      }
+      receiverLines.push(JSON.stringify(ev));
+    }
+  }
+
+  const totalKeyEvents = onsets * 2 * width;
+  const observerSummary = {
+    schema_version: EXPECTED_RECEIVER_SUMMARY_SCHEMA,
+    run_id: RUN_ID,
+    role: 'ReceiveOnly',
+    event_log_id: EVENT_LOG_ID,
+    target_hwnd: HWND,
+    target_pid: PID,
+    observer_mode: EXPECTED_RECEIVER_OBSERVER_MODE,
+    observer_version: EXPECTED_RECEIVER_OBSERVER_VERSION,
+    queue_capacity: EXPECTED_RECEIVER_QUEUE_CAPACITY,
+    qpc_frequency_hz: QPC_FREQ,
+    stream_header_flushed: true,
+    events_flushed: true,
+    consumer_stopped: true,
     queue_drained: true,
+    observer_startup_failures: 0,
     writer_failures: 0,
     observer_internal_failures: 0,
-    ...overrides,
+    queue_dropped: 0,
+    queue_overflow: false,
+    events_seen: totalKeyEvents,
+    events_enqueued: totalKeyEvents,
+    events_written: totalKeyEvents,
+    handler_latency_p50_us: 12,
+    handler_latency_p95_us: 25,
+    handler_latency_p99_us: 40,
+    handler_latency_max_us: 55,
   };
-}
 
-function makeHeaderLine(overrides = {}) {
-  return JSON.stringify({
-    schema_version: 4,
-    run_id: 'fixture-run',
-    role: 'ReceiveOnly',
-    event_log_id: 'log-1',
-    observer_mode: 'SchedulerQueuedV2',
-    observer_version: 'scheduler-receiveonly-queue-v2',
-    sequence: 0,
-    kind: 'stream_start',
-    scan_code: 0,
-    extended: false,
-    virtual_key: 0,
-    message: 0,
-    observed_utc: '2026-11-26T00:00:00.0000000Z',
-    observed_qpc_ticks: 1_000_000,
-    target_hwnd: 4096,
-    target_pid: 1234,
-    foreground_hwnd: 4096,
-    foreground_pid: 1234,
-    ...overrides,
-  });
-}
-
-function makeEventLine(seq, kind, slot, qpcTicks, overrides = {}) {
-  return JSON.stringify({
-    schema_version: 4,
-    run_id: 'fixture-run',
-    role: 'ReceiveOnly',
-    event_log_id: 'log-1',
-    observer_mode: 'SchedulerQueuedV2',
-    observer_version: 'scheduler-receiveonly-queue-v2',
-    sequence: seq,
-    kind,
-    scan_code: CANONICAL_SCAN_CODES[slot],
-    extended: false,
-    virtual_key: 0,
-    message: kind === 'key_press' ? 0x0100 : 0x0101,
-    observed_utc: '2026-11-26T00:00:00.0000000Z',
-    observed_qpc_ticks: qpcTicks,
-    target_hwnd: 4096,
-    target_pid: 1234,
-    foreground_hwnd: 4096,
-    foreground_pid: 1234,
-    ...overrides,
-  });
-}
-
-function makeSenderPkt(
-  idx,
-  upMask,
-  downMask,
-  {
-    authoredOffset,
-    E,
-    W,
-    waitTarget,
-    S,
-    C,
-    chordIndex,
-    flags = 0,
-    send_status = 0,
-    transport_anomaly = false,
-    sent_count = null,
-    authoredLateness = null,
-  }
-) {
-  const req =
-    upMask.toString(2).replace(/0/g, '').length + downMask.toString(2).replace(/0/g, '').length;
-  return {
-    trace_record_index: idx,
-    source_action_index: chordIndex ?? idx,
-    event_index: chordIndex ?? idx,
-    authored_down_chord_index: chordIndex ?? idx,
-    authored_down_chord_index_available: downMask !== 0,
-    authored_offset_ticks: authoredOffset,
-    physical_eligibility_qpc_ticks: E ?? 0,
-    physical_eligibility_qpc_available: E !== undefined,
-    wake_qpc_ticks: W ?? 0,
-    wake_qpc_available: W !== undefined,
-    timer_arm_target_qpc_ticks: waitTarget ?? 0,
-    timer_arm_target_qpc_available: waitTarget !== undefined,
-    pre_call_qpc_ticks: S,
-    pre_call_qpc_available: true,
-    sendinput_completion_qpc_ticks: C,
-    sendinput_completion_qpc_available: true,
-    authored_lateness_ticks: authoredLateness ?? 0,
-    authored_lateness_available: authoredLateness !== null,
-    up_mask: upMask,
-    down_mask: downMask,
-    requested_count: req,
-    sent_count: sent_count ?? req,
-    send_status,
-    transport_anomaly,
-    flags,
-  };
-}
-
-function makeHealthyPairTelemetry() {
-  return {
-    run_id: 'fixture-run',
-    schema_version: EXPECTED_SENDER_TELEMETRY_SCHEMA,
-    qpc_frequency_hz: 10_000_000,
-    epoch_qpc_ticks: 10_000_000,
-    truncated: false,
-    dropped: 0,
-    observer_queue_dropped: 0,
-    up_slot_records_expected: 1,
-    up_slot_records_dropped: 0,
-    up_slot_accounting_status: 'valid',
-    records: [
-      makeSenderPkt(0, 0, 0b1, {
-        authoredOffset: 100_000,
-        E: 10_100_000,
-        S: 10_100_010,
-        C: 10_100_050,
-        chordIndex: 0,
-      }),
-      makeSenderPkt(1, 0b1, 0, {
-        authoredOffset: 271_670,
-        E: 10_271_720,
-        S: 10_271_730,
-        C: 10_271_770,
-      }),
-    ],
-    up_slot_records: [
-      {
-        trace_record_index: 1,
-        slot: 0,
-        scan_code: CANONICAL_SCAN_CODES[0],
-        source_action_index: 0,
-        authored_offset_ticks: 271_670,
-        up_not_before_offset_ticks: 271_720,
-        floor_displacement_ticks: 50,
-        pre_call_qpc_ticks: 10_271_730,
-        completion_qpc_ticks: 10_271_770,
-        residual_ticks: 10,
-        confirmed: true,
-      },
-    ],
-  };
-}
-
-test('contract-shaped schema-28 acceptance report adapter with UpSlotTrace and schema-4 sink JSONL', () => {
-  const epoch = 20_000_000;
-  const D = epoch + 500_000;
-  const U = D + 200 + 171_670;
   const acceptanceReport = {
-    run_id: 'pilot-w5-01',
-    source_sha: 'e7293877a6ce58a387cb8edfe0a88399a85d2b15',
-    binary_sha256: '0'.repeat(64),
+    run_id: RUN_ID,
+    verdict: 'Pass',
+    source_sha: SOURCE_SHA,
+    binary_sha256: BINARY_SHA,
     details: {
-      session_id: 'sess-001',
-      lifecycle_measurement: { qpc_frequency_hz: 10_000_000 },
+      workload_definition_identity: 'chord-width-pilot-v1',
+      pilot_chord_width: width,
+      pilot_cadence_us: PILOT_CADENCE_US,
+      pilot_onset_count: PILOT_ONSET_COUNT,
+      scenario_hold_us: PILOT_HOLD_US,
+      native_timing_telemetry_available: true,
       native_timing_telemetry: {
-        schema_version: 28,
-        qpc_frequency_hz: 10_000_000,
+        schema_version: EXPECTED_SENDER_TELEMETRY_SCHEMA,
+        qpc_frequency_hz: QPC_FREQ,
         truncated: false,
-        attempted: 2,
-        accepted: 2,
         dropped: 0,
         observer_queue_dropped: 0,
-        up_slot_records_expected: 5,
-        up_slot_records_dropped: 0,
+        attempted: senderRecords.length,
+        accepted: senderRecords.length,
+        records: senderRecords,
         up_slot_accounting_status: 'valid',
-        records: [
-          makeSenderPkt(0, 0, 0b11111, {
-            authoredOffset: 500_000,
-            E: D,
-            W: D + 15,
-            waitTarget: D,
-            S: D + 40,
-            C: D + 200,
-            chordIndex: 0,
-            authoredLateness: 40, // allows resolving D = S - 40 even without explicit epoch_qpc_ticks
-          }),
-          makeSenderPkt(1, 0b11111, 0, {
-            authoredOffset: 671_670,
-            E: U,
-            W: U + 10,
-            waitTarget: U,
-            S: U + 30,
-            C: U + 180,
-          }),
-        ],
-        up_slot_records: [0, 1, 2, 3, 4].map((slot) => ({
-          trace_record_index: 1,
-          slot,
-          scan_code: CANONICAL_SCAN_CODES[slot],
-          source_action_index: 0,
-          authored_offset_ticks: 671_670,
-          up_not_before_offset_ticks: 671_870,
-          floor_displacement_ticks: 200,
-          pre_call_qpc_ticks: U + 30,
-          completion_qpc_ticks: U + 180,
-          residual_ticks: 30,
-          confirmed: true,
-        })),
+        up_slot_records_expected: upSlotRecords.length,
+        up_slot_records_dropped: 0,
+        up_slot_records: upSlotRecords,
+      },
+      snapshot: {
+        active_count: 0,
+        final_release_obligation_mask: 0,
+        terminal_error: null,
+        sendinput_partial_events: 0,
+        sendinput_zero_progress_failures: 0,
+        release_outcome: {
+          released_successfully: true,
+        },
       },
     },
   };
 
-  const senderTelemetry = adaptAcceptanceReportToSenderInput(acceptanceReport);
-  const lines = [
-    makeHeaderLine({ run_id: 'pilot-w5-01' }),
-    ...[0, 1, 2, 3, 4].map((s, idx) =>
-      makeEventLine(idx + 1, 'key_press', s, D + 100 + idx * 50, { run_id: 'pilot-w5-01' })
-    ),
-    ...[0, 1, 2, 3, 4].map((s, idx) =>
-      makeEventLine(idx + 6, 'key_release', s, U + 100 + idx * 50, { run_id: 'pilot-w5-01' })
-    ),
-  ];
-  const summary = makeBaseSummary({
-    run_id: 'pilot-w5-01',
-    events_seen: 10,
-    events_enqueued: 10,
-    events_written: 10,
-  });
-
-  const res = analyzeRun({ senderTelemetry, receiverJsonlLines: lines, observerSummary: summary });
-  assert.equal(res.valid, true);
-  assert.equal(res.run_id, 'pilot-w5-01');
-  assert.equal(res.session_id, 'sess-001');
-  assert.equal(res.metrics.s_minus_d.us.p50, 4);
-  assert.equal(res.metrics.down_skew.us.p50, 20);
-  assert.equal(res.metrics.up_skew.us.p50, 20);
-  assert.equal(res.metrics.per_key_receiver_hold.us.p50, 17187);
-  assert.equal(res.metrics.common_chord_hold.us.p50, 17167);
-});
-
-test('01 single key healthy with signed R1 < C', () => {
-  const epoch = 10_000_000;
-  const D = epoch + 500_000;
-  const senderTelemetry = {
-    run_id: 'fixture-run',
-    schema_version: 28,
-    qpc_frequency_hz: 10_000_000,
-    epoch_qpc_ticks: epoch,
-    records: [
-      makeSenderPkt(0, 0, 0b1, {
-        authoredOffset: 500_000,
-        E: D,
-        W: D + 20,
-        waitTarget: D,
-        S: D + 50,
-        C: D + 200,
-        chordIndex: 0,
-      }),
-      makeSenderPkt(1, 0b1, 0, {
-        authoredOffset: 671_670,
-        E: D + 200 + 171_670,
-        W: D + 200 + 171_690,
-        waitTarget: D + 200 + 171_670,
-        S: D + 200 + 171_710,
-        C: D + 200 + 171_810,
-      }),
-    ],
+  return {
+    acceptanceReport,
+    sinkReady,
+    receiverJsonlLines: receiverLines,
+    observerSummary,
+    expectedWidth: width,
+    expectedSourceSha: SOURCE_SHA,
+    expectedBinarySha256: BINARY_SHA,
   };
-  const lines = [
-    makeHeaderLine(),
-    makeEventLine(1, 'key_press', 0, D + 180),
-    makeEventLine(2, 'key_release', 0, D + 200 + 171_800),
-  ];
-  const res = analyzeRun({
-    senderTelemetry,
-    receiverJsonlLines: lines,
-    observerSummary: makeBaseSummary({ events_seen: 2, events_enqueued: 2, events_written: 2 }),
-  });
-  assert.equal(res.valid, true);
-  assert.equal(res.metrics.s_minus_d.us.p50, 5);
-  assert.equal(res.metrics.r1_minus_c.us.p50, -2);
-  assert.equal(res.metrics.common_chord_hold.us.p50, 17182);
+}
+
+test('accepts valid 150-onset pilot fixtures for widths 1, 5, and 15', () => {
+  for (const width of [1, 5, 15]) {
+    const fixture = buildValidPilotFixture(width);
+    const res = analyzePilotRun(fixture);
+    assert.equal(res.valid, true, `width=${width} reasons=${JSON.stringify(res.invalid_reasons)}`);
+    assert.equal(res.accepted_for_aggregation, true);
+    assert.equal(res.total_invalid_count, 0);
+    assert.equal(res.metrics.down_skew.n, 150);
+    assert.equal(res.metrics.up_skew.n, 150);
+    assert.equal(res.metrics.common_chord_hold.n, 150);
+    assert.equal(res.metrics.per_key_receiver_hold.n, 150 * width);
+    assert.equal(res.metrics.w_minus_wait_target.n, 300);
+    if (width === 1) {
+      assert.equal(res.metrics.down_skew.us.max, 0);
+      assert.equal(res.metrics.up_skew.us.max, 0);
+    } else {
+      assert.ok(res.metrics.down_skew.us.p50 > 0);
+      assert.ok(res.metrics.common_chord_hold.us.min > 0);
+    }
+  }
 });
 
-test('02 15-key chord common intersection strictly shorter than every per-key hold', () => {
-  const epoch = 10_000_000;
-  const D = epoch + 500_000;
-  const U = D + 171_670;
-  const mask15 = 0x7fff;
-  const senderTelemetry = {
-    run_id: 'fixture-run',
-    schema_version: 28,
-    qpc_frequency_hz: 10_000_000,
-    epoch_qpc_ticks: epoch,
-    records: [
-      makeSenderPkt(0, 0, mask15, {
-        authoredOffset: 500_000,
-        E: D,
-        W: D + 10,
-        waitTarget: D,
-        S: D + 40,
-        C: D + 1600,
-        chordIndex: 0,
-      }),
-      makeSenderPkt(1, mask15, 0, {
-        authoredOffset: 671_670,
-        E: U,
-        W: U + 10,
-        waitTarget: U,
-        S: U + 40,
-        C: U + 1600,
-      }),
-    ],
-  };
-  const lines = [makeHeaderLine()];
-  let seq = 1;
-  for (let i = 0; i < 15; i++) lines.push(makeEventLine(seq++, 'key_press', i, D + 100 + i * 100));
-  for (let i = 0; i < 15; i++) lines.push(makeEventLine(seq++, 'key_release', i, U + 100 + i * 100));
-  const res = analyzeRun({
-    senderTelemetry,
-    receiverJsonlLines: lines,
-    observerSummary: makeBaseSummary({ events_seen: 30, events_enqueued: 30, events_written: 30 }),
-  });
-  assert.equal(res.valid, true);
-  assert.equal(res.metrics.down_skew.us.p50, 140);
-  assert.equal(res.metrics.per_key_receiver_hold.us.min, 17167);
-  assert.equal(res.metrics.common_chord_hold.us.p50, 17027);
-  assert.ok(res.metrics.common_chord_hold.us.p50 < res.metrics.per_key_receiver_hold.us.min);
+test('never falls back wait_target to E when timer_arm_target_qpc_available is false', () => {
+  const fixture = buildValidPilotFixture(5, { omitTimerArmTarget: true });
+  const res = analyzePilotRun(fixture);
+  assert.equal(res.valid, true, JSON.stringify(res.invalid_reasons));
+  assert.equal(res.metrics.w_minus_wait_target.n, 0);
+  assert.equal(res.metrics.w_minus_wait_target.us, null);
 });
 
-test('03 mixed Up prefix stratified without double-counting whole-packet time', () => {
-  const epoch = 10_000_000;
-  const D0 = epoch + 500_000;
-  const D1 = D0 + 172_000;
-  const U1 = D1 + 172_000;
-  const senderTelemetry = {
-    run_id: 'fixture-run',
-    schema_version: 28,
-    qpc_frequency_hz: 10_000_000,
-    epoch_qpc_ticks: epoch,
-    records: [
-      makeSenderPkt(0, 0, 0b00011, {
-        authoredOffset: 500_000,
-        E: D0,
-        S: D0 + 20,
-        C: D0 + 100,
-        chordIndex: 0,
-      }),
-      makeSenderPkt(1, 0b00011, 0b11100, {
-        authoredOffset: 672_000,
-        E: D1,
-        S: D1 + 30,
-        C: D1 + 350,
-        chordIndex: 1,
-      }),
-      makeSenderPkt(2, 0b11100, 0, {
-        authoredOffset: 844_000,
-        E: U1,
-        S: U1 + 20,
-        C: U1 + 150,
-      }),
-    ],
-  };
-  const lines = [
-    makeHeaderLine(),
-    makeEventLine(1, 'key_press', 0, D0 + 60),
-    makeEventLine(2, 'key_press', 1, D0 + 80),
-    makeEventLine(3, 'key_release', 0, D1 + 100),
-    makeEventLine(4, 'key_release', 1, D1 + 130),
-    makeEventLine(5, 'key_press', 2, D1 + 200),
-    makeEventLine(6, 'key_press', 3, D1 + 240),
-    makeEventLine(7, 'key_press', 4, D1 + 290),
-    makeEventLine(8, 'key_release', 2, U1 + 80),
-    makeEventLine(9, 'key_release', 3, U1 + 100),
-    makeEventLine(10, 'key_release', 4, U1 + 120),
-  ];
-  const res = analyzeRun({
-    senderTelemetry,
-    receiverJsonlLines: lines,
-    observerSummary: makeBaseSummary({ events_seen: 10, events_enqueued: 10, events_written: 10 }),
-  });
-  assert.equal(res.valid, true);
-  assert.equal(res.mixed_by_up_prefix_width.up_prefix_2.r1_minus_d.us.p50, 20);
-  assert.equal(res.mixed_by_up_prefix_width.up_prefix_2.down_skew.us.p50, 9);
+test('rejects empty records and zero receiver events (metrics === null)', () => {
+  const fixture = buildValidPilotFixture(1);
+  fixture.acceptanceReport.details.native_timing_telemetry.records = [];
+  fixture.acceptanceReport.details.native_timing_telemetry.up_slot_records = [];
+  fixture.receiverJsonlLines = [fixture.receiverJsonlLines[0]];
+  const res = analyzePilotRun(fixture);
+  assert.equal(res.valid, false);
+  assert.equal(res.accepted_for_aggregation, false);
+  assert.equal(res.metrics, null);
+  assert.ok(res.total_invalid_count >= 2);
 });
 
-test('04-06 immediate/late wake, equal timestamps, repeated key release gap, negative R1-C', () => {
-  const epoch = 10_000_000;
-  const D0 = epoch + 100_000;
-  const U0 = D0 + 171_670;
-  const D1 = U0 + 1_000;
-  const U1 = D1 + 171_670;
-  const senderTelemetry = {
-    run_id: 'fixture-run',
-    schema_version: 28,
-    qpc_frequency_hz: 10_000_000,
-    epoch_qpc_ticks: epoch,
-    records: [
-      // Immediate (no W)
-      makeSenderPkt(0, 0, 0b11, { authoredOffset: 100_000, E: D0, S: D0, C: D0 + 500, chordIndex: 0 }),
-      makeSenderPkt(1, 0b11, 0, { authoredOffset: 271_670, E: U0, S: U0, C: U0 + 500 }),
-      // Late wake (+500us)
-      makeSenderPkt(2, 0, 0b1, {
-        authoredOffset: 272_670,
-        E: D1,
-        W: D1 + 5000,
-        waitTarget: D1,
-        S: D1 + 5050,
-        C: D1 + 5500,
-        chordIndex: 1,
-      }),
-      makeSenderPkt(3, 0b1, 0, { authoredOffset: 444_340, E: U1, S: U1, C: U1 + 500 }),
-    ],
-  };
-  const lines = [
-    makeHeaderLine(),
-    makeEventLine(1, 'key_press', 0, D0 + 120), // R1 - C = -38us
-    makeEventLine(2, 'key_press', 1, D0 + 120), // equal timestamp -> skew = 0
-    makeEventLine(3, 'key_release', 0, U0 + 120),
-    makeEventLine(4, 'key_release', 1, U0 + 166_950),
-    makeEventLine(5, 'key_press', 0, D1 + 5120), // release gap = (D1+5120)-(U0+120) = 6000 ticks = 600us
-    makeEventLine(6, 'key_release', 0, U1 + 120),
-  ];
-  const res = analyzeRun({
-    senderTelemetry,
-    receiverJsonlLines: lines,
-    observerSummary: makeBaseSummary({ events_seen: 6, events_enqueued: 6, events_written: 6 }),
-  });
-  assert.equal(res.valid, true);
-  assert.equal(res.metrics.down_skew.us.min, 0);
-  assert.equal(res.metrics.r1_minus_c.us.min, -38);
-  assert.equal(res.metrics.w_minus_wait_target.us.max, 500);
-  assert.equal(res.metrics.receiver_release_gap.us.p50, 600);
+test('rejects non-Pass report verdict and unhealthy snapshot', () => {
+  const f1 = buildValidPilotFixture(5);
+  f1.acceptanceReport.verdict = 'Fail';
+  const r1 = analyzePilotRun(f1);
+  assert.equal(r1.valid, false);
+  assert.equal(r1.metrics, null);
+
+  const f2 = buildValidPilotFixture(5);
+  f2.acceptanceReport.details.snapshot.release_outcome.released_successfully = false;
+  const r2 = analyzePilotRun(f2);
+  assert.equal(r2.valid, false);
+  assert.equal(r2.metrics, null);
 });
 
-test('07-16 negative classifications: legacy no-QPC, missing/extra/wrong scan code, identity/freq, drops, malformed/dup, partial/cleanup, sender trace exhaustion & UpSlotTrace mismatch', () => {
-  // Legacy no QPC
-  const legacyRes = analyzeRun({
-    senderTelemetry: makeHealthyPairTelemetry(),
-    receiverJsonlLines: [
-      JSON.stringify({ schema_version: 2, run_id: 'fixture-run', role: 'ReceiveOnly', event_log_id: 'log-1', sequence: 0, kind: 'stream_start' }),
-      JSON.stringify({ schema_version: 2, run_id: 'fixture-run', role: 'ReceiveOnly', event_log_id: 'log-1', sequence: 1, kind: 'key_press', scan_code: 0x15, extended: false }),
-    ],
-    observerSummary: makeBaseSummary({ events_seen: 1, events_enqueued: 1, events_written: 1 }),
-  });
-  assert.equal(legacyRes.measurable_for_skew, false);
-  assert.equal(legacyRes.metrics, 'NOT_MEASURABLE');
+test('rejects missing, unconfirmed, orphan, and mismatched UpSlotTrace records', () => {
+  const fMissing = buildValidPilotFixture(5);
+  fMissing.acceptanceReport.details.native_timing_telemetry.up_slot_records.pop();
+  const rMissing = analyzePilotRun(fMissing);
+  assert.equal(rMissing.valid, false);
+  assert.equal(rMissing.metrics, null);
 
-  // Missing + unclosed
-  const missingRes = analyzeRun({
-    senderTelemetry: makeHealthyPairTelemetry(),
-    receiverJsonlLines: [makeHeaderLine(), makeEventLine(1, 'key_press', 0, 10_100_040)],
-    observerSummary: makeBaseSummary({ events_seen: 1, events_enqueued: 1, events_written: 1 }),
-  });
-  assert.equal(missingRes.invalid_counts.missing_receiver_event, 1);
-  assert.equal(missingRes.invalid_counts.unclosed_generation, 1);
+  const fUnconf = buildValidPilotFixture(5);
+  fUnconf.acceptanceReport.details.native_timing_telemetry.up_slot_records[0].confirmed = false;
+  const rUnconf = analyzePilotRun(fUnconf);
+  assert.equal(rUnconf.valid, false);
+  assert.equal(rUnconf.metrics, null);
 
-  // Extra tail event
-  const extraRes = analyzeRun({
-    senderTelemetry: makeHealthyPairTelemetry(),
-    receiverJsonlLines: [
-      makeHeaderLine(),
-      makeEventLine(1, 'key_press', 0, 10_100_040),
-      makeEventLine(2, 'key_release', 0, 10_271_760),
-      makeEventLine(3, 'key_press', 1, 10_271_900),
-    ],
-    observerSummary: makeBaseSummary({ events_seen: 3, events_enqueued: 3, events_written: 3 }),
-  });
-  assert.equal(extraRes.invalid_counts.extra_receiver_event, 1);
+  const fBadOrigin = buildValidPilotFixture(5);
+  fBadOrigin.acceptanceReport.details.native_timing_telemetry.up_slot_records[0].source_action_index = 999;
+  const rBadOrigin = analyzePilotRun(fBadOrigin);
+  assert.equal(rBadOrigin.valid, false);
+  assert.equal(rBadOrigin.metrics, null);
 
-  // Wrong scan code
-  const wrongScanRes = analyzeRun({
-    senderTelemetry: makeHealthyPairTelemetry(),
-    receiverJsonlLines: [makeHeaderLine(), makeEventLine(1, 'key_press', 2, 10_100_040), makeEventLine(2, 'key_release', 0, 10_271_760)],
-    observerSummary: makeBaseSummary({ events_seen: 2, events_enqueued: 2, events_written: 2 }),
-  });
-  assert.equal(wrongScanRes.invalid_counts.wrong_scan_code_or_extended, 1);
+  const fOrphan = buildValidPilotFixture(5);
+  fOrphan.acceptanceReport.details.native_timing_telemetry.up_slot_records[0].scan_code = 0x7f;
+  const rOrphan = analyzePilotRun(fOrphan);
+  assert.equal(rOrphan.valid, false);
+  assert.equal(rOrphan.metrics, null);
+});
 
-  // Wrong role + frequency + identity
-  const idRes = analyzeRun({
-    senderTelemetry: makeHealthyPairTelemetry(),
-    receiverJsonlLines: [makeHeaderLine({ run_id: 'other' }), makeEventLine(1, 'key_press', 0, 10_100_040)],
-    observerSummary: makeBaseSummary({ role: 'InertFocusProbe', qpc_frequency_hz: 3_579_545, events_seen: 1, events_enqueued: 1, events_written: 1 }),
-  });
-  assert.ok(idRes.invalid_counts.identity_mismatch >= 2);
-  assert.equal(idRes.invalid_counts.frequency_mismatch, 1);
+test('rejects duplicate Down, orphan Up, unexpected mixed packet, and S > C', () => {
+  const fDupDown = buildValidPilotFixture(1);
+  const firstUp = JSON.parse(fDupDown.receiverJsonlLines[2]);
+  firstUp.kind = 'key_press';
+  firstUp.message = 0x0100;
+  fDupDown.receiverJsonlLines[2] = JSON.stringify(firstUp);
+  const rDupDown = analyzePilotRun(fDupDown);
+  assert.equal(rDupDown.valid, false);
+  assert.equal(rDupDown.metrics, null);
 
-  // Receiver queue overflow / drops
-  const dropRes = analyzeRun({
-    senderTelemetry: makeHealthyPairTelemetry(),
-    receiverJsonlLines: [makeHeaderLine(), makeEventLine(1, 'key_press', 0, 10_100_040), makeEventLine(2, 'key_release', 0, 10_271_760)],
-    observerSummary: makeBaseSummary({ events_seen: 3, events_enqueued: 2, events_written: 2, queue_dropped: 1, queue_overflow: true }),
-  });
-  assert.equal(dropRes.invalid_counts.observer_health_invalid, 1);
+  const fOrphanUp = buildValidPilotFixture(1);
+  const firstDown = JSON.parse(fOrphanUp.receiverJsonlLines[1]);
+  firstDown.kind = 'key_release';
+  firstDown.message = 0x0101;
+  fOrphanUp.receiverJsonlLines[1] = JSON.stringify(firstDown);
+  const rOrphanUp = analyzePilotRun(fOrphanUp);
+  assert.equal(rOrphanUp.valid, false);
+  assert.equal(rOrphanUp.metrics, null);
 
-  // Malformed JSON + duplicate sequence
-  const malRes = analyzeRun({
-    senderTelemetry: makeHealthyPairTelemetry(),
-    receiverJsonlLines: [makeHeaderLine(), '{bad-json', makeEventLine(1, 'key_press', 0, 10_100_040), makeEventLine(1, 'key_release', 0, 10_271_760)],
-    observerSummary: makeBaseSummary({ events_seen: 2, events_enqueued: 2, events_written: 2 }),
-  });
-  assert.equal(malRes.invalid_counts.malformed_record, 1);
-  assert.equal(malRes.invalid_counts.duplicate_or_out_of_order_sequence, 1);
+  const fMixed = buildValidPilotFixture(5);
+  fMixed.acceptanceReport.details.native_timing_telemetry.records[0].up_mask = 1;
+  const rMixed = analyzePilotRun(fMixed);
+  assert.equal(rMixed.valid, false);
+  assert.equal(rMixed.metrics, null);
 
-  // Partial send + cleanup recovery record
-  const partialRes = analyzeRun({
-    senderTelemetry: {
-      run_id: 'fixture-run',
-      schema_version: 28,
-      qpc_frequency_hz: 10_000_000,
-      epoch_qpc_ticks: 10_000_000,
-      records: [
-        makeSenderPkt(0, 0, 0b11, { authoredOffset: 100_000, E: 10_100_000, S: 10_100_010, C: 10_100_050, send_status: 3, transport_anomaly: true, sent_count: 1 }),
-        makeSenderPkt(1, 0b1, 0, { authoredOffset: 100_500, E: 10_100_500, S: 10_100_510, C: 10_100_550, flags: TRACE_FLAG_RECOVERY }),
+  const fBadSC = buildValidPilotFixture(5);
+  const rec = fBadSC.acceptanceReport.details.native_timing_telemetry.records[0];
+  rec.pre_call_qpc_ticks = rec.sendinput_completion_qpc_ticks + 100;
+  const rBadSC = analyzePilotRun(fBadSC);
+  assert.equal(rBadSC.valid, false);
+  assert.equal(rBadSC.metrics, null);
+});
+
+test('rejects non-monotonic receiver QPC, duplicate stream_start, and unfinalized summary', () => {
+  const fBack = buildValidPilotFixture(5);
+  const ev2 = JSON.parse(fBack.receiverJsonlLines[2]);
+  const ev1 = JSON.parse(fBack.receiverJsonlLines[1]);
+  ev2.observed_qpc_ticks = ev1.observed_qpc_ticks - 1;
+  fBack.receiverJsonlLines[2] = JSON.stringify(ev2);
+  const rBack = analyzePilotRun(fBack);
+  assert.equal(rBack.valid, false);
+  assert.equal(rBack.metrics, null);
+
+  const fDupStart = buildValidPilotFixture(1);
+  fDupStart.receiverJsonlLines.splice(1, 0, fDupStart.receiverJsonlLines[0]);
+  const rDupStart = analyzePilotRun(fDupStart);
+  assert.equal(rDupStart.valid, false);
+  assert.equal(rDupStart.metrics, null);
+
+  for (const field of ['stream_header_flushed', 'events_flushed', 'consumer_stopped', 'queue_drained']) {
+    const fUnfin = buildValidPilotFixture(1);
+    fUnfin.observerSummary[field] = false;
+    const rUnfin = analyzePilotRun(fUnfin);
+    assert.equal(rUnfin.valid, false, `expected failure when ${field}=false`);
+    assert.equal(rUnfin.metrics, null);
+  }
+});
+
+test('rejects legacy schema 3 without observed_qpc_ticks as NOT MEASURABLE', () => {
+  const fixture = buildValidPilotFixture(1, { omitObservedQpc: true });
+  const res = analyzePilotRun(fixture);
+  assert.equal(res.valid, false);
+  assert.equal(res.accepted_for_aggregation, false);
+  assert.equal(res.measurable_for_skew, false);
+  assert.equal(res.metrics, null);
+  assert.ok(res.invalid_counts.legacy_no_qpc > 0);
+});
+
+test('rejects protocol, role, game_target, identity, and source/binary hash mismatches', () => {
+  const fProto = buildValidPilotFixture(1);
+  fProto.sinkReady.observer_mode = 'SchedulerQueuedV2';
+  assert.equal(analyzePilotRun(fProto).valid, false);
+
+  const fGame = buildValidPilotFixture(1);
+  fGame.sinkReady.game_target = true;
+  assert.equal(analyzePilotRun(fGame).valid, false);
+
+  const fSrc = buildValidPilotFixture(1);
+  fSrc.expectedSourceSha = '0'.repeat(40);
+  assert.equal(analyzePilotRun(fSrc).valid, false);
+
+  const fBin = buildValidPilotFixture(1);
+  fBin.expectedBinarySha256 = 'b'.repeat(64);
+  assert.equal(analyzePilotRun(fBin).valid, false);
+});
+
+test('CLI exits 0 on valid files and 1 on invalid files', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sky-pilot-cli-'));
+  try {
+    const fixture = buildValidPilotFixture(5);
+    const reportPath = path.join(tmpDir, 'report.json');
+    const readyPath = path.join(tmpDir, 'sink-ready.json');
+    const eventsPath = path.join(tmpDir, 'sink-events.jsonl');
+    const summaryPath = path.join(tmpDir, 'sink-observer-summary.json');
+    const outPath = path.join(tmpDir, 'analysis.json');
+
+    fs.writeFileSync(reportPath, JSON.stringify(fixture.acceptanceReport));
+    fs.writeFileSync(readyPath, JSON.stringify(fixture.sinkReady));
+    fs.writeFileSync(eventsPath, fixture.receiverJsonlLines.join('\n') + '\n');
+    fs.writeFileSync(summaryPath, JSON.stringify(fixture.observerSummary));
+
+    const cliScript = path.resolve(process.cwd(), 'scripts/analyze_chord_reception.mjs');
+    const stdout = execFileSync(
+      process.execPath,
+      [
+        cliScript,
+        '--report',
+        reportPath,
+        '--sink-ready',
+        readyPath,
+        '--sink-events',
+        eventsPath,
+        '--observer-summary',
+        summaryPath,
+        '--width',
+        '5',
+        '--expected-source-sha',
+        SOURCE_SHA,
+        '--expected-binary-sha256',
+        BINARY_SHA,
+        '--output',
+        outPath,
       ],
-    },
-    receiverJsonlLines: [makeHeaderLine(), makeEventLine(1, 'key_press', 0, 10_100_040), makeEventLine(2, 'key_release', 0, 10_100_540)],
-    observerSummary: makeBaseSummary({ events_seen: 2, events_enqueued: 2, events_written: 2 }),
-  });
-  assert.equal(partialRes.invalid_counts.partial_or_failed_send, 1);
-  assert.equal(partialRes.invalid_counts.cleanup_record, 1);
+      { encoding: 'utf8' },
+    );
+    const parsed = JSON.parse(stdout);
+    assert.equal(parsed.valid, true);
+    assert.equal(parsed.accepted_for_aggregation, true);
+    assert.ok(fs.existsSync(outPath));
 
-  // Sender trace capacity exhaustion + UpSlotTrace mismatch
-  const exhaustTelemetry = makeHealthyPairTelemetry();
-  exhaustTelemetry.truncated = true;
-  exhaustTelemetry.up_slot_records_dropped = 1;
-  exhaustTelemetry.up_slot_accounting_status = 'invalid';
-  exhaustTelemetry.up_slot_records[0].scan_code = CANONICAL_SCAN_CODES[3];
-  const exhaustRes = analyzeRun({
-    senderTelemetry: exhaustTelemetry,
-    receiverJsonlLines: [makeHeaderLine(), makeEventLine(1, 'key_press', 0, 10_100_040), makeEventLine(2, 'key_release', 0, 10_271_760)],
-    observerSummary: makeBaseSummary({ events_seen: 2, events_enqueued: 2, events_written: 2 }),
-  });
-  assert.equal(exhaustRes.valid, false);
-  assert.equal(exhaustRes.invalid_counts.sender_trace_incomplete, 1);
-  assert.equal(exhaustRes.invalid_counts.up_slot_attribution_mismatch, 1);
+    fixture.observerSummary.queue_dropped = 1;
+    fs.writeFileSync(summaryPath, JSON.stringify(fixture.observerSummary));
+    assert.throws(
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            cliScript,
+            '--report',
+            reportPath,
+            '--sink-ready',
+            readyPath,
+            '--sink-events',
+            eventsPath,
+            '--observer-summary',
+            summaryPath,
+            '--width',
+            '5',
+          ],
+          { encoding: 'utf8', stdio: 'pipe' },
+        ),
+      (err) => err.status === 1,
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('real native_acceptance_sink.ps1 -SelfTest emits Compat3 schema-3 stream compatible with analyzer contract', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sky-sink-selftest-'));
+  try {
+    const sinkScript = path.resolve(process.cwd(), 'scripts/native_acceptance_sink.ps1');
+    execFileSync(
+      'pwsh',
+      ['-NoProfile', '-File', sinkScript, '-SelfTest', '-SelfTestFixtureRoot', tmpDir],
+      { encoding: 'utf8', stdio: 'pipe' },
+    );
+    const files = [];
+    const walk = (dir) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name);
+        if (entry.isDirectory()) walk(full);
+        else files.push(full);
+      }
+    };
+    walk(tmpDir);
+    const jsonlFiles = files.filter((f) => f.endsWith('.jsonl'));
+    const summaryFiles = files.filter((f) => f.includes('summary') && f.endsWith('.json'));
+    assert.ok(jsonlFiles.length > 0, 'SelfTest must emit at least one JSONL event stream');
+    assert.ok(summaryFiles.length > 0, 'SelfTest must emit at least one observer summary JSON');
+
+    let verifiedCompat3 = false;
+    for (const jf of jsonlFiles) {
+      const lines = fs
+        .readFileSync(jf, 'utf8')
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter(Boolean)
+        .map((l) => JSON.parse(l));
+      if (lines.length >= 2 && lines[0].observer_mode === EXPECTED_RECEIVER_OBSERVER_MODE) {
+        assert.equal(lines[0].schema_version, EXPECTED_RECEIVER_EVENT_SCHEMA);
+        assert.equal(lines[0].kind, 'stream_start');
+        assert.equal(lines[0].observer_version, EXPECTED_RECEIVER_OBSERVER_VERSION);
+        const keyEv = lines.find((e) => e.kind === 'key_press' || e.kind === 'key_release');
+        assert.ok(keyEv, 'Compat3 self-test stream should contain key events');
+        assert.equal(keyEv.schema_version, EXPECTED_RECEIVER_EVENT_SCHEMA);
+        assert.equal(typeof keyEv.observed_qpc_ticks, 'number');
+        assert.ok(keyEv.observed_qpc_ticks > 0);
+        verifiedCompat3 = true;
+      }
+    }
+    assert.equal(verifiedCompat3, true, 'expected at least one Compat3 schema-3 stream from sink -SelfTest');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 
 $runnerPath = Join-Path $PSScriptRoot 'qualify_dispatch_core.ps1'
 $tokens = $null
@@ -541,8 +541,9 @@ if (-not $wrongFrameHashRejected) { throw 'FrameSnapshot accepted a baseline sou
 
 $frameBuilderSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'build_dispatch_core_harness.ps1') -Raw
 $m3ProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3'\)"
+$caseRunnerProfileSet = "ValidateSet\('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3', 'ChordWidthPilotV1'\)"
 if ($frameBuilderSource -notmatch $m3ProfileSet -or
-    $acceptanceSource -notmatch $m3ProfileSet) {
+    $acceptanceSource -notmatch $caseRunnerProfileSet) {
     throw 'FrameSnapshot profile is missing from an immutable build or case-runner boundary'
 }
 $qualifierSource = Get-Content -LiteralPath $runnerPath -Raw

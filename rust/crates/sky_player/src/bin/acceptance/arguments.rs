@@ -537,6 +537,24 @@ where
         if run.sample_seconds != Some(15) {
             return Err("chord-width-pilot-v1 requires --sample-seconds 15".to_string());
         }
+        if run.admission_variant != AdmissionVariantChoice::ControlA {
+            return Err("chord-width-pilot-v1 requires --admission-variant control-a".to_string());
+        }
+        if run.calibration_placement != CalibrationPlacement::Baseline {
+            return Err(
+                "chord-width-pilot-v1 requires --calibration-placement baseline".to_string(),
+            );
+        }
+        if !run.timing_observer_for_qualification {
+            return Err(
+                "chord-width-pilot-v1 requires --timing-observer-for-qualification".to_string(),
+            );
+        }
+        if run.hol_stall_us != 0 || run.hol_cycles.is_some() {
+            return Err(
+                "chord-width-pilot-v1 does not allow --hol-stall-us or --hol-cycles".to_string(),
+            );
+        }
     } else if run.pilot_chord_width.is_some() {
         return Err(
             "--pilot-chord-width is valid only for scenario chord-width-pilot-v1".to_string(),
@@ -584,7 +602,14 @@ mod tests {
         assert!(error.contains("adaptive guard mode is retired"));
     }
 
-    fn pilot_args(width: &str, fps: &str, margin: &str, sample_seconds: Option<&str>) -> Vec<String> {
+    fn pilot_args(
+        width: &str,
+        fps: &str,
+        margin: &str,
+        sample_seconds: Option<&str>,
+        calibration_placement: &str,
+        include_observer: bool,
+    ) -> Vec<String> {
         let mut out = vec![
             "run",
             "--allow-real-input",
@@ -604,12 +629,17 @@ mod tests {
             fps,
             "--timing-margin-us",
             margin,
+            "--calibration-placement",
+            calibration_placement,
             "--evidence",
             "evidence.json",
         ]
         .into_iter()
         .map(str::to_string)
         .collect::<Vec<_>>();
+        if include_observer {
+            out.push("--timing-observer-for-qualification".to_string());
+        }
         if let Some(secs) = sample_seconds {
             out.push("--sample-seconds".to_string());
             out.push(secs.to_string());
@@ -621,7 +651,8 @@ mod tests {
     fn chord_width_pilot_v1_accepts_only_bounded_widths_and_fixed_settings() {
         for width in ["1", "5", "15"] {
             let ParsedCommand::Run(run) =
-                parse_args(pilot_args(width, "60", "500", Some("15"))).expect("valid pilot args")
+                parse_args(pilot_args(width, "60", "500", Some("15"), "baseline", true))
+                    .expect("valid pilot args")
             else {
                 panic!("expected run");
             };
@@ -629,15 +660,35 @@ mod tests {
             assert_eq!(run.game_fps, 60);
             assert_eq!(run.timing_margin_us, 500);
             assert_eq!(run.sample_seconds, Some(15));
+            assert_eq!(
+                run.calibration_placement,
+                super::CalibrationPlacement::Baseline
+            );
+            assert!(run.timing_observer_for_qualification);
         }
         for bad_width in ["0", "2", "3", "8", "16"] {
-            assert!(parse_args(pilot_args(bad_width, "60", "500", Some("15"))).is_err());
+            assert!(
+                parse_args(pilot_args(
+                    bad_width,
+                    "60",
+                    "500",
+                    Some("15"),
+                    "baseline",
+                    true
+                ))
+                .is_err()
+            );
         }
-        assert!(parse_args(pilot_args("5", "120", "500", Some("15"))).is_err());
-        assert!(parse_args(pilot_args("5", "60", "0", Some("15"))).is_err());
-        assert!(parse_args(pilot_args("5", "60", "1000", Some("15"))).is_err());
-        assert!(parse_args(pilot_args("5", "60", "500", None)).is_err());
-        let mut dup = pilot_args("5", "60", "500", Some("15"));
+        assert!(parse_args(pilot_args("5", "120", "500", Some("15"), "baseline", true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "0", Some("15"), "baseline", true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "1000", Some("15"), "baseline", true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "500", None, "baseline", true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "500", Some("15"), "candidate", true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "500", Some("15"), "baseline", false)).is_err());
+        let mut with_hol = pilot_args("5", "60", "500", Some("15"), "baseline", true);
+        with_hol.extend(["--hol-stall-us".to_string(), "1000".to_string()]);
+        assert!(parse_args(with_hol).is_err());
+        let mut dup = pilot_args("5", "60", "500", Some("15"), "baseline", true);
         dup.extend(["--pilot-chord-width".to_string(), "5".to_string()]);
         assert!(parse_args(dup).is_err());
         let mut wrong_scenario = args("frozen");
