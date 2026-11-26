@@ -166,6 +166,28 @@ impl MaterializedInstrumentKeyProfile {
         self.keys[slot]
     }
 
+    /// Validate that every ordered slot in `registry_scan_codes` matches this
+    /// validated physical profile (non-extended, identical scan code at each
+    /// slot index). Supports prefix registries (`1..=MAX_KEYS`).
+    pub fn validate_ordered_slot_mapping(&self, registry_scan_codes: &[u16]) -> Result<(), String> {
+        if registry_scan_codes.is_empty() || registry_scan_codes.len() > MAX_KEYS {
+            return Err(format!(
+                "prepared dispatch plan key registry length {} is outside 1..={MAX_KEYS}",
+                registry_scan_codes.len()
+            ));
+        }
+        for (slot, &expected_scan_code) in registry_scan_codes.iter().enumerate() {
+            let physical = self.keys[slot];
+            if physical.extended || physical.scan_code != expected_scan_code {
+                return Err(format!(
+                    "prepared dispatch plan slot {slot} expects scan code {expected_scan_code:#x}, but the native instrument profile maps slot {slot} to {:#x}",
+                    physical.scan_code
+                ));
+            }
+        }
+        Ok(())
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn logical_mask_for_scan_codes(&self, scan_codes: &[u16]) -> Option<u16> {
         scan_codes.iter().try_fold(0u16, |mask, scan_code| {

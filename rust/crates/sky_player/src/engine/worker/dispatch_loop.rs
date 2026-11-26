@@ -2028,15 +2028,18 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         break;
                     }
                 };
-            if matches!(&action, SchedulerAction::Finished) {
+            if matches!(
+                &action,
+                sky_dispatch_core::executor::DispatchDecision::Finished
+            ) {
                 break;
             }
-            if matches!(&action, SchedulerAction::Wait { deadline_qpc } if *deadline_qpc <= now_ticks)
+            if matches!(&action, sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } if *deadline_qpc <= now_ticks)
             {
                 continue;
             }
             let candidate = match action_to_stage {
-                Some(send_action @ SchedulerAction::Send { .. }) => {
+                Some(send_action @ sky_dispatch_core::executor::DispatchDecision::Send { .. }) => {
                     match stage_scheduler_send_candidate(
                         send_action,
                         SchedulerStageAdmission {
@@ -2064,7 +2067,11 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         }
                     }
                 }
-                None | Some(SchedulerAction::Finished | SchedulerAction::Wait { .. }) => None,
+                None
+                | Some(
+                    sky_dispatch_core::executor::DispatchDecision::Finished
+                    | sky_dispatch_core::executor::DispatchDecision::Wait { .. },
+                ) => None,
             };
             let wait_target_qpc =
                 candidate

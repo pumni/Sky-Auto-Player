@@ -42,7 +42,6 @@ pub(super) fn analyze_variant(
 
 #[cfg(test)]
 pub(super) fn analyze_compiled_variant_with_model_hook(
-    _source_chord_count: usize,
     compiled: &sky_player::adapter_support::OnsetPlan,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
@@ -62,7 +61,6 @@ pub(super) fn analyze_compiled_variant_with_model_hook(
 
 #[cfg(not(test))]
 pub(super) fn analyze_compiled_variant(
-    _source_chord_count: usize,
     compiled: &sky_player::adapter_support::OnsetPlan,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
@@ -73,7 +71,6 @@ pub(super) fn analyze_compiled_variant(
 }
 
 pub(super) fn unavailable_compiled_variant(
-    _source_chord_count: usize,
     config: &PlaybackConfigDto,
     policy: &MaterializedTimingPolicy,
     plan_fingerprint: &str,

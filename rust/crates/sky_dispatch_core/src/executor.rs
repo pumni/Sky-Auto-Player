@@ -376,6 +376,10 @@ impl PreparedDispatchSchedule {
         self.qpc_frequency_hz == qpc_frequency_hz && self.hold_us == min_hold_us
     }
 
+    pub fn key_registry(&self) -> &KeyRegistry {
+        &self.key_registry
+    }
+
     pub fn qpc_frequency_hz(&self) -> NonZeroU64 {
         self.qpc_frequency_hz
     }

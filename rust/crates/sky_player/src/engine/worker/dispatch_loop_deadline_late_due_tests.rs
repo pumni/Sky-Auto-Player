@@ -158,13 +158,13 @@ fn late_due_reselects_newly_due_up_with_staged_down() {
         .expect("evaluate future B2");
     assert!(matches!(
         b2_action,
-        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == b2_authored
+        sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } if deadline_qpc == b2_authored
     ));
     assert_eq!(scheduler_wait_target, b2_authored);
     let projected_b2 = projected_b2.expect("scheduler projects B2 at its authored target");
     assert!(matches!(
         projected_b2,
-        super::super::SchedulerAction::Send {
+        sky_dispatch_core::executor::DispatchDecision::Send {
             up_mask: 0,
             down_chord: Some(chord),
             timing_window,
@@ -322,7 +322,7 @@ fn late_due_reselects_newly_due_up_with_staged_down() {
     .expect("fresh next-iteration scheduler evaluation");
     assert!(matches!(
         next_action,
-        super::super::SchedulerAction::Send {
+        sky_dispatch_core::executor::DispatchDecision::Send {
             up_mask: 0,
             down_chord: Some(chord),
             ..

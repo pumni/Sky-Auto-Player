@@ -1,17 +1,3 @@
-#[derive(Clone, Copy, Debug)]
-enum SchedulerAction {
-    Finished,
-    Wait {
-        deadline_qpc: sky_dispatch_win32::clock::QpcTicks,
-    },
-    Send {
-        up_mask: u16,
-        down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
-        timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
-        up_summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
-    },
-}
-
 const UNSTABLE_TARGET_REPLAN_INTERVAL_US: u64 = 1_000;
 const MODIFIER_REPLAN_INTERVAL_US: u64 = 1_000;
 
@@ -252,29 +238,12 @@ fn evaluate_scheduler_action(
     executor: &sky_dispatch_core::executor::DispatchExecutor,
     now_qpc: sky_dispatch_win32::clock::QpcTicks,
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
-) -> Result<SchedulerAction, String> {
+) -> Result<sky_dispatch_core::executor::DispatchDecision, String> {
     #[cfg(test)]
     SCHEDULER_EVALUATION_COUNT.with(|count| count.set(count.get().saturating_add(1)));
-    match executor
+    executor
         .evaluate_at(now_qpc, epoch_qpc)
-        .map_err(|error| format!("scheduler eligibility arithmetic failure: {error}"))?
-    {
-        sky_dispatch_core::executor::DispatchDecision::Finished => Ok(SchedulerAction::Finished),
-        sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } => {
-            Ok(SchedulerAction::Wait { deadline_qpc })
-        }
-        sky_dispatch_core::executor::DispatchDecision::Send {
-            up_mask,
-            down_chord,
-            timing_window,
-            up_summary,
-        } => Ok(SchedulerAction::Send {
-            up_mask,
-            down_chord,
-            timing_window,
-            up_summary,
-        }),
-    }
+        .map_err(|error| format!("scheduler eligibility arithmetic failure: {error}"))
 }
 
 fn evaluate_scheduler_action_for_staging(
@@ -283,25 +252,30 @@ fn evaluate_scheduler_action_for_staging(
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
 ) -> Result<
     (
-        SchedulerAction,
+        sky_dispatch_core::executor::DispatchDecision,
         sky_dispatch_win32::clock::QpcTicks,
-        Option<SchedulerAction>,
+        Option<sky_dispatch_core::executor::DispatchDecision>,
     ),
     String,
 > {
     let action = evaluate_scheduler_action(executor, now_qpc, epoch_qpc)?;
     match action {
-        send @ SchedulerAction::Send { .. } => Ok((action, now_qpc, Some(send))),
-        SchedulerAction::Finished => Ok((action, now_qpc, None)),
-        SchedulerAction::Wait { deadline_qpc } if deadline_qpc > now_qpc => {
+        send @ sky_dispatch_core::executor::DispatchDecision::Send { .. } => {
+            Ok((action, now_qpc, Some(send)))
+        }
+        sky_dispatch_core::executor::DispatchDecision::Finished => Ok((action, now_qpc, None)),
+        sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc }
+            if deadline_qpc > now_qpc =>
+        {
             let at_deadline = evaluate_scheduler_action(executor, deadline_qpc, epoch_qpc)?;
             let action_to_stage = match at_deadline {
-                send @ SchedulerAction::Send { .. } => Some(send),
-                SchedulerAction::Wait { .. } | SchedulerAction::Finished => None,
+                send @ sky_dispatch_core::executor::DispatchDecision::Send { .. } => Some(send),
+                sky_dispatch_core::executor::DispatchDecision::Wait { .. }
+                | sky_dispatch_core::executor::DispatchDecision::Finished => None,
             };
             Ok((action, deadline_qpc, action_to_stage))
         }
-        SchedulerAction::Wait { .. } => Ok((action, now_qpc, None)),
+        sky_dispatch_core::executor::DispatchDecision::Wait { .. } => Ok((action, now_qpc, None)),
     }
 }
 
@@ -323,12 +297,12 @@ fn up_only_timing_window(
 }
 
 fn stage_scheduler_send_candidate(
-    action: SchedulerAction,
+    action: sky_dispatch_core::executor::DispatchDecision,
     admission: SchedulerStageAdmission<'_>,
     resources: &mut super::WorkerResources,
     runtime: &mut super::WorkerRuntime,
 ) -> Result<Option<StagedCandidate>, String> {
-    let SchedulerAction::Send {
+    let sky_dispatch_core::executor::DispatchDecision::Send {
         up_mask,
         down_chord,
         timing_window,
@@ -373,15 +347,15 @@ pub(crate) fn reselect_candidate_after_wait(
     runtime: &mut super::WorkerRuntime,
 ) -> Result<PostWaitSelection, String> {
     match evaluate_scheduler_action(&resources.scheduler, observed_wake_qpc, epoch_qpc)? {
-        SchedulerAction::Finished => {
+        sky_dispatch_core::executor::DispatchDecision::Finished => {
             *staged = None;
             Ok(PostWaitSelection::Finished)
         }
-        SchedulerAction::Wait { .. } => {
+        sky_dispatch_core::executor::DispatchDecision::Wait { .. } => {
             *staged = None;
             Ok(PostWaitSelection::Replan)
         }
-        SchedulerAction::Send {
+        sky_dispatch_core::executor::DispatchDecision::Send {
             up_mask,
             down_chord,
             timing_window,
@@ -466,10 +440,11 @@ fn qpc_evidence(value: Option<sky_dispatch_win32::clock::QpcTicks>) -> String {
 #[cfg(test)]
 mod scheduler_tests {
     use super::{
-        ModifierWaitPurpose, ModifierWaitResult, SchedulerAction,
-        account_modifier_wait_result, attribute_modifier_up_deadline_wake,
-        evaluate_scheduler_action_for_staging, modifier_replan_deadline, wait_after_modifier_held,
+        ModifierWaitPurpose, ModifierWaitResult, account_modifier_wait_result,
+        attribute_modifier_up_deadline_wake, evaluate_scheduler_action_for_staging,
+        modifier_replan_deadline, wait_after_modifier_held,
     };
+    use sky_dispatch_core::executor::DispatchDecision;
     use crate::engine::telemetry::WorkerMetricsLocal;
     use crate::engine::test_support::ProductionDispatchTestHarness;
     use crate::engine::worker::WorkerRuntime;
@@ -932,7 +907,7 @@ mod scheduler_tests {
             epoch,
         )
         .expect("scheduler staging decision");
-        let SchedulerAction::Wait { deadline_qpc } = initial else {
+        let DispatchDecision::Wait { deadline_qpc } = initial else {
             panic!("expected a wait before the authored Down deadline");
         };
         let expected = harness
@@ -940,7 +915,7 @@ mod scheduler_tests {
             .expect("authored Down metadata");
 
         assert_eq!(staging_target, deadline_qpc);
-        let Some(SchedulerAction::Send { down_chord, .. }) = staged else {
+        let Some(DispatchDecision::Send { down_chord, .. }) = staged else {
             panic!("deadline reevaluation must stage its Down");
         };
         assert_eq!(down_chord, Some(expected));

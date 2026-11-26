@@ -457,7 +457,6 @@ impl NativePlaybackService {
         let fingerprint_song_id = format!("{song_id}\0{plan_identity}");
         let fingerprint =
             plan_fingerprint(&fingerprint_song_id, &config, &schedule, &timing_policy)?;
-        let source_action_count = schedule.chords.len();
         let schedule_duration_us = schedule.duration_us;
         let qpc_frequency_hz = if config.dry_run {
             None
@@ -526,17 +525,9 @@ impl NativePlaybackService {
             )
         };
         let timing_advisory = if let Some(compiled) = &base_runtime_schedule {
-            self.analyze_timing_variant(
-                source_action_count,
-                compiled,
-                &config,
-                &timing_policy,
-                &fingerprint,
-                cancelled,
-            )
+            self.analyze_timing_variant(compiled, &config, &timing_policy, &fingerprint, cancelled)
         } else {
             timing_advisory::unavailable_compiled_variant(
-                source_action_count,
                 &config,
                 &timing_policy,
                 &fingerprint,
@@ -615,7 +606,8 @@ impl NativePlaybackService {
                     &recommended_schedule,
                     &recommended_policy,
                 )?;
-                let recommended_action_count = recommended_schedule.chords.len();
+                let base_schedule_capacity_bytes =
+                    schedule_metadata_heap_capacity_bytes(&schedule)?;
                 let base_runtime_schedule_capacity_bytes = base_runtime_schedule
                     .as_ref()
                     .map(|compiled| runtime_schedule_capacity_bytes(compiled, cancelled))
@@ -623,6 +615,7 @@ impl NativePlaybackService {
                     .unwrap_or(0);
                 let recommendation_caller_retained_capacity_bytes = checked_capacity_sum([
                     other_prepared_capacity_bytes,
+                    base_schedule_capacity_bytes,
                     base_runtime_schedule_capacity_bytes,
                     base_dispatch_capacity_bytes,
                 ])?;
@@ -696,7 +689,6 @@ impl NativePlaybackService {
                     };
                     if config.dry_run || recommended_dispatch.is_some() {
                         let recommended_timing_advisory = self.analyze_timing_variant(
-                            recommended_action_count,
                             &recommended_compiled,
                             &recommended_config,
                             &recommended_policy,
@@ -739,7 +731,6 @@ impl NativePlaybackService {
                 )?;
                 let dry_run_timing_advisory = if let Some(compiled) = &base_runtime_schedule {
                     self.analyze_timing_variant(
-                        source_action_count,
                         compiled,
                         &dry_run_config,
                         &timing_policy,
@@ -748,7 +739,6 @@ impl NativePlaybackService {
                     )
                 } else {
                     timing_advisory::unavailable_compiled_variant(
-                        source_action_count,
                         &dry_run_config,
                         &timing_policy,
                         &dry_run_fingerprint,
@@ -914,7 +904,6 @@ impl NativePlaybackService {
 
     fn analyze_timing_variant(
         &self,
-        source_action_count: usize,
         schedule: &sky_player::adapter_support::OnsetPlan,
         config: &PlaybackConfigDto,
         policy: &MaterializedTimingPolicy,
@@ -929,7 +918,6 @@ impl NativePlaybackService {
                 .ok()
                 .and_then(|mut hook| hook.take());
             timing_advisory::analyze_compiled_variant_with_model_hook(
-                source_action_count,
                 schedule,
                 config,
                 policy,
@@ -943,14 +931,7 @@ impl NativePlaybackService {
             )
         }
         #[cfg(not(test))]
-        timing_advisory::analyze_compiled_variant(
-            source_action_count,
-            schedule,
-            config,
-            policy,
-            fingerprint,
-            cancelled,
-        )
+        timing_advisory::analyze_compiled_variant(schedule, config, policy, fingerprint, cancelled)
     }
 
     fn compile_prepared_schedule(
@@ -2982,7 +2963,6 @@ fn compile_dispatch_schedule_with_checkpoint(
     chords
         .try_reserve(schedule.chords.len())
         .map_err(|error| format!("native onset chord allocation failed: {error}"))?;
-    let mut spilled_scan_code_bytes = 0usize;
     for (index, chord) in schedule.chords.iter().enumerate() {
         if index.is_multiple_of(256) && cancelled.load(Ordering::Acquire) {
             return Err("native schedule compilation cancelled".into());
@@ -2997,12 +2977,6 @@ fn compile_dispatch_schedule_with_checkpoint(
             .try_reserve(chord.scan_codes.len())
             .map_err(|error| format!("native scan code allocation failed: {error}"))?;
         scan_codes.extend_from_slice(&chord.scan_codes);
-        if scan_codes.spilled() {
-            spilled_scan_code_bytes = checked_capacity_sum([
-                spilled_scan_code_bytes,
-                checked_capacity_bytes(scan_codes.capacity(), std::mem::size_of::<u16>())?,
-            ])?;
-        }
         chords.push(OnsetChordInput {
             source_action_index: u32::try_from(index).map_err(|_| "native chord index overflow")?,
             scheduled_us: chord.at_us,
@@ -3012,14 +2986,17 @@ fn compile_dispatch_schedule_with_checkpoint(
             checkpoint(index + 1);
         }
     }
-    let temporary_retained_capacity_bytes =
-        checked_capacity_sum([caller_retained_capacity_bytes, spilled_scan_code_bytes])?;
+    // `chords` (and any spilled SmallVec scan-code storage) is temporary to this
+    // compile call and is counted once by `build_onset_plan_with_memory_accounting`
+    // in `input_capacity_bytes`. `caller_retained_capacity_bytes` excludes those
+    // temporary inputs so they are neither double-counted during build nor carried
+    // into subsequent QPC materialization after `chords` is dropped.
     sky_player::adapter_support::build_onset_plan_with_memory_accounting(
         &chords,
         &sky_app_core::song::SKY_SCAN_CODES,
         schedule.hold_us,
         chords.capacity(),
-        temporary_retained_capacity_bytes,
+        caller_retained_capacity_bytes,
         || cancelled.load(Ordering::Acquire),
     )
     .map_err(|error| format!("native onset plan construction failed: {error}"))
@@ -3416,6 +3393,132 @@ mod preparation_cancellation_tests {
             executor_memory.struct_bytes,
             executor_memory.total_bytes,
             compile_memory.phase_peak_capacity_bytes,
+        );
+    }
+
+    #[test]
+    fn spilled_chord_memory_accounting_counts_once_and_drops_temporary_inputs() {
+        let wide_codes = vec![0x15, 0x16, 0x17, 0x18, 0x19, 0x23];
+        assert!(wide_codes.len() > 4, "must spill SmallVec<[u16; 4]>");
+        let schedule = sky_app_core::song::ScheduleMetadata {
+            chords: vec![
+                sky_app_core::song::OnsetChord {
+                    at_us: 0,
+                    scan_codes: wide_codes.clone(),
+                },
+                sky_app_core::song::OnsetChord {
+                    at_us: 50_000,
+                    scan_codes: wide_codes,
+                },
+            ],
+            hold_us: 16_667,
+            source_duration_us: 66_667,
+            playback_duration_us: 66_667,
+            duration_us: 66_667,
+            note_count: 12,
+            deduplicated_note_count: 12,
+            duplicate_note_count: 0,
+            impossible_same_key_repeats: 0,
+            max_polyphony: 6,
+            shortest_same_key_interval_us: Some(50_000),
+            min_same_key_up_gap_us: Some(33_333),
+            short_up_gap_repeat_count: 0,
+            recommended_hold_frames: None,
+            recommended_tempo_scale: None,
+            warnings: Vec::new(),
+        };
+        let source_capacity_bytes =
+            super::schedule_metadata_heap_capacity_bytes(&schedule).expect("source capacity");
+        let external_retained = 4096usize;
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+        let compiled = super::compile_dispatch_schedule_with_checkpoint(
+            &schedule,
+            external_retained,
+            &cancelled,
+            |_| {},
+        )
+        .expect("spilled chord compile");
+        let cm = compiled.compile_memory();
+
+        // Caller retained excludes temporary OnsetChordInput headers and spilled SmallVec payloads.
+        assert_eq!(
+            cm.caller_retained_capacity_bytes,
+            external_retained + source_capacity_bytes
+        );
+        // Core counts input Vec headers + spilled scan-code capacity once.
+        let min_input_bytes = schedule.chords.len()
+            * std::mem::size_of::<sky_player::adapter_support::OnsetChordInput>()
+            + schedule.chords.len() * 6 * std::mem::size_of::<u16>();
+        assert!(
+            cm.input_capacity_bytes >= min_input_bytes,
+            "input_capacity_bytes ({}) must include headers and spilled scan codes (>= {min_input_bytes})",
+            cm.input_capacity_bytes
+        );
+        assert_eq!(
+            cm.phase_peak_capacity_bytes,
+            cm.caller_retained_capacity_bytes
+                + cm.input_capacity_bytes
+                + cm.schedule_capacity_bytes
+        );
+
+        // Near-budget boundary: exact remaining budget succeeds (would fail if spilled bytes were double-counted).
+        let budget = sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES;
+        let exact_external =
+            budget - source_capacity_bytes - cm.input_capacity_bytes - cm.schedule_capacity_bytes;
+        let at_limit = super::compile_dispatch_schedule_with_checkpoint(
+            &schedule,
+            exact_external,
+            &cancelled,
+            |_| {},
+        )
+        .expect("exact budget boundary must succeed without double-counting spilled scan codes");
+        assert_eq!(at_limit.compile_memory().phase_peak_capacity_bytes, budget);
+        assert_eq!(
+            at_limit.compile_memory().caller_retained_capacity_bytes,
+            exact_external + source_capacity_bytes
+        );
+
+        // Materialization after temporary inputs are dropped must not carry temporary input bytes
+        // as retained caller storage; prepared chord storage fits in the remaining budget when
+        // prepared_plan_bytes <= input_capacity_bytes.
+        let qpc_hz = std::num::NonZeroU64::new(1_000_000).expect("qpc");
+        let prepared = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
+            &compiled,
+            qpc_hz,
+            cm.caller_retained_capacity_bytes,
+        )
+        .expect("prepared materialization");
+        let plan_memory = compiled.memory_metrics().expect("plan memory");
+        let source_plan_bytes = plan_memory.heap_payload_bytes + plan_memory.struct_bytes;
+        let materialize_overlap = cm.caller_retained_capacity_bytes
+            + source_plan_bytes
+            + prepared.memory_metrics().plan_capacity_bytes;
+        assert_eq!(
+            prepared.memory_metrics().overlapping_peak_capacity_bytes,
+            materialize_overlap.max(cm.phase_peak_capacity_bytes)
+        );
+
+        // 1 byte over budget must fail cleanly.
+        let over_limit = super::compile_dispatch_schedule_with_checkpoint(
+            &schedule,
+            exact_external + 1,
+            &cancelled,
+            |_| {},
+        );
+        assert!(over_limit.is_err(), "1 byte over budget must be rejected");
+
+        // Overflow must fail cleanly via checked arithmetic without huge allocation.
+        let overflow = super::compile_dispatch_schedule_with_checkpoint(
+            &schedule,
+            usize::MAX,
+            &cancelled,
+            |_| {},
+        );
+        assert!(
+            overflow
+                .expect_err("usize::MAX must overflow")
+                .contains("overflow")
         );
     }
 

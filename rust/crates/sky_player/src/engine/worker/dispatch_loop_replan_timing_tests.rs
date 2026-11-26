@@ -54,7 +54,10 @@ pub(super) fn stage_from_worker_outer_evaluation(
             epoch,
         )
         .expect("worker scheduler evaluation");
-    assert!(matches!(action, super::super::SchedulerAction::Send { .. }));
+    assert!(matches!(
+        action,
+        sky_dispatch_core::executor::DispatchDecision::Send { .. }
+    ));
     let send_action = action_to_stage.expect("due scheduler action stages a packet");
     let candidate = super::super::stage_scheduler_send_candidate(
         send_action,
@@ -192,7 +195,7 @@ fn immediate_resume_worker_decision_sends_due_down_before_retired_cleanup_floor(
     .expect("first worker scheduler decision after Resume");
     assert!(matches!(
         first_action,
-        super::super::SchedulerAction::Send {
+        sky_dispatch_core::executor::DispatchDecision::Send {
             up_mask: 0,
             down_chord: Some(chord),
             timing_window,
@@ -202,7 +205,7 @@ fn immediate_resume_worker_decision_sends_due_down_before_retired_cleanup_floor(
     ));
     assert!(matches!(
         action_to_stage,
-        Some(super::super::SchedulerAction::Send {
+        Some(sky_dispatch_core::executor::DispatchDecision::Send {
             up_mask: 0,
             down_chord: Some(chord),
             ..
@@ -358,14 +361,14 @@ fn assert_fresh_up_admission_was_used(harness: &ProductionDispatchTestHarness) {
 }
 
 fn up_only_send_action(
-    action: Option<super::super::SchedulerAction>,
-) -> super::super::SchedulerAction {
-    let Some(action @ super::super::SchedulerAction::Send { .. }) = action else {
+    action: Option<sky_dispatch_core::executor::DispatchDecision>,
+) -> sky_dispatch_core::executor::DispatchDecision {
+    let Some(action @ sky_dispatch_core::executor::DispatchDecision::Send { .. }) = action else {
         panic!("scheduler must stage an Up-only packet");
     };
     assert!(matches!(
         action,
-        super::super::SchedulerAction::Send {
+        sky_dispatch_core::executor::DispatchDecision::Send {
             up_mask: 1,
             down_chord: None,
             ..
@@ -376,7 +379,7 @@ fn up_only_send_action(
 
 fn stage_scheduler_action(
     harness: &mut ProductionDispatchTestHarness,
-    action: super::super::SchedulerAction,
+    action: sky_dispatch_core::executor::DispatchDecision,
 ) -> crate::engine::worker::StagedCandidate {
     super::super::stage_scheduler_send_candidate(
         action,
@@ -453,7 +456,7 @@ fn scheduler_selects_independent_up_before_down_and_replans_after_interrupt() {
         .expect("production scheduler evaluation before Up deadline");
     assert!(matches!(
         action,
-        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == up_deadline
+        sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } if deadline_qpc == up_deadline
     ));
     assert_eq!(up_deadline, up_hold_floor);
     assert!(up_deadline < down_authored_target);
@@ -505,7 +508,7 @@ fn scheduler_selects_independent_up_before_down_and_replans_after_interrupt() {
         .expect("scheduler re-evaluation after interrupt");
     assert!(matches!(
         replanned_action,
-        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == replanned_deadline
+        sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } if deadline_qpc == replanned_deadline
     ));
     assert_eq!(replanned_deadline, up_deadline);
     let replanned_candidate =

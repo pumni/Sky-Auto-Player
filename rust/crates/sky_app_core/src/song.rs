@@ -284,10 +284,9 @@ pub(crate) fn build_schedule_from_scaled_onsets(
     if !tempo_scale.is_finite() || tempo_scale <= 0.0 {
         return Err(SongError::InvalidTempo);
     }
-    // The authored Up follows the Down by H. Same-key repeats need no second
-    // post-Up floor; an Up at the next Down timestamp is ordered first.
-    let target_hold_us = policy.min_hold_us;
-    let min_hold_us = policy.min_hold_us;
+    // All onset chords share the materialized hold floor H; nominal Up-to-Down
+    // gaps and polyphony below are diagnostic only.
+    let hold_us = policy.min_hold_us;
     let raw_count = drafts.len();
     let mut seen = BTreeSet::new();
     drafts.retain(|(at, scan, _)| seen.insert((*at, *scan)));
@@ -309,20 +308,16 @@ pub(crate) fn build_schedule_from_scaled_onsets(
         if let Some(next_at) = next_at {
             let interval = next_at.saturating_sub(*at);
             shortest = Some(shortest.map_or(interval, |current: u64| current.min(interval)));
-            if interval < min_hold_us {
+            if interval < hold_us {
                 impossible += 1;
-            } else if interval - min_hold_us < policy.frame_us {
+            } else if interval - hold_us < policy.frame_us {
                 short_up_gap_repeat_count += 1;
             }
-        }
-        let actual_hold = target_hold_us;
-        if let Some(next_at) = next_at {
-            let gap = next_at.saturating_sub(*at).saturating_sub(actual_hold);
+            let gap = interval.saturating_sub(hold_us);
             min_up_gap = Some(min_up_gap.map_or(gap, |current: u64| current.min(gap)));
         }
         // Validate that every onset can accommodate the materialized pulse hold.
-        at.checked_add(actual_hold)
-            .ok_or(SongError::TimingOverflow)?;
+        at.checked_add(hold_us).ok_or(SongError::TimingOverflow)?;
         let entry = chords_by_time.entry(*at).or_default();
         if !entry.contains(scan) {
             entry.push(*scan);
@@ -332,13 +327,13 @@ pub(crate) fn build_schedule_from_scaled_onsets(
         .into_iter()
         .map(|(at_us, scan_codes)| OnsetChord { at_us, scan_codes })
         .collect::<Vec<_>>();
-    let max_polyphony = max_polyphony(&chords, target_hold_us);
+    let max_polyphony = max_polyphony(&chords, hold_us);
     let duration = chords
         .last()
         .map(|chord| {
             chord
                 .at_us
-                .checked_add(target_hold_us)
+                .checked_add(hold_us)
                 .ok_or(SongError::TimingOverflow)
         })
         .transpose()?
@@ -346,10 +341,10 @@ pub(crate) fn build_schedule_from_scaled_onsets(
     let mut warnings = Vec::new();
     let (recommended_hold_frames, recommended_tempo_scale) = if impossible > 0 {
         if let Some(shortest) = shortest {
-            let suggestion = bounded_tempo_scale_recommendation(if min_hold_us == 0 {
+            let suggestion = bounded_tempo_scale_recommendation(if hold_us == 0 {
                 tempo_scale
             } else {
-                tempo_scale * shortest as f64 / min_hold_us as f64
+                tempo_scale * shortest as f64 / hold_us as f64
             });
             if suggestion.is_none() {
                 warnings.push(
@@ -369,11 +364,11 @@ pub(crate) fn build_schedule_from_scaled_onsets(
         .map(|(at, _, _)| *at)
         .max()
         .unwrap_or_default()
-        .checked_add(target_hold_us)
+        .checked_add(hold_us)
         .ok_or(SongError::TimingOverflow)?;
     Ok(ScheduleMetadata {
         chords,
-        hold_us: target_hold_us,
+        hold_us,
         source_duration_us,
         playback_duration_us: duration,
         duration_us: duration,

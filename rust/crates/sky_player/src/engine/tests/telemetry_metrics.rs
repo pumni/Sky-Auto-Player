@@ -1267,6 +1267,317 @@ fn invalid_instrument_profile_is_rejected_before_worker_start() {
 }
 
 #[test]
+fn permuted_and_differing_plan_registry_rejected_before_worker_start() {
+    let permuted_plan = sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x16],
+        }],
+        &[0x16, 0x15],
+        20_000,
+    )
+    .expect("permuted allowlist builds a valid core plan");
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let options = test_session_options(
+        permuted_plan,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    let error = NativeDispatchSession::new(options)
+        .err()
+        .expect("permuted registry must be rejected against canonical profile");
+    assert!(error.contains("native instrument profile admission failed"));
+    assert!(error.contains("slot 0 expects scan code 0x16"));
+    assert_eq!(send_calls.load(Ordering::SeqCst), 0);
+
+    let differing_plan = sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x02],
+        }],
+        &[0x02, 0x16],
+        20_000,
+    )
+    .expect("differing allowlist builds a valid core plan");
+    let options = test_session_options(
+        differing_plan,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    let error = NativeDispatchSession::new(options)
+        .err()
+        .expect("differing registry must be rejected against canonical profile");
+    assert!(error.contains("native instrument profile admission failed"));
+    assert!(error.contains("slot 0 expects scan code 0x2"));
+
+    let mut non_canonical_spec = InstrumentKeyProfileSpec::canonical();
+    non_canonical_spec.keys[0] = PhysicalKey {
+        scan_code: 0x02,
+        extended: false,
+    };
+    let mut canonical_options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    canonical_options.instrument_key_profile = Some(non_canonical_spec);
+    let error = NativeDispatchSession::new(canonical_options)
+        .err()
+        .expect("canonical plan must be rejected against mismatched non-canonical profile");
+    assert!(error.contains("native instrument profile admission failed"));
+    assert!(error.contains("slot 0 expects scan code 0x15"));
+}
+
+#[test]
+fn matching_canonical_prefix_and_noncanonical_profiles_emit_and_attribute_intended_scan_codes() {
+    // 1. Full 15-key canonical registry with default canonical profile.
+    let canonical_full = sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15, 0x35],
+        }],
+        &sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES,
+        1_000,
+    )
+    .expect("canonical full plan");
+    let full_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut full_script = FaultInjectionScript::none();
+    full_script.send_input_capture = Some(Arc::clone(&full_capture));
+    let full_session = NativeDispatchSession::new(test_session_options(
+        canonical_full,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: full_script,
+        },
+    ))
+    .expect("canonical full profile must admit");
+    start_with_test_wall_clock_slack(&full_session);
+    assert!(
+        full_session
+            .join(Duration::from_secs(5))
+            .expect("full join")
+    );
+    let full_snapshot = full_session.snapshot();
+    assert_eq!(full_snapshot.status, "finished");
+    assert_eq!(full_snapshot.generation_accounting.released, 2);
+    let expected_mask = (1u16 << 0) | (1u16 << 14);
+    assert!(matches!(
+        full_capture.lock().expect("full capture").as_slice(),
+        [
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask,
+                },
+                ..
+            },
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask,
+                    down_mask: 0,
+                },
+                ..
+            }
+        ] if *down_mask == expected_mask && *up_mask == expected_mask
+    ));
+
+    // 2. Supported prefix registry with canonical profile.
+    let canonical_prefix = sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15, 0x16],
+        }],
+        &[0x15, 0x16],
+        1_000,
+    )
+    .expect("canonical prefix plan");
+    let prefix_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut prefix_script = FaultInjectionScript::none();
+    prefix_script.send_input_capture = Some(Arc::clone(&prefix_capture));
+    let prefix_session = NativeDispatchSession::new(test_session_options(
+        canonical_prefix,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: prefix_script,
+        },
+    ))
+    .expect("canonical prefix profile must admit");
+    start_with_test_wall_clock_slack(&prefix_session);
+    assert!(
+        prefix_session
+            .join(Duration::from_secs(5))
+            .expect("prefix join")
+    );
+    assert_eq!(prefix_session.snapshot().status, "finished");
+    assert!(matches!(
+        prefix_capture.lock().expect("prefix capture").as_slice(),
+        [
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 0b11,
+                },
+                ..
+            },
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0b11,
+                    down_mask: 0,
+                },
+                ..
+            }
+        ]
+    ));
+
+    // 3. Matching non-canonical profile: prove both packet emission and
+    // cleanup/release scan-code attribution match the non-canonical mapping.
+    let mut non_canonical_spec = InstrumentKeyProfileSpec::canonical();
+    non_canonical_spec.keys[0] = PhysicalKey {
+        scan_code: 0x02,
+        extended: false,
+    };
+    non_canonical_spec.keys[1] = PhysicalKey {
+        scan_code: 0x03,
+        extended: false,
+    };
+    let non_canonical_plan = sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x02, 0x03],
+        }],
+        &[0x02, 0x03],
+        1_000,
+    )
+    .expect("non-canonical plan");
+    let nc_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut nc_script = FaultInjectionScript::none();
+    nc_script.send_input_capture = Some(Arc::clone(&nc_capture));
+    let mut nc_options = test_session_options(
+        non_canonical_plan,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: nc_script,
+        },
+    );
+    nc_options.instrument_key_profile = Some(non_canonical_spec);
+    let nc_session = NativeDispatchSession::new(nc_options).expect("non-canonical must admit");
+    start_with_test_wall_clock_slack(&nc_session);
+    assert!(nc_session.join(Duration::from_secs(5)).expect("nc join"));
+    let nc_snapshot = nc_session.snapshot();
+    assert_eq!(nc_snapshot.status, "finished");
+    assert_eq!(nc_snapshot.generation_accounting.released, 2);
+    assert_eq!(nc_snapshot.possibly_active_count, 0);
+    assert_eq!(nc_snapshot.final_release_obligation_mask, 0);
+    assert_eq!(nc_snapshot.failed_release_count, 0);
+    assert!(matches!(
+        nc_capture.lock().expect("nc capture").as_slice(),
+        [
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 0b11,
+                },
+                ..
+            },
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0b11,
+                    down_mask: 0,
+                },
+                ..
+            }
+        ]
+    ));
+
+    // Also prove physical release attribution under cleanup emits 0x02/0x03 (not 0x15/0x16).
+    let cleanup_plan = sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x02, 0x03],
+        }],
+        &[0x02, 0x03],
+        500_000,
+    )
+    .expect("non-canonical cleanup plan");
+    let cleanup_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut cleanup_script = FaultInjectionScript::none();
+    cleanup_script.send_call_count = Some(Arc::clone(&send_calls));
+    cleanup_script.send_input_capture = Some(Arc::clone(&cleanup_capture));
+    let mut cleanup_options = test_session_options(
+        cleanup_plan,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: cleanup_script,
+        },
+    );
+    cleanup_options.instrument_key_profile = Some(non_canonical_spec);
+    let cleanup_session =
+        NativeDispatchSession::new(cleanup_options).expect("non-canonical cleanup must admit");
+    start_with_test_wall_clock_slack(&cleanup_session);
+    let down_deadline = Instant::now() + Duration::from_secs(3);
+    while send_calls.load(Ordering::SeqCst) < 1 {
+        assert!(Instant::now() < down_deadline, "timed out waiting for Down");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    cleanup_session.quit().expect("quit while chord active");
+    assert!(
+        cleanup_session
+            .join(Duration::from_secs(5))
+            .expect("cleanup join")
+    );
+    let cleanup_snapshot = cleanup_session.snapshot();
+    assert_eq!(cleanup_snapshot.outcome.as_deref(), Some("quit"));
+    assert_eq!(cleanup_snapshot.possibly_active_count, 0);
+    assert_eq!(cleanup_snapshot.final_release_obligation_mask, 0);
+    assert_eq!(cleanup_snapshot.failed_release_count, 0);
+    assert!(matches!(
+        cleanup_capture.lock().expect("cleanup capture").as_slice(),
+        [
+            MockSendInputCapture::Packet {
+                packet: PhysicalPacket {
+                    up_mask: 0,
+                    down_mask: 0b11,
+                },
+                ..
+            },
+            MockSendInputCapture::SingleEmitter {
+                scan_codes,
+                key_up: true,
+            }
+        ] if scan_codes == &[0x02, 0x03]
+    ));
+}
+
+#[test]
 fn large_runtime_schedule_starts_and_quits_cleanly() {
     const CHORD_COUNT: usize = 50_000;
     let mut chords = Vec::with_capacity(CHORD_COUNT);
