@@ -25,7 +25,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
         <p class="trust-download__platform">{data.platformSummary}</p>
       </div>
       <div class="trust-download__cta-action">
-        <a class="button button--secondary trust-download__button" href={SITE.stableReleaseUrl}>
+        <a class="trust-download__button" href={SITE.stableReleaseUrl}>
           {data.releaseLinkLabel}
           <span aria-hidden="true">↗</span>
         </a>
@@ -69,178 +69,32 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
 
 <style>
   @layer components {
-    .trust-download {
-      padding-block-end: var(--home-band-space);
-    }
-    .trust-download__layout {
-      display: grid;
-      border: 1px solid var(--line-default);
-      border-radius: 0.9rem;
-      background: var(--color-surface-quiet);
-    }
-    .trust-download__cta {
-      display: grid;
-      justify-items: center;
-      gap: 1.5rem;
-      padding: clamp(1.5rem, 4.5vw, 3.5rem);
-      border-radius: 0.875rem 0.875rem 0 0;
-      background: var(--color-surface-instrument);
-      text-align: center;
-    }
-    .trust-download__cta-copy,
-    .trust-download__cta-action {
-      display: grid;
-      justify-items: center;
-      gap: 0.75rem;
-    }
-    .trust-download__cta h2 {
-      margin: 0;
-      font-size: clamp(2rem, 1.4rem + 2.1vw, 3.5rem);
-      line-height: 1.12;
-    }
-    .trust-download__platform {
-      margin: 0;
-      color: var(--color-text-secondary);
-      font-size: var(--home-lead);
-      line-height: 1.6;
-    }
-    .trust-download__cta-action {
-      gap: 0.625rem;
-    }
-    .trust-download__button {
-      min-block-size: 3.25rem;
-      padding-inline: 1.5rem;
-      gap: 0.625rem;
-      background: var(--color-surface-quiet);
-    }
-    .trust-download__destination {
-      margin: 0;
-      color: var(--color-text-secondary);
-      font-size: var(--type-small);
-      line-height: 1.5;
-    }
-    .trust-download__details {
-      display: grid;
-      gap: 2rem;
-      padding: clamp(1.5rem, 4vw, 3.5rem);
-      border-block-start: 1px solid var(--line-default);
-      color: var(--color-text-secondary);
-      font-size: var(--type-body);
-      line-height: 1.7;
-    }
-    .trust-download__details > div {
-      display: grid;
-      align-content: start;
-      gap: 1rem;
-      min-inline-size: 0;
-    }
-    .trust-download__details h3 {
-      margin: 0;
-      color: var(--color-text-primary);
-      font-size: clamp(1.25rem, 1rem + 0.5vw, 1.6rem);
-      line-height: 1.35;
-    }
-    .trust-download__details p {
-      margin: 0;
-    }
-    .trust-download__warning {
-      padding: 1rem;
-      border-inline-start: 2px solid var(--color-action);
-      background: var(--color-surface-instrument);
-      border-radius: var(--radius-xs);
-    }
-    .trust-download code {
-      overflow-wrap: anywhere;
-      color: var(--color-text-primary);
-      font-size: 0.95em;
-    }
-    .trust-download__safety-link,
-    .trust-download__support-links a {
-      display: inline-flex;
-      min-block-size: 2.75rem;
-      align-items: center;
-      color: var(--color-text-primary);
-      text-decoration: underline;
-      text-decoration-color: var(--color-info);
-      text-underline-offset: 0.2em;
-    }
-    .trust-download__safety-link {
-      justify-self: start;
-    }
-    .trust-download__support {
-      display: grid;
-      gap: 0.75rem;
-      border-block-start: 1px solid var(--line-default);
-      font-size: var(--type-body);
-      padding: 1.5rem clamp(1.5rem, 4vw, 3.5rem);
-    }
-    .trust-download__support > span {
-      color: var(--color-text-primary);
-      font-weight: 600;
-    }
-    .trust-download__support-links {
-      display: grid;
-      gap: 0.5rem;
-      padding: 0;
-      margin: 0;
-      list-style: none;
-    }
-    .trust-download__support-links a {
-      display: flex;
-      justify-content: space-between;
-      block-size: 100%;
-      gap: 1rem;
-      padding: 0.625rem 0.875rem;
-      border: 1px solid var(--line-default);
-      border-radius: var(--radius-sm);
-      text-decoration: none;
-      background: var(--color-surface-instrument);
-    }
-
-    .trust-download__support-links a:hover,
-    .trust-download__safety-link:hover {
-      color: var(--color-action);
-    }
+    .trust-download { padding-block-end: var(--home-band-space); }
+    .trust-download__layout { display: grid; gap: 2rem; }
+    .trust-download__cta { display: grid; align-items: center; gap: 1rem; padding-block: 1.875rem; border-block: 1px solid var(--line-default); }
+    .trust-download__cta h2 { margin: 0; font-size: clamp(1.8125rem, 3vw, 2.625rem); line-height: 1.12; letter-spacing: -0.045em; }
+    .trust-download__platform { margin: 0.5rem 0 0; color: var(--color-text-secondary); font-size: 0.9375rem; }
+    .trust-download__cta-action { display: grid; justify-items: start; }
+    .trust-download__button, .trust-download__safety-link, .trust-download__support-links a { display: inline-flex; align-items: center; gap: 0.5625rem; min-block-size: 44px; color: var(--color-text-primary); font-weight: 600; text-decoration: underline; text-decoration-color: var(--color-info); text-underline-offset: 0.25em; }
+    .trust-download__button:hover, .trust-download__safety-link:hover, .trust-download__support-links a:hover { color: var(--color-action); }
+    .trust-download__destination { margin: 0; color: var(--color-text-secondary); font-size: 0.8125rem; }
+    .trust-download__details { display: grid; gap: clamp(2rem, 6vw, 5.625rem); color: var(--color-text-secondary); font-size: 0.9375rem; line-height: 1.65; }
+    .trust-download__details > div { min-inline-size: 0; }
+    .trust-download__details h3 { margin: 0 0 0.75rem; color: var(--color-text-primary); font-size: 1.1875rem; line-height: 1.35; }
+    .trust-download__details p { max-inline-size: 56ch; margin: 0.5rem 0 0; }
+    .trust-download__details .trust-download__warning { margin-block-start: 1rem; padding-inline-start: 0.875rem; border-inline-start: 2px solid var(--color-action); }
+    .trust-download code { overflow-wrap: anywhere; color: var(--color-text-primary); font-size: 0.95em; }
+    .trust-download__support { display: grid; align-items: center; gap: 0.5rem; padding-block-start: 1.375rem; border-block-start: 1px solid var(--line-default); }
+    .trust-download__support > span { color: var(--color-text-primary); font-size: 1.125rem; font-weight: 600; }
+    .trust-download__support-links { display: flex; flex-wrap: wrap; gap: 0.25rem 1.875rem; padding: 0; margin: 0; list-style: none; }
+    .trust-download__support-links a { font-size: 0.875rem; }
     @media (min-width: 48rem) {
-      .trust-download__cta {
-        grid-template-columns: minmax(0, 1fr) auto;
-        justify-items: stretch;
-        align-items: center;
-        gap: 2rem;
-        text-align: start;
-      }
-      .trust-download__cta-copy {
-        justify-items: start;
-      }
-      .trust-download__cta-action {
-        justify-self: end;
-      }
-      .trust-download__support {
-        grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
-        align-items: center;
-        gap: 2rem;
-      }
-
-      .trust-download__support-links {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 0.75rem;
-      }
-
-      .trust-download__details {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: clamp(2rem, 5vw, 4rem);
-      }
+      .trust-download__cta { grid-template-columns: minmax(0, 1fr) auto; gap: 2rem; }
+      .trust-download__cta-action { justify-self: end; }
+      .trust-download__details, .trust-download__support { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (forced-colors: active) {
-      .trust-download__cta {
-        background: Canvas;
-      }
-      .trust-download__layout,
-      .trust-download__details,
-      .trust-download__support,
-      .trust-download__support-links a {
-        border-color: CanvasText;
-      }
+      .trust-download__cta, .trust-download__support, .trust-download__warning { border-color: CanvasText; }
     }
   }
 </style>

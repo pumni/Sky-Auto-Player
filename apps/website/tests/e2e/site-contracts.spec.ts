@@ -164,13 +164,15 @@ test.describe('published route and asset contracts', () => {
   }) => {
     for (const root of ['/Sky-Auto-Player/', '/Sky-Auto-Player/vi/']) {
       await page.goto(root);
-      for (const selector of ['.header-download', '.hero__primary', '.trust-download__button']) {
+      await expect(page.locator('.header-download')).toHaveCount(0);
+      for (const selector of ['.hero__primary', '.trust-download__button']) {
         await expect(page.locator(selector)).toHaveAttribute('href', stableReleaseUrl);
       }
       await expect(page.locator('footer a[href="' + officialReleasesUrl + '"]')).toHaveCount(1);
       await expect(page.locator('main')).not.toContainText(/\bv?\d+\.\d+\.\d+\b/);
       for (const route of ['faq/', 'guides/windows-setup/']) {
         await page.goto(root + route);
+        await expect(page.locator('.header-download')).toHaveAttribute('href', stableReleaseUrl);
         expect(
           await page.locator('main a[href="' + stableReleaseUrl + '"]').count(),
         ).toBeGreaterThan(0);

@@ -42,6 +42,10 @@ test.describe('computed contrast in the localized global shell', () => {
   for (const route of ['/', '/vi/'] as const) {
     test(route + ' selected language and release action have readable text', async ({ page }) => {
       await page.goto(origin + route);
+      await expect(page.locator('.home-language')).toBeVisible();
+      expect(await contrastRatio(page, '.home-language')).toBeGreaterThanOrEqual(4.5);
+      await expect(page.locator('.header-download')).toHaveCount(0);
+      await page.goto(origin + route + 'faq/');
       const activeLanguage = page.locator(".locale-switch__option[aria-current='page']");
       const releases = page.locator('.header-download');
 

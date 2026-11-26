@@ -9,27 +9,28 @@ export const homeVi: HomeContent = {
       'Trình phát sheet nhạc miễn phí, mã nguồn mở cho Sky trên Windows 11. Dùng sheet của bạn hoặc chọn bài từ thư viện tích hợp.',
   },
   navigation: {
-    overview: 'Tổng quan',
-    howItWorks: 'Cách hoạt động',
+    overview: 'Sản phẩm',
+    howItWorks: 'Bắt đầu',
     guides: 'Hướng dẫn',
     faq: 'FAQ',
     github: 'GitHub',
     release: 'Tải xuống',
   },
   hero: {
-    title: 'Mang âm nhạc đến thế giới Sky.',
+    eyebrow: 'Miễn phí và mã nguồn mở',
+    titleStart: 'Âm nhạc của bạn.',
+    titleEnd: 'Trong Sky.',
     description:
       'Tự động phát sheet nhạc trong Sky: Children of the Light. Chọn bài có sẵn hoặc nhập sheet của bạn.',
-    secondaryCta: 'Khám phá ứng dụng',
-    meta: 'Windows 11 64-bit · Miễn phí, mã nguồn mở · GitHub Releases',
+    secondaryCta: 'Bắt đầu',
+    meta: 'Windows 11 64-bit · GitHub Releases',
     riskNote:
       'Dự án không chính thức. Tự động phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky.',
   },
   product: {
     title: 'Khám phá trình phát',
-    description: 'Tìm và chuẩn bị sheet nhạc.',
     selectorLabel: 'Chọn giao diện trình phát',
-    fullSizeLabel: 'Xem ảnh kích thước đầy đủ',
+    fullSizeLabel: 'Xem ảnh đầy đủ',
     fallbackLabel: 'Mở giao diện trình phát khác',
     pendingMessage: 'Đang tải ảnh xem trước…',
     errorMessage: 'Không tải được ảnh xem trước. Hãy thử lại hoặc mở ảnh trực tiếp.',
@@ -69,7 +70,9 @@ export const homeVi: HomeContent = {
     ],
   },
   playback: {
-    title: 'Chủ động với nhịp điệu',
+    kicker: 'Phát nhạc và timing',
+    demoTitle: 'Minh họa phát nhạc',
+    title: 'Chủ động với nhịp điệu.',
     description:
       'Phát nốt đơn, hợp âm và nốt ngân theo sheet nhạc. Tùy chỉnh tốc độ và thời gian giữ phím.',
     dryRunTitle: 'Chạy thử trước khi chơi',
@@ -94,7 +97,8 @@ export const homeVi: HomeContent = {
     secondsAbbreviation: 'giây',
   },
   quickStart: {
-    title: 'Bắt đầu chơi nhạc trong 3 bước',
+    title: 'Từ sheet đến bản nhạc.',
+    description: 'Bắt đầu chơi nhạc trong 3 bước.',
     items: [
       {
         title: 'Cài đặt ứng dụng',
@@ -121,9 +125,9 @@ export const homeVi: HomeContent = {
     formatsHref: '/vi/guides/sheet-formats/',
   },
   trust: {
-    title: 'Tải Sky Auto Player',
+    title: 'Trước khi cài đặt.',
     platformSummary: 'Windows 11 64-bit · Miễn phí, mã nguồn mở',
-    releaseLinkLabel: 'Lấy bộ cài Windows',
+    releaseLinkLabel: 'Lấy bộ cài ổn định',
     releaseDestinationNote: 'Mở GitHub Releases',
     installationTitle: 'Cài đặt',
     installerGuidance: 'Chọn bộ cài Windows ổn định có tên kết thúc bằng',

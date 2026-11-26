@@ -15,8 +15,8 @@ test.describe('accessibility and responsive contracts', () => {
   }
 
   for (const locale of [
-    { route: '/', heading: 'Bring your music into Sky.', cta: 'Download for Windows' },
-    { route: '/vi/', heading: 'Mang âm nhạc đến thế giới Sky.', cta: 'Tải cho Windows' },
+    { route: '/', heading: 'Your music. Into Sky.', cta: 'Download for Windows' },
+    { route: '/vi/', heading: 'Âm nhạc của bạn. Trong Sky.', cta: 'Tải cho Windows' },
   ]) {
     test(`${locale.route} keeps the five-chapter narrative, anchors, and release journey`, async ({
       page,
@@ -41,7 +41,8 @@ test.describe('accessibility and responsive contracts', () => {
       await expect(
         page.locator('.site-header .button--primary, main .button--primary'),
       ).toHaveCount(1);
-      await expect(page.locator('.header-download')).toHaveAttribute('href', releaseUrl);
+      await expect(page.locator('.header-download')).toHaveCount(0);
+      await expect(page.locator('.home-language')).toBeVisible();
       await expect(page.locator('.trust-download__button')).toHaveAttribute('href', releaseUrl);
       await expect(page.locator('#formats code')).toHaveText(['.json', '.skysheet', '.txt']);
       await expect(page.locator('#formats p')).toContainText('JSON');
@@ -55,7 +56,7 @@ test.describe('accessibility and responsive contracts', () => {
         'href',
         /guides\/troubleshooting\/$/,
       );
-      await expect(page.locator('.hero__secondary')).toHaveAttribute('href', '#product');
+      await expect(page.locator('.hero__secondary')).toHaveAttribute('href', '#how-it-works');
       await expect(page.locator('.hero__description')).not.toContainText(
         /QPC|SendInput|foreground/i,
       );
@@ -109,7 +110,11 @@ test.describe('accessibility and responsive contracts', () => {
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await page.goto(home);
       await page.locator('.hero__secondary').press('Enter');
-      await expect(page).toHaveURL(/#product$/);
+      await expect(page).toHaveURL(/#how-it-works$/);
+      await readAnchor(page, 'how-it-works');
+      if (!desktop) await page.locator('.menu-toggle').click();
+      await page.locator('.site-nav a[href$="#product"]').press('Enter');
+      await expect(page.locator('#product')).toBeFocused();
       await readAnchor(page, 'product');
       if (!desktop) await page.locator('.menu-toggle').click();
       await page.locator('.site-nav a[href$="#how-it-works"]').press('Enter');
@@ -171,20 +176,20 @@ test.describe('accessibility and responsive contracts', () => {
       });
     }
 
-    test(`${route} keeps the 320px brand and release action visually separate`, async ({
+    test(`${route} keeps the 320px brand and language action visually separate`, async ({
       page,
     }) => {
       await page.setViewportSize({ width: 320, height: 844 });
       await page.goto(`/Sky-Auto-Player${route}`);
       const rightEdge = await page.evaluate(() => {
         const brandText = document.querySelector('.brand > span:last-child')!;
-        const releaseAction = document.querySelector('.site-actions')!;
+        const languageAction = document.querySelector('.site-actions')!;
         return {
           brandText: brandText.getBoundingClientRect().right,
-          releaseAction: releaseAction.getBoundingClientRect().left,
+          languageAction: languageAction.getBoundingClientRect().left,
         };
       });
-      expect(rightEdge.brandText).toBeLessThanOrEqual(rightEdge.releaseAction);
+      expect(rightEdge.brandText).toBeLessThanOrEqual(rightEdge.languageAction);
     });
   }
 
@@ -200,14 +205,14 @@ test.describe('accessibility and responsive contracts', () => {
         const bounds = (selector: string) =>
           document.querySelector(selector)!.getBoundingClientRect();
         const contentGaps = [
-          bounds('#product').top - bounds('#top').bottom,
-          bounds('.playback-demo__header').top - bounds('#product').bottom,
-          bounds('.quick-start__layout').top - bounds('.playback-demo__support').bottom,
+          bounds('.product-showcase__features').top - Math.max(bounds('#top').bottom, bounds('#product').bottom),
+          bounds('#playback').top - bounds('.product-showcase__features').bottom,
+          bounds('.quick-start__layout').top - bounds('#playback').bottom,
           bounds('.trust-download__layout').top - bounds('.quick-start__resources').bottom,
         ];
         const footer = document.querySelector('.site-footer__layout')!.getBoundingClientRect();
         const rails = [
-          '#product',
+          '.home-intro__layout',
           '.playback-demo__layout',
           '.quick-start__layout',
           '.trust-download__layout',
@@ -225,17 +230,16 @@ test.describe('accessibility and responsive contracts', () => {
       });
       expect(spacing.gaps).toHaveLength(4);
       const [opening, firstBand, secondBand, closing] = spacing.gaps;
-      expect(opening).toBeGreaterThanOrEqual(32);
-      expect(opening).toBeLessThanOrEqual(64.1);
-      const band = Math.min(128, Math.max(64, width * 0.08));
-      expect(firstBand).toBeGreaterThanOrEqual(2 * band - 1);
-      expect(secondBand).toBeGreaterThanOrEqual(2 * band - 1);
+      const band = Math.min(116, Math.max(64, width * 0.08));
+      expect(opening).toBeGreaterThanOrEqual(27);
+      expect(opening).toBeLessThanOrEqual(77);
+      expect(Math.abs(firstBand)).toBeLessThanOrEqual(2);
+      expect(secondBand).toBeGreaterThanOrEqual(band - 1);
+      expect(secondBand).toBeLessThanOrEqual(band + 2);
       expect(closing).toBeGreaterThanOrEqual(band - 1);
-      expect(firstBand).toBeLessThanOrEqual(2 * band + 2);
-      expect(secondBand).toBeLessThanOrEqual(2 * band + 2);
       expect(closing).toBeLessThanOrEqual(band + 2);
       expect(spacing.footerLeft).toBeGreaterThanOrEqual(16);
-      expect(spacing.footerWidth).toBeLessThanOrEqual(1200.5);
+      expect(spacing.footerWidth).toBeLessThanOrEqual(1280.5);
       const rail = spacing.rails[0];
       expect(rail.left).toBeGreaterThanOrEqual(16);
       expect(rail.right).toBeLessThanOrEqual(spacing.viewport - 16);
@@ -244,7 +248,7 @@ test.describe('accessibility and responsive contracts', () => {
         expect(Math.abs(aligned.right - rail.right)).toBeLessThanOrEqual(1);
         expect(Math.abs(aligned.width - rail.width)).toBeLessThanOrEqual(1);
       }
-      if (width === 1440 || width === 1920) expect(rail.width).toBeCloseTo(1120, 0);
+      if (width === 1440 || width === 1920) expect(rail.width).toBeCloseTo(1280, 0);
     }
 
     await page.goto('/Sky-Auto-Player/faq/');
@@ -302,13 +306,14 @@ test.describe('accessibility and responsive contracts', () => {
             documentWidth: document.documentElement.scrollWidth,
             viewportWidth: document.documentElement.clientWidth,
             rail: [
-              bounds('#product'),
+              bounds('.home-intro__layout'),
               bounds('.playback-demo__layout'),
               bounds('.quick-start__layout'),
               bounds('.trust-download__layout'),
             ],
             productImage: bounds('[data-product-image]'),
-            productIntro: bounds('.product-showcase__intro'),
+            hero: bounds('#top'),
+            product: bounds('#product'),
             productSelector: bounds('.product-selector'),
             setupGuide: bounds('.quick-start__setup'),
             formats: bounds('.quick-start__formats'),
@@ -355,25 +360,19 @@ test.describe('accessibility and responsive contracts', () => {
           'playback-demo__stage',
           'playback-demo__support',
         ]);
-        expect(geometry.playbackHeader.bottom).toBeLessThanOrEqual(geometry.playbackStage.top);
-
-        if (viewport.width >= 1280) {
-          expect(product.width).toBeCloseTo(1120, 0);
+        expect(geometry.playbackKeys.top).toBeGreaterThan(geometry.playbackTimeline.bottom);
+        expect(geometry.productSelector.bottom).toBeLessThanOrEqual(geometry.productImage.top);
+        if (viewport.width >= 1440) {
+          expect(product.width).toBeCloseTo(1280, 0);
         }
-        expect(geometry.playbackStage.width).toBeCloseTo(playback.width, 0);
-        expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(
-          geometry.playbackStage.bottom + 20,
-        );
         if (viewport.width >= 1024) {
-          expect(geometry.productSelector.left).toBeGreaterThanOrEqual(
-            geometry.productIntro.right + 24,
-          );
-          expect(geometry.playbackKeys.left).toBeGreaterThan(geometry.playbackTimeline.right);
+          expect(geometry.product.left).toBeGreaterThan(geometry.hero.right);
+          expect(geometry.playbackStage.left).toBeGreaterThan(geometry.playbackHeader.right);
+          expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(geometry.playbackHeader.bottom);
         } else {
-          expect(geometry.productSelector.top).toBeGreaterThanOrEqual(
-            geometry.productIntro.bottom + 8,
-          );
-          expect(geometry.playbackKeys.top).toBeGreaterThan(geometry.playbackTimeline.bottom);
+          expect(geometry.product.top).toBeGreaterThan(geometry.hero.bottom);
+          expect(geometry.playbackHeader.bottom).toBeLessThanOrEqual(geometry.playbackStage.top);
+          expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(geometry.playbackStage.bottom + 20);
         }
 
         if (viewport.width >= 768) {
@@ -444,7 +443,7 @@ test.describe('accessibility and responsive contracts', () => {
               action.bottom <= risk.top &&
               secondary.bottom <= risk.top &&
               risk.bottom <= hero.bottom &&
-              hero.bottom <= product.top &&
+              (hero.bottom <= product.top || hero.right <= product.left) &&
               selector.bottom <= preview.top,
             productOnscreen:
               preview.left >= 0 && preview.right <= document.documentElement.clientWidth,
@@ -457,12 +456,13 @@ test.describe('accessibility and responsive contracts', () => {
         expect(geometry.openingOrder).toBe(true);
         expect(geometry.heroOnscreen).toBe(true);
         expect(geometry.productOnscreen).toBe(true);
-        expect(geometry.centerOffset).toBeCloseTo(0, 1);
+        if (width < 1024) expect(geometry.centerOffset).toBeCloseTo(0, 1);
+        else expect(geometry.centerOffset).toBeLessThan(0);
         expect(geometry.previewWidth / geometry.previewHeight).toBeCloseTo(1366 / 768, 2);
         expect(geometry.visible).toBeGreaterThanOrEqual(minVisible);
         if (width === 1440) {
-          expect(geometry.previewWidth).toBeGreaterThanOrEqual(960);
-          expect(geometry.previewWidth).toBeLessThanOrEqual(1120);
+          expect(geometry.previewWidth).toBeGreaterThanOrEqual(640);
+          expect(geometry.previewWidth).toBeLessThanOrEqual(800);
         }
         expect(geometry.buttons).toHaveLength(3);
         for (const button of geometry.buttons) expect(button).toBeGreaterThanOrEqual(44);
@@ -1129,7 +1129,8 @@ test.describe('accessibility and responsive contracts', () => {
     await page.goto('/Sky-Auto-Player/');
     await expect(page.locator('main h1')).toBeVisible();
     await expect(page.locator('.site-nav')).toBeVisible();
-    await expect(page.locator('.header-download')).toBeVisible();
+    await expect(page.locator('.header-download')).toHaveCount(0);
+    await expect(page.locator('.home-language')).toBeVisible();
     await expect(page.locator('.menu-toggle')).toBeHidden();
     await expect(page.locator('.site-nav')).toHaveCSS('position', 'static');
     await expect(page.locator('.product-selector')).toBeHidden();
@@ -1201,7 +1202,7 @@ test.describe('accessibility and responsive contracts', () => {
     page,
   }) => {
     await page.goto('/Sky-Auto-Player/vi/');
-    await expect(page.locator('main h1')).toHaveText('Mang âm nhạc đến thế giới Sky.');
+    await expect(page.locator('main h1')).toHaveText('Âm nhạc của bạn. Trong Sky.');
     const primaryAction = page.locator('.hero__actions .button').first();
     await primaryAction.focus();
     await expect(primaryAction).toBeFocused();
@@ -1221,7 +1222,7 @@ test.describe('accessibility and responsive contracts', () => {
   }) => {
     for (const route of ['/', '/vi/']) {
       await page.goto('/Sky-Auto-Player' + route);
-      const features = page.locator('#product .product-showcase__features');
+      const features = page.locator('.home-intro .product-showcase__features');
       await expect(features.getByRole('heading', { level: 3 })).toHaveText(
         route === '/'
           ? ['Bring your own sheets', 'Check compatibility before playing']

@@ -9,26 +9,27 @@ export const homeEn: HomeContent = {
       'A free, open-source music sheet player for Sky on Windows 11. Bring your own sheets or choose from the built-in song library.',
   },
   navigation: {
-    overview: 'Overview',
-    howItWorks: 'How it works',
+    overview: 'Product',
+    howItWorks: 'Getting started',
     guides: 'Guides',
     faq: 'FAQ',
     github: 'GitHub',
     release: 'Download',
   },
   hero: {
-    title: 'Bring your music into Sky.',
+    eyebrow: 'Free and open source',
+    titleStart: 'Your music.',
+    titleEnd: 'Into Sky.',
     description:
       'Automatically play music sheets in Sky: Children of the Light. Choose a song or import your own sheet.',
-    secondaryCta: 'Explore the player',
-    meta: 'Windows 11 x64 · Free and open source · GitHub Releases',
+    secondaryCta: 'Getting started',
+    meta: 'Windows 11 x64 · GitHub Releases',
     riskNote: 'Unofficial project. Automated playback may conflict with Sky’s Terms of Service.',
   },
   product: {
     title: 'Explore the player',
-    description: 'Browse and prepare your sheets.',
     selectorLabel: 'Choose a player view',
-    fullSizeLabel: 'View full size',
+    fullSizeLabel: 'Full size',
     fallbackLabel: 'Open another player view',
     pendingMessage: 'Loading preview…',
     errorMessage: 'The preview could not load. Try again or open it directly.',
@@ -69,7 +70,9 @@ export const homeEn: HomeContent = {
     ],
   },
   playback: {
-    title: 'Shape your playback',
+    kicker: 'Playback & timing',
+    demoTitle: 'Playback demo',
+    title: 'Make the timing yours.',
     description: 'Play notes, chords and holds from the sheet. Adjust tempo and key-hold duration.',
     dryRunTitle: 'Try your settings first',
     dryRunNote:
@@ -94,7 +97,8 @@ export const homeEn: HomeContent = {
     secondsAbbreviation: 's',
   },
   quickStart: {
-    title: 'Start playing in three steps',
+    title: 'From sheet to song.',
+    description: 'Start playing in three steps.',
     items: [
       {
         title: 'Install',
@@ -121,9 +125,9 @@ export const homeEn: HomeContent = {
     formatsHref: '/guides/sheet-formats/',
   },
   trust: {
-    title: 'Get Sky Auto Player',
+    title: 'Before you install.',
     platformSummary: 'Windows 11 x64 · Free and open source',
-    releaseLinkLabel: 'Get the installer',
+    releaseLinkLabel: 'Get the stable installer',
     releaseDestinationNote: 'Opens GitHub Releases',
     installationTitle: 'Installation',
     installerGuidance: 'Choose the stable Windows installer ending in',

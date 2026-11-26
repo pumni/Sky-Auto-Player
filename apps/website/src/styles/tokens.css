@@ -5,17 +5,17 @@
     color-scheme: dark;
 
     /* Raw palette; component styles consume the semantic roles below. */
-    --night-0: #07090d;
-    --night-1: #0a0e14;
-    --night-2: #111821;
-    --night-3: #18212b;
-    --night-4: #202c37;
-    --ink-0: #f4efe3;
-    --ink-1: #b8b4ab;
-    --ink-2: #92958f;
-    --gold-1: #efca78;
-    --gold-2: #f7dda2;
-    --sky-1: #b8ccd6;
+    --night-0: #111315;
+    --night-1: #191c1f;
+    --night-2: #212529;
+    --night-3: #303539;
+    --night-4: #3c3428;
+    --ink-0: #f3f2ef;
+    --ink-1: #b4b9bc;
+    --ink-2: #92999e;
+    --gold-1: #f1d19a;
+    --gold-2: #ffe2b0;
+    --sky-1: #cbdde6;
 
     --color-page: var(--night-0);
     --color-surface-quiet: var(--night-1);
@@ -36,8 +36,8 @@
     --color-interactive-pressed: var(--color-surface-stage);
     --color-interactive-selected: var(--color-info);
 
-    --line-faint: rgb(244 239 227 / 10%);
-    --line-default: rgb(244 239 227 / 18%);
+    --line-faint: rgb(243 242 239 / 10%);
+    --line-default: #34393d;
 
     --font-display: 'Playfair Display Variable', Georgia, 'Times New Roman', serif;
     --font-body: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
@@ -84,19 +84,7 @@
   @layer tokens {
     :root {
       --color-error: oklch(80% 0.087 20);
-      --night-0: oklch(11% 0.015 255);
-      --night-1: oklch(14% 0.018 252);
-      --night-2: oklch(18% 0.022 248);
-      --night-3: oklch(22% 0.025 244);
-      --night-4: oklch(26% 0.028 240);
-      --ink-0: oklch(96% 0.018 84);
-      --ink-1: oklch(82% 0.014 82);
-      --ink-2: oklch(68% 0.012 82);
-      --gold-1: oklch(84% 0.105 84);
-      --gold-2: oklch(90% 0.075 86);
-      --sky-1: oklch(80% 0.045 224);
       --line-faint: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
-      --line-default: color-mix(in oklch, var(--color-text-primary) 15%, transparent);
     }
   }
 }

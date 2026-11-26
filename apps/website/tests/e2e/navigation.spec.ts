@@ -177,12 +177,12 @@ test.describe('navigation and route contracts', () => {
       const nav = page.locator('.site-nav');
 
       await toggle.click();
-      await page.locator('.header-download').evaluate((element) => {
+      await page.locator('.home-language').evaluate((element) => {
         element.addEventListener('click', (event) => event.preventDefault(), { once: true });
       });
-      await page.locator('.header-download').click();
+      await page.locator('.home-language').click();
       await expect(nav).toHaveAttribute('aria-hidden', 'true');
-      await expect(page.locator('.header-download')).toBeFocused();
+      await expect(page.locator('.home-language')).toBeFocused();
       expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
 
       await toggle.click();
@@ -322,20 +322,23 @@ test.describe('navigation and route contracts', () => {
     });
   }
 
-  test('mobile and tablet headers keep the release action visible outside the menu', async ({
-    page,
-  }) => {
-    for (const width of [390, 768]) {
+  test('Home language switch stays outside the menu and documentation retains the release action', async ({ page }) => {
+    for (const width of [320, 390, 768]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto('/Sky-Auto-Player/');
-      const releases = page.locator('.header-download');
-      await expect(releases).toBeVisible();
-      await expect(releases).toHaveAttribute(
-        'href',
-        'https://github.com/pumni/Sky-Auto-Player/releases/latest',
-      );
-      await expect(releases).toHaveAccessibleName(/GitHub Releases/);
+      await expect(page.locator('.header-download')).toHaveCount(0);
+      await expect(page.locator('.home-language')).toBeVisible();
+      await expect(page.locator('.home-language')).toHaveAttribute('href', '/Sky-Auto-Player/vi/');
       await expect(page.locator('.menu-toggle')).toBeVisible();
+      await page.locator('.home-language').click();
+      await expect(page).toHaveURL(/\/vi\/$/);
+      await expect(page.locator('.home-language')).toHaveAttribute('href', '/Sky-Auto-Player/');
+      await page.locator('.home-language').click();
+      await expect(page).toHaveURL(/\/Sky-Auto-Player\/$/);
+      await page.goto('/Sky-Auto-Player/faq/');
+      await expect(page.locator('.header-download')).toBeVisible();
+      await expect(page.locator('.header-download')).toHaveAttribute('href', 'https://github.com/pumni/Sky-Auto-Player/releases/latest');
+      await expect(page.locator('.header-download')).toHaveAccessibleName(/GitHub Releases/);
     }
   });
 

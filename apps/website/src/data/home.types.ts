@@ -13,7 +13,9 @@ export interface HomeContent {
     release: string;
   };
   hero: {
-    title: string;
+    eyebrow: string;
+    titleStart: string;
+    titleEnd: string;
     description: string;
     secondaryCta: string;
     meta: string;
@@ -21,7 +23,6 @@ export interface HomeContent {
   };
   product: {
     title: string;
-    description: string;
     selectorLabel: string;
     fullSizeLabel: string;
     fallbackLabel: string;
@@ -41,6 +42,7 @@ export interface HomeContent {
   };
   quickStart: {
     title: string;
+    description: string;
     items: { title: string; description: string }[];
     setupGuideTitle: string;
     setupGuideDescription: string;
@@ -53,6 +55,8 @@ export interface HomeContent {
     formatsHref: string;
   };
   playback: {
+    kicker: string;
+    demoTitle: string;
     title: string;
     description: string;
     dryRunTitle: string;

@@ -32,11 +32,11 @@ const timingGuide = withBase(
 >
   <div class="container playback-demo__layout">
     <header class="playback-demo__header">
+      <p class="playback-demo__kicker">{data.kicker}</p>
       <h2 id="playback-title">{data.title}</h2>
       <p class="playback-demo__description">{data.description}</p>
     </header>
 
-    <div class="playback-demo__body">
       <div
         class="playback-demo__stage"
         data-playback-demo
@@ -50,6 +50,8 @@ const timingGuide = withBase(
         data-replay-label={data.replay}
         data-locale={locale}
       >
+        <div class="playback-demo__instrument-header">
+          <strong>{data.demoTitle}</strong>
         <div class="playback-demo__time" aria-hidden="true">
           <span data-elapsed>{formatPlaybackTime(0, locale)}</span>
           <span>
@@ -58,6 +60,7 @@ const timingGuide = withBase(
           </span>
         </div>
 
+        </div>
         <div class="playback-timeline" style={`--playback-columns: ${timelineColumns}`}>
           <div
             class="playback-timeline__track"
@@ -159,10 +162,7 @@ const timingGuide = withBase(
         <p class="sr-only" role="status" aria-live="polite" data-demo-status>
           {data.initialStatus}
         </p>
-      </div>
-
-      <aside class="playback-demo__support">
-        <div>
+        <div class="playback-demo__note">
           <p class="playback-demo__timing-note" id="timing-model">
             {data.demoNote}
           </p>
@@ -170,141 +170,40 @@ const timingGuide = withBase(
             {data.timingLinkLabel}
           </a>
         </div>
+      </div>
+
+      <aside class="playback-demo__support">
         <div class="playback-demo__dry-run">
           <h3>{data.dryRunTitle}</h3>
           <p>{data.dryRunNote}</p>
         </div>
       </aside>
-    </div>
   </div>
 </section>
 
 <style>
   @layer components {
-    .playback-demo {
-      padding-block: var(--home-band-space);
-      background: var(--color-surface-quiet);
-      border-block: 1px solid var(--line-default);
-    }
-    .playback-demo__layout,
-    .playback-demo__header,
-    .playback-demo__body {
-      display: grid;
-      gap: var(--home-content-gap);
-    }
-    .playback-demo__header {
-      gap: 1rem;
-    }
-    .playback-demo__header h2 {
-      max-inline-size: 20ch;
-      margin: 0;
-      font-size: var(--home-heading);
-      line-height: 1.12;
-    }
-    .playback-demo__description {
-      max-inline-size: 44ch;
-      margin: 0;
-      color: var(--color-text-secondary);
-      font-size: var(--home-lead);
-      line-height: 1.6;
-    }
-    .playback-demo__body {
-      gap: 1.5rem;
-    }
-    .playback-demo__stage {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr);
-      gap: 1.25rem;
-      align-items: start;
-      min-inline-size: 0;
-      padding: clamp(1rem, 3.5vw, 3rem);
-      border: 1px solid var(--line-default);
-      border-radius: 1rem;
-      background: var(--color-surface-instrument);
-      box-shadow: none;
-    }
-    .playback-demo__support {
-      display: grid;
-      gap: 1.5rem;
-      align-items: start;
-    }
-    .playback-demo__support > div {
-      display: grid;
-      align-content: start;
-      gap: 0.75rem;
-      min-inline-size: 0;
-      padding: 1.25rem 0 0;
-      border: 0;
-
-      border-block-start: 1px solid var(--line-default);
-    }
-    .playback-demo__dry-run h3 {
-      margin: 0;
-      font-size: clamp(1.2rem, 1rem + 0.5vw, 1.5rem);
-      line-height: 1.35;
-    }
-    .playback-demo__dry-run p,
-    .playback-demo__timing-note {
-      max-inline-size: 55ch;
-      margin: 0;
-      color: var(--color-text-secondary);
-      font-size: var(--type-body);
-      line-height: 1.7;
-    }
-    .playback-demo__timing-link {
-      display: inline-flex;
-      min-block-size: 2.75rem;
-      align-items: center;
-      justify-self: start;
-      color: var(--color-text-primary);
-      font-size: var(--type-small);
-      text-decoration: underline;
-      text-decoration-color: var(--color-info);
-      text-underline-offset: 0.22em;
-    }
-    .playback-demo__time {
-      display: flex;
-      gap: 0.25rem;
-      margin: 0;
-      color: var(--color-text-secondary);
-      font-size: var(--type-body);
-      font-weight: 600;
-      font-variant-numeric: tabular-nums;
-    }
-    @media (min-width: 48rem) {
-      .playback-demo__support {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        align-items: stretch;
-        gap: clamp(2rem, 5vw, 4rem);
-      }
-    }
+    .playback-demo { padding-block: var(--home-band-space); background: var(--color-surface-quiet); border-block: 1px solid var(--line-default); }
+    .playback-demo__layout { display: grid; gap: 1.875rem; }
+    .playback-demo__kicker { margin: 0 0 1rem; font-size: 0.8125rem; color: var(--color-text-tertiary); font-weight: 550; }
+    .playback-demo__header h2 { margin: 0; font-size: var(--home-heading); line-height: 1.12; letter-spacing: -0.045em; }
+    .playback-demo__description { max-inline-size: 47ch; margin: 1.125rem 0 0; color: var(--color-text-secondary); font-size: var(--home-lead); line-height: 1.65; }
+    .playback-demo__stage { display: grid; gap: 1.25rem; align-items: start; min-inline-size: 0; padding: clamp(1rem, 2.5vw, 2.125rem); border: 1px solid #414649; border-radius: 1.0625rem; background: var(--color-page); }
+    .playback-demo__instrument-header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; font-size: 0.875rem; }
+    .playback-demo__time { display: flex; gap: 0.25rem; margin: 0; color: var(--color-text-secondary); font: 500 0.8125rem/1.4 var(--font-mono); }
+    .playback-demo__support { padding-block-start: 1.5rem; border-block-start: 1px solid var(--line-default); }
+    .playback-demo__dry-run h3 { margin: 0; font-size: 1.125rem; }
+    .playback-demo__dry-run p, .playback-demo__timing-note { max-inline-size: 55ch; margin: 0.5rem 0 0; color: var(--color-text-secondary); font-size: 0.9375rem; line-height: 1.65; }
+    .playback-demo__note { display: grid; justify-items: start; gap: 0.25rem; }
+    .playback-demo__timing-note { font-size: 0.8125rem; margin: 0; }
+    .playback-demo__timing-link { display: inline-flex; min-block-size: 44px; align-items: center; color: var(--color-text-primary); font-size: 0.8125rem; text-decoration: underline; text-decoration-color: var(--color-info); text-underline-offset: 0.22em; }
     @media (min-width: 64rem) {
-      .playback-demo__header {
-        grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
-        align-items: end;
-        gap: 3rem;
-      }
-      .playback-demo__stage {
-        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
-        gap: 1.25rem 3rem;
-      }
-      .playback-demo__time {
-        grid-column: 1;
-        grid-row: 1;
-      }
-      .playback-timeline {
-        grid-column: 1;
-        grid-row: 2;
-      }
-      .playback-keyboard {
-        grid-column: 2;
-        grid-row: 1 / span 3;
-      }
-      .playback-demo__controls-wrap {
-        grid-column: 1;
-        grid-row: 3;
-      }
+      .playback-demo__layout { grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr); grid-template-rows: 1fr 1fr; column-gap: clamp(2.25rem, 6vw, 5.875rem); row-gap: 2rem; }
+      .playback-demo__header { grid-column: 1; grid-row: 1; align-self: end; }
+      .playback-demo__stage { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+      .playback-demo__support { grid-column: 1; grid-row: 2; align-self: start; }
     }
+    @media (max-width: 21.875rem) { .playback-demo__stage { padding: 0.75rem; } }
     .playback-timeline__track {
       position: relative;
       block-size: 0.625rem;
@@ -362,7 +261,7 @@ const timingGuide = withBase(
       padding-inline-start: 0.5rem;
       border-inline-start: 2px solid transparent;
       color: var(--color-text-secondary);
-      font-size: var(--type-small);
+      font-size: 0.8125rem;
       line-height: 1.35;
     }
 
@@ -406,20 +305,21 @@ const timingGuide = withBase(
 
     .playback-key {
       display: grid;
-      min-block-size: clamp(2.75rem, 4vw, 4.5rem);
+      min-block-size: 3.125rem;
       place-items: center;
       border: 1px solid var(--line-default);
       box-shadow: inset 0 -2px var(--line-default);
       border-radius: 0.5rem;
       background: var(--color-surface-quiet);
       color: var(--color-text-secondary);
-      font-size: var(--type-body);
+      font-size: 0.875rem;
       font-variant-numeric: tabular-nums;
       transition:
         background-color var(--duration-press) var(--ease-standard),
         color var(--duration-press) var(--ease-standard),
         border-color var(--duration-press) var(--ease-standard),
         box-shadow var(--duration-press) var(--ease-standard);
+      font-family: var(--font-mono);
     }
 
     .playback-key.is-active {
@@ -452,16 +352,17 @@ const timingGuide = withBase(
     }
 
     .playback-demo__play {
-      min-block-size: 3rem;
+      min-block-size: 2.75rem;
       min-inline-size: 0;
       border-radius: var(--radius-sm);
       background: var(--color-surface-active);
+      font-size: 0.875rem;
     }
 
     .playback-demo__step {
       display: grid;
-      inline-size: 3rem;
-      block-size: 3rem;
+      inline-size: 2.75rem;
+      block-size: 2.75rem;
       place-items: center;
       border: 1px solid var(--color-interactive-border);
       border-radius: var(--radius-sm);
@@ -518,7 +419,7 @@ const timingGuide = withBase(
         border-color: CanvasText;
       }
       .playback-demo__stage,
-      .playback-demo__support > div {
+      .playback-demo__support {
         border-color: CanvasText;
       }
 

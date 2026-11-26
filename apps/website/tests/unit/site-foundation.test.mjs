@@ -108,8 +108,8 @@ test('the signature demo uses the approved event intervals, keys, and visible ti
 });
 
 test('the hero leads with concise product value and both locales disclose the release journey', () => {
-  expect(homeEn.hero.title).toBe('Bring your music into Sky.');
-  expect(homeVi.hero.title).toBe('Mang âm nhạc đến thế giới Sky.');
+  expect([homeEn.hero.titleStart, homeEn.hero.titleEnd].join(' ')).toBe('Your music. Into Sky.');
+  expect([homeVi.hero.titleStart, homeVi.hero.titleEnd].join(' ')).toBe('Âm nhạc của bạn. Trong Sky.');
   expect(homeEn.downloadCta).toBe('Download for Windows');
   expect(homeVi.downloadCta).toBe('Tải cho Windows');
   expect(homeEn.hero.meta).toContain('GitHub Releases');
@@ -205,7 +205,7 @@ test('fallback colors and the declared cascade remain available before optional 
     /@layer reset, tokens, theme, base, layout, patterns, components, utilities;/,
   );
   expect(tokens.indexOf('--color-page: var(--night-0)')).toBeLessThan(tokens.indexOf('@supports'));
-  expect(tokens.indexOf('--night-0: #07090d')).toBeLessThan(tokens.indexOf('@supports'));
+  expect(tokens.indexOf('--night-0: #111315')).toBeLessThan(tokens.indexOf('@supports'));
   expect(tokens.indexOf('--color-action: var(--gold-1)')).toBeLessThan(tokens.indexOf('@supports'));
   expect(tokens).toContain('@supports (color: oklch(50% 0.1 100))');
 });
