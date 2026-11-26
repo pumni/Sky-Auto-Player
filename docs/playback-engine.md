@@ -120,7 +120,14 @@ Timing and telemetry use five distinct timestamp concepts:
 - **Pre-call**: the QPC sample captured immediately before `SendInput`.
 - **Completion**: the QPC sample captured immediately after `SendInput` returns.
 - **Diagnostic nominal release**: derived on demand for reporting/telemetry as
-  `down_onset_ticks + H_ticks`; it is never an execution gate.
+  `ceil((onset_us + H_us) * f / 1e6)` (distinct from the physical lower-bound
+  `ceil(onset_us * f / 1e6) + ceil(H_us * f / 1e6)`, which can differ by one
+  tick at non-integral QPC frequencies); it is never an execution gate.
+- **Origin onset attribution (`source_action_index`)**: under the onset-only
+  plan, `source_action_index` identifies the originating onset chord for both
+  Down records and their derived Up-slot records (rather than the retired
+  interleaved paired-action index). Historical telemetry readers retain their
+  historical paired-action meaning.
 
 Resume waits for verified cleanup, a
 reconciled release journal, current generation and foreground ownership, a

@@ -1279,8 +1279,8 @@ fn large_runtime_schedule_starts_and_quits_cleanly() {
     }
     let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15], 20_000)
         .expect("large schedule must compile");
-    assert_eq!(schedule.chords.len(), CHORD_COUNT);
-    assert_eq!(schedule.generation_count, CHORD_COUNT as u64);
+    assert_eq!(schedule.chords().len(), CHORD_COUNT);
+    assert_eq!(schedule.generation_count(), CHORD_COUNT as u64);
 
     let session = NativeDispatchSession::new(test_session_options(
         schedule,

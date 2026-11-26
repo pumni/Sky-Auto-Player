@@ -42,7 +42,7 @@ fn prepare_test_schedule(
     sky_player::adapter_support::PreparedDispatchSchedule::prepare(
         schedule,
         qpc.frequency_hz(),
-        schedule.compile_memory.caller_retained_capacity_bytes,
+        schedule.compile_memory().caller_retained_capacity_bytes,
     )
     .expect("prepare native test schedule before session admission")
 }

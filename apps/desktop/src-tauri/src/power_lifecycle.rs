@@ -750,7 +750,7 @@ mod tests {
             let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
                 &plan,
                 qpc.frequency_hz(),
-                plan.compile_memory.caller_retained_capacity_bytes,
+                plan.compile_memory().caller_retained_capacity_bytes,
             )
             .expect("prepare callback-test schedule before session admission");
             NativeSessionOptions {

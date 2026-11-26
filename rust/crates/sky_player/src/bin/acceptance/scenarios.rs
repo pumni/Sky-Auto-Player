@@ -417,17 +417,42 @@ pub(super) fn acceptance_min_hold_us_for_fps(timing_margin_us: u64, game_fps: u1
     ACCEPTANCE_HOLD_FRAMES * frame_period_us(game_fps) + timing_margin_us
 }
 
+pub(super) fn scenario_uses_isolated_long_hold(scenario: Scenario) -> bool {
+    matches!(
+        scenario,
+        Scenario::Hold
+            | Scenario::CleanupFullRelease
+            | Scenario::StopCleanup
+            | Scenario::SkipCleanup
+            | Scenario::PauseResumeActiveCleanup
+            | Scenario::SuspendResume
+            | Scenario::ModifierHeldAfterOwned
+    )
+}
+
+pub(super) fn workload_definition_identity(scenario: Scenario) -> &'static str {
+    match scenario {
+        Scenario::MixedUpDown => "mixed-up-down-fixed-pulse-v1",
+        Scenario::CanonicalMaxChord => "canonical-max-chord-fixed-pulse-v1",
+        Scenario::DenseAlternating => "dense-alternating-fixed-pulse-v1",
+        Scenario::NearMinimumRetrigger => "near-minimum-retrigger-fixed-pulse-v1",
+        Scenario::LongIdle => "long-idle-fixed-pulse-v1",
+        _ => scenario.label(),
+    }
+}
+
 pub(super) fn scenario_min_hold_us_for_fps(
     scenario: Scenario,
     timing_margin_us: u64,
     game_fps: u16,
 ) -> u64 {
-    let frames = if scenario == Scenario::HolInterleaved {
-        2
-    } else {
-        ACCEPTANCE_HOLD_FRAMES
-    };
-    frames * frame_period_us(game_fps) + timing_margin_us
+    match scenario {
+        Scenario::Hold | Scenario::PauseResumeActiveCleanup | Scenario::SuspendResume => 450_000,
+        Scenario::CleanupFullRelease | Scenario::StopCleanup | Scenario::SkipCleanup => 9_950_000,
+        Scenario::ModifierHeldAfterOwned => 100_000,
+        Scenario::HolInterleaved => 2 * frame_period_us(game_fps) + timing_margin_us,
+        _ => ACCEPTANCE_HOLD_FRAMES * frame_period_us(game_fps) + timing_margin_us,
+    }
 }
 
 const fn frame_period_us(game_fps: u16) -> u64 {
@@ -463,16 +488,14 @@ pub(super) fn production_options_for_fps(
     game_fps: u16,
 ) -> Result<NativeSessionOptions, String> {
     let frame_us = frame_period_us(game_fps);
+    let hold_us = schedule.hold_us();
+    let effective_margin_us = timing_margin_us.min(hold_us);
     let timing = TimingOptions {
         game_fps,
-        min_hold_us: scenario_min_hold_us_for_fps(scenario, timing_margin_us, game_fps),
+        min_hold_us: hold_us,
         frame_us,
-        frame_base_hold_us: if scenario == Scenario::HolInterleaved {
-            2 * frame_us
-        } else {
-            frame_us
-        },
-        timing_margin_us,
+        frame_base_hold_us: hold_us.saturating_sub(effective_margin_us),
+        timing_margin_us: effective_margin_us,
         strict_timing: false,
         strict_down_completion_late_us: 2_000,
         strict_up_completion_late_us: 2_000,
@@ -485,7 +508,7 @@ pub(super) fn production_options_for_fps(
     let prepared_schedule = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc_frequency_hz,
-        schedule.compile_memory.caller_retained_capacity_bytes,
+        schedule.compile_memory().caller_retained_capacity_bytes,
     )
     .map_err(|error| format!("native acceptance schedule Prepare failed: {error}"))?;
     let modifier_key_state_query_for_test =

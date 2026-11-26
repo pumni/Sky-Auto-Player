@@ -56,13 +56,13 @@ fn timed_sample_plan_repeats_each_benchmark_workload_over_15_seconds() {
             .expect("timed schedule has authored groups")["scheduled_us"]
             .as_u64()
             .expect("group timestamps are integers");
-        assert!(repeated.schedule.chords.len() > base.schedule.chords.len());
+        assert!(repeated.schedule.chords().len() > base.schedule.chords().len());
         assert!(last.saturating_sub(first) >= 15_000_000, "{scenario:?}");
         assert_eq!(
             repeated.expected_down_slots.len(),
             repeated
                 .schedule
-                .chords
+                .chords()
                 .iter()
                 .map(|chord| chord.key_mask.count_ones() as usize)
                 .sum::<usize>()
@@ -80,8 +80,8 @@ fn paired_near_minimum_workload_keeps_h_plus_gap_geometry_and_sample_cadence() {
         Some(15),
     )
     .unwrap();
-    let base_chords = &base.schedule.chords;
-    let repeated_chords = &repeated.schedule.chords;
+    let base_chords = base.schedule.chords();
+    let repeated_chords = repeated.schedule.chords();
 
     assert_eq!(base_chords.len(), 4);
     assert_eq!(repeated_chords.len() % base_chords.len(), 0);
@@ -187,24 +187,58 @@ fn paired_workloads_match_the_immutable_pr_base_authored_streams() {
         assert_eq!(sha256, expected_sha256, "{name} full authored stream");
     }
 
-    // MixedUpDown and CanonicalMaxChord now author onset-only fixed-pulse H
-    // chords (no per-note variable hold durations). Verify their 15s cadence
-    // and fixed-pulse hold_us invariants.
+    // Immutable historical paired-hold (50ms / 40ms) PR-base digests are preserved
+    // as historical reference evidence only; candidate fixed-pulse workloads carry
+    // distinct identities and must NOT claim parity with those variable-hold streams.
+    let historical_variable_hold_digests = [
+        (
+            Scenario::MixedUpDown,
+            "mixed-up-down-fixed-pulse-v1",
+            "7d83f78e1166fefd9ac797fd945c612fc169de114eff1f39e86f90d37bde6a0b",
+        ),
+        (
+            Scenario::CanonicalMaxChord,
+            "canonical-max-chord-fixed-pulse-v1",
+            "c6a439e78f5da268af4f272884ba9acc7dde937ba8d46d4a6cbc199ab59e05c0",
+        ),
+    ];
     let expected_hold_us = super::super::scenarios::acceptance_min_hold_us_for_fps(500, 60);
-    for scenario in [Scenario::MixedUpDown, Scenario::CanonicalMaxChord] {
+    for (scenario, expected_identity, historical_sha256) in historical_variable_hold_digests {
+        assert_eq!(
+            super::super::scenarios::workload_definition_identity(scenario),
+            expected_identity
+        );
         let plan = super::super::scenarios::scenario_plan_with_sample_seconds(
             scenario,
             500,
             Some(15),
         )
         .unwrap();
-        assert_eq!(plan.schedule.hold_us, expected_hold_us);
-        assert!(plan.schedule.chords.len() >= 100, "{scenario:?}");
+        assert_eq!(plan.schedule.hold_us(), expected_hold_us);
+        assert!(plan.schedule.chords().len() >= 100, "{scenario:?}");
         let projection = super::super::authored_timestamp_group_projection(&plan.schedule);
         let first = projection.first().unwrap()["scheduled_us"].as_u64().unwrap();
         let last = projection.last().unwrap()["scheduled_us"].as_u64().unwrap();
         assert_eq!(first, 50_000, "{scenario:?}");
         assert!(last.saturating_sub(first) >= 15_000_000, "{scenario:?}");
+        let mut events = Vec::new();
+        for group in &projection {
+            let timestamp_us = group["scheduled_us"].as_u64().unwrap();
+            let up_mask = group["up_mask"].as_u64().unwrap();
+            let down_mask = group["down_mask"].as_u64().unwrap();
+            if up_mask != 0 {
+                events.push(format!("{timestamp_us}:up:{up_mask}"));
+            }
+            if down_mask != 0 {
+                events.push(format!("{timestamp_us}:down:{down_mask}"));
+            }
+        }
+        let digest = Sha256::digest(events.join("|").as_bytes());
+        let candidate_sha256: String = digest.iter().map(|b| format!("{b:02x}")).collect();
+        assert_ne!(
+            candidate_sha256, historical_sha256,
+            "{scenario:?} fixed-pulse candidate stream is distinct from historical variable-hold baseline"
+        );
     }
 }
 

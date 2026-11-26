@@ -40,7 +40,7 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
     let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc.frequency_hz(),
-        schedule.compile_memory.caller_retained_capacity_bytes,
+        schedule.compile_memory().caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
     let player = Arc::new(
@@ -640,7 +640,7 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
     let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc.frequency_hz(),
-        schedule.compile_memory.caller_retained_capacity_bytes,
+        schedule.compile_memory().caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
     let player = Arc::new(
@@ -822,7 +822,7 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
     let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc.frequency_hz(),
-        schedule.compile_memory.caller_retained_capacity_bytes,
+        schedule.compile_memory().caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
     let player = Arc::new(

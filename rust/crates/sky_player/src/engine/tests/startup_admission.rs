@@ -1582,7 +1582,7 @@ fn prepared_schedule_cancellation_completes_before_session_construction() {
     let result = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare_with_cancellation(
         &schedule,
         qpc.frequency_hz(),
-        schedule.compile_memory.caller_retained_capacity_bytes,
+        schedule.compile_memory().caller_retained_capacity_bytes,
         || {
             checkpoints += 1;
             if checkpoints == 8 {
@@ -1743,11 +1743,11 @@ fn actual_b_worker_timestamp_hook_keeps_mixed_floor_held_down_targets_distinct()
         .expect("mixed floor-held timestamp schedule");
     assert!(
         schedule
-            .chords
+            .chords()
             .iter()
             .any(|chord| chord.scheduled_us == 45_000 && chord.key_mask == 0b01)
     );
-    assert_eq!(schedule.hold_us, 20_000);
+    assert_eq!(schedule.hold_us(), 20_000);
     let hook = Arc::new(StartupOrderingHook::default());
     let mut options = test_session_options(
         schedule,
@@ -1794,8 +1794,8 @@ fn actual_b_worker_timestamp_hook_records_up_only_sender_provenance() {
     }];
     let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15], 30_000)
         .expect("Up-only timestamp schedule");
-    assert_eq!(schedule.chords.len(), 1);
-    assert_eq!(schedule.hold_us, 30_000);
+    assert_eq!(schedule.chords().len(), 1);
+    assert_eq!(schedule.hold_us(), 30_000);
 
     let hook = Arc::new(StartupOrderingHook::default());
     let mut options = test_session_options(

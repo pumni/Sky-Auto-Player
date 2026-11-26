@@ -14,6 +14,18 @@ runtime adaptive spin are not deployed. Physical SendInput tests require
 interactive foreground authorization; in unattended CI and automated runs,
 physical SendInput remains **NOT RUN**.
 
+In `rt-native-acceptance`, isolated safety/cleanup fixtures (`Hold`,
+`CleanupFullRelease`, `StopCleanup`, `SkipCleanup`,
+`PauseResumeActiveCleanup`, `SuspendResume`, `ModifierHeldAfterOwned`) use
+explicit scenario-local fixed long `H` values recorded in the report
+(`scenario_hold_us`, `scenario_uses_isolated_long_hold`) so control triggers
+reach actively held keys without altering production defaults. Fixed-pulse
+candidate workloads carry distinct identities
+(`mixed-up-down-fixed-pulse-v1`, `canonical-max-chord-fixed-pulse-v1`) and do
+not claim identity with immutable historical 50 ms / 40 ms variable-hold
+baselines. Historical V1/V2/V3 qualification profiles remain immutable and
+branch-pinned.
+
 ## Evidence reachability
 
 A test of a helper or hand-constructed state proves only that isolated behavior.

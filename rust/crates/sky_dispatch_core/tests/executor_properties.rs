@@ -194,13 +194,13 @@ fn candidate_executor_matches_independent_oracle_across_randomized_workloads() {
         let prepared = PreparedDispatchSchedule::prepare(&plan, freq, 0).expect("prepared plan");
         let hold_ticks = prepared.hold_ticks().as_u64();
         let end_offset_ticks = sky_dispatch_core::executor::us_to_timeline_ticks_ceil(
-            plan.schedule_end_offset_us,
+            plan.schedule_end_offset_us(),
             freq,
         )
         .unwrap()
         .as_u64();
         let oracle_chords: Vec<(u64, u16)> = plan
-            .chords
+            .chords()
             .iter()
             .map(|c| {
                 (
@@ -290,9 +290,9 @@ fn candidate_executor_matches_independent_oracle_across_randomized_workloads() {
 
         exec.check_invariants().expect("invariants");
         let acc = exec.accounting();
-        assert_eq!(acc.total, plan.generation_count);
-        assert_eq!(acc.activated, plan.generation_count);
-        assert_eq!(acc.released, plan.generation_count);
+        assert_eq!(acc.total, plan.generation_count());
+        assert_eq!(acc.activated, plan.generation_count());
+        assert_eq!(acc.released, plan.generation_count());
         assert_eq!(acc.active, 0);
         assert_eq!(acc.scheduled, 0);
     }

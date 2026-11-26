@@ -111,6 +111,54 @@ fn analyze_compiled_variant_with_hook(
     analyze_compiled_stream(compiled, result, policy, cancelled, before_analysis)
 }
 
+/// Count the distinct union of authored onset timestamps (`chord.scheduled_us`)
+/// and nominal release timestamps (`chord.scheduled_us + hold_us`) in O(n) time
+/// and O(1) extra space using two sorted cursors.
+pub(crate) fn count_authored_timestamp_groups(
+    chords: &[sky_player::adapter_support::OnsetChord],
+    hold_us: u64,
+) -> Result<u64, String> {
+    let n = chords.len();
+    let mut i = 0usize;
+    let mut j = 0usize;
+    let mut count = 0u64;
+    while i < n && j < n {
+        let onset_us = chords[i].scheduled_us;
+        let release_us = chords[j]
+            .scheduled_us
+            .checked_add(hold_us)
+            .ok_or_else(|| "nominal release timestamp overflow".to_string())?;
+        match onset_us.cmp(&release_us) {
+            std::cmp::Ordering::Less => i += 1,
+            std::cmp::Ordering::Greater => j += 1,
+            std::cmp::Ordering::Equal => {
+                i += 1;
+                j += 1;
+            }
+        }
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| "timestamp group count overflow".to_string())?;
+    }
+    while j < n {
+        chords[j]
+            .scheduled_us
+            .checked_add(hold_us)
+            .ok_or_else(|| "nominal release timestamp overflow".to_string())?;
+        j += 1;
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| "timestamp group count overflow".to_string())?;
+    }
+    while i < n {
+        i += 1;
+        count = count
+            .checked_add(1)
+            .ok_or_else(|| "timestamp group count overflow".to_string())?;
+    }
+    Ok(count)
+}
+
 fn analyze_compiled_stream(
     compiled: &sky_player::adapter_support::OnsetPlan,
     mut result: GenerationTimingAdvisoryDto,
@@ -124,12 +172,17 @@ fn analyze_compiled_stream(
             "analysis was cancelled before generation inspection",
         );
     }
-    let generation_count = match usize::try_from(compiled.generation_count) {
+    let generation_count = match usize::try_from(compiled.generation_count()) {
         Ok(count) => count,
         Err(_) => return unavailable(result, "The generation count exceeds addressable memory."),
     };
-    result.total_authored_timestamp_group_count = Some(compiled.chords.len() as u64);
-    result.down_generation_count = Some(compiled.generation_count);
+    let timestamp_group_count =
+        match count_authored_timestamp_groups(compiled.chords(), compiled.hold_us()) {
+            Ok(count) => count,
+            Err(reason) => return unavailable(result, &reason),
+        };
+    result.total_authored_timestamp_group_count = Some(timestamp_group_count);
+    result.down_generation_count = Some(compiled.generation_count());
     result.unmatched_up_count = Some(0);
     if generation_count > MAX_TIMING_ADVISORY_GENERATIONS {
         return unavailable(
@@ -181,7 +234,7 @@ fn analyze_compiled_stream(
 
     let mut prior_onset_by_slot: [Option<u64>; sky_player::adapter_support::MAX_KEYS] =
         [None; sky_player::adapter_support::MAX_KEYS];
-    for (index, chord) in compiled.chords.iter().enumerate() {
+    for (index, chord) in compiled.chords().iter().enumerate() {
         if index % 256 == 0 && cancelled.load(Ordering::Acquire) {
             return unavailable(
                 result,
@@ -294,22 +347,30 @@ fn simulate_dispatch_schedule(
     policy: &MaterializedTimingPolicy,
     cancelled: &AtomicBool,
 ) -> Result<DispatchSimulationSummary, String> {
-    let hold_ticks = us_to_ticks_ceil(policy.min_hold_us, MODEL_QPC_FREQUENCY_HZ)?;
-    let mut executor = sky_player::adapter_support::DispatchExecutor::new_with_cancellation(
-        plan,
-        sky_player::adapter_support::DurationTicks::from_raw(hold_ticks),
-        |us| {
-            us_to_ticks_ceil(us, MODEL_QPC_FREQUENCY_HZ)
-                .map(sky_player::adapter_support::TimelineTicks::from_raw)
-        },
-        || {
-            if cancelled.load(Ordering::Acquire) {
-                Err("cancelled".into())
-            } else {
-                Ok(())
-            }
-        },
-    )?;
+    if plan.hold_us() != policy.min_hold_us {
+        return Err(format!(
+            "onset plan hold_us ({}) does not match policy min_hold_us ({})",
+            plan.hold_us(),
+            policy.min_hold_us
+        ));
+    }
+    let model_qpc_hz = std::num::NonZeroU64::new(MODEL_QPC_FREQUENCY_HZ)
+        .ok_or_else(|| "model QPC frequency must be nonzero".to_string())?;
+    let prepared =
+        sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
+            plan,
+            model_qpc_hz,
+            0,
+            || {
+                if cancelled.load(Ordering::Acquire) {
+                    Err("cancelled".into())
+                } else {
+                    Ok(())
+                }
+            },
+        )?;
+    let mut executor =
+        sky_player::adapter_support::DispatchExecutor::from_prepared_schedule(prepared);
     let compiled_metrics = plan
         .memory_metrics()
         .map_err(|error| format!("compiled plan memory accounting failed: {error}"))?;
@@ -333,7 +394,7 @@ fn simulate_dispatch_schedule(
         );
     }
     let epoch = sky_player::adapter_support::QpcTicks::ZERO;
-    let max_iterations = usize::try_from(plan.generation_count)
+    let max_iterations = usize::try_from(plan.generation_count())
         .ok()
         .and_then(|count| count.checked_mul(4))
         .and_then(|count| count.checked_add(2))
@@ -451,15 +512,6 @@ fn simulate_dispatch_schedule(
         return Err("cancelled".into());
     }
     Ok(summary)
-}
-
-fn us_to_ticks_ceil(microseconds: u64, frequency_hz: u64) -> Result<u64, String> {
-    let numerator = u128::from(microseconds)
-        .checked_mul(u128::from(frequency_hz))
-        .and_then(|value| value.checked_add(999_999))
-        .ok_or_else(|| "microseconds-to-QPC conversion overflow".to_string())?;
-    u64::try_from(numerator / 1_000_000)
-        .map_err(|_| "microseconds-to-QPC result exceeds the timeline range".to_string())
 }
 
 fn dispatch_model_unavailable(
@@ -602,7 +654,7 @@ mod tests {
             &AtomicBool::new(false),
         );
         assert_eq!(advisory.status, TimingAdvisoryStatus::ShortUpGapRisk);
-        assert_eq!(advisory.total_authored_timestamp_group_count, Some(2));
+        assert_eq!(advisory.total_authored_timestamp_group_count, Some(3));
         assert_eq!(advisory.down_generation_count, Some(2));
         assert_eq!(advisory.unmatched_up_count, Some(0));
         assert_eq!(advisory.short_up_gap_repeat_count, 1);
@@ -612,6 +664,39 @@ mod tests {
             DispatchModelStatus::ModeledRisk
         );
         assert!(advisory.max_modeled_h_floor_displacement_us > 0);
+    }
+
+    #[test]
+    fn authored_timestamp_group_union_counts_empty_single_coincident_disjoint_and_overflow() {
+        use sky_player::adapter_support::OnsetChord;
+
+        let chord = |chord_index, scheduled_us| OnsetChord {
+            chord_index,
+            scheduled_us,
+            key_mask: 1,
+            source_action_index: chord_index as u32,
+        };
+        assert_eq!(count_authored_timestamp_groups(&[], 17_467).unwrap(), 0);
+        assert_eq!(
+            count_authored_timestamp_groups(&[chord(0, 1_000)], 17_467).unwrap(),
+            2
+        );
+        assert_eq!(
+            count_authored_timestamp_groups(&[chord(0, 1_000)], 0).unwrap(),
+            1
+        );
+        // Coincident: onsets {0, H} U releases {H, 2H} = {0, H, 2H} -> 3 groups
+        assert_eq!(
+            count_authored_timestamp_groups(&[chord(0, 0), chord(1, 17_467)], 17_467).unwrap(),
+            3
+        );
+        // Disjoint: onsets {0, 40_000} U releases {17_467, 57_467} -> 4 groups
+        assert_eq!(
+            count_authored_timestamp_groups(&[chord(0, 0), chord(1, 40_000)], 17_467).unwrap(),
+            4
+        );
+        // Overflow: scheduled_us + hold_us > u64::MAX
+        assert!(count_authored_timestamp_groups(&[chord(0, u64::MAX)], 1).is_err());
     }
 
     #[test]

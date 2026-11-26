@@ -135,11 +135,11 @@ fn authored_timestamp_group_projection(
     schedule: &sky_dispatch_core::model::OnsetPlan,
 ) -> Vec<Value> {
     let mut groups = BTreeMap::<u64, (u16, u16, Vec<u32>, Vec<u32>)>::new();
-    for chord in &schedule.chords {
+    for chord in schedule.chords() {
         let group = groups.entry(chord.scheduled_us).or_default();
         group.1 |= chord.key_mask;
         group.2.push(chord.source_action_index);
-        let nominal_up_us = chord.scheduled_us.saturating_add(schedule.hold_us);
+        let nominal_up_us = chord.scheduled_us.saturating_add(schedule.hold_us());
         let up_group = groups.entry(nominal_up_us).or_default();
         up_group.0 |= chord.key_mask;
         up_group.3.push(chord.source_action_index);
@@ -185,11 +185,24 @@ fn active_cleanup_resume_evidence_is_ordered(
     )
 }
 
-fn active_cleanup_resumed_down_sender_qpc_ticks(telemetry: &Value) -> Option<u64> {
+fn active_cleanup_resumed_down_identity(
+    plan: &sky_dispatch_core::model::OnsetPlan,
+) -> Option<(u32, u16)> {
+    let chord = plan.chords().get(1)?;
+    Some((chord.source_action_index, chord.key_mask))
+}
+
+fn active_cleanup_resumed_down_sender_qpc_ticks(
+    telemetry: &Value,
+    expected_source_action_index: u32,
+    expected_down_mask: u16,
+) -> Option<u64> {
     let records = telemetry.get("records")?.as_array()?;
     let mut resumed_downs = records.iter().filter(|record| {
-        record.get("source_action_index").and_then(Value::as_u64) == Some(2)
-            && record.get("down_mask").and_then(Value::as_u64) == Some(1)
+        record.get("source_action_index").and_then(Value::as_u64)
+            == Some(u64::from(expected_source_action_index))
+            && record.get("down_mask").and_then(Value::as_u64)
+                == Some(u64::from(expected_down_mask))
             && record.get("up_mask").and_then(Value::as_u64) == Some(0)
     });
     let record = resumed_downs.next()?;
@@ -202,6 +215,22 @@ fn active_cleanup_resumed_down_sender_qpc_ticks(telemetry: &Value) -> Option<u64
         return None;
     }
     record.get("pre_call_qpc_ticks").and_then(Value::as_u64)
+}
+
+fn count_telemetry_mixed_packets(telemetry: &Value) -> u64 {
+    telemetry
+        .get("records")
+        .and_then(Value::as_array)
+        .map(|records| {
+            records
+                .iter()
+                .filter(|record| {
+                    record.get("up_mask").and_then(Value::as_u64).unwrap_or(0) != 0
+                        && record.get("down_mask").and_then(Value::as_u64).unwrap_or(0) != 0
+                })
+                .count() as u64
+        })
+        .unwrap_or(0)
 }
 #[derive(Debug, Clone)]
 struct AuthorizedTargets {
@@ -368,6 +397,66 @@ fn reconcile_event_sequence(events: &[EventRecord], expected: &[(&str, PhysicalE
     for (index, (event, (kind, physical))) in events.iter().zip(expected).enumerate() { if event.kind != *kind || physical_event(event) != *physical { return Err(format!("event {index} does not match expected {kind} scan=0x{:02X}", physical.scan_code)); } }
     Ok(())
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MixedUpDownObservation {
+    mixed_order_cycles: usize,
+    split_order_cycles: usize,
+}
+
+fn reconcile_mixed_up_down_events(
+    events: &[EventRecord],
+    down: &[PhysicalExpectation],
+    up: &[PhysicalExpectation],
+) -> Result<MixedUpDownObservation, String> {
+    if down.len() < 2 || down.len() != up.len() || !down.len().is_multiple_of(2) {
+        return Err("mixed-up-down expected Down/Up slots must have equal, nonzero, even counts".into());
+    }
+    let expected_events = down.len() * 2;
+    if events.len() != expected_events {
+        return Err(format!(
+            "mixed-up-down event count {} does not match expected {expected_events}",
+            events.len()
+        ));
+    }
+    let (down_pairs, _) = down.as_chunks::<2>();
+    let (up_pairs, _) = up.as_chunks::<2>();
+    let (event_cycles, _) = events.as_chunks::<4>();
+    let mut mixed_order_cycles = 0usize;
+    let mut split_order_cycles = 0usize;
+    for (cycle_index, (cycle_events, (d, u))) in event_cycles
+        .iter()
+        .zip(down_pairs.iter().zip(up_pairs.iter()))
+        .enumerate()
+    {
+        let mixed_seq = [
+            ("key_press", d[0]),
+            ("key_release", u[0]),
+            ("key_press", d[1]),
+            ("key_release", u[1]),
+        ];
+        let split_seq = [
+            ("key_press", d[0]),
+            ("key_press", d[1]),
+            ("key_release", u[0]),
+            ("key_release", u[1]),
+        ];
+        if reconcile_event_sequence(cycle_events, &mixed_seq).is_ok() {
+            mixed_order_cycles += 1;
+        } else if reconcile_event_sequence(cycle_events, &split_seq).is_ok() {
+            split_order_cycles += 1;
+        } else {
+            return Err(format!(
+                "mixed-up-down cycle {cycle_index} matched neither valid mixed nor valid split per-key order"
+            ));
+        }
+    }
+    Ok(MixedUpDownObservation {
+        mixed_order_cycles,
+        split_order_cycles,
+    })
+}
+
+#[cfg(test)]
 fn expected_mixed_up_down_event_sequence(down: &[PhysicalExpectation], up: &[PhysicalExpectation]) -> Result<Vec<(&'static str, PhysicalExpectation)>, &'static str> {
     if down.len() < 2 || down.len() != up.len() || !down.len().is_multiple_of(2) { return Err("mixed-up-down expected Down/Up slots must have equal, nonzero, even counts"); }
     let (down_pairs, _) = down.as_chunks::<2>(); let (up_pairs, _) = up.as_chunks::<2>();
@@ -484,14 +573,22 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots); let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let active_cleanup_key_mask = plan
         .schedule
-        .chords
+        .chords()
         .first()
         .map(|chord| chord.key_mask & chord.key_mask.wrapping_neg())
         .unwrap_or(0);
+    let resumed_down_identity = (args.scenario == Scenario::PauseResumeActiveCleanup)
+        .then(|| active_cleanup_resumed_down_identity(&plan.schedule))
+        .flatten();
+    let scenario_hold_us = plan.schedule.hold_us();
+    let scenario_uses_isolated_long_hold =
+        self::scenarios::scenario_uses_isolated_long_hold(args.scenario);
+    let workload_definition_identity =
+        self::scenarios::workload_definition_identity(args.scenario);
     let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(args.scenario, plan.profile.as_ref(), &expected_down, &expected_up);
     let authored_timestamp_group_targets = authored_timestamp_group_projection(&plan.schedule);
     let authored_timestamp_group_count = authored_timestamp_group_targets.len();
-    let down_generation_count = plan.schedule.generation_count;
+    let down_generation_count = plan.schedule.generation_count();
     let (mut options, modifier_query_count, modifier_held_latch) =
         match modifier_guard::native_session_options(
             plan.schedule,
@@ -928,10 +1025,15 @@ fn run_windows(args: RunArgs) -> i32 {
     let down_sender_attempt_count = acceptance_hook
         .as_deref()
         .map(|hook| hook.down_sender_attempt_count());
-    let resume_down_sender_pre_call_qpc_ticks =
-        (args.scenario == Scenario::PauseResumeActiveCleanup)
-            .then(|| active_cleanup_resumed_down_sender_qpc_ticks(&timing_telemetry))
-            .flatten();
+    let resume_down_sender_pre_call_qpc_ticks = resumed_down_identity
+        .and_then(|(expected_source_index, expected_down_mask)| {
+            active_cleanup_resumed_down_sender_qpc_ticks(
+                &timing_telemetry,
+                expected_source_index,
+                expected_down_mask,
+            )
+        });
+    let observed_telemetry_mixed_packet_count = count_telemetry_mixed_packets(&timing_telemetry);
     let mut details = snapshot_json(&snapshot); attach_sink_window_provenance(&mut details, &fresh_sink, sink_cursor, &sink_events, sink_expected_down.len() + sink_expected_up.len(), args.scenario);
     if let Value::Object(object) = &mut details {
         object.insert("calibration_placement".to_string(), json!(args.calibration_placement.label()));
@@ -988,6 +1090,10 @@ fn run_windows(args: RunArgs) -> i32 {
         object.insert("authored_timestamp_group_targets".to_string(), json!(authored_timestamp_group_targets));
         object.insert("authored_timestamp_group_count".to_string(), json!(authored_timestamp_group_count));
         object.insert("down_generation_count".to_string(), json!(down_generation_count));
+        object.insert("scenario_hold_us".to_string(), json!(scenario_hold_us));
+        object.insert("scenario_uses_isolated_long_hold".to_string(), json!(scenario_uses_isolated_long_hold));
+        object.insert("workload_definition_identity".to_string(), json!(workload_definition_identity));
+        object.insert("observed_telemetry_mixed_packet_count".to_string(), json!(observed_telemetry_mixed_packet_count));
         object.insert("physical_packet_attempt_count".to_string(), json!(snapshot.precision_packet_attempts));
         object.insert("expected_down_key_count".to_string(), json!(sink_expected_down.len())); object.insert("expected_up_key_count".to_string(), json!(sink_expected_up.len())); object.insert("control_actions".to_string(), json!({"first_physical_commit_observed": first_physical_commit_observed, "pause_observed": pause_observed, "pause_cleanup_verified": pause_cleanup_verified, "pause_cleanup_obligation_mask": pause_cleanup_obligation_mask, "pause_requested_qpc_ticks": pause_requested_qpc_ticks, "pause_cleanup_verified_qpc_ticks": pause_cleanup_verified_qpc_ticks, "resume_requested_qpc_ticks": resume_requested_qpc_ticks, "resume_call_completed_qpc_ticks": resume_call_completed_qpc_ticks, "resume_worker_commit_qpc_ticks": resume_worker_commit_qpc_ticks, "resume_worker_commit_elapsed_ticks": resume_worker_commit_elapsed_ticks, "resume_down_sender_pre_call_qpc_ticks": resume_down_sender_pre_call_qpc_ticks, "resume_requested": resume_requested, "system_suspend_terminal_observed": system_suspend_terminal_observed, "owner_process_terminated_at_first_down_checkpoint": owner_process_terminated_at_first_down_checkpoint, "target_changed": target_changed, "stop_requested": stop_requested, "skip_requested": skip_requested}));
         object.insert("expected_authored_up_slots".to_string(), json!(plan.expected_authored_up_slots)); object.insert("expected_safety_up_slots".to_string(), json!(plan.expected_safety_up_slots)); object.insert("ambiguous_packet_outcome_injection_requested".to_string(), json!(args.scenario == Scenario::AmbiguousPacket)); object.insert("preflight_user_held_injection_requested".to_string(), json!(args.scenario == Scenario::PreflightUserHeld));
@@ -1133,9 +1239,39 @@ fn run_windows(args: RunArgs) -> i32 {
         return write_report(&args, Verdict::Pass, "session watchdog expired after session progress stopped while the unrelated helper remained alive", details);
     }
     if args.scenario == Scenario::RapidRetrigger { let key = expected_physical_keys(plan.profile.as_ref(), &[0])[0]; let expected = [("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key), ("key_press", key), ("key_release", key)]; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
-    if args.scenario == Scenario::MixedUpDown { let expected = match expected_mixed_up_down_event_sequence(&expected_down, &expected_up) { Ok(expected) => expected, Err(error) => return write_report(&args, Verdict::Fail, error, details) }; if let Err(error) = reconcile_event_sequence(&sink_events, &expected) { return write_report(&args, Verdict::Fail, &error, details); } }
-    if args.scenario == Scenario::AmbiguousPacket && (!expected_ambiguous_cleanup || !ambiguous_packet_event_sequence_matches(&sink_events, expected_physical_keys(plan.profile.as_ref(), &[0])[0], expected_physical_keys(plan.profile.as_ref(), &[1])[0])) {
-        return write_report(&args, Verdict::Fail, "ambiguous packet did not reconcile to its exact bounded cleanup mask and event sequence", details);
+    if args.scenario == Scenario::MixedUpDown {
+        let observation = match reconcile_mixed_up_down_events(&sink_events, &expected_down, &expected_up) {
+            Ok(observation) => observation,
+            Err(error) => return write_report(&args, Verdict::Fail, &error, details),
+        };
+        if let Value::Object(object) = &mut details {
+            object.insert("observed_mixed_order_cycles".to_string(), json!(observation.mixed_order_cycles));
+            object.insert("observed_split_order_cycles".to_string(), json!(observation.split_order_cycles));
+        }
+    }
+    if args.scenario == Scenario::AmbiguousPacket {
+        if snapshot.sendinput_partial_events == 0 {
+            return write_report(
+                &args,
+                Verdict::Inconclusive,
+                "ambiguous packet injection mask 0b11 was never reached (no mixed packet occurred under timely split dispatch)",
+                details,
+            );
+        }
+        if !expected_ambiguous_cleanup
+            || !ambiguous_packet_event_sequence_matches(
+                &sink_events,
+                expected_physical_keys(plan.profile.as_ref(), &[0])[0],
+                expected_physical_keys(plan.profile.as_ref(), &[1])[0],
+            )
+        {
+            return write_report(
+                &args,
+                Verdict::Fail,
+                "ambiguous packet did not reconcile to its exact bounded cleanup mask and event sequence",
+                details,
+            );
+        }
     }
     if args.scenario.needs_focus_probe() {
         let sink_events_clean = reconcile_events(&sink_events, &sink_expected_down, &sink_expected_up, plan.allow_unpaired_cleanup_ups).is_ok();

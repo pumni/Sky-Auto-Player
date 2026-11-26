@@ -23,9 +23,9 @@ fn noncanonical_scan_code_profile_maps_to_canonical_slots() {
         },
     ];
     let plan = build_onset_plan(&chords, &custom, 16_667).expect("custom profile valid");
-    assert_eq!(plan.chords[0].key_mask, (1 << 0) | (1 << 2));
-    assert_eq!(plan.chords[1].key_mask, (1 << 0) | (1 << 1));
-    assert_eq!(plan.generation_count, 4);
+    assert_eq!(plan.chords()[0].key_mask, (1 << 0) | (1 << 2));
+    assert_eq!(plan.chords()[1].key_mask, (1 << 0) | (1 << 1));
+    assert_eq!(plan.generation_count(), 4);
 }
 
 #[test]

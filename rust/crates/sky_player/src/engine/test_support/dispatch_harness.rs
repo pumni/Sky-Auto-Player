@@ -165,18 +165,12 @@ impl ProductionDispatchTestHarness {
 
         let plan = build_onset_plan(chords, &scan_codes, config.timing.min_hold_us)
             .map_err(|error| format!("production onset plan failed: {error}"))?;
-        let min_hold_ticks = clock
-            .duration_from_us(config.timing.min_hold_us)
-            .map_err(|error| format!("minimum hold conversion failed: {error:?}"))?;
-        let scheduler = DispatchExecutor::new(
+        let prepared = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
             &plan,
-            DurationTicks::from_raw(min_hold_ticks.as_u64()),
-            |us| {
-                clock
-                    .timeline_from_us(us)
-                    .map_err(|error| format!("{error:?}"))
-            },
+            clock.frequency_hz(),
+            plan.compile_memory().caller_retained_capacity_bytes,
         )?;
+        let scheduler = DispatchExecutor::from_prepared_schedule(prepared);
 
         let mut backend = TrackedKeyState::with_qpc_clock(clock);
         backend.set_test_emitters();

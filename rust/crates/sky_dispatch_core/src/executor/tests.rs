@@ -13,10 +13,9 @@ fn make_executor(chords: &[(u32, u64, &[u16])], allowed: &[u16], hold_us: u64) -
         })
         .collect();
     let plan = build_onset_plan(&inputs, allowed, hold_us).expect("plan");
-    DispatchExecutor::new(&plan, DurationTicks::from_raw(hold_us), |us| {
-        Ok::<TimelineTicks, std::convert::Infallible>(TimelineTicks::from_raw(us))
-    })
-    .expect("executor")
+    let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
+    let prepared = PreparedDispatchSchedule::prepare(&plan, qpc_1mhz, 0).expect("prepared");
+    DispatchExecutor::from_prepared_schedule(prepared)
 }
 
 #[test]
@@ -141,4 +140,203 @@ fn independent_up_is_never_delayed_to_batch_with_future_down() {
             down_chord: None,
         }
     );
+}
+
+#[test]
+fn diagnostic_nominal_up_preserves_exact_ceil_rounding_at_nonintegral_qpc_and_late_completion() {
+    // At f = 3_580_000 Hz, onset_us = 2, hold_us = 2:
+    //   ceil(2 * 3.58) = 8, ceil(2 * 3.58) = 8 -> physical lower bound 8 + 8 = 16
+    //   exact diagnostic nominal ceil((2 + 2) * 3.58) = ceil(14.32) = 15 (differs by 1 tick).
+    let freq = NonZeroU64::new(3_580_000).expect("3.58 MHz");
+    let plan = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 7,
+            scheduled_us: 2,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &[0x15],
+        2,
+    )
+    .expect("plan");
+    let prepared = PreparedDispatchSchedule::prepare(&plan, freq, 0).expect("prepared");
+    assert_eq!(prepared.hold_ticks(), DurationTicks::from_raw(8));
+    let mut exec = DispatchExecutor::from_prepared_schedule(prepared);
+    let epoch = QpcTicks::from_raw(1_000);
+
+    // 1. Timely completion right at authored onset (epoch + 8):
+    //    physical release_not_before = epoch + 8 + 8 = epoch + 16
+    //    diagnostic nominal_up_offset_ticks = ceil((2 + 2) * 3.58) = 15.
+    exec.on_send_completed_at(0, 1, QpcTicks::from_raw(1_008))
+        .expect("timely Down commit");
+    let timings = exec.up_slot_timings(1);
+    assert_eq!(timings.len(), 1);
+    assert_eq!(
+        timings[0].nominal_up_offset_ticks,
+        TimelineTicks::from_raw(15)
+    );
+    assert_eq!(timings[0].release_not_before_qpc, QpcTicks::from_raw(1_016));
+    let summary = exec
+        .up_slot_timing_summary(1, epoch)
+        .expect("summary")
+        .expect("active slot");
+    assert_eq!(summary.authored_target_qpc, QpcTicks::from_raw(1_015));
+    assert_eq!(summary.musical_up_not_before_qpc, QpcTicks::from_raw(1_016));
+    assert_eq!(summary.hold_floor_mask, 1);
+
+    // 2. Late completion at epoch + 100:
+    //    physical release_not_before = epoch + 100 + 8 = epoch + 108
+    //    diagnostic nominal_up_offset_ticks remains exact ceil((2 + 2) * 3.58) = 15.
+    let prepared_late = PreparedDispatchSchedule::prepare(&plan, freq, 0).expect("prepared");
+    let mut exec_late = DispatchExecutor::from_prepared_schedule(prepared_late);
+    exec_late
+        .on_send_completed_at(0, 1, QpcTicks::from_raw(1_100))
+        .expect("late Down commit");
+    let late_timings = exec_late.up_slot_timings(1);
+    assert_eq!(
+        late_timings[0].nominal_up_offset_ticks,
+        TimelineTicks::from_raw(15)
+    );
+    assert_eq!(
+        late_timings[0].release_not_before_qpc,
+        QpcTicks::from_raw(1_108)
+    );
+}
+
+#[test]
+fn fifteen_slots_distinct_deadlines_release_in_order_without_starvation() {
+    let allowed: Vec<u16> = (0..MAX_KEYS).map(|i| 0x15 + i as u16).collect();
+    let chords: Vec<(u32, u64, &[u16])> = (0..MAX_KEYS)
+        .map(|i| (i as u32, (i as u64) * 1_000, &allowed[i..=i]))
+        .collect();
+    let mut exec = make_executor(&chords, &allowed, 20_000);
+    let epoch = QpcTicks::from_raw(100_000);
+
+    // Activate all 15 slots at staggered completion times (each 1_000 ticks apart).
+    for i in 0..MAX_KEYS {
+        let now = QpcTicks::from_raw(100_000 + (i as u64) * 1_000);
+        let DispatchDecision::Send {
+            up_mask: 0,
+            down_chord: Some(chord),
+            ..
+        } = exec.evaluate_at(now, epoch).expect("eval")
+        else {
+            panic!("expected Down for slot {i}");
+        };
+        assert_eq!(chord.key_mask, 1u16 << i);
+        exec.on_send_completed_at(0, chord.key_mask, now)
+            .expect("commit Down");
+    }
+    assert_eq!(exec.active_mask(), ALL_KEYS_MASK);
+
+    // Release all 15 slots in strict deadline order without starvation.
+    for i in 0..MAX_KEYS {
+        let deadline = QpcTicks::from_raw(100_000 + (i as u64) * 1_000 + 20_000);
+        assert_eq!(
+            exec.evaluate_at(QpcTicks::from_raw(deadline.as_u64() - 1), epoch)
+                .expect("wait"),
+            DispatchDecision::Wait {
+                deadline_qpc: deadline,
+            }
+        );
+        let DispatchDecision::Send {
+            up_mask,
+            down_chord: None,
+            ..
+        } = exec.evaluate_at(deadline, epoch).expect("release")
+        else {
+            panic!("expected Up for slot {i}");
+        };
+        assert_eq!(up_mask, 1u16 << i);
+        exec.on_send_completed_at(up_mask, 0, deadline)
+            .expect("commit Up");
+    }
+    assert_eq!(exec.active_mask(), 0);
+    exec.check_invariants().unwrap();
+}
+
+#[test]
+fn attempted_down_consumption_rejects_mismatched_source_or_mask() {
+    let mut exec = make_executor(&[(10, 0, &[0x15])], &[0x15, 0x16], 16_667);
+    assert!(
+        exec.consume_attempted_down_after_proven_raw_zero(99, 1)
+            .is_err()
+    );
+    assert!(
+        exec.consume_attempted_down_after_proven_raw_zero(10, 0b10)
+            .is_err()
+    );
+    assert!(
+        exec.consume_attempted_down_after_verified_cleanup(99, 1)
+            .is_err()
+    );
+    assert!(
+        exec.consume_attempted_down_after_verified_cleanup(10, 0b10)
+            .is_err()
+    );
+    // State remains completely unmutated.
+    assert_eq!(exec.chord_cursor(), 0);
+    assert_eq!(exec.accounting().cancelled, 0);
+    exec.check_invariants().unwrap();
+}
+
+#[test]
+fn cleanup_overflow_preflights_without_mutation() {
+    let mut exec = make_executor(&[(0, 0, &[0x15, 0x16])], &[0x15, 0x16], 16_667);
+    exec.on_send_completed(0, 0b11, TimelineTicks::ZERO)
+        .unwrap();
+    // Force cancelled counter near u64::MAX to verify overflow preflight atomicity.
+    exec.counters.cancelled = u64::MAX - 1;
+    let err = exec
+        .on_verified_cleanup()
+        .expect_err("cancelled counter overflow must fail closed");
+    assert!(err.contains("overflow"), "{err}");
+    // Active mask, slots, and counters must remain untouched.
+    assert_eq!(exec.active_mask(), 0b11);
+    assert_eq!(exec.counters.cancelled, u64::MAX - 1);
+}
+
+#[test]
+fn end_state_waits_for_trailing_schedule_end_offset_with_zero_active_keys() {
+    let plan = build_onset_plan(&[], &[0x15], 16_667)
+        .expect("empty plan")
+        .with_trailing_end_offset_us(50_000)
+        .expect("trailing end");
+    let qpc_1mhz = NonZeroU64::new(1_000_000).expect("1 MHz");
+    let prepared = PreparedDispatchSchedule::prepare(&plan, qpc_1mhz, 0).expect("prepared");
+    let exec = DispatchExecutor::from_prepared_schedule(prepared);
+    let epoch = QpcTicks::from_raw(10_000);
+    assert_eq!(
+        exec.evaluate_at(QpcTicks::from_raw(59_999), epoch).unwrap(),
+        DispatchDecision::Wait {
+            deadline_qpc: QpcTicks::from_raw(60_000),
+        }
+    );
+    assert_eq!(
+        exec.evaluate_at(QpcTicks::from_raw(60_000), epoch).unwrap(),
+        DispatchDecision::Finished
+    );
+}
+
+#[test]
+fn forced_conversion_failure_fails_executor_construction() {
+    let plan = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &[0x15],
+        16_667,
+    )
+    .expect("plan");
+    let qpc_1mhz = NonZeroU64::new(1_000_000).expect("1 MHz");
+    let err = DispatchExecutor::new_with_converter_for_test(
+        &plan,
+        qpc_1mhz,
+        DurationTicks::from_raw(16_667),
+        |_| Err::<TimelineTicks, &str>("injected clock conversion failure"),
+        || Ok(()),
+    )
+    .expect_err("conversion failure must reject executor construction");
+    assert!(err.contains("injected clock conversion failure"), "{err}");
 }

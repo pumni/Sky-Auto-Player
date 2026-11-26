@@ -109,15 +109,18 @@ pub struct OnsetPlanMemoryMetrics {
 }
 
 /// Validated, immutable onset-only chord plan in the microsecond domain.
+///
+/// Fields are crate-private so external callers cannot forge or mutate a plan
+/// after validation; construct via `sky_dispatch_core::plan::build_onset_plan*`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OnsetPlan {
-    pub chords: Vec<OnsetChord>,
-    pub generation_count: u64,
-    pub key_registry: KeyRegistry,
-    pub hold_us: u64,
-    pub schedule_end_offset_us: u64,
+    pub(crate) chords: Vec<OnsetChord>,
+    pub(crate) generation_count: u64,
+    pub(crate) key_registry: KeyRegistry,
+    pub(crate) hold_us: u64,
+    pub(crate) schedule_end_offset_us: u64,
     /// Build-phase capacity accounting carried into QPC preparation and startup admission.
-    pub compile_memory: CompileMemoryMetrics,
+    pub(crate) compile_memory: CompileMemoryMetrics,
 }
 
 impl OnsetPlan {
@@ -142,13 +145,35 @@ impl OnsetPlan {
     }
 
     #[inline]
-    pub fn schedule_end_offset_us(&self) -> u64 {
+    pub const fn generation_count(&self) -> u64 {
+        self.generation_count
+    }
+
+    #[inline]
+    pub fn key_registry(&self) -> &KeyRegistry {
+        &self.key_registry
+    }
+
+    #[inline]
+    pub const fn schedule_end_offset_us(&self) -> u64 {
         self.schedule_end_offset_us
     }
 
     #[inline]
-    pub fn hold_us(&self) -> u64 {
+    pub const fn hold_us(&self) -> u64 {
         self.hold_us
+    }
+
+    #[inline]
+    pub const fn compile_memory(&self) -> CompileMemoryMetrics {
+        self.compile_memory
+    }
+
+    /// Bitmask of valid key slots registered in `key_registry`.
+    #[inline]
+    pub fn allowed_key_mask(&self) -> u16 {
+        let count = self.key_registry.len().min(MAX_KEYS);
+        if count == 0 { 0 } else { (1u16 << count) - 1 }
     }
 
     /// Extend the plan's schedule end offset for explicit trailing-idle tests.

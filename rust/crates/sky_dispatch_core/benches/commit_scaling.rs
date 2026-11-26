@@ -8,7 +8,7 @@ use serde_json::json;
 use sky_dispatch_core::executor::{DispatchDecision, DispatchExecutor};
 use sky_dispatch_core::model::OnsetChordInput;
 use sky_dispatch_core::plan::build_onset_plan;
-use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
+use sky_dispatch_core::time::QpcTicks;
 use std::env;
 use std::hint::black_box;
 use std::time::Instant;
@@ -55,12 +55,12 @@ fn measure(generation_count: usize, polyphony: usize, samples: usize) -> serde_j
     let plan = build_onset_plan(&chords, SCAN_CODES, 1).expect("valid scaling plan");
     let mut timings = Vec::with_capacity(samples);
 
+    let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
     for _ in 0..samples {
-        let mut executor =
-            DispatchExecutor::new(&plan, DurationTicks::from_raw(1), |microseconds| {
-                Ok::<_, String>(TimelineTicks::from_raw(microseconds))
-            })
-            .expect("production executor construction");
+        let prepared =
+            sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(&plan, qpc_1mhz, 0)
+                .expect("production prepared schedule");
+        let mut executor = DispatchExecutor::from_prepared_schedule(prepared);
         let down_mask = match executor
             .evaluate_at(QpcTicks::ZERO, QpcTicks::ZERO)
             .expect("first production dispatch decision")

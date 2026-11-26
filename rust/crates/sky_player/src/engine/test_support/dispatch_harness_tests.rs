@@ -1127,3 +1127,106 @@ fn negative_control_unconfirmed_packet_fails_closed() {
             .is_some()
     );
 }
+
+#[test]
+fn controlled_late_wake_reaches_mixed_packet_ambiguity_and_exact_cleanup_scope() {
+    use sky_dispatch_core::model::OnsetChordInput;
+
+    // Onset-only A@0, B@H: under completion-anchored semantics, a controlled late
+    // wake past max(epoch + H, completion_A + H) deterministically makes both
+    // Up(A) and Down(B) due together in one mixed packet (mask 0b11).
+    let chords = [
+        OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: vec![0x15].into(),
+        },
+        OnsetChordInput {
+            source_action_index: 1,
+            scheduled_us: DISPATCH_EFFECTIVE_HOLD_US,
+            scan_codes: vec![0x16].into(),
+        },
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
+    let packets = harness.configure_mock_packet_sender_for_test(&[0]);
+    let cleanup = harness.configure_mock_cleanup_emitter_for_test();
+    harness.attach_executor_for_test().expect("attach executor");
+
+    let clock = harness.resources.clock;
+    let epoch = clock.now().expect("epoch QPC");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor epoch");
+
+    // 1. Dispatch Down(A) at epoch.
+    let (up_0, down_0, out_0) = dispatch_live_scheduler_next(&mut harness, epoch, epoch);
+    assert_eq!((up_0, down_0), (0, 0b01));
+    assert_eq!(
+        out_0,
+        crate::engine::worker::StagedDispatchOutcome::Dispatched
+    );
+    let completion_a = packets
+        .lock()
+        .expect("packets")
+        .first()
+        .and_then(|(_, ev)| ev.completed_ticks)
+        .expect("Down(A) completion QPC");
+    let hold_ticks = clock
+        .duration_from_us(DISPATCH_EFFECTIVE_HOLD_US)
+        .expect("H ticks");
+
+    // 2. Controlled late wake past completion_A + H + 500us so both Up(A) and Down(B) are due.
+    let late_wake = completion_a
+        .checked_add_duration(hold_ticks)
+        .expect("release floor")
+        .checked_add_duration(clock.duration_from_us(500).expect("late margin"))
+        .expect("late wake");
+    wait_until_qpc(clock, late_wake);
+
+    // 3. Inject partial/ambiguous SendInput on the mixed 0b11 packet.
+    let mixed_seen = Arc::new(AtomicUsize::new(0));
+    let mixed_seen_cb = Arc::clone(&mixed_seen);
+    harness.resources.backend.set_packet_emitter(move |packet| {
+        assert_eq!(
+            packet,
+            PhysicalPacket::new(0b01, 0b10),
+            "controlled late wake must reach exact mixed packet Up(A)+Down(B)"
+        );
+        mixed_seen_cb.fetch_add(1, Ordering::AcqRel);
+        let completed = clock.now().expect("ambiguous send QPC");
+        SendTransactionOutcome {
+            status: SendTransactionStatus::PartialProgress,
+            evidence: SendEvidence {
+                requested_mask: 0b11,
+                confirmed_mask: 0b01,
+                skipped_mask: 0,
+                first_inserted: 1,
+                attempts: 1,
+                zero_progress_retries: 0,
+                retry_reason: PacketRetryReason::PartialProgress { inserted_count: 1 },
+                first_win32_error: Some(5),
+                last_win32_error: Some(5),
+                started_ticks: Some(completed),
+                completed_ticks: Some(completed),
+                timing_error: None,
+            },
+        }
+    });
+
+    let now = clock.now().expect("mixed evaluation QPC");
+    let (up_1, down_1, out_1) = dispatch_live_scheduler_next(&mut harness, now, epoch);
+    assert_eq!((up_1, down_1), (0b01, 0b10));
+    assert_eq!(out_1, crate::engine::worker::StagedDispatchOutcome::Exit);
+    assert_eq!(mixed_seen.load(Ordering::Acquire), 1);
+
+    // 4. Verify exact journal cleanup scope (both A and B released) and zero residual.
+    let cleanup_calls = cleanup.lock().expect("cleanup capture");
+    assert!(!cleanup_calls.is_empty(), "bounded cleanup must run");
+    assert_eq!(
+        cleanup_calls[0].0,
+        vec![0x15, 0x16],
+        "ambiguity cleanup must scope exactly to both journaled keys 0b11"
+    );
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(harness.in_flight_mask_for_test(), 0);
+}

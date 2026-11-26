@@ -15,12 +15,12 @@ pub(super) fn test_session_options_with_timing_margin(
     backend: BackendConfig,
     timing_margin_us: u64,
 ) -> NativeSessionOptions {
-    let effective_margin_us = timing_margin_us.min(schedule.hold_us);
+    let effective_margin_us = timing_margin_us.min(schedule.hold_us());
     let timing = TimingOptions {
         game_fps: 60,
-        min_hold_us: schedule.hold_us,
+        min_hold_us: schedule.hold_us(),
         frame_us: 16_667,
-        frame_base_hold_us: schedule.hold_us.saturating_sub(effective_margin_us),
+        frame_base_hold_us: schedule.hold_us().saturating_sub(effective_margin_us),
         timing_margin_us: effective_margin_us,
         strict_timing: false,
         strict_down_completion_late_us: 2_000,
@@ -31,7 +31,7 @@ pub(super) fn test_session_options_with_timing_margin(
     let prepared_schedule = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc.frequency_hz(),
-        schedule.compile_memory.caller_retained_capacity_bytes,
+        schedule.compile_memory().caller_retained_capacity_bytes,
     )
     .expect("prepare native test schedule before session admission");
     NativeSessionOptions {

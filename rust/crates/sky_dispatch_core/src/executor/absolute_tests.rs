@@ -1,7 +1,7 @@
 use super::*;
 use crate::model::OnsetChordInput;
 use crate::plan::build_onset_plan;
-use crate::time::{DurationTicks, QpcTicks, TimelineTicks};
+use crate::time::QpcTicks;
 
 fn build_executor(
     chords: &[(u32, u64, &[u16])],
@@ -17,10 +17,9 @@ fn build_executor(
         })
         .collect();
     let plan = build_onset_plan(&inputs, allowed, hold_us).expect("valid onset plan");
-    DispatchExecutor::new(&plan, DurationTicks::from_raw(hold_us), |us| {
-        Ok::<TimelineTicks, std::convert::Infallible>(TimelineTicks::from_raw(us))
-    })
-    .expect("executor")
+    let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
+    let prepared = PreparedDispatchSchedule::prepare(&plan, qpc_1mhz, 0).expect("prepared");
+    DispatchExecutor::from_prepared_schedule(prepared)
 }
 
 #[test]

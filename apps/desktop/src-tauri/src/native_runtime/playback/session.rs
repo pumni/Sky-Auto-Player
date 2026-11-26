@@ -513,7 +513,7 @@ impl NativePlaybackService {
                 sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
                     compiled,
                     qpc_frequency_hz.expect("physical Prepare requires QPC admission"),
-                    compiled.compile_memory.caller_retained_capacity_bytes,
+                    compiled.compile_memory().caller_retained_capacity_bytes,
                     || {
                         if cancelled.load(Ordering::Acquire) {
                             Err("native dispatch materialization cancelled".to_string())
@@ -668,12 +668,12 @@ impl NativePlaybackService {
                             .recommended_plan_caller_capacity_override_for_test
                             .unwrap_or(
                                 recommended_compiled
-                                    .compile_memory
+                                    .compile_memory()
                                     .caller_retained_capacity_bytes,
                             );
                         #[cfg(not(all(test, feature = "tauri-test")))]
                         let caller_retained_capacity_bytes = recommended_compiled
-                            .compile_memory
+                            .compile_memory()
                             .caller_retained_capacity_bytes;
                         match sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
                             &recommended_compiled,
@@ -2951,6 +2951,21 @@ fn compile_dispatch_schedule_with_checkpoint(
     if schedule.chords.len() > sky_player::adapter_support::MAX_CHORDS {
         return Err("native schedule exceeds onset chord limit".into());
     }
+    let caller_retained_capacity_bytes = caller_retained_capacity_bytes
+        .checked_add(schedule_metadata_heap_capacity_bytes(schedule)?)
+        .ok_or_else(|| "native caller-retained startup capacity overflow".to_string())?;
+    let estimated_input_bytes = checked_capacity_bytes(
+        schedule.chords.len(),
+        std::mem::size_of::<OnsetChordInput>(),
+    )?;
+    let preflight_bytes =
+        checked_capacity_sum([caller_retained_capacity_bytes, estimated_input_bytes])?;
+    if preflight_bytes > sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES {
+        return Err(format!(
+            "native onset chord input preflight ({preflight_bytes} bytes) exceeds the {} byte retained-dispatch budget",
+            sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES
+        ));
+    }
     checkpoint(0);
     let mut chords = Vec::new();
     chords
@@ -2979,9 +2994,6 @@ fn compile_dispatch_schedule_with_checkpoint(
             checkpoint(index + 1);
         }
     }
-    let caller_retained_capacity_bytes = caller_retained_capacity_bytes
-        .checked_add(schedule_metadata_heap_capacity_bytes(schedule)?)
-        .ok_or_else(|| "native caller-retained startup capacity overflow".to_string())?;
     sky_player::adapter_support::build_onset_plan_with_memory_accounting(
         &chords,
         &sky_app_core::song::SKY_SCAN_CODES,
@@ -3330,44 +3342,6 @@ mod preparation_cancellation_tests {
         let source_capacity_bytes =
             schedule_metadata_heap_capacity_bytes(&schedule).expect("source schedule capacity");
         let qpc_frequency = std::num::NonZeroU64::new(1_000_000).expect("QPC frequency");
-        let baseline_started = std::time::Instant::now();
-        let baseline_compiled = compile_dispatch_schedule_with_checkpoint(
-            &schedule,
-            0,
-            &std::sync::atomic::AtomicBool::new(false),
-            |_| {},
-        )
-        .expect("baseline-equivalent one-million-action compile");
-        let baseline_compile_memory = baseline_compiled.compile_memory;
-        let baseline_schedule_memory = baseline_compiled
-            .memory_metrics()
-            .expect("baseline compiled schedule capacity");
-        let baseline_executor = sky_player::adapter_support::DispatchExecutor::new(
-            &baseline_compiled,
-            sky_player::adapter_support::DurationTicks::from_raw(1),
-            |microseconds| {
-                Ok::<_, std::convert::Infallible>(
-                    sky_player::adapter_support::TimelineTicks::from_raw(microseconds),
-                )
-            },
-        )
-        .expect("baseline-equivalent worker executor construction");
-        let baseline_executor_memory = baseline_executor
-            .try_memory_metrics()
-            .expect("baseline executor capacity metrics");
-        let baseline_start_compile_validate_and_executor_us =
-            baseline_started.elapsed().as_micros();
-        let baseline_retained_capacity_bytes = baseline_compile_memory
-            .caller_retained_capacity_bytes
-            .checked_add(baseline_schedule_memory.heap_payload_bytes)
-            .and_then(|bytes| bytes.checked_add(baseline_schedule_memory.struct_bytes))
-            .and_then(|bytes| bytes.checked_add(baseline_executor_memory.total_bytes))
-            .expect("baseline source, schedule, and executor capacity");
-        let baseline_peak_capacity_bytes = baseline_compile_memory
-            .phase_peak_capacity_bytes
-            .max(baseline_retained_capacity_bytes);
-        drop(baseline_executor);
-        drop(baseline_compiled);
 
         let candidate_prepare_started = std::time::Instant::now();
         let compiled = compile_dispatch_schedule_with_checkpoint(
@@ -3377,8 +3351,8 @@ mod preparation_cancellation_tests {
             |_| {},
         )
         .expect("candidate one-million-action Prepare compile");
-        assert_eq!(compiled.generation_count, (ACTION_COUNT / 2) as u64);
-        let compile_memory = compiled.compile_memory;
+        assert_eq!(compiled.generation_count(), (ACTION_COUNT / 2) as u64);
+        let compile_memory = compiled.compile_memory();
         let schedule_memory = compiled
             .memory_metrics()
             .expect("compiled schedule capacity");
@@ -3411,9 +3385,9 @@ mod preparation_cancellation_tests {
         assert!(executor_memory.chord_heap_bytes > 0);
         assert!(retained_capacity_bytes <= budget_bytes);
         assert!(startup_peak_capacity_bytes <= budget_bytes);
-        assert!(baseline_peak_capacity_bytes <= budget_bytes);
         eprintln!(
-            "prepared_playback_evidence workload=valid_one_key actions={ACTION_COUNT} source_schedule_capacity_bytes={source_capacity_bytes} baseline_equivalent_start_compile_validate_plus_executor_us={baseline_start_compile_validate_and_executor_us} candidate_prepare_compile_validate_plus_plan_materialization_us={candidate_prepare_compile_and_materialize_us} candidate_start_plan_move_and_session_state_ns={candidate_start_plan_move_ns} baseline_retained_capacity_bytes={baseline_retained_capacity_bytes} baseline_peak_capacity_bytes={baseline_peak_capacity_bytes} candidate_caller_retained_capacity_bytes={} candidate_compiler_input_capacity_bytes={} candidate_compiler_temporary_capacity_bytes={} candidate_compiled_schedule_capacity_bytes={schedule_capacity_bytes} candidate_prepared_plan_capacity_bytes={} candidate_runtime_executor_heap_bytes={} candidate_runtime_executor_struct_bytes={} candidate_runtime_executor_total_bytes={} candidate_prepare_overlapping_peak_capacity_bytes={retained_capacity_bytes} candidate_compiler_phase_peak_capacity_bytes={} candidate_startup_peak_capacity_bytes={startup_peak_capacity_bytes} policy_bytes={budget_bytes} timing_basis=wall_clock_single_offline_run_not_a_gate baseline_basis=baseline-equivalent_raw_compile_validation_plus_executor_path_on_candidate_source candidate_basis=compile_validate_and_prepare_plan_then_move_plan_on_candidate_source start_arm_timing=executor-construction-only native_process_setup_and_real_worker_arm=not_measured memory_basis=calculated_size_and_capacity complete_application_process_peak=not_measured windows_process_memory=not_measured",
+            "prepared_playback_evidence workload=valid_one_key chords={} source_schedule_capacity_bytes={source_capacity_bytes} prepare_compile_validate_plus_plan_materialization_us={candidate_prepare_compile_and_materialize_us} start_plan_move_and_session_state_ns={candidate_start_plan_move_ns} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_capacity_bytes={schedule_capacity_bytes} prepared_plan_capacity_bytes={} runtime_executor_heap_bytes={} runtime_executor_struct_bytes={} runtime_executor_total_bytes={} prepare_overlapping_peak_capacity_bytes={retained_capacity_bytes} compiler_phase_peak_capacity_bytes={} startup_peak_capacity_bytes={startup_peak_capacity_bytes} policy_bytes={budget_bytes} timing_basis=wall_clock_single_offline_run_not_a_gate basis=compile_validate_and_prepare_plan_then_move_plan start_arm_timing=executor-construction-only native_process_setup_and_real_worker_arm=not_measured memory_basis=calculated_size_and_capacity complete_application_process_peak=not_measured windows_process_memory=not_measured",
+            ACTION_COUNT / 2,
             compile_memory.caller_retained_capacity_bytes,
             compile_memory.input_capacity_bytes,
             compile_memory.temporary_capacity_bytes,
@@ -3422,14 +3396,6 @@ mod preparation_cancellation_tests {
             executor_memory.struct_bytes,
             executor_memory.total_bytes,
             compile_memory.phase_peak_capacity_bytes,
-        );
-        eprintln!(
-            "prepared_playback_baseline_detail actions={ACTION_COUNT} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_heap_capacity_bytes={} executor_total_capacity_bytes={} retained_capacity_bytes={baseline_retained_capacity_bytes} peak_capacity_bytes={baseline_peak_capacity_bytes}",
-            baseline_compile_memory.caller_retained_capacity_bytes,
-            baseline_compile_memory.input_capacity_bytes,
-            baseline_compile_memory.temporary_capacity_bytes,
-            baseline_schedule_memory.heap_payload_bytes,
-            baseline_executor_memory.total_bytes,
         );
     }
 
@@ -3970,51 +3936,7 @@ mod preparation_cancellation_tests {
             }
         }));
         let prepared_input = input(1, "prepared-runtime");
-        let source_action_count = prepared_input.schedule.chords.len();
-        let baseline_schedule = prepared_input.schedule.clone();
-        let baseline_clock = sky_dispatch_win32::clock::QpcClock::initialize()
-            .expect("baseline-equivalent QPC clock");
-        let baseline_started = std::time::Instant::now();
-        let baseline_compiled = super::compile_dispatch_schedule(
-            &baseline_schedule,
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .expect("baseline-equivalent raw schedule compile");
-        let baseline_min_hold = baseline_clock
-            .duration_from_us(prepared_input.timing_policy.min_hold_us)
-            .expect("baseline H conversion");
-        let baseline_executor = sky_player::adapter_support::DispatchExecutor::new(
-            &baseline_compiled,
-            baseline_min_hold,
-            |microseconds| {
-                baseline_clock
-                    .timeline_from_us(microseconds)
-                    .map_err(|error| format!("{error:?}"))
-            },
-        )
-        .expect("baseline-equivalent executor construction");
-        let baseline_executor_memory = baseline_executor
-            .try_memory_metrics()
-            .expect("baseline executor capacity metrics");
-        let baseline_schedule_memory = baseline_compiled
-            .memory_metrics()
-            .expect("baseline schedule capacity metrics");
-        let baseline_start_compile_validate_plus_executor_us =
-            baseline_started.elapsed().as_micros();
-        let baseline_retained_capacity_bytes = baseline_compiled
-            .compile_memory
-            .caller_retained_capacity_bytes
-            .checked_add(baseline_schedule_memory.heap_payload_bytes)
-            .and_then(|bytes| bytes.checked_add(baseline_schedule_memory.struct_bytes))
-            .and_then(|bytes| bytes.checked_add(baseline_executor_memory.total_bytes))
-            .expect("baseline retained capacity");
-        let baseline_peak_capacity_bytes = baseline_compiled
-            .compile_memory
-            .phase_peak_capacity_bytes
-            .max(baseline_retained_capacity_bytes);
-        drop(baseline_executor);
-        drop(baseline_compiled);
-        drop(baseline_schedule);
+        let source_chord_count = prepared_input.schedule.chords.len();
         let prepare_started = std::time::Instant::now();
         let prepared = service.prepare(prepared_input).expect("physical Prepare");
         let prepare_elapsed_us = prepare_started.elapsed().as_micros();
@@ -4051,10 +3973,8 @@ mod preparation_cancellation_tests {
         assert_eq!(executor.active_mask(), 0);
         assert_eq!(executor.total_chords(), 1);
         eprintln!(
-            "prepared_playback_evidence workload=short source_actions={source_action_count} baseline_equivalent_start_compile_validate_plus_executor_us={baseline_start_compile_validate_plus_executor_us} candidate_runtime_schedule_compile_count={runtime_schedule_compile_count} candidate_desktop_prepare_wall_us={prepare_elapsed_us} candidate_prepared_executor_move_and_state_init_ns={start_runtime_move_ns} baseline_executor_total_capacity_bytes={} baseline_retained_capacity_bytes={baseline_retained_capacity_bytes} baseline_peak_capacity_bytes={baseline_peak_capacity_bytes} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={} timing_basis=wall_clock_single_offline_run_not_a_gate baseline_basis=raw_compile_validation_plus_executor_on_candidate_source candidate_basis=desktop_prepare_and_prepared_executor_move start_arm_timing=executor-construction-only native_process_setup_and_real_worker_arm=not_measured memory_basis=calculated_size_and_capacity disposition=valid_physical_plan_prepared_and_consumed",
-            baseline_executor_memory.total_bytes,
-            metrics.plan_capacity_bytes,
-            metrics.overlapping_peak_capacity_bytes,
+            "prepared_playback_evidence workload=short source_chords={source_chord_count} runtime_schedule_compile_count={runtime_schedule_compile_count} desktop_prepare_wall_us={prepare_elapsed_us} prepared_executor_move_and_state_init_ns={start_runtime_move_ns} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={} timing_basis=wall_clock_single_offline_run_not_a_gate basis=desktop_prepare_and_prepared_executor_move start_arm_timing=executor-construction-only native_process_setup_and_real_worker_arm=not_measured memory_basis=calculated_size_and_capacity disposition=valid_physical_plan_prepared_and_consumed",
+            metrics.plan_capacity_bytes, metrics.overlapping_peak_capacity_bytes,
         );
     }
 

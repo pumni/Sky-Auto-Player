@@ -161,7 +161,7 @@ mod tests {
         let schedule = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
             &plan,
             qpc.frequency_hz(),
-            plan.compile_memory.caller_retained_capacity_bytes,
+            plan.compile_memory().caller_retained_capacity_bytes,
         )
         .expect("prepared empty schedule");
         NativeSessionOptions {

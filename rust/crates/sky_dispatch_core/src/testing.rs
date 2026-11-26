@@ -7,7 +7,7 @@ use std::rc::Rc;
 use crate::executor::{DispatchDecision, DispatchExecutor};
 use crate::model::{MAX_KEYS, OnsetChordInput, generation_id_for};
 use crate::plan::{PlanError, build_onset_plan};
-use crate::time::{DurationTicks, QpcTicks, TimelineTicks};
+use crate::time::QpcTicks;
 
 #[cfg(any(test, feature = "test-support"))]
 pub fn assert_clean_generation_completion(accounting: crate::accounting::GenerationAccounting) {
@@ -76,11 +76,10 @@ pub fn simulate_schedule(
     send_latency_us: u64,
 ) -> Result<SimulationResult, PlanError> {
     let plan = build_onset_plan(chords, allowed_scan_codes, hold_us)?;
-    let hold_ticks = DurationTicks::from_raw(hold_us);
-    let mut executor = DispatchExecutor::new(&plan, hold_ticks, |microseconds| {
-        Ok::<_, std::convert::Infallible>(TimelineTicks::from_raw(microseconds))
-    })
-    .map_err(PlanError::Simulation)?;
+    let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
+    let prepared = crate::executor::PreparedDispatchSchedule::prepare(&plan, qpc_1mhz, 0)
+        .map_err(PlanError::Simulation)?;
+    let mut executor = DispatchExecutor::from_prepared_schedule(prepared);
 
     let mut events = Vec::new();
     let mut step = 0u32;

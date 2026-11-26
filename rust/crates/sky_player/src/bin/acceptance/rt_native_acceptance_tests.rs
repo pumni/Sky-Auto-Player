@@ -1,17 +1,19 @@
 use super::{
     ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US, AdmissionVariantChoice, CalibrationPlacement,
-    active_cleanup_resume_evidence_is_ordered, active_cleanup_resumed_down_sender_qpc_ticks,
+    active_cleanup_resume_evidence_is_ordered, active_cleanup_resumed_down_identity,
+    active_cleanup_resumed_down_sender_qpc_ticks,
     DRAIN_DEADLINE_MS, DrainClock, DrainMode, DrainResult, EVENT_SCHEMA_VERSION, EventRecord,
     EventWindow, EventWindowReader, FULL_INSTRUMENT_MASK, INPUT_POLICY,
-    MaterializedInstrumentKeyProfile, NativeCleanupEvidence, PHYSICAL_INSTRUMENT_SCAN_CODES,
-    PRETERMINAL_DEADLINE_MS, PROBE_KIND, PROBE_TITLE, ParsedCommand, PhysicalExpectation,
-    SHORT_UP_GAP_STRESS_CYCLES,
+    MaterializedInstrumentKeyProfile, MixedUpDownObservation, NativeCleanupEvidence,
+    PHYSICAL_INSTRUMENT_SCAN_CODES, PRETERMINAL_DEADLINE_MS, PROBE_KIND, PROBE_TITLE,
+    ParsedCommand, PhysicalExpectation, SHORT_UP_GAP_STRESS_CYCLES,
     PreTerminalResult, READY_SCHEMA_VERSION, RECEIVE_ONLY_ROLE, ReadyRecord, SCRIPT_MARKER,
-    SINK_KIND, SINK_TITLE, TARGET_CLASS_RECEIVE_ONLY, TARGET_CLASS_PROBE, Scenario, Verdict, acceptance_min_hold_us,
-    cleanup_evidence_clean, drain_event_window_with,
+    SINK_KIND, SINK_TITLE, TARGET_CLASS_RECEIVE_ONLY, TARGET_CLASS_PROBE, Scenario, Verdict,
+    acceptance_min_hold_us, cleanup_evidence_clean, drain_event_window_with,
     expected_physical_keys, focus_evidence_clean, parse_args, preterminal_verdict,
     healthy_generation_qualification, production_visibility_qualification,
-    expected_mixed_up_down_event_sequence, reconcile_event_sequence, reconcile_events, scenario_plan,
+    expected_mixed_up_down_event_sequence, reconcile_event_sequence, reconcile_events,
+    reconcile_mixed_up_down_events, scenario_plan,
     validate_event_stream, validate_ready_record, noncanonical_profile_spec, wait_for_sink_events_with,
 };
 use super::scenarios::production_options;
@@ -57,7 +59,18 @@ fn active_cleanup_resume_ordering_uses_worker_commit_and_down_sender_qpc() {
 }
 
 #[test]
-fn active_cleanup_resume_sender_qpc_requires_unique_measured_same_key_down() {
+fn active_cleanup_resume_sender_qpc_derives_identity_from_actual_plan_and_rejects_stale_ids() {
+    let plan = scenario_plan(
+        Scenario::PauseResumeActiveCleanup,
+        ACCEPTANCE_TIMING_MARGIN_US,
+    )
+    .expect("pause-resume-active-cleanup plan");
+    let (expected_source_index, expected_down_mask) =
+        active_cleanup_resumed_down_identity(&plan.schedule)
+            .expect("plan must expose resumed Down identity");
+    assert_eq!(expected_source_index, 1);
+    assert_eq!(expected_down_mask, 1);
+
     let telemetry = serde_json::json!({
         "records": [
             {
@@ -68,8 +81,8 @@ fn active_cleanup_resume_sender_qpc_requires_unique_measured_same_key_down() {
                 "pre_call_qpc_ticks": 90
             },
             {
-                "source_action_index": 2,
-                "down_mask": 1,
+                "source_action_index": expected_source_index,
+                "down_mask": expected_down_mask,
                 "up_mask": 0,
                 "pre_call_qpc_available": true,
                 "pre_call_qpc_ticks": 123
@@ -77,28 +90,84 @@ fn active_cleanup_resume_sender_qpc_requires_unique_measured_same_key_down() {
         ]
     });
     assert_eq!(
-        active_cleanup_resumed_down_sender_qpc_ticks(&telemetry),
+        active_cleanup_resumed_down_sender_qpc_ticks(
+            &telemetry,
+            expected_source_index,
+            expected_down_mask,
+        ),
         Some(123)
+    );
+
+    // Negative: stale paired-action ID 2 must NOT match the onset-only plan's resumed Down.
+    let stale_id_telemetry = serde_json::json!({
+        "records": [{
+            "source_action_index": 2,
+            "down_mask": 1,
+            "up_mask": 0,
+            "pre_call_qpc_available": true,
+            "pre_call_qpc_ticks": 123
+        }]
+    });
+    assert_eq!(
+        active_cleanup_resumed_down_sender_qpc_ticks(
+            &stale_id_telemetry,
+            expected_source_index,
+            expected_down_mask,
+        ),
+        None
+    );
+
+    // Negative: wrong down_mask rejected.
+    let wrong_mask = serde_json::json!({
+        "records": [{
+            "source_action_index": expected_source_index,
+            "down_mask": 2,
+            "up_mask": 0,
+            "pre_call_qpc_available": true,
+            "pre_call_qpc_ticks": 123
+        }]
+    });
+    assert_eq!(
+        active_cleanup_resumed_down_sender_qpc_ticks(
+            &wrong_mask,
+            expected_source_index,
+            expected_down_mask,
+        ),
+        None
     );
 
     let unavailable = serde_json::json!({
         "records": [{
-            "source_action_index": 2,
-            "down_mask": 1,
+            "source_action_index": expected_source_index,
+            "down_mask": expected_down_mask,
             "up_mask": 0,
             "pre_call_qpc_available": false,
             "pre_call_qpc_ticks": 0
         }]
     });
-    assert_eq!(active_cleanup_resumed_down_sender_qpc_ticks(&unavailable), None);
+    assert_eq!(
+        active_cleanup_resumed_down_sender_qpc_ticks(
+            &unavailable,
+            expected_source_index,
+            expected_down_mask,
+        ),
+        None
+    );
 
     let ambiguous = serde_json::json!({
         "records": [
-            {"source_action_index": 2, "down_mask": 1, "up_mask": 0, "pre_call_qpc_available": true, "pre_call_qpc_ticks": 123},
-            {"source_action_index": 2, "down_mask": 1, "up_mask": 0, "pre_call_qpc_available": true, "pre_call_qpc_ticks": 124}
+            {"source_action_index": expected_source_index, "down_mask": expected_down_mask, "up_mask": 0, "pre_call_qpc_available": true, "pre_call_qpc_ticks": 123},
+            {"source_action_index": expected_source_index, "down_mask": expected_down_mask, "up_mask": 0, "pre_call_qpc_available": true, "pre_call_qpc_ticks": 124}
         ]
     });
-    assert_eq!(active_cleanup_resumed_down_sender_qpc_ticks(&ambiguous), None);
+    assert_eq!(
+        active_cleanup_resumed_down_sender_qpc_ticks(
+            &ambiguous,
+            expected_source_index,
+            expected_down_mask,
+        ),
+        None
+    );
 }
 
 fn base_arguments(scenario: &str) -> Vec<String> {
@@ -320,14 +389,16 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
     assert_eq!(pause_active.expected_authored_up_slots, vec![0]);
     assert_eq!(pause_active.expected_safety_up_slots, vec![0]);
     assert!(pause_active.allow_unpaired_cleanup_ups);
-    assert_eq!(pause_active.schedule.chords[0].scheduled_us, 50_000);
-    assert_eq!(pause_active.schedule.chords[1].scheduled_us, 600_000);
+    assert_eq!(pause_active.schedule.chords()[0].scheduled_us, 50_000);
+    assert_eq!(pause_active.schedule.chords()[1].scheduled_us, 600_000);
+    assert_eq!(pause_active.schedule.hold_us(), 450_000);
 
     let suspend = scenario_plan(Scenario::SuspendResume, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
     assert_eq!(suspend.expected_down_slots, vec![0, 1]);
     assert_eq!(suspend.expected_up_slots, vec![0, 0, 1]);
     assert_eq!(suspend.expected_authored_up_slots, vec![0, 1]);
     assert_eq!(suspend.expected_safety_up_slots, vec![0]);
+    assert_eq!(suspend.schedule.hold_us(), 450_000);
     assert!(suspend.allow_unpaired_cleanup_ups);
 
     let ambiguous = scenario_plan(Scenario::AmbiguousPacket, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
@@ -335,8 +406,11 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
     assert_eq!(ambiguous.expected_up_slots, vec![0, 0, 1]);
     assert_eq!(ambiguous.expected_authored_up_slots, vec![0]);
     assert_eq!(ambiguous.expected_safety_up_slots, vec![0, 1]);
-    assert_eq!(ambiguous.schedule.chords[1].scheduled_us, 50_000 + ambiguous.schedule.hold_us);
-    assert_eq!(ambiguous.schedule.chords[1].key_mask, 0b10);
+    assert_eq!(
+        ambiguous.schedule.chords()[1].scheduled_us,
+        50_000 + ambiguous.schedule.hold_us()
+    );
+    assert_eq!(ambiguous.schedule.chords()[1].key_mask, 0b10);
     assert!(ambiguous.allow_unpaired_cleanup_ups);
 
     let preflight = scenario_plan(Scenario::PreflightUserHeld, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
@@ -380,8 +454,8 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
         ACCEPTANCE_TIMING_MARGIN_US,
     )
     .unwrap();
-    assert_eq!(delayed.schedule.chords[0].key_mask, 1);
-    assert!(delayed.schedule.chords[0].scheduled_us > 3_000_000);
+    assert_eq!(delayed.schedule.chords()[0].key_mask, 1);
+    assert!(delayed.schedule.chords()[0].scheduled_us > 3_000_000);
     assert!(delayed.expected_down_slots.is_empty());
     assert!(delayed.expected_up_slots.is_empty());
 }
@@ -455,6 +529,42 @@ fn mixed_up_down_oracle_matches_repeated_cycles_and_rejects_mutations() {
     assert!(expected_mixed_up_down_event_sequence(&down, &down[..1]).is_err());
     let up = [physical(0x17), PhysicalExpectation { scan_code: 0x18, extended: true }];
     assert_eq!(expected_mixed_up_down_event_sequence(&down, &up).unwrap(), vec![("key_press", down[0]), ("key_release", up[0]), ("key_press", down[1]), ("key_release", up[1])]);
+
+    // Completion-anchored MixedUpDown reconciliation accepts both mixed-order and
+    // split-order cycles and counts each explicitly, while rejecting invalid order.
+    let mixed_and_split_events = vec![
+        event(1, "key_press", 0x15),
+        event(2, "key_release", 0x15),
+        event(3, "key_press", 0x16),
+        event(4, "key_release", 0x16),
+        event(5, "key_press", 0x15),
+        event(6, "key_press", 0x16),
+        event(7, "key_release", 0x15),
+        event(8, "key_release", 0x16),
+    ];
+    let obs = reconcile_mixed_up_down_events(
+        &mixed_and_split_events,
+        &[physical(0x15), physical(0x16), physical(0x15), physical(0x16)],
+        &[physical(0x15), physical(0x16), physical(0x15), physical(0x16)],
+    )
+    .expect("mixed + split cycles are valid under completion-anchored semantics");
+    assert_eq!(
+        obs,
+        MixedUpDownObservation {
+            mixed_order_cycles: 1,
+            split_order_cycles: 1,
+        }
+    );
+    let mut bad_order = mixed_and_split_events[..4].to_vec();
+    bad_order.swap(0, 2); // B Down before A Down
+    assert!(
+        reconcile_mixed_up_down_events(
+            &bad_order,
+            &[physical(0x15), physical(0x16)],
+            &[physical(0x15), physical(0x16)],
+        )
+        .is_err()
+    );
 }
 #[test]
 fn expected_drain_waits_for_late_event_and_quiet() {
@@ -707,7 +817,8 @@ fn noncanonical_profile_and_cleanup_verdicts_remain_valid() {
     );
     assert_eq!(p.physical_key(0).scan_code, 0x02);
     let plan = scenario_plan(Scenario::CleanupFullRelease, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
-    assert_eq!(plan.schedule.chords[0].key_mask, FULL_INSTRUMENT_MASK);
+    assert_eq!(plan.schedule.chords()[0].key_mask, FULL_INSTRUMENT_MASK);
+    assert_eq!(plan.schedule.hold_us(), 9_950_000);
     assert!(cleanup_evidence_clean(
         true,
         FULL_INSTRUMENT_MASK,
@@ -815,12 +926,12 @@ fn timing_margin_sweep_authors_hold_h_and_zero_up_gap_targets() {
     for margin in [0, 500, 800, 1_000, 3_000] {
         let plan = scenario_plan(Scenario::TimingMarginSweep, margin).unwrap();
         let hold = ACCEPTANCE_FRAME_US + margin;
-        assert_eq!(plan.schedule.hold_us, hold);
+        assert_eq!(plan.schedule.hold_us(), hold);
         assert_eq!(
-            plan.schedule.chords[1].scheduled_us - plan.schedule.chords[0].scheduled_us,
+            plan.schedule.chords()[1].scheduled_us - plan.schedule.chords()[0].scheduled_us,
             hold
         );
-        assert_eq!(plan.schedule.generation_count, 2);
+        assert_eq!(plan.schedule.generation_count(), 2);
         assert_eq!(plan.expected_down_slots, vec![0, 0]);
         assert_eq!(plan.expected_up_slots, vec![0, 0]);
     }
@@ -831,12 +942,12 @@ fn short_up_gap_stress_authors_exact_holds_and_same_timestamp_repeats() {
     let plan = scenario_plan(Scenario::ShortUpGapStress, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
     let hold = acceptance_min_hold_us(ACCEPTANCE_TIMING_MARGIN_US);
 
-    assert_eq!(plan.schedule.hold_us, hold);
-    assert_eq!(plan.schedule.chords.len(), SHORT_UP_GAP_STRESS_CYCLES);
-    assert_eq!(plan.schedule.generation_count, SHORT_UP_GAP_STRESS_CYCLES as u64);
+    assert_eq!(plan.schedule.hold_us(), hold);
+    assert_eq!(plan.schedule.chords().len(), SHORT_UP_GAP_STRESS_CYCLES);
+    assert_eq!(plan.schedule.generation_count(), SHORT_UP_GAP_STRESS_CYCLES as u64);
     assert_eq!(plan.expected_down_slots.len(), SHORT_UP_GAP_STRESS_CYCLES);
     assert_eq!(plan.expected_up_slots.len(), SHORT_UP_GAP_STRESS_CYCLES);
-    for pair in plan.schedule.chords.windows(2) {
+    for pair in plan.schedule.chords().windows(2) {
         assert_eq!(pair[1].scheduled_us - pair[0].scheduled_us, hold);
     }
     assert_eq!(SHORT_UP_GAP_STRESS_CYCLES - 1, SHORT_UP_GAP_STRESS_MIN_HOLD_SAMPLES as usize);
