@@ -46,7 +46,7 @@ export const homeVi: HomeContent = {
       {
         title: 'Kiểm tra trước khi phát',
         description:
-          'Xem thông tin tương thích, chọn track hoặc cao độ khi được hỗ trợ và xem những phần có thể bị mất khi chuyển đổi sheet nhạc.',
+          'Kiểm tra khả năng tương thích của sheet, chọn bè nhạc hoặc cao độ khi được hỗ trợ và xem những phần có thể bị mất khi chuyển đổi.',
       },
     ],
     views: [
@@ -71,11 +71,11 @@ export const homeVi: HomeContent = {
     ],
   },
   playback: {
-    title: 'Phát nhạc theo nhịp của bản nhạc',
+    title: 'Chủ động với nhịp điệu',
     description:
-      'Trình phát lên lịch cho nốt đơn, hợp âm và nốt ngân theo sheet nhạc. Bạn có thể điều chỉnh tốc độ và thời gian giữ phím.',
-    dryRunNote:
-      'Kiểm tra thiết lập trước khi chơi. Trong ứng dụng desktop, Test playback (no input) cho phép chạy thử mà không gửi phím.',
+      'Phát nốt đơn, hợp âm và nốt ngân theo sheet nhạc. Tùy chỉnh tốc độ và thời gian giữ phím.',
+    dryRunTitle: 'Chạy thử trước khi chơi',
+    dryRunNote: 'Trong ứng dụng desktop, Test playback (no input) chạy thử mà không gửi phím.',
     eventTypes: { chord: 'Hợp âm', note: 'Nốt đơn', hold: 'Nốt ngân' },
     controlsLabel: 'Điều khiển minh họa phát nhạc',
     play: 'Chạy minh họa',
@@ -91,8 +91,7 @@ export const homeVi: HomeContent = {
     pausedStatus: 'Đã tạm dừng',
     completeStatus: 'Đã phát xong. Không có phím nào đang hoạt động.',
     manualOnly: 'Đang bật giảm chuyển động. Dùng nút Trước và Tiếp để chuyển từng phần.',
-    demoNote:
-      'Chạy minh họa để xem hợp âm, nốt đơn và nốt ngân. Không có âm thanh và không đo thời điểm gửi phím trong game.',
+    demoNote: 'Minh họa 2,6 giây, không có âm thanh và không đo thời điểm gửi phím trong game.',
     timingLinkLabel: 'Cách tính thời gian phát',
     secondsAbbreviation: 'giây',
   },
@@ -123,14 +122,16 @@ export const homeVi: HomeContent = {
   trust: {
     title: 'Tải Sky Auto Player',
     platformSummary: 'Windows 11 64-bit · Miễn phí, mã nguồn mở',
+    releaseDestinationNote: 'Mở GitHub Releases',
     installationTitle: 'Cài đặt',
-    installerGuidance: 'Chọn bộ cài Windows ổn định có tên kết thúc bằng _x64-setup.exe.',
+    installerGuidance: 'Chọn bộ cài Windows ổn định có tên kết thúc bằng',
+    installerSuffix: '_x64-setup.exe',
     signatureNote: 'Tệp .exe.sig dành cho trình cập nhật, không cần khi cài thủ công.',
     installScope: 'Cài đặt cho tài khoản Windows hiện tại.',
     signingValue:
       'Bộ cài không có chữ ký Authenticode; Windows có thể hiển thị Unknown Publisher hoặc SmartScreen.',
     safetyNote:
-      'Ứng dụng gửi phím qua Windows SendInput. Ứng dụng không đọc bộ nhớ game hay sửa tệp game; điều này không bảo đảm an toàn tài khoản.',
+      'Ứng dụng gửi phím qua Windows SendInput, không đọc bộ nhớ hoặc sửa tệp game. Cách này không bảo đảm an toàn tài khoản.',
     safetyTitle: 'An toàn tài khoản',
     safetyLink: 'Đọc về rủi ro tài khoản',
     supportLabel: 'Trợ giúp',

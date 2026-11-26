@@ -85,7 +85,6 @@ const defaultView = data.views[0];
 <style>
   @layer components {
     .product-showcase {
-      max-inline-size: 70rem;
       background: radial-gradient(ellipse at center, var(--line-faint), transparent 72%);
     }
 
@@ -173,6 +172,9 @@ const defaultView = data.views[0];
     }
 
     .product-showcase__caption a {
+      display: inline-flex;
+      min-block-size: 2.75rem;
+      align-items: center;
       color: var(--color-text-primary);
       text-decoration: underline;
       text-decoration-color: var(--line-default);
@@ -187,7 +189,7 @@ const defaultView = data.views[0];
     .product-showcase__provenance {
       margin: 0 0 0.5rem;
       color: var(--color-text-tertiary);
-      font-size: var(--type-micro);
+      font-size: clamp(0.8125rem, 0.75rem + 0.15vw, 0.875rem);
       line-height: 1.45;
     }
 
@@ -228,26 +230,37 @@ const defaultView = data.views[0];
 
     .product-showcase__features {
       display: grid;
-      gap: clamp(1.5rem, 3vw, 2.5rem);
-      margin-block-start: clamp(1.5rem, 3vw, 3rem);
-      padding-block-start: clamp(1.5rem, 2.5vw, 2.5rem);
-      border-block-start: 1px solid var(--line-default);
+      gap: clamp(1.75rem, 3.5vw, 3rem);
+      margin-block-start: clamp(1.5rem, 2.5vw, 2rem);
+      padding-block-start: clamp(0.5rem, 1.1vw, 1rem);
+      border-block-start: 1px solid var(--line-faint);
     }
 
     .product-showcase__features h3 {
-      margin: 0 0 0.75rem;
-      font-size: var(--type-h3);
+      margin: 0 0 0.5rem;
+      font-size: clamp(1.25rem, 1.15rem + 0.2vw, 1.5rem);
+      line-height: 1.35;
     }
 
     .product-showcase__features p {
       max-inline-size: 56ch;
       margin: 0;
       color: var(--color-text-secondary);
+      font-size: clamp(1rem, 0.95rem + 0.2vw, 1.125rem);
+      line-height: 1.68;
     }
 
     @media (min-width: 48rem) {
       .product-showcase__features {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 39.99rem) {
+      .product-showcase__caption {
+        display: grid;
+        justify-content: start;
+        gap: 0.5rem;
       }
     }
 

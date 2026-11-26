@@ -71,11 +71,11 @@ export const homeEn: HomeContent = {
     ],
   },
   playback: {
-    title: 'Playback built around musical timing',
-    description:
-      'The player schedules notes, chords and holds from the sheet, with adjustable tempo and key-hold settings.',
+    title: 'Shape your playback',
+    description: 'Play notes, chords and holds from the sheet. Adjust tempo and key-hold duration.',
+    dryRunTitle: 'Try your settings first',
     dryRunNote:
-      'Check your settings first. In the desktop app, Test playback (no input) runs a preview without sending key presses.',
+      'In the desktop app, Test playback (no input) runs a preview without sending key presses.',
     eventTypes: { chord: 'Chord', note: 'Note', hold: 'Hold' },
     controlsLabel: 'Playback demonstration controls',
     play: 'Run demo',
@@ -91,8 +91,7 @@ export const homeEn: HomeContent = {
     pausedStatus: 'Paused',
     completeStatus: 'Phrase complete. No keys are active.',
     manualOnly: 'Reduced motion is on. Use Previous and Next to step through the phrase.',
-    demoNote:
-      'Run the visual demo to see a chord, note and hold. No sound or game timing measurement.',
+    demoNote: '2.6-second visual demo. No audio or in-game timing measurement.',
     timingLinkLabel: 'How timing works',
     secondsAbbreviation: 's',
   },
@@ -123,8 +122,10 @@ export const homeEn: HomeContent = {
   trust: {
     title: 'Get Sky Auto Player',
     platformSummary: 'Windows 11 x64 · Free and open source',
+    releaseDestinationNote: 'Opens GitHub Releases',
     installationTitle: 'Installation',
-    installerGuidance: 'Choose the stable Windows installer ending in _x64-setup.exe.',
+    installerGuidance: 'Choose the stable Windows installer ending in',
+    installerSuffix: '_x64-setup.exe',
     signatureNote: 'The .exe.sig file is for the updater, not manual installation.',
     installScope: 'Installs for the current Windows user.',
     signingValue: 'Unsigned installer; Windows may show Unknown Publisher or SmartScreen.',

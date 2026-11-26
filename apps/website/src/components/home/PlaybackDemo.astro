@@ -31,131 +31,148 @@ const timingGuide = withBase(
   data-home-section="playback"
 >
   <div class="container playback-demo__layout">
-    <header class="playback-demo__intro">
+    <header class="playback-demo__header">
       <h2 id="playback-title">{data.title}</h2>
       <p class="playback-demo__description">{data.description}</p>
-      <p class="playback-demo__dry-run">{data.dryRunNote}</p>
     </header>
 
-    <div
-      class="playback-demo__stage"
-      data-playback-demo
-      data-initial-status={data.initialStatus}
-      data-playing-status={data.playingStatus}
-      data-paused-status={data.pausedStatus}
-      data-complete-status={data.completeStatus}
-      data-play-label={data.play}
-      data-resume-label={data.resume}
-      data-pause-label={data.pause}
-      data-replay-label={data.replay}
-      data-locale={locale}
-    >
-      <div class="playback-demo__time" aria-hidden="true">
-        <span data-elapsed>{formatPlaybackTime(0, locale)}</span>
-        <span>
-          {' '}
-          / {formatPlaybackTime(PLAYBACK_DEMO_DURATION_MS, locale)} {data.secondsAbbreviation}
-        </span>
-      </div>
-
-      <div class="playback-timeline" style={`--playback-columns: ${timelineColumns}`}>
-        <div
-          class="playback-timeline__track"
-          role="progressbar"
-          aria-label={data.progressLabel}
-          aria-valuemin="0"
-          aria-valuemax={PLAYBACK_DEMO_DURATION_MS}
-          aria-valuenow="0"
-          aria-describedby="playback-legend"
-          data-demo-progress
-        >
-          <span class="playback-timeline__segments" aria-hidden="true">
-            {PLAYBACK_DEMO_EVENTS.map((_event, index) => (
-              <span
-                class="playback-timeline__segment"
-                aria-current={index === 0 ? 'step' : undefined}
-                data-demo-segment={index}
-              ></span>
-            ))}
+    <div class="playback-demo__body">
+      <div
+        class="playback-demo__stage"
+        data-playback-demo
+        data-initial-status={data.initialStatus}
+        data-playing-status={data.playingStatus}
+        data-paused-status={data.pausedStatus}
+        data-complete-status={data.completeStatus}
+        data-play-label={data.play}
+        data-resume-label={data.resume}
+        data-pause-label={data.pause}
+        data-replay-label={data.replay}
+        data-locale={locale}
+      >
+        <div class="playback-demo__time" aria-hidden="true">
+          <span data-elapsed>{formatPlaybackTime(0, locale)}</span>
+          <span>
+            {' '}
+            / {formatPlaybackTime(PLAYBACK_DEMO_DURATION_MS, locale)} {data.secondsAbbreviation}
           </span>
-          <span class="playback-timeline__playhead" aria-hidden="true" data-playhead></span>
         </div>
-        <ol class="playback-timeline__legend" id="playback-legend">
-          {PLAYBACK_DEMO_EVENTS.map((event, index) => (
-            <li
-              aria-current={index === 0 ? 'step' : undefined}
-              data-demo-event={index}
-              data-kind={data.eventTypes[event.kind]}
-              data-keys={event.keys.join(' + ')}
-            >
-              <strong>{data.eventTypes[event.kind]}</strong>
-              <span>{event.keys.join(' + ')}</span>
-              <time datetime={`PT${(event.endMs - event.startMs) / 1000}S`}>
-                {formatPlaybackDuration(event.endMs - event.startMs, locale)}
-              </time>
-            </li>
-          ))}
-        </ol>
-      </div>
 
-      <div class="playback-keyboard">
-        <p class="playback-keyboard__label">{data.keyboardLabel}</p>
-        <div class="playback-keyboard__keys" aria-hidden="true">
-          {PLAYBACK_DEMO_KEYS.map((key) => (
-            <span
-              class:list={['playback-key', firstEventKeys.has(key) && 'is-active']}
-              data-demo-key={key}
-            >
-              {key}
+        <div class="playback-timeline" style={`--playback-columns: ${timelineColumns}`}>
+          <div
+            class="playback-timeline__track"
+            role="progressbar"
+            aria-label={data.progressLabel}
+            aria-valuemin="0"
+            aria-valuemax={PLAYBACK_DEMO_DURATION_MS}
+            aria-valuenow="0"
+            aria-describedby="playback-legend"
+            data-demo-progress
+          >
+            <span class="playback-timeline__segments" aria-hidden="true">
+              {PLAYBACK_DEMO_EVENTS.map((_event, index) => (
+                <span
+                  class="playback-timeline__segment"
+                  aria-current={index === 0 ? 'step' : undefined}
+                  data-demo-segment={index}
+                ></span>
+              ))}
             </span>
-          ))}
+            <span class="playback-timeline__playhead" aria-hidden="true" data-playhead></span>
+          </div>
+          <ol class="playback-timeline__legend" id="playback-legend">
+            {PLAYBACK_DEMO_EVENTS.map((event, index) => (
+              <li
+                aria-current={index === 0 ? 'step' : undefined}
+                data-demo-event={index}
+                data-kind={data.eventTypes[event.kind]}
+                data-keys={event.keys.join(' + ')}
+              >
+                <strong>{data.eventTypes[event.kind]}</strong>
+                <span class="playback-timeline__keys">
+                  {event.keys.map((key, keyIndex) => (
+                    <span class="playback-timeline__key-token">
+                      {keyIndex > 0 && ' + '}
+                      {key}
+                    </span>
+                  ))}
+                </span>
+                <time datetime={`PT${(event.endMs - event.startMs) / 1000}S`}>
+                  {formatPlaybackDuration(event.endMs - event.startMs, locale)}
+                </time>
+              </li>
+            ))}
+          </ol>
         </div>
-      </div>
 
-      <div class="playback-demo__controls-wrap">
-        <div
-          class="playback-demo__controls"
-          role="group"
-          aria-label={data.controlsLabel}
-          hidden
-          data-demo-controls
-        >
-          <button
-            class="button button--secondary playback-demo__play"
-            type="button"
-            data-action="play"
-          >
-            {data.play}
-          </button>
-          <button
-            class="playback-demo__step"
-            type="button"
-            aria-label={data.previous}
-            aria-disabled="true"
-            data-action="previous"
-          >
-            <span aria-hidden="true">←</span>
-          </button>
-          <button
-            class="playback-demo__step"
-            type="button"
-            aria-label={data.next}
-            data-action="next"
-          >
-            <span aria-hidden="true">→</span>
-          </button>
+        <div class="playback-keyboard">
+          <p class="playback-keyboard__label">{data.keyboardLabel}</p>
+          <div class="playback-keyboard__keys" aria-hidden="true">
+            {PLAYBACK_DEMO_KEYS.map((key) => (
+              <span
+                class:list={['playback-key', firstEventKeys.has(key) && 'is-active']}
+                data-demo-key={key}
+              >
+                {key}
+              </span>
+            ))}
+          </div>
         </div>
-        <p class="playback-demo__motion-note" hidden data-motion-note>
-          {data.manualOnly}
+
+        <div class="playback-demo__controls-wrap">
+          <div
+            class="playback-demo__controls"
+            role="group"
+            aria-label={data.controlsLabel}
+            hidden
+            data-demo-controls
+          >
+            <button
+              class="button button--secondary playback-demo__play"
+              type="button"
+              data-action="play"
+            >
+              {data.play}
+            </button>
+            <button
+              class="playback-demo__step"
+              type="button"
+              aria-label={data.previous}
+              aria-disabled="true"
+              data-action="previous"
+            >
+              <span aria-hidden="true">←</span>
+            </button>
+            <button
+              class="playback-demo__step"
+              type="button"
+              aria-label={data.next}
+              data-action="next"
+            >
+              <span aria-hidden="true">→</span>
+            </button>
+          </div>
+          <p class="playback-demo__motion-note" hidden data-motion-note>
+            {data.manualOnly}
+          </p>
+        </div>
+        <p class="sr-only" role="status" aria-live="polite" data-demo-status>
+          {data.initialStatus}
         </p>
       </div>
-      <p class="playback-demo__timing-note" id="timing-model">
-        {data.demoNote}
-        <a href={timingGuide}>{data.timingLinkLabel}</a>
-      </p>
-      <p class="sr-only" role="status" aria-live="polite" data-demo-status>
-        {data.initialStatus}
-      </p>
+
+      <aside class="playback-demo__support">
+        <p class="playback-demo__timing-note" id="timing-model">
+          {data.demoNote}
+        </p>
+        <a class="playback-demo__timing-link" href={timingGuide}>
+          {data.timingLinkLabel}
+        </a>
+        <div class="playback-demo__dry-run">
+          <h3>{data.dryRunTitle}</h3>
+          <p>{data.dryRunNote}</p>
+        </div>
+      </aside>
     </div>
   </div>
 </section>
@@ -165,32 +182,47 @@ const timingGuide = withBase(
     .playback-demo__layout {
       display: grid;
       gap: var(--home-content-gap);
-      padding-block-start: var(--home-content-gap);
+      padding-block-start: clamp(2rem, 3vw, 3rem);
       border-block-start: 1px solid var(--line-faint);
     }
 
-    @media (min-width: 64rem) {
-      .playback-demo__layout {
-        grid-template-columns: minmax(0, 36fr) minmax(0, 64fr);
-        align-items: center;
-      }
+    .playback-demo__header {
+      display: grid;
+      gap: 1rem;
     }
 
-    .playback-demo__intro {
-      max-inline-size: 44rem;
-    }
-
-    .playback-demo h2 {
-      margin-block-end: 0.75rem;
+    .playback-demo__header h2 {
+      max-inline-size: 18ch;
+      margin: 0;
       font-size: var(--home-heading);
-      line-height: var(--leading-heading);
+      line-height: 1.12;
     }
 
     .playback-demo__description {
+      max-inline-size: 55ch;
       margin: 0;
       color: var(--color-text-secondary);
-      font-size: var(--home-lead);
-      line-height: 1.55;
+      font-size: clamp(1rem, 0.95rem + 0.25vw, 1.125rem);
+      line-height: 1.68;
+    }
+
+    .playback-demo__body {
+      display: grid;
+      align-items: start;
+      gap: var(--home-content-gap);
+    }
+
+    @media (min-width: 64rem) {
+      .playback-demo__header {
+        grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+        align-items: end;
+        gap: clamp(2.5rem, 3.3vw, 3rem);
+      }
+
+      .playback-demo__body {
+        grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
+        gap: clamp(2.5rem, 3.3vw, 3rem);
+      }
     }
 
     .playback-demo__stage {
@@ -213,9 +245,51 @@ const timingGuide = withBase(
     }
 
     .playback-demo__dry-run {
+      display: grid;
+      gap: 0.5rem;
       margin: 1rem 0 0;
+      padding-block-start: 1.5rem;
+      border-block-start: 1px solid var(--line-faint);
+    }
+
+    .playback-demo__dry-run h3 {
+      margin: 0;
+      font-size: clamp(1.25rem, 1.15rem + 0.2vw, 1.5rem);
+      line-height: 1.35;
+    }
+
+    .playback-demo__dry-run p {
+      max-inline-size: 55ch;
+      margin: 0;
       color: var(--color-text-secondary);
-      max-inline-size: 54ch;
+      font-size: clamp(1rem, 0.95rem + 0.2vw, 1.125rem);
+      line-height: 1.68;
+    }
+
+    .playback-demo__support {
+      display: grid;
+      align-content: start;
+      gap: 0.5rem;
+    }
+
+    .playback-demo__timing-note {
+      max-inline-size: 55ch;
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--type-small);
+      line-height: 1.6;
+    }
+
+    .playback-demo__timing-link {
+      display: inline-flex;
+      min-block-size: 2.75rem;
+      align-items: center;
+      justify-self: start;
+      color: var(--color-action);
+      font-size: var(--type-small);
+      text-decoration: underline;
+      text-decoration-color: var(--line-accent);
+      text-underline-offset: 0.22em;
     }
 
     .playback-demo__time {
@@ -305,6 +379,10 @@ const timingGuide = withBase(
     .playback-timeline__legend strong {
       color: var(--color-text-primary);
       font-weight: 600;
+    }
+
+    .playback-timeline__key-token {
+      white-space: nowrap;
     }
 
     .playback-keyboard {
@@ -398,29 +476,15 @@ const timingGuide = withBase(
       background: var(--color-surface-quiet);
     }
 
-    .playback-demo__motion-note,
-    .playback-demo__timing-note {
+    .playback-demo__motion-note {
       margin: 1rem 0 0;
       color: var(--color-text-tertiary);
       font-size: var(--type-small);
       line-height: 1.5;
     }
 
-    .playback-demo__timing-note {
-      max-inline-size: 70ch;
-      color: var(--color-text-secondary);
-    }
-
     .playback-demo__motion-note {
       margin: 0;
-    }
-
-    .playback-demo__timing-note a {
-      margin-inline-start: 0.35rem;
-      color: var(--color-text-secondary);
-      text-decoration: underline;
-      text-decoration-color: var(--line-default);
-      text-underline-offset: 0.2em;
     }
 
     @media (forced-colors: active) {

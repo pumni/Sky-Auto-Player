@@ -54,6 +54,7 @@ export interface HomeContent {
   playback: {
     title: string;
     description: string;
+    dryRunTitle: string;
     dryRunNote: string;
     eventTypes: { chord: string; note: string; hold: string };
     controlsLabel: string;
@@ -77,8 +78,10 @@ export interface HomeContent {
   trust: {
     title: string;
     platformSummary: string;
+    releaseDestinationNote: string;
     installationTitle: string;
     installerGuidance: string;
+    installerSuffix: string;
     signatureNote: string;
     installScope: string;
     signingValue: string;

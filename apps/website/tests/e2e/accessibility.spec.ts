@@ -184,13 +184,21 @@ test.describe('accessibility and responsive contracts', () => {
           element.getBoundingClientRect(),
         );
         const footer = document.querySelector('.site-footer__layout')!.getBoundingClientRect();
-        const quickStart = document.querySelector('.quick-start__layout')!.getBoundingClientRect();
+        const rails = [
+          '#product',
+          '.playback-demo__layout',
+          '.quick-start__layout',
+          '.trust-download__layout',
+        ].map((selector) => {
+          const rect = document.querySelector(selector)!.getBoundingClientRect();
+          return { left: rect.left, right: rect.right, width: rect.width };
+        });
         return {
           gaps: chapters.slice(1).map((box, index) => box.top - chapters[index].bottom),
           footerLeft: footer.left,
           footerWidth: footer.width,
-          quickStartLeft: quickStart.left,
-          quickStartWidth: quickStart.width,
+          rails,
+          viewport: document.documentElement.clientWidth,
         };
       });
       expect(spacing.gaps).toHaveLength(4);
@@ -213,9 +221,15 @@ test.describe('accessibility and responsive contracts', () => {
       }
       expect(spacing.footerLeft).toBeGreaterThanOrEqual(16);
       expect(spacing.footerWidth).toBeLessThanOrEqual(1200.5);
-      const localGutter = width === 390 ? 4 : 0;
-      expect(spacing.quickStartLeft - spacing.footerLeft).toBeCloseTo(localGutter, 0);
-      expect(spacing.footerWidth - spacing.quickStartWidth).toBeCloseTo(2 * localGutter, 0);
+      const rail = spacing.rails[0];
+      expect(rail.left).toBeGreaterThanOrEqual(16);
+      expect(rail.right).toBeLessThanOrEqual(spacing.viewport - 16);
+      for (const aligned of spacing.rails.slice(1)) {
+        expect(Math.abs(aligned.left - rail.left)).toBeLessThanOrEqual(1);
+        expect(Math.abs(aligned.right - rail.right)).toBeLessThanOrEqual(1);
+        expect(Math.abs(aligned.width - rail.width)).toBeLessThanOrEqual(1);
+      }
+      if (width === 1440 || width === 1920) expect(rail.width).toBeCloseTo(1120, 0);
     }
 
     await page.goto('/Sky-Auto-Player/faq/');
@@ -225,6 +239,166 @@ test.describe('accessibility and responsive contracts', () => {
         .locator('.faq-layout')
         .evaluate((element) => Number.parseFloat(getComputedStyle(element).marginBottom));
       expect(Math.abs(defaultSpacing - faqSpacing[index])).toBeLessThan(0.2);
+    }
+  });
+
+  test('Home composition uses one rail and the approved responsive grouping in both locales', async ({
+    page,
+  }) => {
+    const viewports = [
+      { width: 1920, height: 1080 },
+      { width: 1440, height: 900 },
+      { width: 1280, height: 800 },
+      { width: 1024, height: 768 },
+      { width: 768, height: 1024 },
+      { width: 390, height: 844 },
+      { width: 320, height: 768 },
+      { width: 844, height: 390 },
+    ];
+
+    for (const route of ['/', '/vi/']) {
+      for (const viewport of viewports) {
+        await page.setViewportSize(viewport);
+        await page.goto(`/Sky-Auto-Player${route}`);
+        await page.evaluate(() => document.fonts.ready);
+        const geometry = await page.evaluate(() => {
+          const bounds = (selector: string) => {
+            const rect = document.querySelector(selector)!.getBoundingClientRect();
+            return {
+              left: rect.left,
+              right: rect.right,
+              top: rect.top,
+              bottom: rect.bottom,
+              width: rect.width,
+            };
+          };
+          const stepHeadings = [...document.querySelectorAll('.quick-start__step h3')].map(
+            (element) => {
+              const rect = element.getBoundingClientRect();
+              return { left: rect.left, top: rect.top };
+            },
+          );
+          const trustHeadings = [...document.querySelectorAll('.trust-download__details h3')].map(
+            (element) => element.getBoundingClientRect().top,
+          );
+          const ctaButton = bounds('.trust-download__button');
+          const ctaNote = bounds('.trust-download__destination');
+          const sections = [...document.querySelectorAll('[data-home-section]')];
+          return {
+            documentWidth: document.documentElement.scrollWidth,
+            viewportWidth: document.documentElement.clientWidth,
+            rail: [
+              bounds('#product'),
+              bounds('.playback-demo__layout'),
+              bounds('.quick-start__layout'),
+              bounds('.trust-download__layout'),
+            ],
+            productImage: bounds('[data-product-image]'),
+            playbackHeader: bounds('.playback-demo__header'),
+            playbackStage: bounds('.playback-demo__stage'),
+            playbackSupport: bounds('.playback-demo__support'),
+            playbackDOMOrder: [
+              ...document.querySelectorAll(
+                '#playback .playback-demo__header, #playback .playback-demo__stage, #playback .playback-demo__support',
+              ),
+            ].map((element) => element.className),
+            quickStartSteps: [...document.querySelectorAll('.quick-start__step')].map((element) => {
+              const rect = element.getBoundingClientRect();
+              return { left: rect.left, top: rect.top, width: rect.width };
+            }),
+            stepHeadings,
+            trustHeadings,
+            ctaCopy: bounds('.trust-download__cta-copy'),
+            ctaAction: bounds('.trust-download__cta-action'),
+            ctaButton,
+            ctaNote,
+            chapterGaps: sections
+              .slice(1)
+              .map(
+                (element, index) =>
+                  element.getBoundingClientRect().top -
+                  sections[index].getBoundingClientRect().bottom,
+              ),
+          };
+        });
+
+        expect(geometry.documentWidth).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+        const [product, playback, quickStart, trust] = geometry.rail;
+        for (const aligned of [playback, quickStart, trust]) {
+          expect(
+            Math.abs(aligned.left - product.left),
+            `${route} ${viewport.width}px rail left`,
+          ).toBeLessThanOrEqual(1);
+          expect(
+            Math.abs(aligned.right - product.right),
+            `${route} ${viewport.width}px rail right`,
+          ).toBeLessThanOrEqual(1);
+        }
+        expect(geometry.playbackDOMOrder).toEqual([
+          'playback-demo__header',
+          'playback-demo__stage',
+          'playback-demo__support',
+        ]);
+        expect(geometry.playbackHeader.bottom).toBeLessThanOrEqual(geometry.playbackStage.top);
+
+        if (viewport.width >= 1280) {
+          expect(product.width).toBeCloseTo(1120, 0);
+          expect(geometry.playbackStage.width).toBeGreaterThanOrEqual(650);
+          expect(geometry.playbackStage.width).toBeLessThanOrEqual(700);
+        }
+        if (viewport.width === 1024) {
+          expect(geometry.playbackStage.width).toBeGreaterThanOrEqual(540);
+          expect(geometry.playbackStage.width).toBeLessThanOrEqual(580);
+        }
+        if (viewport.width >= 1024) {
+          expect(geometry.playbackSupport.left).toBeGreaterThan(geometry.playbackStage.right);
+          expect(
+            Math.abs(geometry.playbackSupport.top - geometry.playbackStage.top),
+          ).toBeLessThanOrEqual(1);
+        } else {
+          expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(
+            geometry.playbackStage.bottom + 20,
+          );
+        }
+
+        if (viewport.width >= 768) {
+          expect(geometry.quickStartSteps[0].left).toBeLessThan(geometry.quickStartSteps[1].left);
+          expect(geometry.quickStartSteps[1].left).toBeLessThan(geometry.quickStartSteps[2].left);
+          const headingTop = geometry.stepHeadings[0].top;
+          for (const heading of geometry.stepHeadings.slice(1)) {
+            expect(Math.abs(heading.top - headingTop)).toBeLessThanOrEqual(1);
+          }
+          const trustHeadingTop = geometry.trustHeadings[0];
+          for (const headingTopValue of geometry.trustHeadings.slice(1)) {
+            expect(Math.abs(headingTopValue - trustHeadingTop)).toBeLessThanOrEqual(1);
+          }
+          expect(geometry.ctaAction.left).toBeGreaterThan(geometry.ctaCopy.left);
+        } else {
+          expect(geometry.quickStartSteps[0].top).toBeLessThan(geometry.quickStartSteps[1].top);
+          expect(geometry.quickStartSteps[1].top).toBeLessThan(geometry.quickStartSteps[2].top);
+          expect(geometry.quickStartSteps[0].left).toBeCloseTo(geometry.quickStartSteps[1].left, 0);
+          expect(geometry.stepHeadings[0].left).toBeGreaterThan(
+            geometry.quickStartSteps[0].left + 24,
+          );
+        }
+        expect(geometry.ctaButton.bottom).toBeLessThanOrEqual(geometry.ctaNote.top);
+        expect(geometry.ctaNote.top - geometry.ctaButton.bottom).toBeLessThanOrEqual(12);
+
+        const laterMinMax =
+          viewport.width >= 1280
+            ? [120, 144]
+            : viewport.width >= 1024
+              ? [96, 120]
+              : viewport.width >= 640
+                ? [88, 112]
+                : viewport.width > 320
+                  ? [80, 96]
+                  : [72, 80];
+        for (const gap of geometry.chapterGaps.slice(1)) {
+          expect(gap).toBeGreaterThanOrEqual(laterMinMax[0] - 0.1);
+          expect(gap).toBeLessThanOrEqual(laterMinMax[1] + 0.1);
+        }
+      }
     }
   });
 
@@ -768,7 +942,9 @@ test.describe('accessibility and responsive contracts', () => {
       .evaluateAll((events) => events.map((event) => event.getBoundingClientRect().width));
     for (const widths of [trackWidths, legendWidths]) {
       expect(widths).toHaveLength(3);
-      expect(widths[0]).toBeCloseTo(widths[1]);
+      // Chromium rounds fractional CSS grid tracks to 1/64px. Equal-duration
+      // events can therefore differ by one layout quantum at the narrower rail.
+      expect(Math.abs(widths[0] - widths[1])).toBeLessThanOrEqual(1 / 64);
       expect(widths[2] / widths[0]).toBeCloseTo(1200 / 700, 2);
     }
 
@@ -1053,7 +1229,7 @@ test.describe('accessibility and responsive contracts', () => {
         1,
       );
       await expect(page.locator('#timing-model')).toContainText(
-        route === '/' ? 'No sound' : 'Không có âm thanh',
+        route === '/' ? 'No audio' : 'không có âm thanh',
       );
       await expect(page.locator('#how-it-works ol li')).toHaveCount(3);
       await expect(page.locator('#how-it-works ol')).toContainText('15');

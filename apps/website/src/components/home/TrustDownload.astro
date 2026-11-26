@@ -20,35 +20,43 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
   data-home-section="trust-download"
 >
   <div class="container trust-download__layout">
-    <div class="trust-download__lead">
-      <h2 id="trust-download-title">{data.title}</h2>
-      <p class="trust-download__platform">{data.platformSummary}</p>
-      <a class="button button--primary trust-download__button" href={SITE.stableReleaseUrl}>
-        {downloadCta}
-      </a>
-      <p class="trust-download__destination">GitHub Releases</p>
+    <div class="trust-download__cta">
+      <div class="trust-download__cta-copy">
+        <h2 id="trust-download-title">{data.title}</h2>
+        <p class="trust-download__platform">{data.platformSummary}</p>
+      </div>
+      <div class="trust-download__cta-action">
+        <a class="button button--primary trust-download__button" href={SITE.stableReleaseUrl}>
+          {downloadCta}
+        </a>
+        <p class="trust-download__destination">{data.releaseDestinationNote}</p>
+      </div>
     </div>
 
     <div class="trust-download__details">
       <div>
         <h3>{data.installationTitle}</h3>
-        <p>{data.installerGuidance}</p>
+        <p>
+          {data.installerGuidance} <code>{data.installerSuffix}</code>.
+        </p>
         <p>{data.signatureNote}</p>
         <p>{data.installScope}</p>
         <p>{data.signingValue}</p>
       </div>
       <div>
         <h3>{data.safetyTitle}</h3>
-        <p class="trust-download__safety">
-          {data.safetyNote}
-          <a href={safetyUrl}>{data.safetyLink}</a>
-        </p>
+        <p>{data.safetyNote}</p>
+        <a class="trust-download__safety-link" href={safetyUrl}>
+          {data.safetyLink}
+        </a>
 
         <nav id="faq-preview" class="trust-download__support" aria-label={data.supportLabel}>
           <span>{data.supportLabel}</span>
-          {data.supportLinks.map((link) => (
-            <a href={withBase(link.href)}>{link.label}</a>
-          ))}
+          <div class="trust-download__support-links">
+            {data.supportLinks.map((link) => (
+              <a href={withBase(link.href)}>{link.label}</a>
+            ))}
+          </div>
         </nav>
       </div>
     </div>
@@ -59,32 +67,43 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
   @layer components {
     .trust-download__layout {
       display: grid;
-      gap: var(--home-content-gap);
+      gap: clamp(1.5rem, 2.4vw, 2rem);
     }
 
-    .trust-download__lead {
+    .trust-download__cta {
       display: grid;
       justify-items: center;
-      gap: 1rem;
-      padding: clamp(1.5rem, 3.2vw, 3rem) clamp(1rem, 4vw, 4rem);
+      gap: 1.5rem;
+      padding: 1.5rem 1rem;
       border: 1px solid var(--line-default);
       border-radius: var(--radius-md);
       background: var(--color-surface-stage);
       text-align: center;
     }
 
-    .trust-download h2 {
-      margin: 0;
-      font-size: var(--home-heading);
-      line-height: var(--leading-heading);
+    .trust-download__cta-copy {
+      display: grid;
+      gap: 0.75rem;
+      justify-items: center;
     }
 
-    .trust-download__platform,
-    .trust-download__destination {
+    .trust-download__cta h2 {
+      margin: 0;
+      font-size: clamp(1.875rem, 1.5rem + 1.5vw, 2.5rem);
+      line-height: 1.15;
+    }
+
+    .trust-download__platform {
       margin: 0;
       color: var(--color-text-secondary);
-      font-size: var(--type-small);
-      line-height: 1.5;
+      font-size: clamp(1rem, 0.95rem + 0.2vw, 1.125rem);
+      line-height: 1.6;
+    }
+
+    .trust-download__cta-action {
+      display: grid;
+      justify-items: center;
+      gap: 0.625rem;
     }
 
     .trust-download__button {
@@ -93,37 +112,73 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       border-radius: var(--radius-sm);
     }
 
+    .trust-download__destination {
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--type-small);
+      line-height: 1.5;
+    }
+
     .trust-download__details {
       display: grid;
       gap: clamp(1.5rem, 2.2vw, 2rem);
-      inline-size: min(100%, 66rem);
-      margin-inline: auto;
-      padding-block: clamp(1.5rem, 2vw, 2rem);
-      border-block: 1px solid var(--line-faint);
+      padding-block-start: clamp(1.5rem, 2vw, 2rem);
+      border-block-start: 1px solid var(--line-faint);
       color: var(--color-text-secondary);
-      line-height: 1.6;
+      font-size: var(--type-body);
+      line-height: 1.68;
     }
 
     .trust-download__details > div {
       display: grid;
       align-content: start;
-      gap: var(--space-3);
-      max-inline-size: 72ch;
+      gap: 0.75rem;
+      max-inline-size: 60ch;
     }
 
-    @media (min-width: 64rem) {
+    @media (min-width: 48rem) {
+      .trust-download__cta {
+        grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr);
+        justify-items: stretch;
+        align-items: center;
+        gap: 2rem;
+        padding: clamp(2.5rem, 3.5vw, 4rem) clamp(2rem, 4vw, 3.5rem);
+        text-align: start;
+      }
+
+      .trust-download__cta-copy,
+      .trust-download__cta-action {
+        justify-items: start;
+      }
+
       .trust-download__details {
         grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: clamp(3rem, 5vw, 5rem);
       }
     }
 
-    .trust-download__details h3,
+    .trust-download__details h3 {
+      margin: 0;
+      color: var(--color-text-primary);
+      font-size: clamp(1.25rem, 1.15rem + 0.2vw, 1.5rem);
+      line-height: 1.35;
+    }
+
     .trust-download__details p {
       margin: 0;
     }
 
-    .trust-download__safety a {
-      margin-inline-start: 0.35rem;
+    .trust-download code {
+      overflow-wrap: anywhere;
+      color: var(--color-text-primary);
+      font-size: 0.95em;
+    }
+
+    .trust-download__safety-link {
+      display: inline-flex;
+      min-block-size: 2.75rem;
+      align-items: center;
+      justify-self: start;
       color: var(--color-text-primary);
       text-decoration: underline;
       text-decoration-color: var(--line-default);
@@ -131,10 +186,8 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
     }
 
     .trust-download__support {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 0.5rem 1.25rem;
+      display: grid;
+      gap: 0.5rem;
       padding-block-start: 0.25rem;
       font-size: var(--type-small);
     }
@@ -143,16 +196,33 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       color: var(--color-text-tertiary);
     }
 
-    .trust-download__support a {
+    .trust-download__support-links {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.75rem 1rem;
+    }
+
+    .trust-download__support-links a {
+      display: inline-flex;
+      min-block-size: 2.75rem;
+      align-items: center;
       color: var(--color-text-secondary);
       text-decoration: underline;
       text-decoration-color: var(--line-default);
       text-underline-offset: 0.2em;
     }
 
-    .trust-download__support a:hover,
-    .trust-download__safety a:hover {
+    .trust-download__support-links a:hover,
+    .trust-download__safety-link:hover {
       color: var(--color-action);
+    }
+
+    @media (forced-colors: active) {
+      .trust-download__cta,
+      .trust-download__details {
+        border-color: CanvasText;
+      }
     }
   }
 </style>
