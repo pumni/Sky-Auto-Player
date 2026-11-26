@@ -2,7 +2,6 @@
 import BaseLayout from '../../layouts/BaseLayout.astro';
 import HomePage from '../../components/home/HomePage.astro';
 import { homeVi } from '../../data/home.vi';
-import { PRODUCT_RELEASE } from '../../data/product-release';
 import { SITE } from '../../data/site';
 import { withBase } from '../../utils/urls';
 
@@ -27,12 +26,11 @@ const structuredData = {
       '@id': softwareId,
       name: 'Sky Auto Player',
       description: homeVi.seo.description,
-      softwareVersion: PRODUCT_RELEASE.version,
       applicationCategory: 'MultimediaApplication',
       operatingSystem: 'Windows 11 (64-bit)',
       url: siteUrlEn,
       image: new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href,
-      downloadUrl: SITE.releaseUrl,
+      downloadUrl: SITE.stableReleaseUrl,
       license: 'https://www.gnu.org/licenses/gpl-3.0.html',
       isAccessibleForFree: true,
       inLanguage: 'vi',

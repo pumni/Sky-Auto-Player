@@ -1,6 +1,5 @@
 ---
 import type { HomeContent } from '../../data/home.types';
-import { PRODUCT_RELEASE } from '../../data/product-release';
 import { SITE } from '../../data/site';
 import { withBase } from '../../utils/urls';
 
@@ -16,40 +15,23 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
 
 <section
   id="technical"
-  class="home-chapter trust-download"
+  class="trust-download"
   aria-labelledby="trust-download-title"
   data-home-section="trust-download"
 >
   <div class="container trust-download__layout">
     <div class="trust-download__lead">
-      <div>
-        <h2 id="trust-download-title">{data.title}</h2>
-        <p class="trust-download__package">
-          {data.packageLabel}: {data.packageValue} · v{PRODUCT_RELEASE.version}
-        </p>
-      </div>
-      <a class="button button--primary trust-download__button" href={SITE.releaseUrl}>
+      <h2 id="trust-download-title">{data.title}</h2>
+      <p class="trust-download__description">{data.description}</p>
+      <a class="button button--primary trust-download__button" href={SITE.stableReleaseUrl}>
         {downloadCta}
       </a>
+      <p class="trust-download__package">{data.packageValue} · GitHub Releases</p>
     </div>
 
     <div class="trust-download__details">
-      <p class="trust-download__installer">
-        {locale === 'vi'
-          ? 'Trong GitHub Releases, tải bộ cài Windows ổn định:'
-          : 'In GitHub Releases, download the stable Windows installer:'}
-        <code>Sky.Auto.Player_{PRODUCT_RELEASE.version}_x64-setup.exe</code>
-        {locale === 'vi'
-          ? '. Tệp .exe.sig chỉ dùng làm chữ ký updater.'
-          : '. The .exe.sig file is only the updater signature.'}
-      </p>
-      <p>
-        <strong>{locale === 'vi' ? 'Chữ ký bộ cài' : 'Authenticode'}</strong> {data.signingValue}
-      </p>
-      <p>
-        <strong>{locale === 'vi' ? 'Xác minh bản cập nhật' : 'Updater verification'}</strong>{' '}
-        {data.updaterValue}
-      </p>
+      <p>{data.installerGuidance}</p>
+      <p>{data.signingValue}</p>
     </div>
 
     <p class="trust-download__safety">
@@ -68,23 +50,36 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
 
 <style>
   @layer components {
-    .trust-download {
-      padding-block-end: clamp(2rem, 4vw, 3rem);
-    }
-
     .trust-download__layout {
       display: grid;
-      gap: 1.25rem;
+      gap: var(--home-content-gap);
+    }
+
+    .trust-download__lead {
+      display: grid;
+      justify-items: center;
+      gap: 1rem;
+      padding: clamp(1.5rem, 5vw, 5rem) clamp(1rem, 4vw, 4rem);
+      border: 1px solid var(--line-default);
+      border-radius: var(--radius-md);
+      background: var(--color-surface-stage);
+      text-align: center;
+    }
+
+    .trust-download__description {
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--home-lead);
     }
 
     .trust-download h2 {
       margin: 0;
-      font-size: var(--type-h2);
+      font-size: var(--home-heading);
       line-height: var(--leading-heading);
     }
 
     .trust-download__package {
-      margin-block-start: 0.5rem;
+      margin: 0;
       color: var(--color-text-secondary);
       font-size: var(--type-small);
       line-height: 1.5;
@@ -104,14 +99,6 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       color: var(--color-text-tertiary);
       font-size: var(--type-small);
       line-height: 1.5;
-    }
-
-    .trust-download__installer code {
-      overflow-wrap: anywhere;
-    }
-
-    .trust-download__details strong {
-      color: var(--color-text-primary);
     }
 
     .trust-download__details p {
@@ -157,19 +144,6 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
     .trust-download__support a:hover,
     .trust-download__safety a:hover {
       color: var(--color-action);
-    }
-
-    @media (min-width: 48rem) {
-      .trust-download__lead {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 2rem;
-      }
-
-      .trust-download__button {
-        flex: none;
-      }
     }
   }
 </style>

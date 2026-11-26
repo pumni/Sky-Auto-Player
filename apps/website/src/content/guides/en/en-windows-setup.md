@@ -36,7 +36,7 @@ evidence:
 
 ## Download and install
 
-1. Go to the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
+1. Go to the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases/latest).
 2. Download the canonical Tauri NSIS installer. The `.exe.sig` sidecar is used by the in-app updater and is not needed for manual installation.
 3. Run the installer and keep the default current-user location.
 4. Launch **Sky Auto Player** from the installed shortcut.

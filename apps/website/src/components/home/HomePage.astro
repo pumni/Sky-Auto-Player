@@ -13,10 +13,10 @@ interface Props {
 const { content } = Astro.props;
 ---
 
-<div class="home-opening container">
+<div class="home-page">
   <Hero data={content.hero} downloadCta={content.downloadCta} locale={content.locale} />
   <ProductShowcase data={content.product} />
+  <PlaybackDemo data={content.playback} locale={content.locale} />
+  <QuickStart data={content.quickStart} />
+  <TrustDownload data={content.trust} locale={content.locale} downloadCta={content.downloadCta} />
 </div>
-<PlaybackDemo data={content.playback} locale={content.locale} />
-<QuickStart data={content.quickStart} />
-<TrustDownload data={content.trust} locale={content.locale} downloadCta={content.downloadCta} />

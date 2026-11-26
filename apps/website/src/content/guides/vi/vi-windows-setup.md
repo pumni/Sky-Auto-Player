@@ -34,7 +34,7 @@ evidence:
 
 ## Tải xuống và cài đặt
 
-1. Vào [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases).
+1. Vào [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases/latest).
 2. Tải installer Tauri NSIS canonical. Sidecar `.exe.sig` dành cho in-app updater, không cần khi cài thủ công.
 3. Chạy installer và giữ vị trí current-user mặc định.
 4. Mở **Sky Auto Player** từ shortcut đã cài.

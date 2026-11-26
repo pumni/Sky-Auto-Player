@@ -124,7 +124,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     <div class="site-actions">
       <a
         class="button button--primary button--small header-download"
-        href={SITE.releaseUrl}
+        href={SITE.stableReleaseUrl}
         aria-label={
           isVi
             ? 'Tải xuống — tải cho Windows trên GitHub Releases'
@@ -392,7 +392,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         flex-direction: row;
         align-items: center;
         justify-content: center;
-        gap: clamp(0.45rem, 1vw, 1.25rem);
+        gap: clamp(0.45rem, 1.1vw, 1.4rem);
         padding: 0;
         border: 0;
         order: 1;

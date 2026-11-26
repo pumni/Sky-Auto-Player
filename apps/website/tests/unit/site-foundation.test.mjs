@@ -39,13 +39,13 @@ test('English and Vietnamese homepage data keep every section structurally align
   expect(valueShape(homeEn)).toEqual(valueShape(homeVi));
   expect(homeEn.product.views.map((view) => view.label)).toEqual([
     'Library',
-    'Song Detail',
-    'Settings',
+    'Song details',
+    'Playback settings',
   ]);
   expect(homeVi.product.views.map((view) => view.label)).toEqual([
     'Thư viện',
     'Chi tiết bài hát',
-    'Thiết lập',
+    'Thiết lập phát',
   ]);
   expect(homeEn.quickStart.items).toHaveLength(3);
   expect(homeVi.quickStart.items).toHaveLength(3);
@@ -56,7 +56,7 @@ test('English and Vietnamese homepage data keep every section structurally align
   ]);
 });
 
-test('homepage composes the four approved chapters from the five section owners', () => {
+test('homepage composes the five approved chapters once in order', () => {
   const homePage = readFileSync(
     new URL('../../src/components/home/HomePage.astro', import.meta.url),
     'utf8',
@@ -105,8 +105,8 @@ test('the signature demo uses the approved event intervals, keys, and visible ti
 });
 
 test('the hero leads with concise product value and both locales disclose the release journey', () => {
-  expect(homeEn.hero.title).toBe('Play the sheet. Not the keyboard.');
-  expect(homeVi.hero.title).toBe('Chơi bản nhạc, không chơi bàn phím.');
+  expect(homeEn.hero.titleEmphasis).toBe('your music');
+  expect(homeVi.hero.titleEmphasis).toBe('âm nhạc');
   expect(homeEn.downloadCta).toBe('Download for Windows');
   expect(homeVi.downloadCta).toBe('Tải cho Windows');
   expect(homeEn.hero.meta).toContain('GitHub Releases');
@@ -271,8 +271,8 @@ test('localized technical copy follows the current playback, install, import, an
   expect(viFormats).toContain('30, 60, 90, 120, 144, 165 hoặc 240');
   expect(homeEn.trust.signingValue).toMatch(/unsigned installer/i);
   expect(homeVi.trust.signingValue).toMatch(/không có chữ ký Authenticode/i);
-  expect(homeEn.trust.updaterValue).toContain('.exe.sig');
-  expect(homeVi.trust.updaterValue).toContain('.exe.sig');
+  expect(homeEn.trust.installerGuidance).toContain('.exe.sig');
+  expect(homeVi.trust.installerGuidance).toContain('.exe.sig');
   expect(homeEn.trust.safetyNote).toMatch(/Windows SendInput/);
   expect(homeVi.trust.safetyNote).toMatch(/Windows SendInput/);
 });

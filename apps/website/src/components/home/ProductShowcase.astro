@@ -12,13 +12,17 @@ const defaultView = data.views[0];
 
 <section
   id="product"
-  class="product-showcase"
-  aria-label={data.sectionLabel}
+  class="container product-showcase"
+  aria-labelledby="product-title"
   data-home-section="product"
   data-product-showcase
   data-pending-message={data.pendingMessage}
   data-error-message={data.errorMessage}
 >
+  <header class="product-showcase__intro">
+    <h2 id="product-title">{data.title}</h2>
+    <p>{data.description}</p>
+  </header>
   <div class="product-selector" role="group" aria-label={data.selectorLabel} hidden>
     {data.views.map((view, index) => (
       <button
@@ -30,7 +34,7 @@ const defaultView = data.views[0];
         data-alt={view.alt}
         data-caption={view.caption}
       >
-        {view.label}
+        <strong>{view.label}</strong> <span>{view.description}</span>
       </button>
     ))}
   </div>
@@ -73,7 +77,24 @@ const defaultView = data.views[0];
 <style>
   @layer components {
     .product-showcase {
-      min-inline-size: 0;
+      max-inline-size: 70rem;
+      background: radial-gradient(ellipse at center, var(--line-faint), transparent 72%);
+    }
+
+    .product-showcase__intro {
+      margin-block-end: var(--home-content-gap);
+      text-align: center;
+    }
+
+    .product-showcase__intro h2 {
+      margin: 0;
+      font-size: var(--home-heading);
+    }
+
+    .product-showcase__intro p {
+      margin: 0.5rem 0 0;
+      color: var(--color-text-secondary);
+      font-size: var(--home-lead);
     }
 
     .product-selector[hidden],
@@ -82,21 +103,29 @@ const defaultView = data.views[0];
     }
 
     .product-selector {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.25rem;
-      margin-block-end: 0.75rem;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(min(100%, 15rem), 1fr));
+      gap: 0.5rem;
+      margin-block-end: 1rem;
     }
 
     .product-selector__button {
       min-block-size: 44px;
-      padding: 0.4rem 0.7rem;
+      display: grid;
+      align-content: start;
+      gap: 0.2rem;
+      padding: 0.55rem 0.85rem;
+      text-align: start;
       border: 1px solid transparent;
       border-radius: var(--radius-sm);
       background: transparent;
       color: var(--color-text-secondary);
       cursor: pointer;
       font-size: var(--type-small);
+    }
+
+    .product-selector__button strong {
+      font-size: var(--type-body);
     }
 
     .product-selector__button:hover {
@@ -107,6 +136,9 @@ const defaultView = data.views[0];
       border-color: var(--color-action);
       background: var(--color-surface-active);
       color: var(--color-text-primary);
+    }
+
+    .product-selector__button[aria-pressed='true'] strong {
       text-decoration: underline;
       text-underline-offset: 0.22em;
     }

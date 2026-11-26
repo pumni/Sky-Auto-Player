@@ -33,7 +33,7 @@ const { groups } = Astro.props;
     }
 
     .faq-list__group + .faq-list__group {
-      margin-block-start: var(--space-6);
+      margin-block-start: clamp(2rem, 4vw, 3.5rem);
     }
 
     .faq-list__group h2 {

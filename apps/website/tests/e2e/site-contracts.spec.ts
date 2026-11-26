@@ -1,5 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { readFileSync } from 'node:fs';
 
 const origin = process.env.PLAYWRIGHT_BASE_URL;
 if (!origin) {
@@ -9,10 +8,7 @@ if (!origin) {
 }
 const hostOrigin = new URL(origin).origin;
 const officialReleasesUrl = 'https://github.com/pumni/Sky-Auto-Player/releases';
-const legacyLatestUrl = `${officialReleasesUrl}/latest`;
-const publishedRelease = JSON.parse(
-  readFileSync(new URL('../../src/data/product-release.json', import.meta.url), 'utf8'),
-) as { version: string };
+const stableReleaseUrl = `${officialReleasesUrl}/latest`;
 
 const canonicalRoutes = [
   { path: '/', lang: 'en', canonical: 'https://pumni.github.io/Sky-Auto-Player/' },
@@ -36,7 +32,7 @@ test.describe('published route and asset contracts', () => {
     });
   }
 
-  test('English and Vietnamese homepage JSON-LD uses the published stable release', async ({
+  test('English and Vietnamese homepage JSON-LD links to the stable release without snapshot metadata', async ({
     request,
   }) => {
     for (const path of ['/', '/vi/']) {
@@ -53,7 +49,8 @@ test.describe('published route and asset contracts', () => {
         .filter((entry) => entry && entry['@type'] === 'SoftwareApplication');
 
       expect(softwareApplications).toHaveLength(1);
-      expect(softwareApplications[0].softwareVersion).toBe(publishedRelease.version);
+      expect(softwareApplications[0]).not.toHaveProperty('softwareVersion');
+      expect(softwareApplications[0].downloadUrl).toBe(stableReleaseUrl);
       expect(softwareApplications[0].operatingSystem).toBe('Windows 11 (64-bit)');
     }
   });
@@ -69,7 +66,6 @@ test.describe('published route and asset contracts', () => {
           'free, open-source music sheet player',
           'Download for Windows',
           'GitHub Releases',
-          'NSIS',
           'current-user install',
           'playlist',
           'does not inspect game memory',
@@ -162,15 +158,23 @@ test.describe('published route and asset contracts', () => {
     }
   });
 
-  test('active v4-facing pages use the releases collection, not legacy Latest', async ({
-    request,
+  test('stable download actions and release history have distinct destinations', async ({
+    page,
   }) => {
-    for (const path of ['/', '/faq/', '/vi/', '/vi/faq/']) {
-      const response = await request.get(origin + path);
-      expect(response.status()).toBe(200);
-      const html = await response.text();
-      expect(html).toContain(officialReleasesUrl);
-      expect(html).not.toContain(legacyLatestUrl);
+    for (const root of ['/Sky-Auto-Player/', '/Sky-Auto-Player/vi/']) {
+      await page.goto(root);
+      for (const selector of ['.header-download', '.hero__primary', '.trust-download__button']) {
+        await expect(page.locator(selector)).toHaveAttribute('href', stableReleaseUrl);
+      }
+      await expect(page.locator('footer a[href="' + officialReleasesUrl + '"]')).toHaveCount(1);
+      await expect(page.locator('main')).not.toContainText(/\bv?\d+\.\d+\.\d+\b/);
+      for (const route of ['faq/', 'guides/windows-setup/']) {
+        await page.goto(root + route);
+        expect(
+          await page.locator('main a[href="' + stableReleaseUrl + '"]').count(),
+        ).toBeGreaterThan(0);
+        await expect(page.locator('footer a[href="' + officialReleasesUrl + '"]')).toHaveCount(1);
+      }
     }
   });
 
@@ -226,7 +230,7 @@ test.describe('published route and asset contracts', () => {
     const html = await home.text();
     expect(html).toContain('Browser mock preview');
     expect(html).toContain('/assets/images/desktop-library-browser-preview-1366x768.png');
-    expect(html).toContain('not a native Tauri capture');
+    expect(html).toContain('not a native capture');
     expect(html).not.toContain('terminal picker');
     const localUrls = Array.from(
       html.matchAll(/(?:href|src)="(\/Sky-Auto-Player\/[^"#?]+)"/g),

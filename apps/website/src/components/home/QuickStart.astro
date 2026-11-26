@@ -11,7 +11,7 @@ const { data } = Astro.props;
 
 <section
   id="how-it-works"
-  class="home-chapter quick-start"
+  class="quick-start"
   aria-labelledby="quick-start-title"
   data-home-section="quick-start"
 >
@@ -30,17 +30,15 @@ const { data } = Astro.props;
         </li>
       ))}
     </ol>
-    <div class="quick-start__links">
-      <a href={withBase(data.setupGuideHref)}>
-        {data.setupGuideLabel}
-        <span aria-hidden="true"> ↗</span>
-      </a>
-    </div>
     <p class="quick-start__formats" id="formats">
       <span>{data.formatsLabel}</span>
       <span>{data.formatsValue}</span>
       <a href={withBase(data.formatsHref)}>
         {data.formatsLinkLabel}
+        <span aria-hidden="true"> ↗</span>
+      </a>
+      <a href={withBase(data.setupGuideHref)}>
+        {data.setupGuideLabel}
         <span aria-hidden="true"> ↗</span>
       </a>
     </p>
@@ -51,19 +49,19 @@ const { data } = Astro.props;
   @layer components {
     .quick-start__layout {
       display: grid;
-      gap: 1.5rem;
+      gap: var(--home-content-gap);
     }
 
     .quick-start h2 {
       max-inline-size: 24ch;
       margin: 0;
-      font-size: var(--type-h2);
+      font-size: var(--home-heading);
       line-height: var(--leading-heading);
     }
 
     .quick-start__steps {
       display: grid;
-      gap: 1.25rem;
+      gap: 1.5rem;
       margin: 0;
       padding: 0;
       list-style: none;
@@ -84,7 +82,7 @@ const { data } = Astro.props;
 
     .quick-start__step h3 {
       margin-block-end: 0.3rem;
-      font-size: var(--type-body);
+      font-size: clamp(1.25rem, 1rem + 0.5vw, 1.5rem);
       line-height: 1.35;
     }
 
@@ -96,7 +94,6 @@ const { data } = Astro.props;
       line-height: var(--leading-body);
     }
 
-    .quick-start__links a,
     .quick-start__formats a {
       color: var(--color-action);
       text-decoration: underline;

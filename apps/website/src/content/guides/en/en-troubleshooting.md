@@ -105,7 +105,7 @@ limits described above and in the [playback guide](https://pumni.github.io/Sky-A
 
 **Cause**: The canonical installer is intentionally unsigned for Authenticode under the current policy. Windows may show Unknown Publisher or a SmartScreen warning.
 
-**Fix**: Confirm the download came from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases). The Tauri updater verifies the separate `.exe.sig` sidecar; it does not provide Authenticode publisher identity. If you cannot confirm the source, do not run the installer.
+**Fix**: Confirm the download came from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases/latest). The Tauri updater verifies the separate `.exe.sig` sidecar; it does not provide Authenticode publisher identity. If you cannot confirm the source, do not run the installer.
 
 ## Updating manually
 
@@ -115,7 +115,7 @@ limits described above and in the [playback guide](https://pumni.github.io/Sky-A
 
 1. Retry **Update and Restart** from the in-app update notice.
 2. If it still fails, uninstall only after preserving app data, then download the current
-   canonical NSIS installer from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases).
+   canonical NSIS installer from the [official Sky Auto Player GitHub Releases page](https://github.com/pumni/Sky-Auto-Player/releases/latest).
 3. Do not use a v3 ZIP, `MANIFEST.json`, or standalone updater executable for v4.
 
 ## The HUD shows high timing jitter

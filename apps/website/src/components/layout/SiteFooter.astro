@@ -27,7 +27,7 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
     </div>
     <nav class="site-footer__links" aria-label={isVi ? 'Liên kết chân trang' : 'Footer links'}>
       <div class="site-footer__group">
-        <a href={SITE.releaseUrl}>{isVi ? 'Bản phát hành' : 'Releases'}</a>
+        <a href={SITE.releaseHistoryUrl}>{isVi ? 'Bản phát hành' : 'Releases'}</a>
         <a href={withBase(isVi ? '/vi/guides/' : '/guides/')}>{isVi ? 'Hướng dẫn' : 'Guides'}</a>
         <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>FAQ</a>
       </div>

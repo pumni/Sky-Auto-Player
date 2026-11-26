@@ -332,7 +332,7 @@ test.describe('navigation and route contracts', () => {
       await expect(releases).toBeVisible();
       await expect(releases).toHaveAttribute(
         'href',
-        'https://github.com/pumni/Sky-Auto-Player/releases',
+        'https://github.com/pumni/Sky-Auto-Player/releases/latest',
       );
       await expect(releases).toHaveAccessibleName(/GitHub Releases/);
       await expect(page.locator('.menu-toggle')).toBeVisible();

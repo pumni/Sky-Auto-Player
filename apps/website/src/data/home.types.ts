@@ -13,14 +13,17 @@ export interface HomeContent {
     release: string;
   };
   hero: {
-    title: string;
+    titleStart: string;
+    titleEmphasis: string;
+    titleEnd: string;
     description: string;
     secondaryCta: string;
     meta: string;
     riskNote: string;
   };
   product: {
-    sectionLabel: string;
+    title: string;
+    description: string;
     selectorLabel: string;
     fullSizeLabel: string;
     fallbackLabel: string;
@@ -29,6 +32,7 @@ export interface HomeContent {
     captureNote: string;
     views: {
       label: string;
+      description: string;
       alt: string;
       caption: string;
       src: string;
@@ -68,10 +72,10 @@ export interface HomeContent {
   };
   trust: {
     title: string;
-    packageLabel: string;
+    description: string;
+    installerGuidance: string;
     packageValue: string;
     signingValue: string;
-    updaterValue: string;
     safetyNote: string;
     safetyLink: string;
     supportLabel: string;

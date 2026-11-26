@@ -23,7 +23,7 @@ export function GET() {
 - [FAQ](${base}/faq/)
 - [Vietnamese home](${base}/vi/)
 - [Vietnamese FAQ](${base}/vi/faq/)
-- [Releases](${SITE.releaseUrl})
+- [Releases](${SITE.releaseHistoryUrl})
 - [Source repository](${SITE.repositoryUrl})
 
 ## Guides

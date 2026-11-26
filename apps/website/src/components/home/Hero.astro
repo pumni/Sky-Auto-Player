@@ -13,17 +13,21 @@ const { data, downloadCta, locale } = Astro.props;
 
 <section
   id="top"
-  class:list={['hero', locale === 'vi' && 'hero--vi']}
+  class:list={['hero container', locale === 'vi' && 'hero--vi']}
   aria-labelledby="hero-title"
   data-home-section="hero"
 >
-  <h1 id="hero-title">{data.title}</h1>
+  <h1 id="hero-title">
+    {data.titleStart}
+    <span>{data.titleEmphasis}</span>
+    {data.titleEnd}
+  </h1>
   <p class="hero__description">{data.description}</p>
   <div class="hero__actions">
-    <a class="button button--primary hero__primary" href={SITE.releaseUrl}>
+    <a class="button button--primary hero__primary" href={SITE.stableReleaseUrl}>
       {downloadCta}
     </a>
-    <a class="hero__secondary" href="#product">
+    <a class="button button--secondary hero__secondary" href="#product">
       {data.secondaryCta}
     </a>
   </div>
@@ -34,97 +38,63 @@ const { data, downloadCta, locale } = Astro.props;
 <style>
   @layer components {
     .hero {
-      min-inline-size: 0;
-      padding-block: 1rem;
+      max-inline-size: 52rem;
+      text-align: center;
     }
 
     .hero h1 {
-      margin-block-end: 1.25rem;
+      margin: 0;
+      font-size: clamp(2.25rem, 1.5rem + 3.7vw, 5rem);
       letter-spacing: -0.025em;
       line-height: 1.08;
-      max-inline-size: 17ch;
-      color: var(--color-text-primary);
       text-wrap: balance;
     }
 
-    .hero h1::first-line {
+    .hero h1 span {
       color: var(--color-action-hover);
     }
 
     .hero--vi h1 {
       letter-spacing: 0;
+      font-size: clamp(2.25rem, 1.5rem + 3.1vw, 4.5rem);
       line-height: 1.16;
-      max-inline-size: 15ch;
     }
 
     .hero__description {
-      max-inline-size: 42ch;
-      margin-block-end: 1.5rem;
+      max-inline-size: 72ch;
+      margin: 1.5rem auto 0;
       color: var(--color-text-secondary);
-      font-size: var(--type-lead);
+      font-size: var(--home-lead);
       line-height: 1.5;
+    }
+
+    .hero--vi .hero__description {
+      font-size: clamp(1rem, 0.9rem + 0.3vw, 1.125rem);
     }
 
     .hero__actions {
       display: flex;
       flex-wrap: wrap;
-      align-items: center;
-      gap: 1.25rem;
+      justify-content: center;
+      gap: 0.75rem clamp(0.5rem, 1.2vw, 1rem);
+      margin-block-start: 1.5rem;
     }
 
-    .hero__primary {
-      min-block-size: 3rem;
-      padding-inline: 1.25rem;
-      border-radius: var(--radius-sm);
-    }
-
-    .hero__secondary {
-      display: inline-flex;
+    .hero__actions .button {
       min-block-size: 44px;
-      align-items: center;
-      color: var(--color-text-secondary);
-      text-decoration: underline;
-      text-decoration-color: var(--line-default);
-      text-underline-offset: 0.25em;
+      padding-inline: clamp(0.5rem, 1.6vw, 1.25rem);
     }
 
-    .hero__secondary:hover {
-      color: var(--color-text-primary);
-      text-decoration-color: var(--color-focus);
-    }
-
-    .hero__meta {
-      margin-block-start: 0.875rem;
-      color: var(--color-text-tertiary);
-      font-size: var(--type-small);
-    }
-
+    .hero__meta,
     .hero__risk {
-      max-inline-size: 48ch;
-      margin-block-start: 1.25rem;
+      margin: 0.75rem auto 0;
       color: var(--color-text-secondary);
       font-size: var(--type-small);
       line-height: 1.5;
     }
 
-    @media (min-width: 64rem) {
-      .hero {
-        padding-block-start: clamp(1rem, 3vw, 3rem);
-      }
-    }
-
-    @media (max-width: 39.99rem) {
-      .hero {
-        padding-block: 0;
-      }
-
-      .hero__actions {
-        gap: 0.75rem 1rem;
-      }
-
-      .hero__risk {
-        margin-block-start: 1rem;
-      }
+    .hero__risk {
+      max-inline-size: 78ch;
     }
   }
 </style>

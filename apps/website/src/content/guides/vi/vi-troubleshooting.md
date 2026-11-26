@@ -84,7 +84,7 @@ parser hiện tại chưa hỗ trợ.
 
 **Nguyên nhân**: Installer canonical hiện chưa được ký Authenticode theo chính sách hiện hành. Windows có thể hiển thị Unknown Publisher hoặc cảnh báo SmartScreen.
 
-**Sửa**: Xác nhận file được tải từ [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases). Tauri updater xác minh sidecar `.exe.sig` riêng; sidecar không cung cấp publisher identity Authenticode. Nếu không xác nhận được nguồn tải, đừng chạy installer.
+**Sửa**: Xác nhận file được tải từ [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases/latest). Tauri updater xác minh sidecar `.exe.sig` riêng; sidecar không cung cấp publisher identity Authenticode. Nếu không xác nhận được nguồn tải, đừng chạy installer.
 
 ## Cập nhật thủ công
 
@@ -93,7 +93,7 @@ parser hiện tại chưa hỗ trợ.
 **Sửa**:
 
 1. Thử lại **Update and Restart** từ thông báo cập nhật trong app.
-2. Nếu vẫn thất bại, tải installer NSIS canonical từ [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases).
+2. Nếu vẫn thất bại, tải installer NSIS canonical từ [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases/latest).
 3. Không dùng ZIP v3, `MANIFEST.json` hoặc updater executable độc lập cho v4.
 
 ## HUD hiển thị jitter timing cao

@@ -49,7 +49,6 @@
     --type-label: clamp(0.8125rem, 0.8rem + 0.08vw, 0.9rem);
     --type-small: clamp(0.9rem, 0.87rem + 0.12vw, 0.98rem);
     --type-body: clamp(1rem, 0.97rem + 0.15vw, 1.1rem);
-    --type-lead: clamp(1.16rem, 1.08rem + 0.3vw, 1.42rem);
     --type-h3: clamp(1.24rem, 1.12rem + 0.45vw, 1.62rem);
     --type-h2: clamp(1.75rem, 1.3rem + 1.4vw, 2.75rem);
     --type-hero: clamp(2.25rem, 1.6rem + 2.8vw, 4.25rem);
