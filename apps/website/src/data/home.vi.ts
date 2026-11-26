@@ -97,8 +97,9 @@ export const homeVi: HomeContent = {
     secondsAbbreviation: 'giây',
   },
   quickStart: {
+    eyebrow: 'Bắt đầu sử dụng',
     title: 'Từ sheet đến bản nhạc.',
-    description: 'Bắt đầu chơi nhạc trong 3 bước.',
+    description: 'Cài đặt trình phát, chọn bản nhạc và chơi trong Sky chỉ với ba bước.',
     items: [
       {
         title: 'Cài đặt ứng dụng',
@@ -114,8 +115,6 @@ export const homeVi: HomeContent = {
           'Mở nhạc cụ 15 phím tương thích trong Sky. Chọn bài, nhấn Play trong ứng dụng rồi chuyển lại cửa sổ Sky.',
       },
     ],
-    setupGuideTitle: 'Thiết lập lần đầu',
-    setupGuideDescription: 'Làm theo hướng dẫn cài đặt và phát bản nhạc đầu tiên.',
     setupGuideLabel: 'Đọc hướng dẫn cài đặt',
     setupGuideHref: '/vi/guides/windows-setup/',
     formatsLabel: 'Định dạng sheet hỗ trợ',
@@ -125,7 +124,7 @@ export const homeVi: HomeContent = {
     formatsHref: '/vi/guides/sheet-formats/',
   },
   trust: {
-    title: 'Trước khi cài đặt.',
+    title: 'Sẵn sàng chơi nhạc?',
     platformSummary: 'Windows 11 64-bit · Miễn phí, mã nguồn mở',
     releaseLinkLabel: 'Xem bản phát hành ổn định',
     releaseDestinationNote: 'Mở GitHub Releases',
@@ -142,9 +141,10 @@ export const homeVi: HomeContent = {
     safetyTitle: 'An toàn tài khoản',
     safetyLink: 'Đọc về rủi ro tài khoản',
     supportLabel: 'Bạn cần trợ giúp?',
+    supportDescription: 'Tìm câu trả lời trước khi chơi hoặc khắc phục sự cố để tiếp tục phát nhạc.',
     supportLinks: [
-      { label: 'Câu hỏi thường gặp', href: '/vi/faq/' },
-      { label: 'Khắc phục sự cố phát nhạc', href: '/vi/guides/troubleshooting/' },
+      { label: 'Câu hỏi thường gặp', description: 'Cài đặt, định dạng, tương thích và an toàn tài khoản.', href: '/vi/faq/' },
+      { label: 'Khắc phục sự cố phát nhạc', description: 'Xử lý lỗi phát nhạc, thời gian phát và gửi phím.', href: '/vi/guides/troubleshooting/' },
     ],
   },
 };

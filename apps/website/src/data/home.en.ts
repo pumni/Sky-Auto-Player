@@ -97,8 +97,9 @@ export const homeEn: HomeContent = {
     secondsAbbreviation: 's',
   },
   quickStart: {
+    eyebrow: 'Getting started',
     title: 'From sheet to song.',
-    description: 'Start playing in three steps.',
+    description: 'Set up the player, choose your music and play it in Sky in three steps.',
     items: [
       {
         title: 'Install',
@@ -114,8 +115,6 @@ export const homeEn: HomeContent = {
           'Open a compatible 15-key instrument in Sky. Choose a song, press Play in the app and return focus to the Sky window.',
       },
     ],
-    setupGuideTitle: 'First-time setup',
-    setupGuideDescription: 'Follow the installation and first playback instructions.',
     setupGuideLabel: 'Read the setup guide',
     setupGuideHref: '/guides/windows-setup/',
     formatsLabel: 'Supported sheet formats',
@@ -125,7 +124,7 @@ export const homeEn: HomeContent = {
     formatsHref: '/guides/sheet-formats/',
   },
   trust: {
-    title: 'Before you install.',
+    title: 'Ready to play?',
     platformSummary: 'Windows 11 x64 · Free and open source',
     releaseLinkLabel: 'View stable release',
     releaseDestinationNote: 'Opens GitHub Releases',
@@ -140,10 +139,11 @@ export const homeEn: HomeContent = {
     safetyRisk: 'This cannot guarantee account safety.',
     safetyTitle: 'Account safety',
     safetyLink: 'Read about account risk',
-    supportLabel: 'Need help?',
+    supportLabel: 'Need a hand?',
+    supportDescription: 'Find answers before your first song or get back to playing.',
     supportLinks: [
-      { label: 'Common questions', href: '/faq/' },
-      { label: 'Troubleshoot playback', href: '/guides/troubleshooting/' },
+      { label: 'Common questions', description: 'Setup, formats, compatibility and account safety.', href: '/faq/' },
+      { label: 'Troubleshoot playback', description: 'Resolve playback, timing and input issues.', href: '/guides/troubleshooting/' },
     ],
   },
 };

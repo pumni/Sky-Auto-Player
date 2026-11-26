@@ -41,11 +41,10 @@ export interface HomeContent {
     }[];
   };
   quickStart: {
+    eyebrow: string;
     title: string;
     description: string;
     items: { title: string; description: string }[];
-    setupGuideTitle: string;
-    setupGuideDescription: string;
     setupGuideLabel: string;
     setupGuideHref: string;
     formatsLabel: string;
@@ -97,6 +96,7 @@ export interface HomeContent {
     safetyTitle: string;
     safetyLink: string;
     supportLabel: string;
-    supportLinks: ReadonlyArray<{ label: string; href: string }>;
+    supportDescription: string;
+    supportLinks: ReadonlyArray<{ label: string; description: string; href: string }>;
   };
 }
