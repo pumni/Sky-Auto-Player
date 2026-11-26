@@ -2,7 +2,7 @@ use super::*;
 
 pub(super) const TEST_WALL_CLOCK_PREROLL_US: u64 = 500_000;
 
-pub(super) fn test_session_options(
+pub(crate) fn test_session_options(
     schedule: sky_dispatch_core::model::OnsetPlan,
     _allowed_count: usize,
     backend: BackendConfig,

@@ -22,7 +22,7 @@ fn dispatch_owned_down_for_cleanup(harness: &mut ProductionDispatchTestHarness) 
         .attach_executor_for_test()
         .expect("attach cleanup executor");
     let down = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -31,8 +31,8 @@ fn dispatch_owned_down_for_cleanup(harness: &mut ProductionDispatchTestHarness) 
         .expect("owned Down candidate");
     harness.set_mock_sender_start_qpc_for_test(epoch);
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(down, false),
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(down, false),
+        crate::engine::worker::DispatchOutcome::Dispatched
     );
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
 }
@@ -58,7 +58,7 @@ fn dispatch_live_scheduler_next(
     harness: &mut ProductionDispatchTestHarness,
     now: QpcTicks,
     epoch: QpcTicks,
-) -> (u16, u16, crate::engine::worker::StagedDispatchOutcome) {
+) -> (u16, u16, crate::engine::worker::DispatchOutcome) {
     use sky_dispatch_core::executor::DispatchDecision;
 
     let (up_mask, down_chord, timing_window): (
@@ -81,7 +81,7 @@ fn dispatch_live_scheduler_next(
     };
     let down_mask = down_chord.map_or(0, |chord| chord.key_mask);
     let candidate = harness
-        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+        .prepare_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage live scheduler candidate")
         .expect("live scheduler Send candidate");
     let sender_start = harness
@@ -90,7 +90,7 @@ fn dispatch_live_scheduler_next(
         .now()
         .expect("live scheduler sender start QPC");
     harness.set_mock_sender_start_qpc_for_test(sender_start);
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
     (up_mask, down_mask, outcome)
 }
 
@@ -161,7 +161,7 @@ fn test_support_resumable_cleanup_releases_and_cancels_live_scheduler_state() {
     harness.configure_mock_cleanup_emitter_for_test();
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage scheduler Down")
         .expect("scheduler Down candidate");
     let clock = harness.resources.clock;
@@ -186,8 +186,8 @@ fn test_support_resumable_cleanup_releases_and_cancels_live_scheduler_state() {
         }
     });
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(candidate, false),
+        crate::engine::worker::DispatchOutcome::Dispatched
     ));
     assert_eq!(harness.resources.scheduler.accounting().active, 1);
 
@@ -294,7 +294,7 @@ fn probe_held_keeps_needs_probe_without_retrying_physical_up() {
 }
 #[test]
 fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
-    use crate::engine::worker::StagedDispatchOutcome;
+    use crate::engine::worker::DispatchOutcome;
     use sky_dispatch_core::executor::DispatchDecision;
     use sky_dispatch_core::model::OnsetChordInput;
 
@@ -340,7 +340,7 @@ fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
         (0, 1),
         "first production packet is Down"
     );
-    assert!(matches!(down_outcome, StagedDispatchOutcome::Dispatched));
+    assert!(matches!(down_outcome, DispatchOutcome::Dispatched));
     let down_evidence = packets
         .lock()
         .expect("live scheduler packet capture")
@@ -388,7 +388,7 @@ fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
         (1, 0),
         "second production packet is Up"
     );
-    assert!(matches!(up_outcome, StagedDispatchOutcome::Dispatched));
+    assert!(matches!(up_outcome, DispatchOutcome::Dispatched));
     let up_evidence = packets
         .lock()
         .expect("live scheduler packet capture")
@@ -469,10 +469,7 @@ fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
         (0, 1),
         "third production packet is Down"
     );
-    assert!(matches!(
-        retrigger_outcome,
-        StagedDispatchOutcome::Dispatched
-    ));
+    assert!(matches!(retrigger_outcome, DispatchOutcome::Dispatched));
     let retrigger_evidence = packets
         .lock()
         .expect("live scheduler packet capture")
@@ -491,10 +488,7 @@ fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
         (1, 0),
         "fourth production packet is Up"
     );
-    assert!(matches!(
-        final_up_outcome,
-        StagedDispatchOutcome::Dispatched
-    ));
+    assert!(matches!(final_up_outcome, DispatchOutcome::Dispatched));
 
     let final_accounting = harness.generation_accounting_for_test();
     let captured = packets.lock().expect("live scheduler packet capture");
@@ -530,7 +524,7 @@ fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
 
 #[test]
 fn production_scheduler_lifecycle_matrix_releases_or_quarantines_accepted_downs() {
-    use crate::engine::worker::{FinalizeTestObservation, StagedDispatchOutcome};
+    use crate::engine::worker::{DispatchOutcome, FinalizeTestObservation};
     use sky_dispatch_win32::input::PlatformSendResult;
     use std::sync::{Arc, Mutex};
 
@@ -552,12 +546,12 @@ fn production_scheduler_lifecycle_matrix_releases_or_quarantines_accepted_downs(
         harness.set_mock_sender_start_qpc_for_test(send_start);
         let chord = harness.current_executor_chord_for_test();
         let candidate = harness
-            .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+            .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
             .expect("stage production scheduler Down")
             .expect("production scheduler Down candidate");
         assert!(matches!(
-            harness.dispatch_staged_candidate_for_test(candidate, false),
-            StagedDispatchOutcome::Dispatched
+            harness.dispatch_candidate_for_test(candidate, false),
+            DispatchOutcome::Dispatched
         ));
         assert_eq!(
             packets.lock().expect("production packet capture").len(),
@@ -727,7 +721,7 @@ fn production_scheduler_lifecycle_matrix_releases_or_quarantines_accepted_downs(
 
 #[test]
 fn live_scheduler_final_down_gate_rejects_target_lease_and_control_without_commit() {
-    use crate::engine::worker::StagedDispatchOutcome;
+    use crate::engine::worker::DispatchOutcome;
     use std::sync::atomic::Ordering;
 
     for rejection in ["target_generation", "supervisor_lease", "quit_control"] {
@@ -735,7 +729,7 @@ fn live_scheduler_final_down_gate_rejects_target_lease_and_control_without_commi
         let packets = harness.configure_mock_packet_sender_for_test(&[0]);
         let chord = harness.current_executor_chord_for_test();
         let candidate = harness
-            .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+            .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
             .expect("stage production final-gate candidate")
             .expect("production final-gate Down candidate");
         let before_accounting = harness.generation_accounting_for_test();
@@ -749,8 +743,8 @@ fn live_scheduler_final_down_gate_rejects_target_lease_and_control_without_commi
             _ => unreachable!(),
         }
 
-        let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-        assert_ne!(outcome, StagedDispatchOutcome::Dispatched, "{rejection}");
+        let outcome = harness.dispatch_candidate_for_test(candidate, false);
+        assert_ne!(outcome, DispatchOutcome::Dispatched, "{rejection}");
         assert!(packets.lock().expect("scheduler packet capture").is_empty());
         assert_eq!(
             harness.generation_accounting_for_test(),
@@ -767,7 +761,7 @@ fn live_scheduler_final_down_gate_rejects_target_lease_and_control_without_commi
 
 #[test]
 fn live_scheduler_partial_chord_send_is_not_replayed_and_consumed_after_cleanup() {
-    use crate::engine::worker::{FinalizeTestObservation, StagedDispatchOutcome};
+    use crate::engine::worker::{DispatchOutcome, FinalizeTestObservation};
     use std::sync::{Arc, Mutex};
 
     let mut harness = ProductionDispatchTestHarness::new_down_chord(2);
@@ -802,14 +796,14 @@ fn live_scheduler_partial_chord_send_is_not_replayed_and_consumed_after_cleanup(
     let cleanup = harness.configure_mock_cleanup_emitter_for_test();
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage production chord")
         .expect("production chord candidate");
     let before = harness.generation_accounting_for_test();
 
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(candidate, false),
+        DispatchOutcome::Exit
     ));
     let attempts = packet_attempts
         .lock()
@@ -844,7 +838,7 @@ fn live_scheduler_partial_chord_send_is_not_replayed_and_consumed_after_cleanup(
 
 #[test]
 fn live_scheduler_terminal_finalizer_cleans_lease_panic_and_worker_unwind() {
-    use crate::engine::worker::{FinalizeTestObservation, StagedDispatchOutcome};
+    use crate::engine::worker::{DispatchOutcome, FinalizeTestObservation};
     use std::sync::atomic::Ordering;
 
     for path in ["supervisor_lease", "panic_request", "worker_unwind"] {
@@ -853,12 +847,12 @@ fn live_scheduler_terminal_finalizer_cleans_lease_panic_and_worker_unwind() {
         let cleanup = harness.configure_mock_cleanup_emitter_for_test();
         let chord = harness.current_executor_chord_for_test();
         let candidate = harness
-            .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+            .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
             .expect("stage production terminal candidate")
             .expect("production terminal Down candidate");
         assert!(matches!(
-            harness.dispatch_staged_candidate_for_test(candidate, false),
-            StagedDispatchOutcome::Dispatched
+            harness.dispatch_candidate_for_test(candidate, false),
+            DispatchOutcome::Dispatched
         ));
         assert_eq!(
             packets
@@ -933,12 +927,12 @@ fn live_scheduler_verified_cleanup_cancels_without_a_post_cleanup_timestamp() {
     let cleanup = harness.configure_mock_cleanup_emitter_for_test();
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage QPC barrier candidate")
         .expect("scheduler QPC barrier Down candidate");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(candidate, false),
+        crate::engine::worker::DispatchOutcome::Dispatched
     ));
 
     let outcome = harness.apply_scheduler_resumable_lifecycle_transition_for_test();
@@ -983,18 +977,15 @@ fn admissible_down_fences_when_focus_lost_or_stale_preflight() {
     let packets = harness.configure_mock_packet_sender_for_test(&[0]);
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage Down candidate")
         .expect("Down candidate exists");
 
     // Focus is dropped between staging (preflight) and final admission
     harness.focus_active.store(false, Ordering::Release);
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
 
-    assert_eq!(
-        outcome,
-        crate::engine::worker::StagedDispatchOutcome::Replan
-    );
+    assert_eq!(outcome, crate::engine::worker::DispatchOutcome::Replan);
     assert!(
         packets.lock().expect("packets lock").is_empty(),
         "no packets sent when focus is lost at final admission"
@@ -1009,17 +1000,14 @@ fn focus_and_pause_fencing_suppresses_pending_down() {
     let packets = harness.configure_mock_packet_sender_for_test(&[0]);
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage Down candidate")
         .expect("Down candidate exists");
 
     harness.desired_pause.store(true, Ordering::Release);
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
 
-    assert_eq!(
-        outcome,
-        crate::engine::worker::StagedDispatchOutcome::Replan
-    );
+    assert_eq!(outcome, crate::engine::worker::DispatchOutcome::Replan);
     assert!(
         packets.lock().expect("packets lock").is_empty(),
         "no packets sent when paused"
@@ -1034,14 +1022,14 @@ fn generation_and_release_obligation_lifecycle() {
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
     let chord = harness.current_executor_chord_for_test();
     let down_candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage Down candidate")
         .expect("Down candidate exists");
 
-    let down_outcome = harness.dispatch_staged_candidate_for_test(down_candidate, false);
+    let down_outcome = harness.dispatch_candidate_for_test(down_candidate, false);
     assert_eq!(
         down_outcome,
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
+        crate::engine::worker::DispatchOutcome::Dispatched
     );
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
     assert_eq!(harness.generation_accounting_for_test().active, 1);
@@ -1052,13 +1040,13 @@ fn generation_and_release_obligation_lifecycle() {
     wait_until_qpc(harness.resources.clock, up_floor);
 
     let up_candidate = harness
-        .stage_candidate_for_test(1, None, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(1, None, TimelineTicks::ZERO)
         .expect("stage Up candidate")
         .expect("Up candidate exists");
-    let up_outcome = harness.dispatch_staged_candidate_for_test(up_candidate, false);
+    let up_outcome = harness.dispatch_candidate_for_test(up_candidate, false);
     assert_eq!(
         up_outcome,
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
+        crate::engine::worker::DispatchOutcome::Dispatched
     );
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
     assert_eq!(harness.generation_accounting_for_test().active, 0);
@@ -1072,17 +1060,14 @@ fn target_owner_proof_invalidation_rejects_at_final_admission() {
     let packets = harness.configure_mock_packet_sender_for_test(&[0]);
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage Down candidate")
         .expect("Down candidate exists");
 
     harness.target.invalidate_owner_identity();
 
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-    assert_eq!(
-        outcome,
-        crate::engine::worker::StagedDispatchOutcome::Replan
-    );
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
+    assert_eq!(outcome, crate::engine::worker::DispatchOutcome::Replan);
     assert!(packets.lock().expect("packets lock").is_empty());
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
 }
@@ -1114,12 +1099,12 @@ fn negative_control_unconfirmed_packet_fails_closed() {
 
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage Down")
         .expect("candidate");
 
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-    assert_eq!(outcome, crate::engine::worker::StagedDispatchOutcome::Exit);
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
+    assert_eq!(outcome, crate::engine::worker::DispatchOutcome::Exit);
     assert!(
         harness
             .runtime
@@ -1162,10 +1147,7 @@ fn controlled_late_wake_reaches_mixed_packet_ambiguity_and_exact_cleanup_scope()
     // 1. Dispatch Down(A) at epoch.
     let (up_0, down_0, out_0) = dispatch_live_scheduler_next(&mut harness, epoch, epoch);
     assert_eq!((up_0, down_0), (0, 0b01));
-    assert_eq!(
-        out_0,
-        crate::engine::worker::StagedDispatchOutcome::Dispatched
-    );
+    assert_eq!(out_0, crate::engine::worker::DispatchOutcome::Dispatched);
     let completion_a = packets
         .lock()
         .expect("packets")
@@ -1217,7 +1199,7 @@ fn controlled_late_wake_reaches_mixed_packet_ambiguity_and_exact_cleanup_scope()
     let now = clock.now().expect("mixed evaluation QPC");
     let (up_1, down_1, out_1) = dispatch_live_scheduler_next(&mut harness, now, epoch);
     assert_eq!((up_1, down_1), (0b01, 0b10));
-    assert_eq!(out_1, crate::engine::worker::StagedDispatchOutcome::Exit);
+    assert_eq!(out_1, crate::engine::worker::DispatchOutcome::Exit);
     assert_eq!(mixed_seen.load(Ordering::Acquire), 1);
 
     // 4. Verify exact journal cleanup scope (both A and B released) and zero residual.

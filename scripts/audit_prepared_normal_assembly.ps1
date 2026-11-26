@@ -1,5 +1,5 @@
 # Historical command name retained as a compatibility adapter. The audit now
-# inspects DispatchExecutor::dispatch_staged_candidate, not a retired
+# inspects DispatchExecutor::dispatch_candidate, not a retired
 # prepared-normal scheduler.
 param(
     [string]$AssemblyPath = ''

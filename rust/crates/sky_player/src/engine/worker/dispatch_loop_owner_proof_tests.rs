@@ -1,6 +1,6 @@
 use super::support::{candidate_at, target_at, test_chord, wait_until_qpc};
 use crate::engine::test_support::ProductionDispatchTestHarness;
-use crate::engine::worker::StagedDispatchOutcome;
+use crate::engine::worker::DispatchOutcome;
 use sky_dispatch_win32::input::PhysicalPacket;
 
 struct ForegroundTestReset;
@@ -29,8 +29,8 @@ fn immutable_session_target_loss_withholds_origin_up_and_keeps_release_obligatio
     let down = candidate_at(&mut harness, epoch, epoch);
     harness.set_mock_sender_start_qpc_for_test(epoch);
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(down, false),
-        StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(down, false),
+        DispatchOutcome::Dispatched
     );
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
 
@@ -42,8 +42,8 @@ fn immutable_session_target_loss_withholds_origin_up_and_keeps_release_obligatio
     harness.invalidate_focus_owner_for_test(2, 202);
     harness.set_mock_sender_start_qpc_for_test(up_at);
     assert_ne!(
-        harness.dispatch_staged_candidate_for_test(up, false),
-        StagedDispatchOutcome::Dispatched,
+        harness.dispatch_candidate_for_test(up, false),
+        DispatchOutcome::Dispatched,
         "an Up authored under the original target must never be sent to a replacement"
     );
 

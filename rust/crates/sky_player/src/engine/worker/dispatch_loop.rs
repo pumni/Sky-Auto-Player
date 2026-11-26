@@ -445,19 +445,20 @@ pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
 }
 
 #[derive(Debug)]
-pub struct StagedCandidate {
+pub struct DispatchCandidate {
     pub(crate) down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
     pub(crate) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
     pub(crate) authored_target_ticks: TimelineTicks,
     pub(crate) timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
-    /// Stable HWND/generation snapshot captured during staging. Down-bearing
-    /// packets also pass physical-key preflight against this exact stamp.
+    /// Stable HWND/generation snapshot captured immediately before final
+    /// admission. Down-bearing packets also pass physical-key preflight
+    /// against this exact stamp.
     pub(crate) target_stamp: Option<TargetStamp>,
     pub(crate) up_slot_timing_summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
     pub(crate) up_slot_timings: Option<SmallVec<[sky_dispatch_core::executor::UpSlotTiming; 15]>>,
 }
 
-impl StagedCandidate {
+impl DispatchCandidate {
     #[inline]
     pub(crate) fn packet_masks(&self) -> sky_dispatch_win32::input::PhysicalPacket {
         self.prepared_packet.packet()
@@ -597,7 +598,7 @@ fn record_final_admission_gate_marker(
     }
 }
 
-fn effective_packet(candidate: &StagedCandidate) -> EffectivePacket<'_> {
+fn effective_packet(candidate: &DispatchCandidate) -> EffectivePacket<'_> {
     EffectivePacket {
         view: candidate.prepared_packet.as_view(),
         down_chord: candidate.down_chord,
@@ -612,7 +613,7 @@ fn effective_packet(candidate: &StagedCandidate) -> EffectivePacket<'_> {
 }
 
 fn effective_up_prefix(
-    candidate: &StagedCandidate,
+    candidate: &DispatchCandidate,
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
 ) -> Result<EffectivePacket<'_>, String> {
     let original_packet = candidate.prepared_packet.packet();
@@ -695,8 +696,9 @@ fn source_action_target(
 
 include!("dispatch_loop_scheduler.rs");
 
+#[cfg(any(test, feature = "test-support"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StagedDispatchOutcome {
+pub enum DispatchOutcome {
     Dispatched,
     Replan,
     Exit,
@@ -712,17 +714,17 @@ pub(crate) enum DispatchAttemptOutcome {
 
 impl DispatchAttemptOutcome {
     #[cfg(any(test, feature = "test-support"))]
-    pub(crate) fn public_outcome(self) -> StagedDispatchOutcome {
+    pub(crate) fn public_outcome(self) -> DispatchOutcome {
         match self {
-            Self::Dispatched => StagedDispatchOutcome::Dispatched,
-            Self::ModifierHeld => StagedDispatchOutcome::Replan,
-            Self::Replan => StagedDispatchOutcome::Replan,
-            Self::Exit => StagedDispatchOutcome::Exit,
+            Self::Dispatched => DispatchOutcome::Dispatched,
+            Self::ModifierHeld => DispatchOutcome::Replan,
+            Self::Replan => DispatchOutcome::Replan,
+            Self::Exit => DispatchOutcome::Exit,
         }
     }
 }
 
-pub(crate) struct StagedControlSignals<'a> {
+pub(crate) struct DispatchControlSignals<'a> {
     pub(crate) focus_active: &'a AtomicBool,
     pub(crate) quit_requested: &'a AtomicBool,
     pub(crate) skip_requested: &'a AtomicBool,
@@ -770,10 +772,10 @@ fn dispatch_replan_action(context: DispatchReplanWaitContext<'_>) -> DispatchRep
     DispatchReplanAction::ContinueImmediately
 }
 
-pub(crate) struct StagedDispatchContext<'a> {
+pub(crate) struct DispatchAttemptContext<'a> {
     pub(crate) target: &'a SessionTarget,
     pub(crate) config: &'a super::WorkerConfig,
-    pub(crate) control: StagedControlSignals<'a>,
+    pub(crate) control: DispatchControlSignals<'a>,
     pub(crate) timing: &'a super::WorkerTimingState,
     pub(crate) qpc_clock: sky_dispatch_win32::clock::QpcClock,
     pub(crate) progress_clock: &'a crate::engine::shared::SharedProgressClock,
@@ -781,7 +783,7 @@ pub(crate) struct StagedDispatchContext<'a> {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn stage_candidate(
+pub(crate) fn prepare_dispatch_candidate(
     up_mask: u16,
     down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
     timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
@@ -790,7 +792,7 @@ pub(crate) fn stage_candidate(
     target: &SessionTarget,
     resources: &mut super::WorkerResources,
     runtime: &mut super::WorkerRuntime,
-) -> Result<Option<StagedCandidate>, String> {
+) -> Result<Option<DispatchCandidate>, String> {
     let down_mask = down_chord.map_or(0, |c| c.key_mask);
     let has_down = down_mask != 0;
     let packet_masks = sky_dispatch_win32::input::PhysicalPacket::new(up_mask, down_mask);
@@ -863,7 +865,7 @@ pub(crate) fn stage_candidate(
             Err(err) => return Err(format!("failed to prepare physical packet: {err}")),
         };
 
-    Ok(Some(StagedCandidate {
+    Ok(Some(DispatchCandidate {
         down_chord,
         prepared_packet,
         authored_target_ticks,
@@ -874,9 +876,9 @@ pub(crate) fn stage_candidate(
     }))
 }
 
-pub(crate) fn dispatch_staged_candidate(
-    candidate: StagedCandidate,
-    ctx: StagedDispatchContext<'_>,
+pub(crate) fn dispatch_candidate(
+    candidate: DispatchCandidate,
+    ctx: DispatchAttemptContext<'_>,
     resources: &mut super::WorkerResources,
     runtime: &mut super::WorkerRuntime,
     local_metrics: &mut super::WorkerMetricsLocal,
@@ -2016,79 +2018,42 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 continue;
             }
 
-            let (action, scheduler_wait_target_qpc, action_to_stage) =
-                match evaluate_scheduler_action_for_staging(
-                    &resources.scheduler,
-                    now_ticks,
-                    resources.playback.epoch,
-                ) {
-                    Ok(projected) => projected,
-                    Err(error) => {
-                        core.runtime.terminal_error = Some(error);
-                        break;
-                    }
-                };
-            if matches!(
-                &action,
-                sky_dispatch_core::executor::DispatchDecision::Finished
+            let decision = match evaluate_scheduler_action(
+                &resources.scheduler,
+                now_ticks,
+                resources.playback.epoch,
             ) {
-                break;
-            }
-            if matches!(&action, sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } if *deadline_qpc <= now_ticks)
-            {
-                continue;
-            }
-            let candidate = match action_to_stage {
-                Some(send_action @ sky_dispatch_core::executor::DispatchDecision::Send { .. }) => {
-                    match stage_scheduler_send_candidate(
-                        send_action,
-                        SchedulerStageAdmission {
-                            target,
-                            capture_up_slot_timings: core.observer.pending.is_some(),
-                        },
-                        resources,
-                        &mut core.runtime,
-                    ) {
-                        Ok(Some(candidate)) => Some(candidate),
-                        Ok(None) => {
-                            core.runtime.terminal_error.get_or_insert_with(|| {
-                                if target.is_valid() {
-                                    "staging rejected the immutable session target".to_string()
-                                } else {
-                                    "immutable session target or owner identity was invalidated"
-                                        .to_string()
-                                }
-                            });
-                            break;
-                        }
-                        Err(error) => {
-                            core.runtime.terminal_error = Some(error);
-                            break;
-                        }
-                    }
+                Ok(decision) => decision,
+                Err(error) => {
+                    core.runtime.terminal_error = Some(error);
+                    break;
                 }
-                None
-                | Some(
-                    sky_dispatch_core::executor::DispatchDecision::Finished
-                    | sky_dispatch_core::executor::DispatchDecision::Wait { .. },
-                ) => None,
             };
-            let wait_target_qpc =
-                candidate
-                    .as_ref()
-                    .map_or(scheduler_wait_target_qpc, |candidate| {
-                        scheduler_wait_target_qpc.max(candidate.timing_window.packet_not_before_qpc)
-                    });
-            // Carry an Up-deadline wake for one selector pass only, and attach
-            // it only to a packet with an Up at that exact release deadline.
-            attribute_modifier_up_deadline_wake(
-                pending_modifier_up_deadline_wake.take(),
-                candidate.as_ref(),
-                &mut core.runtime,
-            );
-            let mut candidate = candidate;
-            if wait_target_qpc > now_ticks {
-                if let Some(staged_candidate) = candidate.as_ref() {
+
+            let (up_mask, down_chord, timing_window, up_summary) = match decision {
+                sky_dispatch_core::executor::DispatchDecision::Finished => break,
+                sky_dispatch_core::executor::DispatchDecision::Send {
+                    up_mask,
+                    down_chord,
+                    timing_window,
+                    up_summary,
+                } => {
+                    // Already due now; no timer wait armed.
+                    // Carry an Up-deadline wake from modifier backoff for one
+                    // pass only, attaching it only to an Up at that exact floor.
+                    attribute_modifier_up_deadline_wake(
+                        pending_modifier_up_deadline_wake.take(),
+                        up_mask,
+                        timing_window.musical_up_not_before_qpc,
+                        &mut core.runtime,
+                    );
+                    (up_mask, down_chord, timing_window, up_summary)
+                }
+                sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } => {
+                    let _ = pending_modifier_up_deadline_wake.take();
+                    if deadline_qpc <= now_ticks {
+                        continue;
+                    }
                     let control_signals = FinalControlSignals {
                         quit_requested,
                         skip_requested,
@@ -2097,186 +2062,174 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         supervisor_expired,
                         system_power: Some(system_power),
                     };
-                    match pre_wait_candidate_admission(
-                        staged_candidate,
+                    match pre_wait_admission(
                         target,
                         config.focus.require_focus,
                         focus_active,
                         control_signals,
                         &mut core.runtime,
                     ) {
-                        StagedDispatchOutcome::Dispatched => {}
-                        StagedDispatchOutcome::Replan => {
-                            let target_stale = candidate
-                                .as_ref()
-                                .and_then(|candidate| candidate.target_stamp)
-                                .is_some_and(|expected| {
-                                    !target_stamp_still_current(target, expected)
-                                });
-                            if target_stale {
-                                core.runtime.verified_target = None;
-                                core.runtime.terminal_error.get_or_insert_with(|| {
-                            if target.is_valid() {
-                                "staged target stamp no longer matches its immutable session binding"
-                                    .to_string()
-                            } else {
-                                "immutable session target or owner identity was invalidated"
-                                    .to_string()
-                            }
-                        });
-                                break;
-                            }
-                            // Target, foreground, and control replans retain
-                            // their lifecycle meaning; they never authorize
-                            // sending the Up prefix.
-                            continue;
-                        }
-                        StagedDispatchOutcome::Exit => break,
+                        PreWaitAdmission::Proceed => {}
+                        PreWaitAdmission::Replan => continue,
+                        PreWaitAdmission::Exit => break,
                     }
-                }
-                #[cfg(any(test, feature = "test-support"))]
-                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
-                    hook.visit_startup_checkpoint(
-                        super::super::config::StartupCheckpoint::DispatchWait,
-                    );
-                }
-                #[cfg(any(test, feature = "test-support"))]
-                if candidate
-                    .as_ref()
-                    .is_some_and(|candidate| candidate.packet_masks().down_mask != 0)
-                    && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                    && let Some(candidate) = candidate.as_ref()
-                {
-                    hook.record_down_window(
-                        candidate.timing_window.authored_target_qpc.as_u64(),
-                        candidate.timing_window.packet_not_before_qpc.as_u64(),
-                    );
-                    hook.visit_startup_checkpoint(
-                        super::super::config::StartupCheckpoint::PhysicalWait,
-                    );
-                }
-                let authored_target_ticks = candidate.as_ref().map_or_else(
-                    || {
-                        TimelineTicks::from_raw(
-                            wait_target_qpc
-                                .as_u64()
-                                .saturating_sub(resources.playback.epoch.as_u64()),
-                        )
-                    },
-                    |candidate| candidate.authored_target_ticks,
-                );
 
-                match wait_for_next_boundary(WaitBoundaryInput {
-                    deadline: WaitDeadline {
-                        physical_target_qpc: Some(wait_target_qpc),
-                        spin_threshold_ticks: if candidate.is_some() {
-                            timing.effective_spin_threshold_ticks
-                        } else {
-                            DurationTicks::ZERO
-                        },
-                        qpc_clock,
-                    },
-                    signals: WaitSignals {
-                        waiter: &resources.waiter,
-                        interrupt,
-                    },
-                    mutable: WaitMutable {
-                        local_metrics: &mut core.metrics,
-                        terminal_error: &mut core.runtime.terminal_error,
-                    },
-                }) {
-                    WaitBoundary::Due {
-                        wait_result,
-                        target_qpc,
-                        dispatch_qpc,
-                        planned_wait_ticks,
-                    } => {
-                        super::dispatch::publish_pending_wait_observation(
-                            &mut core.runtime,
-                            core.observer.pending.as_ref(),
-                            &mut core.metrics,
+                    #[cfg(any(test, feature = "test-support"))]
+                    if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                        hook.visit_startup_checkpoint(
+                            super::super::config::StartupCheckpoint::DispatchWait,
                         );
-                        core.runtime.pending_wait_observation =
-                            super::dispatch::record_wait_attempt(
+                        if let Some(chord) = resources.scheduler.current_chord()
+                            && (resources.scheduler.active_mask() & chord.key_mask) == 0
+                            && let Ok(authored_down_qpc) =
+                                resources.playback.epoch.checked_add_duration(
+                                    DurationTicks::from_raw(chord.onset_ticks.as_u64()),
+                                )
+                            && authored_down_qpc == deadline_qpc
+                        {
+                            hook.visit_startup_checkpoint(
+                                super::super::config::StartupCheckpoint::PhysicalWait,
+                            );
+                        }
+                    }
+
+                    let authored_target_ticks = TimelineTicks::from_raw(
+                        deadline_qpc
+                            .as_u64()
+                            .saturating_sub(resources.playback.epoch.as_u64()),
+                    );
+                    let spin_threshold_ticks = if resources.scheduler.has_physical_work() {
+                        timing.effective_spin_threshold_ticks
+                    } else {
+                        DurationTicks::ZERO
+                    };
+
+                    match wait_for_next_boundary(WaitBoundaryInput {
+                        deadline: WaitDeadline {
+                            physical_target_qpc: Some(deadline_qpc),
+                            spin_threshold_ticks,
+                            qpc_clock,
+                        },
+                        signals: WaitSignals {
+                            waiter: &resources.waiter,
+                            interrupt,
+                        },
+                        mutable: WaitMutable {
+                            local_metrics: &mut core.metrics,
+                            terminal_error: &mut core.runtime.terminal_error,
+                        },
+                    }) {
+                        WaitBoundary::Due {
+                            wait_result,
+                            target_qpc,
+                            dispatch_qpc,
+                            planned_wait_ticks,
+                        } => {
+                            super::dispatch::publish_pending_wait_observation(
+                                &mut core.runtime,
                                 core.observer.pending.as_ref(),
+                                &mut core.metrics,
+                            );
+                            core.runtime.pending_wait_observation =
+                                super::dispatch::record_wait_attempt(
+                                    core.observer.pending.as_ref(),
+                                    wait_result,
+                                    target_qpc,
+                                    planned_wait_ticks,
+                                    authored_target_ticks,
+                                    resources.playback.epoch,
+                                    None,
+                                    &mut core.metrics,
+                                );
+                            if let Some(wait_result) = wait_result {
+                                core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
+                                core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
+                            } else {
+                                core.runtime.last_dispatch_deadline_wake_qpc = Some(dispatch_qpc);
+                                core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
+                            }
+                            match evaluate_scheduler_action(
+                                &resources.scheduler,
+                                dispatch_qpc,
+                                resources.playback.epoch,
+                            ) {
+                                Ok(sky_dispatch_core::executor::DispatchDecision::Send {
+                                    up_mask,
+                                    down_chord,
+                                    timing_window,
+                                    up_summary,
+                                }) => (up_mask, down_chord, timing_window, up_summary),
+                                Ok(sky_dispatch_core::executor::DispatchDecision::Wait {
+                                    ..
+                                }) => continue,
+                                Ok(sky_dispatch_core::executor::DispatchDecision::Finished) => {
+                                    break;
+                                }
+                                Err(error) => {
+                                    core.runtime.terminal_error = Some(error);
+                                    break;
+                                }
+                            }
+                        }
+                        WaitBoundary::Interrupted(wait_result, target_qpc, planned_wait_ticks) => {
+                            core.runtime.last_dispatch_deadline_wake_qpc = None;
+                            core.runtime.last_dispatch_deadline_target_qpc = None;
+                            super::dispatch::publish_interrupted_physical_wait(
+                                &mut core.runtime,
+                                core.observer.pending.as_ref(),
+                                &mut core.metrics,
                                 wait_result,
                                 target_qpc,
                                 planned_wait_ticks,
                                 authored_target_ticks,
                                 resources.playback.epoch,
-                                None,
+                            );
+                            let _ = interrupt.try_take();
+                            continue;
+                        }
+                        WaitBoundary::Exit => {
+                            super::dispatch::publish_pending_wait_observation(
+                                &mut core.runtime,
+                                core.observer.pending.as_ref(),
                                 &mut core.metrics,
                             );
-                        if let Some(wait_result) = wait_result {
-                            core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
-                            core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
-                        } else {
-                            core.runtime.last_dispatch_deadline_wake_qpc = Some(dispatch_qpc);
-                            core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
+                            break;
                         }
-                        match reselect_candidate_after_wait(
-                            &mut candidate,
-                            dispatch_qpc,
-                            resources.playback.epoch,
-                            core.observer.pending.is_some(),
-                            target,
-                            resources,
-                            &mut core.runtime,
-                        ) {
-                            Ok(PostWaitSelection::SendReady) => {}
-                            Ok(PostWaitSelection::Replan) => continue,
-                            Ok(PostWaitSelection::Finished) => break,
-                            Ok(PostWaitSelection::TargetInvalidated) => {
-                                core.runtime.terminal_error.get_or_insert_with(|| {
-                                    if target.is_valid() {
-                                        "post-wake restaging rejected the immutable session target"
-                                            .to_string()
-                                    } else {
-                                        "immutable session target or owner identity was invalidated"
-                                            .to_string()
-                                    }
-                                });
-                                break;
-                            }
-                            Err(error) => {
-                                core.runtime.terminal_error = Some(error);
-                                break;
-                            }
-                        }
-                    }
-                    WaitBoundary::Interrupted(wait_result, target_qpc, planned_wait_ticks) => {
-                        core.runtime.last_dispatch_deadline_wake_qpc = None;
-                        core.runtime.last_dispatch_deadline_target_qpc = None;
-                        super::dispatch::publish_interrupted_physical_wait(
-                            &mut core.runtime,
-                            core.observer.pending.as_ref(),
-                            &mut core.metrics,
-                            wait_result,
-                            target_qpc,
-                            planned_wait_ticks,
-                            authored_target_ticks,
-                            resources.playback.epoch,
-                        );
-                        let _ = interrupt.try_take();
-                        continue;
-                    }
-                    WaitBoundary::Exit => {
-                        super::dispatch::publish_pending_wait_observation(
-                            &mut core.runtime,
-                            core.observer.pending.as_ref(),
-                            &mut core.metrics,
-                        );
-                        break;
                     }
                 }
-            }
-            let Some(candidate) = candidate else {
-                continue;
             };
-            let ctx = StagedDispatchContext {
+
+            let candidate = match prepare_dispatch_candidate(
+                up_mask,
+                down_chord,
+                timing_window,
+                up_summary,
+                core.observer.pending.is_some(),
+                target,
+                resources,
+                &mut core.runtime,
+            ) {
+                Ok(Some(candidate)) => candidate,
+                Ok(None) => {
+                    core.runtime.terminal_error.get_or_insert_with(|| {
+                        if target.is_valid() {
+                            "immediate packet preparation rejected the immutable session target"
+                                .to_string()
+                        } else {
+                            "immutable session target or owner identity was invalidated".to_string()
+                        }
+                    });
+                    break;
+                }
+                Err(error) => {
+                    core.runtime.terminal_error = Some(error);
+                    break;
+                }
+            };
+            let ctx = DispatchAttemptContext {
                 target,
                 config,
-                control: StagedControlSignals {
+                control: DispatchControlSignals {
                     focus_active,
                     quit_requested,
                     skip_requested,
@@ -2290,7 +2243,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 progress_clock: &shared.publication.progress_clock,
                 metrics,
             };
-            match dispatch_staged_candidate(
+            match dispatch_candidate(
                 candidate,
                 ctx,
                 resources,
@@ -2494,6 +2447,8 @@ mod tests {
     mod deadline_post_due_control;
     #[path = "../../dispatch_loop_deadline_real_waiter_tests.rs"]
     mod deadline_real_waiter;
+    #[path = "../../dispatch_loop_direct_dispatch_tests.rs"]
+    mod direct_dispatch;
     #[path = "../../dispatch_loop_failure_tests.rs"]
     mod failure;
     #[path = "../../dispatch_loop_observer_tests.rs"]

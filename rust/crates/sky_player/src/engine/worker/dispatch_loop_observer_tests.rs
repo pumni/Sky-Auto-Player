@@ -38,13 +38,13 @@ fn complete_transport_with_sender_timing_error_is_reconciled_by_terminal_cleanup
 
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("some candidate");
 
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
 
-    assert!(matches!(outcome, super::super::StagedDispatchOutcome::Exit));
+    assert!(matches!(outcome, super::super::DispatchOutcome::Exit));
     assert!(
         harness
             .runtime
@@ -108,13 +108,13 @@ fn complete_status_without_completion_qpc_is_reconciled_without_fabricating_time
 
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("some candidate");
 
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
 
-    assert!(matches!(outcome, super::super::StagedDispatchOutcome::Exit));
+    assert!(matches!(outcome, super::super::DispatchOutcome::Exit));
     assert!(
         harness
             .runtime
@@ -173,12 +173,12 @@ fn complete_status_without_pre_call_qpc_is_reconciled_without_fabricating_time()
 
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("Down candidate");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::super::StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(candidate, false),
+        super::super::DispatchOutcome::Exit
     ));
     assert!(
         harness
@@ -240,12 +240,12 @@ fn complete_status_with_invalid_qpc_order_is_reconciled_without_clock_substituti
 
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("Down candidate");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::super::StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(candidate, false),
+        super::super::DispatchOutcome::Exit
     ));
     assert!(
         harness
@@ -309,15 +309,12 @@ fn wait_observation_is_published_promptly_on_dispatch() {
 
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("some candidate");
 
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, true);
-    assert!(matches!(
-        outcome,
-        super::super::StagedDispatchOutcome::Dispatched
-    ));
+    let outcome = harness.dispatch_candidate_for_test(candidate, true);
+    assert!(matches!(outcome, super::super::DispatchOutcome::Dispatched));
 
     assert!(harness.runtime.pending_wait_observation.is_none());
     let observations: Vec<_> = std::iter::from_fn(|| harness.observer.pop_front()).collect();
@@ -369,12 +366,12 @@ fn wait_observation_is_published_promptly_on_dispatch() {
         &mut harness.local_metrics,
     );
     let candidate = harness
-        .stage_candidate_with_observer_for_test(1, None, TimelineTicks::from_raw(20_000), true)
+        .prepare_candidate_with_observer_for_test(1, None, TimelineTicks::from_raw(20_000), true)
         .expect("stage Up")
         .expect("Up candidate");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, true),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(candidate, true),
+        super::super::DispatchOutcome::Dispatched
     ));
     let observations: Vec<_> = std::iter::from_fn(|| harness.observer.pop_front()).collect();
     let packet = observations
@@ -415,12 +412,12 @@ fn mixed_packet_preserves_one_wait_with_matching_identity() {
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
     let first = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage first")
         .expect("first");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(first, false),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(first, false),
+        super::super::DispatchOutcome::Dispatched
     ));
     let target = harness.qpc_now_for_test().expect("wait target");
     let mixed_offset = super::support::qpc_offset(
@@ -448,14 +445,14 @@ fn mixed_packet_preserves_one_wait_with_matching_identity() {
     );
     let chord = harness.current_executor_chord_for_test();
     let mixed = harness
-        .stage_candidate_with_observer_for_test(1, chord, mixed_offset, true)
+        .prepare_candidate_with_observer_for_test(1, chord, mixed_offset, true)
         .expect("stage mixed")
         .expect("mixed");
     assert_ne!(mixed.packet_masks().up_mask, 0);
     assert_ne!(mixed.packet_masks().down_mask, 0);
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(mixed, true),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(mixed, true),
+        super::super::DispatchOutcome::Dispatched
     ));
     let observations: Vec<_> = std::iter::from_fn(|| harness.observer.pop_front()).collect();
     let packet = observations
@@ -526,12 +523,12 @@ fn interrupted_wait_is_not_attributed_to_later_dispatch() {
     );
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage")
         .expect("candidate");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, true),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(candidate, true),
+        super::super::DispatchOutcome::Dispatched
     ));
     let observations: Vec<_> = std::iter::from_fn(|| harness.observer.pop_front()).collect();
     let waits: Vec<_> = observations
@@ -573,13 +570,13 @@ fn final_control_rejects_staged_down_and_up_before_send() {
     down.attach_executor_for_test().expect("attach executor");
     let chord = down.current_executor_chord_for_test();
     let candidate = down
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage Down")
         .expect("Down candidate");
     down.quit_requested.store(true, Ordering::Release);
     assert!(matches!(
-        down.dispatch_staged_candidate_for_test(candidate, true),
-        super::super::StagedDispatchOutcome::Replan
+        down.dispatch_candidate_for_test(candidate, true),
+        super::super::DispatchOutcome::Replan
     ));
     assert!(down_packets.lock().expect("Down packets").is_empty());
     assert_eq!(down.local_metrics.precision_packet_attempts, 0);
@@ -589,21 +586,21 @@ fn final_control_rejects_staged_down_and_up_before_send() {
     up.attach_executor_for_test().expect("attach executor");
     let chord = up.current_executor_chord_for_test();
     let first = up
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage first")
         .expect("first Down");
     assert!(matches!(
-        up.dispatch_staged_candidate_for_test(first, false),
-        super::super::StagedDispatchOutcome::Dispatched
+        up.dispatch_candidate_for_test(first, false),
+        super::super::DispatchOutcome::Dispatched
     ));
     let candidate = up
-        .stage_candidate_with_observer_for_test(1, None, TimelineTicks::from_raw(20_000), true)
+        .prepare_candidate_with_observer_for_test(1, None, TimelineTicks::from_raw(20_000), true)
         .expect("stage Up")
         .expect("Up candidate");
     up.quit_requested.store(true, Ordering::Release);
     assert!(matches!(
-        up.dispatch_staged_candidate_for_test(candidate, true),
-        super::super::StagedDispatchOutcome::Exit
+        up.dispatch_candidate_for_test(candidate, true),
+        super::super::DispatchOutcome::Exit
     ));
     assert_eq!(up_packets.lock().expect("Up packets").len(), 1);
     assert_eq!(up.local_metrics.precision_packet_attempts, 1);
@@ -621,25 +618,25 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
     let epoch = harness.resources.playback.epoch;
     let chord = harness.current_executor_chord_for_test();
     let first = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage first Down")
         .expect("first Down");
     harness.set_mock_sender_start_qpc_for_test(epoch);
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(first, false),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(first, false),
+        super::super::DispatchOutcome::Dispatched
     ));
     let second_offset = super::support::qpc_offset(&harness, 1_000);
     let second_qpc = super::support::target_at(&harness, epoch, 1_000);
     let second_chord = harness.current_executor_chord_for_test();
     let second = harness
-        .stage_candidate_for_test(0, second_chord, second_offset)
+        .prepare_candidate_for_test(0, second_chord, second_offset)
         .expect("stage second Down")
         .expect("second Down");
     harness.set_mock_sender_start_qpc_for_test(second_qpc);
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(second, false),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(second, false),
+        super::super::DispatchOutcome::Dispatched
     ));
     let both_ups_due = TimelineTicks::from_raw(
         harness
@@ -650,12 +647,12 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
             .as_u64(),
     );
     let up = harness
-        .stage_candidate_with_observer_for_test(3, None, both_ups_due, true)
+        .prepare_candidate_with_observer_for_test(3, None, both_ups_due, true)
         .expect("stage Up")
         .expect("Up");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(up, true),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(up, true),
+        super::super::DispatchOutcome::Dispatched
     ));
     let packet = match harness.observer.pop_front().expect("packet observation") {
         crate::engine::worker::dispatch::observation::DispatchObservation::Down(packet) => packet,
@@ -719,12 +716,12 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
     let first = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage Down")
         .expect("Down");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(first, false),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(first, false),
+        super::super::DispatchOutcome::Dispatched
     ));
     let both_ups_due = TimelineTicks::from_raw(
         harness
@@ -746,12 +743,12 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
     }
 
     let up = harness
-        .stage_candidate_with_observer_for_test(3, None, both_ups_due, true)
+        .prepare_candidate_with_observer_for_test(3, None, both_ups_due, true)
         .expect("stage coalesced Up")
         .expect("Up");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(up, true),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(up, true),
+        super::super::DispatchOutcome::Dispatched
     ));
     assert_eq!(harness.local_metrics.observer_dropped_samples, 1);
     assert_eq!(harness.local_metrics.observer_dropped_up_slot_records, 2);

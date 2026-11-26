@@ -1,6 +1,6 @@
 use super::support::{candidate_at, target_at, test_chord, wait_until_qpc};
 use crate::engine::test_support::ProductionDispatchTestHarness;
-use crate::engine::worker::StagedDispatchOutcome;
+use crate::engine::worker::DispatchOutcome;
 use sky_dispatch_core::model::OnsetChordInput;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{
@@ -16,13 +16,13 @@ enum UpOnlyQpcFault {
 }
 fn dispatch_with_source(
     harness: &mut ProductionDispatchTestHarness,
-    candidate: crate::engine::worker::StagedCandidate,
+    candidate: crate::engine::worker::DispatchCandidate,
     expected_source_action: &AtomicU32,
 ) {
     expected_source_action.store(candidate.source_action_index(), Ordering::Release);
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(candidate, false),
+        DispatchOutcome::Dispatched
     ));
 }
 
@@ -94,8 +94,8 @@ fn assert_up_only_anomaly_terminates(fault: UpOnlyQpcFault) {
     );
     source.store(10, Ordering::Release);
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(up_a, false),
-        StagedDispatchOutcome::Exit,
+        harness.dispatch_candidate_for_test(up_a, false),
+        DispatchOutcome::Exit,
         "an invalid completion timestamp is terminal after one attempted Up"
     );
     assert_eq!(
@@ -211,7 +211,7 @@ fn sender_anomaly_survives_late_skip_and_suspend_before_finalize() {
         }
     });
     let candidate = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -219,8 +219,8 @@ fn sender_anomaly_survives_late_skip_and_suspend_before_finalize() {
         .expect("stage Down")
         .expect("Down candidate");
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(candidate, false),
+        DispatchOutcome::Exit
     ));
     harness.skip_requested.store(true, Ordering::Release);
     harness.system_power.notify(true, &harness.interrupt);
@@ -345,8 +345,8 @@ fn up_only_anomaly_preserves_residual_when_late_suspend_arrives_before_finalize(
     assert_eq!(up.source_action_index(), 0);
     source.store(0, Ordering::Release);
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(up, false),
-        StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(up, false),
+        DispatchOutcome::Exit
     );
 
     assert_eq!(
@@ -433,7 +433,7 @@ fn suspend_during_partial_progress_down_terminates_error_with_retained_suspend_c
     });
 
     let candidate = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -442,10 +442,10 @@ fn suspend_during_partial_progress_down_terminates_error_with_retained_suspend_c
         .expect("Down candidate");
     assert_eq!(candidate.packet_masks(), PhysicalPacket::new(0, 3));
 
-    let dispatch_outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
+    let dispatch_outcome = harness.dispatch_candidate_for_test(candidate, false);
     assert_eq!(
         dispatch_outcome,
-        StagedDispatchOutcome::Exit,
+        DispatchOutcome::Exit,
         "partial progress Down exits immediately"
     );
     assert!(
@@ -546,7 +546,7 @@ fn suspend_before_send_or_zero_progress_terminates_system_suspended_without_atte
         });
 
     let candidate = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -554,8 +554,8 @@ fn suspend_before_send_or_zero_progress_terminates_system_suspended_without_atte
         .expect("stage Down")
         .expect("Down candidate");
 
-    let dispatch_outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-    assert_eq!(dispatch_outcome, StagedDispatchOutcome::Exit);
+    let dispatch_outcome = harness.dispatch_candidate_for_test(candidate, false);
+    assert_eq!(dispatch_outcome, DispatchOutcome::Exit);
 
     let mut observation = crate::engine::worker::FinalizeTestObservation::default();
     let outcome = harness.finalize_worker_for_test(false, &mut observation);
@@ -612,7 +612,7 @@ fn healthy_send_with_suspend_control_case_terminates_system_suspended() {
     });
 
     let candidate = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -620,8 +620,8 @@ fn healthy_send_with_suspend_control_case_terminates_system_suspended() {
         .expect("stage Down")
         .expect("Down candidate");
 
-    let dispatch_outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-    assert_eq!(dispatch_outcome, StagedDispatchOutcome::Exit);
+    let dispatch_outcome = harness.dispatch_candidate_for_test(candidate, false);
+    assert_eq!(dispatch_outcome, DispatchOutcome::Exit);
 
     let mut observation = crate::engine::worker::FinalizeTestObservation::default();
     let outcome = harness.finalize_worker_for_test(false, &mut observation);

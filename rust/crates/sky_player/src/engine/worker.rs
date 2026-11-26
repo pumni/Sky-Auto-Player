@@ -43,11 +43,12 @@ pub(crate) use dispatch_loop::apply_scheduler_resumable_lifecycle_transition_for
 pub(crate) use dispatch_loop::validate_resume_prerequisites;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) use dispatch_loop::{
-    PostWaitSelection, StagedControlSignals, StagedDispatchContext, dispatch_staged_candidate,
-    pre_wait_candidate_admission, reselect_candidate_after_wait, stage_candidate,
+    DispatchAttemptContext, DispatchControlSignals, dispatch_candidate, prepare_dispatch_candidate,
 };
 #[cfg(any(test, feature = "test-support"))]
-pub use dispatch_loop::{StagedCandidate, StagedDispatchOutcome};
+pub use dispatch_loop::{DispatchCandidate, DispatchOutcome};
+#[cfg(test)]
+pub(crate) use dispatch_loop::{PreWaitAdmission, pre_wait_admission};
 
 #[cfg(any(test, feature = "test-support"))]
 #[cfg(test)]

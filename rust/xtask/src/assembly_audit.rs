@@ -241,10 +241,10 @@ fn production_dispatch_range(lines: &[String]) -> Result<(usize, usize)> {
         lines,
         |line| {
             line.starts_with(".seh_proc _")
-                && line.contains("dispatch_staged_candidate")
+                && line.contains("dispatch_candidate")
                 && !line.contains("?dtor$")
         },
-        "DispatchExecutor production dispatch_staged_candidate boundary",
+        "DispatchExecutor production dispatch_candidate boundary",
     )
 }
 
@@ -370,7 +370,7 @@ fn report_dispatch_audit(root: &Path, assembly_argument: Option<&str>, alias: &s
     require_source_contract(root)?;
     println!("assembly={}", path.display());
     println!("audit={alias}");
-    println!("boundary=DispatchExecutor::dispatch_staged_candidate");
+    println!("boundary=DispatchExecutor::dispatch_candidate");
     println!(
         "dispatch_lines={}-{}",
         shape.dispatch_lines.0, shape.dispatch_lines.1
@@ -600,7 +600,7 @@ mod tests {
 
     fn valid_dispatch() -> Vec<String> {
         fixture(
-            ".seh_proc _fixture_dispatch_staged_candidate\n\
+            ".seh_proc _fixture_dispatch_candidate\n\
              callq query_async_key_state\n\
              callq query_async_key_state\n\
              callq query_async_key_state\n\
@@ -650,7 +650,7 @@ mod tests {
         assert!(validate_production_dispatch_assembly(&missing_owner).is_err());
 
         let double_sender = fixture(
-            ".seh_proc _fixture_dispatch_staged_candidate\n\
+            ".seh_proc _fixture_dispatch_candidate\n\
              callq query_async_key_state\ncallq query_async_key_state\n\
              callq query_async_key_state\ncallq query_async_key_state\n\
              callq query_async_key_state\n\
@@ -663,7 +663,7 @@ mod tests {
         assert!(validate_production_dispatch_assembly(&double_sender).is_err());
 
         let wrong_commit_order = fixture(
-            ".seh_proc _fixture_dispatch_staged_candidate\n\
+            ".seh_proc _fixture_dispatch_candidate\n\
              callq query_async_key_state\ncallq query_async_key_state\n\
              callq query_async_key_state\ncallq query_async_key_state\n\
              callq query_async_key_state\n\
@@ -694,7 +694,7 @@ mod tests {
         }
 
         let diagnostic_only = fixture(
-            ".seh_proc _fixture_dispatch_staged_candidate\n\
+            ".seh_proc _fixture_dispatch_candidate\n\
              callq query_async_key_state\ncallq query_async_key_state\n\
              callq query_async_key_state\ncallq query_async_key_state\n\
              callq query_async_key_state\n\
