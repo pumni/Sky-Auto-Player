@@ -74,7 +74,6 @@ const defaultView = data.views[0];
   @layer components {
     .product-showcase {
       min-inline-size: 0;
-      align-self: center;
     }
 
     .product-selector[hidden],
@@ -212,10 +211,38 @@ const defaultView = data.views[0];
     const caption = showcase.querySelector<HTMLElement>('[data-product-caption]');
     const status = showcase.querySelector<HTMLElement>('[data-product-status]');
     const buttons = Array.from(showcase.querySelectorAll<HTMLButtonElement>('[data-product-view]'));
-    let committed = buttons[0];
-    if (controls && fallback && image && link && caption && status && committed) {
+    if (controls && fallback && image && link && caption && status && buttons[0]) {
+      let committed = buttons[0];
+      let imageState: 'loading' | 'ready' | 'failed' = 'loading';
+      let selectionFailed = false;
+      let pending = false;
       controls.hidden = false;
-      fallback.hidden = true;
+      const updateFeedback = () => {
+        const failed = imageState === 'failed' || selectionFailed;
+        status.toggleAttribute('data-error', failed && !pending);
+        const message = pending
+          ? (showcase.dataset.pendingMessage ?? '')
+          : failed
+            ? (showcase.dataset.errorMessage ?? '')
+            : '';
+        if (status.textContent !== message) status.textContent = message;
+        if (!failed && fallback.contains(document.activeElement)) {
+          committed.focus({ preventScroll: true });
+        }
+        fallback.hidden = !failed;
+      };
+      const initial = new AbortController();
+      const settleInitial = () => {
+        initial.abort();
+        imageState = image.naturalWidth > 0 ? 'ready' : 'failed';
+        committed.setAttribute('aria-pressed', String(imageState === 'ready'));
+        updateFeedback();
+      };
+      image.addEventListener('load', settleInitial, { signal: initial.signal });
+      image.addEventListener('error', settleInitial, { signal: initial.signal });
+      if (image.complete) settleInitial();
+      else updateFeedback();
+
       let cancelPending = () => {};
       controls.addEventListener('click', (event) => {
         const button =
@@ -226,48 +253,57 @@ const defaultView = data.views[0];
         const { src, alt, caption: nextCaption } = button.dataset;
         if (!src || !alt || !nextCaption) return;
         cancelPending();
-        if (button === committed) return;
-        status.textContent = '';
-        status.removeAttribute('data-error');
+        if (button === committed && imageState !== 'failed') {
+          selectionFailed = false;
+          updateFeedback();
+          return;
+        }
         const request = new AbortController();
         const preview = new Image();
         const timer = window.setTimeout(() => {
           button.setAttribute('data-pending', '');
-          status.textContent = showcase.dataset.pendingMessage ?? '';
+          pending = true;
+          updateFeedback();
         }, 150);
         cancelPending = () => {
           request.abort();
           window.clearTimeout(timer);
           button.removeAttribute('data-pending');
-          status.textContent = '';
+          pending = false;
           cancelPending = () => {};
         };
         const commitSelection = () => {
           cancelPending();
+          initial.abort();
           image.src = src;
           image.alt = alt;
           link.href = src;
           caption.textContent = nextCaption;
-          fallback.hidden = true;
           committed.setAttribute('aria-pressed', 'false');
           button.setAttribute('aria-pressed', 'true');
           committed = button;
+          imageState = 'ready';
+          selectionFailed = false;
+          updateFeedback();
         };
         preview.addEventListener('load', commitSelection, { signal: request.signal });
         preview.addEventListener(
           'error',
           () => {
             cancelPending();
-            fallback.hidden = false;
-            status.setAttribute('data-error', '');
-            status.textContent = showcase.dataset.errorMessage ?? '';
+            selectionFailed = true;
+            updateFeedback();
           },
           { signal: request.signal },
         );
         preview.src = src;
         if (preview.complete && preview.naturalWidth > 0) commitSelection();
       });
-      window.addEventListener('pagehide', () => cancelPending());
+      window.addEventListener('pagehide', (event) => {
+        cancelPending();
+        updateFeedback();
+        if (!event.persisted) initial.abort();
+      });
     }
   }
 </script>

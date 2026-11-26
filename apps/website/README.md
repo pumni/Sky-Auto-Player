@@ -35,7 +35,9 @@ The shared header and footer are rendered by `BaseLayout` on every route. Naviga
 
 `src/components/home/HomePage.astro` composes four visual chapters: the Hero and product showcase share one opening composition; one compact playback demonstration follows; three getting-started steps include a compact formats row; and one download section closes with safety and support links. The visible targets `#top`, `#product`, `#playback`, `#how-it-works`, `#formats`, `#technical`, `#timing-model`, and `#faq-preview` remain stable.
 
-The product selector enhances direct full-size image links and commits the latest successfully loaded selection as one update. The last loaded view stays visible while a new preview loads. Slow requests show a localized status. Failed requests offer a retry and direct image links. The playback demonstration and its browser behavior share the fixed three-event model in `src/data/playback-demo.ts`; it has one timeline, one elapsed display, one key grid, and user-triggered controls. Its static markup remains useful without JavaScript.
+The product selector enhances direct full-size image links and commits the latest successfully loaded selection as one update. The last loaded view stays visible while a new preview loads. Slow requests show a localized status. Failed requests, including initial load failure, offer a retry and direct image links. Cancelling a selection clears its timer and listeners. The browser may finish the image transfer. The playback demonstration and its browser behavior share the fixed three-event model in `src/data/playback-demo.ts`; it has one timeline, one elapsed display, one key grid, and user-triggered controls. Its static markup remains useful without JavaScript.
+
+The enhanced header applies the responsive disclosure mode after inspecting current focus so the outgoing control can hand focus to its visible replacement. The static header keeps CSS-only navigation.
 
 The guide architecture figure uses one ordered list for the visual flow and its text equivalent, including the process boundary.
 

@@ -416,88 +416,70 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         order: 2;
       }
 
-      .menu-toggle {
-        display: none;
-      }
-
       .locale-switch {
         padding: 0;
       }
     }
 
-    @media (max-width: 63.99rem) {
-      :global(html[data-nav-enhanced='true']) .site-header__inner {
-        flex-wrap: nowrap;
-      }
-
-      :global(html[data-nav-enhanced='true']) .site-nav {
-        position: absolute;
-        top: 100%;
-        right: 0;
-        left: 0;
-        z-index: 101;
-        display: flex;
-        max-height: calc(100dvh - 5rem);
-        flex: initial;
-        flex-direction: column;
-        align-items: stretch;
-        gap: 0;
-        overflow-y: auto;
-        padding: var(--space-3) var(--gutter) var(--space-5);
-        border-top: 0;
-        border-bottom: 1px solid var(--color-interactive-border);
-        background: var(--color-page);
-        opacity: 0;
-        pointer-events: none;
-        transform: translateY(-0.35rem);
-        visibility: hidden;
-        --nav-transition-duration: var(--duration-fast);
-        transition:
-          opacity var(--nav-transition-duration) var(--ease-standard),
-          transform var(--nav-transition-duration) var(--ease-out),
-          visibility 0s linear var(--nav-transition-duration);
-      }
-
-      :global(html[data-nav-enhanced='true'])
-        .site-header:has(.menu-toggle[aria-expanded='true'])
-        .site-nav {
-        opacity: 1;
-        pointer-events: auto;
-        transform: translateY(0);
-        visibility: visible;
-        --nav-transition-duration: var(--duration-standard);
-        transition-delay: 0s;
-      }
-
-      :global(html[data-nav-enhanced='true']) .site-nav__link {
-        border-bottom: 1px solid var(--line-faint);
-      }
-
-      :global(html[data-nav-enhanced='true']) .site-actions {
-        flex: 0 0 auto;
-        order: 2;
-      }
-
-      :global(html[data-nav-enhanced='true']) .menu-toggle {
-        display: inline-grid;
-      }
-
-      :global(html[data-nav-enhanced='true']) .locale-switch {
-        align-self: flex-start;
-        padding-block-start: var(--space-2);
-      }
+    :global(html[data-nav-viewport='mobile']) .site-header__inner {
+      flex-wrap: nowrap;
     }
 
-    @media (prefers-reduced-motion: reduce) {
-      .menu-toggle__icon,
-      .menu-toggle__icon::before,
-      .menu-toggle__icon::after {
-        transition: none;
-      }
+    :global(html[data-nav-viewport='mobile']) .site-nav {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      left: 0;
+      z-index: 101;
+      display: flex;
+      max-height: calc(100dvh - 5rem);
+      flex: initial;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0;
+      overflow-y: auto;
+      padding: var(--space-3) var(--gutter) var(--space-5);
+      border-top: 0;
+      border-bottom: 1px solid var(--color-interactive-border);
+      background: var(--color-page);
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(-0.35rem);
+      visibility: hidden;
+      --nav-transition-duration: var(--duration-fast);
+      transition:
+        opacity var(--nav-transition-duration) var(--ease-standard),
+        transform var(--nav-transition-duration) var(--ease-out),
+        visibility 0s linear var(--nav-transition-duration);
+    }
 
-      :global(html[data-nav-enhanced='true']) .site-nav {
-        transition: none !important;
-      }
+    :global(html[data-nav-viewport='mobile'])
+      .site-header:has(.menu-toggle[aria-expanded='true'])
+      .site-nav {
+      opacity: 1;
+      pointer-events: auto;
+      transform: translateY(0);
+      visibility: visible;
+      --nav-transition-duration: var(--duration-standard);
+      transition-delay: 0s;
+    }
+
+    :global(html[data-nav-viewport='mobile']) .site-nav__link {
+      border-bottom: 1px solid var(--line-faint);
+    }
+
+    :global(html[data-nav-viewport='mobile']) .site-actions {
+      flex: 0 0 auto;
+      order: 2;
+    }
+
+    :global(html[data-nav-viewport='mobile']) .menu-toggle {
+      display: inline-grid;
+    }
+
+    :global(html[data-nav-viewport='mobile']) .locale-switch {
+      align-self: flex-start;
+      padding-block-start: var(--space-2);
     }
 
     @media (forced-colors: active) {
@@ -526,7 +508,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         color: ButtonText;
       }
 
-      :global(html[data-nav-enhanced='true']) .site-nav {
+      :global(html[data-nav-viewport='mobile']) .site-nav {
         border-color: CanvasText;
         background: Canvas;
       }
@@ -668,15 +650,21 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     });
 
     const synchronizeViewport = () => {
+      // Read focus before applying CSS that hides the outgoing control.
+      const active = document.activeElement;
       if (desktopQuery.matches) {
-        const toggleWasFocused = toggle.matches(':focus');
+        if (active === toggle) {
+          // Make the destination focusable before either viewport hides its outgoing UI.
+          setMobileState(true);
+          nav.querySelector<HTMLAnchorElement>('a[href]')?.focus({ preventScroll: true });
+        }
+        document.documentElement.dataset.navViewport = 'desktop';
         nav.inert = false;
         nav.removeAttribute('aria-hidden');
         setButtonState(false);
-        if (toggleWasFocused) nav.querySelector<HTMLAnchorElement>('a[href]')?.focus();
       } else {
-        const focusIsInNav = nav.contains(document.activeElement);
-        setMobileState(focusIsInNav);
+        setMobileState(nav.contains(active));
+        document.documentElement.dataset.navViewport = 'mobile';
       }
     };
 
@@ -686,6 +674,5 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     window.addEventListener('pageshow', synchronizeViewport);
 
     synchronizeViewport();
-    document.documentElement.dataset.navEnhanced = 'true';
   }
 </script>

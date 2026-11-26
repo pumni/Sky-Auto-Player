@@ -35,7 +35,6 @@ const { data, downloadCta, locale } = Astro.props;
   @layer components {
     .hero {
       min-inline-size: 0;
-      align-self: center;
       padding-block: 1rem;
     }
 
@@ -106,6 +105,12 @@ const { data, downloadCta, locale } = Astro.props;
       color: var(--color-text-secondary);
       font-size: var(--type-small);
       line-height: 1.5;
+    }
+
+    @media (min-width: 64rem) {
+      .hero {
+        padding-block-start: clamp(1rem, 3vw, 3rem);
+      }
     }
 
     @media (max-width: 39.99rem) {

@@ -399,13 +399,23 @@ const timingGuide = withBase(
       text-underline-offset: 0.2em;
     }
 
-    @media (prefers-reduced-motion: reduce) {
-      .playback-key {
-        transition: none;
-      }
-    }
-
     @media (forced-colors: active) {
+      .playback-timeline__track {
+        outline: 1px solid CanvasText;
+        outline-offset: -1px;
+      }
+
+      .playback-timeline__segment[aria-current='step'] {
+        forced-color-adjust: none;
+        background: Highlight;
+      }
+
+      .playback-timeline__playhead {
+        forced-color-adjust: none;
+        background: Canvas;
+        box-shadow: inset 0 0 0 1px CanvasText;
+      }
+
       .playback-key.is-active {
         outline: 2px solid Highlight;
         outline-offset: 1px;

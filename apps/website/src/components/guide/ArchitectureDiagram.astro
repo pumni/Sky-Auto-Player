@@ -14,8 +14,8 @@ const isVi = locale === 'vi';
     <li>
       <strong>{isVi ? 'File Sheet' : 'Sheet file'}</strong>
       {isVi
-        ? ' — đọc và parse bởi Sky Auto Player (.json / .skysheet / .txt)'
-        : ' — read and parsed by Sky Auto Player (.json / .skysheet / .txt)'}
+        ? ' — đọc và parse bởi Sky Auto Player (.json / .skysheet / .txt tương thích JSON)'
+        : ' — read and parsed by Sky Auto Player (.json / .skysheet / JSON-compatible .txt)'}
     </li>
     <li>
       <strong>Parser</strong>
@@ -36,8 +36,8 @@ const isVi = locale === 'vi';
     <li>
       <strong>Windows SendInput</strong>
       {isVi
-        ? ' — phương thức input duy nhất, không hook, không inject'
-        : ' — only input mechanism, no hooks, no injection'}
+        ? ' — phương thức input duy nhất, không dùng input hook hoặc chèn mã'
+        : ' — only input mechanism, no input hooks or code injection'}
     </li>
     <li>
       <span class="arch-diagram__boundary">

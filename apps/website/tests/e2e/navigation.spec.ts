@@ -278,6 +278,7 @@ test.describe('navigation and route contracts', () => {
       const toggle = page.locator('.menu-toggle');
       const nav = page.locator('.site-nav');
 
+      await page.emulateMedia({ reducedMotion: 'reduce' });
       await toggle.focus();
       await page.setViewportSize({ width: 1280, height: 900 });
       await expect(toggle).not.toBeVisible();
@@ -299,6 +300,25 @@ test.describe('navigation and route contracts', () => {
       await page.setViewportSize({ width: 390, height: 844 });
       await expect(focusedLink).toBeFocused();
       await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      // Cross the breakpoint repeatedly without waiting for transitions between resizes.
+      for (const width of [1280, 390, 1280, 390, 1280, 390]) {
+        await page.setViewportSize({ width, height: 844 });
+      }
+      await expect(focusedLink).toBeFocused();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+
+      const unrelated = page.locator('.hero__primary');
+      await unrelated.focus();
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await expect(toggle).toBeHidden();
+      await expect(unrelated).toBeFocused();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await expect(toggle).toBeVisible();
+      await expect(unrelated).toBeFocused();
+      await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+      expect(await nav.evaluate((element) => (element as HTMLElement).inert)).toBe(true);
     });
   }
 

@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 const routes = ['/', '/faq/', '/vi/', '/vi/faq/'];
@@ -316,9 +316,35 @@ test.describe('accessibility and responsive contracts', () => {
     );
   });
 
+  async function observePreviewLoads(page: Page) {
+    await page.addInitScript(() => {
+      window.Image = class extends Image {
+        constructor() {
+          super();
+          const observe = (event: Event) => {
+            document.documentElement.dataset.previewTestEvent = event.type + ':' + this.src;
+          };
+          this.addEventListener('load', observe);
+          this.addEventListener('error', observe);
+        }
+      };
+    });
+  }
+
+  function openingGeometry(page: Page) {
+    return page.locator('.hero__primary, [data-product-image]').evaluateAll((elements) =>
+      elements.map((element) => {
+        const { x, y, width, height } = element.getBoundingClientRect();
+        return [x + scrollX, y + scrollY, width, height];
+      }),
+    );
+  }
+
   test('slow preview keeps the committed view and cancels when it is reselected', async ({
     page,
   }) => {
+    await observePreviewLoads(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
     let release!: () => void;
     const response = new Promise<void>((resolve) => {
       release = resolve;
@@ -332,6 +358,7 @@ test.describe('accessibility and responsive contracts', () => {
       const group = page.getByRole('group', { name: 'Chọn giao diện trình phát' });
       const library = group.getByRole('button', { name: 'Thư viện' });
       const detail = group.getByRole('button', { name: 'Chi tiết bài hát' });
+      const geometry = await openingGeometry(page);
       await detail.click();
       await expect(page.locator('[data-product-status]')).toHaveText('Đang tải ảnh xem trước…');
       await expect(library).toHaveAttribute('aria-pressed', 'true');
@@ -341,14 +368,114 @@ test.describe('accessibility and responsive contracts', () => {
         'href',
         /desktop-library/,
       );
+      expect(await openingGeometry(page)).toEqual(geometry);
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await library.click();
       await expect(page.locator('[data-product-status]')).toBeEmpty();
-      const loaded = page.waitForResponse((asset) => asset.url().includes('desktop-song-detail'));
       release();
-      await (await loaded).finished();
+      await expect(page.locator('html')).toHaveAttribute(
+        'data-preview-test-event',
+        /load:.*desktop-song-detail/,
+      );
       await expect(library).toHaveAttribute('aria-pressed', 'true');
       await expect(page.locator('[data-product-status]')).toBeEmpty();
+    } finally {
+      release();
+    }
+  });
+
+  test('a failed eager preview offers a focused retry and commits all image metadata', async ({
+    page,
+  }) => {
+    const source = '**/desktop-library-browser-preview-1366x768.png';
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.route(source, (route) => route.abort());
+    await page.goto('/Sky-Auto-Player/');
+    await page.evaluate(() => document.fonts.ready);
+    const library = page.getByRole('button', { name: 'Library' });
+    const fallback = page.locator('.product-showcase__fallback');
+    const status = page.locator('[data-product-status]');
+    const image = page.locator('[data-product-image]');
+    await expect(status).toHaveText(/preview could not load/);
+    await expect(library).toHaveAttribute('aria-pressed', 'false');
+    await expect(fallback.getByRole('link', { name: 'Library' })).toBeVisible();
+    const geometry = await openingGeometry(page);
+    await page.unroute(source);
+    let release!: () => void;
+    const response = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await page.route(source, async (route) => {
+      await response;
+      await route.continue();
+    });
+    try {
+      await library.click();
+      await expect(status).toHaveText('Loading preview…');
+      await fallback.getByRole('link', { name: 'Library' }).focus();
+      release();
+      await expect(library).toHaveAttribute('aria-pressed', 'true');
+      await expect(library).toBeFocused();
+      await expect(fallback).toBeHidden();
+      await expect(status).toBeEmpty();
+      await expect
+        .poll(() => image.evaluate((node) => (node as HTMLImageElement).naturalWidth))
+        .toBe(1366);
+      await expect(image).toHaveAttribute('src', /desktop-library/);
+      await expect(image).toHaveAttribute('alt', /song library/);
+      await expect(page.locator('[data-product-caption]')).toHaveText(
+        'Browse songs, favorites, and playlists.',
+      );
+      await expect(page.locator('[data-product-full-size]')).toHaveAttribute(
+        'href',
+        /desktop-library/,
+      );
+      expect(await openingGeometry(page)).toEqual(geometry);
+    } finally {
+      release();
+    }
+  });
+
+  test('persisted pagehide cancels pending preview errors and preserves controls on return', async ({
+    page,
+  }) => {
+    await observePreviewLoads(page);
+    let release!: () => void;
+    const response = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const source = '**/desktop-settings-playback-browser-preview-1366x768.png';
+    await page.route(source, async (route) => {
+      await response;
+      await route.abort();
+    });
+    try {
+      await page.goto('/Sky-Auto-Player/');
+      const settings = page.getByRole('button', { name: 'Settings' });
+      const status = page.locator('[data-product-status]');
+      await settings.click();
+      await expect(status).toHaveText('Loading preview…');
+      await page.evaluate(() =>
+        window.dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true })),
+      );
+      release();
+      await expect(page.locator('html')).toHaveAttribute(
+        'data-preview-test-event',
+        /error:.*desktop-settings/,
+      );
+      await page.evaluate(() =>
+        window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true })),
+      );
+      await expect(status).toBeEmpty();
+      await expect(page.locator('.product-showcase__fallback')).toBeHidden();
+      await expect(page.getByRole('button', { name: 'Library' })).toHaveAttribute(
+        'aria-pressed',
+        'true',
+      );
+      await page.unroute(source);
+      await settings.click();
+      await expect(settings).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('[data-product-image]')).toHaveAttribute('src', /desktop-settings/);
     } finally {
       release();
     }
@@ -363,6 +490,8 @@ test.describe('accessibility and responsive contracts', () => {
     await page.goto('/Sky-Auto-Player/');
     const group = page.getByRole('group', { name: 'Choose a player view' });
     const image = page.locator('[data-product-image]');
+    await page.evaluate(() => document.fonts.ready);
+    const geometry = await openingGeometry(page);
     await group.getByRole('button', { name: 'Settings' }).click();
     await expect(group.getByRole('button', { name: 'Library' })).toHaveAttribute(
       'aria-pressed',
@@ -383,6 +512,12 @@ test.describe('accessibility and responsive contracts', () => {
       page.locator('.product-showcase__fallback').getByRole('link', { name: 'Settings' }),
     ).toHaveAttribute('href', /desktop-settings-playback-browser-preview-1366x768\.png/);
 
+    expect(await openingGeometry(page)).toEqual(geometry);
+    await group.getByRole('button', { name: 'Library' }).click();
+    await expect(page.locator('[data-product-status]')).toBeEmpty();
+    await expect(page.locator('.product-showcase__fallback')).toBeHidden();
+    await group.getByRole('button', { name: 'Settings' }).click();
+    await expect(page.locator('[data-product-status]')).toHaveText(/preview could not load/);
     await page.unroute('**/desktop-settings-playback-browser-preview-1366x768.png');
     await group.getByRole('button', { name: 'Settings' }).click();
     await expect(group.getByRole('button', { name: 'Settings' })).toHaveAttribute(
@@ -934,7 +1069,11 @@ test.describe('accessibility and responsive contracts', () => {
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    for (const route of ['/guides/sheet-formats/', '/guides/how-it-works/']) {
+    for (const route of [
+      '/guides/sheet-formats/',
+      '/guides/how-it-works/',
+      '/vi/guides/how-it-works/',
+    ]) {
       await page.goto(`/Sky-Auto-Player${route}`);
       const localOverflow = await page.evaluate(() => {
         const element = document.querySelector<HTMLElement>('table, .arch-diagram');
@@ -955,12 +1094,65 @@ test.describe('accessibility and responsive contracts', () => {
         for (let i = 1; i < boxes.length; i++) {
           expect(boxes[i]!.y).toBeGreaterThan(boxes[i - 1]!.y + boxes[i - 1]!.height);
         }
-        await expect(steps.last()).toContainText('Process boundary');
+        const vi = route.startsWith('/vi/');
+        await expect(steps.locator('strong')).toHaveText([
+          vi ? 'File Sheet' : 'Sheet file',
+          'Parser',
+          vi ? 'Timing Model' : 'Timing model',
+          'Rust Dispatch',
+          'Windows SendInput',
+          'Game',
+        ]);
+        await expect(steps.first()).toContainText(
+          vi ? '.txt tương thích JSON' : 'JSON-compatible .txt',
+        );
+        await expect(steps.last()).toContainText(vi ? 'Ranh giới tiến trình' : 'Process boundary');
       } else {
         expect(localOverflow!.content).toBeGreaterThanOrEqual(localOverflow!.client);
       }
       expect(localOverflow!.document).toBeLessThanOrEqual(localOverflow!.viewport + 1);
     }
+  });
+
+  for (const prefix of ['', '/vi']) {
+    test(
+      prefix + ' Guide Hub summaries match the six guide articles',
+      async ({ page, context }) => {
+        await page.goto('/Sky-Auto-Player' + prefix + '/guides/');
+        const entries = page.locator('.guide-hub li');
+        await expect(entries).toHaveCount(6);
+        const articles = await entries.evaluateAll((rows) =>
+          rows.map((row) => ({
+            url: row.querySelector('a')!.href,
+            summary: row.querySelector('p')!.textContent!.trim(),
+          })),
+        );
+        const detail = await context.newPage();
+        for (const article of articles) {
+          expect(article.summary).not.toEqual('');
+          await detail.goto(article.url);
+          await expect(detail.locator('.guide-page__summary')).toHaveText(article.summary);
+        }
+        await detail.close();
+      },
+    );
+  }
+
+  test('forced colors preserve the playback marker, event and key cues at 320px', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 720 });
+    await page.emulateMedia({ forcedColors: 'active', reducedMotion: 'reduce' });
+    await page.goto('/Sky-Auto-Player/vi/');
+    await page.locator('[data-action="next"]').press('Enter');
+    await expect(page.locator('[data-demo-progress]')).toHaveCSS('outline-style', 'solid');
+    await expect(page.locator('[data-playhead]')).toHaveCSS('width', '3px');
+    await expect(page.locator('[data-playhead]')).toHaveCSS('box-shadow', /inset/);
+    await expect(page.locator('.playback-timeline__segment[aria-current="step"]')).toHaveCSS(
+      'forced-color-adjust',
+      'none',
+    );
+    await expect(page.locator('[data-demo-key="D2"]')).toHaveCSS('outline-width', '2px');
   });
 
   test('FAQ pages expose FAQPage JSON-LD and stable fonts', async ({ page }) => {
