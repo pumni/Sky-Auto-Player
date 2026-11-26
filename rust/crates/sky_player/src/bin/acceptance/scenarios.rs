@@ -417,17 +417,21 @@ pub(super) fn acceptance_min_hold_us_for_fps(timing_margin_us: u64, game_fps: u1
     ACCEPTANCE_HOLD_FRAMES * frame_period_us(game_fps) + timing_margin_us
 }
 
+fn isolated_long_hold_us(scenario: Scenario) -> Option<u64> {
+    match scenario {
+        Scenario::Hold | Scenario::PauseResumeActiveCleanup | Scenario::SuspendResume => {
+            Some(450_000)
+        }
+        Scenario::CleanupFullRelease | Scenario::StopCleanup | Scenario::SkipCleanup => {
+            Some(9_950_000)
+        }
+        Scenario::ModifierHeldAfterOwned => Some(100_000),
+        _ => None,
+    }
+}
+
 pub(super) fn scenario_uses_isolated_long_hold(scenario: Scenario) -> bool {
-    matches!(
-        scenario,
-        Scenario::Hold
-            | Scenario::CleanupFullRelease
-            | Scenario::StopCleanup
-            | Scenario::SkipCleanup
-            | Scenario::PauseResumeActiveCleanup
-            | Scenario::SuspendResume
-            | Scenario::ModifierHeldAfterOwned
-    )
+    isolated_long_hold_us(scenario).is_some()
 }
 
 pub(super) fn workload_definition_identity(scenario: Scenario) -> &'static str {
@@ -446,13 +450,15 @@ pub(super) fn scenario_min_hold_us_for_fps(
     timing_margin_us: u64,
     game_fps: u16,
 ) -> u64 {
-    match scenario {
-        Scenario::Hold | Scenario::PauseResumeActiveCleanup | Scenario::SuspendResume => 450_000,
-        Scenario::CleanupFullRelease | Scenario::StopCleanup | Scenario::SkipCleanup => 9_950_000,
-        Scenario::ModifierHeldAfterOwned => 100_000,
-        Scenario::HolInterleaved => 2 * frame_period_us(game_fps) + timing_margin_us,
-        _ => ACCEPTANCE_HOLD_FRAMES * frame_period_us(game_fps) + timing_margin_us,
+    if let Some(long_hold_us) = isolated_long_hold_us(scenario) {
+        return long_hold_us;
     }
+    let frames = if scenario == Scenario::HolInterleaved {
+        2
+    } else {
+        ACCEPTANCE_HOLD_FRAMES
+    };
+    frames * frame_period_us(game_fps) + timing_margin_us
 }
 
 const fn frame_period_us(game_fps: u16) -> u64 {
