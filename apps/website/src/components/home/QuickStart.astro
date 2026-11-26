@@ -30,15 +30,15 @@ const { data } = Astro.props;
         </li>
       ))}
     </ol>
+    <a class="quick-start__setup" href={withBase(data.setupGuideHref)}>
+      {data.setupGuideLabel}
+      <span aria-hidden="true"> ↗</span>
+    </a>
     <p class="quick-start__formats" id="formats">
       <span>{data.formatsLabel}</span>
       <span>{data.formatsValue}</span>
       <a href={withBase(data.formatsHref)}>
         {data.formatsLinkLabel}
-        <span aria-hidden="true"> ↗</span>
-      </a>
-      <a href={withBase(data.setupGuideHref)}>
-        {data.setupGuideLabel}
         <span aria-hidden="true"> ↗</span>
       </a>
     </p>
@@ -69,14 +69,15 @@ const { data } = Astro.props;
 
     .quick-start__step {
       display: grid;
-      grid-template-columns: 2rem minmax(0, 1fr);
-      gap: 0.875rem;
+      grid-template-columns: 2.5rem minmax(0, 1fr);
+      gap: 1rem;
     }
 
     .quick-start__number {
-      padding-block-start: 0.2rem;
-      color: var(--color-info);
-      font-size: var(--type-small);
+      color: var(--color-action);
+      font-family: var(--font-display);
+      font-size: clamp(1.5rem, 1.2rem + 0.6vw, 2rem);
+      line-height: 1.2;
       font-variant-numeric: tabular-nums;
     }
 
@@ -94,11 +95,17 @@ const { data } = Astro.props;
       line-height: var(--leading-body);
     }
 
+    .quick-start__setup,
     .quick-start__formats a {
       color: var(--color-action);
       text-decoration: underline;
       text-decoration-color: var(--line-accent);
       text-underline-offset: 0.22em;
+    }
+
+    .quick-start__setup {
+      justify-self: start;
+      font-weight: 600;
     }
 
     .quick-start__formats {
@@ -121,11 +128,6 @@ const { data } = Astro.props;
       .quick-start__steps {
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 2rem;
-      }
-
-      .quick-start__step {
-        grid-template-columns: 1.75rem minmax(0, 1fr);
-        gap: 0.75rem;
       }
 
       .quick-start__formats {

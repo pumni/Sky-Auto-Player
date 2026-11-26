@@ -5,12 +5,31 @@
   }
 
   .home-page {
+    --home-opening-gap: clamp(2rem, 3.95vw, 2.5rem);
     --home-heading: clamp(1.75rem, 1.25rem + 1.85vw, 3rem);
     --home-lead: clamp(1rem, 0.9rem + 0.4vw, 1.375rem);
     --home-content-gap: clamp(1.5rem, 2.6vw, 2.5rem);
     display: grid;
-    gap: clamp(3.5rem, 6.8vw, 8rem);
-    padding-block: clamp(2.5rem, 4.5vw, 6rem) clamp(3.5rem, 8vw, 8rem);
+    padding-block: clamp(1.75rem, 4.1vw, 4rem) clamp(3.5rem, 8vw, 8rem);
+  }
+
+  .home-page > section ~ section {
+    margin-block-start: clamp(3.5rem, 6.8vw, 8rem);
+  }
+
+  .home-page > section:nth-of-type(2) {
+    margin-block-start: var(--home-opening-gap);
+  }
+
+  @media (min-width: 64rem) {
+    .home-page {
+      --home-opening-gap: clamp(2.5rem, 3.35vw, 3.5rem);
+      padding-block-start: clamp(3rem, 3.9vw, 4rem);
+    }
+
+    .home-page > section ~ section {
+      margin-block-start: clamp(6rem, 6.8vw, 8rem);
+    }
   }
 
   @media (min-width: 22.5rem) and (max-width: 39.99rem) {

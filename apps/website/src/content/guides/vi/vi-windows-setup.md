@@ -51,6 +51,8 @@ Installer canonical hiện chưa được ký Authenticode theo chính sách đa
 2. Tạo hoặc chọn playlist, rồi dùng **Add songs** để nhập file hoặc thư mục chứa file.
 3. File được nhập vẫn ở vị trí gốc; ứng dụng không di chuyển hay xóa chúng.
 
+Để phát nhạc, hãy mở nhạc cụ 15 phím tương thích trong Sky. Chọn bài trong Sky Auto Player rồi nhấn **Play**. Giữ tiêu điểm ở cửa sổ Sky khi phát.
+
 ## Phím tắt desktop
 
 | Phím tắt | Hành động            |

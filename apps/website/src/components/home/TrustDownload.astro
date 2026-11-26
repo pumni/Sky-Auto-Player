@@ -22,29 +22,32 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
   <div class="container trust-download__layout">
     <div class="trust-download__lead">
       <h2 id="trust-download-title">{data.title}</h2>
-      <p class="trust-download__description">{data.description}</p>
       <a class="button button--primary trust-download__button" href={SITE.stableReleaseUrl}>
         {downloadCta}
       </a>
-      <p class="trust-download__package">{data.packageValue} · GitHub Releases</p>
+      <p class="trust-download__destination">GitHub Releases</p>
     </div>
 
     <div class="trust-download__details">
-      <p>{data.installerGuidance}</p>
-      <p>{data.signingValue}</p>
+      <div>
+        <p>{data.installerGuidance}</p>
+        <p>{data.installScope}</p>
+        <p>{data.signingValue}</p>
+      </div>
+      <div>
+        <p class="trust-download__safety">
+          {data.safetyNote}
+          <a href={safetyUrl}>{data.safetyLink}</a>
+        </p>
+
+        <nav id="faq-preview" class="trust-download__support" aria-label={data.supportLabel}>
+          <span>{data.supportLabel}</span>
+          {data.supportLinks.map((link) => (
+            <a href={withBase(link.href)}>{link.label}</a>
+          ))}
+        </nav>
+      </div>
     </div>
-
-    <p class="trust-download__safety">
-      {data.safetyNote}
-      <a href={safetyUrl}>{data.safetyLink}</a>
-    </p>
-
-    <nav id="faq-preview" class="trust-download__support" aria-label={data.supportLabel}>
-      <span>{data.supportLabel}</span>
-      {data.supportLinks.map((link) => (
-        <a href={withBase(link.href)}>{link.label}</a>
-      ))}
-    </nav>
   </div>
 </section>
 
@@ -66,19 +69,13 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       text-align: center;
     }
 
-    .trust-download__description {
-      margin: 0;
-      color: var(--color-text-secondary);
-      font-size: var(--home-lead);
-    }
-
     .trust-download h2 {
       margin: 0;
       font-size: var(--home-heading);
       line-height: var(--leading-heading);
     }
 
-    .trust-download__package {
+    .trust-download__destination {
       margin: 0;
       color: var(--color-text-secondary);
       font-size: var(--type-small);
@@ -93,24 +90,30 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
 
     .trust-download__details {
       display: grid;
-      gap: var(--space-3);
+      gap: var(--home-content-gap);
+      inline-size: min(100%, 66rem);
+      margin-inline: auto;
       padding-block: 1rem;
       border-block: 1px solid var(--line-faint);
-      color: var(--color-text-tertiary);
-      font-size: var(--type-small);
-      line-height: 1.5;
+      color: var(--color-text-secondary);
+      line-height: 1.6;
+    }
+
+    .trust-download__details > div {
+      display: grid;
+      align-content: start;
+      gap: var(--space-3);
+      max-inline-size: 72ch;
+    }
+
+    @media (min-width: 64rem) {
+      .trust-download__details {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
     }
 
     .trust-download__details p {
       margin: 0;
-    }
-
-    .trust-download__safety {
-      max-inline-size: 75ch;
-      margin: 0;
-      color: var(--color-text-secondary);
-      font-size: var(--type-small);
-      line-height: 1.55;
     }
 
     .trust-download__safety a {

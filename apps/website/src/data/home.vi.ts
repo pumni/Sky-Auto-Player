@@ -21,49 +21,46 @@ export const homeVi: HomeContent = {
     titleEmphasis: 'âm nhạc',
     titleEnd: ' đến thế giới Sky.',
     description:
-      'Phát nhạc trong Sky: Children of the Light bằng sheet nhạc. Khám phá thư viện bài hát tích hợp hoặc nhập sheet của bạn, rồi chuẩn bị phát nhạc ngay trong ứng dụng desktop.',
+      'Tự động phát sheet nhạc trong Sky: Children of the Light trên Windows. Chọn bài từ thư viện có sẵn hoặc nhập bản nhạc của bạn.',
     secondaryCta: 'Khám phá ứng dụng',
     meta: 'Windows 11 64-bit · Miễn phí, mã nguồn mở · GitHub Releases',
     riskNote:
       'Dự án không chính thức. Tự động phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky.',
   },
   product: {
-    title: 'Âm nhạc theo cách của bạn.',
-    description: 'Tìm bài hát, sắp xếp bộ sưu tập và chuẩn bị phát nhạc.',
+    title: 'Khám phá trình phát',
+    description: 'Duyệt bài hát, mục yêu thích, danh sách phát và tùy chọn phát.',
     selectorLabel: 'Chọn giao diện trình phát',
     fullSizeLabel: 'Xem ảnh kích thước đầy đủ',
     fallbackLabel: 'Mở giao diện trình phát khác',
     pendingMessage: 'Đang tải ảnh xem trước…',
     errorMessage: 'Không tải được ảnh xem trước. Hãy thử lại hoặc mở ảnh trực tiếp.',
     captureNote:
-      'Ảnh xem trước giao diện desktop với dữ liệu mẫu (browser mock, không phải ảnh chụp ứng dụng native).',
+      'Giao diện desktop · Dữ liệu mẫu · Mô phỏng trong trình duyệt, không phải ảnh chụp ứng dụng',
     views: [
       {
         label: 'Thư viện',
-        description: 'Khám phá bài hát có sẵn, mục yêu thích và playlist.',
-        alt: 'Ảnh xem trước bằng browser mock của thư viện bài hát desktop với bài hát mẫu và thanh bên playlist.',
-        caption: 'Bài hát có sẵn trong thư viện mẫu.',
+        alt: 'Ảnh xem trước bằng browser mock của thư viện bài hát desktop với bài hát mẫu và thanh bên danh sách phát.',
+        caption: 'Duyệt thư viện, bài yêu thích và danh sách phát.',
         src: '/assets/images/desktop-library-browser-preview-1366x768.png',
       },
       {
-        label: 'Chi tiết bài hát',
-        description: 'Xem thông tin sheet trước khi phát.',
+        label: 'Chi tiết bài',
         alt: 'Ảnh xem trước bằng browser mock của bài hát mẫu đã chọn và chi tiết sheet trên giao diện desktop.',
-        caption: 'Bài Blue Bird được chọn và mục Details đang mở trong Inspector.',
+        caption: 'Xem thông tin bản nhạc trước khi phát. Ví dụ đang chọn Blue Bird.',
         src: '/assets/images/desktop-song-detail-browser-preview-1366x768.png',
       },
       {
         label: 'Thiết lập phát',
-        description: 'Điều chỉnh tùy chọn phát phù hợp với thiết lập của bạn.',
         alt: 'Ảnh xem trước bằng browser mock của thiết lập phát nhạc desktop với dữ liệu mẫu.',
-        caption: 'Tùy chọn mặc định và timing trong mục thiết lập phát.',
+        caption: 'Điều chỉnh tùy chọn phát và thời gian giữ phím.',
         src: '/assets/images/desktop-settings-playback-browser-preview-1366x768.png',
       },
     ],
   },
   playback: {
     title: 'Không chỉ là một chuỗi phím.',
-    description: 'Xem cách một bản nhạc biểu diễn hợp âm, nốt đơn và nốt ngân theo thời gian.',
+    description: 'Xem cách trình phát lên lịch cho hợp âm, nốt đơn và nốt ngân từ bản nhạc.',
     eventTypes: { chord: 'Hợp âm', note: 'Nốt', hold: 'Ngân' },
     controlsLabel: 'Điều khiển minh họa phát nhạc',
     play: 'Chạy minh họa',
@@ -79,9 +76,8 @@ export const homeVi: HomeContent = {
     pausedStatus: 'Đã tạm dừng',
     completeStatus: 'Đã phát xong. Không có phím nào đang hoạt động.',
     manualOnly: 'Đang bật giảm chuyển động. Dùng nút Trước và Tiếp để chuyển từng phần.',
-    schematicNote:
-      'Minh họa trực quan · 2,6 giây · Không phát âm thanh hay đo thời điểm input trong game.',
-    timingLinkLabel: 'Cách tính timing',
+    schematicNote: 'Minh họa 2,6 giây · Không có âm thanh hay đo thời điểm gửi phím trong game.',
+    timingLinkLabel: 'Cách tính thời gian phát',
     secondsAbbreviation: 'giây',
   },
   quickStart: {
@@ -91,10 +87,11 @@ export const homeVi: HomeContent = {
         title: 'Cài đặt Sky Auto Player',
         description: 'Tải bộ cài Windows ổn định từ GitHub Releases chính thức.',
       },
-      { title: 'Chọn bản nhạc', description: 'Duyệt thư viện hoặc nhập sheet tương thích.' },
+      { title: 'Chọn bản nhạc', description: 'Duyệt thư viện hoặc nhập sheet nhạc tương thích.' },
       {
         title: 'Chuẩn bị trong Sky',
-        description: 'Mở nhạc cụ phù hợp, chọn cửa sổ Sky và làm theo hướng dẫn phát nhạc.',
+        description:
+          'Mở nhạc cụ phù hợp trong Sky, chọn bài và nhấn Play. Giữ tiêu điểm ở cửa sổ Sky khi phát.',
       },
     ],
     setupGuideLabel: 'Đọc hướng dẫn cài đặt',
@@ -105,11 +102,10 @@ export const homeVi: HomeContent = {
     formatsHref: '/vi/guides/sheet-formats/',
   },
   trust: {
-    title: 'Sẵn sàng mang âm nhạc đến Sky?',
-    description: 'Tải bản phát hành ổn định cho Windows và bắt đầu với bộ sưu tập nhạc của bạn.',
+    title: 'Tải Sky Auto Player',
     installerGuidance:
       'Trên GitHub Releases, chọn bộ cài Windows 64-bit của bản ổn định có tên kết thúc bằng _x64-setup.exe. Tệp .exe.sig dành cho trình cập nhật, không cần khi cài thủ công.',
-    packageValue: 'Windows 11 64-bit · Miễn phí, mã nguồn mở · cài cho người dùng hiện tại',
+    installScope: 'Cài đặt cho tài khoản Windows hiện tại.',
     signingValue:
       'Bộ cài không có chữ ký Authenticode; Windows có thể hiển thị Unknown Publisher hoặc SmartScreen.',
     safetyNote:

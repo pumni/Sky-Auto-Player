@@ -133,7 +133,8 @@ runtime. New Tauri runtime adapters must be added to the explicit owner set.
 Site CI and local builds invoke Bun/Astro directly. The website embeds stable
 download and release history destinations without reading desktop version
 metadata or calling a release API. CI validates the build, output, SEO, and
-functional contracts. See the [website release policy](../apps/website/README.md#release-destinations).
+functional contracts. Manual Pages recovery verifies the built output and
+SEO before deployment. See the [website release policy](../apps/website/README.md#release-destinations).
 
 ## Deliberate non-deduplication
 

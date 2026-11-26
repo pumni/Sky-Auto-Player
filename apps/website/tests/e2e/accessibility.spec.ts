@@ -144,9 +144,14 @@ test.describe('accessibility and responsive contracts', () => {
           quickStartWidth: quickStart.width,
         };
       });
-      const expectedGap = Math.min(128, Math.max(56, width * 0.068));
       expect(spacing.gaps).toHaveLength(4);
-      for (const gap of spacing.gaps) expect(gap).toBeCloseTo(expectedGap, 0);
+      const [opening, ...later] = spacing.gaps;
+      expect(opening).toBeGreaterThanOrEqual(width >= 1024 ? 40 : 32);
+      expect(opening).toBeLessThanOrEqual(width >= 1024 ? 56 : 40);
+      for (const gap of later) {
+        expect(gap).toBeGreaterThanOrEqual(width >= 1024 ? 96 : 56);
+        expect(gap).toBeLessThanOrEqual(128);
+      }
       expect(spacing.footerLeft).toBeGreaterThanOrEqual(16);
       expect(spacing.footerWidth).toBeLessThanOrEqual(1200.5);
       expect(spacing.quickStartLeft).toBeCloseTo(spacing.footerLeft, 0);
@@ -163,41 +168,66 @@ test.describe('accessibility and responsive contracts', () => {
     }
   });
 
-  test('editorial hero precedes the product stage and keeps the action visible', async ({
+  test('both locales expose a meaningful portion of the real preview on the opening fold', async ({
     page,
   }) => {
+    const viewports = [
+      { width: 1440, height: 900, minVisible: 180 },
+      { width: 1024, height: 768, minVisible: 120 },
+      { width: 390, height: 844, minVisible: 100 },
+    ];
     for (const route of ['/', '/vi/']) {
-      await page.setViewportSize({ width: 1440, height: 900 });
-      await page.goto(`/Sky-Auto-Player${route}`);
-      const desktop = await page.evaluate(() => {
-        const hero = document.querySelector('.hero')!.getBoundingClientRect();
-        const image = document.querySelector('.product-showcase__image')!.getBoundingClientRect();
-        const action = document.querySelector('.hero__primary')!.getBoundingClientRect();
-        return {
-          stacked: image.top >= hero.bottom,
-          centerOffset: (hero.left + hero.right - image.left - image.right) / 2,
-          imageTop: image.top,
-          actionBottom: action.bottom,
-          screenshotWidth: image.width,
-        };
-      });
-      expect(desktop.stacked).toBe(true);
-      expect(desktop.centerOffset).toBeCloseTo(0);
-      expect(desktop.screenshotWidth).toBeGreaterThanOrEqual(960);
-      expect(desktop.imageTop).toBeLessThan(900);
-      expect(desktop.actionBottom).toBeLessThan(900);
-
-      await page.setViewportSize({ width: 390, height: 844 });
-      await page.goto(`/Sky-Auto-Player${route}`);
-      await expect(page.locator('main h1')).toBeVisible();
-      await expect(page.locator('.hero__primary')).toBeInViewport();
-      const mobile = await page.evaluate(() => {
-        const hero = document.querySelector('.hero')!.getBoundingClientRect();
-        const image = document.querySelector('.product-showcase__image')!.getBoundingClientRect();
-        return { stacked: image.top >= hero.bottom, imageRight: image.right };
-      });
-      expect(mobile.stacked).toBe(true);
-      expect(mobile.imageRight).toBeLessThanOrEqual(391);
+      for (const { width, height, minVisible } of viewports) {
+        await page.setViewportSize({ width, height });
+        await page.goto(`/Sky-Auto-Player${route}`);
+        await page.evaluate(() => document.fonts.ready);
+        const image = page.locator('[data-product-image]');
+        await expect
+          .poll(() => image.evaluate((img: HTMLImageElement) => img.naturalWidth))
+          .toBe(1366);
+        expect(await image.evaluate((img: HTMLImageElement) => img.naturalHeight)).toBe(768);
+        const geometry = await page.evaluate(() => {
+          const rect = (selector: string) =>
+            document.querySelector(selector)!.getBoundingClientRect();
+          const hero = rect('#top');
+          const risk = rect('.hero__risk');
+          const action = rect('.hero__primary');
+          const secondary = rect('.hero__secondary');
+          const preview = rect('[data-product-image]');
+          const selector = rect('.product-selector');
+          const product = rect('#product');
+          return {
+            centerOffset: (hero.left + hero.right - preview.left - preview.right) / 2,
+            previewWidth: preview.width,
+            previewHeight: preview.height,
+            visible: Math.max(0, Math.min(preview.bottom, innerHeight) - Math.max(preview.top, 0)),
+            openingOrder:
+              action.bottom <= risk.top &&
+              secondary.bottom <= risk.top &&
+              risk.bottom <= hero.bottom &&
+              hero.bottom <= product.top &&
+              selector.bottom <= preview.top,
+            productOnscreen:
+              preview.left >= 0 && preview.right <= document.documentElement.clientWidth,
+            heroOnscreen: action.top >= 0 && secondary.top >= 0 && risk.bottom <= innerHeight,
+            buttons: [...document.querySelectorAll('[data-product-view]')].map(
+              (button) => button.getBoundingClientRect().height,
+            ),
+          };
+        });
+        expect(geometry.openingOrder).toBe(true);
+        expect(geometry.heroOnscreen).toBe(true);
+        expect(geometry.productOnscreen).toBe(true);
+        expect(geometry.centerOffset).toBeCloseTo(0, 1);
+        expect(geometry.previewWidth / geometry.previewHeight).toBeCloseTo(1366 / 768, 2);
+        expect(geometry.visible).toBeGreaterThanOrEqual(minVisible);
+        if (width === 1440) {
+          expect(geometry.previewWidth).toBeGreaterThanOrEqual(960);
+          expect(geometry.previewWidth).toBeLessThanOrEqual(1120);
+        }
+        expect(geometry.buttons).toHaveLength(3);
+        for (const button of geometry.buttons) expect(button).toBeGreaterThanOrEqual(44);
+      }
     }
   });
 
@@ -261,7 +291,7 @@ test.describe('accessibility and responsive contracts', () => {
     await page.waitForTimeout(350);
     await expect(image).toHaveAttribute('src', /desktop-library-browser-preview-1366x768\.png/);
     await expect(page.locator('[data-product-caption]')).toHaveText(
-      'Built-in songs in the sample library.',
+      'Browse the library, favorites and playlists.',
     );
 
     await group.getByRole('button', { name: 'Song details' }).click();
@@ -276,7 +306,7 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(image).toHaveAttribute('src', /desktop-song-detail-browser-preview-1366x768\.png/);
     await expect(image).toHaveAttribute('alt', /selected example song and its sheet details/);
     await expect(page.locator('[data-product-caption]')).toHaveText(
-      'Blue Bird selected with Inspector Details open.',
+      'Review a sheet before playback. Blue Bird is selected in the preview.',
     );
     await expect(fullSize).toHaveAttribute(
       'href',
@@ -297,7 +327,7 @@ test.describe('accessibility and responsive contracts', () => {
       /desktop-settings-playback-browser-preview-1366x768\.png/,
     );
     await expect(page.locator('[data-product-caption]')).toHaveText(
-      'Playback defaults and timing options in Settings.',
+      'Adjust playback defaults and key hold duration.',
     );
   });
 
@@ -342,7 +372,7 @@ test.describe('accessibility and responsive contracts', () => {
       await page.goto('/Sky-Auto-Player/vi/');
       const group = page.getByRole('group', { name: 'Chọn giao diện trình phát' });
       const library = group.getByRole('button', { name: 'Thư viện' });
-      const detail = group.getByRole('button', { name: 'Chi tiết bài hát' });
+      const detail = group.getByRole('button', { name: 'Chi tiết bài' });
       const geometry = await openingGeometry(page);
       await detail.click();
       await expect(page.locator('[data-product-status]')).toHaveText('Đang tải ảnh xem trước…');
@@ -409,7 +439,7 @@ test.describe('accessibility and responsive contracts', () => {
       await expect(image).toHaveAttribute('src', /desktop-library/);
       await expect(image).toHaveAttribute('alt', /song library/);
       await expect(page.locator('[data-product-caption]')).toHaveText(
-        'Built-in songs in the sample library.',
+        'Browse the library, favorites and playlists.',
       );
       await expect(page.locator('[data-product-full-size]')).toHaveAttribute(
         'href',
@@ -489,7 +519,7 @@ test.describe('accessibility and responsive contracts', () => {
       /desktop-library-browser-preview-1366x768\.png/,
     );
     await expect(page.locator('[data-product-caption]')).toHaveText(
-      'Built-in songs in the sample library.',
+      'Browse the library, favorites and playlists.',
     );
     await expect(page.locator('[data-product-status]')).toHaveText(/preview could not load/);
     await expect(page.locator('.product-showcase__fallback')).toBeVisible();
@@ -513,7 +543,7 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('.product-showcase__fallback')).toBeHidden();
   });
 
-  test('Vietnamese player view selector has localized labels, descriptions, and captions', async ({
+  test('Vietnamese player view selector has compact localized names and selected captions', async ({
     page,
   }) => {
     await page.goto('/Sky-Auto-Player/vi/');
@@ -522,15 +552,15 @@ test.describe('accessibility and responsive contracts', () => {
       'aria-pressed',
       'true',
     );
-    const details = group.getByRole('button', { name: 'Chi tiết bài hát' });
-    await expect(details).toHaveAccessibleName(/Xem thông tin sheet trước khi phát/);
+    const details = group.getByRole('button', { name: 'Chi tiết bài' });
+    await expect(details).toHaveAccessibleName('Chi tiết bài');
     await details.click();
     await expect(page.locator('[data-product-image]')).toHaveAttribute(
       'alt',
       /bài hát mẫu đã chọn và chi tiết sheet/,
     );
     await expect(page.locator('[data-product-caption]')).toHaveText(
-      'Bài Blue Bird được chọn và mục Details đang mở trong Inspector.',
+      'Xem thông tin bản nhạc trước khi phát. Ví dụ đang chọn Blue Bird.',
     );
     await expect(page.locator('[data-product-full-size]')).toHaveAttribute(
       'href',
@@ -670,10 +700,17 @@ test.describe('accessibility and responsive contracts', () => {
     await demo.locator('[data-action="next"]').click();
     expect(await keyGeometry()).toEqual(pressedGeometry);
     await demo.locator('[data-action="previous"]').click();
-    const segmentGrid = await demo.locator('.playback-timeline__segments').getAttribute('style');
-    expect(await demo.locator('.playback-timeline__legend').getAttribute('style')).toBe(
-      segmentGrid,
-    );
+    const trackWidths = await demo
+      .locator('[data-demo-segment]')
+      .evaluateAll((segments) => segments.map((segment) => segment.getBoundingClientRect().width));
+    const legendWidths = await demo
+      .locator('[data-demo-event]')
+      .evaluateAll((events) => events.map((event) => event.getBoundingClientRect().width));
+    for (const widths of [trackWidths, legendWidths]) {
+      expect(widths).toHaveLength(3);
+      expect(widths[0]).toBeCloseTo(widths[1]);
+      expect(widths[2] / widths[0]).toBeCloseTo(1200 / 700, 2);
+    }
 
     const next = demo.locator('[data-action="next"]');
     await next.click();
@@ -903,7 +940,8 @@ test.describe('accessibility and responsive contracts', () => {
           '.hero__risk',
           '.product-showcase__caption',
           '.playback-timeline__legend li',
-          '.trust-download__package',
+          '.trust-download__destination',
+          '.product-showcase__provenance',
         ].join(','),
       )
       .evaluateAll((elements) =>
@@ -914,7 +952,7 @@ test.describe('accessibility and responsive contracts', () => {
           })
           .map((element) => Number.parseFloat(getComputedStyle(element).fontSize)),
       );
-    expect(sizes.length).toBeGreaterThan(0);
+    expect(sizes).toHaveLength(8);
     expect(Math.min(...sizes)).toBeGreaterThanOrEqual(12);
   });
 
@@ -947,7 +985,9 @@ test.describe('accessibility and responsive contracts', () => {
         releaseUrl,
       );
       await expect(page.locator('#technical')).toContainText(
-        route === '/' ? 'Windows 11 x64' : 'Windows 11 64-bit',
+        route === '/'
+          ? 'Installs for the current Windows user'
+          : 'Cài đặt cho tài khoản Windows hiện tại',
       );
       await expect(page.locator('#technical')).toContainText('_x64-setup.exe');
       await expect(page.locator('#technical')).toContainText('.exe.sig');
@@ -1123,6 +1163,27 @@ test.describe('accessibility and responsive contracts', () => {
       },
     );
   }
+
+  test('narrow Vietnamese legend gives event labels equal space while the track stays duration-weighted', async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 320, height: 768 });
+    await page.goto('/Sky-Auto-Player/vi/');
+    const pixels = (selector: string) =>
+      page
+        .locator(selector)
+        .evaluateAll((nodes) => nodes.map((node) => node.getBoundingClientRect().width));
+    const legend = await pixels('[data-demo-event]');
+    expect(legend).toHaveLength(3);
+    expect(legend[0]).toBeCloseTo(legend[1], 1);
+    expect(legend[1]).toBeCloseTo(legend[2], 1);
+    const track = await pixels('[data-demo-segment]');
+    expect(track).toHaveLength(3);
+    expect(track[2] / track[0]).toBeCloseTo(1200 / 700, 2);
+    await expect(page.locator('[data-demo-event][aria-current="step"]')).toContainText(
+      'A1 + B2 + C3',
+    );
+  });
 
   test('forced colors preserve the playback marker, event and key cues at 320px', async ({
     page,

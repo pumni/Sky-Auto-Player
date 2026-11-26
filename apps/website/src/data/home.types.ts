@@ -32,7 +32,6 @@ export interface HomeContent {
     captureNote: string;
     views: {
       label: string;
-      description: string;
       alt: string;
       caption: string;
       src: string;
@@ -72,9 +71,8 @@ export interface HomeContent {
   };
   trust: {
     title: string;
-    description: string;
     installerGuidance: string;
-    packageValue: string;
+    installScope: string;
     signingValue: string;
     safetyNote: string;
     safetyLink: string;

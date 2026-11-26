@@ -44,7 +44,7 @@ test('English and Vietnamese homepage data keep every section structurally align
   ]);
   expect(homeVi.product.views.map((view) => view.label)).toEqual([
     'Thư viện',
-    'Chi tiết bài hát',
+    'Chi tiết bài',
     'Thiết lập phát',
   ]);
   expect(homeEn.quickStart.items).toHaveLength(3);
@@ -111,8 +111,8 @@ test('the hero leads with concise product value and both locales disclose the re
   expect(homeVi.downloadCta).toBe('Tải cho Windows');
   expect(homeEn.hero.meta).toContain('GitHub Releases');
   expect(homeVi.hero.meta).toContain('GitHub Releases');
-  expect(homeEn.trust.packageValue).toContain('Windows 11 x64');
-  expect(homeVi.trust.packageValue).toContain('Windows 11 64-bit');
+  expect(homeEn.hero.meta).toContain('Windows 11 x64');
+  expect(homeVi.hero.meta).toContain('Windows 11 64-bit');
   expect(homeEn.hero.riskNote).toMatch(/Terms of Service/);
   expect(homeVi.hero.riskNote).toMatch(/Điều khoản Dịch vụ/);
   expect(homeEn.hero.description).not.toMatch(/QPC|SendInput|foreground|packet/i);
@@ -155,7 +155,7 @@ test('website copy contains no retired instructions, adaptive-lead claims, or un
 
 test('every CSS custom property reference resolves to a declared or inline property', () => {
   const declared = new Set(
-    [...sourceText.matchAll(/(?:^|[;{\s])(--[\w-]+)\s*:/gm)].map((match) => match[1]),
+    [...sourceText.matchAll(/(?:^|[`;{\s])(--[\w-]+)\s*:/gm)].map((match) => match[1]),
   );
   for (const match of sourceText.matchAll(/setProperty\(\s*['"](--[\w-]+)['"]/g)) {
     declared.add(match[1]);

@@ -61,7 +61,7 @@ const timingGuide = withBase(
         </span>
       </div>
 
-      <div class="playback-timeline">
+      <div class="playback-timeline" style={`--playback-columns: ${timelineColumns}`}>
         <div
           class="playback-timeline__track"
           role="progressbar"
@@ -72,11 +72,7 @@ const timingGuide = withBase(
           aria-describedby="playback-legend"
           data-demo-progress
         >
-          <span
-            class="playback-timeline__segments"
-            aria-hidden="true"
-            style={`grid-template-columns: ${timelineColumns}`}
-          >
+          <span class="playback-timeline__segments" aria-hidden="true">
             {PLAYBACK_DEMO_EVENTS.map((_event, index) => (
               <span
                 class="playback-timeline__segment"
@@ -87,11 +83,7 @@ const timingGuide = withBase(
           </span>
           <span class="playback-timeline__playhead" aria-hidden="true" data-playhead></span>
         </div>
-        <ol
-          class="playback-timeline__legend"
-          id="playback-legend"
-          style={`grid-template-columns: ${timelineColumns}`}
-        >
+        <ol class="playback-timeline__legend" id="playback-legend">
           {PLAYBACK_DEMO_EVENTS.map((event, index) => (
             <li
               aria-current={index === 0 ? 'step' : undefined}
@@ -239,6 +231,7 @@ const timingGuide = withBase(
       position: absolute;
       inset: 0;
       display: grid;
+      grid-template-columns: var(--playback-columns);
       gap: 2px;
     }
 
@@ -262,10 +255,17 @@ const timingGuide = withBase(
 
     .playback-timeline__legend {
       display: grid;
+      grid-template-columns: var(--playback-columns);
       gap: 0.75rem clamp(0.25rem, 1vw, 1rem);
       margin: 0.7rem 0 0;
       padding: 0;
       list-style: none;
+    }
+
+    @media (max-width: 30rem) {
+      .playback-timeline__legend {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
     }
 
     .playback-timeline__legend li {
@@ -336,7 +336,8 @@ const timingGuide = withBase(
       border-color: var(--color-action);
       box-shadow: inset 0 -3px var(--color-action);
       background: var(--color-surface-active);
-      color: var(--color-text-primary);
+      color: var(--color-action-hover);
+      font-weight: 650;
     }
 
     .playback-demo__controls-wrap {

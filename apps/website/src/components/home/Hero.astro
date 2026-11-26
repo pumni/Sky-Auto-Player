@@ -44,7 +44,7 @@ const { data, downloadCta, locale } = Astro.props;
 
     .hero h1 {
       margin: 0;
-      font-size: clamp(2.25rem, 1.5rem + 3.7vw, 5rem);
+      font-size: clamp(2.25rem, 1.5rem + 3.7vw, 4.5rem);
       letter-spacing: -0.025em;
       line-height: 1.08;
       text-wrap: balance;
@@ -56,13 +56,13 @@ const { data, downloadCta, locale } = Astro.props;
 
     .hero--vi h1 {
       letter-spacing: 0;
-      font-size: clamp(2.25rem, 1.5rem + 3.1vw, 4.5rem);
+      font-size: clamp(2.25rem, 1.5rem + 3.1vw, 4.25rem);
       line-height: 1.16;
     }
 
     .hero__description {
-      max-inline-size: 72ch;
-      margin: 1.5rem auto 0;
+      max-inline-size: 65ch;
+      margin: clamp(1rem, 1.4vw, 1.25rem) auto 0;
       color: var(--color-text-secondary);
       font-size: var(--home-lead);
       line-height: 1.5;
@@ -77,7 +77,7 @@ const { data, downloadCta, locale } = Astro.props;
       flex-wrap: wrap;
       justify-content: center;
       gap: 0.75rem clamp(0.5rem, 1.2vw, 1rem);
-      margin-block-start: 1.5rem;
+      margin-block-start: clamp(1rem, 1.4vw, 1.25rem);
     }
 
     .hero__actions .button {
@@ -87,7 +87,7 @@ const { data, downloadCta, locale } = Astro.props;
 
     .hero__meta,
     .hero__risk {
-      margin: 0.75rem auto 0;
+      margin: 0.625rem auto 0;
       color: var(--color-text-secondary);
       font-size: var(--type-small);
       line-height: 1.5;
