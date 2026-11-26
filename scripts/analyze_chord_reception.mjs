@@ -100,13 +100,9 @@ function toExactPositiveBigInt(value) {
   return null;
 }
 
-function usToTicksExactOrCeil(us, freqHz) {
+function usToTicksCeil(us, freqHz) {
   const num = BigInt(us) * freqHz;
   return (num + 999_999n) / 1_000_000n;
-}
-
-function usToTicksFloor(us, freqHz) {
-  return (BigInt(us) * freqHz) / 1_000_000n;
 }
 
 function ticksToUs(deltaTicks, freqHz) {
@@ -589,9 +585,7 @@ export function analyzePilotRun({
   }
 
   const freqHz = BigInt(Number.isSafeInteger(senderFreq) && senderFreq > 0 ? senderFreq : 10_000_000);
-  const exactFreqRoundingTol = freqHz % 1_000_000n === 0n ? 0n : 1n;
-  const expectedHoldTicks = usToTicksExactOrCeil(PILOT_HOLD_US, freqHz);
-  const expectedHoldTicksFloor = usToTicksFloor(PILOT_HOLD_US, freqHz);
+  const expectedHoldTicks = usToTicksCeil(PILOT_HOLD_US, freqHz);
 
   const records = Array.isArray(telemetry?.records) ? telemetry.records : [];
   const metrics = {
@@ -619,8 +613,7 @@ export function analyzePilotRun({
   let rxCursor = 0;
   let downOnsetIdx = 0;
   let upOnsetIdx = 0;
-  let firstDownD = null;
-  let firstDownAuthOffset = null;
+  let derivedEpochQpc = null;
 
   for (let i = 0; i < records.length; i++) {
     const pkt = records[i];
@@ -705,7 +698,7 @@ export function analyzePilotRun({
         fail('pilot_geometry_mismatch', `Down packet at record ${i} (onset ${downOnsetIdx}) mask/index mismatch`);
       }
 
-      // Check exact authored Down offset (first=50000 us, cadence=100000 us)
+      // Check exact checked-ceil authored Down offset (first=50000 us, cadence=100000 us)
       let authoredOffsetTicks;
       try {
         authoredOffsetTicks = toBigIntStrict(pkt.authored_offset_ticks, `authored_offset_ticks@${i}`);
@@ -714,18 +707,15 @@ export function analyzePilotRun({
         authoredOffsetTicks = null;
       }
       const expectedOffsetUs = PILOT_FIRST_OFFSET_US + downOnsetIdx * PILOT_CADENCE_US;
-      const expectedOffsetMin = usToTicksFloor(expectedOffsetUs, freqHz);
-      const expectedOffsetMax = usToTicksExactOrCeil(expectedOffsetUs, freqHz);
-      if (authoredOffsetTicks === null ||
-          authoredOffsetTicks < expectedOffsetMin - exactFreqRoundingTol ||
-          authoredOffsetTicks > expectedOffsetMax + exactFreqRoundingTol) {
+      const expectedOffsetTicks = usToTicksCeil(expectedOffsetUs, freqHz);
+      if (authoredOffsetTicks === null || authoredOffsetTicks !== expectedOffsetTicks) {
         fail(
           'authored_timing_inconsistent',
-          `Down(${downOnsetIdx}) authored_offset_ticks=${authoredOffsetTicks} outside expected ${expectedOffsetUs} us [${expectedOffsetMin}..${expectedOffsetMax}]`,
+          `Down(${downOnsetIdx}) authored_offset_ticks=${authoredOffsetTicks} != exact ceil(${expectedOffsetUs} us)=${expectedOffsetTicks}`,
         );
       }
 
-      // Require authoritative authored_lateness_ticks and cross-check consistent D across all 150 onsets
+      // Require authoritative authored_lateness_ticks and exact same-domain epoch consistency across all 150 onsets
       if (pkt.authored_lateness_available !== true) {
         fail('authored_timing_inconsistent', `Down(${downOnsetIdx}) missing authoritative authored_lateness_available`);
       } else {
@@ -734,17 +724,16 @@ export function analyzePilotRun({
           const D = S - lateness;
           if (D <= 0n) {
             fail('authored_timing_inconsistent', `Down(${downOnsetIdx}) derived D=${D} <= 0`);
-          } else if (firstDownD === null) {
-            firstDownD = D;
-            firstDownAuthOffset = authoredOffsetTicks;
-          } else if (authoredOffsetTicks !== null && firstDownAuthOffset !== null) {
-            const actualDeltaD = D - firstDownD;
-            const expectedDeltaD = authoredOffsetTicks - firstDownAuthOffset;
-            const diff = actualDeltaD >= expectedDeltaD ? actualDeltaD - expectedDeltaD : expectedDeltaD - actualDeltaD;
-            if (diff > exactFreqRoundingTol) {
+          } else if (authoredOffsetTicks !== null) {
+            const onsetEpoch = D - authoredOffsetTicks;
+            if (onsetEpoch <= 0n) {
+              fail('authored_timing_inconsistent', `Down(${downOnsetIdx}) derived epoch=${onsetEpoch} <= 0`);
+            } else if (derivedEpochQpc === null) {
+              derivedEpochQpc = onsetEpoch;
+            } else if (onsetEpoch !== derivedEpochQpc) {
               fail(
                 'authored_timing_inconsistent',
-                `Down(${downOnsetIdx}) inconsistent D progression: D_i - D_0 = ${actualDeltaD}, expected ${expectedDeltaD}`,
+                `Down(${downOnsetIdx}) epoch mismatch: derived=${onsetEpoch}, expected=${derivedEpochQpc}`,
               );
             }
           }
@@ -762,23 +751,27 @@ export function analyzePilotRun({
         fail('pilot_geometry_mismatch', `Up packet at record ${i} (onset ${upOnsetIdx}) mask/order mismatch`);
       }
 
-      // Check completion-anchored hold floor against prior Down(upOnsetIdx) completion C
+      // Exact same-domain completion-anchored hold floor: S_up >= C_down + ceil(H_ticks)
       const priorDownC = downCompletionByOnset.get(upOnsetIdx);
       if (priorDownC === undefined) {
         fail('pilot_geometry_mismatch', `Up(${upOnsetIdx}) has no prior Down(${upOnsetIdx}) completion record`);
-      } else if (S + exactFreqRoundingTol < priorDownC + expectedHoldTicksFloor) {
+      } else if (S < priorDownC + expectedHoldTicks) {
         fail(
           'hold_floor_violation',
-          `Up(${upOnsetIdx}) pre-call S=${S} precedes prior Down completion C=${priorDownC} + H=${expectedHoldTicksFloor} ticks`,
+          `Up(${upOnsetIdx}) pre-call S=${S} < prior Down completion C=${priorDownC} + exact ceil H=${expectedHoldTicks} ticks`,
         );
       }
 
-      // Strict mandatory UpSlotTrace sidecar verification
+      // Strict mandatory UpSlotTrace sidecar verification with exact epoch-relative up_not_before_offset_ticks = (C_down + H_ticks) - epoch
       const sidecar = upSlotByRecord.get(pkt.trace_record_index);
       if (!sidecar || sidecar.length !== upSlots.length) {
         fail('up_slot_attribution_mismatch', `missing or count-mismatched UpSlotTrace for record ${pkt.trace_record_index}`);
       } else {
         consumedSidecarRecords.add(pkt.trace_record_index);
+        const expectedUpNotBeforeOffset =
+          priorDownC !== undefined && derivedEpochQpc !== null
+            ? priorDownC + expectedHoldTicks - derivedEpochQpc
+            : null;
         for (let k = 0; k < upSlots.length; k++) {
           const tr = sidecar[k];
           let trComp;
@@ -794,10 +787,11 @@ export function analyzePilotRun({
               tr.scan_code !== upSlots[k].scan_code ||
               tr.source_action_index !== upOnsetIdx ||
               trComp !== C ||
-              trNotBefore + exactFreqRoundingTol < expectedHoldTicksFloor) {
+              expectedUpNotBeforeOffset === null ||
+              trNotBefore !== expectedUpNotBeforeOffset) {
             fail(
               'up_slot_attribution_mismatch',
-              `UpSlotTrace mismatch at record ${pkt.trace_record_index} idx=${k}: slot=${tr.slot}/${upSlots[k].slot} sc=${tr.scan_code}/${upSlots[k].scan_code} origin=${tr.source_action_index}/${upOnsetIdx} comp=${trComp}/${C} not_before=${trNotBefore}/${expectedHoldTicksFloor}`,
+              `UpSlotTrace mismatch at record ${pkt.trace_record_index} idx=${k}: slot=${tr.slot}/${upSlots[k].slot} sc=${tr.scan_code}/${upSlots[k].scan_code} origin=${tr.source_action_index}/${upOnsetIdx} comp=${trComp}/${C} up_not_before_offset=${trNotBefore}/${expectedUpNotBeforeOffset}`,
             );
           }
         }

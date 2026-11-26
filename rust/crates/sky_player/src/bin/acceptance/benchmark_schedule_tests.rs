@@ -376,6 +376,9 @@ fn chord_width_pilot_v1_geometry_rotation_digests_and_trace_capacities() {
     assert_ne!(digests[1], digests[2]);
 }
 
+/// Proves actual `snapshot_json` + `evidence_report::write_report` report-envelope
+/// compatibility with `scripts/analyze_chord_reception.mjs` CLI using synthetic
+/// timing records (no-send; does NOT exercise live worker/observer execution).
 #[test]
 fn chord_width_pilot_v1_real_serializer_to_analyzer_cli_roundtrip() {
     use serde_json::json;
@@ -562,6 +565,7 @@ fn chord_width_pilot_v1_real_serializer_to_analyzer_cli_roundtrip() {
         }));
         trace_idx += 1;
 
+        let up_not_before_offset_ticks = (down_post_qpc + hold_ticks) - epoch_qpc;
         for (k, &slot) in slots.iter().enumerate() {
             up_slots.push(json!({
                 "trace_record_index": up_trace_idx,
@@ -569,7 +573,7 @@ fn chord_width_pilot_v1_real_serializer_to_analyzer_cli_roundtrip() {
                 "scan_code": CANONICAL_SCANS[slot],
                 "source_action_index": onset_idx,
                 "authored_offset_ticks": authored_offset_ticks + hold_ticks,
-                "up_not_before_offset_ticks": hold_ticks,
+                "up_not_before_offset_ticks": up_not_before_offset_ticks,
                 "floor_displacement_ticks": 0,
                 "pre_call_qpc_ticks": up_pre_qpc,
                 "completion_qpc_ticks": up_post_qpc,

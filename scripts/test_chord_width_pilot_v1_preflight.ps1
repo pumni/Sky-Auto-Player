@@ -197,13 +197,107 @@ try {
     Write-Manifest -Path $badObsManifest -Overrides @{ receiveonly_observer_mode = 'SchedulerQueuedV2'; receiveonly_observer_event_schema_version = 4 }
     Assert-CommandFails 'Wrong observer protocol/schema in manifest' { & pwsh -NoProfile -File $isoPrepare -RepositoryRoot $workRepo -Mode PreflightOnly -HarnessManifestPath $badObsManifest }
 
-    # --- Negative checks: direct run_native_acceptance_case.ps1 locks, owner approval, remote tip, script hashes ---
-    Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 missing -OwnerApprovedReceiveOnlyRun rejected before lock' {
-        & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 5 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -HarnessPath $fakeBin -HarnessManifestPath $validManifest -OutputRoot (Join-Path $extOut 'direct-no-owner')
+    # --- Positive 3: Pilot entry-gate binding verified via -PreflightOnly (pure/fake, zero receiver/harness/output) ---
+    $freshManifest = Join-Path $fakeBinDir 'fresh-manifest.json'
+    Write-Manifest -Path $freshManifest -Overrides @{
+        build_provenance = 'fresh_pinned_dist_build'
+        cargo_build_command = 'node scripts/toolchain-pin.mjs exec -- cargo build --locked --profile dist ...'
+        cargo_build_exit_code = 0
     }
-    Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 execution locked even with -OwnerApprovedReceiveOnlyRun' {
-        & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 5 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -HarnessPath $fakeBin -HarnessManifestPath $validManifest -OutputRoot (Join-Path $extOut 'direct-exec') -OwnerApprovedReceiveOnlyRun
+    $freshManifestSha = (Get-FileHash -LiteralPath $freshManifest -Algorithm SHA256).Hash.ToLowerInvariant()
+    $approvedPlanPath = Join-Path $fakeBinDir 'approved-preflight-plan.json'
+    $approvedPlanObj = [ordered]@{
+        schema_version = 1
+        qualification_profile = 'ChordWidthPilotV1'
+        pilot_identity = 'ChordWidthPilotV1'
+        mode = 'PreflightOnly'
+        source_revision = $headSha
+        source_tree = $treeSha
+        branch = 'refactor/completion-anchored-pulse-engine'
+        remote_tip_revision = $headSha
+        frozen_baseline_revision = 'e7293877a6ce58a387cb8edfe0a88399a85d2b15'
+        cargo_lock_sha256 = $lockSha
+        rustc_version = $rustcVersion
+        cargo_version = $cargoVersion
+        sink_script_sha256 = $sinkSha
+        analyzer_script_sha256 = $analyzerSha
+        case_runner_script_sha256 = $caseRunnerSha
+        preflight_script_sha256 = $prepareSha
+        native_build_status = 'BUILT_NONPHYSICAL_DIST'
+        native_manifest_status = 'VERIFIED_FRESH_PINNED_BUILD'
+        build_provenance = 'fresh_pinned_dist_build'
+        binary_provenance_verified_by_fresh_build = $true
+        cargo_build_command = 'node scripts/toolchain-pin.mjs exec -- cargo build --locked --profile dist ...'
+        cargo_build_exit_code = 0
+        manifest_sha256 = $freshManifestSha
+        binary_sha256 = $fakeBinSha
+        receiver_started = $false
+        harness_started = $false
+        no_native_invocation = $true
+        sendinput_calls = 0
+        receiver_contract = [ordered]@{
+            role = 'ReceiveOnly'
+            game_target = $false
+            observer_mode = 'SchedulerQueuedV3Compat3'
+            observer_version = 'scheduler-receiveonly-queue-v3-compat3'
+            event_schema_version = 3
+            observer_queue_capacity = 32768
+        }
+        planned_smoke_session_count = 3
+        planned_sessions = @(
+            [ordered]@{ session_index = 1; qualification_profile = 'ChordWidthPilotV1'; scenario = 'chord-width-pilot-v1'; workload_definition_identity = 'chord-width-pilot-v1'; pilot_chord_width = 15; admission_variant = 'control-a'; calibration_placement = 'baseline'; load_condition = 'Quiet'; game_fps = 60; timing_margin_us = 500; configured_hold_us = 17167; cadence_us = 100000; onset_count = 150; sample_seconds = 15; observer_mode = 'SchedulerQueuedV3Compat3'; event_schema_version = 3; timing_observer_for_qualification = $true },
+            [ordered]@{ session_index = 2; qualification_profile = 'ChordWidthPilotV1'; scenario = 'chord-width-pilot-v1'; workload_definition_identity = 'chord-width-pilot-v1'; pilot_chord_width = 1; admission_variant = 'control-a'; calibration_placement = 'baseline'; load_condition = 'Quiet'; game_fps = 60; timing_margin_us = 500; configured_hold_us = 17167; cadence_us = 100000; onset_count = 150; sample_seconds = 15; observer_mode = 'SchedulerQueuedV3Compat3'; event_schema_version = 3; timing_observer_for_qualification = $true },
+            [ordered]@{ session_index = 3; qualification_profile = 'ChordWidthPilotV1'; scenario = 'chord-width-pilot-v1'; workload_definition_identity = 'chord-width-pilot-v1'; pilot_chord_width = 5; admission_variant = 'control-a'; calibration_placement = 'baseline'; load_condition = 'Quiet'; game_fps = 60; timing_margin_us = 500; configured_hold_us = 17167; cadence_us = 100000; onset_count = 150; sample_seconds = 15; observer_mode = 'SchedulerQueuedV3Compat3'; event_schema_version = 3; timing_observer_for_qualification = $true }
+        )
+        case_runner_preflight_results = @(
+            [ordered]@{ session_index = 1; pilot_chord_width = 15; status = 'CASE_PREFLIGHT_ONLY PASS'; output_created = $false; receiver_started = $false; harness_started = $false },
+            [ordered]@{ session_index = 2; pilot_chord_width = 1; status = 'CASE_PREFLIGHT_ONLY PASS'; output_created = $false; receiver_started = $false; harness_started = $false },
+            [ordered]@{ session_index = 3; pilot_chord_width = 5; status = 'CASE_PREFLIGHT_ONLY PASS'; output_created = $false; receiver_started = $false; harness_started = $false }
+        )
     }
+    ($approvedPlanObj | ConvertTo-Json -Depth 8) | Set-Content -LiteralPath $approvedPlanPath -Encoding utf8NoBOM
+    $approvedPlanSha = (Get-FileHash -LiteralPath $approvedPlanPath -Algorithm SHA256).Hash.ToLowerInvariant()
+
+    $gateProbeDir = Join-Path $extOut 'gate-positive-probe'
+    $gateOut = & pwsh -NoProfile -File $isoCaseRunner `
+        -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' `
+        -PilotChordWidth 15 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification `
+        -HarnessPath $fakeBin -HarnessManifestPath $freshManifest -OutputRoot $gateProbeDir -PreflightOnly `
+        -ApprovedPreflightPlanPath $approvedPlanPath `
+        -ExpectedApprovedSourceRevision $headSha -ExpectedApprovedSourceTree $treeSha `
+        -ExpectedApprovedManifestSha256 $freshManifestSha -ExpectedApprovedBinarySha256 $fakeBinSha `
+        -ExpectedApprovedPreflightPlanSha256 $approvedPlanSha
+    if ($LASTEXITCODE -ne 0 -or (($gateOut -join ' ') -notmatch 'entry_gate_binding=VERIFIED') -or (Test-Path -LiteralPath $gateProbeDir)) {
+        throw "Positive entry-gate preflight binding failed: $($gateOut -join ' ')"
+    }
+    Write-Output 'PASS: Pilot entry-gate positive binding via -PreflightOnly (zero receiver/harness/output)'
+
+    # --- Negative checks: direct run_native_acceptance_case.ps1 entry gate (proving ZERO directory creation!) ---
+    $noOwnerDir = Join-Path $extOut 'direct-no-owner'
+    Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 missing -OwnerApprovedReceiveOnlyRun rejected before effects' {
+        & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 5 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -HarnessPath $fakeBin -HarnessManifestPath $freshManifest -OutputRoot $noOwnerDir
+    }
+    if (Test-Path -LiteralPath $noOwnerDir) { throw 'No-owner rejection must not create output directory' }
+
+    $noHashesDir = Join-Path $extOut 'direct-no-hashes'
+    Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 with -OwnerApprovedReceiveOnlyRun but missing expected hashes rejected (zero output)' {
+        & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 5 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -HarnessPath $fakeBin -HarnessManifestPath $freshManifest -OutputRoot $noHashesDir -OwnerApprovedReceiveOnlyRun
+    }
+    if (Test-Path -LiteralPath $noHashesDir) { throw 'Missing-hashes rejection must not create output directory' }
+
+    $wrongBinHashDir = Join-Path $extOut 'direct-wrong-bin-hash'
+    Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 rejects wrong -ExpectedApprovedBinarySha256 (zero output)' {
+        & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 15 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -HarnessPath $fakeBin -HarnessManifestPath $freshManifest -OutputRoot $wrongBinHashDir -OwnerApprovedReceiveOnlyRun -ApprovedPreflightPlanPath $approvedPlanPath -ExpectedApprovedSourceRevision $headSha -ExpectedApprovedSourceTree $treeSha -ExpectedApprovedManifestSha256 $freshManifestSha -ExpectedApprovedBinarySha256 ('0' * 64) -ExpectedApprovedPreflightPlanSha256 $approvedPlanSha
+    }
+    if (Test-Path -LiteralPath $wrongBinHashDir) { throw 'Wrong-binary-hash rejection must not create output directory' }
+
+    $reusedDir = Join-Path $extOut 'direct-reused-manifest'
+    Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 rejects reused-only manifest on execution entry gate (zero output)' {
+        $reusedManifestSha = (Get-FileHash -LiteralPath $validManifest -Algorithm SHA256).Hash.ToLowerInvariant()
+        & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 15 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -HarnessPath $fakeBin -HarnessManifestPath $validManifest -OutputRoot $reusedDir -OwnerApprovedReceiveOnlyRun -ApprovedPreflightPlanPath $approvedPlanPath -ExpectedApprovedSourceRevision $headSha -ExpectedApprovedSourceTree $treeSha -ExpectedApprovedManifestSha256 $reusedManifestSha -ExpectedApprovedBinarySha256 $fakeBinSha -ExpectedApprovedPreflightPlanSha256 $approvedPlanSha
+    }
+    if (Test-Path -LiteralPath $reusedDir) { throw 'Reused-manifest rejection must not create output directory' }
+
     Assert-CommandFails 'Direct case-runner ChordWidthPilotV1 rejects tampered script hash in manifest' {
         & pwsh -NoProfile -File $isoCaseRunner -QualificationProfile 'ChordWidthPilotV1' -Scenario 'chord-width-pilot-v1' -Workload 'chord-width-pilot-v1' -PilotChordWidth 5 -GameFps 60 -TimingMarginUs 500 -SampleSeconds 15 -TimingObserverForQualification -HarnessPath $fakeBin -HarnessManifestPath $badScriptHashManifest -OutputRoot (Join-Path $extOut 'direct-bad-script') -PreflightOnly
     }

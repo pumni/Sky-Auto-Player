@@ -38,7 +38,12 @@ const SOURCE_SHA = '77c03d2bdeaf9873c42ae2e7ab9da49e3973585f';
 const SOURCE_TREE = '0ad933679b346e2139351b0f2d46fccc9cec7538';
 const BINARY_SHA = 'a'.repeat(64);
 
+function ceilTicks(us, freqHz) {
+  return Number((BigInt(us) * BigInt(freqHz) + 999_999n) / 1_000_000n);
+}
+
 function buildValidPilotFixture(width, opts = {}) {
+  const freqHz = opts.qpcFreqHz ?? QPC_FREQ;
   const onsets = opts.onsets ?? PILOT_ONSET_COUNT;
   const senderRecords = [];
   const upSlotRecords = [];
@@ -64,7 +69,7 @@ function buildValidPilotFixture(width, opts = {}) {
     observer_mode: EXPECTED_RECEIVER_OBSERVER_MODE,
     observer_version: EXPECTED_RECEIVER_OBSERVER_VERSION,
     observer_queue_capacity: EXPECTED_RECEIVER_QUEUE_CAPACITY,
-    observer_qpc_frequency_hz: QPC_FREQ,
+    observer_qpc_frequency_hz: freqHz,
   };
 
   let seq = 0;
@@ -92,11 +97,11 @@ function buildValidPilotFixture(width, opts = {}) {
     const mask = slotsToMask(slots);
 
     const authoredOffsetUs = PILOT_FIRST_OFFSET_US + i * PILOT_CADENCE_US;
-    const authoredOffsetTicks = authoredOffsetUs * US_TO_TICKS;
+    const authoredOffsetTicks = ceilTicks(authoredOffsetUs, freqHz);
     const downDueQpc = epochQpc + authoredOffsetTicks;
-    const downWakeQpc = downDueQpc + 20 * US_TO_TICKS;
-    const downPreQpc = downDueQpc + 30 * US_TO_TICKS;
-    const downPostQpc = downPreQpc + (15 + width * 3) * US_TO_TICKS;
+    const downWakeQpc = downDueQpc + ceilTicks(20, freqHz);
+    const downPreQpc = downDueQpc + ceilTicks(30, freqHz);
+    const downPostQpc = downPreQpc + ceilTicks(15 + width * 3, freqHz);
 
     const downTraceIdx = traceIndex++;
     senderRecords.push({
@@ -131,7 +136,7 @@ function buildValidPilotFixture(width, opts = {}) {
       const slot = slots[k];
       const sc = CANONICAL_SCAN_CODES[slot];
       // R can be < C (observed during SendInput) as long as R >= S - 1
-      const recvDownQpc = downPreQpc + (10 + k * 2) * US_TO_TICKS;
+      const recvDownQpc = downPreQpc + ceilTicks(10 + k * 2, freqHz);
       const ev = {
         schema_version: EXPECTED_RECEIVER_EVENT_SCHEMA,
         run_id: RUN_ID,
@@ -156,11 +161,13 @@ function buildValidPilotFixture(width, opts = {}) {
       receiverLines.push(JSON.stringify(ev));
     }
 
-    const holdTicks = PILOT_HOLD_US * US_TO_TICKS;
+    const holdTicks = ceilTicks(PILOT_HOLD_US, freqHz);
     const upDueQpc = downPostQpc + holdTicks;
-    const upWakeQpc = upDueQpc + 18 * US_TO_TICKS;
-    const upPreQpc = upDueQpc + 28 * US_TO_TICKS;
-    const upPostQpc = upPreQpc + (14 + width * 3) * US_TO_TICKS;
+    const upWakeQpc = upDueQpc + ceilTicks(18, freqHz);
+    const upPreQpc = upDueQpc + ceilTicks(28, freqHz);
+    const upPostQpc = upPreQpc + ceilTicks(14 + width * 3, freqHz);
+    // Exact epoch-relative up_not_before_offset_ticks = (C_down + H_ticks) - epoch
+    const upNotBeforeOffsetTicks = downPostQpc + holdTicks - epochQpc;
 
     const upTraceIdx = traceIndex++;
     senderRecords.push({
@@ -200,14 +207,14 @@ function buildValidPilotFixture(width, opts = {}) {
         scan_code: sc,
         source_action_index: i,
         authored_offset_ticks: authoredOffsetTicks + holdTicks,
-        up_not_before_offset_ticks: holdTicks,
+        up_not_before_offset_ticks: upNotBeforeOffsetTicks,
         floor_displacement_ticks: 0,
         pre_call_qpc_ticks: upPreQpc,
         completion_qpc_ticks: upPostQpc,
         residual_ticks: 0,
         confirmed: true,
       });
-      const recvUpQpc = upPreQpc + (12 + k * 2) * US_TO_TICKS;
+      const recvUpQpc = upPreQpc + ceilTicks(12 + k * 2, freqHz);
       const ev = {
         schema_version: EXPECTED_RECEIVER_EVENT_SCHEMA,
         run_id: RUN_ID,
@@ -243,7 +250,7 @@ function buildValidPilotFixture(width, opts = {}) {
     observer_mode: EXPECTED_RECEIVER_OBSERVER_MODE,
     observer_version: EXPECTED_RECEIVER_OBSERVER_VERSION,
     queue_capacity: EXPECTED_RECEIVER_QUEUE_CAPACITY,
-    qpc_frequency_hz: QPC_FREQ,
+    qpc_frequency_hz: freqHz,
     stream_header_flushed: true,
     events_flushed: true,
     consumer_stopped: true,
@@ -303,7 +310,7 @@ function buildValidPilotFixture(width, opts = {}) {
       native_timing_telemetry_available: true,
       native_timing_telemetry: {
         schema_version: EXPECTED_SENDER_TELEMETRY_SCHEMA,
-        qpc_frequency_hz: QPC_FREQ,
+        qpc_frequency_hz: freqHz,
         truncated: false,
         dropped: 0,
         observer_queue_dropped: 0,
@@ -455,6 +462,41 @@ test('rejects wrong authored offset, inconsistent authored_lateness_ticks / D, h
   assert.equal(rRxEarly.valid, false);
   assert.equal(rRxEarly.metrics, null);
   assert.ok(rRxEarly.invalid_counts.receiver_precedes_sender > 0);
+});
+
+test('enforces exact epoch-relative UpSlotTrace.up_not_before_offset_ticks including non-integral 3579545 Hz QPC', () => {
+  // Old H_ticks-only bug must be rejected
+  const fOnlyH = buildValidPilotFixture(5);
+  fOnlyH.acceptanceReport.details.native_timing_telemetry.up_slot_records[0].up_not_before_offset_ticks =
+    ceilTicks(PILOT_HOLD_US, QPC_FREQ);
+  const rOnlyH = analyzePilotRun(fOnlyH);
+  assert.equal(rOnlyH.valid, false);
+  assert.equal(rOnlyH.metrics, null);
+  assert.ok(rOnlyH.invalid_counts.up_slot_attribution_mismatch > 0);
+
+  // Non-integral QPC frequency (3,579,545 Hz, matching observer_trace.rs:359)
+  const fOdd = buildValidPilotFixture(5, { qpcFreqHz: 3_579_545 });
+  const rOdd = analyzePilotRun(fOdd);
+  assert.equal(rOdd.valid, true, JSON.stringify(rOdd.invalid_reasons));
+  assert.equal(rOdd.expected_hold_ticks, String(ceilTicks(PILOT_HOLD_US, 3_579_545)));
+
+  // Off-by-1 tick on up_not_before_offset_ticks at non-integral frequency must be rejected (exact same-domain arithmetic)
+  const fOddOffBy1 = buildValidPilotFixture(5, { qpcFreqHz: 3_579_545 });
+  fOddOffBy1.acceptanceReport.details.native_timing_telemetry.up_slot_records[0].up_not_before_offset_ticks -= 1;
+  const rOddOffBy1 = analyzePilotRun(fOddOffBy1);
+  assert.equal(rOddOffBy1.valid, false);
+  assert.equal(rOddOffBy1.metrics, null);
+  assert.ok(rOddOffBy1.invalid_counts.up_slot_attribution_mismatch > 0);
+
+  // Off-by-1 tick on S_up < C_down + ceil_H_ticks at non-integral frequency must be rejected
+  const fOddFloor = buildValidPilotFixture(1, { qpcFreqHz: 3_579_545 });
+  const downC = fOddFloor.acceptanceReport.details.native_timing_telemetry.records[0].sendinput_completion_qpc_ticks;
+  fOddFloor.acceptanceReport.details.native_timing_telemetry.records[1].pre_call_qpc_ticks =
+    downC + ceilTicks(PILOT_HOLD_US, 3_579_545) - 1;
+  const rOddFloor = analyzePilotRun(fOddFloor);
+  assert.equal(rOddFloor.valid, false);
+  assert.equal(rOddFloor.metrics, null);
+  assert.ok(rOddFloor.invalid_counts.hold_floor_violation > 0);
 });
 
 test('rejects non-PASS status, unhealthy flat cleanup fields, legacy no-QPC, and unfinalized summary', () => {
