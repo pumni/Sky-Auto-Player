@@ -232,13 +232,14 @@ test.describe('accessibility and responsive contracts', () => {
       expect(spacing.gaps).toHaveLength(4);
       const [opening, firstBand, secondBand, closing] = spacing.gaps;
       const band = Math.min(116, Math.max(64, width * 0.08));
+      const closingBand = Math.min(64, Math.max(40, width * 0.04));
       expect(opening).toBeGreaterThanOrEqual(27);
       expect(opening).toBeLessThanOrEqual(77);
       expect(Math.abs(firstBand)).toBeLessThanOrEqual(2);
       expect(secondBand).toBeGreaterThanOrEqual(band - 1);
       expect(secondBand).toBeLessThanOrEqual(band + 2);
-      expect(closing).toBeGreaterThanOrEqual(band - 1);
-      expect(closing).toBeLessThanOrEqual(band + 2);
+      expect(closing).toBeGreaterThanOrEqual(closingBand - 1);
+      expect(closing).toBeLessThanOrEqual(closingBand + 2);
       expect(spacing.footerLeft).toBeGreaterThanOrEqual(16);
       expect(spacing.footerWidth).toBeLessThanOrEqual(1280.5);
       const rail = spacing.rails[0];
@@ -318,9 +319,18 @@ test.describe('accessibility and responsive contracts', () => {
             productSelector: bounds('.product-selector'),
             setupGuide: bounds('.quick-start__setup'),
             formats: bounds('.quick-start__formats'),
-            resourceLinks: [...document.querySelectorAll('.quick-start__resource-link')].map(
-              (link) => link.getBoundingClientRect().top,
-            ),
+            resourceLinkSpacing: [
+              ...document.querySelectorAll<HTMLAnchorElement>('.quick-start__resource-link'),
+            ].map((link) => {
+              const content = link.parentElement!;
+              const body =
+                content.querySelector<HTMLElement>('.quick-start__resource-body') ??
+                content.querySelector<HTMLElement>('p')!;
+              return {
+                linkTop: link.getBoundingClientRect().top,
+                lastBodyBottom: body.getBoundingClientRect().bottom,
+              };
+            }),
             playbackHeader: bounds('.playback-demo__header'),
             playbackStage: bounds('.playback-demo__stage'),
             playbackSupport: bounds('.playback-demo__support'),
@@ -344,6 +354,15 @@ test.describe('accessibility and responsive contracts', () => {
             featureSecond: bounds('.product-showcase__features > div:nth-child(2)'),
             trustSecond: bounds('.trust-download__details > div:nth-child(2)'),
             supportLinks: bounds('.trust-download__support-links'),
+            supportLinksDirection: getComputedStyle(
+              document.querySelector('.trust-download__support-links')!,
+            ).flexDirection,
+            supportLinkItems: [
+              ...document.querySelectorAll('.trust-download__support-links > li'),
+            ].map((element) => {
+              const rect = element.getBoundingClientRect();
+              return { left: rect.left, top: rect.top, bottom: rect.bottom };
+            }),
             navigation: bounds('.site-nav'),
             headerRail: bounds('.site-header__inner'),
           };
@@ -409,10 +428,14 @@ test.describe('accessibility and responsive contracts', () => {
           ]) {
             expect(Math.abs(aligned.left - geometry.formats.left)).toBeLessThanOrEqual(1);
           }
-          expect(
-            Math.abs(geometry.resourceLinks[0] - geometry.resourceLinks[1]),
-          ).toBeLessThanOrEqual(1);
+          expect(geometry.supportLinksDirection).toBe('row');
         } else {
+          expect(geometry.supportLinksDirection).toBe('column');
+          for (let index = 1; index < geometry.supportLinkItems.length; index += 1) {
+            expect(geometry.supportLinkItems[index].top).toBeGreaterThan(
+              geometry.supportLinkItems[index - 1].bottom,
+            );
+          }
           expect(geometry.formats.top).toBeGreaterThan(geometry.setupGuide.bottom);
           expect(geometry.quickStartSteps[0].top).toBeLessThan(geometry.quickStartSteps[1].top);
           expect(geometry.quickStartSteps[1].top).toBeLessThan(geometry.quickStartSteps[2].top);
@@ -420,6 +443,10 @@ test.describe('accessibility and responsive contracts', () => {
           expect(geometry.stepHeadings[0].left).toBeGreaterThan(
             geometry.quickStartSteps[0].left + 24,
           );
+        }
+        for (const resource of geometry.resourceLinkSpacing) {
+          expect(resource.linkTop - resource.lastBodyBottom).toBeGreaterThanOrEqual(7.5);
+          expect(resource.linkTop - resource.lastBodyBottom).toBeLessThanOrEqual(8.5);
         }
         expect(geometry.ctaButton.bottom).toBeLessThanOrEqual(geometry.ctaNote.top);
         expect(geometry.ctaNote.top - geometry.ctaButton.bottom).toBeLessThanOrEqual(12);
@@ -521,10 +548,14 @@ test.describe('accessibility and responsive contracts', () => {
     const fullSize = page.locator('[data-product-full-size]');
     await expect(group).toBeVisible();
     await expect(group.getByRole('button')).toHaveCount(3);
-    await expect(group.getByRole('button', { name: 'Library' })).toHaveAttribute(
-      'aria-pressed',
-      'true',
-    );
+    const library = group.getByRole('button', { name: 'Library' });
+    await expect(library).toHaveAttribute('aria-pressed', 'true');
+    await expect(library).toHaveCSS('border-radius', '0px');
+    await expect(library).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
+    await expect(library).toHaveCSS('border-bottom-style', 'solid');
+    await expect(library).toHaveCSS('border-bottom-width', '2px');
+    await expect(library).toHaveCSS('min-height', '44px');
+    expect(await group.evaluate((element) => getComputedStyle(element).boxShadow)).not.toBe('none');
     await expect(image).toHaveAttribute('src', /desktop-library-browser-preview-1366x768\.png/);
     await expect(image).toHaveAttribute('alt', /song library/);
     await expect(fullSize).toHaveAttribute('href', /desktop-library-browser-preview-1366x768\.png/);
@@ -589,6 +620,26 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('[data-product-caption]')).toHaveText(
       'Adjust playback defaults and key-hold duration.',
     );
+    await expect(settings).toHaveCSS('border-bottom-style', 'solid');
+    await expect(settings).toHaveCSS('border-bottom-width', '2px');
+    const focusStyle = await settings.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        outlineStyle: style.outlineStyle,
+        outlineWidth: Number.parseFloat(style.outlineWidth),
+      };
+    });
+    expect(focusStyle.outlineStyle).not.toBe('none');
+    expect(focusStyle.outlineWidth).toBeGreaterThanOrEqual(2);
+    await page.emulateMedia({ forcedColors: 'active' });
+    const forcedColors = await settings.evaluate((element) => ({
+      active: matchMedia('(forced-colors: active)').matches,
+      indicator: getComputedStyle(element).borderBottomColor,
+      baseline: getComputedStyle(element.parentElement!).boxShadow,
+    }));
+    expect(forcedColors.active).toBe(true);
+    expect(forcedColors.indicator).not.toBe('rgba(0, 0, 0, 0)');
+    expect(forcedColors.baseline).toBe('none');
   });
 
   async function observePreviewLoads(page: Page) {
@@ -636,6 +687,10 @@ test.describe('accessibility and responsive contracts', () => {
       const geometry = await openingGeometry(page);
       await detail.click();
       await expect(page.locator('[data-product-status]')).toHaveText('Đang tải ảnh xem trước…');
+      await expect(detail).toHaveAttribute('data-pending', '');
+      await expect(detail).toHaveCSS('border-bottom-style', 'dashed');
+      await expect(detail).toHaveCSS('border-bottom-width', '2px');
+      await expect(detail).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
       await expect(library).toHaveAttribute('aria-pressed', 'true');
       await expect(detail).toHaveAttribute('aria-pressed', 'false');
       await expect(page.locator('[data-product-image]')).toHaveAttribute('src', /desktop-library/);
@@ -1292,6 +1347,32 @@ test.describe('accessibility and responsive contracts', () => {
           : ['Chọn đúng bộ cài', 'An toàn tài khoản'],
       );
       await expect(trust).toContainText(/SmartScreen/);
+      const installation = trust.locator('.trust-download__details > div').nth(0);
+      const safety = trust.locator('.trust-download__details > div').nth(1);
+      await expect(installation.locator('.trust-download__detail-list > li')).toHaveCount(3);
+      await expect(installation.locator('.trust-download__detail-list')).toContainText(
+        route === '/'
+          ? 'Choose the stable Windows installer ending in _x64-setup.exe'
+          : 'Chọn bộ cài Windows ổn định có tên kết thúc bằng _x64-setup.exe',
+      );
+      await expect(installation.locator('.trust-download__detail-list')).toContainText('.exe.sig');
+      await expect(installation.locator('.trust-download__warning')).toContainText(
+        route === '/' ? 'Unsigned installer' : 'Bộ cài không có chữ ký Authenticode',
+      );
+      await expect(safety.locator('.trust-download__detail-list > li')).toHaveCount(2);
+      await expect(safety.locator('.trust-download__detail-list')).toContainText(
+        'Windows SendInput',
+      );
+      await expect(safety.locator('.trust-download__detail-list')).toContainText(
+        route === '/'
+          ? 'Does not inspect game memory or change game files'
+          : 'Không đọc bộ nhớ hoặc sửa tệp game',
+      );
+      await expect(safety.locator('.trust-download__warning')).toHaveText(
+        route === '/'
+          ? 'This cannot guarantee account safety.'
+          : 'Cách này không bảo đảm an toàn tài khoản.',
+      );
       await expect(trust.locator('a[href*="account-safety"]')).toBeVisible();
       await expect(page.locator('#technical')).not.toContainText('100% safe');
     }
