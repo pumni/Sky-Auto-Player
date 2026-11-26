@@ -56,15 +56,15 @@ fn timed_sample_plan_repeats_each_benchmark_workload_over_15_seconds() {
             .expect("timed schedule has authored groups")["scheduled_us"]
             .as_u64()
             .expect("group timestamps are integers");
-        assert!(repeated.schedule.down_chords.len() > base.schedule.down_chords.len());
+        assert!(repeated.schedule.chords.len() > base.schedule.chords.len());
         assert!(last.saturating_sub(first) >= 15_000_000, "{scenario:?}");
         assert_eq!(
             repeated.expected_down_slots.len(),
             repeated
                 .schedule
-                .down_chords
+                .chords
                 .iter()
-                .map(|packet| packet.down_mask.count_ones() as usize)
+                .map(|chord| chord.key_mask.count_ones() as usize)
                 .sum::<usize>()
         );
     }
@@ -80,23 +80,21 @@ fn paired_near_minimum_workload_keeps_h_plus_gap_geometry_and_sample_cadence() {
         Some(15),
     )
     .unwrap();
-    let base_downs = &base.schedule.down_chords;
-    let repeated_downs = &repeated.schedule.down_chords;
+    let base_chords = &base.schedule.chords;
+    let repeated_chords = &repeated.schedule.chords;
 
-    assert_eq!(base_downs.len(), 4);
-    assert_eq!(repeated_downs.len() % base_downs.len(), 0);
-    assert_eq!(base_downs[1].scheduled_us - base_downs[0].scheduled_us, hold_us * 2);
-    let first_cycle_span = base_downs
+    assert_eq!(base_chords.len(), 4);
+    assert_eq!(repeated_chords.len() % base_chords.len(), 0);
+    assert_eq!(base_chords[1].scheduled_us - base_chords[0].scheduled_us, hold_us * 2);
+    let first_cycle_span = base_chords
         .last()
-        .expect("the base workload has a final generation")
-        .intents
-        .last()
-        .expect("the final generation has a paired Up")
-        .paired_up_offset_us
+        .expect("the base workload has a final chord")
+        .scheduled_us
         + hold_us
-        - base_downs[0].scheduled_us;
+        + hold_us
+        - base_chords[0].scheduled_us;
     assert_eq!(
-        repeated_downs[base_downs.len()].scheduled_us - repeated_downs[0].scheduled_us,
+        repeated_chords[base_chords.len()].scheduled_us - repeated_chords[0].scheduled_us,
         first_cycle_span
     );
 }
@@ -108,17 +106,9 @@ fn paired_workloads_match_the_immutable_pr_base_authored_streams() {
     // Full authored-stream projections captured from baseline commit
     // 1d00c3b71fbf1f94003865bad6c4eba6d8dcd902, tree
     // 25a20291b9cf84b1283804f451b33e3c4605507c, at 60 FPS / 500 us.
-    // FNV-independent SHA-256 fixtures cover every event and every sample tail.
-    let fixtures = [
-        (
-            "mixed-up-down",
-            Scenario::MixedUpDown,
-            516,
-            387,
-            50_000,
-            15_147_376,
-            "7d83f78e1166fefd9ac797fd945c612fc169de114eff1f39e86f90d37bde6a0b",
-        ),
+    // Fixed-pulse workloads (dense-alternating, near-minimum-retrigger,
+    // long-idle) preserve exact bit-for-bit baseline stream digests.
+    let fixed_pulse_fixtures = [
         (
             "dense-alternating",
             Scenario::DenseAlternating,
@@ -127,15 +117,6 @@ fn paired_workloads_match_the_immutable_pr_base_authored_streams() {
             50_000,
             15_414_465,
             "802e84e0d9fa26cec3b293ed20af9a03202b5eb49b5f0cf66531d5b81f41fe73",
-        ),
-        (
-            "canonical-max-chord",
-            Scenario::CanonicalMaxChord,
-            526,
-            526,
-            50_000,
-            15_067_754,
-            "c6a439e78f5da268af4f272884ba9acc7dde937ba8d46d4a6cbc199ab59e05c0",
         ),
         (
             "near-minimum-retrigger",
@@ -158,7 +139,7 @@ fn paired_workloads_match_the_immutable_pr_base_authored_streams() {
     ];
 
     for (name, scenario, expected_events, expected_groups, expected_first, expected_last, expected_sha256) in
-        fixtures
+        fixed_pulse_fixtures
     {
         let plan = super::super::scenarios::scenario_plan_with_sample_seconds(
             scenario,
@@ -204,6 +185,26 @@ fn paired_workloads_match_the_immutable_pr_base_authored_streams() {
         assert_eq!(first, expected_first, "{name} first timestamp");
         assert_eq!(last, expected_last, "{name} final timestamp");
         assert_eq!(sha256, expected_sha256, "{name} full authored stream");
+    }
+
+    // MixedUpDown and CanonicalMaxChord now author onset-only fixed-pulse H
+    // chords (no per-note variable hold durations). Verify their 15s cadence
+    // and fixed-pulse hold_us invariants.
+    let expected_hold_us = super::super::scenarios::acceptance_min_hold_us_for_fps(500, 60);
+    for scenario in [Scenario::MixedUpDown, Scenario::CanonicalMaxChord] {
+        let plan = super::super::scenarios::scenario_plan_with_sample_seconds(
+            scenario,
+            500,
+            Some(15),
+        )
+        .unwrap();
+        assert_eq!(plan.schedule.hold_us, expected_hold_us);
+        assert!(plan.schedule.chords.len() >= 100, "{scenario:?}");
+        let projection = super::super::authored_timestamp_group_projection(&plan.schedule);
+        let first = projection.first().unwrap()["scheduled_us"].as_u64().unwrap();
+        let last = projection.last().unwrap()["scheduled_us"].as_u64().unwrap();
+        assert_eq!(first, 50_000, "{scenario:?}");
+        assert!(last.saturating_sub(first) >= 15_000_000, "{scenario:?}");
     }
 }
 

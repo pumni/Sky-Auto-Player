@@ -1,19 +1,24 @@
-//! Bounded 15-slot musical dispatch executor.
+//! Bounded 15-slot completion-anchored pulse executor.
 //!
-//! Manages exact musical generation ownership, independent release eligibility
-//! per slot, atomic Down-chord transport gating, Up-before-Down combining,
-//! and the Down-completion H timing floor.
+//! Manages exact musical onset ordering, intact chord admission, independent
+//! per-key completion-anchored release eligibility (`completion_qpc + H_ticks`),
+//! Up-before-Down packet combining for disjoint masks, and checked generation
+//! lifecycle accounting with zero heap allocation on healthy dispatch.
 
 use smallvec::SmallVec;
 use std::num::NonZeroU64;
 
 use crate::accounting::{GenerationAccounting, GenerationCounters};
-use crate::model::{GenerationId, KeyRegistry, KeySlot, MAX_KEYS, RuntimeSchedule};
+use crate::model::{
+    ALL_KEYS_MASK, GenerationId, KeyRegistry, KeySlot, MAX_KEYS, MAX_RETAINED_DISPATCH_BYTES,
+    OnsetPlan, generation_id_for,
+};
 use crate::time::{DurationTicks, QpcTicks, TimeArithmeticError, TimelineTicks};
+
 mod memory;
 pub use memory::MAX_EXECUTOR_BYTES;
 pub(crate) use memory::checked_executor_storage_bytes;
-use memory::{reserve_executor_chords, reserve_executor_intents};
+use memory::reserve_executor_chords;
 
 #[cfg(any(test, feature = "test-support"))]
 std::thread_local! {
@@ -32,272 +37,56 @@ pub fn scheduler_evaluation_count_for_test() -> u64 {
     SCHEDULER_EVALUATION_COUNT.with(std::cell::Cell::get)
 }
 
-/// Per-slot musical ownership state for the 15 instrument keys.
+pub const EXECUTOR_BUILD_CHECKPOINT_INTERVAL: usize = 4096;
+
+/// One immutable onset chord materialized in the QPC timeline domain.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct MusicalSlot {
-    /// Active musical generation in this slot, if any.
-    pub active_generation: Option<GenerationId>,
-    /// Exact authored Up offset for this generation.
-    pub authored_up_offset_ticks: TimelineTicks,
-    /// Prepared Up eligibility floor, including the checked Down + H QPC floor.
-    pub paired_up_not_before_offset_ticks: TimelineTicks,
-    /// Physical hold floor: successful Down completion QPC + H.
-    pub release_not_before_qpc: QpcTicks,
-    /// Exact authored source action index of the paired Up.
-    pub paired_up_source_action_index: u32,
-}
-
-impl Default for MusicalSlot {
-    fn default() -> Self {
-        Self {
-            active_generation: None,
-            authored_up_offset_ticks: TimelineTicks::ZERO,
-            paired_up_not_before_offset_ticks: TimelineTicks::ZERO,
-            release_not_before_qpc: QpcTicks::ZERO,
-            paired_up_source_action_index: 0,
-        }
-    }
-}
-
-/// A Down intent with timeline tick offsets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DownIntentTicks {
-    pub generation_id: GenerationId,
-    pub key_slot: KeySlot,
-    pub scan_code: u16,
-    pub source_action_index: u32,
-    pub reason_id: crate::model::ReasonId,
-    pub authored_up_offset_ticks: TimelineTicks,
-    pub paired_up_not_before_offset_ticks: TimelineTicks,
-    pub paired_up_offset_us: u64,
-    pub paired_up_source_action_index: u32,
-}
-
-/// An owned Down chord fixture. The live executor stores its chord header and
-/// intents in separate contiguous vectors; this owned form remains useful to
-/// compile/test-support paths that need a self-contained fixture.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DownChordTicks {
+pub struct PreparedChord {
     pub chord_index: usize,
-    pub scheduled_ticks: TimelineTicks,
-    pub scheduled_us: u64,
-    pub down_mask: u16,
+    pub onset_ticks: TimelineTicks,
+    pub onset_us: u64,
+    pub key_mask: u16,
     pub source_action_index: u32,
-    pub reason_id: crate::model::ReasonId,
-    pub intents: SmallVec<[DownIntentTicks; MAX_KEYS]>,
 }
 
-/// Borrowed view over one compact live-executor chord and its contiguous intents.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DownChordView<'a> {
-    pub chord_index: usize,
-    pub scheduled_ticks: TimelineTicks,
-    pub scheduled_us: u64,
-    pub down_mask: u16,
-    pub source_action_index: u32,
-    pub reason_id: crate::model::ReasonId,
-    pub intents: &'a [DownIntentTicks],
-}
-
-/// Small, copyable provenance retained by the worker while a packet is staged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DownChordMetadata {
-    pub chord_index: usize,
-    pub scheduled_ticks: TimelineTicks,
-    pub scheduled_us: u64,
-    pub down_mask: u16,
-    pub source_action_index: u32,
-    pub reason_id: crate::model::ReasonId,
-}
-
-impl From<DownChordTicks> for DownChordMetadata {
-    fn from(chord: DownChordTicks) -> Self {
-        Self {
-            chord_index: chord.chord_index,
-            scheduled_ticks: chord.scheduled_ticks,
-            scheduled_us: chord.scheduled_us,
-            down_mask: chord.down_mask,
-            source_action_index: chord.source_action_index,
-            reason_id: chord.reason_id,
-        }
+impl PreparedChord {
+    #[inline]
+    pub const fn key_count(self) -> usize {
+        self.key_mask.count_ones() as usize
     }
 }
 
-impl From<&DownChordTicks> for DownChordMetadata {
-    fn from(chord: &DownChordTicks) -> Self {
-        Self {
-            chord_index: chord.chord_index,
-            scheduled_ticks: chord.scheduled_ticks,
-            scheduled_us: chord.scheduled_us,
-            down_mask: chord.down_mask,
-            source_action_index: chord.source_action_index,
-            reason_id: chord.reason_id,
-        }
-    }
-}
-
-impl From<DownChordView<'_>> for DownChordMetadata {
-    fn from(chord: DownChordView<'_>) -> Self {
-        Self {
-            chord_index: chord.chord_index,
-            scheduled_ticks: chord.scheduled_ticks,
-            scheduled_us: chord.scheduled_us,
-            down_mask: chord.down_mask,
-            source_action_index: chord.source_action_index,
-            reason_id: chord.reason_id,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DownChordHeaderTicks {
+/// Minimal per-slot diagnostic attribution retained while a musical key is active.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct ActiveSlotOrigin {
     chord_index: usize,
-    scheduled_ticks: TimelineTicks,
-    scheduled_us: u64,
-    down_mask: u16,
     source_action_index: u32,
-    reason_id: crate::model::ReasonId,
-    intent_start: usize,
-    intent_count: usize,
-}
-
-struct DownArena {
-    chords: Vec<DownChordHeaderTicks>,
-    intents: Vec<DownIntentTicks>,
-}
-
-#[derive(Clone, Copy)]
-struct DownArenaBuildPolicy {
-    checkpoint_first_chord: bool,
-    checkpoint_after_count: bool,
-    count_changed_error: &'static str,
-    check_actual_capacity: bool,
-    min_hold_ticks: DurationTicks,
-}
-
-#[derive(Clone, Copy)]
-enum DownArenaTimestampKind {
-    Chord,
-    PairedUp,
-}
-
-/// Shared compact-arena construction for prepared plans and fresh raw
-/// executors. Callers retain their own validation, tick conversion, and
-/// cancellation policy around this storage mechanism.
-fn build_down_arena<C, F>(
-    schedule: &RuntimeSchedule,
-    mut checkpoint: C,
-    policy: DownArenaBuildPolicy,
-    mut timestamp_ticks: F,
-) -> Result<DownArena, String>
-where
-    C: FnMut() -> Result<(), String>,
-    F: FnMut(u64, DownArenaTimestampKind) -> Result<TimelineTicks, String>,
-{
-    let chord_count = schedule.down_chords.len();
-    let mut intent_count = 0usize;
-    for (index, chord) in schedule.down_chords.iter().enumerate() {
-        if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL)
-            && (policy.checkpoint_first_chord || index != 0)
-        {
-            checkpoint()?;
-        }
-        intent_count = intent_count
-            .checked_add(chord.intents.len())
-            .ok_or_else(|| "executor Down intent count overflow".to_string())?;
-    }
-    checked_executor_storage_bytes(chord_count, intent_count)?;
-    if policy.checkpoint_after_count {
-        checkpoint()?;
-    }
-
-    let mut chords = Vec::new();
-    reserve_executor_chords(&mut chords, chord_count)?;
-    let mut intents = Vec::new();
-    reserve_executor_intents(&mut intents, intent_count)?;
-
-    for (index, chord) in schedule.down_chords.iter().enumerate() {
-        if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL)
-            && (policy.checkpoint_first_chord || index != 0)
-        {
-            checkpoint()?;
-        }
-        let scheduled_ticks = timestamp_ticks(chord.scheduled_us, DownArenaTimestampKind::Chord)?;
-        let earliest_up_ticks = scheduled_ticks
-            .checked_add_duration(policy.min_hold_ticks)
-            .map_err(|error| format!("prepared hold-floor conversion overflow: {error}"))?;
-        let intent_start = intents.len();
-        for intent in &chord.intents {
-            let authored_up_offset_ticks =
-                timestamp_ticks(intent.paired_up_offset_us, DownArenaTimestampKind::PairedUp)?;
-            let paired_up_not_before_offset_ticks = authored_up_offset_ticks.max(earliest_up_ticks);
-            intents.push(DownIntentTicks {
-                generation_id: intent.generation_id,
-                key_slot: intent.key_slot,
-                scan_code: intent.scan_code,
-                source_action_index: intent.source_action_index,
-                reason_id: intent.reason_id,
-                authored_up_offset_ticks,
-                paired_up_not_before_offset_ticks,
-                paired_up_offset_us: intent.paired_up_offset_us,
-                paired_up_source_action_index: intent.paired_up_source_action_index,
-            });
-        }
-        let intent_len = intents
-            .len()
-            .checked_sub(intent_start)
-            .ok_or_else(|| "executor Down intent range underflow".to_string())?;
-        let range_end = intent_start
-            .checked_add(intent_len)
-            .ok_or_else(|| "executor Down intent range overflow".to_string())?;
-        if range_end != intents.len() || range_end > intents.capacity() {
-            return Err("executor Down intent range exceeds reserved arena".to_string());
-        }
-        chords.push(DownChordHeaderTicks {
-            chord_index: chord.chord_index,
-            scheduled_ticks,
-            scheduled_us: chord.scheduled_us,
-            down_mask: chord.down_mask,
-            source_action_index: chord.source_action_index,
-            reason_id: chord.reason_id,
-            intent_start,
-            intent_count: intent_len,
-        });
-    }
-
-    if intents.len() != intent_count {
-        return Err(policy.count_changed_error.to_string());
-    }
-    if policy.check_actual_capacity {
-        checked_executor_storage_bytes(chords.capacity(), intents.capacity())?;
-    }
-
-    Ok(DownArena { chords, intents })
+    down_onset_ticks: TimelineTicks,
 }
 
 /// Absolute-QPC decision made by the production scheduler.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DispatchDecision<'a> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchDecision {
     /// Ready physical packet to stage and send.
     Send {
         up_mask: u16,
-        down_chord: Option<DownChordView<'a>>,
+        down_chord: Option<PreparedChord>,
         timing_window: DispatchTimingWindow,
     },
     /// No physical work ready; wait until the specified deadline.
     Wait { deadline_qpc: QpcTicks },
-    /// All Down chords sent, all slots released, and timeline end offset reached.
+    /// All onset chords sent, all slots released, and timeline end offset reached.
     Finished,
 }
 
 /// Timeline-zero adapter retained for core unit fixtures that model an
 /// epoch at QPC zero. Production dispatch uses [`DispatchDecision`].
 #[cfg(any(test, feature = "test-support"))]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DispatchAction<'a> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchAction {
     Send {
         up_mask: u16,
-        down_chord: Option<DownChordView<'a>>,
+        down_chord: Option<PreparedChord>,
     },
     Wait {
         deadline_ticks: TimelineTicks,
@@ -308,270 +97,213 @@ pub enum DispatchAction<'a> {
 /// Scheduler-owned absolute QPC eligibility evidence for one physical packet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct DispatchTimingWindow {
+    /// Authored onset target (for Down) or diagnostic nominal release (`epoch + onset + H`, for Up).
     pub authored_target_qpc: QpcTicks,
+    /// Authoritative completion-anchored release floor for due Ups (`max(completion + H)`).
     pub musical_up_not_before_qpc: QpcTicks,
+    /// Authoritative Down eligibility floor (`epoch + onset`).
     pub down_not_before_qpc: QpcTicks,
+    /// Combined packet eligibility floor (`max(musical_up_not_before_qpc, down_not_before_qpc)`).
     pub packet_not_before_qpc: QpcTicks,
+    /// Bitmask of due Up slots whose completion-anchored floor exceeds their diagnostic nominal Up.
     pub hold_floor_mask: u16,
 }
-
-/// Bounded 15-slot musical executor.
-#[derive(Debug, Clone)]
-pub struct DispatchExecutor {
-    down_chords: Vec<DownChordHeaderTicks>,
-    down_intents: Vec<DownIntentTicks>,
-    schedule_end_offset_ticks: TimelineTicks,
-    schedule_end_offset_us: u64,
-    key_registry: KeyRegistry,
-    chord_cursor: usize,
-    slots: [MusicalSlot; MAX_KEYS],
-    min_hold_ticks: DurationTicks,
-    verified_cleanup_seen: bool,
-    counters: GenerationCounters,
-    total_generations: u64,
-    activated_generations: u64,
-}
-
-pub const EXECUTOR_BUILD_CHECKPOINT_INTERVAL: usize = 4096;
 
 /// Measured memory footprint of the `DispatchExecutor`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutorMemoryMetrics {
     pub chord_count: usize,
     pub chord_capacity: usize,
-    pub intent_count: usize,
-    pub intent_capacity: usize,
-    pub chord_header_heap_bytes: usize,
-    pub intent_heap_bytes: usize,
-    /// Total capacity bytes for both executor-owned vectors.
     pub chord_heap_bytes: usize,
     pub struct_bytes: usize,
     pub total_bytes: usize,
 }
 
-/// Authored metadata for an Up intent that has no paired Down generation.
-/// This is prepared before Arm so startup does not walk every action merely
-/// to produce the existing stale-metadata diagnostics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct PreparedUnmatchedUpMetadata {
-    pub source_action_index: u32,
-    pub scheduled_ticks: TimelineTicks,
-    pub suppressed_intent_count: usize,
-}
-
-/// Capacity evidence for an immutable dispatch plan and its overlapping
-/// construction phase. Values describe allocated capacities, not process RSS.
+/// Capacity evidence for an immutable prepared dispatch plan and its
+/// overlapping construction phase. Values describe allocated capacities,
+/// not process RSS.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PreparedDispatchMemoryMetrics {
     pub chord_count: usize,
     pub chord_capacity: usize,
-    pub intent_count: usize,
-    pub intent_capacity: usize,
-    pub unmatched_up_count: usize,
-    pub unmatched_up_capacity: usize,
+    pub generation_count: u64,
     pub plan_capacity_bytes: usize,
     pub overlapping_peak_capacity_bytes: usize,
 }
 
-/// Immutable, QPC-domain dispatch materialization produced during Prepare.
-/// It contains only the fixed dispatch representation and the metadata needed
-/// to initialize a fresh session; cursor, slots, epoch, and transport state
+/// Immutable, QPC-domain onset plan produced during Prepare.
+/// Contains only the fixed chord array and metadata needed to initialize a
+/// fresh session; cursor, active mask, deadlines, epoch, and transport state
 /// are created separately by `DispatchExecutor::from_prepared_schedule`.
 #[derive(Debug)]
 pub struct PreparedDispatchSchedule {
-    down_chords: Vec<DownChordHeaderTicks>,
-    down_intents: Vec<DownIntentTicks>,
+    chords: Vec<PreparedChord>,
     schedule_end_offset_ticks: TimelineTicks,
     schedule_end_offset_us: u64,
     key_registry: KeyRegistry,
     total_generations: u64,
     qpc_frequency_hz: NonZeroU64,
-    min_hold_us: u64,
-    min_hold_ticks: DurationTicks,
+    hold_us: u64,
+    hold_ticks: DurationTicks,
     total_us: u64,
-    authored_timestamp_group_count: usize,
     has_down: bool,
-    unmatched_up_metadata: Vec<PreparedUnmatchedUpMetadata>,
     memory_metrics: PreparedDispatchMemoryMetrics,
 }
 
+/// Checked ceiling conversion from microseconds to QPC timeline ticks.
+#[inline]
+pub fn us_to_timeline_ticks_ceil(
+    microseconds: u64,
+    qpc_frequency_hz: NonZeroU64,
+) -> Option<TimelineTicks> {
+    let numerator = u128::from(microseconds)
+        .checked_mul(u128::from(qpc_frequency_hz.get()))
+        .and_then(|value| value.checked_add(999_999))?;
+    u64::try_from(numerator / 1_000_000)
+        .ok()
+        .map(TimelineTicks::from_raw)
+}
+
+/// Checked ceiling conversion from microseconds to QPC duration ticks.
+#[inline]
+pub fn us_to_duration_ticks_ceil(
+    microseconds: u64,
+    qpc_frequency_hz: NonZeroU64,
+) -> Option<DurationTicks> {
+    us_to_timeline_ticks_ceil(microseconds, qpc_frequency_hz)
+        .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
+}
+
+fn build_prepared_chords<C, F>(
+    plan: &OnsetPlan,
+    hold_ticks: DurationTicks,
+    mut checkpoint: C,
+    mut timestamp_ticks: F,
+) -> Result<Vec<PreparedChord>, String>
+where
+    C: FnMut() -> Result<(), String>,
+    F: FnMut(u64) -> Result<TimelineTicks, String>,
+{
+    let chord_count = plan.chords.len();
+    checked_executor_storage_bytes(chord_count)?;
+    checkpoint()?;
+
+    let mut chords = Vec::new();
+    reserve_executor_chords(&mut chords, chord_count)?;
+
+    for (index, chord) in plan.chords.iter().enumerate() {
+        if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL) {
+            checkpoint()?;
+        }
+        if chord.key_mask == 0 || (chord.key_mask & !ALL_KEYS_MASK) != 0 {
+            return Err(format!(
+                "onset chord {} has invalid key mask {:#06x}",
+                chord.chord_index, chord.key_mask
+            ));
+        }
+        let onset_ticks = timestamp_ticks(chord.scheduled_us)?;
+        // Prove onset_ticks + hold_ticks fits in TimelineTicks (checked arithmetic).
+        onset_ticks
+            .checked_add_duration(hold_ticks)
+            .map_err(|error| format!("prepared hold-floor conversion overflow: {error}"))?;
+        chords.push(PreparedChord {
+            chord_index: chord.chord_index,
+            onset_ticks,
+            onset_us: chord.scheduled_us,
+            key_mask: chord.key_mask,
+            source_action_index: chord.source_action_index,
+        });
+    }
+    Ok(chords)
+}
+
 impl PreparedDispatchSchedule {
-    /// Compile a `RuntimeSchedule` into the immutable QPC-relative physical
-    /// representation used by a later session. The conversion rounds up in
-    /// the same way as `QpcClock::timeline_from_us`.
+    /// Materialize a validated `OnsetPlan` into the immutable QPC-relative
+    /// representation used by a later session. Uses checked ceiling conversion
+    /// identical to `QpcClock::timeline_from_us`.
     pub fn prepare(
-        schedule: &RuntimeSchedule,
+        plan: &OnsetPlan,
         qpc_frequency_hz: NonZeroU64,
-        min_hold_us: u64,
         caller_retained_capacity_bytes: usize,
     ) -> Result<Self, String> {
         Self::prepare_with_cancellation(
-            schedule,
+            plan,
             qpc_frequency_hz,
-            min_hold_us,
             caller_retained_capacity_bytes,
             || Ok(()),
         )
     }
 
-    /// Cancellable form used by the desktop Prepare path and by raw-schedule
-    /// admission. Checkpoints are bounded by authored groups/generations.
+    /// Cancellable form used by the desktop Prepare path and startup admission.
     pub fn prepare_with_cancellation(
-        schedule: &RuntimeSchedule,
+        plan: &OnsetPlan,
         qpc_frequency_hz: NonZeroU64,
-        min_hold_us: u64,
         caller_retained_capacity_bytes: usize,
         mut checkpoint: impl FnMut() -> Result<(), String>,
     ) -> Result<Self, String> {
         checkpoint()?;
-        let qpc_to_ticks = |microseconds| {
-            let numerator = (microseconds as u128)
-                .checked_mul(qpc_frequency_hz.get() as u128)
-                .and_then(|value| value.checked_add(999_999))?;
-            u64::try_from(numerator / 1_000_000)
-                .ok()
-                .map(TimelineTicks::from_raw)
-        };
-        let min_hold_ticks = qpc_to_ticks(min_hold_us)
-            .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
+        let hold_ticks = us_to_duration_ticks_ceil(plan.hold_us, qpc_frequency_hz)
             .ok_or_else(|| "prepared hold-floor conversion overflow".to_string())?;
-        crate::validation::validate_min_hold_feasibility_ticks_with_checkpoint(
-            schedule,
-            min_hold_us,
-            min_hold_ticks,
-            qpc_to_ticks,
-            || checkpoint().map_err(|_| crate::validation::ScheduleTimingError::Cancelled),
-        )
-        .map_err(|error| format!("prepared native schedule admission failed: {error}"))?;
+
+        let chords = build_prepared_chords(plan, hold_ticks, &mut checkpoint, |microseconds| {
+            us_to_timeline_ticks_ceil(microseconds, qpc_frequency_hz).ok_or_else(|| {
+                format!("scheduled timestamp conversion failed for chord at {microseconds}us")
+            })
+        })?;
         checkpoint()?;
 
-        let chord_count = schedule.down_chords.len();
-        let DownArena {
-            chords: down_chords,
-            intents: down_intents,
-        } = build_down_arena(
-            schedule,
-            &mut checkpoint,
-            DownArenaBuildPolicy {
-                checkpoint_first_chord: true,
-                checkpoint_after_count: false,
-                count_changed_error: "executor Down intent count changed during preparation",
-                check_actual_capacity: false,
-                min_hold_ticks,
-            },
-            |microseconds, kind| {
-                qpc_to_ticks(microseconds).ok_or_else(|| match kind {
-                    DownArenaTimestampKind::Chord => {
-                        format!(
-                            "scheduled timestamp conversion failed for chord at {microseconds}us"
-                        )
-                    }
-                    DownArenaTimestampKind::PairedUp => {
-                        format!("paired Up offset timestamp conversion failed at {microseconds}us")
-                    }
-                })
-            },
-        )?;
-        let intent_count = down_intents.len();
+        let schedule_end_offset_ticks =
+            us_to_timeline_ticks_ceil(plan.schedule_end_offset_us, qpc_frequency_hz)
+                .ok_or_else(|| "schedule end offset timestamp conversion overflow".to_string())?;
 
-        let mut unmatched_up_metadata: Vec<PreparedUnmatchedUpMetadata> = Vec::new();
-        unmatched_up_metadata
-            .try_reserve(schedule.unmatched_ups.len())
-            .map_err(|error| format!("prepared unmatched-Up allocation failed: {error}"))?;
-        for (index, unmatched_up) in schedule.unmatched_ups.iter().enumerate() {
-            if index % EXECUTOR_BUILD_CHECKPOINT_INTERVAL == 0 {
-                checkpoint()?;
-            }
-            let scheduled_ticks = qpc_to_ticks(unmatched_up.scheduled_us).ok_or_else(|| {
-                format!(
-                    "unmatched Up timestamp conversion failed at {}us",
-                    unmatched_up.scheduled_us
-                )
-            })?;
-            if let Some(last) = unmatched_up_metadata.last_mut()
-                && last.source_action_index == unmatched_up.source_action_index
-                && last.scheduled_ticks == scheduled_ticks
-            {
-                last.suppressed_intent_count = last
-                    .suppressed_intent_count
-                    .checked_add(1)
-                    .ok_or_else(|| "prepared unmatched-Up count overflow".to_string())?;
-            } else {
-                unmatched_up_metadata.push(PreparedUnmatchedUpMetadata {
-                    source_action_index: unmatched_up.source_action_index,
-                    scheduled_ticks,
-                    suppressed_intent_count: 1,
-                });
-            }
-        }
-        checkpoint()?;
-        let unmatched_up_count = unmatched_up_metadata.len();
-
-        let schedule_memory = schedule.memory_metrics_with_checkpoint(checkpoint)?;
-        let schedule_bytes = schedule_memory
+        let plan_memory = plan.memory_metrics()?;
+        let source_plan_bytes = plan_memory
             .heap_payload_bytes
-            .checked_add(schedule_memory.struct_bytes)
-            .ok_or_else(|| "runtime schedule capacity overflow".to_string())?;
-        let chord_bytes = down_chords
+            .checked_add(plan_memory.struct_bytes)
+            .ok_or_else(|| "onset plan capacity overflow".to_string())?;
+        let chord_bytes = chords
             .capacity()
-            .checked_mul(std::mem::size_of::<DownChordHeaderTicks>())
+            .checked_mul(std::mem::size_of::<PreparedChord>())
             .ok_or_else(|| "prepared chord capacity overflow".to_string())?;
-        let intent_bytes = down_intents
-            .capacity()
-            .checked_mul(std::mem::size_of::<DownIntentTicks>())
-            .ok_or_else(|| "prepared intent capacity overflow".to_string())?;
-        let unmatched_up_bytes = unmatched_up_metadata
-            .capacity()
-            .checked_mul(std::mem::size_of::<PreparedUnmatchedUpMetadata>())
-            .ok_or_else(|| "prepared unmatched-Up capacity overflow".to_string())?;
         let plan_capacity_bytes = chord_bytes
-            .checked_add(intent_bytes)
-            .and_then(|bytes| bytes.checked_add(unmatched_up_bytes))
-            .and_then(|bytes| bytes.checked_add(std::mem::size_of::<Self>()))
+            .checked_add(std::mem::size_of::<Self>())
             .ok_or_else(|| "prepared plan capacity overflow".to_string())?;
         let overlapping_peak_capacity_bytes = caller_retained_capacity_bytes
-            .checked_add(schedule_bytes)
+            .checked_add(source_plan_bytes)
             .and_then(|bytes| bytes.checked_add(plan_capacity_bytes))
             .ok_or_else(|| "prepared startup capacity overflow".to_string())?
-            .max(schedule.compile_memory.phase_peak_capacity_bytes);
-        if overlapping_peak_capacity_bytes > crate::model::MAX_RETAINED_DISPATCH_BYTES {
+            .max(plan.compile_memory.phase_peak_capacity_bytes);
+        if overlapping_peak_capacity_bytes > MAX_RETAINED_DISPATCH_BYTES {
             return Err(format!(
                 "prepared playback capacity ({overlapping_peak_capacity_bytes} bytes) exceeds the {} byte retained-dispatch budget",
-                crate::model::MAX_RETAINED_DISPATCH_BYTES
+                MAX_RETAINED_DISPATCH_BYTES
             ));
         }
-        let total_us = schedule.schedule_end_offset_us;
+
         let memory_metrics = PreparedDispatchMemoryMetrics {
-            chord_count,
-            chord_capacity: down_chords.capacity(),
-            intent_count,
-            intent_capacity: down_intents.capacity(),
-            unmatched_up_count,
-            unmatched_up_capacity: unmatched_up_metadata.capacity(),
+            chord_count: chords.len(),
+            chord_capacity: chords.capacity(),
+            generation_count: plan.generation_count,
             plan_capacity_bytes,
             overlapping_peak_capacity_bytes,
         };
         Ok(Self {
-            down_chords,
-            down_intents,
-            schedule_end_offset_ticks: qpc_to_ticks(schedule.schedule_end_offset_us)
-                .ok_or_else(|| "schedule end offset timestamp conversion overflow".to_string())?,
-            schedule_end_offset_us: schedule.schedule_end_offset_us,
-            key_registry: schedule.key_registry.clone(),
-            total_generations: schedule.generation_count,
+            has_down: !chords.is_empty(),
+            chords,
+            schedule_end_offset_ticks,
+            schedule_end_offset_us: plan.schedule_end_offset_us,
+            key_registry: plan.key_registry.clone(),
+            total_generations: plan.generation_count,
             qpc_frequency_hz,
-            min_hold_us,
-            min_hold_ticks,
-            total_us,
-            authored_timestamp_group_count: schedule.authored_timestamp_group_count,
-            has_down: !schedule.down_chords.is_empty(),
-            unmatched_up_metadata,
+            hold_us: plan.hold_us,
+            hold_ticks,
+            total_us: plan.schedule_end_offset_us,
             memory_metrics,
         })
     }
 
     pub fn is_compatible(&self, qpc_frequency_hz: NonZeroU64, min_hold_us: u64) -> bool {
-        self.qpc_frequency_hz == qpc_frequency_hz && self.min_hold_us == min_hold_us
+        self.qpc_frequency_hz == qpc_frequency_hz && self.hold_us == min_hold_us
     }
 
     pub fn qpc_frequency_hz(&self) -> NonZeroU64 {
@@ -579,7 +311,11 @@ impl PreparedDispatchSchedule {
     }
 
     pub fn min_hold_us(&self) -> u64 {
-        self.min_hold_us
+        self.hold_us
+    }
+
+    pub fn hold_ticks(&self) -> DurationTicks {
+        self.hold_ticks
     }
 
     pub fn total_us(&self) -> u64 {
@@ -590,16 +326,12 @@ impl PreparedDispatchSchedule {
         self.total_generations
     }
 
-    pub fn authored_timestamp_group_count(&self) -> usize {
-        self.authored_timestamp_group_count
+    pub fn chord_count(&self) -> usize {
+        self.chords.len()
     }
 
     pub fn has_down(&self) -> bool {
         self.has_down
-    }
-
-    pub fn unmatched_up_metadata(&self) -> &[PreparedUnmatchedUpMetadata] {
-        &self.unmatched_up_metadata
     }
 
     pub fn memory_metrics(&self) -> PreparedDispatchMemoryMetrics {
@@ -611,14 +343,15 @@ impl PreparedDispatchSchedule {
     }
 }
 
-/// Timing and authored metadata for an active key slot being released.
+/// Diagnostic timing and attribution for an active key slot being released.
+/// `nominal_up_offset_ticks` is derived on demand from `down_onset_ticks + hold_ticks`
+/// and is diagnostic only — it is never an execution gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct UpSlotTiming {
     pub slot: u8,
     pub scan_code: u16,
     pub source_action_index: u32,
-    pub authored_up_offset_ticks: TimelineTicks,
-    pub paired_up_not_before_offset_ticks: TimelineTicks,
+    pub nominal_up_offset_ticks: TimelineTicks,
     pub release_not_before_qpc: QpcTicks,
 }
 
@@ -627,8 +360,7 @@ impl UpSlotTiming {
         slot: 0xFF,
         scan_code: 0,
         source_action_index: 0,
-        authored_up_offset_ticks: TimelineTicks::ZERO,
-        paired_up_not_before_offset_ticks: TimelineTicks::ZERO,
+        nominal_up_offset_ticks: TimelineTicks::ZERO,
         release_not_before_qpc: QpcTicks::ZERO,
     };
 }
@@ -644,44 +376,55 @@ pub struct UpSlotTimingSummary {
     pub hold_floor_mask: u16,
 }
 
+/// Bounded 15-slot completion-anchored pulse executor.
+#[derive(Debug, Clone)]
+pub struct DispatchExecutor {
+    chords: Vec<PreparedChord>,
+    schedule_end_offset_ticks: TimelineTicks,
+    schedule_end_offset_us: u64,
+    key_registry: KeyRegistry,
+    cursor: usize,
+    active_mask: u16,
+    release_not_before_qpc: [QpcTicks; MAX_KEYS],
+    active_slot_origin: [ActiveSlotOrigin; MAX_KEYS],
+    hold_ticks: DurationTicks,
+    verified_cleanup_seen: bool,
+    counters: GenerationCounters,
+    total_generations: u64,
+    activated_generations: u64,
+}
+
 impl DispatchExecutor {
     /// Bound the capacity-backed storage required to create an executor for a
-    /// canonical schedule without allocating it.
-    pub fn estimated_memory_bytes(schedule: &RuntimeSchedule) -> Result<usize, String> {
-        let intent_count = schedule
-            .down_chords
-            .iter()
-            .try_fold(0usize, |count, chord| {
-                count.checked_add(chord.intents.len())
-            })
-            .ok_or_else(|| "executor Down intent count overflow".to_string())?;
-        checked_executor_storage_bytes(schedule.down_chords.len(), intent_count)?
+    /// validated onset plan without allocating it.
+    pub fn estimated_memory_bytes(plan: &OnsetPlan) -> Result<usize, String> {
+        checked_executor_storage_bytes(plan.chords.len())?
             .checked_add(std::mem::size_of::<Self>())
             .ok_or_else(|| "executor total memory size overflow".to_string())
     }
 
     /// Create fresh mutable session state from a plan prepared before Arm.
-    /// The authored arrays are moved without rebuilding or reallocating.
+    /// The chord vector is moved without rebuilding or reallocating.
     pub fn from_prepared_schedule(plan: PreparedDispatchSchedule) -> Self {
         let PreparedDispatchSchedule {
-            down_chords,
-            down_intents,
+            chords,
             schedule_end_offset_ticks,
             schedule_end_offset_us,
             key_registry,
             total_generations,
-            min_hold_ticks,
+            hold_ticks,
             ..
         } = plan;
         Self {
-            down_chords,
-            down_intents,
+            chords,
             schedule_end_offset_ticks,
             schedule_end_offset_us,
             key_registry,
-            chord_cursor: 0,
-            slots: [MusicalSlot::default(); MAX_KEYS],
-            min_hold_ticks,
+            cursor: 0,
+            active_mask: 0,
+            release_not_before_qpc: [QpcTicks::ZERO; MAX_KEYS],
+            active_slot_origin: [ActiveSlotOrigin::default(); MAX_KEYS],
+            hold_ticks,
             verified_cleanup_seen: false,
             counters: GenerationCounters::default(),
             total_generations,
@@ -689,23 +432,24 @@ impl DispatchExecutor {
         }
     }
 
-    /// Construct a new 15-slot executor from a validated `RuntimeSchedule`.
+    /// Construct a new 15-slot executor directly from a validated `OnsetPlan`.
     pub fn new<F, E>(
-        schedule: &RuntimeSchedule,
-        min_hold_ticks: DurationTicks,
+        plan: &OnsetPlan,
+        hold_ticks: DurationTicks,
         us_to_ticks: F,
     ) -> Result<Self, String>
     where
         F: FnMut(u64) -> Result<TimelineTicks, E>,
         E: std::fmt::Display,
     {
-        Self::new_with_cancellation(schedule, min_hold_ticks, us_to_ticks, || Ok(()))
+        Self::new_with_cancellation(plan, hold_ticks, us_to_ticks, || Ok(()))
     }
 
-    /// Construct a new 15-slot executor with bounded memory admission and periodic cancellation checkpoints.
+    /// Construct a new 15-slot executor with bounded memory admission and
+    /// periodic cancellation checkpoints.
     pub fn new_with_cancellation<F, E, C>(
-        schedule: &RuntimeSchedule,
-        min_hold_ticks: DurationTicks,
+        plan: &OnsetPlan,
+        hold_ticks: DurationTicks,
         mut us_to_ticks: F,
         mut checkpoint: C,
     ) -> Result<Self, String>
@@ -714,56 +458,37 @@ impl DispatchExecutor {
         E: std::fmt::Display,
         C: FnMut() -> Result<(), String>,
     {
-        let DownArena {
-            chords: down_chords,
-            intents: down_intents,
-        } = build_down_arena(
-            schedule,
-            &mut checkpoint,
-            DownArenaBuildPolicy {
-                checkpoint_first_chord: false,
-                checkpoint_after_count: true,
-                count_changed_error: "executor Down intent count changed during compilation",
-                check_actual_capacity: true,
-                min_hold_ticks,
-            },
-            |microseconds, kind| {
-                us_to_ticks(microseconds).map_err(|error| match kind {
-                    DownArenaTimestampKind::Chord => {
-                        format!(
-                            "scheduled timestamp conversion failed for chord at {microseconds}us: {error}"
-                        )
-                    }
-                    DownArenaTimestampKind::PairedUp => {
-                        format!(
-                            "paired Up offset timestamp conversion failed at {microseconds}us: {error}"
-                        )
-                    }
-                })
-            },
-        )?;
+        let chords = build_prepared_chords(plan, hold_ticks, &mut checkpoint, |microseconds| {
+            us_to_ticks(microseconds).map_err(|error| {
+                format!(
+                    "scheduled timestamp conversion failed for chord at {microseconds}us: {error}"
+                )
+            })
+        })?;
+        checked_executor_storage_bytes(chords.capacity())?;
         checkpoint()?;
 
         let schedule_end_offset_ticks =
-            us_to_ticks(schedule.schedule_end_offset_us).map_err(|e| {
+            us_to_ticks(plan.schedule_end_offset_us).map_err(|error| {
                 format!(
-                    "schedule end offset timestamp conversion failed at {}us: {e}",
-                    schedule.schedule_end_offset_us
+                    "schedule end offset timestamp conversion failed at {}us: {error}",
+                    plan.schedule_end_offset_us
                 )
             })?;
 
         Ok(Self {
-            down_chords,
-            down_intents,
+            chords,
             schedule_end_offset_ticks,
-            schedule_end_offset_us: schedule.schedule_end_offset_us,
-            key_registry: schedule.key_registry.clone(),
-            chord_cursor: 0,
-            slots: [MusicalSlot::default(); MAX_KEYS],
-            min_hold_ticks,
+            schedule_end_offset_us: plan.schedule_end_offset_us,
+            key_registry: plan.key_registry.clone(),
+            cursor: 0,
+            active_mask: 0,
+            release_not_before_qpc: [QpcTicks::ZERO; MAX_KEYS],
+            active_slot_origin: [ActiveSlotOrigin::default(); MAX_KEYS],
+            hold_ticks,
             verified_cleanup_seen: false,
             counters: GenerationCounters::default(),
-            total_generations: schedule.generation_count,
+            total_generations: plan.generation_count,
             activated_generations: 0,
         })
     }
@@ -775,65 +500,57 @@ impl DispatchExecutor {
     }
 
     pub fn try_memory_metrics(&self) -> Result<ExecutorMemoryMetrics, String> {
-        let chord_header_heap_bytes = self
-            .down_chords
-            .capacity()
-            .checked_mul(std::mem::size_of::<DownChordHeaderTicks>())
-            .ok_or_else(|| "executor chord-header capacity size overflow".to_string())?;
-        let intent_heap_bytes = self
-            .down_intents
-            .capacity()
-            .checked_mul(std::mem::size_of::<DownIntentTicks>())
-            .ok_or_else(|| "executor intent-arena capacity size overflow".to_string())?;
-        let chord_heap_bytes = chord_header_heap_bytes
-            .checked_add(intent_heap_bytes)
-            .ok_or_else(|| "executor vector capacity size overflow".to_string())?;
-        checked_executor_storage_bytes(self.down_chords.capacity(), self.down_intents.capacity())?;
+        let chord_heap_bytes = checked_executor_storage_bytes(self.chords.capacity())?;
         let struct_bytes = std::mem::size_of::<Self>();
         let total_bytes = chord_heap_bytes
             .checked_add(struct_bytes)
             .ok_or_else(|| "executor total memory size overflow".to_string())?;
         Ok(ExecutorMemoryMetrics {
-            chord_count: self.down_chords.len(),
-            chord_capacity: self.down_chords.capacity(),
-            intent_count: self.down_intents.len(),
-            intent_capacity: self.down_intents.capacity(),
-            chord_header_heap_bytes,
-            intent_heap_bytes,
+            chord_count: self.chords.len(),
+            chord_capacity: self.chords.capacity(),
             chord_heap_bytes,
             struct_bytes,
             total_bytes,
         })
     }
 
-    /// Extract per-slot authored Up metadata for the keys active in `up_mask`.
+    #[inline]
+    fn nominal_up_offset_ticks(&self, slot: usize) -> Result<TimelineTicks, TimeArithmeticError> {
+        self.active_slot_origin[slot]
+            .down_onset_ticks
+            .checked_add_duration(self.hold_ticks)
+    }
+
+    /// Extract per-slot diagnostic Up metadata for the keys active in `up_mask`.
     pub fn up_slot_timings(&self, up_mask: u16) -> SmallVec<[UpSlotTiming; MAX_KEYS]> {
         let mut timings = SmallVec::new();
-        for (i, slot) in self.slots.iter().enumerate() {
-            if (up_mask & (1 << i)) != 0 && slot.active_generation.is_some() {
-                let scan_code = self.key_registry.scan_code_for(i as u8).unwrap_or(0);
-                timings.push(UpSlotTiming {
-                    slot: i as u8,
-                    scan_code,
-                    source_action_index: slot.paired_up_source_action_index,
-                    authored_up_offset_ticks: slot.authored_up_offset_ticks,
-                    paired_up_not_before_offset_ticks: slot.paired_up_not_before_offset_ticks,
-                    release_not_before_qpc: slot.release_not_before_qpc,
-                });
-            }
+        let mut remaining = up_mask & self.active_mask;
+        while remaining != 0 {
+            let slot_idx = remaining.trailing_zeros() as usize;
+            remaining &= remaining - 1;
+            let scan_code = self.key_registry.scan_code_for(slot_idx as u8).unwrap_or(0);
+            let origin = self.active_slot_origin[slot_idx];
+            let nominal_up_offset_ticks = origin
+                .down_onset_ticks
+                .saturating_add_duration(self.hold_ticks);
+            timings.push(UpSlotTiming {
+                slot: slot_idx as u8,
+                scan_code,
+                source_action_index: origin.source_action_index,
+                nominal_up_offset_ticks,
+                release_not_before_qpc: self.release_not_before_qpc[slot_idx],
+            });
         }
         timings
     }
 
-    /// Summarize Up timing without constructing or copying per-slot observer
-    /// records. The result preserves the Up-only packet window and source
-    /// attribution needed by the worker when a mixed packet is replanned.
+    /// Summarize Up timing without constructing per-slot observer records.
     pub fn up_slot_timing_summary(
         &self,
         up_mask: u16,
         epoch_qpc: QpcTicks,
     ) -> Result<Option<UpSlotTimingSummary>, TimeArithmeticError> {
-        let mut remaining = up_mask;
+        let mut remaining = up_mask & self.active_mask;
         let mut slot_count = 0u8;
         let mut first_source_action_index = None;
         let mut authored_target_qpc = None;
@@ -841,30 +558,20 @@ impl DispatchExecutor {
         let mut hold_floor_mask = 0u16;
 
         while remaining != 0 {
-            let slot_index = remaining.trailing_zeros() as usize;
-            let slot_mask = 1u16 << slot_index;
-            remaining &= !slot_mask;
+            let slot_idx = remaining.trailing_zeros() as usize;
+            let slot_bit = 1u16 << slot_idx;
+            remaining &= !slot_bit;
 
-            let Some(slot) = self.slots.get(slot_index) else {
-                continue;
-            };
-            if slot.active_generation.is_none() {
-                continue;
-            }
-
-            let authored_up_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
-                slot.authored_up_offset_ticks.as_u64(),
-            ))?;
-            let prepared_up_not_before_qpc = epoch_qpc.checked_add_duration(
-                DurationTicks::from_raw(slot.paired_up_not_before_offset_ticks.as_u64()),
-            )?;
-            let release_not_before_qpc =
-                prepared_up_not_before_qpc.max(slot.release_not_before_qpc);
+            let nominal_up_offset = self.nominal_up_offset_ticks(slot_idx)?;
+            let nominal_up_qpc = epoch_qpc
+                .checked_add_duration(DurationTicks::from_raw(nominal_up_offset.as_u64()))?;
+            let release_not_before_qpc = self.release_not_before_qpc[slot_idx];
             slot_count += 1;
-            first_source_action_index.get_or_insert(slot.paired_up_source_action_index);
+            first_source_action_index
+                .get_or_insert(self.active_slot_origin[slot_idx].source_action_index);
             authored_target_qpc = Some(
-                authored_target_qpc.map_or(authored_up_qpc, |current: QpcTicks| {
-                    current.min(authored_up_qpc)
+                authored_target_qpc.map_or(nominal_up_qpc, |current: QpcTicks| {
+                    current.min(nominal_up_qpc)
                 }),
             );
             musical_up_not_before_qpc = Some(
@@ -872,8 +579,8 @@ impl DispatchExecutor {
                     current.max(release_not_before_qpc)
                 }),
             );
-            if release_not_before_qpc > authored_up_qpc {
-                hold_floor_mask |= slot_mask;
+            if release_not_before_qpc > nominal_up_qpc {
+                hold_floor_mask |= slot_bit;
             }
         }
 
@@ -888,56 +595,38 @@ impl DispatchExecutor {
         ))
     }
 
-    /// Return the earliest release deadline among every active slot,
-    /// including deadlines that are already due. Modifier backoff uses this
-    /// to wake for an independent Up without treating a blocked Down as the
-    /// next musical event.
-    pub fn earliest_active_up_due_qpc(
-        &self,
-        epoch_qpc: QpcTicks,
-    ) -> Result<Option<QpcTicks>, TimeArithmeticError> {
-        let mut earliest = None;
-        for slot in &self.slots {
-            if slot.active_generation.is_none() {
-                continue;
-            }
-            let authored_up_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
-                slot.authored_up_offset_ticks.as_u64(),
-            ))?;
-            let prepared_up_not_before_qpc = epoch_qpc.checked_add_duration(
-                DurationTicks::from_raw(slot.paired_up_not_before_offset_ticks.as_u64()),
-            )?;
-            let due = authored_up_qpc
-                .max(prepared_up_not_before_qpc)
-                .max(slot.release_not_before_qpc);
-            earliest = Some(earliest.map_or(due, |current: QpcTicks| current.min(due)));
+    /// Return the earliest completion-anchored release deadline among every
+    /// active slot, including deadlines that are already due.
+    pub fn earliest_active_up_due_qpc(&self) -> Option<QpcTicks> {
+        let mut remaining = self.active_mask;
+        let mut earliest: Option<QpcTicks> = None;
+        while remaining != 0 {
+            let slot_idx = remaining.trailing_zeros() as usize;
+            remaining &= remaining - 1;
+            let due = self.release_not_before_qpc[slot_idx];
+            earliest = Some(earliest.map_or(due, |current| current.min(due)));
         }
-        Ok(earliest)
+        earliest
     }
 
     #[inline]
     pub fn chord_cursor(&self) -> usize {
-        self.chord_cursor
+        self.cursor
     }
 
     #[inline]
     pub fn down_chord_count(&self) -> usize {
-        self.down_chords.len()
+        self.chords.len()
     }
 
     #[inline]
     pub fn total_chords(&self) -> usize {
-        self.down_chords.len()
+        self.chords.len()
     }
 
     #[inline]
     pub fn remaining_chords(&self) -> usize {
-        self.down_chords.len().saturating_sub(self.chord_cursor)
-    }
-
-    #[inline]
-    pub fn slots(&self) -> &[MusicalSlot; MAX_KEYS] {
-        &self.slots
+        self.chords.len().saturating_sub(self.cursor)
     }
 
     #[inline]
@@ -946,21 +635,40 @@ impl DispatchExecutor {
     }
 
     #[inline]
-    pub fn active_mask(&self) -> u16 {
-        let mut mask = 0u16;
-        for (i, slot) in self.slots.iter().enumerate() {
-            if slot.active_generation.is_some() {
-                mask |= 1 << i;
-            }
-        }
-        mask
+    pub fn hold_ticks(&self) -> DurationTicks {
+        self.hold_ticks
     }
 
-    /// Whether there is any pending or active physical work (chords remaining or active key slots held).
-    /// When false, any subsequent wait is purely the metadata-only tail.
+    #[inline]
+    pub fn active_mask(&self) -> u16 {
+        self.active_mask
+    }
+
+    /// Return the completion-anchored release deadline for an active slot.
+    #[inline]
+    pub fn slot_release_not_before_qpc(&self, slot: KeySlot) -> Option<QpcTicks> {
+        let idx = usize::from(slot);
+        if idx >= MAX_KEYS || (self.active_mask & (1u16 << idx)) == 0 {
+            return None;
+        }
+        Some(self.release_not_before_qpc[idx])
+    }
+
+    /// Return the derived stable generation identity for an active slot.
+    #[inline]
+    pub fn active_generation_for_slot(&self, slot: KeySlot) -> Option<GenerationId> {
+        let idx = usize::from(slot);
+        if idx >= MAX_KEYS || (self.active_mask & (1u16 << idx)) == 0 {
+            return None;
+        }
+        generation_id_for(self.active_slot_origin[idx].chord_index, slot)
+    }
+
+    /// Whether there is any pending or active physical work (chords remaining
+    /// or active key slots held).
     #[inline]
     pub fn has_physical_work(&self) -> bool {
-        self.remaining_chords() > 0 || self.active_mask() != 0
+        self.remaining_chords() > 0 || self.active_mask != 0
     }
 
     #[inline]
@@ -974,76 +682,58 @@ impl DispatchExecutor {
     }
 
     #[inline]
-    pub fn current_chord(&self) -> Option<DownChordView<'_>> {
-        self.down_chords
-            .get(self.chord_cursor)
-            .map(|chord| self.chord_view(chord))
-    }
-
-    fn chord_view(&self, chord: &DownChordHeaderTicks) -> DownChordView<'_> {
-        let intent_end = chord
-            .intent_start
-            .checked_add(chord.intent_count)
-            .expect("executor chord range was checked at construction");
-        let intents = self
-            .down_intents
-            .get(chord.intent_start..intent_end)
-            .expect("executor chord range is contained in its intent arena");
-        DownChordView {
-            chord_index: chord.chord_index,
-            scheduled_ticks: chord.scheduled_ticks,
-            scheduled_us: chord.scheduled_us,
-            down_mask: chord.down_mask,
-            source_action_index: chord.source_action_index,
-            reason_id: chord.reason_id,
-            intents,
-        }
+    pub fn current_chord(&self) -> Option<PreparedChord> {
+        self.chords.get(self.cursor).copied()
     }
 
     /// Evaluate the current state at an absolute QPC time and decide the next action.
-    /// Authored targets are offsets from the current playback epoch; physical H
-    /// remains absolute across pause-driven epoch changes.
+    ///
+    /// - Musical Downs are eligible at `epoch_qpc + onset_ticks` only when ALL
+    ///   slots in the next chord are currently idle (no early send, intact chord).
+    /// - Active Ups are independently eligible at `release_not_before_qpc[slot]`
+    ///   (`Down completion QPC + hold_ticks`), with no authored Up floor.
+    /// - Disjoint due Ups and next Down combine into one packet (Up before Down).
+    /// - If the next chord is blocked by active slot(s), its lower-bound wake is
+    ///   `max(authored_down_qpc, latest blocking release)` to avoid spinning on
+    ///   an already-due blocked Down.
     pub fn evaluate_at(
         &self,
         now_qpc: QpcTicks,
         epoch_qpc: QpcTicks,
-    ) -> Result<DispatchDecision<'_>, TimeArithmeticError> {
+    ) -> Result<DispatchDecision, TimeArithmeticError> {
         #[cfg(any(test, feature = "test-support"))]
         SCHEDULER_EVALUATION_COUNT.with(|count| count.set(count.get().saturating_add(1)));
+
         let mut up_ready_mask = 0u16;
-        let mut earliest_active_up_due_qpc: Option<QpcTicks> = None;
+        let mut earliest_future_up_due_qpc: Option<QpcTicks> = None;
         let mut up_packet_not_before_qpc: Option<QpcTicks> = None;
         let mut up_authored_target_qpc: Option<QpcTicks> = None;
         let mut up_hold_floor_mask = 0u16;
 
-        for (slot_idx, slot) in self.slots.iter().enumerate() {
-            if slot.active_generation.is_some() {
-                let authored_up_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
-                    slot.authored_up_offset_ticks.as_u64(),
-                ))?;
-                let prepared_up_not_before_qpc = epoch_qpc.checked_add_duration(
-                    DurationTicks::from_raw(slot.paired_up_not_before_offset_ticks.as_u64()),
-                )?;
-                let due = authored_up_qpc
-                    .max(prepared_up_not_before_qpc)
-                    .max(slot.release_not_before_qpc);
-                if now_qpc >= due {
-                    up_ready_mask |= 1 << slot_idx;
-                    up_packet_not_before_qpc =
-                        Some(up_packet_not_before_qpc.map_or(due, |value| value.max(due)));
-                    up_authored_target_qpc = Some(
-                        up_authored_target_qpc
-                            .map_or(authored_up_qpc, |value| value.min(authored_up_qpc)),
-                    );
-                    if due > authored_up_qpc {
-                        up_hold_floor_mask |= 1 << slot_idx;
-                    }
-                } else {
-                    // A due Up is sent immediately. Until then, only the
-                    // earliest active release can wake the worker.
-                    earliest_active_up_due_qpc =
-                        Some(earliest_active_up_due_qpc.map_or(due, |value| value.min(due)));
+        let mut active = self.active_mask;
+        while active != 0 {
+            let slot_idx = active.trailing_zeros() as usize;
+            let slot_bit = 1u16 << slot_idx;
+            active &= !slot_bit;
+
+            let due = self.release_not_before_qpc[slot_idx];
+            if now_qpc >= due {
+                up_ready_mask |= slot_bit;
+                up_packet_not_before_qpc =
+                    Some(up_packet_not_before_qpc.map_or(due, |value| value.max(due)));
+                let nominal_up_offset = self.nominal_up_offset_ticks(slot_idx)?;
+                let nominal_up_qpc = epoch_qpc
+                    .checked_add_duration(DurationTicks::from_raw(nominal_up_offset.as_u64()))?;
+                up_authored_target_qpc = Some(
+                    up_authored_target_qpc
+                        .map_or(nominal_up_qpc, |value| value.min(nominal_up_qpc)),
+                );
+                if due > nominal_up_qpc {
+                    up_hold_floor_mask |= slot_bit;
                 }
+            } else {
+                earliest_future_up_due_qpc =
+                    Some(earliest_future_up_due_qpc.map_or(due, |value| value.min(due)));
             }
         }
 
@@ -1054,29 +744,21 @@ impl DispatchExecutor {
 
         if let Some(chord) = chord_opt {
             let authored_down_qpc = epoch_qpc
-                .checked_add_duration(DurationTicks::from_raw(chord.scheduled_ticks.as_u64()))?;
+                .checked_add_duration(DurationTicks::from_raw(chord.onset_ticks.as_u64()))?;
             chord_authored_target_qpc = Some(authored_down_qpc);
-            chord_eligible = true;
-            chord_earliest_due_qpc = authored_down_qpc;
-            if now_qpc < authored_down_qpc {
+            let mut blocking = chord.key_mask & self.active_mask;
+            if blocking == 0 {
+                chord_eligible = now_qpc >= authored_down_qpc;
+                chord_earliest_due_qpc = authored_down_qpc;
+            } else {
                 chord_eligible = false;
-            }
-            for intent in chord.intents {
-                let k = intent.key_slot as usize;
-                let slot = &self.slots[k];
-                if slot.active_generation.is_some() {
-                    chord_eligible = false;
-                    let authored_up_qpc = epoch_qpc.checked_add_duration(
-                        DurationTicks::from_raw(slot.authored_up_offset_ticks.as_u64()),
-                    )?;
-                    let prepared_up_not_before_qpc = epoch_qpc.checked_add_duration(
-                        DurationTicks::from_raw(slot.paired_up_not_before_offset_ticks.as_u64()),
-                    )?;
-                    let key_release_due = authored_up_qpc
-                        .max(prepared_up_not_before_qpc)
-                        .max(slot.release_not_before_qpc);
-                    chord_earliest_due_qpc = chord_earliest_due_qpc.max(key_release_due);
+                let mut bound = authored_down_qpc;
+                while blocking != 0 {
+                    let slot_idx = blocking.trailing_zeros() as usize;
+                    blocking &= blocking - 1;
+                    bound = bound.max(self.release_not_before_qpc[slot_idx]);
                 }
+                chord_earliest_due_qpc = bound;
             }
         }
 
@@ -1084,61 +766,54 @@ impl DispatchExecutor {
         let up_authored_qpc = up_authored_target_qpc.filter(|_| up_ready_mask != 0);
         let down_ready_qpc = chord_eligible.then_some(chord_earliest_due_qpc);
         let down_authored_qpc = chord_authored_target_qpc.filter(|_| chord_eligible);
-        match (up_ready_mask != 0, chord_eligible) {
-            (true, true) | (true, false) | (false, true) => {
-                let authored_target_qpc = match (up_authored_qpc, down_authored_qpc) {
-                    (Some(up), Some(down)) => up.min(down),
-                    (Some(up), None) => up,
-                    (None, Some(down)) => down,
-                    (None, None) => unreachable!("a send action has a selected direction"),
-                };
-                let musical_up_not_before_qpc = up_ready_qpc.unwrap_or(authored_target_qpc);
-                let down_not_before_qpc = down_ready_qpc.unwrap_or(authored_target_qpc);
-                Ok(DispatchDecision::Send {
-                    up_mask: if up_ready_mask != 0 { up_ready_mask } else { 0 },
-                    down_chord: if chord_eligible { chord_opt } else { None },
-                    timing_window: DispatchTimingWindow {
-                        authored_target_qpc,
-                        musical_up_not_before_qpc,
-                        down_not_before_qpc,
-                        packet_not_before_qpc: musical_up_not_before_qpc.max(down_not_before_qpc),
-                        hold_floor_mask: up_hold_floor_mask,
-                    },
-                })
-            }
-            (false, false) => {
-                let mut earliest_wake = if up_ready_mask == 0 {
-                    earliest_active_up_due_qpc
-                } else {
-                    None
-                };
-                if chord_opt.is_some() {
-                    earliest_wake =
-                        Some(earliest_wake.map_or(chord_earliest_due_qpc, |earliest| {
-                            earliest.min(chord_earliest_due_qpc)
-                        }));
-                }
 
-                if let Some(wake) = earliest_wake {
-                    Ok(DispatchDecision::Wait { deadline_qpc: wake })
-                } else {
-                    let schedule_end_qpc = epoch_qpc.checked_add_duration(
-                        DurationTicks::from_raw(self.schedule_end_offset_ticks.as_u64()),
-                    )?;
-                    if now_qpc < schedule_end_qpc {
-                        Ok(DispatchDecision::Wait {
-                            deadline_qpc: schedule_end_qpc,
-                        })
-                    } else {
-                        Ok(DispatchDecision::Finished)
-                    }
-                }
+        if up_ready_mask != 0 || chord_eligible {
+            let authored_target_qpc = match (up_authored_qpc, down_authored_qpc) {
+                (Some(up), Some(down)) => up.min(down),
+                (Some(up), None) => up,
+                (None, Some(down)) => down,
+                (None, None) => unreachable!("a send decision has an Up or Down direction"),
+            };
+            let musical_up_not_before_qpc = up_ready_qpc.unwrap_or(authored_target_qpc);
+            let down_not_before_qpc = down_ready_qpc.unwrap_or(authored_target_qpc);
+            return Ok(DispatchDecision::Send {
+                up_mask: up_ready_mask,
+                down_chord: chord_eligible.then_some(chord_opt).flatten(),
+                timing_window: DispatchTimingWindow {
+                    authored_target_qpc,
+                    musical_up_not_before_qpc,
+                    down_not_before_qpc,
+                    packet_not_before_qpc: musical_up_not_before_qpc.max(down_not_before_qpc),
+                    hold_floor_mask: up_hold_floor_mask,
+                },
+            });
+        }
+
+        let mut earliest_wake = earliest_future_up_due_qpc;
+        if chord_opt.is_some() {
+            earliest_wake = Some(earliest_wake.map_or(chord_earliest_due_qpc, |earliest| {
+                earliest.min(chord_earliest_due_qpc)
+            }));
+        }
+
+        if let Some(wake) = earliest_wake {
+            Ok(DispatchDecision::Wait { deadline_qpc: wake })
+        } else {
+            let schedule_end_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
+                self.schedule_end_offset_ticks.as_u64(),
+            ))?;
+            if now_qpc < schedule_end_qpc {
+                Ok(DispatchDecision::Wait {
+                    deadline_qpc: schedule_end_qpc,
+                })
+            } else {
+                Ok(DispatchDecision::Finished)
             }
         }
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn evaluate(&self, now_ticks: TimelineTicks) -> DispatchAction<'_> {
+    pub fn evaluate(&self, now_ticks: TimelineTicks) -> DispatchAction {
         match self
             .evaluate_at(QpcTicks::from_raw(now_ticks.as_u64()), QpcTicks::ZERO)
             .expect("timeline-zero test scheduler timestamps must fit QPC")
@@ -1158,7 +833,8 @@ impl DispatchExecutor {
         }
     }
 
-    /// Commit the result of a successful or partial SendInput transaction.
+    /// Commit the result of a complete healthy `SendInput` transaction.
+    /// All arithmetic and structural checks run before any state mutation.
     pub fn on_send_completed_at(
         &mut self,
         confirmed_up_mask: u16,
@@ -1168,61 +844,55 @@ impl DispatchExecutor {
         if confirmed_up_mask & confirmed_down_mask != 0 {
             return Err("confirmed packet has overlapping Up and Down masks".to_string());
         }
+        if (confirmed_up_mask & !ALL_KEYS_MASK) != 0 || (confirmed_down_mask & !ALL_KEYS_MASK) != 0
+        {
+            return Err("confirmed packet contains out-of-range key slot".to_string());
+        }
+        let inactive_ups = confirmed_up_mask & !self.active_mask;
+        if inactive_ups != 0 {
+            let slot_idx = inactive_ups.trailing_zeros() as usize;
+            return Err(format!("confirmed Up on inactive slot {slot_idx}"));
+        }
+
         let new_up_floor = if confirmed_down_mask != 0 {
             Some(
                 completion_qpc
-                    .checked_add_duration(self.min_hold_ticks)
+                    .checked_add_duration(self.hold_ticks)
                     .map_err(|error| format!("Down completion H floor overflow: {error}"))?,
             )
         } else {
             None
         };
 
-        let mut up_slots = confirmed_up_mask;
-        while up_slots != 0 {
-            let slot_idx = up_slots.trailing_zeros() as usize;
-            up_slots &= up_slots - 1;
-            if self.slots[slot_idx].active_generation.is_none() {
-                return Err(format!("confirmed Up on inactive slot {slot_idx}"));
-            }
-        }
-
         let chord = if confirmed_down_mask != 0 {
-            let chord = self
-                .down_chords
-                .get(self.chord_cursor)
-                .copied()
-                .ok_or_else(|| "confirmed Down chord when chord cursor is exhausted".to_string())?;
-            if chord.down_mask != confirmed_down_mask {
+            let chord =
+                self.chords.get(self.cursor).copied().ok_or_else(|| {
+                    "confirmed Down chord when chord cursor is exhausted".to_string()
+                })?;
+            if chord.key_mask != confirmed_down_mask {
                 return Err(format!(
-                    "confirmed Down mask 0x{:04x} does not match chord mask 0x{:04x}",
-                    confirmed_down_mask, chord.down_mask
+                    "confirmed Down mask {confirmed_down_mask:#06x} does not match chord mask {:#06x}",
+                    chord.key_mask
                 ));
             }
-            for intent in self.chord_view(&chord).intents {
-                if self.slots[intent.key_slot as usize]
-                    .active_generation
-                    .is_some()
-                {
-                    return Err(format!(
-                        "attempted to activate already active slot {}",
-                        intent.key_slot
-                    ));
-                }
+            let already_active = self.active_mask & confirmed_down_mask;
+            if already_active != 0 {
+                let slot_idx = already_active.trailing_zeros() as usize;
+                return Err(format!(
+                    "attempted to activate already active slot {slot_idx}"
+                ));
             }
             Some(chord)
         } else {
             None
         };
-        if chord.is_some() && confirmed_down_mask & confirmed_up_mask != 0 {
-            return Err("confirmed packet releases and represses the same slot".to_string());
-        }
+
         let next_released = self
             .counters
             .released
             .checked_add(u64::from(confirmed_up_mask.count_ones()))
             .ok_or("released counter overflow")?;
-        let activated_count = chord.map_or(0, |chord| chord.intent_count as u64);
+        let activated_count = chord.map_or(0, |chord| u64::from(chord.key_mask.count_ones()));
         let next_activated = self
             .activated_generations
             .checked_add(activated_count)
@@ -1231,40 +901,39 @@ impl DispatchExecutor {
             return Err("activated generation count exceeds compiled total".to_string());
         }
         let next_cursor = self
-            .chord_cursor
-            .checked_add(if chord.is_some() { 1 } else { 0 })
+            .cursor
+            .checked_add(usize::from(chord.is_some()))
             .ok_or("Down chord cursor overflow")?;
 
+        // Commit atomically after all checks succeeded.
         let mut up_slots = confirmed_up_mask;
         while up_slots != 0 {
             let slot_idx = up_slots.trailing_zeros() as usize;
             up_slots &= up_slots - 1;
-            let slot = &mut self.slots[slot_idx];
-            slot.active_generation = None;
-            slot.release_not_before_qpc = QpcTicks::ZERO;
+            self.release_not_before_qpc[slot_idx] = QpcTicks::ZERO;
+            self.active_slot_origin[slot_idx] = ActiveSlotOrigin::default();
         }
+        self.active_mask &= !confirmed_up_mask;
+
         if let Some(chord) = chord {
-            let intent_start = chord.intent_start;
-            let intent_end = intent_start
-                .checked_add(chord.intent_count)
-                .ok_or_else(|| "executor Down intent range overflow at commit".to_string())?;
-            let chord_intents = self
-                .down_intents
-                .get(intent_start..intent_end)
-                .ok_or_else(|| "executor Down intent range invalid at commit".to_string())?;
-            for intent in chord_intents {
-                let slot = &mut self.slots[intent.key_slot as usize];
-                slot.active_generation = Some(intent.generation_id);
-                slot.authored_up_offset_ticks = intent.authored_up_offset_ticks;
-                slot.paired_up_not_before_offset_ticks = intent.paired_up_not_before_offset_ticks;
-                slot.paired_up_source_action_index = intent.paired_up_source_action_index;
-                slot.release_not_before_qpc = new_up_floor.unwrap_or(QpcTicks::ZERO);
+            let release_deadline = new_up_floor.expect("Down commit computed release floor");
+            let mut down_slots = chord.key_mask;
+            while down_slots != 0 {
+                let slot_idx = down_slots.trailing_zeros() as usize;
+                down_slots &= down_slots - 1;
+                self.release_not_before_qpc[slot_idx] = release_deadline;
+                self.active_slot_origin[slot_idx] = ActiveSlotOrigin {
+                    chord_index: chord.chord_index,
+                    source_action_index: chord.source_action_index,
+                    down_onset_ticks: chord.onset_ticks,
+                };
             }
+            self.active_mask |= chord.key_mask;
         }
+
         self.counters.released = next_released;
         self.activated_generations = next_activated;
-        self.chord_cursor = next_cursor;
-
+        self.cursor = next_cursor;
         Ok(())
     }
 
@@ -1285,11 +954,7 @@ impl DispatchExecutor {
     /// Check that cancelling all currently active generations would not overflow
     /// the cancelled counter.
     pub fn check_cleanup_overflow(&self) -> Result<(), String> {
-        let active_count = self
-            .slots
-            .iter()
-            .filter(|s| s.active_generation.is_some())
-            .count() as u64;
+        let active_count = u64::from(self.active_mask.count_ones());
         self.counters
             .cancelled
             .checked_add(active_count)
@@ -1299,39 +964,32 @@ impl DispatchExecutor {
 
     /// Apply verified resumable cleanup.
     ///
-    /// Clears active musical owners in all 15 slots without physical replay,
-    /// marks cancelled generations in accounting, and records that subsequent
-    /// worker transitions may proceed once their other gates are satisfied.
+    /// Clears active musical owners in all 15 slots without physical replay and
+    /// marks cancelled generations in accounting.
     pub fn on_verified_cleanup(&mut self) -> Result<u64, String> {
-        let active_count = self
-            .slots
-            .iter()
-            .filter(|s| s.active_generation.is_some())
-            .count() as u64;
+        let active_count = u64::from(self.active_mask.count_ones());
         let next_cancelled = self
             .counters
             .cancelled
             .checked_add(active_count)
             .ok_or("cancelled counter overflow")?;
-        for slot in &mut self.slots {
-            slot.active_generation = None;
-            slot.release_not_before_qpc = QpcTicks::ZERO;
-        }
+        self.active_mask = 0;
+        self.release_not_before_qpc.fill(QpcTicks::ZERO);
+        self.active_slot_origin.fill(ActiveSlotOrigin::default());
         self.counters.cancelled = next_cancelled;
         self.verified_cleanup_seen = true;
         Ok(active_count)
     }
 
-    /// Consume the current authored Down chord after an attempted packet was
-    /// reconciled by verified safety cleanup. The attempted onset is cancelled
-    /// exactly once after verified cleanup. No sender completion is inferred
-    /// for the attempted musical packet.
+    /// Consume the current onset chord after an attempted packet was reconciled
+    /// by verified safety cleanup. The attempted onset is cancelled once and
+    /// never replayed.
     pub fn consume_attempted_down_after_verified_cleanup(
         &mut self,
         source_action_index: u32,
         down_mask: u16,
     ) -> Result<(), String> {
-        if self.active_mask() != 0 {
+        if self.active_mask != 0 {
             return Err(
                 "attempted Down cannot be consumed before active slots are cleaned up".into(),
             );
@@ -1348,14 +1006,13 @@ impl DispatchExecutor {
 
     /// Consume a Down-only onset after one internally consistent raw-zero
     /// transport result. No completion QPC or cleanup barrier is created:
-    /// the packet was attempted once, while unrelated active slots and their
-    /// existing H eligibility remains live.
+    /// unrelated active slots keep their existing H eligibility.
     pub fn consume_attempted_down_after_proven_raw_zero(
         &mut self,
         source_action_index: u32,
         down_mask: u16,
     ) -> Result<(), String> {
-        if down_mask == 0 || self.active_mask() & down_mask != 0 {
+        if down_mask == 0 || self.active_mask & down_mask != 0 {
             return Err("proven-zero Down overlaps an active musical slot".into());
         }
         self.checked_attempted_down_cursor_transition(
@@ -1374,23 +1031,23 @@ impl DispatchExecutor {
         let chord = self
             .current_chord()
             .ok_or_else(|| format!("{context} chord cursor is exhausted"))?;
-        if chord.source_action_index != source_action_index || chord.down_mask != down_mask {
+        if chord.source_action_index != source_action_index || chord.key_mask != down_mask {
             return Err(format!(
                 "{context} identity does not match current chord: source_action={} down_mask={:#06x}, current_source_action={} current_down_mask={:#06x}",
-                source_action_index, down_mask, chord.source_action_index, chord.down_mask,
+                source_action_index, down_mask, chord.source_action_index, chord.key_mask,
             ));
         }
         let next_cancelled = self
             .counters
             .cancelled
-            .checked_add(chord.intents.len() as u64)
+            .checked_add(u64::from(chord.key_mask.count_ones()))
             .ok_or_else(|| format!("cancelled counter overflow while consuming {context}"))?;
         let next_cursor = self
-            .chord_cursor
+            .cursor
             .checked_add(1)
             .ok_or_else(|| format!("Down chord cursor overflow while consuming {context}"))?;
         self.counters.cancelled = next_cancelled;
-        self.chord_cursor = next_cursor;
+        self.cursor = next_cursor;
         Ok(())
     }
 
@@ -1408,34 +1065,27 @@ impl DispatchExecutor {
             .checked_add(cancelled_count)
             .ok_or("terminal cancelled counter overflow")?;
         self.counters.cancelled = next_cancelled;
-        for slot in &mut self.slots {
-            slot.active_generation = None;
-            slot.release_not_before_qpc = QpcTicks::ZERO;
-        }
+        self.active_mask = 0;
+        self.release_not_before_qpc.fill(QpcTicks::ZERO);
+        self.active_slot_origin.fill(ActiveSlotOrigin::default());
         Ok(cancelled_count)
     }
 
     /// Check the bounded scheduler state and generation lifecycle partition.
     pub fn check_invariants(&self) -> Result<(), String> {
-        if self.chord_cursor > self.down_chords.len() {
-            return Err("scheduler chord cursor exceeds the compiled chord count".into());
+        if self.cursor > self.chords.len() {
+            return Err("scheduler chord cursor exceeds the prepared chord count".into());
         }
-        for (slot_index, slot) in self.slots.iter().enumerate() {
-            if slot
-                .active_generation
-                .is_some_and(|generation| generation >= self.total_generations)
-            {
+        if (self.active_mask & !ALL_KEYS_MASK) != 0 {
+            return Err("scheduler active mask contains out-of-range key slot".into());
+        }
+        let mut active = self.active_mask;
+        while active != 0 {
+            let slot_idx = active.trailing_zeros() as usize;
+            active &= active - 1;
+            if self.active_slot_origin[slot_idx].chord_index >= self.chords.len() {
                 return Err(format!(
-                    "scheduler slot {slot_index} owns an unknown generation"
-                ));
-            }
-            if let Some(generation) = slot.active_generation
-                && self.slots[..slot_index]
-                    .iter()
-                    .any(|other| other.active_generation == Some(generation))
-            {
-                return Err(format!(
-                    "scheduler generation {generation} owns multiple slots"
+                    "scheduler slot {slot_idx} references an out-of-range chord"
                 ));
             }
         }
@@ -1462,8 +1112,8 @@ impl DispatchExecutor {
     /// the musical timeline has reached `schedule_end_offset_ticks`.
     #[inline]
     pub fn is_finished(&self, now_ticks: TimelineTicks) -> bool {
-        self.chord_cursor >= self.down_chords.len()
-            && self.slots.iter().all(|s| s.active_generation.is_none())
+        self.cursor >= self.chords.len()
+            && self.active_mask == 0
             && now_ticks >= self.schedule_end_offset_ticks
     }
 
@@ -1475,21 +1125,12 @@ impl DispatchExecutor {
         let end_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
             self.schedule_end_offset_ticks.as_u64(),
         ))?;
-        Ok(self.chord_cursor >= self.down_chords.len()
-            && self
-                .slots
-                .iter()
-                .all(|slot| slot.active_generation.is_none())
-            && now_qpc >= end_qpc)
+        Ok(self.cursor >= self.chords.len() && self.active_mask == 0 && now_qpc >= end_qpc)
     }
 
     /// Snapshot current generation accounting.
     pub fn accounting(&self) -> GenerationAccounting {
-        let active_count = self
-            .slots
-            .iter()
-            .filter(|s| s.active_generation.is_some())
-            .count() as u64;
+        let active_count = u64::from(self.active_mask.count_ones());
         let terminal = self.counters.terminal_total();
         let scheduled = self
             .total_generations
@@ -1528,12 +1169,12 @@ impl DispatchExecutor {
 
     /// Return the authored source action index of the first released key in `up_mask`.
     pub fn up_source_action_index(&self, up_mask: u16) -> Option<u32> {
-        for slot in 0..MAX_KEYS {
-            if up_mask & (1 << slot) != 0 {
-                return Some(self.slots[slot].paired_up_source_action_index);
-            }
+        let active_ups = up_mask & self.active_mask;
+        if active_ups == 0 {
+            return None;
         }
-        None
+        let slot = active_ups.trailing_zeros() as usize;
+        Some(self.active_slot_origin[slot].source_action_index)
     }
 }
 
@@ -1545,8 +1186,6 @@ mod absolute_tests;
 
 #[cfg(test)]
 mod scale_tests;
-#[cfg(test)]
-mod tests;
 
 #[cfg(test)]
-mod arena_oracle_tests;
+mod tests;

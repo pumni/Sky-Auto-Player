@@ -63,7 +63,7 @@ fn dispatch_live_scheduler_next(
 
     let (up_mask, down_chord, timing_window): (
         u16,
-        Option<sky_dispatch_core::executor::DownChordMetadata>,
+        Option<sky_dispatch_core::executor::PreparedChord>,
         sky_dispatch_core::executor::DispatchTimingWindow,
     ) = match harness
         .resources
@@ -75,10 +75,10 @@ fn dispatch_live_scheduler_next(
             up_mask,
             down_chord,
             timing_window,
-        } => (up_mask, down_chord.map(Into::into), timing_window),
+        } => (up_mask, down_chord, timing_window),
         decision => panic!("expected production scheduler Send decision, got {decision:?}"),
     };
-    let down_mask = down_chord.as_ref().map_or(0, |chord| chord.down_mask);
+    let down_mask = down_chord.map_or(0, |chord| chord.key_mask);
     let candidate = harness
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage live scheduler candidate")
@@ -295,39 +295,21 @@ fn probe_held_keeps_needs_probe_without_retrying_physical_up() {
 fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
     use crate::engine::worker::StagedDispatchOutcome;
     use sky_dispatch_core::executor::DispatchDecision;
-    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::model::OnsetChordInput;
 
-    let actions = [
-        KeyActionInput {
+    let chords = [
+        OnsetChordInput {
             source_action_index: 0,
-            kind: ActionKind::Down,
             scheduled_us: 0,
             scan_codes: vec![0x15].into(),
-            reason: "first down".into(),
         },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 17_167,
-            scan_codes: vec![0x15].into(),
-            reason: "first up".into(),
-        },
-        KeyActionInput {
+        OnsetChordInput {
             source_action_index: 2,
-            kind: ActionKind::Down,
             scheduled_us: 17_167,
             scan_codes: vec![0x15].into(),
-            reason: "authored repeat".into(),
-        },
-        KeyActionInput {
-            source_action_index: 3,
-            kind: ActionKind::Up,
-            scheduled_us: 34_334,
-            scan_codes: vec![0x15].into(),
-            reason: "second up".into(),
         },
     ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let packets = harness.configure_mock_packet_sender_for_test(&[1_000, 1_000, 1_000, 1_000]);
     let clock = harness.resources.clock;
     let now = clock.now().expect("initial live scheduler QPC");
@@ -428,7 +410,7 @@ fn live_scheduler_late_wake_sends_both_scheduled_down_generations() {
         .current_executor_chord_for_test()
         .expect("second production Down chord");
     let authored_next_down = epoch
-        .checked_add_duration(DurationTicks::from_raw(next_chord.scheduled_ticks.as_u64()))
+        .checked_add_duration(DurationTicks::from_raw(next_chord.onset_ticks.as_u64()))
         .expect("second Down authored QPC");
     assert_eq!(
         authored_next_down,

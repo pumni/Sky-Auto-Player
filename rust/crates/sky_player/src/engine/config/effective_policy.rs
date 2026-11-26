@@ -155,14 +155,13 @@ mod tests {
             strict_timing,
             ..WorkerConfig::default().timing
         };
-        let schedule = sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15])
-            .expect("empty schedule with one allowed key");
+        let plan = sky_dispatch_core::plan::build_onset_plan(&[], &[0x15], timing.min_hold_us)
+            .expect("empty plan with one allowed key");
         let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
         let schedule = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
-            &schedule,
+            &plan,
             qpc.frequency_hz(),
-            timing.min_hold_us,
-            schedule.compile_memory.caller_retained_capacity_bytes,
+            plan.compile_memory.caller_retained_capacity_bytes,
         )
         .expect("prepared empty schedule");
         NativeSessionOptions {

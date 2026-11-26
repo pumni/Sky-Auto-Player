@@ -39,7 +39,7 @@ use sky_app_core::settings::{
     UpdatePreferencesPatch as CoreUpdatePreferencesPatch,
 };
 use sky_app_core::song::{
-    ActionKind, RiskReport, ScheduleMetadata, Song, SongPlan, analyze_schedule_with_context,
+    RiskReport, ScheduleMetadata, Song, SongPlan, analyze_schedule_with_context,
     build_schedule_with_policy, build_song_plan,
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
@@ -48,7 +48,7 @@ use sky_native_adapters::{
     CatalogCacheStore, CatalogComposer, CatalogComposition, FileCatalogSource,
     ImportedSourceCatalogStatus, JsonLibraryManifestStore, JsonSettingsStore,
 };
-use sky_player::adapter_support::{ActionKind as DispatchActionKind, KeyActionInput, PriorityMode};
+use sky_player::adapter_support::{OnsetChordInput, PriorityMode};
 use sky_player::engine::{
     BackendConfig, DispatchProfile, EnginePollStatus, EngineProgressSnapshot, EngineSnapshot,
     FocusOptions, NativeDispatchSession, NativeSessionOptions, PriorityOptions, TelemetryMode,

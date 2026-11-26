@@ -1,6 +1,6 @@
 use super::super::test_support::MockSendInputCapture;
 use super::*;
-use sky_dispatch_core::model::RuntimeSchedule;
+use sky_dispatch_core::model::OnsetPlan;
 use sky_dispatch_win32::input::PhysicalPacket;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -23,7 +23,7 @@ fn install_foreground(hwnd: isize, pid: u32) {
 }
 
 fn mock_session(
-    schedule: RuntimeSchedule,
+    schedule: OnsetPlan,
     held: &Arc<AtomicBool>,
     admission_checks: &Arc<AtomicUsize>,
     captures: &Arc<Mutex<Vec<MockSendInputCapture>>>,
@@ -71,8 +71,8 @@ fn mock_session(
     session
 }
 
-fn schedule(actions: &[KeyActionInput], scan_codes: &[u16]) -> RuntimeSchedule {
-    sky_dispatch_core::compile::compile_runtime_intents(actions, scan_codes)
+fn schedule(chords: &[OnsetChordInput], scan_codes: &[u16], hold_us: u64) -> OnsetPlan {
+    sky_dispatch_core::plan::build_onset_plan(chords, scan_codes, hold_us)
         .expect("valid modifier replan fixture")
 }
 
@@ -96,39 +96,22 @@ fn wait_until(timeout: Duration, mut condition: impl FnMut() -> bool, label: &st
     assert!(condition(), "timed out waiting for {label}");
 }
 
-fn held_modifier_mixed_schedule() -> RuntimeSchedule {
+fn held_modifier_mixed_schedule() -> OnsetPlan {
     schedule(
         &[
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "modifier-replan-first-down".into(),
             },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 300_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "modifier-replan-independent-up".into(),
-            },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 2,
-                kind: ActionKind::Down,
                 scheduled_us: 300_000,
                 scan_codes: smallvec::smallvec![0x16, 0x17],
-                reason: "modifier-replan-two-key-chord".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 1_500_000,
-                scan_codes: smallvec::smallvec![0x16, 0x17],
-                reason: "modifier-replan-chord-up".into(),
             },
         ],
         &[0x15, 0x16, 0x17],
+        300_000,
     )
 }
 
@@ -300,36 +283,19 @@ fn owner_invalidation_interrupts_modifier_backoff_and_retains_origin_obligation(
     let send_calls = Arc::new(AtomicU64::new(0));
     let blocked_schedule = schedule(
         &[
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "owner-replan-first-down".into(),
             },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 1,
-                kind: ActionKind::Down,
                 scheduled_us: 250_000,
                 scan_codes: smallvec::smallvec![0x16],
-                reason: "owner-replan-blocked-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: 1_000_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "owner-replan-origin-up".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 1_100_000,
-                scan_codes: smallvec::smallvec![0x16],
-                reason: "owner-replan-unattempted-up".into(),
             },
         ],
         &[0x15, 0x16],
+        1_000_000,
     );
     let session = mock_session(
         blocked_schedule,
@@ -396,36 +362,19 @@ fn terminal_controls_interrupt_modifier_replan_without_attempting_blocked_down()
         let send_calls = Arc::new(AtomicU64::new(0));
         let schedule = schedule(
             &[
-                KeyActionInput {
+                OnsetChordInput {
                     source_action_index: 0,
-                    kind: ActionKind::Down,
                     scheduled_us: 0,
                     scan_codes: smallvec::smallvec![0x15],
-                    reason: "control-replan-first-down".into(),
                 },
-                KeyActionInput {
+                OnsetChordInput {
                     source_action_index: 1,
-                    kind: ActionKind::Down,
                     scheduled_us: 200_000,
                     scan_codes: smallvec::smallvec![0x16],
-                    reason: "control-replan-blocked-down".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 2,
-                    kind: ActionKind::Up,
-                    scheduled_us: 1_000_000,
-                    scan_codes: smallvec::smallvec![0x15],
-                    reason: "control-replan-origin-up".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 3,
-                    kind: ActionKind::Up,
-                    scheduled_us: 1_100_000,
-                    scan_codes: smallvec::smallvec![0x16],
-                    reason: "control-replan-unattempted-up".into(),
                 },
             ],
             &[0x15, 0x16],
+            1_000_000,
         );
         let session = mock_session(schedule, &held, &admission_checks, &captures, &send_calls);
         session.arm(0).expect("arm production worker loop");
@@ -528,23 +477,13 @@ fn modifier_inconclusive_query_fails_closed_without_sends() {
     fault_script.send_input_capture = Some(Arc::clone(&captures));
 
     let sched = schedule(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 10_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "inconclusive-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 100_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "inconclusive-up".into(),
-            },
-        ],
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 10_000,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        90_000,
     );
 
     let mut options = support::test_session_options(
@@ -617,23 +556,13 @@ fn modifier_hold_exceeding_bounded_deadline_fails_closed() {
     fault_script.send_input_capture = Some(Arc::clone(&captures));
 
     let sched = schedule(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 10_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "held-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 200_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "held-up".into(),
-            },
-        ],
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 10_000,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        190_000,
     );
 
     let mut options = support::test_session_options(
@@ -720,36 +649,19 @@ fn overlapping_manual_pause_and_focus_loss_resumes_cleanly() {
 
     let sched = schedule(
         &[
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 10_000,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "overlap-first-down".into(),
             },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 100_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "overlap-first-up".into(),
-            },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 2,
-                kind: ActionKind::Down,
                 scheduled_us: 300_000,
                 scan_codes: smallvec::smallvec![0x16],
-                reason: "overlap-second-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 500_000,
-                scan_codes: smallvec::smallvec![0x16],
-                reason: "overlap-second-up".into(),
             },
         ],
         &[0x15, 0x16],
+        150_000,
     );
 
     let session = mock_session(sched, &held, &admission_checks, &captures, &send_calls);
@@ -829,36 +741,19 @@ fn simultaneous_stop_and_skip_during_modifier_wait() {
 
     let sched = schedule(
         &[
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "simul-first-down".into(),
             },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 1,
-                kind: ActionKind::Down,
                 scheduled_us: 200_000,
                 scan_codes: smallvec::smallvec![0x16],
-                reason: "simul-blocked-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: 1_000_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "simul-origin-up".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 1_100_000,
-                scan_codes: smallvec::smallvec![0x16],
-                reason: "simul-unattempted-up".into(),
             },
         ],
         &[0x15, 0x16],
+        1_000_000,
     );
 
     let session = mock_session(sched, &held, &admission_checks, &captures, &send_calls);
@@ -920,43 +815,24 @@ fn modifier_hold_budget_does_not_reset_on_independent_ups_and_fails_closed() {
 
     let sched = schedule(
         &[
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 0,
-                scan_codes: smallvec::smallvec![0x15, 0x16],
-                reason: "initial-downs".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Down,
-                scheduled_us: 20_000,
-                scan_codes: smallvec::smallvec![0x17],
-                reason: "blocked-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: 40_000,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "independent-up-1".into(),
             },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 70_000,
+            OnsetChordInput {
+                source_action_index: 1,
+                scheduled_us: 20_000,
                 scan_codes: smallvec::smallvec![0x16],
-                reason: "independent-up-2".into(),
             },
-            KeyActionInput {
-                source_action_index: 4,
-                kind: ActionKind::Up,
-                scheduled_us: 500_000,
+            OnsetChordInput {
+                source_action_index: 2,
+                scheduled_us: 80_000,
                 scan_codes: smallvec::smallvec![0x17],
-                reason: "unattempted-up".into(),
             },
         ],
         &[0x15, 0x16, 0x17],
+        100_000,
     );
 
     let mut options = support::test_session_options(
@@ -970,7 +846,7 @@ fn modifier_hold_budget_does_not_reset_on_independent_ups_and_fails_closed() {
     );
     options.profile = DispatchProfile::MockTest;
     options.focus.require_focus = true;
-    options.wait.modifier_hold_timeout_us = 80_000;
+    options.wait.modifier_hold_timeout_us = 120_000;
 
     let checks = Arc::clone(&admission_checks);
     let held_flag = Arc::clone(&held);
@@ -1002,8 +878,8 @@ fn modifier_hold_budget_does_not_reset_on_independent_ups_and_fails_closed() {
 
     wait_until(
         Duration::from_secs(3),
-        || !captured_packets(&captures).is_empty(),
-        "initial Down dispatched",
+        || captured_packets(&captures).len() >= 2,
+        "initial staggered Downs dispatched",
     );
 
     held.store(true, Ordering::Release);
@@ -1049,36 +925,19 @@ fn modifier_hold_release_before_timeout_succeeds_after_intermediate_ups() {
 
     let sched = schedule(
         &[
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "initial-down".into(),
             },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 1,
-                kind: ActionKind::Down,
                 scheduled_us: 20_000,
                 scan_codes: smallvec::smallvec![0x16],
-                reason: "blocked-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: 40_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "independent-up".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 200_000,
-                scan_codes: smallvec::smallvec![0x16],
-                reason: "final-up".into(),
             },
         ],
         &[0x15, 0x16],
+        60_000,
     );
 
     let mut options = support::test_session_options(
@@ -1177,23 +1036,13 @@ fn modifier_hold_rearms_after_pause_resume() {
     fault_script.send_input_capture = Some(Arc::clone(&captures));
 
     let sched = schedule(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 10_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "held-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 300_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "held-up".into(),
-            },
-        ],
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 10_000,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        290_000,
     );
 
     let mut options = support::test_session_options(
@@ -1277,23 +1126,13 @@ fn quit_concurrent_with_modifier_timeout_honors_quit() {
 
     let admission_checks = Arc::new(AtomicUsize::new(0));
     let sched = schedule(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 10_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "held-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 200_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "held-up".into(),
-            },
-        ],
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 10_000,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        190_000,
     );
 
     let mut options = support::test_session_options(
@@ -1370,23 +1209,13 @@ fn skip_concurrent_with_modifier_timeout_honors_skip() {
 
     let admission_checks = Arc::new(AtomicUsize::new(0));
     let sched = schedule(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 10_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "held-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 200_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "held-up".into(),
-            },
-        ],
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 10_000,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        190_000,
     );
 
     let mut options = support::test_session_options(

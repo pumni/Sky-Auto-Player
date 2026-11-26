@@ -34,7 +34,7 @@ use sink_event_log::read_log_window_status;
 use acceptance_limits::*;
 pub(super) use entrypoint::main;
 use generation_stress::{attach_sink_window_provenance, generation_stress_scenario_plan, healthy_generation_qualification, production_visibility_qualification};
-use scenarios::{action, expected_physical_keys, scenario_plan_for_settings};
+use scenarios::{expected_physical_keys, onset, scenario_plan_for_settings};
 #[cfg(test)]
 use scenarios::{acceptance_min_hold_us, scenario_plan};
 use arguments::{CalibrationPlacement, ParsedCommand, RunArgs, Scenario, parse_args};
@@ -128,28 +128,21 @@ struct ReadyRecord {
 #[derive(Debug, Clone, PartialEq, Eq)] enum DrainResult { Pass(Vec<EventRecord>), Fail(String, Vec<EventRecord>), Inconclusive(String) }
 #[derive(Debug, Clone)]
 struct ScenarioPlan {
-    schedule: sky_dispatch_core::model::RuntimeSchedule, profile: Option<InstrumentKeyProfileSpec>,
+    schedule: sky_dispatch_core::model::OnsetPlan, profile: Option<InstrumentKeyProfileSpec>,
     expected_down_slots: Vec<usize>, expected_up_slots: Vec<usize>, allow_unpaired_cleanup_ups: bool, expected_authored_up_slots: Vec<usize>, expected_safety_up_slots: Vec<usize>,
 }
 fn authored_timestamp_group_projection(
-    schedule: &sky_dispatch_core::model::RuntimeSchedule,
+    schedule: &sky_dispatch_core::model::OnsetPlan,
 ) -> Vec<Value> {
     let mut groups = BTreeMap::<u64, (u16, u16, Vec<u32>, Vec<u32>)>::new();
-    for chord in &schedule.down_chords {
-        for intent in &chord.intents {
-            let bit = 1u16 << intent.key_slot;
-            let group = groups.entry(chord.scheduled_us).or_default();
-            group.1 |= bit;
-            group.2.push(intent.source_action_index);
-            let up_group = groups.entry(intent.paired_up_offset_us).or_default();
-            up_group.0 |= bit;
-            up_group.3.push(intent.paired_up_source_action_index);
-        }
-    }
-    for up in &schedule.unmatched_ups {
-        let group = groups.entry(up.scheduled_us).or_default();
-        group.0 |= 1u16 << up.key_slot;
-        group.3.push(up.source_action_index);
+    for chord in &schedule.chords {
+        let group = groups.entry(chord.scheduled_us).or_default();
+        group.1 |= chord.key_mask;
+        group.2.push(chord.source_action_index);
+        let nominal_up_us = chord.scheduled_us.saturating_add(schedule.hold_us);
+        let up_group = groups.entry(nominal_up_us).or_default();
+        up_group.0 |= chord.key_mask;
+        up_group.3.push(chord.source_action_index);
     }
     groups
         .into_iter()
@@ -491,14 +484,13 @@ fn run_windows(args: RunArgs) -> i32 {
     let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots); let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
     let active_cleanup_key_mask = plan
         .schedule
-        .down_chords
+        .chords
         .first()
-        .and_then(|chord| chord.intents.first())
-        .map(|intent| 1_u16 << intent.key_slot)
+        .map(|chord| chord.key_mask & chord.key_mask.wrapping_neg())
         .unwrap_or(0);
     let (sink_expected_down, sink_expected_up) = expected_sink_physical_keys(args.scenario, plan.profile.as_ref(), &expected_down, &expected_up);
     let authored_timestamp_group_targets = authored_timestamp_group_projection(&plan.schedule);
-    let authored_timestamp_group_count = plan.schedule.authored_timestamp_group_count;
+    let authored_timestamp_group_count = authored_timestamp_group_targets.len();
     let down_generation_count = plan.schedule.generation_count;
     let (mut options, modifier_query_count, modifier_held_latch) =
         match modifier_guard::native_session_options(

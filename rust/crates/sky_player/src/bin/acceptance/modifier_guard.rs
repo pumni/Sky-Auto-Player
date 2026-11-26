@@ -78,7 +78,7 @@ pub(super) fn query_for_scenario(
 }
 
 pub(super) fn native_session_options(
-    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    schedule: sky_dispatch_core::model::OnsetPlan,
     profile: Option<InstrumentKeyProfileSpec>,
     timing_margin_us: u64,
     scenario: Scenario,

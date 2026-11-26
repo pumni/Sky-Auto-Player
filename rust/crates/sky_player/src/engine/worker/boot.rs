@@ -1,7 +1,6 @@
 #[cfg(any(test, feature = "test-support"))]
 use super::super::create_mock_backend;
 mod epoch;
-mod prepare_diagnostics;
 mod startup_admission;
 #[cfg(test)]
 use startup_admission::finalize_admission_failure;
@@ -26,7 +25,6 @@ use super::{
 };
 use crate::engine::config::StartupCalibrationPlacement;
 use epoch::compute_playback_epoch;
-use prepare_diagnostics::record_unmatched_up_prepare_diagnostics;
 use startup_calibration::{
     StartupCalibrationMeasurement, apply_startup_calibration_result, measure_startup_calibration,
 };
@@ -298,27 +296,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             );
         }
     };
-    if let Err(error) = record_unmatched_up_prepare_diagnostics(
-        &prepared_schedule,
-        &telemetry,
-        || {
-            startup_checkpoint(
-                shared,
-                config.focus.require_focus && schedule_has_down,
-                StartupCheckpoint::PrepareDiagnosticChunk,
-                #[cfg(any(test, feature = "test-support"))]
-                startup_hook,
-            )
-        },
-        #[cfg(any(test, feature = "test-support"))]
-        startup_hook,
-    ) {
-        return admission_failure(
-            &mut backend,
-            metrics,
-            format!("unmatched Up Prepare diagnostics failed: {error}"),
-        );
-    }
     let scheduler =
         sky_dispatch_core::executor::DispatchExecutor::from_prepared_schedule(prepared_schedule);
     #[cfg(any(test, feature = "test-support"))]

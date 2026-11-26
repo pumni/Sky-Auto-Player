@@ -4,7 +4,8 @@
 //! staging, sender journal, mock transport completion, and executor commit.
 //! Fixture construction and deadline waits are outside that window.
 
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::executor::PreparedChord;
+use sky_dispatch_core::model::OnsetChordInput;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::input::{PHYSICAL_INSTRUMENT_SCAN_CODES, PhysicalPacket};
@@ -80,13 +81,11 @@ fn disable_counting() -> u64 {
     ALLOC_COUNT.load(Ordering::SeqCst)
 }
 
-fn action(index: u32, kind: ActionKind, scheduled_us: u64, scan_codes: &[u16]) -> KeyActionInput {
-    KeyActionInput {
+fn chord(index: u32, scheduled_us: u64, scan_codes: &[u16]) -> OnsetChordInput {
+    OnsetChordInput {
         source_action_index: index,
-        kind,
         scheduled_us,
         scan_codes: scan_codes.iter().copied().collect(),
-        reason: Arc::from("production noalloc fixture"),
     }
 }
 
@@ -106,7 +105,7 @@ fn stage_and_dispatch(
     epoch: QpcTicks,
     now: QpcTicks,
     up_mask: u16,
-    down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
+    down_chord: Option<PreparedChord>,
 ) -> StagedDispatchOutcome {
     let elapsed = now.as_u64().saturating_sub(epoch.as_u64());
     let candidate = harness
@@ -167,7 +166,7 @@ fn production_verified_cleanup_resume_fixture() -> (
             up_mask,
             down_chord,
             timing_window,
-        } => (up_mask, down_chord.map(Into::into), timing_window),
+        } => (up_mask, down_chord, timing_window),
         decision => panic!("expected initial production Down, got {decision:?}"),
     };
     assert_eq!(up_mask, 0);
@@ -213,13 +212,10 @@ fn production_staged_worker_1_5_and_15_key_chords_no_alloc() {
     let clock = clock();
 
     for width in [1_usize, 5, 15] {
-        let chord = &PHYSICAL_INSTRUMENT_SCAN_CODES[..width];
+        let keys = &PHYSICAL_INSTRUMENT_SCAN_CODES[..width];
         let key_mask = (1_u16 << width) - 1;
-        let actions = [
-            action(0, ActionKind::Down, 0, chord),
-            action(1, ActionKind::Up, 20_000, chord),
-        ];
-        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let chords = [chord(0, 0, keys)];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
         let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
         harness
             .attach_executor_for_test()
@@ -246,13 +242,7 @@ fn production_staged_worker_1_5_and_15_key_chords_no_alloc() {
                 .checked_add(qpc_duration(clock, 17_167))
                 .expect("H floor"),
         );
-        let authored_up = QpcTicks::from_raw(
-            epoch
-                .as_u64()
-                .checked_add(qpc_duration(clock, 20_000))
-                .expect("authored Up target"),
-        );
-        wait_until(hold_floor.max(authored_up));
+        wait_until(hold_floor);
 
         let up_now = clock.now().expect("Up pre-call QPC");
         enable_counting();
@@ -281,13 +271,8 @@ fn production_staged_worker_mixed_to_up_prefix_no_alloc() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundOverrideReset;
     let clock = clock();
-    let actions = [
-        action(0, ActionKind::Down, 0, &[0x15]),
-        action(1, ActionKind::Up, 20_000, &[0x15]),
-        action(2, ActionKind::Down, 20_000, &[0x16]),
-        action(3, ActionKind::Up, 40_000, &[0x16]),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [chord(0, 0, &[0x15]), chord(1, 17_167, &[0x16])];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     harness.configure_focus_owner_for_test(1, 101);
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0, 0]);
     harness
@@ -350,7 +335,7 @@ fn production_staged_worker_mixed_to_up_prefix_no_alloc() {
     assert_eq!(
         harness
             .current_executor_chord_for_test()
-            .map(|chord| chord.down_mask),
+            .map(|chord| chord.key_mask),
         Some(2),
         "the effective Up prefix must leave the Down onset pending"
     );
@@ -371,13 +356,8 @@ fn production_staged_worker_mixed_up_down_packet_no_alloc() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
     let _foreground_reset = ForegroundOverrideReset;
     let clock = clock();
-    let actions = [
-        action(0, ActionKind::Down, 0, &[0x15]),
-        action(1, ActionKind::Up, 20_000, &[0x15]),
-        action(2, ActionKind::Down, 20_000, &[0x16]),
-        action(3, ActionKind::Up, 40_000, &[0x16]),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [chord(0, 0, &[0x15]), chord(1, 17_167, &[0x16])];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     harness.configure_focus_owner_for_test(1, 101);
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0, 0]);
     harness
@@ -453,7 +433,7 @@ fn lifecycle_verified_cleanup_resume_dispatches_without_allocating() {
                 up_mask,
                 down_chord,
                 timing_window,
-            } => (up_mask, down_chord.map(Into::into), timing_window),
+            } => (up_mask, down_chord, timing_window),
             other => panic!("expected immediate authored Send decision, got {other:?}"),
         };
         let allocations = disable_counting();
@@ -489,4 +469,108 @@ fn lifecycle_verified_cleanup_resume_dispatches_without_allocating() {
     let packets = packets.lock().expect("packet capture");
     assert_eq!(packets.len(), 1, "Resume performs one immediate mock send");
     assert_eq!(packets[0].0, PhysicalPacket::new(0, 1));
+}
+
+#[test]
+fn production_blocked_same_key_repeat_wait_and_replan_no_alloc() {
+    use sky_dispatch_core::executor::DispatchDecision;
+
+    let _lock = TEST_LOCK.lock();
+    let clock = clock();
+    let chords = [chord(0, 0, &[0x15]), chord(1, 17_167, &[0x15])];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0, 0, 0]);
+    harness
+        .attach_executor_for_test()
+        .expect("executor invariants");
+    let epoch = reanchor_in_the_past(&mut harness, clock);
+
+    // 1. Dispatch first Down on slot 0.
+    let now = clock.now().expect("first Down QPC");
+    let first_chord = harness.current_executor_chord_for_test();
+    let outcome = stage_and_dispatch(&mut harness, epoch, now, 0, first_chord);
+    assert!(matches!(outcome, StagedDispatchOutcome::Dispatched));
+
+    // 2. While slot 0 is still held (before completion + H), the same-key
+    //    repeat is blocked and evaluate_at must return Wait without allocating.
+    let blocked_now = clock.now().expect("blocked evaluation QPC");
+    enable_counting();
+    let blocked_decision = harness
+        .evaluate_live_scheduler_for_test(blocked_now, epoch)
+        .expect("blocked scheduler evaluation");
+    let wait_allocations = disable_counting();
+    assert_eq!(
+        wait_allocations, 0,
+        "blocked same-key Wait evaluation allocated"
+    );
+    let DispatchDecision::Wait { deadline_qpc } = blocked_decision else {
+        panic!("expected blocked Wait before H elapses, got {blocked_decision:?}");
+    };
+
+    // 3. Wait until the completion-anchored release deadline, then evaluate,
+    //    stage, and dispatch Up-only (repeat Down stays blocked until Up commits).
+    wait_until(deadline_qpc);
+    let up_now = clock.now().expect("Up release QPC");
+    enable_counting();
+    let up_decision = harness
+        .evaluate_live_scheduler_for_test(up_now, epoch)
+        .expect("Up scheduler evaluation");
+    let (up_mask, up_down, up_window) = match up_decision {
+        DispatchDecision::Send {
+            up_mask,
+            down_chord,
+            timing_window,
+        } => (up_mask, down_chord, timing_window),
+        other => panic!("expected Up-only Send while repeat is blocked, got {other:?}"),
+    };
+    let up_candidate = harness
+        .stage_candidate_with_scheduler_window_for_test(up_mask, up_down, up_window)
+        .expect("stage Up-only candidate")
+        .expect("Up-only candidate");
+    harness.set_mock_sender_start_qpc_for_test(up_now);
+    let up_outcome = harness.dispatch_staged_candidate_for_test(up_candidate, false);
+    let up_allocations = disable_counting();
+    assert_eq!(
+        up_allocations, 0,
+        "blocked-repeat Up-only dispatch allocated"
+    );
+    assert_eq!(up_mask, 1);
+    assert!(up_down.is_none());
+    assert!(matches!(up_outcome, StagedDispatchOutcome::Dispatched));
+
+    // 4. Immediately after Up commits, fresh scheduler evaluation unblocks the
+    //    repeat Down with zero allocations.
+    let repeat_now = clock.now().expect("repeat Down QPC");
+    enable_counting();
+    let repeat_decision = harness
+        .evaluate_live_scheduler_for_test(repeat_now, epoch)
+        .expect("unblocked repeat evaluation");
+    let (rep_up, rep_down, rep_window) = match repeat_decision {
+        DispatchDecision::Send {
+            up_mask,
+            down_chord,
+            timing_window,
+        } => (up_mask, down_chord, timing_window),
+        other => panic!("expected unblocked repeat Down Send, got {other:?}"),
+    };
+    let rep_candidate = harness
+        .stage_candidate_with_scheduler_window_for_test(rep_up, rep_down, rep_window)
+        .expect("stage repeat Down candidate")
+        .expect("repeat Down candidate");
+    harness.set_mock_sender_start_qpc_for_test(repeat_now);
+    let rep_outcome = harness.dispatch_staged_candidate_for_test(rep_candidate, false);
+    let rep_allocations = disable_counting();
+    assert_eq!(
+        rep_allocations, 0,
+        "unblocked repeat Down dispatch allocated"
+    );
+    assert_eq!(rep_up, 0);
+    assert_eq!(rep_down.map(|c| c.key_mask), Some(1));
+    assert!(matches!(rep_outcome, StagedDispatchOutcome::Dispatched));
+
+    let packets = packets.lock().expect("packet capture");
+    assert_eq!(packets.len(), 3);
+    assert_eq!(packets[0].0, PhysicalPacket::new(0, 1));
+    assert_eq!(packets[1].0, PhysicalPacket::new(1, 0));
+    assert_eq!(packets[2].0, PhysicalPacket::new(0, 1));
 }

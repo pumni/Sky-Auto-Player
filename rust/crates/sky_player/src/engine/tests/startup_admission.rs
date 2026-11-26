@@ -119,24 +119,14 @@ fn worker_final_gate_rechecks_retained_process_identity_before_down() {
             0,
         ),
     ] {
-        let schedule = sky_dispatch_core::compile::compile_runtime_intents(
-            &[
-                KeyActionInput {
-                    source_action_index: 10,
-                    kind: ActionKind::Down,
-                    scheduled_us: 0,
-                    scan_codes: smallvec::smallvec![0x15],
-                    reason: "session-owner-final-proof-down".into(),
-                },
-                KeyActionInput {
-                    source_action_index: 11,
-                    kind: ActionKind::Up,
-                    scheduled_us: 40_000,
-                    scan_codes: smallvec::smallvec![0x15],
-                    reason: "session-owner-final-proof-up".into(),
-                },
-            ],
+        let schedule = sky_dispatch_core::plan::build_onset_plan(
+            &[OnsetChordInput {
+                source_action_index: 10,
+                scheduled_us: 0,
+                scan_codes: smallvec::smallvec![0x15],
+            }],
             &[0x15],
+            40_000,
         )
         .expect("valid identity-gated schedule");
         let send_call_count = Arc::new(AtomicU64::new(0));
@@ -188,24 +178,14 @@ fn worker_final_gate_rechecks_retained_process_identity_before_down() {
 #[cfg(feature = "test-support")]
 #[test]
 fn dropped_session_owner_leaves_watchdog_to_release_then_drops_target_binding() {
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 20,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "owner-unwind-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 21,
-                kind: ActionKind::Up,
-                scheduled_us: 5_000_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "owner-unwind-later-up".into(),
-            },
-        ],
+    let schedule = sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 20,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        5_000_000,
     )
     .expect("valid owner-unwind schedule");
     let send_call_count = Arc::new(AtomicU64::new(0));
@@ -300,24 +280,14 @@ fn musical_up_only_rechecks_process_identity_and_cleanup_remains_fail_closed() {
     let _foreground_reset = ForegroundOverrideReset;
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 30,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "up-only-process-proof-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 31,
-                kind: ActionKind::Up,
-                scheduled_us: 40_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "up-only-process-proof-up".into(),
-            },
-        ],
+    let schedule = sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 30,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        40_000,
     )
     .expect("valid Up-only proof schedule");
     let send_call_count = Arc::new(AtomicU64::new(0));
@@ -386,24 +356,14 @@ fn terminal_tracked_cleanup_uses_owner_proof_without_foreground_requirement() {
     let _foreground_reset = ForegroundOverrideReset;
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 40,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "terminal-owner-proof-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 41,
-                kind: ActionKind::Up,
-                scheduled_us: 5_000_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "terminal-owner-proof-up".into(),
-            },
-        ],
+    let schedule = sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 40,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        5_000_000,
     )
     .expect("valid terminal cleanup schedule");
     let send_call_count = Arc::new(AtomicU64::new(0));
@@ -450,25 +410,15 @@ fn terminal_tracked_cleanup_uses_owner_proof_without_foreground_requirement() {
 }
 
 #[cfg(feature = "test-support")]
-fn ownership_review_schedule(up_us: u64) -> sky_dispatch_core::model::RuntimeSchedule {
-    sky_dispatch_core::compile::compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 700,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "ownership-review-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 701,
-                kind: ActionKind::Up,
-                scheduled_us: up_us,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "ownership-review-up".into(),
-            },
-        ],
+fn ownership_review_schedule(hold_us: u64) -> sky_dispatch_core::model::OnsetPlan {
+    sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 700,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        hold_us,
     )
     .expect("valid ownership review schedule")
 }
@@ -1052,24 +1002,14 @@ fn stop_skip_panic_and_suspend_interrupt_staged_long_wait_before_input() {
         ("panic", EnginePollStatus::Error),
         ("suspend", EnginePollStatus::SystemSuspended),
     ];
-    let long_wait_schedule = sky_dispatch_core::compile::compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 710,
-                kind: ActionKind::Down,
-                scheduled_us: 1_000_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "long-wait-control-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 711,
-                kind: ActionKind::Up,
-                scheduled_us: 2_000_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "long-wait-control-up".into(),
-            },
-        ],
+    let long_wait_schedule = sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 710,
+            scheduled_us: 1_000_000,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        1_000_000,
     )
     .expect("valid long-wait control schedule");
 
@@ -1117,7 +1057,7 @@ fn stop_skip_panic_and_suspend_interrupt_staged_long_wait_before_input() {
 #[test]
 fn production_require_focus_arm_rejects_missing_failed_wrong_or_late_owner_proof() {
     fn production_session() -> NativeDispatchSession {
-        let schedule = sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15])
+        let schedule = sky_dispatch_core::plan::build_onset_plan(&[], &[0x15], 20_000)
             .expect("empty production admission schedule");
         let mut options = test_session_options(schedule, 1, BackendConfig::Production);
         options.focus.require_focus = true;
@@ -1186,7 +1126,7 @@ fn production_require_focus_arm_rejects_missing_failed_wrong_or_late_owner_proof
 #[cfg(all(feature = "test-support", windows))]
 #[test]
 fn production_require_focus_arm_accepts_exact_continuous_bound_owner() {
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15])
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&[], &[0x15], 20_000)
         .expect("empty production admission schedule");
     let mut options = test_session_options(schedule, 1, BackendConfig::Production);
     options.focus.require_focus = true;
@@ -1217,7 +1157,7 @@ fn production_require_focus_arm_accepts_exact_continuous_bound_owner() {
 #[cfg(feature = "test-support")]
 #[test]
 fn zero_release_obligation_needs_no_owner_or_safety_syscall() {
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&[], &[0x15])
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&[], &[0x15], 20_000)
         .expect("empty schedule is valid");
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();
@@ -1256,38 +1196,21 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
         }
     }
 
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(
+    let schedule = sky_dispatch_core::plan::build_onset_plan(
         &[
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "focus-restore-down".to_string().into(),
             },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 1,
-                kind: ActionKind::Down,
                 scheduled_us: 10_000,
                 scan_codes: smallvec::smallvec![0x16],
-                reason: "focus-restore-next-down".to_string().into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: 300_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "focus-restore-first-up".to_string().into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 320_000,
-                scan_codes: smallvec::smallvec![0x16],
-                reason: "focus-restore-next-up".to_string().into(),
             },
         ],
         &[0x15, 0x16],
+        300_000,
     )
     .expect("valid focus-restore schedule");
     let force_inconclusive_probe = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -1446,114 +1369,6 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
 }
 
 #[cfg(all(feature = "test-support", windows))]
-fn stale_metadata_race_schedule(
-    stale_packet_count: usize,
-) -> sky_dispatch_core::model::RuntimeSchedule {
-    let mut actions = Vec::with_capacity(stale_packet_count + 4);
-    actions.push(KeyActionInput {
-        source_action_index: 0,
-        kind: ActionKind::Down,
-        scheduled_us: 100_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "late-control-initial-down".into(),
-    });
-    actions.push(KeyActionInput {
-        source_action_index: 1,
-        kind: ActionKind::Up,
-        scheduled_us: 150_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "late-control-initial-up".into(),
-    });
-    for index in 0..stale_packet_count {
-        actions.push(KeyActionInput {
-            source_action_index: u32::try_from(index + 2).expect("stale source index"),
-            kind: ActionKind::Up,
-            scheduled_us: 200_000 + index as u64,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "late-control-stale-up".into(),
-        });
-    }
-    let final_down_index = u32::try_from(stale_packet_count + 2).expect("final Down index");
-    actions.push(KeyActionInput {
-        source_action_index: final_down_index,
-        kind: ActionKind::Down,
-        scheduled_us: 500_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "late-control-final-down".into(),
-    });
-    actions.push(KeyActionInput {
-        source_action_index: final_down_index + 1,
-        kind: ActionKind::Up,
-        scheduled_us: 550_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "late-control-final-up".into(),
-    });
-    sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
-        .expect("stale metadata race schedule")
-}
-
-#[cfg(all(feature = "test-support", windows))]
-fn post_wake_stale_metadata_schedule(
-    stale_packet_count: usize,
-) -> sky_dispatch_core::model::RuntimeSchedule {
-    let mut actions = Vec::with_capacity(stale_packet_count + 6);
-    actions.push(KeyActionInput {
-        source_action_index: 0,
-        kind: ActionKind::Down,
-        scheduled_us: 5_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "post-wake-initial-down".into(),
-    });
-    actions.push(KeyActionInput {
-        source_action_index: 1,
-        kind: ActionKind::Up,
-        scheduled_us: 10_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "post-wake-initial-up".into(),
-    });
-    actions.push(KeyActionInput {
-        source_action_index: 2,
-        kind: ActionKind::Down,
-        scheduled_us: 14_000,
-        scan_codes: smallvec::smallvec![0x16],
-        reason: "post-wake-intermediate-down".into(),
-    });
-    actions.push(KeyActionInput {
-        source_action_index: 3,
-        kind: ActionKind::Up,
-        scheduled_us: 14_500,
-        scan_codes: smallvec::smallvec![0x16],
-        reason: "post-wake-intermediate-up".into(),
-    });
-    for index in 0..stale_packet_count {
-        actions.push(KeyActionInput {
-            source_action_index: u32::try_from(index + 4).expect("stale source index"),
-            kind: ActionKind::Up,
-            scheduled_us: 15_000 + index as u64,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "post-wake-stale-up".into(),
-        });
-    }
-    let final_down_index = u32::try_from(stale_packet_count + 4).expect("final Down index");
-    actions.push(KeyActionInput {
-        source_action_index: final_down_index,
-        kind: ActionKind::Down,
-        scheduled_us: 200_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "post-wake-final-down".into(),
-    });
-    actions.push(KeyActionInput {
-        source_action_index: final_down_index + 1,
-        kind: ActionKind::Up,
-        scheduled_us: 210_000,
-        scan_codes: smallvec::smallvec![0x15],
-        reason: "post-wake-final-up".into(),
-    });
-    sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
-        .expect("32 stale metadata post-wake schedule")
-}
-
-#[cfg(all(feature = "test-support", windows))]
 #[test]
 fn actual_worker_wait_path_drops_waitable_timer_after_session_exit() {
     let timer_context = sky_dispatch_win32::timer::test_support::new_counters();
@@ -1657,71 +1472,6 @@ fn startup_boundary_publishes_after_worker_startup() {
 
 #[cfg(all(feature = "test-support", windows))]
 #[test]
-fn actual_b_worker_honors_late_quit_after_32_33_and_10k_stale_metadata() {
-    for stale_count in [32usize, 33, 10_000] {
-        let (session, hook, send_calls) = checkpointed_session(
-            stale_metadata_race_schedule(stale_count),
-            StartupCheckpoint::PrepareDiagnosticChunk,
-            1,
-            false,
-        );
-        session.arm(0).expect("start actual B worker");
-        assert!(
-            hook.wait_for_startup_checkpoint(Duration::from_secs(5)),
-            "stale packet count {stale_count}"
-        );
-        assert_eq!(hook.unmatched_up_prepare_count.load(Ordering::SeqCst), 32);
-        assert_eq!(send_calls.load(Ordering::Acquire), 0);
-
-        session.quit().expect("late quit accepted");
-        hook.release_startup_checkpoint();
-        assert!(session.join(Duration::from_secs(5)).expect("B worker join"));
-        let snapshot = session.snapshot();
-        assert_eq!(snapshot.status, EnginePollStatus::Quit.as_str());
-        assert_eq!(snapshot.outcome.as_deref(), Some("quit"));
-        assert_eq!(hook.unmatched_up_prepare_count.load(Ordering::SeqCst), 32);
-        assert_eq!(
-            send_calls.load(Ordering::Acquire),
-            0,
-            "final Down must not send after late quit with {stale_count} stale packets"
-        );
-    }
-}
-
-#[cfg(all(feature = "test-support", windows))]
-#[test]
-fn actual_b_worker_records_stale_diagnostics_during_prepare_and_continues_dispatch() {
-    let hook = Arc::new(StartupOrderingHook::default());
-    let send_calls = Arc::new(AtomicU64::new(0));
-    let mut fault_script = FaultInjectionScript::none();
-    fault_script.send_call_count = Some(Arc::clone(&send_calls));
-    let mut options = test_session_options(
-        post_wake_stale_metadata_schedule(1),
-        1,
-        BackendConfig::Mock {
-            latency_base_us: 0,
-            latency_per_key_us: 0,
-            fault_script,
-        },
-    );
-    options.wait.test_spin_threshold_us = None;
-    options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
-    options.startup_ordering_hook = Some(Arc::clone(&hook));
-    let session = NativeDispatchSession::new(options).expect("actual B worker session");
-
-    session.arm(0).expect("worker arm");
-    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
-    assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
-    assert_eq!(hook.unmatched_up_prepare_count.load(Ordering::Acquire), 1);
-    assert_eq!(send_calls.load(Ordering::Acquire), 6);
-    assert_eq!(hook.down_sender_attempt_count(), 3);
-    let (_, authored_target, packet_not_before, _) = hook.last_down_sender_qpc_evidence();
-    assert!(authored_target.is_some());
-    assert!(packet_not_before.is_some());
-}
-
-#[cfg(all(feature = "test-support", windows))]
-#[test]
 fn first_down_committed_checkpoint_follows_successful_backend_send() {
     use super::MockSendInputCapture;
 
@@ -1788,7 +1538,6 @@ fn prepared_schedule_passes_session_admission_and_worker_arm_without_remateriali
     let prepared = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc.frequency_hz(),
-        500,
         0,
     )
     .expect("Prepare materializes the physical schedule");
@@ -1827,13 +1576,12 @@ fn prepared_schedule_passes_session_admission_and_worker_arm_without_remateriali
 
 #[test]
 fn prepared_schedule_cancellation_completes_before_session_construction() {
-    let schedule = large_startup_materialization_schedule(5_000);
+    let schedule = large_startup_materialization_schedule(25_000);
     let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
     let mut checkpoints = 0;
     let result = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare_with_cancellation(
         &schedule,
         qpc.frequency_hz(),
-        500,
         schedule.compile_memory.caller_retained_capacity_bytes,
         || {
             checkpoints += 1;
@@ -1855,40 +1603,23 @@ fn prepared_schedule_cancellation_completes_before_session_construction() {
 #[cfg(all(feature = "test-support", windows))]
 #[test]
 fn actual_b_worker_publishes_interrupted_wait_before_resumed_packet_dispatch() {
-    use sky_dispatch_core::compile::compile_runtime_intents;
+    use sky_dispatch_core::plan::build_onset_plan;
 
-    let schedule = compile_runtime_intents(
+    let schedule = build_onset_plan(
         &[
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 150_000,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "interrupted-physical-wait-down".into(),
             },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 190_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "interrupted-physical-wait-up".into(),
-            },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 2,
-                kind: ActionKind::Down,
                 scheduled_us: 250_000,
                 scan_codes: smallvec::smallvec![0x16],
-                reason: "interrupted-physical-wait-resumed-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 300_000,
-                scan_codes: smallvec::smallvec![0x16],
-                reason: "interrupted-physical-wait-resumed-up".into(),
             },
         ],
         &[0x15, 0x16],
+        40_000,
     )
     .expect("interrupted-wait regression schedule");
     let hook = Arc::new(StartupOrderingHook::default());
@@ -1991,64 +1722,32 @@ fn actual_b_worker_publishes_interrupted_wait_before_resumed_packet_dispatch() {
 #[cfg(all(feature = "test-support", windows))]
 #[test]
 fn actual_b_worker_timestamp_hook_keeps_mixed_floor_held_down_targets_distinct() {
-    let actions = [
-        KeyActionInput {
+    let chords = [
+        OnsetChordInput {
             source_action_index: 0,
-            kind: ActionKind::Down,
             scheduled_us: 5_000,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "timestamp-floor-initial-down".into(),
         },
-        KeyActionInput {
+        OnsetChordInput {
             source_action_index: 1,
-            kind: ActionKind::Down,
             scheduled_us: 6_000,
             scan_codes: smallvec::smallvec![0x16],
-            reason: "timestamp-floor-secondary-down".into(),
         },
-        KeyActionInput {
-            source_action_index: 2,
-            kind: ActionKind::Up,
-            scheduled_us: 25_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "timestamp-floor-initial-up".into(),
-        },
-        KeyActionInput {
-            source_action_index: 3,
-            kind: ActionKind::Up,
-            scheduled_us: 45_000,
-            scan_codes: smallvec::smallvec![0x16],
-            reason: "timestamp-floor-mixed-up".into(),
-        },
-        KeyActionInput {
+        OnsetChordInput {
             source_action_index: 4,
-            kind: ActionKind::Down,
             scheduled_us: 45_000,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "timestamp-floor-mixed-down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 5,
-            kind: ActionKind::Up,
-            scheduled_us: 80_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "timestamp-floor-final-up".into(),
         },
     ];
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15, 0x16], 20_000)
         .expect("mixed floor-held timestamp schedule");
     assert!(
         schedule
-            .down_chords
+            .chords
             .iter()
-            .any(|chord| chord.scheduled_us == 45_000 && chord.down_mask == 0b01)
+            .any(|chord| chord.scheduled_us == 45_000 && chord.key_mask == 0b01)
     );
-    assert!(schedule.down_chords.iter().any(|chord| {
-        chord
-            .intents
-            .iter()
-            .any(|intent| intent.scan_code == 0x16 && intent.paired_up_offset_us == 45_000)
-    }));
+    assert_eq!(schedule.hold_us, 20_000);
     let hook = Arc::new(StartupOrderingHook::default());
     let mut options = test_session_options(
         schedule,
@@ -2088,29 +1787,15 @@ fn actual_b_worker_timestamp_hook_keeps_mixed_floor_held_down_targets_distinct()
 #[cfg(all(feature = "test-support", windows))]
 #[test]
 fn actual_b_worker_timestamp_hook_records_up_only_sender_provenance() {
-    let actions = [
-        KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 5_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "timestamp-up-only-initial-down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 35_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "timestamp-up-only-release".into(),
-        },
-    ];
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+    let chords = [OnsetChordInput {
+        source_action_index: 0,
+        scheduled_us: 5_000,
+        scan_codes: smallvec::smallvec![0x15],
+    }];
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15], 30_000)
         .expect("Up-only timestamp schedule");
-    assert_eq!(schedule.down_chords.len(), 1);
-    assert_eq!(
-        schedule.down_chords[0].intents[0].paired_up_offset_us,
-        35_000
-    );
+    assert_eq!(schedule.chords.len(), 1);
+    assert_eq!(schedule.hold_us, 30_000);
 
     let hook = Arc::new(StartupOrderingHook::default());
     let mut options = test_session_options(
@@ -2136,57 +1821,10 @@ fn actual_b_worker_timestamp_hook_records_up_only_sender_provenance() {
         .up_only_sender_attempt_evidence()
         .expect("Up-only sender timing evidence");
     let sender_start = sender_start.expect("sender measured pre-call QPC");
-    assert_eq!(authored_target, packet_not_before);
+    assert!(packet_not_before >= authored_target);
     assert!(sender_start >= packet_not_before);
 }
 
-#[cfg(all(feature = "test-support", windows))]
-#[test]
-fn actual_b_worker_prepare_diagnostic_matrix_has_no_runtime_stale_scan() {
-    use serde_json::json;
-
-    let mut scenarios = Vec::new();
-    for unmatched_up_count in [0usize, 1, 32, 33, 10_000] {
-        let hook = Arc::new(StartupOrderingHook::default());
-        let mut options = test_session_options(
-            post_wake_stale_metadata_schedule(unmatched_up_count),
-            1,
-            BackendConfig::Mock {
-                latency_base_us: 0,
-                latency_per_key_us: 0,
-                fault_script: FaultInjectionScript::none(),
-            },
-        );
-        options.wait.test_spin_threshold_us = None;
-        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
-        options.startup_ordering_hook = Some(Arc::clone(&hook));
-        options.telemetry.capacity = 64;
-        let session = NativeDispatchSession::new(options).expect("actual B worker session");
-        session.arm(0).expect("worker arm");
-        assert!(session.join(Duration::from_secs(10)).expect("worker join"));
-        assert_eq!(session.snapshot().outcome.as_deref(), Some("finished"));
-        assert_eq!(
-            hook.unmatched_up_prepare_count.load(Ordering::Acquire),
-            unmatched_up_count as u64
-        );
-        assert_eq!(hook.down_sender_attempt_count(), 3);
-        scenarios.push(json!({
-            "unmatched_up_count": unmatched_up_count,
-            "prepare_diagnostic_count": hook.unmatched_up_prepare_count.load(Ordering::Acquire),
-            "physical_down_attempt_count": hook.down_sender_attempt_count(),
-        }));
-    }
-
-    eprintln!(
-        "prepare_diagnostic_matrix_json={}",
-        serde_json::to_string(&json!({
-            "evidence_scope": "actual_b_worker_test_support_mock_sender",
-            "runtime_stale_scan": false,
-            "scenarios": scenarios,
-        }))
-        .expect("prepare diagnostic matrix JSON")
-    );
-}
 #[test]
 fn startup_calibration_placement_stays_before_ready_and_tracks_guard_context() {
     for (placement, guards_precede_calibration) in [

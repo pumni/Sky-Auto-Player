@@ -1,8 +1,8 @@
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use sky_app_core::song::{
-    ActionKind, ConversionMode, LegacyCompatibilityPlan, PianoPlannerOptions, PlanStatus,
-    PlannerError, SKY_SCAN_CODES, SongDecodeError, SongPlan, analyze_schedule_with_notes,
+    ConversionMode, LegacyCompatibilityPlan, PianoPlannerOptions, PlanStatus, PlannerError,
+    SKY_SCAN_CODES, SongDecodeError, SongPlan, analyze_schedule_with_notes,
     build_schedule_with_policy, build_song_plan, decode_song_json, parse_song_json,
     plan_canonical_song,
 };
@@ -137,15 +137,13 @@ fn piano_planner_golden_cases_cover_pitch_mapping_modes_and_losses() {
                 .expect("playable events have schedule");
             assert_eq!(schedule.duplicate_note_count, 0, "{}", case["name"]);
             let mut emitted = BTreeSet::new();
-            for action in &schedule.actions {
-                if action.kind == ActionKind::Down {
-                    for scan_code in &action.scan_codes {
-                        assert!(
-                            emitted.insert((action.at_us, *scan_code)),
-                            "duplicate scan/time in {}",
-                            case["name"]
-                        );
-                    }
+            for chord in &schedule.chords {
+                for scan_code in &chord.scan_codes {
+                    assert!(
+                        emitted.insert((chord.at_us, *scan_code)),
+                        "duplicate scan/time in {}",
+                        case["name"]
+                    );
                 }
             }
             let actual_pitch = serde_json::to_value(plan.target_pitch).unwrap();
@@ -153,18 +151,8 @@ fn piano_planner_golden_cases_cover_pitch_mapping_modes_and_losses() {
                 assert_eq!(actual_pitch, *expected_pitch, "{}", case["name"]);
             }
             if plan.diagnostics.authored_sustain_lost_count > 0 {
-                let down = schedule
-                    .actions
-                    .iter()
-                    .find(|action| action.kind == ActionKind::Down)
-                    .unwrap();
-                let up = schedule
-                    .actions
-                    .iter()
-                    .find(|action| action.kind == ActionKind::Up)
-                    .unwrap();
                 assert_eq!(
-                    up.at_us - down.at_us,
+                    schedule.hold_us,
                     policy().min_hold_us,
                     "authored musical sustain must not redefine Piano's physical hold"
                 );
@@ -184,10 +172,10 @@ fn piano_planner_golden_cases_cover_pitch_mapping_modes_and_losses() {
                     .count();
                 if chord_size > 1 {
                     let down = schedule
-                        .actions
+                        .chords
                         .iter()
-                        .find(|action| action.kind == ActionKind::Down && action.at_us == onset)
-                        .expect("same-onset notes share one Down action");
+                        .find(|chord| chord.at_us == onset)
+                        .expect("same-onset notes share one onset chord");
                     assert_eq!(down.scan_codes.len(), chord_size);
                 }
             }
@@ -300,10 +288,9 @@ fn same_key_repeat_conflicts_are_preserved_for_existing_risk_gates() {
     assert_eq!(plan.diagnostics.physical_timing_conflict_count, 1);
     assert_eq!(plan.physical_risk.as_ref().unwrap().severity, "high");
     let downs = schedule
-        .actions
+        .chords
         .iter()
-        .filter(|action| action.kind == ActionKind::Down)
-        .map(|action| action.at_us)
+        .map(|chord| chord.at_us)
         .collect::<Vec<_>>();
     assert_eq!(downs, [0, 1_000]);
     assert_eq!(plan.status, PlanStatus::Ready);
@@ -465,14 +452,7 @@ fn full_fifteen_key_chord_keeps_all_simultaneous_scan_codes() {
         (0..15).collect::<Vec<_>>()
     );
     assert!(plan.events.iter().all(|event| event.onset_us == 100_000));
-    let down = plan
-        .schedule
-        .as_ref()
-        .unwrap()
-        .actions
-        .iter()
-        .find(|action| action.kind == ActionKind::Down)
-        .unwrap();
+    let down = plan.schedule.as_ref().unwrap().chords.first().unwrap();
     assert_eq!(down.at_us, 100_000);
     assert_eq!(down.scan_codes, SKY_SCAN_CODES);
     assert_eq!(plan.physical_risk.as_ref().unwrap().severity, "medium");
@@ -604,13 +584,15 @@ fn piano_planner_invariants_across_boundary_pitches_and_modes() {
             }
 
             if let Some(schedule) = &plan.schedule {
-                let mut prev = 0;
-                for action in &schedule.actions {
-                    assert!(
-                        action.at_us >= prev,
-                        "action timestamps must be non-decreasing"
-                    );
-                    prev = action.at_us;
+                let mut prev = None;
+                for chord in &schedule.chords {
+                    if let Some(previous) = prev {
+                        assert!(
+                            chord.at_us > previous,
+                            "chord timestamps must be strictly increasing"
+                        );
+                    }
+                    prev = Some(chord.at_us);
                 }
             }
         }

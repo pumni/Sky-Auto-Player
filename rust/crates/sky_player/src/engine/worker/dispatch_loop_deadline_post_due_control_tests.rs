@@ -1,7 +1,5 @@
-use super::replan_timing::timing_action;
-use super::support::{
-    ActionKind, ProductionDispatchTestHarness, StagedDispatchOutcome, TimelineTicks,
-};
+use super::replan_timing::timing_chord;
+use super::support::{ProductionDispatchTestHarness, StagedDispatchOutcome, TimelineTicks};
 use std::sync::atomic::Ordering;
 #[test]
 fn due_candidate_rechecks_stop_skip_focus_and_owner_before_sender() {
@@ -18,11 +16,8 @@ fn due_candidate_rechecks_stop_skip_focus_and_owner_before_sender() {
     let _foreground_reset = ForegroundReset;
 
     for change in ["stop", "skip", "focus", "owner"] {
-        let actions = [
-            timing_action(6690, ActionKind::Down, 50_000),
-            timing_action(6691, ActionKind::Up, 500_000),
-        ];
-        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let chords = [timing_chord(6690, 50_000)];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
         let clock = harness.resources.clock;
         let epoch = clock
             .now()

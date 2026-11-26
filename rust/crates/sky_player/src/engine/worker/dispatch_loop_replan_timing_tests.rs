@@ -1,5 +1,5 @@
 use super::support::ProductionDispatchTestHarness;
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::model::OnsetChordInput;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -13,25 +13,23 @@ impl Drop for ForegroundOverrideReset {
     }
 }
 
-pub(super) fn timing_action(index: u32, kind: ActionKind, scheduled_us: u64) -> KeyActionInput {
-    KeyActionInput {
+pub(super) fn timing_chord(index: u32, scheduled_us: u64) -> OnsetChordInput {
+    OnsetChordInput {
         source_action_index: index,
-        kind,
         scheduled_us,
-        scan_codes: vec![0x15].into(),
-        reason: format!("replan-timing-{index}").into(),
+        scan_codes: smallvec::smallvec![0x15],
     }
 }
 
 pub(super) fn timing_harness_without_focus(
-    actions: &[KeyActionInput],
+    chords: &[OnsetChordInput],
     sender_latencies_us: &[u64],
 ) -> (
     ProductionDispatchTestHarness,
     crate::engine::test_support::PacketCapture,
     QpcTicks,
 ) {
-    let mut harness = ProductionDispatchTestHarness::create_harness(actions);
+    let mut harness = ProductionDispatchTestHarness::create_harness(chords);
     let epoch = harness.qpc_now_for_test().expect("test QPC epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -90,13 +88,8 @@ pub(super) fn elapsed_us(
 
 #[test]
 fn immediate_resume_worker_decision_sends_due_down_before_retired_cleanup_floor() {
-    let actions = [
-        timing_action(900, ActionKind::Down, 0),
-        timing_action(901, ActionKind::Up, 50_000),
-        timing_action(902, ActionKind::Down, 50_000),
-        timing_action(903, ActionKind::Up, 110_000),
-    ];
-    let (mut harness, packets, _) = timing_harness_without_focus(&actions, &[0]);
+    let chords = [timing_chord(900, 0), timing_chord(902, 50_000)];
+    let (mut harness, packets, _) = timing_harness_without_focus(&chords, &[0]);
     let cleanup_capture = harness.configure_mock_cleanup_emitter_for_test();
     let qpc_clock = harness.resources.clock;
     let current_qpc = harness.qpc_now_for_test().expect("current test QPC");
@@ -242,37 +235,19 @@ fn prepare_due_mixed_fallback_candidate() -> (
     crate::engine::test_support::PacketCapture,
     crate::engine::worker::StagedCandidate,
 ) {
-    let actions = [
-        KeyActionInput {
+    let chords = [
+        OnsetChordInput {
             source_action_index: 820,
-            kind: ActionKind::Down,
             scheduled_us: 0,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "mixed gate first Down".into(),
         },
-        KeyActionInput {
-            source_action_index: 821,
-            kind: ActionKind::Up,
-            scheduled_us: 20_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "mixed gate due Up".into(),
-        },
-        KeyActionInput {
+        OnsetChordInput {
             source_action_index: 822,
-            kind: ActionKind::Down,
             scheduled_us: 20_000,
             scan_codes: smallvec::smallvec![0x16],
-            reason: "mixed gate due Down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 823,
-            kind: ActionKind::Up,
-            scheduled_us: 40_000,
-            scan_codes: smallvec::smallvec![0x16],
-            reason: "mixed gate trailing Up".into(),
         },
     ];
-    let (mut harness, packets, epoch) = timing_harness_without_focus(&actions, &[0, 0]);
+    let (mut harness, packets, epoch) = timing_harness_without_focus(&chords, &[0, 0]);
     harness.configure_focus_owner_for_test(1, 101);
     harness.config.wait.supervisor_lease_timeout_us = 1_000_000;
     harness.timing.lease_timeout_ticks = harness
@@ -417,25 +392,15 @@ fn stage_scheduler_action(
 
 #[test]
 fn scheduler_selects_independent_up_before_down_and_replans_after_interrupt() {
-    let actions = [
-        timing_action(810, ActionKind::Down, 0),
-        timing_action(811, ActionKind::Up, 300_000),
-        KeyActionInput {
+    let chords = [
+        timing_chord(810, 0),
+        OnsetChordInput {
             source_action_index: 812,
-            kind: ActionKind::Down,
             scheduled_us: 600_000,
             scan_codes: smallvec::smallvec![0x16],
-            reason: "later scheduler Down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 813,
-            kind: ActionKind::Up,
-            scheduled_us: 700_000,
-            scan_codes: smallvec::smallvec![0x16],
-            reason: "later scheduler Up".into(),
         },
     ];
-    let (mut harness, packets, epoch) = timing_harness_without_focus(&actions, &[0, 0]);
+    let (mut harness, packets, epoch) = timing_harness_without_focus(&chords, &[0, 0]);
     let initial_now = harness.qpc_now_for_test().expect("initial Down QPC");
     let initial = harness
         .stage_candidate_for_test(
@@ -450,16 +415,24 @@ fn scheduler_selects_independent_up_before_down_and_replans_after_interrupt() {
         harness.dispatch_staged_candidate_for_test(initial, false),
         super::super::StagedDispatchOutcome::Dispatched
     );
+    let down_completion = packets
+        .lock()
+        .expect("initial Down packet capture")
+        .first()
+        .and_then(|(_, evidence)| evidence.completed_ticks)
+        .expect("initial Down completion evidence");
 
     let now = harness.qpc_now_for_test().expect("pre-wait QPC");
-    let up_authored_target = epoch
+    let up_hold_floor = down_completion
         .checked_add_duration(DurationTicks::from_raw(
             harness
-                .qpc_duration_from_us_for_test(300_000)
-                .expect("Up target conversion")
+                .qpc_duration_from_us_for_test(
+                    crate::engine::test_support::dispatch_harness::DISPATCH_EFFECTIVE_HOLD_US,
+                )
+                .expect("Up hold floor conversion")
                 .as_u64(),
         ))
-        .expect("Up target QPC");
+        .expect("Up hold floor QPC");
     let down_authored_target = epoch
         .checked_add_duration(DurationTicks::from_raw(
             harness
@@ -468,7 +441,7 @@ fn scheduler_selects_independent_up_before_down_and_replans_after_interrupt() {
                 .as_u64(),
         ))
         .expect("Down target QPC");
-    assert!(now < up_authored_target);
+    assert!(now < up_hold_floor);
 
     let (action, up_deadline, action_to_stage) =
         super::super::evaluate_scheduler_action_for_staging(
@@ -481,7 +454,7 @@ fn scheduler_selects_independent_up_before_down_and_replans_after_interrupt() {
         action,
         super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == up_deadline
     ));
-    assert!(up_deadline >= up_authored_target);
+    assert_eq!(up_deadline, up_hold_floor);
     assert!(up_deadline < down_authored_target);
     let first_candidate =
         stage_scheduler_action(&mut harness, up_only_send_action(action_to_stage));
@@ -567,7 +540,7 @@ fn scheduler_selects_independent_up_before_down_and_replans_after_interrupt() {
     assert_eq!(
         harness
             .current_executor_chord_for_test()
-            .map(|chord| chord.down_mask),
+            .map(|chord| chord.key_mask),
         Some(2)
     );
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
@@ -699,7 +672,7 @@ fn scheduler_reachable_mixed_modifier_fallback_trace_spans_both_gates_without_wa
     assert_eq!(
         harness
             .current_executor_chord_for_test()
-            .map(|chord| chord.down_mask),
+            .map(|chord| chord.key_mask),
         Some(2),
         "the blocked Down remains pending and receives no onset before admission"
     );

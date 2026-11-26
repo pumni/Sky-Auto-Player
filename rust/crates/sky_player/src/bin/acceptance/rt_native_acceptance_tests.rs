@@ -320,8 +320,8 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
     assert_eq!(pause_active.expected_authored_up_slots, vec![0]);
     assert_eq!(pause_active.expected_safety_up_slots, vec![0]);
     assert!(pause_active.allow_unpaired_cleanup_ups);
-    assert_eq!(pause_active.schedule.down_chords[0].scheduled_us, 50_000);
-    assert_eq!(pause_active.schedule.down_chords[1].scheduled_us, 600_000);
+    assert_eq!(pause_active.schedule.chords[0].scheduled_us, 50_000);
+    assert_eq!(pause_active.schedule.chords[1].scheduled_us, 600_000);
 
     let suspend = scenario_plan(Scenario::SuspendResume, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
     assert_eq!(suspend.expected_down_slots, vec![0, 1]);
@@ -335,12 +335,8 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
     assert_eq!(ambiguous.expected_up_slots, vec![0, 0, 1]);
     assert_eq!(ambiguous.expected_authored_up_slots, vec![0]);
     assert_eq!(ambiguous.expected_safety_up_slots, vec![0, 1]);
-    assert_eq!(ambiguous.schedule.down_chords[1].scheduled_us, 100_000);
-    assert_eq!(ambiguous.schedule.down_chords[1].down_mask, 0b10);
-    assert_eq!(
-        ambiguous.schedule.down_chords[0].intents[0].paired_up_offset_us,
-        100_000
-    );
+    assert_eq!(ambiguous.schedule.chords[1].scheduled_us, 50_000 + ambiguous.schedule.hold_us);
+    assert_eq!(ambiguous.schedule.chords[1].key_mask, 0b10);
     assert!(ambiguous.allow_unpaired_cleanup_ups);
 
     let preflight = scenario_plan(Scenario::PreflightUserHeld, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
@@ -384,8 +380,8 @@ fn ownership_scoped_lifecycle_scenarios_expect_only_owned_cleanup_keys() {
         ACCEPTANCE_TIMING_MARGIN_US,
     )
     .unwrap();
-    assert_eq!(delayed.schedule.down_chords[0].down_mask, 1);
-    assert!(delayed.schedule.down_chords[0].scheduled_us > 3_000_000);
+    assert_eq!(delayed.schedule.chords[0].key_mask, 1);
+    assert!(delayed.schedule.chords[0].scheduled_us > 3_000_000);
     assert!(delayed.expected_down_slots.is_empty());
     assert!(delayed.expected_up_slots.is_empty());
 }
@@ -711,7 +707,7 @@ fn noncanonical_profile_and_cleanup_verdicts_remain_valid() {
     );
     assert_eq!(p.physical_key(0).scan_code, 0x02);
     let plan = scenario_plan(Scenario::CleanupFullRelease, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
-    assert_eq!(plan.schedule.down_chords[0].down_mask, FULL_INSTRUMENT_MASK);
+    assert_eq!(plan.schedule.chords[0].key_mask, FULL_INSTRUMENT_MASK);
     assert!(cleanup_evidence_clean(
         true,
         FULL_INSTRUMENT_MASK,
@@ -818,12 +814,12 @@ fn calibration_placement_is_an_explicit_paired_run_setting() {
 fn timing_margin_sweep_authors_hold_h_and_zero_up_gap_targets() {
     for margin in [0, 500, 800, 1_000, 3_000] {
         let plan = scenario_plan(Scenario::TimingMarginSweep, margin).unwrap();
-        let first = &plan.schedule.down_chords[0].intents[0];
-        let second = &plan.schedule.down_chords[1].intents[0];
         let hold = ACCEPTANCE_FRAME_US + margin;
-        assert_eq!(first.paired_up_offset_us - plan.schedule.down_chords[0].scheduled_us, hold);
-        assert_eq!(plan.schedule.down_chords[1].scheduled_us, first.paired_up_offset_us);
-        assert_eq!(second.paired_up_offset_us - plan.schedule.down_chords[1].scheduled_us, hold);
+        assert_eq!(plan.schedule.hold_us, hold);
+        assert_eq!(
+            plan.schedule.chords[1].scheduled_us - plan.schedule.chords[0].scheduled_us,
+            hold
+        );
         assert_eq!(plan.schedule.generation_count, 2);
         assert_eq!(plan.expected_down_slots, vec![0, 0]);
         assert_eq!(plan.expected_up_slots, vec![0, 0]);
@@ -835,16 +831,13 @@ fn short_up_gap_stress_authors_exact_holds_and_same_timestamp_repeats() {
     let plan = scenario_plan(Scenario::ShortUpGapStress, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
     let hold = acceptance_min_hold_us(ACCEPTANCE_TIMING_MARGIN_US);
 
-    assert_eq!(plan.schedule.down_chords.len(), SHORT_UP_GAP_STRESS_CYCLES);
+    assert_eq!(plan.schedule.hold_us, hold);
+    assert_eq!(plan.schedule.chords.len(), SHORT_UP_GAP_STRESS_CYCLES);
     assert_eq!(plan.schedule.generation_count, SHORT_UP_GAP_STRESS_CYCLES as u64);
-    assert_eq!(plan.schedule.authored_timestamp_group_count, SHORT_UP_GAP_STRESS_CYCLES + 1);
     assert_eq!(plan.expected_down_slots.len(), SHORT_UP_GAP_STRESS_CYCLES);
     assert_eq!(plan.expected_up_slots.len(), SHORT_UP_GAP_STRESS_CYCLES);
-    for chord in &plan.schedule.down_chords {
-        assert_eq!(chord.intents[0].paired_up_offset_us - chord.scheduled_us, hold);
-    }
-    for pair in plan.schedule.down_chords.windows(2) {
-        assert_eq!(pair[1].scheduled_us, pair[0].intents[0].paired_up_offset_us);
+    for pair in plan.schedule.chords.windows(2) {
+        assert_eq!(pair[1].scheduled_us - pair[0].scheduled_us, hold);
     }
     assert_eq!(SHORT_UP_GAP_STRESS_CYCLES - 1, SHORT_UP_GAP_STRESS_MIN_HOLD_SAMPLES as usize);
 }

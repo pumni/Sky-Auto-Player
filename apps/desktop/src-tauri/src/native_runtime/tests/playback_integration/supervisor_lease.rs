@@ -6,35 +6,13 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
     // This is behavioral coverage for supervisor ownership: progress
     // stops when the owning monitor iteration stalls, independent of
     // source checkout line endings or Rust formatting.
-    use sky_player::adapter_support::{
-        ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
-    };
+    use sky_player::adapter_support::{OnsetChordInput, PriorityMode, build_onset_plan};
     use sky_player::engine::{
         BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions, NativeDispatchSession,
         NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions, TestWaitPolicy,
         TimingOptions, WaitOptions,
     };
 
-    let schedule = compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: DispatchActionKind::Down,
-                scheduled_us: 30_000_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: Arc::<str>::from("monitor-stall-runtime-test-down"),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: DispatchActionKind::Up,
-                scheduled_us: 30_100_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: Arc::<str>::from("monitor-stall-runtime-test-up"),
-            },
-        ],
-        &sky_app_core::song::SKY_SCAN_CODES,
-    )
-    .expect("runtime test schedule");
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
@@ -46,11 +24,22 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
         strict_up_completion_late_us: 2_000,
         input_path_warn_us: 300,
     };
+    let schedule = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 30_000_000,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &sky_app_core::song::SKY_SCAN_CODES,
+        timing.min_hold_us,
+    )
+    .expect("runtime test plan")
+    .with_trailing_end_offset_us(30_100_000)
+    .expect("runtime test trailing end");
     let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
     let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc.frequency_hz(),
-        timing.min_hold_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
@@ -617,35 +606,13 @@ fn direct_native_player_keeps_the_qualified_supervisor_lease() {
 #[cfg(feature = "tauri-test")]
 #[test]
 fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
-    use sky_player::adapter_support::{
-        ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
-    };
+    use sky_player::adapter_support::{OnsetChordInput, PriorityMode, build_onset_plan};
     use sky_player::engine::{
         BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions, NativeDispatchSession,
         NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions, TestWaitPolicy,
         TimingOptions, WaitOptions,
     };
 
-    let schedule = compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: DispatchActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: Arc::<str>::from("monitor-unwind-test-down"),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: DispatchActionKind::Up,
-                scheduled_us: 10_000_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: Arc::<str>::from("monitor-unwind-test-up"),
-            },
-        ],
-        &sky_app_core::song::SKY_SCAN_CODES,
-    )
-    .expect("runtime test schedule");
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
@@ -657,11 +624,22 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
         strict_up_completion_late_us: 2_000,
         input_path_warn_us: 300,
     };
+    let schedule = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &sky_app_core::song::SKY_SCAN_CODES,
+        timing.min_hold_us,
+    )
+    .expect("runtime test plan")
+    .with_trailing_end_offset_us(10_000_000)
+    .expect("runtime test trailing end");
     let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
     let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc.frequency_hz(),
-        timing.min_hold_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");
@@ -810,35 +788,13 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
 #[cfg(feature = "tauri-test")]
 #[test]
 fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
-    use sky_player::adapter_support::{
-        ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
-    };
+    use sky_player::adapter_support::{OnsetChordInput, PriorityMode, build_onset_plan};
     use sky_player::engine::{
         BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions, NativeDispatchSession,
         NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions, TestWaitPolicy,
         TimingOptions, WaitOptions,
     };
 
-    let schedule = compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: DispatchActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: Arc::<str>::from("monitor-stop-test-down"),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: DispatchActionKind::Up,
-                scheduled_us: 10_000_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: Arc::<str>::from("monitor-stop-test-up"),
-            },
-        ],
-        &sky_app_core::song::SKY_SCAN_CODES,
-    )
-    .expect("runtime test schedule");
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
@@ -850,11 +806,22 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
         strict_up_completion_late_us: 2_000,
         input_path_warn_us: 300,
     };
+    let schedule = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &sky_app_core::song::SKY_SCAN_CODES,
+        timing.min_hold_us,
+    )
+    .expect("runtime test plan")
+    .with_trailing_end_offset_us(10_000_000)
+    .expect("runtime test trailing end");
     let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
     let schedule = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc.frequency_hz(),
-        timing.min_hold_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .expect("prepare runtime test schedule before session admission");

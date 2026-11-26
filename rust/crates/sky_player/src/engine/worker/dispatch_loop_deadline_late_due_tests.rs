@@ -1,33 +1,32 @@
 use super::replan_timing::elapsed_us;
 use super::support::{
-    ActionKind, ProductionDispatchTestHarness, QpcTicks, StagedDispatchOutcome, TimelineTicks,
+    OnsetChordInput, ProductionDispatchTestHarness, QpcTicks, StagedDispatchOutcome, TimelineTicks,
     qpc_offset, staged_send_at,
 };
 #[test]
 fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
-    use sky_dispatch_core::model::KeyActionInput;
     use sky_dispatch_win32::wait::{WaitOutcome, WaitResult};
 
-    fn action(index: u32, kind: ActionKind, scheduled_us: u64, scans: &[u16]) -> KeyActionInput {
-        KeyActionInput {
+    fn chord(index: u32, scheduled_us: u64, scans: &[u16]) -> OnsetChordInput {
+        OnsetChordInput {
             source_action_index: index,
-            kind,
             scheduled_us,
-            scan_codes: scans.to_vec().into(),
-            reason: format!("late-Due-contract-{index}").into(),
+            scan_codes: scans.iter().copied().collect(),
         }
     }
 
-    let actions = [
-        action(6680, ActionKind::Down, 0, &[0x15, 0x16]),
-        action(6681, ActionKind::Up, 25_000, &[0x16]),
-        action(6682, ActionKind::Down, 42_500, &[0x16]),
-        action(6683, ActionKind::Down, 90_000, &[0x17]),
-        action(6684, ActionKind::Up, 100_000, &[0x15]),
-        action(6685, ActionKind::Up, 130_000, &[0x16]),
-        action(6686, ActionKind::Up, 160_000, &[0x17]),
+    // Slot ordering (sorted scan codes): 0x15 -> bit 1 (A), 0x16 -> bit 2 (B), 0x17 -> bit 4 (C).
+    // B1 goes Down at 0 and is released at +25ms (after H=17.167ms).
+    // A goes Down at +35ms so its fixed-pulse Up floor is +52.167ms.
+    // B2 is staged for +42.5ms while A is still held.
+    // A simulated late Due wake at +60ms overshoots both A's Up (+52.167ms) and C's Down (+55ms).
+    let chords = [
+        chord(6680, 0, &[0x16]),
+        chord(6681, 35_000, &[0x15]),
+        chord(6682, 42_500, &[0x16]),
+        chord(6683, 55_000, &[0x17]),
     ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let clock = harness.resources.clock;
     let epoch = clock
         .now()
@@ -41,7 +40,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     harness
         .reanchor_playback_clock_for_test(epoch)
         .expect("reanchor at future QPC epoch");
-    let packets = harness.configure_mock_packet_sender_for_test(&[0, 5_000, 0, 0]);
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 5_000, 0, 0, 0]);
     harness.attach_executor_for_test().expect("attach executor");
 
     let first = harness
@@ -50,37 +49,30 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
         )
-        .expect("stage initial A+B Down")
+        .expect("stage initial B1 Down")
         .expect("initial chord candidate");
     assert_eq!(first.source_action_index, 6680);
     assert_eq!(
         first.packet_masks,
-        sky_dispatch_win32::input::PhysicalPacket::new(0, 3)
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 2)
     );
     harness.set_mock_sender_start_qpc_for_test(epoch);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(first, false),
         StagedDispatchOutcome::Dispatched
     );
-    assert_eq!(harness.resources.backend.active_mask, 3);
+    assert_eq!(harness.resources.backend.active_mask, 2);
     assert_eq!(harness.resources.backend.possibly_active_mask, 0);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
-    assert_eq!(harness.release_obligation_mask_for_test(), 3);
+    assert_eq!(harness.release_obligation_mask_for_test(), 2);
     assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
-    let origin = harness
-        .resources
-        .backend
-        .release_owner_proof_for_mask(1)
-        .expect("A origin proof lookup")
-        .expect("A origin proof")
-        .clone();
 
-    let authored_b_up = epoch
+    let b1_up_eval = epoch
         .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
             qpc_offset(&harness, 25_000).as_u64(),
         ))
-        .expect("B1 authored Up target");
-    let (up_b_mask, down_chord, up_b_window) = staged_send_at(&mut harness, authored_b_up, epoch);
+        .expect("B1 Up target");
+    let (up_b_mask, down_chord, up_b_window) = staged_send_at(&mut harness, b1_up_eval, epoch);
     assert_eq!(up_b_mask, 2);
     assert!(down_chord.is_none());
     let up_b = harness
@@ -90,26 +82,66 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     let h_ticks = clock
         .duration_from_us(harness.config.timing.min_hold_us)
         .expect("H floor conversion");
-    let a_b_down_completion = packets
+    let b1_down_completion = packets
         .lock()
         .expect("initial Down evidence")
         .first()
         .and_then(|(_, evidence)| evidence.completed_ticks)
-        .expect("confirmed A+B Down completion");
-    let b_h_floor = a_b_down_completion
+        .expect("confirmed B1 Down completion");
+    let b_h_floor = b1_down_completion
         .checked_add_duration(h_ticks)
         .expect("B1 H floor");
-    assert!(up_b.timing_window.packet_not_before_qpc >= authored_b_up.max(b_h_floor));
-    harness.set_mock_sender_start_qpc_for_test(up_b.timing_window.packet_not_before_qpc);
+    assert_eq!(up_b.timing_window.packet_not_before_qpc, b_h_floor);
+    harness.set_mock_sender_start_qpc_for_test(b1_up_eval);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(up_b, false),
+        StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.resources.backend.active_mask, 0);
+    assert_eq!(harness.resources.backend.possibly_active_mask, 0);
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 0);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
+
+    let a_down_authored = epoch
+        .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+            qpc_offset(&harness, 35_000).as_u64(),
+        ))
+        .expect("A authored Down target");
+    let (a_up_mask, a_down_chord, a_window) = staged_send_at(&mut harness, a_down_authored, epoch);
+    assert_eq!(a_up_mask, 0);
+    assert_eq!(a_down_chord.map(|c| c.source_action_index), Some(6681));
+    let a_down = harness
+        .stage_candidate_with_scheduler_window_for_test(a_up_mask, a_down_chord, a_window)
+        .expect("stage A Down")
+        .expect("A Down candidate");
+    assert_eq!(
+        a_down.packet_masks,
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 1)
+    );
+    harness.set_mock_sender_start_qpc_for_test(a_down_authored);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(a_down, false),
         StagedDispatchOutcome::Dispatched
     );
     assert_eq!(harness.resources.backend.active_mask, 1);
     assert_eq!(harness.resources.backend.possibly_active_mask, 0);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
-    assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 2);
+    let origin = harness
+        .resources
+        .backend
+        .release_owner_proof_for_mask(1)
+        .expect("A origin proof lookup")
+        .expect("A origin proof")
+        .clone();
+    let a_down_completion = packets
+        .lock()
+        .expect("A Down evidence")
+        .get(2)
+        .and_then(|(_, evidence)| evidence.completed_ticks)
+        .expect("confirmed A Down completion");
 
     let b2_authored = epoch
         .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
@@ -162,23 +194,22 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         StagedDispatchOutcome::Dispatched
     );
 
-    let authored_a_up = epoch
-        .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
-            qpc_offset(&harness, 100_000).as_u64(),
-        ))
-        .expect("A authored Up target");
-    let a_h_floor = a_b_down_completion
+    let a_up_physical_target = a_down_completion
         .checked_add_duration(h_ticks)
         .expect("A H floor");
-    let a_up_physical_target = authored_a_up.max(a_h_floor);
-    assert_eq!(a_up_physical_target, authored_a_up);
+    let late_wake_target = epoch
+        .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+            qpc_offset(&harness, 60_000).as_u64(),
+        ))
+        .expect("late wake target after A Up and C Down");
+    assert!(late_wake_target >= a_up_physical_target);
     let _waiter_override = crate::engine::worker::wait::install_waiter_result_for_test(
         b2_authored,
         WaitResult {
             outcome: WaitOutcome::Deadline,
-            wake_qpc: Some(a_up_physical_target),
+            wake_qpc: Some(late_wake_target),
             spin_ticks: sky_dispatch_core::time::DurationTicks::ZERO,
-            timer_return_qpc: Some(a_up_physical_target),
+            timer_return_qpc: Some(late_wake_target),
             timer_arm_target_qpc: Some(b2_authored),
             timer_arm_qpc: None,
             timer_arm_generation: None,
@@ -211,7 +242,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         } => {
             assert_eq!(target_qpc, b2_authored);
             assert_eq!(result.outcome, WaitOutcome::Deadline);
-            assert_eq!(result.wake_qpc, Some(a_up_physical_target));
+            assert_eq!(result.wake_qpc, Some(late_wake_target));
             assert!(
                 dispatch_qpc > target_qpc,
                 "Due wake overshoots B2's authored deadline"
@@ -240,7 +271,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         harness.dispatch_staged_candidate_for_test(b2, false),
         StagedDispatchOutcome::Dispatched
     );
-    assert_eq!(harness.resources.scheduler.chord_cursor(), 2);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 3);
     assert_eq!(harness.resources.backend.active_mask, 3);
     assert_eq!(harness.resources.backend.possibly_active_mask, 0);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
@@ -294,7 +325,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         harness.dispatch_staged_candidate_for_test(mixed, false),
         StagedDispatchOutcome::Dispatched
     );
-    assert_eq!(harness.resources.scheduler.chord_cursor(), 3);
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 4);
     assert_eq!(harness.resources.backend.active_mask, 6);
     assert_eq!(harness.resources.backend.possibly_active_mask, 0);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
@@ -319,10 +350,10 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     );
 
     let sent = packets.lock().expect("late-Due packet trace");
-    assert_eq!(sent.len(), 4);
+    assert_eq!(sent.len(), 5);
     assert_eq!(
         sent[0].0,
-        sky_dispatch_win32::input::PhysicalPacket::new(0, 3)
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 2)
     );
     assert_eq!(
         sent[1].0,
@@ -330,35 +361,40 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     );
     assert_eq!(
         sent[2].0,
-        sky_dispatch_win32::input::PhysicalPacket::new(0, 2)
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 1)
     );
     assert_eq!(
         sent[3].0,
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 2)
+    );
+    assert_eq!(
+        sent[4].0,
         sky_dispatch_win32::input::PhysicalPacket::new(1, 4)
     );
     assert!(sent.iter().all(|(_, evidence)| evidence.attempts == 1));
     assert_eq!(sent[0].1.started_ticks, Some(epoch));
-    assert!(sent[1].1.started_ticks.expect("B1 Up sender QPC") >= authored_b_up.max(b_h_floor));
-    assert!(sent[2].1.started_ticks.expect("B2 sender QPC") >= b2_authored);
-    assert!(sent[3].1.started_ticks.expect("A Up/C Down sender QPC") >= a_up_physical_target);
+    assert!(sent[1].1.started_ticks.expect("B1 Up sender QPC") >= b_h_floor);
+    assert_eq!(sent[2].1.started_ticks, Some(a_down_authored));
+    assert!(sent[3].1.started_ticks.expect("B2 sender QPC") >= b2_authored);
+    assert!(sent[4].1.started_ticks.expect("A Up/C Down sender QPC") >= a_up_physical_target);
     assert_eq!(
         sent.iter()
-            .skip(2)
+            .skip(3)
             .filter(|(packet, _)| packet.down_mask & 2 != 0)
             .count(),
         1,
         "the staged B2 onset crosses its sender boundary at most once"
     );
-    assert_eq!(harness.local_metrics.precision_packet_attempts, 4);
+    assert_eq!(harness.local_metrics.precision_packet_attempts, 5);
     assert!(harness.runtime.terminal_error.is_none());
 
     println!(
-        "late-Due trace: H=+{}us B1_Up=+{}us B2_authored=+{}us B2_G_deadline=+{}us Due_wake=+{}us A_Up_authored=+{}us staged_down=0x0002 first_late_packet=(up:0x0000,down:0x0002) next_iteration=(up:0x0001,down:0x0004) cursor=3 masks=(active:0x0006,possible:0,inflight:0,release:0x0006) attempts(B2)=1",
-        elapsed_us(clock, epoch, a_h_floor),
-        elapsed_us(clock, epoch, authored_b_up),
+        "late-Due trace: H=+{}us B1_Up=+{}us B2_authored=+{}us B2_G_deadline=+{}us Due_wake=+{}us A_Up_floor=+{}us staged_down=0x0002 first_late_packet=(up:0x0000,down:0x0002) next_iteration=(up:0x0001,down:0x0004) cursor=4 masks=(active:0x0006,possible:0,inflight:0,release:0x0006) attempts(B2)=1",
+        elapsed_us(clock, epoch, b_h_floor),
+        elapsed_us(clock, epoch, b1_up_eval),
         elapsed_us(clock, epoch, b2_authored),
         elapsed_us(clock, epoch, b2_authored),
         elapsed_us(clock, epoch, late_wake_qpc),
-        elapsed_us(clock, epoch, authored_a_up),
+        elapsed_us(clock, epoch, a_up_physical_target),
     );
 }

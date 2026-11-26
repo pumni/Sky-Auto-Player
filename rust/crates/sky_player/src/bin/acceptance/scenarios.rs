@@ -3,12 +3,12 @@ use super::{
     ACCEPTANCE_INPUT_PATH_WARN_US, PhysicalExpectation, Scenario, ScenarioPlan,
     generation_stress_scenario_plan,
 };
-use sky_dispatch_core::model::{ActionKind, KeyActionInput, MAX_KEYS};
-use sky_dispatch_win32::mmcss::PriorityMode;
+use sky_dispatch_core::model::{MAX_KEYS, OnsetChordInput};
 use sky_dispatch_win32::input::{
     InstrumentKeyProfileSpec, PHYSICAL_INSTRUMENT_SCAN_CODES, PhysicalKey,
 };
-use sky_player::adapter_support::compile_runtime_intents;
+use sky_dispatch_win32::mmcss::PriorityMode;
+use sky_player::adapter_support::build_onset_plan;
 use sky_player::engine::{
     BackendConfig, DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US, DispatchProfile, FocusOptions,
     NativeSessionOptions, PriorityOptions, TelemetryMode, TelemetryOptions, TimingOptions,
@@ -18,22 +18,19 @@ use smallvec::SmallVec;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-pub(super) fn action(
+pub(super) fn onset(
     source_action_index: u32,
-    kind: ActionKind,
     scheduled_us: u64,
     slots: &[usize],
-) -> KeyActionInput {
+) -> OnsetChordInput {
     let scan_codes = slots
         .iter()
         .map(|slot| PHYSICAL_INSTRUMENT_SCAN_CODES[*slot])
         .collect::<SmallVec<[u16; 4]>>();
-    KeyActionInput {
+    OnsetChordInput {
         source_action_index,
-        kind,
         scheduled_us,
         scan_codes,
-        reason: Arc::<str>::from("rt-native-acceptance"),
     }
 }
 
@@ -72,162 +69,100 @@ pub(super) fn scenario_plan_for_settings(
     if !matches!(game_fps, 60 | 120) {
         return Err("acceptance workload game FPS must be 60 or 120".to_string());
     }
-    let (actions, profile, expected_down_slots, expected_up_slots, allow_unpaired_cleanup_ups) =
+    let hold_us = scenario_min_hold_us_for_fps(scenario, timing_margin_us, game_fps);
+    let (chords, profile, expected_down_slots, expected_up_slots, allow_unpaired_cleanup_ups) =
         match scenario {
             Scenario::CanonicalSingle | Scenario::NoncanonicalProfile => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 80_000, &[0]),
-                ],
+                vec![onset(0, 50_000, &[0])],
                 (scenario == Scenario::NoncanonicalProfile).then_some(noncanonical_profile_spec()),
                 vec![0],
                 vec![0],
                 false,
             ),
             Scenario::CanonicalChord => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0, 1]),
-                    action(1, ActionKind::Up, 90_000, &[0, 1]),
-                ],
+                vec![onset(0, 50_000, &[0, 1])],
                 None,
                 vec![0, 1],
                 vec![0, 1],
                 false,
             ),
             Scenario::CanonicalMaxChord => (
-                vec![
-                    action(
-                        0,
-                        ActionKind::Down,
-                        50_000,
-                        &(0..MAX_KEYS).collect::<Vec<_>>(),
-                    ),
-                    action(
-                        1,
-                        ActionKind::Up,
-                        90_000,
-                        &(0..MAX_KEYS).collect::<Vec<_>>(),
-                    ),
-                ],
+                vec![onset(0, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>())],
                 None,
                 (0..MAX_KEYS).collect(),
                 (0..MAX_KEYS).collect(),
                 false,
             ),
             Scenario::Hold => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 500_000, &[0]),
-                ],
+                vec![onset(0, 50_000, &[0])],
                 None,
                 vec![0],
                 vec![0],
                 false,
             ),
             Scenario::LongSingleSequence => {
-                let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
                 let gap_us = frame_period_us(game_fps);
-                let mut actions = Vec::with_capacity(48);
+                let mut chords = Vec::with_capacity(24);
                 let mut down_slots = Vec::with_capacity(24);
                 let mut up_slots = Vec::with_capacity(24);
                 let mut timestamp_us = 50_000_u64;
                 for index in 0..24_u32 {
-                    actions.push(action(index * 2, ActionKind::Down, timestamp_us, &[0]));
-                    actions.push(action(
-                        index * 2 + 1,
-                        ActionKind::Up,
-                        timestamp_us + hold_us,
-                        &[0],
-                    ));
+                    chords.push(onset(index, timestamp_us, &[0]));
                     down_slots.push(0);
                     up_slots.push(0);
                     timestamp_us += hold_us + gap_us;
                 }
-                (actions, None, down_slots, up_slots, false)
+                (chords, None, down_slots, up_slots, false)
             }
             Scenario::DenseAlternating => {
-                let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                // Paired qualification retains the pinned baseline cadence.
-                // This spacing belongs only to the workload generator; it is
-                // not a playback or planner release-gap floor.
                 let gap_us = frame_period_us(game_fps).saturating_add(timing_margin_us);
-                let mut actions = Vec::with_capacity(32);
+                let mut chords = Vec::with_capacity(16);
                 let mut down_slots = Vec::with_capacity(16);
                 let mut up_slots = Vec::with_capacity(16);
                 let mut timestamp_us = 50_000_u64;
                 for index in 0..16_u32 {
                     let slot = (index as usize) % 2;
-                    actions.push(action(index * 2, ActionKind::Down, timestamp_us, &[slot]));
-                    actions.push(action(
-                        index * 2 + 1,
-                        ActionKind::Up,
-                        timestamp_us + hold_us,
-                        &[slot],
-                    ));
+                    chords.push(onset(index, timestamp_us, &[slot]));
                     down_slots.push(slot);
                     up_slots.push(slot);
                     timestamp_us += hold_us + gap_us;
                 }
-                (actions, None, down_slots, up_slots, false)
+                (chords, None, down_slots, up_slots, false)
             }
             Scenario::ChordSweep => {
-                let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                // Keep the chord-size sweep physically observable on the
-                // receive-only Windows sink. Dense minimum-geometry timing is
-                // covered independently by DenseAlternating.
                 let gap_us = 100_000;
-                let mut actions = Vec::with_capacity((MAX_KEYS - 1) * 2);
+                let mut chords = Vec::with_capacity(MAX_KEYS - 1);
                 let mut down_slots = Vec::new();
                 let mut up_slots = Vec::new();
                 let mut timestamp_us = 50_000_u64;
-                let mut action_index = 0_u32;
-                for chord_size in 2..=MAX_KEYS {
+                for (action_index, chord_size) in (2..=MAX_KEYS).enumerate() {
                     let slots = (0..chord_size).collect::<Vec<_>>();
-                    actions.push(action(action_index, ActionKind::Down, timestamp_us, &slots));
-                    actions.push(action(
-                        action_index + 1,
-                        ActionKind::Up,
-                        timestamp_us + hold_us,
-                        &slots,
-                    ));
+                    chords.push(onset(action_index as u32, timestamp_us, &slots));
                     down_slots.extend(slots.iter().copied());
                     up_slots.extend(slots);
                     timestamp_us += hold_us + gap_us;
-                    action_index += 2;
                 }
-                (actions, None, down_slots, up_slots, false)
+                (chords, None, down_slots, up_slots, false)
             }
             Scenario::NearMinimumRetrigger => {
-                let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                // Preserve the pinned baseline paired-workload geometry. The
-                // separate short-up-gap-stress scenario remains candidate-only.
                 let gap_us = frame_period_us(game_fps).saturating_add(timing_margin_us);
-                let mut actions = Vec::with_capacity(8);
+                let mut chords = Vec::with_capacity(4);
                 let mut down_slots = Vec::with_capacity(4);
                 let mut up_slots = Vec::with_capacity(4);
                 let mut timestamp_us = 50_000_u64;
                 for index in 0..4_u32 {
-                    actions.push(action(index * 2, ActionKind::Down, timestamp_us, &[0]));
-                    actions.push(action(
-                        index * 2 + 1,
-                        ActionKind::Up,
-                        timestamp_us + hold_us,
-                        &[0],
-                    ));
+                    chords.push(onset(index, timestamp_us, &[0]));
                     down_slots.push(0);
                     up_slots.push(0);
                     timestamp_us += hold_us + gap_us;
                 }
-                (actions, None, down_slots, up_slots, false)
+                (chords, None, down_slots, up_slots, false)
             }
             Scenario::RapidRetrigger => (
                 vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 80_000, &[0]),
-                    action(2, ActionKind::Down, 110_000, &[0]),
-                    action(3, ActionKind::Up, 140_000, &[0]),
-                    action(4, ActionKind::Down, 170_000, &[0]),
-                    action(5, ActionKind::Up, 200_000, &[0]),
+                    onset(0, 50_000, &[0]),
+                    onset(1, 110_000, &[0]),
+                    onset(2, 170_000, &[0]),
                 ],
                 None,
                 vec![0, 0, 0],
@@ -239,10 +174,8 @@ pub(super) fn scenario_plan_for_settings(
             }
             Scenario::MixedUpDown => (
                 vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 100_000, &[0]),
-                    action(2, ActionKind::Down, 100_000, &[1]),
-                    action(3, ActionKind::Up, 150_000, &[1]),
+                    onset(0, 50_000, &[0]),
+                    onset(1, 50_000 + hold_us, &[1]),
                 ],
                 None,
                 vec![0, 1],
@@ -251,10 +184,8 @@ pub(super) fn scenario_plan_for_settings(
             ),
             Scenario::AmbiguousPacket => (
                 vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 100_000, &[0]),
-                    action(2, ActionKind::Down, 100_000, &[1]),
-                    action(3, ActionKind::Up, 150_000, &[1]),
+                    onset(0, 50_000, &[0]),
+                    onset(1, 50_000 + hold_us, &[1]),
                 ],
                 None,
                 vec![0, 1],
@@ -262,20 +193,14 @@ pub(super) fn scenario_plan_for_settings(
                 true,
             ),
             Scenario::PreflightUserHeld => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 80_000, &[0]),
-                ],
+                vec![onset(0, 50_000, &[0])],
                 None,
                 vec![],
                 vec![],
                 true,
             ),
             Scenario::ModifierHeldFinalBoundary => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 80_000, &[0]),
-                ],
+                vec![onset(0, 50_000, &[0])],
                 None,
                 vec![],
                 vec![],
@@ -283,10 +208,8 @@ pub(super) fn scenario_plan_for_settings(
             ),
             Scenario::ModifierHeldAfterOwned => (
                 vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Down, 100_000, &[1]),
-                    action(2, ActionKind::Up, 150_000, &[0]),
-                    action(3, ActionKind::Up, 200_000, &[1]),
+                    onset(0, 50_000, &[0]),
+                    onset(1, 50_000 + hold_us / 2, &[1]),
                 ],
                 None,
                 vec![0],
@@ -294,22 +217,14 @@ pub(super) fn scenario_plan_for_settings(
                 false,
             ),
             Scenario::CleanupFullRelease => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>()),
-                    action(1, ActionKind::Up, 10_000_000, &(0..MAX_KEYS).collect::<Vec<_>>()),
-                ],
+                vec![onset(0, 50_000, &(0..MAX_KEYS).collect::<Vec<_>>())],
                 None,
                 (0..MAX_KEYS).collect(),
                 (0..MAX_KEYS).collect(),
                 false,
             ),
             Scenario::FocusLoss => (
-                vec![
-                    action(0, ActionKind::Down, 500_000, &[0]),
-                    action(1, ActionKind::Up, 600_000, &[0]),
-                    action(2, ActionKind::Down, 3_000_000, &[1]),
-                    action(3, ActionKind::Up, 3_100_000, &[1]),
-                ],
+                vec![onset(0, 500_000, &[0]), onset(1, 3_000_000, &[1])],
                 None,
                 vec![0, 1],
                 vec![0, 1],
@@ -319,66 +234,42 @@ pub(super) fn scenario_plan_for_settings(
             | Scenario::OwnerMismatch
             | Scenario::OwnerQueryFailure
             | Scenario::OwnerProcessTermination => (
-                vec![
-                    action(0, ActionKind::Down, 500_000, &[0]),
-                    action(1, ActionKind::Up, 600_000, &[0]),
-                ],
+                vec![onset(0, 500_000, &[0])],
                 None,
                 vec![],
                 vec![],
                 true,
             ),
             Scenario::StopCleanup | Scenario::SkipCleanup => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 10_000_000, &[0]),
-                ],
+                vec![onset(0, 50_000, &[0])],
                 None,
                 vec![0],
                 vec![0],
                 false,
             ),
             Scenario::PauseResume => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 120_000, &[0]),
-                    action(2, ActionKind::Down, 500_000, &[1]),
-                    action(3, ActionKind::Up, 570_000, &[1]),
-                ],
+                vec![onset(0, 50_000, &[0]), onset(1, 500_000, &[1])],
                 None,
                 vec![0, 1],
                 vec![0, 1],
                 true,
             ),
             Scenario::PauseResumeActiveCleanup => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 500_000, &[0]),
-                    action(2, ActionKind::Down, 600_000, &[0]),
-                    action(3, ActionKind::Up, 670_000, &[0]),
-                ],
+                vec![onset(0, 50_000, &[0]), onset(1, 600_000, &[0])],
                 None,
                 vec![0, 0],
                 vec![0, 0],
                 true,
             ),
             Scenario::SuspendResume => (
-                vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 500_000, &[0]),
-                    action(2, ActionKind::Down, 1_000_000, &[1]),
-                    action(3, ActionKind::Up, 1_100_000, &[1]),
-                ],
+                vec![onset(0, 50_000, &[0]), onset(1, 1_000_000, &[1])],
                 None,
                 vec![0, 1],
                 vec![0, 0, 1],
                 true,
             ),
             Scenario::SupervisorLeaseExpiry => (
-                vec![
-                    action(0, ActionKind::Down, 5_000_000, &[0]),
-                    action(1, ActionKind::Up, 5_100_000, &[0]),
-                ],
+                vec![onset(0, 5_000_000, &[0])],
                 None,
                 vec![],
                 vec![],
@@ -386,36 +277,13 @@ pub(super) fn scenario_plan_for_settings(
             ),
             Scenario::LeaseAgeWatchdogDelayed => {
                 let down = DEFAULT_SUPERVISOR_LEASE_TIMEOUT_US + 500_000;
-                (
-                    vec![
-                        action(0, ActionKind::Down, down, &[0]),
-                        action(
-                            1,
-                            ActionKind::Up,
-                            down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps),
-                            &[0],
-                        ),
-                    ],
-                    None,
-                    // The lease-age oracle must reject the authored Down before
-                    // SendInput. Its accepted physical event window is empty.
-                    vec![],
-                    vec![],
-                    true,
-                )
+                (vec![onset(0, down, &[0])], None, vec![], vec![], true)
             }
             Scenario::TimingMarginSweep => {
                 let down = 50_000;
-                let up = down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                let next_down = up;
-                let next_up = next_down + acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
+                let next_down = down + hold_us;
                 (
-                    vec![
-                        action(0, ActionKind::Down, down, &[0]),
-                        action(1, ActionKind::Up, up, &[0]),
-                        action(2, ActionKind::Down, next_down, &[0]),
-                        action(3, ActionKind::Up, next_up, &[0]),
-                    ],
+                    vec![onset(0, down, &[0]), onset(1, next_down, &[0])],
                     None,
                     vec![0, 0],
                     vec![0, 0],
@@ -423,18 +291,16 @@ pub(super) fn scenario_plan_for_settings(
                 )
             }
             Scenario::LongIdle => {
-                let hold_us = acceptance_min_hold_us_for_fps(timing_margin_us, game_fps);
-                let mut actions = Vec::with_capacity(8);
+                let mut chords = Vec::with_capacity(4);
                 let mut down_slots = Vec::with_capacity(4);
                 let mut up_slots = Vec::with_capacity(4);
                 let mut down_us = 50_000_u64;
                 for index in 0..4_u32 {
                     let slot = if index % 2 == 0 { 0 } else { 1 };
-                    actions.push(action(index * 2, ActionKind::Down, down_us, &[slot]));
+                    chords.push(onset(index, down_us, &[slot]));
                     let up_us = down_us
                         .checked_add(hold_us)
                         .ok_or("long-idle schedule overflow")?;
-                    actions.push(action(index * 2 + 1, ActionKind::Up, up_us, &[slot]));
                     down_slots.push(slot);
                     up_slots.push(slot);
                     let idle_us = if index % 2 == 0 { 250_000 } else { 2_000_000 };
@@ -442,14 +308,12 @@ pub(super) fn scenario_plan_for_settings(
                         .checked_add(idle_us)
                         .ok_or("long-idle schedule overflow")?;
                 }
-                (actions, None, down_slots, up_slots, false)
+                (chords, None, down_slots, up_slots, false)
             }
             Scenario::HolInterleaved => (
                 vec![
-                    action(0, ActionKind::Down, 50_000, &[0]),
-                    action(1, ActionKind::Up, 84_000, &[0]),
-                    action(2, ActionKind::Down, 85_000, &[1]),
-                    action(3, ActionKind::Up, 119_000, &[1]),
+                    onset(0, 50_000, &[0]),
+                    onset(1, 50_000 + hold_us + 1_000, &[1]),
                 ],
                 None,
                 vec![0, 1],
@@ -457,7 +321,7 @@ pub(super) fn scenario_plan_for_settings(
                 false,
             ),
         };
-    let mut actions = actions;
+    let mut chords = chords;
     let mut expected_down_slots = expected_down_slots;
     let mut expected_up_slots = expected_up_slots;
     if let Some(sample_seconds) = sample_seconds {
@@ -466,14 +330,14 @@ pub(super) fn scenario_plan_for_settings(
                 "{scenario:?} does not support a repeated timed sample"
             ));
         }
-        let first_scheduled_us = actions
+        let first_scheduled_us = chords
             .first()
-            .map(|action| action.scheduled_us)
-            .ok_or_else(|| "timed sample scenario has no authored actions".to_string())?;
-        let last_scheduled_us = actions
+            .map(|chord| chord.scheduled_us)
+            .ok_or_else(|| "timed sample scenario has no onset chords".to_string())?;
+        let last_end_us = chords
             .last()
-            .map(|action| action.scheduled_us)
-            .ok_or_else(|| "timed sample scenario has no authored actions".to_string())?;
+            .and_then(|chord| chord.scheduled_us.checked_add(hold_us))
+            .ok_or_else(|| "timed sample scenario end overflow".to_string())?;
         let cycle_gap_us = if scenario == Scenario::LongIdle {
             2_000_000
         } else if scenario == Scenario::HolInterleaved {
@@ -481,7 +345,7 @@ pub(super) fn scenario_plan_for_settings(
         } else {
             frame_period_us(game_fps).saturating_add(timing_margin_us)
         };
-        let cycle_duration_us = last_scheduled_us
+        let cycle_duration_us = last_end_us
             .checked_sub(first_scheduled_us)
             .and_then(|span| span.checked_add(cycle_gap_us))
             .filter(|duration| *duration > 0)
@@ -492,27 +356,27 @@ pub(super) fn scenario_plan_for_settings(
         let repetitions = required_duration_us
             .saturating_add(cycle_duration_us - 1)
             / cycle_duration_us;
-        let base_actions = actions.clone();
+        let base_chords = chords.clone();
         let base_down_slots = expected_down_slots.clone();
         let base_up_slots = expected_up_slots.clone();
         for repetition in 1..repetitions {
             let schedule_offset_us = cycle_duration_us.saturating_mul(repetition);
-            for action in &base_actions {
-                let mut repeated = action.clone();
-                repeated.source_action_index = u32::try_from(actions.len())
+            for chord in &base_chords {
+                let mut repeated = chord.clone();
+                repeated.source_action_index = u32::try_from(chords.len())
                     .map_err(|_| "timed sample exceeds source action index capacity".to_string())?;
                 repeated.scheduled_us = repeated
                     .scheduled_us
                     .checked_add(schedule_offset_us)
                     .ok_or_else(|| "timed sample schedule overflow".to_string())?;
-                actions.push(repeated);
+                chords.push(repeated);
             }
             expected_down_slots.extend_from_slice(&base_down_slots);
             expected_up_slots.extend_from_slice(&base_up_slots);
         }
     }
-    let schedule = compile_runtime_intents(&actions, &PHYSICAL_INSTRUMENT_SCAN_CODES)
-        .map_err(|error| format!("scenario schedule compilation failed: {error}"))?;
+    let schedule = build_onset_plan(&chords, &PHYSICAL_INSTRUMENT_SCAN_CODES, hold_us)
+        .map_err(|error| format!("scenario onset plan failed: {error}"))?;
     let expected_safety_up_slots = match scenario {
         Scenario::CleanupFullRelease => (0..MAX_KEYS).collect(),
         Scenario::StopCleanup
@@ -525,7 +389,10 @@ pub(super) fn scenario_plan_for_settings(
     };
     let mut expected_authored_up_slots = expected_up_slots.clone();
     for slot in &expected_safety_up_slots {
-        if let Some(index) = expected_authored_up_slots.iter().position(|expected| expected == slot) {
+        if let Some(index) = expected_authored_up_slots
+            .iter()
+            .position(|expected| expected == slot)
+        {
             expected_authored_up_slots.remove(index);
         }
     }
@@ -545,12 +412,21 @@ pub(super) fn acceptance_min_hold_us(timing_margin_us: u64) -> u64 {
     acceptance_min_hold_us_for_fps(timing_margin_us, 60)
 }
 
+#[cfg(test)]
 pub(super) fn acceptance_min_hold_us_for_fps(timing_margin_us: u64, game_fps: u16) -> u64 {
     ACCEPTANCE_HOLD_FRAMES * frame_period_us(game_fps) + timing_margin_us
 }
 
-pub(super) fn scenario_min_hold_us_for_fps(scenario: Scenario, timing_margin_us: u64, game_fps: u16) -> u64 {
-    let frames = if scenario == Scenario::HolInterleaved { 2 } else { ACCEPTANCE_HOLD_FRAMES };
+pub(super) fn scenario_min_hold_us_for_fps(
+    scenario: Scenario,
+    timing_margin_us: u64,
+    game_fps: u16,
+) -> u64 {
+    let frames = if scenario == Scenario::HolInterleaved {
+        2
+    } else {
+        ACCEPTANCE_HOLD_FRAMES
+    };
     frames * frame_period_us(game_fps) + timing_margin_us
 }
 
@@ -560,7 +436,7 @@ const fn frame_period_us(game_fps: u16) -> u64 {
 
 #[cfg(test)]
 pub(super) fn production_options(
-    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    schedule: sky_dispatch_core::model::OnsetPlan,
     profile: Option<InstrumentKeyProfileSpec>,
     timing_margin_us: u64,
     scenario: Scenario,
@@ -578,7 +454,7 @@ pub(super) fn production_options(
 }
 
 pub(super) fn production_options_for_fps(
-    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    schedule: sky_dispatch_core::model::OnsetPlan,
     profile: Option<InstrumentKeyProfileSpec>,
     timing_margin_us: u64,
     scenario: Scenario,
@@ -609,7 +485,6 @@ pub(super) fn production_options_for_fps(
     let prepared_schedule = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc_frequency_hz,
-        timing.min_hold_us,
         schedule.compile_memory.caller_retained_capacity_bytes,
     )
     .map_err(|error| format!("native acceptance schedule Prepare failed: {error}"))?;
@@ -646,12 +521,13 @@ pub(super) fn production_options_for_fps(
             mode: PriorityMode::Auto,
         },
         instrument_key_profile: profile,
+        #[cfg(feature = "test-support")]
         startup_calibration_placement:
             sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
+        #[cfg(feature = "test-support")]
         timing_observer_for_qualification: false,
         #[cfg(feature = "test-support")]
         startup_ordering_hook: None,
-        #[cfg(feature = "test-support")]
         #[cfg(feature = "test-support")]
         focus_pause_hook: None,
         #[cfg(feature = "test-support")]

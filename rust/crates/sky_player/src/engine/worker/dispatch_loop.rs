@@ -316,7 +316,7 @@ pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
 
 #[derive(Debug)]
 pub struct StagedCandidate {
-    pub(crate) down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
+    pub(crate) down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
     pub(crate) packet_masks: sky_dispatch_win32::input::PhysicalPacket,
     pub(crate) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
     pub(crate) authored_target_ticks: TimelineTicks,
@@ -338,7 +338,7 @@ pub struct StagedCandidate {
 #[derive(Clone, Copy)]
 struct EffectivePacket<'a> {
     view: sky_dispatch_win32::input::PreparedPacketView<'a>,
-    down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
+    down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
     authored_target_ticks: TimelineTicks,
     authored_target_qpc: sky_dispatch_win32::clock::QpcTicks,
     down_authored_target_ticks: Option<TimelineTicks>,
@@ -492,7 +492,7 @@ fn proven_raw_zero_down_only(
         && packet.down_mask != 0
         && candidate.down_chord.is_some_and(|chord| {
             chord.source_action_index == candidate.source_action_index
-                && chord.down_mask == packet.down_mask
+                && chord.key_mask == packet.down_mask
         })
         && packet.event_count() == packet.down_mask.count_ones() as u8
         && outcome.status == sky_dispatch_win32::input::SendTransactionStatus::ZeroProgress
@@ -514,14 +514,14 @@ fn proven_raw_zero_down_only(
 
 fn down_authored_target(
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
-    down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
+    down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
 ) -> Result<Option<(TimelineTicks, sky_dispatch_win32::clock::QpcTicks)>, String> {
     down_chord
         .map(|chord| {
             let target_qpc = epoch_qpc
-                .checked_add_duration(DurationTicks::from_raw(chord.scheduled_ticks.as_u64()))
+                .checked_add_duration(DurationTicks::from_raw(chord.onset_ticks.as_u64()))
                 .map_err(|error| format!("Down authored target QPC overflow: {error}"))?;
-            Ok((chord.scheduled_ticks, target_qpc))
+            Ok((chord.onset_ticks, target_qpc))
         })
         .transpose()
 }
@@ -623,14 +623,14 @@ pub(crate) struct StagedDispatchContext<'a> {
 
 pub(crate) fn stage_candidate(
     up_mask: u16,
-    down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
+    down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
     timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
     capture_up_slot_timings: bool,
     target: &SessionTarget,
     resources: &mut super::WorkerResources,
     runtime: &mut super::WorkerRuntime,
 ) -> Result<Option<StagedCandidate>, String> {
-    let down_mask = down_chord.map_or(0, |c| c.down_mask);
+    let down_mask = down_chord.map_or(0, |c| c.key_mask);
     let has_down = down_mask != 0;
     let packet_masks = sky_dispatch_win32::input::PhysicalPacket::new(up_mask, down_mask);
 
@@ -1057,7 +1057,7 @@ pub(crate) fn dispatch_staged_candidate(
                 .scheduler
                 .consume_attempted_down_after_proven_raw_zero(
                     chord.source_action_index,
-                    chord.down_mask,
+                    chord.key_mask,
                 )
             {
                 let _ = suspend_live_input_for_dispatch_with_control(
@@ -1077,7 +1077,7 @@ pub(crate) fn dispatch_staged_candidate(
             }
             if let Err(error) = resources
                 .backend
-                .clear_proven_raw_zero_down_attempt(chord.down_mask)
+                .clear_proven_raw_zero_down_attempt(chord.key_mask)
             {
                 let _ = suspend_live_input_for_dispatch_with_control(
                     &mut resources.backend,
@@ -1147,7 +1147,7 @@ pub(crate) fn dispatch_staged_candidate(
                 .scheduler
                 .consume_attempted_down_after_verified_cleanup(
                     chord.source_action_index,
-                    chord.down_mask,
+                    chord.key_mask,
                 )
             {
                 runtime.terminal_error = Some(format!(
@@ -2360,19 +2360,8 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                 );
                                 break;
                             }
-                            let next_active_up_deadline = resources
-                                .scheduler
-                                .earliest_active_up_due_qpc(resources.playback.epoch)
-                                .map_err(|error| {
-                                    format!("modifier-held active Up deadline failed: {error}")
-                                });
-                            let next_active_up_deadline = match next_active_up_deadline {
-                                Ok(deadline) => deadline,
-                                Err(error) => {
-                                    core.runtime.terminal_error = Some(error);
-                                    break;
-                                }
-                            };
+                            let next_active_up_deadline =
+                                resources.scheduler.earliest_active_up_due_qpc();
                             let max_hold_deadline = match hold_started
                                 .checked_add_duration(timing.modifier_hold_timeout_ticks)
                             {

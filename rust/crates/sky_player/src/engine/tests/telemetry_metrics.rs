@@ -581,37 +581,19 @@ fn progress_snapshot_freezes_for_manual_pause_and_resumes_afterward() {
 
 #[test]
 fn manual_pause_verifies_active_cleanup_before_immediate_same_key_resume() {
-    let actions = [
-        KeyActionInput {
+    let chords = [
+        OnsetChordInput {
             source_action_index: 0,
-            kind: ActionKind::Down,
             scheduled_us: 50_000,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "active-pause-down".into(),
         },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 100_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "active-pause-up".into(),
-        },
-        KeyActionInput {
+        OnsetChordInput {
             source_action_index: 2,
-            kind: ActionKind::Down,
             scheduled_us: 100_000,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "active-pause-resumed-down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 3,
-            kind: ActionKind::Up,
-            scheduled_us: 160_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "active-pause-resumed-up".into(),
         },
     ];
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15], 50_000)
         .expect("valid active-pause schedule");
     let send_calls = Arc::new(AtomicU64::new(0));
     let capture = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -838,23 +820,12 @@ fn manual_pause_verifies_active_cleanup_before_immediate_same_key_resume() {
 
 #[test]
 fn preroll_manual_pause_retains_countdown_and_resumes_without_error() {
-    let actions = [
-        KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 100_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "preroll-pause-down".to_string().into(),
-        },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 200_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "preroll-pause-up".to_string().into(),
-        },
-    ];
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+    let chords = [OnsetChordInput {
+        source_action_index: 0,
+        scheduled_us: 100_000,
+        scan_codes: smallvec::smallvec![0x15],
+    }];
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15], 100_000)
         .expect("compile schedule");
     let mut options = support::test_session_options(
         schedule,
@@ -949,23 +920,13 @@ fn preroll_manual_pause_retains_countdown_and_resumes_without_error() {
 }
 
 fn preroll_test_options(scheduled_down_us: u64, scheduled_up_us: u64) -> NativeSessionOptions {
-    let actions = [
-        KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: scheduled_down_us,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "preroll-down".to_string().into(),
-        },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: scheduled_up_us,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "preroll-up".to_string().into(),
-        },
-    ];
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+    let hold_us = scheduled_up_us.saturating_sub(scheduled_down_us);
+    let chords = [OnsetChordInput {
+        source_action_index: 0,
+        scheduled_us: scheduled_down_us,
+        scan_codes: smallvec::smallvec![0x15],
+    }];
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15], hold_us)
         .expect("compile schedule");
     let mut options = support::test_session_options(
         schedule,
@@ -1111,28 +1072,18 @@ fn frozen_terminal_projection_preserves_preroll_countdown_at_termination() {
 
 #[test]
 fn native_telemetry_does_not_block_dispatch() {
-    let actions: Vec<KeyActionInput> = (0_u32..3)
-        .flat_map(|index| {
+    let chords: Vec<OnsetChordInput> = (0_u32..3)
+        .map(|index| {
             let cycle_us = (u64::from(index) + 1) * 800_000;
-            [
-                KeyActionInput {
-                    source_action_index: index * 2,
-                    kind: ActionKind::Down,
-                    scheduled_us: cycle_us,
-                    scan_codes: smallvec::smallvec![0x15],
-                    reason: "long-down".to_string().into(),
-                },
-                KeyActionInput {
-                    source_action_index: index * 2 + 1,
-                    kind: ActionKind::Up,
-                    scheduled_us: cycle_us + 500_000,
-                    scan_codes: smallvec::smallvec![0x15],
-                    reason: "long-up".to_string().into(),
-                },
-            ]
+            OnsetChordInput {
+                source_action_index: index,
+                scheduled_us: cycle_us,
+                scan_codes: smallvec::smallvec![0x15],
+            }
         })
         .collect();
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+    let expected_packets = chords.len() * 2;
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15], 500_000)
         .expect("long telemetry schedule must compile");
     let mut options = test_session_options(
         schedule,
@@ -1144,7 +1095,7 @@ fn native_telemetry_does_not_block_dispatch() {
         },
     );
     options.wait.supervisor_lease_timeout_us = 3_000_000;
-    options.telemetry.capacity = actions.len();
+    options.telemetry.capacity = expected_packets;
 
     let session = NativeDispatchSession::new(options).expect("test session admission");
     session.arm(1_000_000).expect("worker arm");
@@ -1171,7 +1122,7 @@ fn native_telemetry_does_not_block_dispatch() {
     assert_eq!(telemetry["truncated"], false);
     // Queue pressure is scheduler-dependent; the invariant is that it stays
     // bounded and never changes the successful physical/telemetry result.
-    assert!(snapshot.observer_dropped_samples <= actions.len() as u64);
+    assert!(snapshot.observer_dropped_samples <= expected_packets as u64);
     let records = telemetry["records"].as_array().expect("records array");
     assert_eq!(
         records.len(),
@@ -1185,7 +1136,7 @@ fn native_telemetry_does_not_block_dispatch() {
     assert!(
         indices
             .iter()
-            .all(|index| *index < actions.len() as u64 * 2)
+            .all(|index| *index < expected_packets as u64 * 2)
     );
 }
 
@@ -1317,26 +1268,19 @@ fn invalid_instrument_profile_is_rejected_before_worker_start() {
 
 #[test]
 fn large_runtime_schedule_starts_and_quits_cleanly() {
-    const AUTHORED_ACTIONS: usize = 100_000;
-    let mut actions = Vec::with_capacity(AUTHORED_ACTIONS);
-    for action_index in 0..AUTHORED_ACTIONS {
-        actions.push(KeyActionInput {
-            source_action_index: action_index as u32,
-            kind: if action_index % 2 == 0 {
-                ActionKind::Down
-            } else {
-                ActionKind::Up
-            },
-            scheduled_us: (action_index as u64) * 20_000,
+    const CHORD_COUNT: usize = 50_000;
+    let mut chords = Vec::with_capacity(CHORD_COUNT);
+    for chord_index in 0..CHORD_COUNT {
+        chords.push(OnsetChordInput {
+            source_action_index: chord_index as u32,
+            scheduled_us: (chord_index as u64) * 40_000,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "large-schedule".to_string().into(),
         });
     }
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15], 20_000)
         .expect("large schedule must compile");
-    assert_eq!(schedule.authored_timestamp_group_count, AUTHORED_ACTIONS);
-    assert_eq!(schedule.down_chords.len(), AUTHORED_ACTIONS / 2);
-    assert_eq!(schedule.generation_count, (AUTHORED_ACTIONS / 2) as u64);
+    assert_eq!(schedule.chords.len(), CHORD_COUNT);
+    assert_eq!(schedule.generation_count, CHORD_COUNT as u64);
 
     let session = NativeDispatchSession::new(test_session_options(
         schedule,
@@ -1969,37 +1913,19 @@ fn termination_error_aggregation_preserves_primary_and_secondary_errors() {
 
 #[test]
 fn persistent_zero_progress_down_is_not_replayed_and_terminates_playback() {
-    let actions = vec![
-        KeyActionInput {
+    let chords = vec![
+        OnsetChordInput {
             source_action_index: 0,
-            kind: ActionKind::Down,
             scheduled_us: 0,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "down-1".to_string().into(),
         },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 1_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "up-1".to_string().into(),
-        },
-        KeyActionInput {
+        OnsetChordInput {
             source_action_index: 2,
-            kind: ActionKind::Down,
             scheduled_us: 2_000,
             scan_codes: smallvec::smallvec![0x16],
-            reason: "down-2".to_string().into(),
-        },
-        KeyActionInput {
-            source_action_index: 3,
-            kind: ActionKind::Up,
-            scheduled_us: 3_000,
-            scan_codes: smallvec::smallvec![0x16],
-            reason: "up-2".to_string().into(),
         },
     ];
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15, 0x16], 1_000)
         .expect("valid fault-injection schedule");
     let send_input_capture = Arc::new(std::sync::Mutex::new(Vec::new()));
     let script = FaultInjectionScript {
@@ -2214,38 +2140,28 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
     // Keep the authored epoch comfortably ahead of worker startup. This is a
     // test-only epoch choice made before arm(); the worker must not rebase the
     // frozen schedule after arm or derive a new target from observed runtime.
-    const TEST_AUTHORED_EPOCH_US: u64 = 2_000_000;
-    let actions = vec![
-        KeyActionInput {
+    // With a 30ms mock send latency and 20ms hold, chord 0's completion-anchored
+    // Up (t0 + 50ms) and chord 2's Down (t0 + 45ms) are both due when chord 1
+    // finishes (t0 + 60ms), deterministically producing one disjoint mixed packet.
+    const TEST_AUTHORED_EPOCH_US: u64 = 200_000;
+    let chords = vec![
+        OnsetChordInput {
             source_action_index: 0,
-            kind: ActionKind::Down,
             scheduled_us: TEST_AUTHORED_EPOCH_US,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "first-down".to_string().into(),
         },
-        KeyActionInput {
+        OnsetChordInput {
             source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: TEST_AUTHORED_EPOCH_US + 1_000_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "release-before-disjoint-mixed-down".to_string().into(),
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 5_000,
+            scan_codes: smallvec::smallvec![0x16],
         },
-        KeyActionInput {
+        OnsetChordInput {
             source_action_index: 2,
-            kind: ActionKind::Down,
-            scheduled_us: TEST_AUTHORED_EPOCH_US + 1_000_000,
-            scan_codes: smallvec::smallvec![0x16],
-            reason: "disjoint-mixed-down".to_string().into(),
-        },
-        KeyActionInput {
-            source_action_index: 3,
-            kind: ActionKind::Up,
-            scheduled_us: TEST_AUTHORED_EPOCH_US + 1_500_000,
-            scan_codes: smallvec::smallvec![0x16],
-            reason: "release".to_string().into(),
+            scheduled_us: TEST_AUTHORED_EPOCH_US + 45_000,
+            scan_codes: smallvec::smallvec![0x17],
         },
     ];
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15, 0x16])
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15, 0x16, 0x17], 20_000)
         .expect("valid disjoint mixed schedule");
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();
@@ -2253,7 +2169,7 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
     let options = test_session_options_with_timing_margin(
         schedule,
         BackendConfig::Mock {
-            latency_base_us: 0,
+            latency_base_us: 30_000,
             latency_per_key_us: 0,
             fault_script,
         },
@@ -2274,9 +2190,9 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
         "terminal error: {:?}",
         snapshot.terminal_error
     );
-    assert_eq!(snapshot.precision_packet_attempts, 3);
+    assert_eq!(snapshot.precision_packet_attempts, 5);
     assert_eq!(snapshot.sendinput_completion_qpc_unavailable_attempts, 0);
-    assert_eq!(send_calls.load(Ordering::SeqCst), 3);
+    assert_eq!(send_calls.load(Ordering::SeqCst), 5);
 
     let telemetry: serde_json::Value =
         serde_json::from_str(&session.take_telemetry_json().expect("telemetry"))
@@ -2295,23 +2211,12 @@ fn mixed_disjoint_packet_telemetry_preserves_two_events() {
 #[cfg(feature = "real-input-acceptance")]
 #[test]
 fn native_acceptance_lifecycle_evidence_unstarted_session_is_unavailable() {
-    let actions = [
-        KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 0,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "down".to_string().into(),
-        },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 20_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "up".to_string().into(),
-        },
-    ];
-    let schedule = sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+    let chords = [OnsetChordInput {
+        source_action_index: 0,
+        scheduled_us: 0,
+        scan_codes: smallvec::smallvec![0x15],
+    }];
+    let schedule = sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15], 20_000)
         .expect("valid schedule");
     let options = test_session_options_with_timing_margin(
         schedule,

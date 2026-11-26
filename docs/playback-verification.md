@@ -7,10 +7,12 @@ is [playback-engine.md](playback-engine.md); security rules are in
 timing or gameplay evidence.
 
 Production dispatch executes pure **Control A** for all Down, Up, and mixed
-actions with `ProcessQosPolicy` pinned to **Default** and a frozen pre-spin
-window. Experimental B/C process QoS and runtime adaptive spin are not deployed.
-Physical SendInput tests require interactive foreground authorization; in
-unattended CI and automated runs, physical SendInput remains **NOT RUN**.
+actions over the onset-only chord plan with completion-anchored releases
+(`release_not_before = completion_qpc + H_ticks`), `ProcessQosPolicy` pinned to
+**Default**, and a frozen pre-spin window. Experimental B/C process QoS and
+runtime adaptive spin are not deployed. Physical SendInput tests require
+interactive foreground authorization; in unattended CI and automated runs,
+physical SendInput remains **NOT RUN**.
 
 ## Evidence reachability
 

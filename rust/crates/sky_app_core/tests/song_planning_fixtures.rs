@@ -1,8 +1,9 @@
-use serde_json::Value;
+use serde_json::{Value, json};
 use sky_app_core::song::{
-    ActionKind, analyze_schedule_with_context, build_schedule_with_policy, parse_song_json,
+    ScheduleMetadata, analyze_schedule_with_context, build_schedule_with_policy, parse_song_json,
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 fn fixture() -> Value {
     serde_json::from_str(include_str!(
@@ -21,6 +22,62 @@ fn assert_json_field(actual: &Value, expected: &Value, field: &str, context: &Va
     } else {
         assert_eq!(actual_value, expected_value, "{field}: {context}");
     }
+}
+
+/// Derive the historical paired Down/Up actions array from an onset-only
+/// `ScheduleMetadata` so the immutable `schedule_contract_cases.json` fixture
+/// can be verified without modifying historical evidence.
+fn derive_historical_actions_json(schedule: &ScheduleMetadata) -> Value {
+    let mut flat = Vec::new();
+    for chord in &schedule.chords {
+        for &scan in &chord.scan_codes {
+            flat.push((chord.at_us, scan));
+        }
+    }
+    let mut has_next = vec![false; flat.len()];
+    let mut seen_later = HashMap::<u16, u64>::new();
+    for (idx, &(at_us, scan)) in flat.iter().enumerate().rev() {
+        has_next[idx] = seen_later.contains_key(&scan);
+        seen_later.insert(scan, at_us);
+    }
+    // Sort key: (at_us, is_down) so Up precedes Down at equal timestamps.
+    let mut grouped = BTreeMap::<(u64, bool), (Vec<u16>, BTreeSet<String>)>::new();
+    for (idx, &(at_us, scan)) in flat.iter().enumerate() {
+        let down = grouped.entry((at_us, true)).or_default();
+        if !down.0.contains(&scan) {
+            down.0.push(scan);
+        }
+        down.1.insert("onset".into());
+
+        let up_at = at_us + schedule.hold_us;
+        let up = grouped.entry((up_at, false)).or_default();
+        if !up.0.contains(&scan) {
+            up.0.push(scan);
+        }
+        up.1.insert(if has_next[idx] {
+            "repeat_release".into()
+        } else {
+            "release".into()
+        });
+    }
+    Value::Array(
+        grouped
+            .into_iter()
+            .map(|((at_us, is_down), (scan_codes, reasons))| {
+                let reason = if reasons.len() == 1 {
+                    reasons.into_iter().next().unwrap_or_default()
+                } else {
+                    "mixed".into()
+                };
+                json!({
+                    "at_us": at_us,
+                    "scan_codes": scan_codes,
+                    "kind": if is_down { "down" } else { "up" },
+                    "reason": reason,
+                })
+            })
+            .collect(),
+    )
 }
 
 #[test]
@@ -70,7 +127,8 @@ fn schedule_and_risk_cases_match_recorded_contract_fields() {
             build_schedule_with_policy(&song, case["tempo_scale"].as_f64().unwrap(), &policy)
                 .expect("schedule fixture case");
         let expected = &case["schedule"];
-        let actual = serde_json::to_value(&schedule).unwrap();
+        let mut actual = serde_json::to_value(&schedule).unwrap();
+        actual["actions"] = derive_historical_actions_json(&schedule);
         for field in [
             "actions",
             "source_duration_us",
@@ -116,12 +174,6 @@ fn schedule_and_risk_cases_match_recorded_contract_fields() {
             assert_json_field(&actual_risk, expected_risk, field, case);
         }
     }
-}
-
-#[test]
-fn action_kind_wire_names_remain_stable() {
-    assert_eq!(serde_json::to_value(ActionKind::Down).unwrap(), "down");
-    assert_eq!(serde_json::to_value(ActionKind::Up).unwrap(), "up");
 }
 
 #[test]
@@ -180,23 +232,20 @@ fn planner_invariants_across_boundary_tempo_scales() {
         let schedule = build_schedule_with_policy(&song, tempo, &policy)
             .unwrap_or_else(|e| panic!("failed to build schedule for tempo {tempo}: {e:?}"));
 
-        let mut prev_us = 0;
-        let mut down_count = 0;
-        let mut up_count = 0;
-        for action in &schedule.actions {
-            assert!(
-                action.at_us >= prev_us,
-                "action at {} preceded previous at {} for tempo {}",
-                action.at_us,
-                prev_us,
-                tempo
-            );
-            prev_us = action.at_us;
-            match action.kind {
-                ActionKind::Down => down_count += action.scan_codes.len(),
-                ActionKind::Up => up_count += action.scan_codes.len(),
+        assert_eq!(schedule.hold_us, policy.min_hold_us);
+        let mut prev_us = None;
+        for chord in &schedule.chords {
+            if let Some(prev) = prev_us {
+                assert!(
+                    chord.at_us > prev,
+                    "chord at {} did not strictly advance past {} for tempo {}",
+                    chord.at_us,
+                    prev,
+                    tempo
+                );
             }
+            assert!(!chord.scan_codes.is_empty());
+            prev_us = Some(chord.at_us);
         }
-        assert_eq!(down_count, up_count, "down and up note count must balance");
     }
 }

@@ -1,7 +1,7 @@
 use super::replan_timing::{
-    elapsed_us, stage_from_worker_outer_evaluation, timing_action, timing_harness_without_focus,
+    elapsed_us, stage_from_worker_outer_evaluation, timing_chord, timing_harness_without_focus,
 };
-use super::support::{ActionKind, ProductionDispatchTestHarness, QpcTicks, StagedDispatchOutcome};
+use super::support::{ProductionDispatchTestHarness, QpcTicks, StagedDispatchOutcome};
 
 fn wait_to_packet_deadline(
     harness: &mut ProductionDispatchTestHarness,
@@ -35,13 +35,8 @@ fn wait_to_packet_deadline(
 
 #[test]
 fn scheduler_h_floor_and_authored_repeat_trace_uses_single_sender_commits() {
-    let actions = [
-        timing_action(6670, ActionKind::Down, 0),
-        timing_action(6671, ActionKind::Up, 20_000),
-        timing_action(6672, ActionKind::Down, 20_000),
-        timing_action(6673, ActionKind::Up, 40_000),
-    ];
-    let (mut harness, packets, epoch) = timing_harness_without_focus(&actions, &[40_000, 0, 0]);
+    let chords = [timing_chord(6670, 0), timing_chord(6672, 20_000)];
+    let (mut harness, packets, epoch) = timing_harness_without_focus(&chords, &[40_000, 0, 0]);
     let clock = harness.resources.clock;
 
     let down_eval_qpc = harness.qpc_now_for_test().expect("Down scheduler QPC");

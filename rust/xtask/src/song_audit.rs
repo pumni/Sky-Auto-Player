@@ -301,7 +301,7 @@ fn analyze_sheet(bytes: &[u8], fallback_name: &str) -> Result<SheetAnalysis> {
     match plan {
         Ok(SongPlan::LegacyCompatibility(legacy)) => {
             plan_status = "ready_legacy_compatibility".to_owned();
-            schedule_action_count = Some(legacy.schedule.actions.len());
+            schedule_action_count = Some(legacy.schedule.chords.len());
             schedule_note_count = Some(legacy.schedule.note_count);
             schedule_duration_us = Some(legacy.schedule.duration_us);
             impossible_repeats = Some(legacy.schedule.impossible_same_key_repeats);
@@ -338,7 +338,7 @@ fn analyze_sheet(bytes: &[u8], fallback_name: &str) -> Result<SheetAnalysis> {
                 );
             }
             if let Some(schedule) = &piano.schedule {
-                schedule_action_count = Some(schedule.actions.len());
+                schedule_action_count = Some(schedule.chords.len());
                 schedule_note_count = Some(schedule.note_count);
                 schedule_duration_us = Some(schedule.duration_us);
                 impossible_repeats = Some(schedule.impossible_same_key_repeats);
@@ -1322,7 +1322,7 @@ mod tests {
         assert_eq!(analysis.metrics.authored_distinct_onset_count, 1);
         assert_eq!(analysis.metrics.unique_physical_time_key_count, 1);
         assert_eq!(analysis.metrics.output_physical_note_count, Some(2));
-        assert_eq!(analysis.metrics.output_action_count, Some(2));
+        assert_eq!(analysis.metrics.output_action_count, Some(1));
         assert_eq!(analysis.metrics.physical_collision_extra_event_count, 2);
         assert_eq!(analysis.metrics.source_layer_collision_extra_event_count, 1);
         assert_eq!(analysis.metrics.active_duration_us, Some(0));

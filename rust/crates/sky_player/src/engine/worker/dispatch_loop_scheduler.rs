@@ -6,7 +6,7 @@ enum SchedulerAction {
     },
     Send {
         up_mask: u16,
-        down_chord: Option<sky_dispatch_core::executor::DownChordMetadata>,
+        down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
         timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
     },
 }
@@ -268,7 +268,7 @@ fn evaluate_scheduler_action(
             timing_window,
         } => Ok(SchedulerAction::Send {
             up_mask,
-            down_chord: down_chord.map(Into::into),
+            down_chord,
             timing_window,
         }),
     }
@@ -399,7 +399,7 @@ mod scheduler_tests {
     use crate::engine::worker::WorkerRuntime;
     use crate::engine::worker::dispatch::observation::DispatchObservation;
     use crate::engine::worker::dispatch::observer::PendingObservationQueue;
-    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+    use sky_dispatch_core::model::OnsetChordInput;
     use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
     use sky_dispatch_win32::clock::{QpcClock, QpcTicks};
     use sky_dispatch_win32::wait::{WaitFailure, WaitOutcome, WaitResult};
@@ -598,23 +598,12 @@ mod scheduler_tests {
 
     #[test]
     fn modifier_up_wake_is_attached_only_to_the_matching_up_deadline_packet() {
-        let actions = [
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "wake-attribution-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 20_000,
-                scan_codes: vec![0x15].into(),
-                reason: "wake-attribution-up".into(),
-            },
-        ];
-        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let chords = [OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: vec![0x15].into(),
+        }];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
         let epoch = harness.resources.playback.epoch;
         harness
             .resources
@@ -622,20 +611,20 @@ mod scheduler_tests {
             .on_send_completed_at(0, 1, epoch)
             .expect("commit first Down");
         let deadline = epoch
-            .checked_add_duration(harness.resources.clock.duration_from_us(20_000).unwrap())
+            .checked_add_duration(harness.resources.clock.duration_from_us(17_167).unwrap())
             .unwrap();
         let candidate = harness
             .stage_candidate_for_test(
                 1,
                 None,
-                TimelineTicks::from_raw(20_000),
+                TimelineTicks::from_raw(17_167),
             )
             .expect("stage release at its deadline")
             .expect("Up candidate");
         assert_eq!(candidate.timing_window.musical_up_not_before_qpc, deadline);
 
         let wake = epoch
-            .checked_add_duration(harness.resources.clock.duration_from_us(20_010).unwrap())
+            .checked_add_duration(harness.resources.clock.duration_from_us(17_177).unwrap())
             .unwrap();
         let mut runtime = WorkerRuntime::default();
         attribute_modifier_up_deadline_wake(Some((deadline, wake)), Some(&candidate), &mut runtime);
@@ -659,37 +648,19 @@ mod scheduler_tests {
     fn modifier_backoff_targets_independent_up_at_controlled_qpc_deadline() {
         use sky_dispatch_core::executor::DispatchDecision;
 
-        let actions = [
-            KeyActionInput {
+        let chords = [
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: vec![0x15].into(),
-                reason: "modifier-deadline-a-down".into(),
             },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 1,
-                kind: ActionKind::Down,
-                scheduled_us: 19_500,
+                scheduled_us: 16_500,
                 scan_codes: vec![0x16].into(),
-                reason: "modifier-deadline-b-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: 20_000,
-                scan_codes: vec![0x15].into(),
-                reason: "modifier-deadline-a-up".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 40_000,
-                scan_codes: vec![0x16].into(),
-                reason: "modifier-deadline-b-up".into(),
             },
         ];
-        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
         let clock = harness.resources.clock;
         let epoch = QpcTicks::ZERO;
         harness
@@ -698,27 +669,26 @@ mod scheduler_tests {
             .on_send_completed_at(0, 1, epoch)
             .expect("complete A Down at controlled QPC zero");
 
-        let at_19_5ms = epoch
-            .checked_add_duration(clock.duration_from_us(19_500).unwrap())
+        let at_16_5ms = epoch
+            .checked_add_duration(clock.duration_from_us(16_500).unwrap())
             .unwrap();
         let active_up_deadline = harness
             .resources
             .scheduler
-            .earliest_active_up_due_qpc(epoch)
-            .expect("active Up deadline arithmetic")
+            .earliest_active_up_due_qpc()
             .expect("active A slot");
         assert_eq!(
             active_up_deadline,
             epoch
-                .checked_add_duration(clock.duration_from_us(20_000).unwrap())
+                .checked_add_duration(clock.duration_from_us(17_167).unwrap())
                 .unwrap()
         );
         assert!(matches!(
             harness
                 .resources
                 .scheduler
-                .evaluate_at(at_19_5ms, epoch)
-                .expect("19.5-ms scheduler decision"),
+                .evaluate_at(at_16_5ms, epoch)
+                .expect("16.5-ms scheduler decision"),
             DispatchDecision::Send {
                 up_mask: 0,
                 down_chord: Some(_),
@@ -726,21 +696,21 @@ mod scheduler_tests {
             }
         ));
 
-        let default_max_hold = at_19_5ms
+        let default_max_hold = at_16_5ms
             .checked_add_duration(clock.duration_from_us(2_000_000).unwrap())
             .unwrap();
-        let deadline = modifier_replan_deadline(at_19_5ms, Some(active_up_deadline), default_max_hold, clock)
+        let deadline = modifier_replan_deadline(at_16_5ms, Some(active_up_deadline), default_max_hold, clock)
             .expect("modifier deadline calculation")
             .expect("future Up needs an interruptible wait");
         assert_eq!(deadline, active_up_deadline);
 
-        let at_20ms = active_up_deadline;
+        let at_up = active_up_deadline;
         assert!(matches!(
             harness
                 .resources
                 .scheduler
-                .evaluate_at(at_20ms, epoch)
-                .expect("20-ms scheduler decision"),
+                .evaluate_at(at_up, epoch)
+                .expect("Up scheduler decision"),
             DispatchDecision::Send {
                 up_mask: 1,
                 down_chord: Some(_),
@@ -748,7 +718,7 @@ mod scheduler_tests {
             }
         ));
         assert_eq!(
-            modifier_replan_deadline(at_20ms, Some(active_up_deadline), default_max_hold, clock)
+            modifier_replan_deadline(at_up, Some(active_up_deadline), default_max_hold, clock)
                 .expect("already-due Up calculation"),
             None,
             "an already-due Up replans immediately without arming a busy wait"
@@ -793,37 +763,19 @@ mod scheduler_tests {
     fn independent_up_deadline_keeps_hold_without_adding_an_extra_same_key_wait() {
         use sky_dispatch_core::executor::DispatchDecision;
 
-        let independent_actions = [
-            KeyActionInput {
+        let independent_chords = [
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: vec![0x15].into(),
-                reason: "hold-floor-a-down".into(),
             },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 1,
-                kind: ActionKind::Down,
                 scheduled_us: 19_500,
                 scan_codes: vec![0x16].into(),
-                reason: "hold-floor-b-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Up,
-                scheduled_us: 20_000,
-                scan_codes: vec![0x15].into(),
-                reason: "hold-floor-a-up".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 40_000,
-                scan_codes: vec![0x16].into(),
-                reason: "hold-floor-b-up".into(),
             },
         ];
-        let hold = ProductionDispatchTestHarness::create_harness(&independent_actions);
+        let hold = ProductionDispatchTestHarness::create_harness(&independent_chords);
         let clock = hold.resources.clock;
         let epoch = QpcTicks::ZERO;
         let down_completion = epoch
@@ -837,50 +789,30 @@ mod scheduler_tests {
             .checked_add_duration(clock.duration_from_us(22_167).unwrap())
             .unwrap();
         assert_eq!(
-            hold_scheduler
-                .earliest_active_up_due_qpc(epoch)
-                .expect("H-floor deadline arithmetic"),
+            hold_scheduler.earliest_active_up_due_qpc(),
             Some(hold_floor_deadline),
-            "the independent Up waits for completion + H when that exceeds authored Up"
+            "the independent Up waits for completion + H"
         );
 
-        let repeat_actions = [
-            KeyActionInput {
+        let repeat_chords = [
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 scheduled_us: 0,
                 scan_codes: vec![0x15].into(),
-                reason: "repeat-first-down".into(),
             },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 20_000,
-                scan_codes: vec![0x15].into(),
-                reason: "repeat-first-up".into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
                 scheduled_us: 37_167,
                 scan_codes: vec![0x15].into(),
-                reason: "repeat-second-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 60_000,
-                scan_codes: vec![0x15].into(),
-                reason: "repeat-second-up".into(),
             },
         ];
-        let repeat = ProductionDispatchTestHarness::create_harness(&repeat_actions);
+        let repeat = ProductionDispatchTestHarness::create_harness(&repeat_chords);
         let mut scheduler = repeat.resources.scheduler;
         scheduler
             .on_send_completed_at(0, 1, epoch)
             .expect("complete first Down");
         let authored_up = epoch
-            .checked_add_duration(clock.duration_from_us(20_000).unwrap())
+            .checked_add_duration(clock.duration_from_us(17_167).unwrap())
             .unwrap();
         assert!(matches!(
             scheduler
@@ -911,23 +843,12 @@ mod scheduler_tests {
 
     #[test]
     fn scheduler_deadline_reevaluation_carries_down_metadata_from_evaluation() {
-        let actions = [
-            KeyActionInput {
-                source_action_index: 17,
-                kind: ActionKind::Down,
-                scheduled_us: 5_000,
-                scan_codes: vec![0x15].into(),
-                reason: "deadline-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 18,
-                kind: ActionKind::Up,
-                scheduled_us: 25_000,
-                scan_codes: vec![0x15].into(),
-                reason: "deadline-up".into(),
-            },
-        ];
-        let harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let chords = [OnsetChordInput {
+            source_action_index: 17,
+            scheduled_us: 5_000,
+            scan_codes: vec![0x15].into(),
+        }];
+        let harness = ProductionDispatchTestHarness::create_harness(&chords);
         let epoch = harness.resources.playback.epoch;
         let (initial, staging_target, staged) = evaluate_scheduler_action_for_staging(
             &harness.resources.scheduler,
@@ -951,23 +872,12 @@ mod scheduler_tests {
 
     #[test]
     fn staging_captures_up_slots_only_when_observer_is_enabled() {
-        let actions = [
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: vec![0x15].into(),
-                reason: "observer-off-down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 4,
-                kind: ActionKind::Up,
-                scheduled_us: 20_000,
-                scan_codes: vec![0x15].into(),
-                reason: "observer-off-up".into(),
-            },
-        ];
-        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let chords = [OnsetChordInput {
+            source_action_index: 3,
+            scheduled_us: 0,
+            scan_codes: vec![0x15].into(),
+        }];
+        let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
         harness.configure_mock_packet_sender_for_test(&[0]);
         harness.attach_executor_for_test().expect("attach executor");
         let down = harness
@@ -1004,7 +914,7 @@ mod scheduler_tests {
             .as_ref()
             .expect("observer per-slot attribution");
         assert_eq!(captured.len(), usize::from(summary.slot_count));
-        assert_eq!(captured[0].source_action_index, 4);
+        assert_eq!(captured[0].source_action_index, 3);
         assert_eq!(captured[0].source_action_index, summary.first_source_action_index);
         assert_eq!(without_observer.timing_window, with_observer.timing_window);
     }

@@ -1,8 +1,8 @@
 use super::support::wait_until_qpc;
 use crate::engine::test_support::ProductionDispatchTestHarness;
 use crate::engine::worker::StagedDispatchOutcome;
-use sky_dispatch_core::executor::{DispatchDecision, DownChordMetadata};
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::executor::{DispatchDecision, PreparedChord};
+use sky_dispatch_core::model::OnsetChordInput;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
 use sky_dispatch_win32::input::{
     PacketRetryReason, PhysicalPacket, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
@@ -10,29 +10,23 @@ use sky_dispatch_win32::input::{
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-fn raw_zero_action(
+fn raw_zero_chord(
     source_action_index: u32,
-    kind: ActionKind,
     scheduled_us: u64,
     scan_codes: &[u16],
-) -> KeyActionInput {
-    KeyActionInput {
+) -> OnsetChordInput {
+    OnsetChordInput {
         source_action_index,
-        kind,
         scheduled_us,
         scan_codes: scan_codes.iter().copied().collect(),
-        reason: "Issue 666 proven raw-zero regression".into(),
     }
 }
 
-fn raw_zero_sequence() -> [KeyActionInput; 6] {
+fn raw_zero_sequence() -> [OnsetChordInput; 3] {
     [
-        raw_zero_action(600, ActionKind::Down, 0, &[0x15]),
-        raw_zero_action(601, ActionKind::Down, 20_000, &[0x16]),
-        raw_zero_action(602, ActionKind::Down, 30_000, &[0x17]),
-        raw_zero_action(603, ActionKind::Up, 40_000, &[0x16]),
-        raw_zero_action(604, ActionKind::Up, 50_000, &[0x17]),
-        raw_zero_action(605, ActionKind::Up, 100_000, &[0x15]),
+        raw_zero_chord(600, 0, &[0x15]),
+        raw_zero_chord(601, 5_000, &[0x16]),
+        raw_zero_chord(602, 10_000, &[0x17]),
     ]
 }
 
@@ -50,11 +44,7 @@ fn stage_at_qpc(
     harness: &mut ProductionDispatchTestHarness,
     at: QpcTicks,
     epoch: QpcTicks,
-) -> (
-    u16,
-    Option<DownChordMetadata>,
-    crate::engine::StagedCandidate,
-) {
+) -> (u16, Option<PreparedChord>, crate::engine::StagedCandidate) {
     match harness
         .evaluate_live_scheduler_for_test(at, epoch)
         .expect("evaluate production scheduler")
@@ -64,7 +54,6 @@ fn stage_at_qpc(
             down_chord,
             timing_window,
         } => {
-            let down_chord = down_chord.map(Into::into);
             let candidate = harness
                 .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
                 .expect("stage production candidate")
@@ -153,7 +142,7 @@ fn proven_raw_zero_down_only_clears_only_the_new_obligation_and_terminates() {
     );
     assert_eq!(harness.resources.backend.active_mask, 0b0001);
 
-    let b_at = qpc_at_offset(&harness, epoch, 20_000);
+    let b_at = qpc_at_offset(&harness, epoch, 5_000);
     wait_until_qpc(&harness, b_at);
     let (b_up_mask, b_down, b) = stage_at_qpc(&mut harness, b_at, epoch);
     assert_eq!(b_up_mask, 0);
@@ -210,7 +199,7 @@ fn raw_zero_does_not_create_a_completion_floor_or_send_later_events() {
         StagedDispatchOutcome::Dispatched
     );
 
-    let b_at = qpc_at_offset(&harness, epoch, 20_000);
+    let b_at = qpc_at_offset(&harness, epoch, 5_000);
     wait_until_qpc(&harness, b_at);
     let (_, b_down, b) = stage_at_qpc(&mut harness, b_at, epoch);
     assert_eq!(b_down.map(|chord| chord.source_action_index), Some(601));
@@ -249,11 +238,8 @@ fn raw_zero_does_not_create_a_completion_floor_or_send_later_events() {
 }
 #[test]
 fn h_g_real_waiter_smoke_wakes_on_a_future_boundary() {
-    let actions = [
-        raw_zero_action(616, ActionKind::Down, 0, &[0x15]),
-        raw_zero_action(617, ActionKind::Up, 1_000_000, &[0x15]),
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [raw_zero_chord(616, 0, &[0x15])];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let now = harness.qpc_now_for_test().expect("wait smoke QPC");
     let deadline = now
         .checked_add_duration(
@@ -281,13 +267,11 @@ fn h_g_real_waiter_smoke_wakes_on_a_future_boundary() {
 #[test]
 fn raw_zero_classifier_rejects_short_packet_and_contradictory_qpc() {
     for contradictory_qpc in [false, true] {
-        let actions = [
-            raw_zero_action(620, ActionKind::Down, 0, &[0x15]),
-            raw_zero_action(621, ActionKind::Down, 20_000, &[0x16, 0x17]),
-            raw_zero_action(622, ActionKind::Up, 40_000, &[0x16, 0x17]),
-            raw_zero_action(623, ActionKind::Up, 100_000, &[0x15]),
+        let chords = [
+            raw_zero_chord(620, 0, &[0x15]),
+            raw_zero_chord(621, 5_000, &[0x16, 0x17]),
         ];
-        let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+        let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
         let epoch = harness.qpc_now_for_test().expect("QPC epoch");
         harness
             .reanchor_playback_clock_for_test(epoch)
@@ -360,7 +344,7 @@ fn raw_zero_classifier_rejects_short_packet_and_contradictory_qpc() {
             harness.dispatch_staged_candidate_for_test(first, false),
             StagedDispatchOutcome::Dispatched
         );
-        let b_at = qpc_at_offset(&harness, epoch, 20_000);
+        let b_at = qpc_at_offset(&harness, epoch, 5_000);
         wait_until_qpc(&harness, b_at);
         let (_, _, b) = stage_at_qpc(&mut harness, b_at, epoch);
         assert_eq!(b.packet_masks.down_mask.count_ones(), 2);
@@ -394,13 +378,11 @@ fn raw_zero_classifier_rejects_short_packet_and_contradictory_qpc() {
 
 #[test]
 fn mixed_up_a_down_b_raw_zero_uses_conservative_reconciliation() {
-    let actions = [
-        raw_zero_action(640, ActionKind::Down, 0, &[0x15]),
-        raw_zero_action(641, ActionKind::Up, 20_000, &[0x15]),
-        raw_zero_action(642, ActionKind::Down, 20_000, &[0x16]),
-        raw_zero_action(643, ActionKind::Up, 40_000, &[0x16]),
+    let chords = [
+        raw_zero_chord(640, 0, &[0x15]),
+        raw_zero_chord(642, 20_000, &[0x16]),
     ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = harness.qpc_now_for_test().expect("QPC epoch");
     harness
         .reanchor_playback_clock_for_test(epoch)
@@ -619,7 +601,7 @@ fn raw_zero_with_concurrent_stop_skip_or_lease_expiry_cleans_up_and_does_not_con
             harness.dispatch_staged_candidate_for_test(first, false),
             StagedDispatchOutcome::Dispatched
         );
-        let b_at = qpc_at_offset(&harness, epoch, 20_000);
+        let b_at = qpc_at_offset(&harness, epoch, 5_000);
         wait_until_qpc(&harness, b_at);
         let (_, _, b) = stage_at_qpc(&mut harness, b_at, epoch);
         assert_eq!(
@@ -731,11 +713,8 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
 
     // Down-only.
-    let actions = [
-        raw_zero_action(700, ActionKind::Down, 0, &[0x15]),
-        raw_zero_action(701, ActionKind::Up, 100_000, &[0x15]),
-    ];
-    let mut down = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [raw_zero_chord(700, 0, &[0x15])];
+    let mut down = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = down.qpc_now_for_test().expect("epoch");
     down.reanchor_playback_clock_for_test(epoch).unwrap();
     down.configure_focus_owner_for_test(1, 177);
@@ -764,11 +743,8 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     let _ = down.finalize_for_test();
 
     // Up-only. Setup Down and wait occur before the measured suffix.
-    let actions = [
-        raw_zero_action(710, ActionKind::Down, 0, &[0x15]),
-        raw_zero_action(711, ActionKind::Up, 20_000, &[0x15]),
-    ];
-    let mut up = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [raw_zero_chord(710, 0, &[0x15])];
+    let mut up = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = up.qpc_now_for_test().expect("epoch");
     up.reanchor_playback_clock_for_test(epoch).unwrap();
     up.configure_focus_owner_for_test(1, 177);
@@ -806,13 +782,11 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     let _ = up.finalize_for_test();
 
     // Mixed Up(A)+Down(B).
-    let actions = [
-        raw_zero_action(720, ActionKind::Down, 0, &[0x15]),
-        raw_zero_action(721, ActionKind::Up, 20_000, &[0x15]),
-        raw_zero_action(722, ActionKind::Down, 20_000, &[0x16]),
-        raw_zero_action(723, ActionKind::Up, 40_000, &[0x16]),
+    let chords = [
+        raw_zero_chord(720, 0, &[0x15]),
+        raw_zero_chord(722, 20_000, &[0x16]),
     ];
-    let mut mixed = ProductionDispatchTestHarness::create_harness(&actions);
+    let mut mixed = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = mixed.qpc_now_for_test().expect("epoch");
     mixed.reanchor_playback_clock_for_test(epoch).unwrap();
     mixed.configure_focus_owner_for_test(1, 177);
@@ -855,13 +829,11 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     let _ = mixed.finalize_for_test();
 
     // Mixed modifier block replans to the independent Up-only packet.
-    let actions = [
-        raw_zero_action(730, ActionKind::Down, 0, &[0x15]),
-        raw_zero_action(731, ActionKind::Up, 20_000, &[0x15]),
-        raw_zero_action(732, ActionKind::Down, 20_000, &[0x16]),
-        raw_zero_action(733, ActionKind::Up, 40_000, &[0x16]),
+    let chords = [
+        raw_zero_chord(730, 0, &[0x15]),
+        raw_zero_chord(732, 20_000, &[0x16]),
     ];
-    let mut fallback = ProductionDispatchTestHarness::create_harness(&actions);
+    let mut fallback = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = fallback.qpc_now_for_test().expect("epoch");
     fallback.reanchor_playback_clock_for_test(epoch).unwrap();
     fallback.configure_focus_owner_for_test(1, 177);
@@ -924,7 +896,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     assert_eq!(
         fallback
             .current_executor_chord_for_test()
-            .map(|chord| chord.down_mask),
+            .map(|chord| chord.key_mask),
         Some(2),
         "Up-prefix must leave the staged Down onset pending"
     );
@@ -934,11 +906,8 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
 
     // Target invalidation at final admission rejects the candidate before
     // the mock packet boundary. No sender call is counted.
-    let actions = [
-        raw_zero_action(740, ActionKind::Down, 0, &[0x15]),
-        raw_zero_action(741, ActionKind::Up, 100_000, &[0x15]),
-    ];
-    let mut blocked = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [raw_zero_chord(740, 0, &[0x15])];
+    let mut blocked = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = blocked.qpc_now_for_test().expect("epoch");
     blocked.reanchor_playback_clock_for_test(epoch).unwrap();
     blocked.configure_focus_owner_for_test(1, 177);
@@ -974,11 +943,8 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     // A Down blocked by a held modifier is the common pre-call replan path.
     // It must stop before lease QPC, foreground/process queries, owner proof,
     // or the sender, then leave the authored onset eligible.
-    let actions = [
-        raw_zero_action(750, ActionKind::Down, 0, &[0x15]),
-        raw_zero_action(751, ActionKind::Up, 100_000, &[0x15]),
-    ];
-    let mut modifier_blocked = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [raw_zero_chord(750, 0, &[0x15])];
+    let mut modifier_blocked = ProductionDispatchTestHarness::create_harness(&chords);
     let epoch = modifier_blocked.qpc_now_for_test().expect("epoch");
     modifier_blocked
         .reanchor_playback_clock_for_test(epoch)
