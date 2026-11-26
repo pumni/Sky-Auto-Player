@@ -13,6 +13,7 @@ export interface HomeContent {
     release: string;
   };
   hero: {
+    eyebrow: string;
     titleStart: string;
     titleEmphasis: string;
     titleEnd: string;

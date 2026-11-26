@@ -17,11 +17,12 @@ export const homeVi: HomeContent = {
     release: 'Tải xuống',
   },
   hero: {
+    eyebrow: 'Trình phát nhạc cho Sky',
     titleStart: 'Mang ',
     titleEmphasis: 'âm nhạc',
     titleEnd: ' đến thế giới Sky.',
     description:
-      'Tự động phát sheet nhạc trong Sky: Children of the Light trên Windows. Chọn bài từ thư viện có sẵn hoặc nhập bản nhạc của bạn.',
+      'Tự động phát sheet nhạc trong Sky: Children of the Light. Chọn bài có sẵn hoặc nhập sheet của bạn.',
     secondaryCta: 'Khám phá ứng dụng',
     meta: 'Windows 11 64-bit · Miễn phí, mã nguồn mở · GitHub Releases',
     riskNote:
@@ -29,7 +30,7 @@ export const homeVi: HomeContent = {
   },
   product: {
     title: 'Khám phá trình phát',
-    description: 'Tìm bản nhạc và chuẩn bị trước khi phát.',
+    description: 'Tìm và chuẩn bị sheet nhạc.',
     selectorLabel: 'Chọn giao diện trình phát',
     fullSizeLabel: 'Xem ảnh kích thước đầy đủ',
     fallbackLabel: 'Mở giao diện trình phát khác',

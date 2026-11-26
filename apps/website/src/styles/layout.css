@@ -5,46 +5,37 @@
   }
 
   .home-page {
-    --home-chapter-gap: clamp(5.5rem, 24vw, 7rem);
-    --home-opening-gap: clamp(2.25rem, 10.25vw, 2.5rem);
     --home-rail-max: 70rem;
-    --home-heading: clamp(2rem, 1.4rem + 1.7vw, 3rem);
-    --home-lead: clamp(1rem, 0.9rem + 0.4vw, 1.375rem);
-    --home-content-gap: clamp(1.75rem, 3.2vw, 2.5rem);
-    display: grid;
-    padding-block: clamp(2rem, 4.5vw, 4.5rem) clamp(4rem, 9vw, 9rem);
-  }
-
-  .home-page > section:not([data-home-section='hero']) {
     --container-max: var(--home-rail-max);
+    --home-heading: clamp(2rem, 1.45rem + 2.3vw, 3.5rem);
+    --home-lead: clamp(1rem, 0.9rem + 0.5vw, 1.25rem);
+    --home-content-gap: clamp(1.5rem, 3.5vw, 3.5rem);
+    --home-band-space: clamp(4rem, 8vw, 8rem);
+    --home-halo-warm: #29252c;
+    --home-halo-cool: #172631;
+    --home-halo-download: #3e342c;
   }
 
-  .home-page > section ~ section {
-    margin-block-start: var(--home-chapter-gap);
+  .home-intro {
+    padding-block: clamp(2.5rem, 6vw, 6rem) var(--home-band-space);
+    background:
+      radial-gradient(ellipse at 15% 0%, var(--home-halo-warm), transparent 55%),
+      radial-gradient(ellipse at 100% 35%, var(--home-halo-cool), transparent 57%);
   }
 
-  .home-page > section:nth-of-type(2) {
-    margin-block-start: var(--home-opening-gap);
+  .home-intro > #product {
+    margin-block-start: clamp(2rem, 4vw, 4rem);
   }
 
-  @media (min-width: 40rem) {
-    .home-page {
-      --home-chapter-gap: clamp(6.5rem, 11vw, 8rem);
+  @media (max-width: 39.99rem) {
+    .home-intro {
+      padding-block-start: 2rem;
     }
   }
 
-  @media (min-width: 64rem) {
-    .home-page {
-      --home-chapter-gap: clamp(7.5rem, 11vw, 9rem);
-      --home-opening-gap: clamp(3.5rem, 4.5vw, 4.5rem);
-      --home-content-gap: clamp(2.5rem, 3.5vw, 3.5rem);
-      padding-block-start: clamp(3.5rem, 4.5vw, 4.5rem);
-    }
-  }
-
-  @media (min-width: 80rem) {
-    .home-page {
-      --home-chapter-gap: clamp(9rem, 11vw, 11rem);
+  @media (forced-colors: active) {
+    .home-intro {
+      background: Canvas;
     }
   }
 

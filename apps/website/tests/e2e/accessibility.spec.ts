@@ -171,7 +171,7 @@ test.describe('accessibility and responsive contracts', () => {
     });
   }
 
-  test('chapter gaps, shared alignment, and FAQ spacing hold at responsive widths', async ({
+  test('Home band spacing, shared alignment, and FAQ spacing hold at responsive widths', async ({
     page,
   }) => {
     const widths = [320, 390, 768, 1024, 1440, 1920];
@@ -180,9 +180,13 @@ test.describe('accessibility and responsive contracts', () => {
     for (const width of widths) {
       await page.setViewportSize({ width, height: 900 });
       const spacing = await page.evaluate(() => {
-        const chapters = [...document.querySelectorAll('[data-home-section]')].map((element) =>
-          element.getBoundingClientRect(),
-        );
+        const bounds = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+        const contentGaps = [
+          bounds('#product').top - bounds('#top').bottom,
+          bounds('.playback-demo__header').top - bounds('#product').bottom,
+          bounds('.quick-start__layout').top - bounds('.playback-demo__support').bottom,
+          bounds('.trust-download__layout').top - bounds('.quick-start__resources').bottom,
+        ];
         const footer = document.querySelector('.site-footer__layout')!.getBoundingClientRect();
         const rails = [
           '#product',
@@ -194,7 +198,7 @@ test.describe('accessibility and responsive contracts', () => {
           return { left: rect.left, right: rect.right, width: rect.width };
         });
         return {
-          gaps: chapters.slice(1).map((box, index) => box.top - chapters[index].bottom),
+          gaps: contentGaps,
           footerLeft: footer.left,
           footerWidth: footer.width,
           rails,
@@ -202,21 +206,16 @@ test.describe('accessibility and responsive contracts', () => {
         };
       });
       expect(spacing.gaps).toHaveLength(4);
-      const [opening, ...later] = spacing.gaps;
-      expect(opening).toBeGreaterThanOrEqual(width >= 1024 ? 56 : 36);
-      expect(opening).toBeLessThanOrEqual(width >= 1024 ? 72 : 40);
-      const [min, max] =
-        width >= 1280
-          ? [144, 176]
-          : width >= 1024
-            ? [120, 144]
-            : width >= 640
-              ? [104, 128]
-              : [88, 112];
-      for (const gap of later) {
-        expect(gap).toBeGreaterThanOrEqual(min - 0.1);
-        expect(gap).toBeLessThanOrEqual(max + 0.1);
-      }
+      const [opening, firstBand, secondBand, closing] = spacing.gaps;
+      expect(opening).toBeGreaterThanOrEqual(32);
+      expect(opening).toBeLessThanOrEqual(64.1);
+      const band = Math.min(128, Math.max(64, width * 0.08));
+      expect(firstBand).toBeGreaterThanOrEqual(2 * band - 1);
+      expect(secondBand).toBeGreaterThanOrEqual(2 * band - 1);
+      expect(closing).toBeGreaterThanOrEqual(band - 1);
+      expect(firstBand).toBeLessThanOrEqual(2 * band + 2);
+      expect(secondBand).toBeLessThanOrEqual(2 * band + 2);
+      expect(closing).toBeLessThanOrEqual(band + 2);
       expect(spacing.footerLeft).toBeGreaterThanOrEqual(16);
       expect(spacing.footerWidth).toBeLessThanOrEqual(1200.5);
       const rail = spacing.rails[0];
@@ -281,7 +280,6 @@ test.describe('accessibility and responsive contracts', () => {
           );
           const ctaButton = bounds('.trust-download__button');
           const ctaNote = bounds('.trust-download__destination');
-          const sections = [...document.querySelectorAll('[data-home-section]')];
           return {
             documentWidth: document.documentElement.scrollWidth,
             viewportWidth: document.documentElement.clientWidth,
@@ -299,6 +297,8 @@ test.describe('accessibility and responsive contracts', () => {
             playbackHeader: bounds('.playback-demo__header'),
             playbackStage: bounds('.playback-demo__stage'),
             playbackSupport: bounds('.playback-demo__support'),
+            playbackTimeline: bounds('.playback-timeline'),
+            playbackKeys: bounds('.playback-keyboard'),
             playbackDOMOrder: [
               ...document.querySelectorAll(
                 '#playback .playback-demo__header, #playback .playback-demo__stage, #playback .playback-demo__support',
@@ -314,13 +314,7 @@ test.describe('accessibility and responsive contracts', () => {
             ctaAction: bounds('.trust-download__cta-action'),
             ctaButton,
             ctaNote,
-            chapterGaps: sections
-              .slice(1)
-              .map(
-                (element, index) =>
-                  element.getBoundingClientRect().top -
-                  sections[index].getBoundingClientRect().bottom,
-              ),
+
           };
         });
 
@@ -345,25 +339,15 @@ test.describe('accessibility and responsive contracts', () => {
 
         if (viewport.width >= 1280) {
           expect(product.width).toBeCloseTo(1120, 0);
-          expect(geometry.playbackStage.width).toBeGreaterThanOrEqual(650);
-          expect(geometry.playbackStage.width).toBeLessThanOrEqual(700);
         }
-        if (viewport.width === 1024) {
-          expect(geometry.playbackStage.width).toBeGreaterThanOrEqual(540);
-          expect(geometry.playbackStage.width).toBeLessThanOrEqual(580);
-        }
+        expect(geometry.playbackStage.width).toBeCloseTo(playback.width, 0);
+        expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(geometry.playbackStage.bottom + 20);
         if (viewport.width >= 1024) {
           expect(geometry.productSelector.left).toBeGreaterThanOrEqual(geometry.productIntro.right + 24);
-          expect(Math.abs(geometry.productSelector.bottom - geometry.productIntro.bottom)).toBeLessThanOrEqual(1);
-          expect(geometry.playbackSupport.left).toBeGreaterThan(geometry.playbackStage.right);
-          expect(
-            Math.abs(geometry.playbackSupport.top - geometry.playbackStage.top),
-          ).toBeLessThanOrEqual(1);
+          expect(geometry.playbackKeys.left).toBeGreaterThan(geometry.playbackTimeline.right);
         } else {
           expect(geometry.productSelector.top).toBeGreaterThanOrEqual(geometry.productIntro.bottom + 8);
-          expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(
-            geometry.playbackStage.bottom + 20,
-          );
+          expect(geometry.playbackKeys.top).toBeGreaterThan(geometry.playbackTimeline.bottom);
         }
 
         if (viewport.width >= 768) {
@@ -391,18 +375,7 @@ test.describe('accessibility and responsive contracts', () => {
         expect(geometry.ctaButton.bottom).toBeLessThanOrEqual(geometry.ctaNote.top);
         expect(geometry.ctaNote.top - geometry.ctaButton.bottom).toBeLessThanOrEqual(12);
 
-        const laterMinMax =
-          viewport.width >= 1280
-            ? [144, 176]
-            : viewport.width >= 1024
-              ? [120, 144]
-              : viewport.width >= 640
-                ? [104, 128]
-                : [88, 112];
-        for (const gap of geometry.chapterGaps.slice(1)) {
-          expect(gap).toBeGreaterThanOrEqual(laterMinMax[0] - 0.1);
-          expect(gap).toBeLessThanOrEqual(laterMinMax[1] + 0.1);
-        }
+
       }
     }
   });

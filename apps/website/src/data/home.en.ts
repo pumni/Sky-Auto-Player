@@ -17,18 +17,19 @@ export const homeEn: HomeContent = {
     release: 'Download',
   },
   hero: {
+    eyebrow: 'A music player for Sky',
     titleStart: 'Bring ',
     titleEmphasis: 'your music',
     titleEnd: ' into Sky.',
     description:
-      'Automatically play music sheets in Sky: Children of the Light on Windows. Choose a built-in song or import your own sheet.',
+      'Automatically play music sheets in Sky: Children of the Light. Choose a song or import your own sheet.',
     secondaryCta: 'Explore the player',
     meta: 'Windows 11 x64 · Free and open source · GitHub Releases',
     riskNote: 'Unofficial project. Automated playback may conflict with Sky’s Terms of Service.',
   },
   product: {
     title: 'Explore the player',
-    description: 'Find your music and prepare it for playback.',
+    description: 'Browse and prepare your sheets.',
     selectorLabel: 'Choose a player view',
     fullSizeLabel: 'View full size',
     fallbackLabel: 'Open another player view',

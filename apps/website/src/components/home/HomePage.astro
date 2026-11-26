@@ -14,8 +14,10 @@ const { content } = Astro.props;
 ---
 
 <div class="home-page">
-  <Hero data={content.hero} downloadCta={content.downloadCta} locale={content.locale} />
-  <ProductShowcase data={content.product} />
+  <div class="home-intro">
+    <Hero data={content.hero} downloadCta={content.downloadCta} locale={content.locale} />
+    <ProductShowcase data={content.product} />
+  </div>
   <PlaybackDemo data={content.playback} locale={content.locale} />
   <QuickStart data={content.quickStart} />
   <TrustDownload data={content.trust} locale={content.locale} downloadCta={content.downloadCta} />

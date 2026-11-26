@@ -65,174 +65,145 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
 
 <style>
   @layer components {
+    .trust-download {
+      padding-block-end: var(--home-band-space);
+    }
     .trust-download__layout {
       display: grid;
-      gap: clamp(2.5rem, 4vw, 4rem);
+      border: 1px solid var(--line-default);
+      border-radius: 1.25rem;
+      background: var(--color-surface-quiet);
     }
-
     .trust-download__cta {
       display: grid;
       justify-items: center;
       gap: 1.5rem;
-      padding: 2rem 1.25rem;
-      border: 1px solid var(--line-default);
-      border-radius: 1rem;
-      background: linear-gradient(125deg, var(--color-surface-stage), var(--color-surface-instrument));
+      padding: clamp(1.5rem, 5vw, 4.5rem);
+      border-radius: 1.2rem 1.2rem 0 0;
+      background: radial-gradient(ellipse at 0% 0%, var(--home-halo-download), transparent 90%), var(--color-surface-stage);
       text-align: center;
     }
-
-    .trust-download__cta-copy {
-      display: grid;
-      gap: 0.75rem;
-      justify-items: center;
-    }
-
-    .trust-download__cta h2 {
-      margin: 0;
-      font-size: clamp(2rem, 1.5rem + 1.5vw, 3rem);
-      line-height: 1.15;
-    }
-
-    .trust-download__platform {
-      margin: 0;
-      color: var(--color-text-secondary);
-      font-size: clamp(1rem, 0.95rem + 0.2vw, 1.125rem);
-      line-height: 1.6;
-    }
-
+    .trust-download__cta-copy,
     .trust-download__cta-action {
       display: grid;
       justify-items: center;
+      gap: 0.75rem;
+    }
+    .trust-download__cta h2 {
+      margin: 0;
+      font-size: clamp(2rem, 1.4rem + 2.1vw, 3.5rem);
+      line-height: 1.12;
+    }
+    .trust-download__platform {
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--home-lead);
+      line-height: 1.6;
+    }
+    .trust-download__cta-action {
       gap: 0.625rem;
     }
-
     .trust-download__button {
       min-block-size: 3.25rem;
       padding-inline: 1.5rem;
-      border-radius: var(--radius-sm);
     }
-
     .trust-download__destination {
       margin: 0;
       color: var(--color-text-secondary);
       font-size: var(--type-small);
       line-height: 1.5;
     }
-
     .trust-download__details {
       display: grid;
-      gap: 2.5rem;
-      padding-block-start: clamp(1.5rem, 3vw, 2.5rem);
-      border-block-start: 1px solid var(--line-faint);
+      gap: 2rem;
+      padding: clamp(1.5rem, 4vw, 3.5rem);
+      border-block-start: 1px solid var(--line-default);
       color: var(--color-text-secondary);
       font-size: var(--type-body);
-      line-height: 1.75;
+      line-height: 1.7;
     }
-
     .trust-download__details > div {
       display: grid;
       align-content: start;
       gap: 1rem;
-      max-inline-size: 60ch;
+      min-inline-size: 0;
     }
-
+    .trust-download__details h3 {
+      margin: 0;
+      color: var(--color-text-primary);
+      font-size: clamp(1.25rem, 1rem + 0.5vw, 1.6rem);
+      line-height: 1.35;
+    }
+    .trust-download__details p {
+      margin: 0;
+    }
+    .trust-download__warning {
+      padding: 1rem;
+      border-inline-start: 2px solid var(--color-action);
+      background: var(--color-surface-instrument);
+    }
+    .trust-download code {
+      overflow-wrap: anywhere;
+      color: var(--color-text-primary);
+      font-size: 0.95em;
+    }
+    .trust-download__safety-link,
+    .trust-download__support-links a {
+      display: inline-flex;
+      min-block-size: 2.75rem;
+      align-items: center;
+      color: var(--color-text-primary);
+      text-decoration: underline;
+      text-decoration-color: var(--color-info);
+      text-underline-offset: 0.2em;
+    }
+    .trust-download__safety-link {
+      justify-self: start;
+    }
+    .trust-download__support {
+      display: grid;
+      gap: 0.5rem;
+      padding-block-start: 1rem;
+      border-block-start: 1px solid var(--line-default);
+      font-size: var(--type-small);
+    }
+    .trust-download__support span {
+      color: var(--color-text-primary);
+      font-weight: 600;
+    }
+    .trust-download__support-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem 1.25rem;
+    }
+    .trust-download__support-links a:hover,
+    .trust-download__safety-link:hover {
+      color: var(--color-action);
+    }
     @media (min-width: 48rem) {
       .trust-download__cta {
         grid-template-columns: minmax(0, 1fr) auto;
         justify-items: stretch;
         align-items: center;
         gap: 2rem;
-        padding: clamp(3rem, 4.2vw, 4.5rem) clamp(2rem, 4vw, 3.5rem);
         text-align: start;
       }
-
       .trust-download__cta-copy {
         justify-items: start;
       }
-
       .trust-download__cta-action {
         justify-self: end;
       }
-
       .trust-download__details {
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: clamp(3rem, 5vw, 5rem);
+        gap: clamp(2rem, 5vw, 4rem);
       }
     }
-
-    .trust-download__details h3 {
-      margin: 0;
-      color: var(--color-text-primary);
-      font-size: clamp(1.3rem, 1.1rem + 0.45vw, 1.65rem);
-      line-height: 1.35;
-      margin-block-end: 0.25rem;
-    }
-
-    .trust-download__details p {
-      margin: 0;
-    }
-
-    .trust-download__warning {
-      padding: 1rem 1.125rem;
-      border-inline-start: 2px solid var(--color-action);
-      background: var(--color-surface-quiet);
-    }
-
-    .trust-download code {
-      overflow-wrap: anywhere;
-      color: var(--color-text-primary);
-      font-size: 0.95em;
-    }
-
-    .trust-download__safety-link {
-      display: inline-flex;
-      min-block-size: 2.75rem;
-      align-items: center;
-      justify-self: start;
-      color: var(--color-text-primary);
-      text-decoration: underline;
-      text-decoration-color: var(--color-info);
-      text-underline-offset: 0.2em;
-    }
-
-    .trust-download__support {
-      display: grid;
-      gap: 0.75rem;
-      padding-block-start: 1.25rem;
-      font-size: var(--type-small);
-      border-block-start: 1px solid var(--line-faint);
-    }
-
-    .trust-download__support span {
-      color: var(--color-text-primary);
-      font-weight: 600;
-      font-size: var(--type-body);
-    }
-
-    .trust-download__support-links {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: center;
-      gap: 0.5rem 1.25rem;
-    }
-
-    .trust-download__support-links a {
-      display: inline-flex;
-      min-block-size: 2.75rem;
-      align-items: center;
-      color: var(--color-text-secondary);
-      text-decoration: underline;
-      text-decoration-color: var(--line-default);
-      text-underline-offset: 0.2em;
-    }
-
-    .trust-download__support-links a:hover,
-    .trust-download__safety-link:hover {
-      color: var(--color-action);
-    }
-
     @media (forced-colors: active) {
-      .trust-download__cta,
+      .trust-download__cta {
+        background: Canvas;
+      }
+      .trust-download__layout,
       .trust-download__details {
         border-color: CanvasText;
       }

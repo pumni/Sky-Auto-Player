@@ -162,12 +162,14 @@ const timingGuide = withBase(
       </div>
 
       <aside class="playback-demo__support">
-        <p class="playback-demo__timing-note" id="timing-model">
-          {data.demoNote}
-        </p>
-        <a class="playback-demo__timing-link" href={timingGuide}>
-          {data.timingLinkLabel}
-        </a>
+        <div>
+          <p class="playback-demo__timing-note" id="timing-model">
+            {data.demoNote}
+          </p>
+          <a class="playback-demo__timing-link" href={timingGuide}>
+            {data.timingLinkLabel}
+          </a>
+        </div>
         <div class="playback-demo__dry-run">
           <h3>{data.dryRunTitle}</h3>
           <p>{data.dryRunNote}</p>
@@ -179,99 +181,69 @@ const timingGuide = withBase(
 
 <style>
   @layer components {
-    .playback-demo__layout {
-      display: grid;
-      gap: var(--home-content-gap);
-      padding-block-start: clamp(1.5rem, 3vw, 3rem);
-      border-block-start: 1px solid var(--line-faint);
+    .playback-demo {
+      padding-block: var(--home-band-space);
+      background: radial-gradient(ellipse at 80% 20%, var(--home-halo-cool), transparent 65%), var(--color-surface-quiet);
+      border-block: 1px solid var(--line-default);
     }
-
-    .playback-demo__header {
-      display: grid;
-      gap: 1rem;
-    }
-
-    .playback-demo__header h2 {
-
-      margin: 0;
-      font-size: var(--home-heading);
-      line-height: 1.15;
-    }
-
-    .playback-demo__description {
-      max-inline-size: 55ch;
-      margin: 0;
-      color: var(--color-text-secondary);
-      font-size: clamp(1rem, 0.95rem + 0.25vw, 1.125rem);
-      line-height: 1.75;
-    }
-
+    .playback-demo__layout,
+    .playback-demo__header,
     .playback-demo__body {
       display: grid;
-      align-items: start;
       gap: var(--home-content-gap);
     }
-
-    @media (min-width: 64rem) {
-      .playback-demo__header {
-        grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
-        align-items: center;
-        gap: clamp(2.5rem, 3.3vw, 3rem);
-      }
-
-      .playback-demo__body {
-        grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr);
-        gap: clamp(2.5rem, 3.3vw, 3rem);
-      }
+    .playback-demo__header {
+      gap: 1rem;
     }
-
-    .playback-demo__stage {
-      min-inline-size: 0;
-      padding: clamp(0.75rem, 4.5vw, 1.5rem);
-      border: 1px solid var(--line-default);
-      border-radius: 1rem;
-      background: linear-gradient(
-        155deg,
-        var(--color-surface-stage),
-        var(--color-surface-instrument) 65%
-      );
-      box-shadow: var(--stage-elevation);
-    }
-
-    @media (min-width: 64rem) {
-      .playback-demo__stage {
-        padding: clamp(2rem, 3vw, 2.75rem);
-      }
-    }
-
-    .playback-demo__dry-run {
-      display: grid;
-      gap: 0.875rem;
-      margin: 1rem 0 0;
-      padding-block-start: 2rem;
-      border-block-start: 1px solid var(--line-faint);
-    }
-
-    .playback-demo__dry-run h3 {
+    .playback-demo__header h2 {
+      max-inline-size: 20ch;
       margin: 0;
-      font-size: clamp(1.25rem, 1.15rem + 0.2vw, 1.5rem);
-      line-height: 1.35;
+      font-size: var(--home-heading);
+      line-height: 1.12;
     }
-
-    .playback-demo__dry-run p {
-      max-inline-size: 55ch;
+    .playback-demo__description {
+      max-inline-size: 44ch;
       margin: 0;
       color: var(--color-text-secondary);
-      font-size: clamp(1rem, 0.95rem + 0.2vw, 1.125rem);
-      line-height: 1.75;
+      font-size: var(--home-lead);
+      line-height: 1.6;
     }
-
+    .playback-demo__body {
+      gap: 1.5rem;
+    }
+    .playback-demo__stage {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr);
+      gap: 1.25rem;
+      align-items: start;
+      min-inline-size: 0;
+      padding: clamp(1rem, 3.5vw, 3rem);
+      border: 1px solid var(--line-default);
+      border-radius: 1.25rem;
+      background: var(--color-surface-instrument);
+      box-shadow: var(--stage-elevation);
+    }
     .playback-demo__support {
       display: grid;
-      align-content: start;
-      gap: 0.875rem;
+      gap: 1.5rem;
+      align-items: start;
     }
-
+    .playback-demo__support > div {
+      display: grid;
+      align-content: start;
+      gap: 0.75rem;
+      min-inline-size: 0;
+      padding: 1.5rem;
+      border: 1px solid var(--line-default);
+      border-radius: 0.9rem;
+      background: var(--color-surface-instrument);
+    }
+    .playback-demo__dry-run h3 {
+      margin: 0;
+      font-size: clamp(1.2rem, 1rem + 0.5vw, 1.5rem);
+      line-height: 1.35;
+    }
+    .playback-demo__dry-run p,
     .playback-demo__timing-note {
       max-inline-size: 55ch;
       margin: 0;
@@ -279,29 +251,60 @@ const timingGuide = withBase(
       font-size: var(--type-body);
       line-height: 1.7;
     }
-
     .playback-demo__timing-link {
       display: inline-flex;
       min-block-size: 2.75rem;
       align-items: center;
       justify-self: start;
       color: var(--color-action);
-      font-size: var(--type-body);
+      font-size: var(--type-small);
       text-decoration: underline;
       text-decoration-color: var(--line-accent);
       text-underline-offset: 0.22em;
     }
-
     .playback-demo__time {
       display: flex;
-      justify-content: flex-end;
       gap: 0.25rem;
-      margin-block-end: 1rem;
+      margin: 0;
       color: var(--color-text-secondary);
-      font-size: var(--type-small);
+      font-size: var(--type-body);
+      font-weight: 600;
       font-variant-numeric: tabular-nums;
     }
-
+    @media (min-width: 48rem) {
+      .playback-demo__support {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        align-items: stretch;
+        gap: 1rem;
+      }
+    }
+    @media (min-width: 64rem) {
+      .playback-demo__header {
+        grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+        align-items: end;
+        gap: 3rem;
+      }
+      .playback-demo__stage {
+        grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+        gap: 1.25rem 3rem;
+      }
+      .playback-demo__time {
+        grid-column: 1;
+        grid-row: 1;
+      }
+      .playback-timeline {
+        grid-column: 1;
+        grid-row: 2;
+      }
+      .playback-keyboard {
+        grid-column: 2;
+        grid-row: 1 / span 3;
+      }
+      .playback-demo__controls-wrap {
+        grid-column: 1;
+        grid-row: 3;
+      }
+    }
     .playback-timeline__track {
       position: relative;
       block-size: 0.625rem;
@@ -339,8 +342,8 @@ const timingGuide = withBase(
     .playback-timeline__legend {
       display: grid;
       grid-template-columns: var(--playback-columns);
-      gap: 0.75rem clamp(0.25rem, 1vw, 1rem);
-      margin: 1rem 0 0;
+      gap: 0.75rem 0.35rem;
+      margin: 1.125rem 0 0;
       padding: 0;
       list-style: none;
     }
@@ -386,7 +389,7 @@ const timingGuide = withBase(
     }
 
     .playback-keyboard {
-      margin-block-start: 2rem;
+      margin: 0;
     }
 
     .playback-keyboard__label {
@@ -403,11 +406,11 @@ const timingGuide = withBase(
 
     .playback-key {
       display: grid;
-      min-block-size: 3rem;
+      min-block-size: clamp(2.75rem, 4vw, 4.5rem);
       place-items: center;
       border: 1px solid var(--line-default);
       box-shadow: inset 0 -2px var(--line-default);
-      border-radius: var(--radius-xs);
+      border-radius: 0.5rem;
       background: var(--color-surface-quiet);
       color: var(--color-text-secondary);
       font-size: var(--type-body);
@@ -430,9 +433,8 @@ const timingGuide = withBase(
     .playback-demo__controls-wrap {
       display: flex;
       flex-wrap: wrap;
-      align-items: center;
+      align-items: start;
       gap: 1rem;
-      margin-block-start: 1.5rem;
     }
 
     .playback-demo__controls[hidden],
@@ -444,14 +446,14 @@ const timingGuide = withBase(
     .playback-demo__controls {
       display: flex;
       align-items: center;
-      gap: 0.625rem;
+      gap: 0.5rem;
       flex-wrap: wrap;
       max-inline-size: 100%;
     }
 
     .playback-demo__play {
       min-block-size: 3rem;
-      min-inline-size: min(10rem, 100%);
+      min-inline-size: 0;
       border-radius: var(--radius-sm);
     }
 
@@ -493,20 +495,32 @@ const timingGuide = withBase(
 
       .playback-demo__controls {
         gap: 0.5rem;
+        inline-size: 100%;
+        flex-wrap: nowrap;
       }
 
       .playback-demo__play {
         min-inline-size: 0;
-        flex: 1 1 7rem;
+        flex: 1 1 auto;
       }
 
       .playback-demo__step {
         inline-size: 2.75rem;
         block-size: 2.75rem;
+        flex: 0 0 44px;
       }
     }
 
     @media (forced-colors: active) {
+      .playback-demo {
+        background: Canvas;
+        border-color: CanvasText;
+      }
+      .playback-demo__stage,
+      .playback-demo__support > div {
+        border-color: CanvasText;
+      }
+
       .playback-timeline__track {
         outline: 1px solid CanvasText;
         outline-offset: -1px;
