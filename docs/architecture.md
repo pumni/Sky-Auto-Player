@@ -59,7 +59,7 @@ Each state has one owner and each module has a focused invariant:
 - `sky_app_core` owns pure application and domain policy (parsing, validation, sheet models).
 - `sky_native_adapters` encapsulates concrete filesystem, process, and Win32 host adapters.
 - **sky_player** owns the playback worker, target authority, admission/control, QPC timing, telemetry, and worker cleanup. **sky_desktop_shell** owns playback-service orchestration, ordered worker join and retirement, post-join recovery coordination, and UI publication.
-- `sky_dispatch_core` owns pure schedule and action policy.
+- `sky_dispatch_core` owns pure onset-plan validation and completion-anchored pulse scheduling policy.
 - `sky_dispatch_win32` owns Windows wait, focus, priority, and `SendInput` boundaries.
 - `sky_desktop_shell` (`apps/desktop/src-tauri`) owns Tauri command decoding, delivery DTO translation, and the Rust-owned `UpdateService` policy boundary. It contains no song scheduling, risk analysis, persisted-settings migration, or realtime dispatch algorithms.
 

@@ -29,17 +29,19 @@ unexpectedly, the guard triggers prompt safety release with terminal reason
 on metrics locks. The guard is safely disarmed upon intentional termination
 (`quit`, `skip`, `panic_release`, and confirmed `join`).
 
-Preparation compiles and validates the immutable dispatch schedule before a
-worker starts. The worker moves prepared storage into its executor; it does not
-compile or materialize the sheet. Healthy dispatch does not allocate.
+Preparation builds and validates the immutable onset-only dispatch plan
+(`OnsetPlan` -> `PreparedDispatchSchedule`) before a worker starts. The worker
+moves prepared storage into its executor; it does not compile or materialize
+the sheet. Healthy dispatch does not allocate.
 
-Prepare reports two independent timing signals. The authored Up-gap check counts
-feasible same-key repeats whose authored Up-to-next-Down gap is shorter than one
-frame. A bounded offline estimate also advances the canonical schedule through
-the production `DispatchExecutor` with explicit sender-cost assumptions and
-reports lateness, H-floor displacement, and head-of-line delay. The estimate is
-diagnostic only: it does not change admission, schedule timing, or playback, and
-does not predict whether the game observes an Up pulse.
+Prepare reports two independent timing signals. The nominal Up-gap check counts
+feasible same-key repeats whose nominal Up-to-next-Down gap
+(`next_onset - (prev_onset + H)`) is shorter than one frame. A bounded offline
+estimate also advances the canonical onset plan through the production
+`DispatchExecutor` with explicit sender-cost assumptions and reports lateness,
+H-floor displacement, and head-of-line delay. The estimate is diagnostic only:
+it does not change admission, schedule timing, or playback, and does not
+predict whether the game observes an Up pulse.
 
 ## Session authority and final admission
 
@@ -87,21 +89,60 @@ exact current foreground owner.
 
 ## Musical executor and timing
 
-One fixed 15-slot executor owns musical Down and Up eligibility. A healthy
-chord uses one prepared packet. When disjoint Up and Down obligations are due
-together, they may share a packet with every Up ordered before every Down.
-Authored Down order is retained, and each slot's eligible Up is considered
-independently.
+One fixed 15-slot executor (`DispatchExecutor`) owns musical Down and Up
+eligibility over a flat onset-only chord plan (`Vec<PreparedChord>`) and one
+fixed pulse hold `H`. A healthy chord uses one prepared packet and is never
+split across packets. When disjoint Up and Down obligations are due together,
+they may share a packet with every Up ordered before every Down. Authored Down
+order is retained, and each slot's eligible Up is tracked independently.
 
 Let T be the ceiling of 1,000,000 divided by configured FPS, in microseconds.
 The sender timing policy is:
 
 - H = ceiling(hold_frames × T) + timing margin.
 
-An Up is eligible no earlier than both its authored Up time and successful
-Down completion plus H. After a successful Up commits, the next same-key Down
-can be sent at its authored time after a fresh scheduler evaluation; there is
-no additional musical release delay. Resume waits for verified cleanup, a
+Releases are completion-anchored rather than authored as a separate Up stream:
+after a successful Down commits with sender completion QPC `completion_qpc`,
+each activated key slot becomes eligible for release at
+`release_not_before = completion_qpc + H_ticks` (converted with ceiling
+rounding to QPC ticks). There is no separate authored Up floor and no
+additional musical release gap `G`. When the next onset chord overlaps any
+currently held slot, it is blocked until every overlapping slot's release has
+committed (bounded wait deadline `max(authored_onset, latest_blocking_release)`).
+After a successful Up commits, the next same-key Down can be sent at its
+authored onset time after a fresh scheduler evaluation.
+
+When the worker stages a candidate before waiting for a future deadline and
+wakes on `Due` with an authoritative observed QPC `dispatch_qpc`, it
+re-evaluates the scheduler at `dispatch_qpc` before final admission:
+
+- If the packet masks, chord index, timing window, and Up summary match the
+  staged candidate, the worker reuses the staged packet bytes without
+  rebuilding or allocating.
+- If a late wake makes additional independent Up releases eligible alongside
+  a disjoint staged Down (or makes new work eligible), the worker rebuilds the
+  packet once with all due Ups before the intact Down, then runs fresh final
+  admission before `SendInput`.
+- Interrupted or early wakes never send stale staged bytes.
+
+Timing and telemetry use five distinct timestamp concepts:
+
+- **Authored onset**: the chord's scheduled musical onset (`epoch + onset_ticks`).
+- **Eligible release**: the completion-anchored release deadline
+  (`completion_qpc + H_ticks`).
+- **Pre-call**: the QPC sample captured immediately before `SendInput`.
+- **Completion**: the QPC sample captured immediately after `SendInput` returns.
+- **Diagnostic nominal release**: derived on demand for reporting/telemetry as
+  `ceil((onset_us + H_us) * f / 1e6)` (distinct from the physical lower-bound
+  `ceil(onset_us * f / 1e6) + ceil(H_us * f / 1e6)`, which can differ by one
+  tick at non-integral QPC frequencies); it is never an execution gate.
+- **Origin onset attribution (`source_action_index`)**: under the onset-only
+  plan, `source_action_index` identifies the originating onset chord for both
+  Down records and their derived Up-slot records (rather than the retired
+  interleaved paired-action index). Historical telemetry readers retain their
+  historical paired-action meaning.
+
+Resume waits for verified cleanup, a
 reconciled release journal, current generation and foreground ownership, a
 valid owner lease, and the committed Resume control. The next send uses a fresh
 QPC admission sample and the playback epoch updated at Resume; cleanup does

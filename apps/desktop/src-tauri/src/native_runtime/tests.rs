@@ -35,15 +35,14 @@ use crate::app_state::ActivityCoordinator;
 use crate::commands::{PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest};
 
 fn prepare_test_schedule(
-    schedule: &sky_player::adapter_support::RuntimeSchedule,
-    timing: &sky_player::engine::TimingOptions,
+    schedule: &sky_player::adapter_support::OnsetPlan,
+    _timing: &sky_player::engine::TimingOptions,
 ) -> sky_player::adapter_support::PreparedDispatchSchedule {
     let qpc = sky_dispatch_win32::clock::QpcClock::initialize().expect("QPC clock");
     sky_player::adapter_support::PreparedDispatchSchedule::prepare(
         schedule,
         qpc.frequency_hz(),
-        timing.min_hold_us,
-        schedule.compile_memory.caller_retained_capacity_bytes,
+        schedule.compile_memory().caller_retained_capacity_bytes,
     )
     .expect("prepare native test schedule before session admission")
 }
@@ -108,35 +107,13 @@ fn projection_session_with_down(
     up_scheduled_us: u64,
     startup_ordering_hook: Option<Arc<sky_player::engine::StartupOrderingHook>>,
 ) -> Arc<NativeDispatchSession> {
-    use sky_player::adapter_support::{
-        ActionKind as DispatchActionKind, KeyActionInput, PriorityMode, compile_runtime_intents,
-    };
+    use sky_player::adapter_support::{OnsetChordInput, PriorityMode, build_onset_plan};
     use sky_player::engine::{
         BackendConfig, DispatchProfile, FaultInjectionScript, FocusOptions, NativeSessionOptions,
         PriorityOptions, TelemetryMode, TelemetryOptions, TestWaitPolicy, TimingOptions,
         WaitOptions,
     };
 
-    let schedule = compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: DispatchActionKind::Down,
-                scheduled_us: down_scheduled_us,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: Arc::<str>::from("terminal-projection-down"),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: DispatchActionKind::Up,
-                scheduled_us: up_scheduled_us,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: Arc::<str>::from("terminal-projection-up"),
-            },
-        ],
-        &sky_app_core::song::SKY_SCAN_CODES,
-    )
-    .expect("terminal projection schedule");
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
@@ -148,6 +125,18 @@ fn projection_session_with_down(
         strict_up_completion_late_us: 2_000,
         input_path_warn_us: 300,
     };
+    let schedule = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: down_scheduled_us,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &sky_app_core::song::SKY_SCAN_CODES,
+        timing.min_hold_us,
+    )
+    .expect("terminal projection onset plan")
+    .with_trailing_end_offset_us(up_scheduled_us.max(down_scheduled_us + timing.min_hold_us))
+    .expect("terminal projection trailing end");
     let schedule = prepare_test_schedule(&schedule, &timing);
     let player = Arc::new(
         NativeDispatchSession::new_with_power_endpoint(
@@ -675,35 +664,13 @@ fn native_handoff_test_player_with_focus(
     mut fault_script: sky_player::engine::FaultInjectionScript,
     require_focus: bool,
 ) -> Arc<NativeDispatchSession> {
-    use sky_player::adapter_support::{
-        ActionKind as DispatchActionKind, KeyActionInput, compile_runtime_intents,
-    };
+    use sky_player::adapter_support::{OnsetChordInput, build_onset_plan};
     use sky_player::engine::{
         BackendConfig, DispatchProfile, FocusOptions, NativeSessionOptions, PriorityOptions,
         SystemPowerEndpoint, TelemetryMode, TelemetryOptions, TestWaitPolicy, TimingOptions,
         WaitOptions,
     };
 
-    let schedule = compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: DispatchActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: Arc::<str>::from("terminal-handoff-test-down"),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: DispatchActionKind::Up,
-                scheduled_us: 100_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: Arc::<str>::from("terminal-handoff-test-up"),
-            },
-        ],
-        &sky_app_core::song::SKY_SCAN_CODES,
-    )
-    .expect("handoff test schedule");
     let timing = TimingOptions {
         game_fps: 60,
         min_hold_us: 17_467,
@@ -715,6 +682,18 @@ fn native_handoff_test_player_with_focus(
         strict_up_completion_late_us: 2_000,
         input_path_warn_us: 300,
     };
+    let schedule = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &sky_app_core::song::SKY_SCAN_CODES,
+        timing.min_hold_us,
+    )
+    .expect("handoff test plan")
+    .with_trailing_end_offset_us(100_000)
+    .expect("handoff test trailing end");
     let schedule = prepare_test_schedule(&schedule, &timing);
     fault_script.send_input_capture = Some(capture);
     Arc::new(

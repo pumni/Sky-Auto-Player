@@ -14,7 +14,7 @@ use super::{
     focus_gate_matches, record_input_path_health, record_termination_error, trace_outcome_code,
     try_publish_metrics,
 };
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::model::OnsetChordInput;
 use sky_dispatch_core::time::TimelineTicks;
 use sky_dispatch_win32::clock::{
     QpcClock, QpcTicks, qpc_frequency, qpc_ticks_to_us, qpc_us_to_ticks,
@@ -32,7 +32,6 @@ fn native_session_rejects_prepared_plan_from_another_qpc_domain() {
     let prepared = super::super::adapter_support::PreparedDispatchSchedule::prepare(
         &schedule,
         std::num::NonZeroU64::new(1).expect("nonzero fixture QPC frequency"),
-        500,
         0,
     )
     .expect("fixture plan is valid in its prepared domain");

@@ -1,6 +1,7 @@
 use super::support::{
-    ActionKind, KeyActionInput, PacketRetryReason, ProductionDispatchTestHarness, SendEvidence,
+    PacketRetryReason, PreparedChord, ProductionDispatchTestHarness, SendEvidence,
     SendTransactionOutcome, SendTransactionStatus, StagedDispatchOutcome, TimelineTicks,
+    test_chord,
 };
 
 fn sender_failure_record_for_test(
@@ -221,7 +222,7 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
             .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
             .expect("stage candidate")
             .expect("Down candidate");
-        let packet_mask = candidate.packet_masks.down_mask;
+        let packet_mask = candidate.packet_masks().down_mask;
         let accounting_before = harness.resources.scheduler.accounting();
         let clock = harness.resources.clock;
         harness.resources.backend.set_packet_emitter(move |packet| {
@@ -324,7 +325,7 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
         }
         let (up_mask, down_chord, timing_window): (
             u16,
-            Option<sky_dispatch_core::executor::DownChordMetadata>,
+            Option<PreparedChord>,
             sky_dispatch_core::executor::DispatchTimingWindow,
         ) = match harness
             .evaluate_live_scheduler_for_test(mixed_target, epoch)
@@ -334,17 +335,18 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
                 up_mask,
                 down_chord,
                 timing_window,
-            } => (up_mask, down_chord.map(Into::into), timing_window),
+                ..
+            } => (up_mask, down_chord, timing_window),
             decision => panic!("expected production mixed Up+Down, got {decision:?}"),
         };
         assert_eq!(up_mask, 0b01);
-        assert_eq!(down_chord.as_ref().map(|chord| chord.down_mask), Some(0b10));
+        assert_eq!(down_chord.as_ref().map(|chord| chord.key_mask), Some(0b10));
         let candidate = harness
             .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
             .expect("stage production mixed packet")
             .expect("mixed packet candidate");
-        assert_eq!(candidate.packet_masks.up_mask, 0b01);
-        assert_eq!(candidate.packet_masks.down_mask, 0b10);
+        assert_eq!(candidate.packet_masks().up_mask, 0b01);
+        assert_eq!(candidate.packet_masks().down_mask, 0b10);
 
         let attempts = Arc::new(AtomicUsize::new(0));
         let observed_attempts = Arc::clone(&attempts);
@@ -427,7 +429,7 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
             "the original A onset had exactly one healthy packet"
         );
         assert!(
-            anomaly.contains("source_action=2 source_chord=1 up_mask=0x0001 down_mask=0x0002"),
+            anomaly.contains("source_action=1 source_chord=1 up_mask=0x0001 down_mask=0x0002"),
             "the attempted mixed B onset is identified exactly: {anomaly}"
         );
         let _ = harness.finalize_for_test();
@@ -437,39 +439,9 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
 #[test]
 fn invalidated_session_target_does_not_send_origin_up() {
     use sky_dispatch_core::executor::DispatchDecision;
-    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
 
-    let actions = [
-        KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 0,
-            scan_codes: vec![0x15].into(),
-            reason: "initial-down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Down,
-            scheduled_us: 19_000,
-            scan_codes: vec![0x16].into(),
-            reason: "earlier-mixed-down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 2,
-            kind: ActionKind::Up,
-            scheduled_us: 20_000,
-            scan_codes: vec![0x15].into(),
-            reason: "mixed-up".into(),
-        },
-        KeyActionInput {
-            source_action_index: 3,
-            kind: ActionKind::Up,
-            scheduled_us: 39_000,
-            scan_codes: vec![0x16].into(),
-            reason: "later-up".into(),
-        },
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(0, 0, 0x15), test_chord(1, 19_000, 0x16)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
     harness
         .attach_executor_for_test()
@@ -503,7 +475,7 @@ fn invalidated_session_target_does_not_send_origin_up() {
     }
     let (up_mask, down_chord, timing_window): (
         u16,
-        Option<sky_dispatch_core::executor::DownChordMetadata>,
+        Option<PreparedChord>,
         sky_dispatch_core::executor::DispatchTimingWindow,
     ) = match harness
         .evaluate_live_scheduler_for_test(mixed_target, epoch)
@@ -513,7 +485,8 @@ fn invalidated_session_target_does_not_send_origin_up() {
             up_mask,
             down_chord,
             timing_window,
-        } => (up_mask, down_chord.map(Into::into), timing_window),
+            ..
+        } => (up_mask, down_chord, timing_window),
         decision => panic!("expected mixed Up+Down candidate, got {decision:?}"),
     };
     assert_eq!(up_mask, 0b01);
@@ -526,7 +499,7 @@ fn invalidated_session_target_does_not_send_origin_up() {
         )
         .expect("stage mixed candidate")
         .expect("mixed candidate");
-    assert_eq!(mixed.packet_masks.down_mask, 0b10);
+    assert_eq!(mixed.packet_masks().down_mask, 0b10);
     let accounting_before_replan = harness.generation_accounting_for_test();
 
     harness.invalidate_focus_owner_for_test(2, 202);
@@ -606,23 +579,8 @@ fn unstable_target_retry_wait_is_interruptible_before_deadline() {
 fn suspend_after_sender_return_up_only_commits_without_phantom_up() {
     use std::sync::Arc;
 
-    let actions = [
-        KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 0,
-            scan_codes: vec![0x15].into(),
-            reason: "first-down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 20_000,
-            scan_codes: vec![0x15].into(),
-            reason: "up-only".into(),
-        },
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(0, 0, 0x15)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let cleanup = harness.configure_mock_cleanup_emitter_for_test();
     harness.attach_executor_for_test().expect("attach executor");
     let epoch = harness.resources.playback.epoch;
@@ -651,12 +609,12 @@ fn suspend_after_sender_return_up_only_commits_without_phantom_up() {
     while harness.qpc_now_for_test().expect("now") < up_target {
         std::thread::yield_now();
     }
-    let (up_mask, down_chord, _timing_window) =
+    let (up_mask, down_chord, timing_window) =
         super::support::staged_send_at(&mut harness, up_target, epoch);
     assert_eq!(up_mask, 1);
     assert!(down_chord.is_none());
     let up_candidate = harness
-        .stage_candidate_for_test(1, None, TimelineTicks::from_raw(20_000))
+        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage Up")
         .expect("Up candidate");
 
@@ -713,37 +671,8 @@ fn suspend_after_sender_return_up_only_commits_without_phantom_up() {
 fn suspend_after_sender_return_mixed_commits_and_preserves_remaining_down_safety_release() {
     use std::sync::Arc;
 
-    let actions = [
-        KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 0,
-            scan_codes: vec![0x15].into(),
-            reason: "first-down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 20_000,
-            scan_codes: vec![0x15].into(),
-            reason: "mixed-up".into(),
-        },
-        KeyActionInput {
-            source_action_index: 2,
-            kind: ActionKind::Down,
-            scheduled_us: 20_000,
-            scan_codes: vec![0x16].into(),
-            reason: "mixed-down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 3,
-            kind: ActionKind::Up,
-            scheduled_us: 40_000,
-            scan_codes: vec![0x16].into(),
-            reason: "later-up".into(),
-        },
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [test_chord(0, 0, 0x15), test_chord(2, 20_000, 0x16)];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let cleanup = harness.configure_mock_cleanup_emitter_for_test();
     harness.attach_executor_for_test().expect("attach executor");
     let epoch = harness.resources.playback.epoch;
@@ -772,16 +701,16 @@ fn suspend_after_sender_return_mixed_commits_and_preserves_remaining_down_safety
     while harness.qpc_now_for_test().expect("now") < mixed_target {
         std::thread::yield_now();
     }
-    let (up_mask, down_chord, _timing_window) =
+    let (up_mask, down_chord, timing_window) =
         super::support::staged_send_at(&mut harness, mixed_target, epoch);
     assert_eq!(up_mask, 0b01);
     assert!(down_chord.is_some());
     let mixed_candidate = harness
-        .stage_candidate_for_test(1, down_chord, TimelineTicks::from_raw(20_000))
+        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage Mixed")
         .expect("Mixed candidate");
-    assert_eq!(mixed_candidate.packet_masks.up_mask, 0b01);
-    assert_eq!(mixed_candidate.packet_masks.down_mask, 0b10);
+    assert_eq!(mixed_candidate.packet_masks().up_mask, 0b01);
+    assert_eq!(mixed_candidate.packet_masks().down_mask, 0b10);
 
     let clock = harness.resources.clock;
     let system_power = Arc::clone(&harness.system_power);

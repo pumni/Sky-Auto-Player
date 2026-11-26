@@ -6,74 +6,65 @@
 
 /// Narrow, typed native surface for delivery adapters.
 ///
-/// Keep the small set of compilation, timing, and schedule types
+/// Keep the small set of plan-building, timing, and schedule types
 /// needed by the desktop adapter behind one typed facade.
 pub mod adapter_support {
-    pub use sky_dispatch_core::compile::{CompileError, MAX_ACTIONS, MAX_REASON_BYTES};
     pub use sky_dispatch_core::executor::{
-        DispatchDecision, DispatchExecutor, PreparedDispatchMemoryMetrics,
-        PreparedDispatchSchedule, PreparedUnmatchedUpMetadata,
+        DispatchDecision, DispatchExecutor, PreparedChord, PreparedDispatchMemoryMetrics,
+        PreparedDispatchSchedule,
     };
     pub use sky_dispatch_core::model::{
-        ActionKind, CompileMemoryMetrics, CompiledDownChord, CompiledDownIntent, KeyActionInput,
-        MAX_KEYS, RuntimeSchedule, UnmatchedUpMetadata,
+        CompileMemoryMetrics, MAX_KEYS, OnsetChord, OnsetChordInput, OnsetPlan,
+        OnsetPlanMemoryMetrics,
     };
+    pub use sky_dispatch_core::plan::{MAX_CHORDS, PlanError};
     pub use sky_dispatch_core::time::{DurationTicks, TimelineTicks};
-    pub use sky_dispatch_core::validation::{
-        ScheduleTimingError, validate_min_hold_feasibility_ticks,
-    };
     pub use sky_dispatch_win32::clock::QpcError;
     pub use sky_dispatch_win32::clock::QpcTicks;
     pub use sky_dispatch_win32::input::PHYSICAL_INSTRUMENT_SCAN_CODES;
     pub use sky_dispatch_win32::mmcss::PriorityMode;
 
     pub const SCHEMA_VERSION: u32 = sky_dispatch_core::SCHEMA_VERSION;
-    pub const MAX_COMPILED_ACTIONS: usize = sky_dispatch_core::compile::MAX_ACTIONS;
-    pub const MAX_COMPILED_REASON_BYTES: usize = sky_dispatch_core::compile::MAX_REASON_BYTES;
     pub const MAX_RETAINED_DISPATCH_BYTES: usize =
         sky_dispatch_core::model::MAX_RETAINED_DISPATCH_BYTES;
-    pub fn compile_runtime_intents(
-        actions: &[KeyActionInput],
+
+    pub fn build_onset_plan(
+        chords: &[OnsetChordInput],
         allowed_scan_codes: &[u16],
-    ) -> Result<RuntimeSchedule, CompileError> {
-        sky_dispatch_core::compile::compile_runtime_intents(actions, allowed_scan_codes)
+        hold_us: u64,
+    ) -> Result<OnsetPlan, PlanError> {
+        sky_dispatch_core::plan::build_onset_plan(chords, allowed_scan_codes, hold_us)
     }
 
-    pub fn compile_runtime_intents_with_cancellation(
-        actions: &[KeyActionInput],
+    pub fn build_onset_plan_with_cancellation(
+        chords: &[OnsetChordInput],
         allowed_scan_codes: &[u16],
+        hold_us: u64,
         cancelled: impl FnMut() -> bool,
-    ) -> Result<RuntimeSchedule, CompileError> {
-        sky_dispatch_core::compile::compile_runtime_intents_with_cancellation(
-            actions,
+    ) -> Result<OnsetPlan, PlanError> {
+        sky_dispatch_core::plan::build_onset_plan_with_cancellation(
+            chords,
             allowed_scan_codes,
+            hold_us,
             cancelled,
         )
     }
 
-    pub fn compile_runtime_intents_with_memory_accounting(
-        actions: &[KeyActionInput],
+    pub fn build_onset_plan_with_memory_accounting(
+        chords: &[OnsetChordInput],
         allowed_scan_codes: &[u16],
-        action_vector_capacity: usize,
+        hold_us: u64,
+        input_vector_capacity: usize,
         caller_retained_capacity_bytes: usize,
         cancelled: impl FnMut() -> bool,
-    ) -> Result<RuntimeSchedule, CompileError> {
-        sky_dispatch_core::compile::compile_runtime_intents_with_memory_metrics(
-            actions,
+    ) -> Result<OnsetPlan, PlanError> {
+        sky_dispatch_core::plan::build_onset_plan_with_memory_metrics(
+            chords,
             allowed_scan_codes,
-            action_vector_capacity,
+            hold_us,
+            input_vector_capacity,
             caller_retained_capacity_bytes,
             cancelled,
-        )
-    }
-
-    pub fn validate_min_hold_feasibility(
-        schedule: &RuntimeSchedule,
-        effective_min_hold_us: u64,
-    ) -> Result<(), ScheduleTimingError> {
-        sky_dispatch_core::validation::validate_min_hold_feasibility(
-            schedule,
-            effective_min_hold_us,
         )
     }
 

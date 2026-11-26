@@ -457,7 +457,6 @@ impl NativePlaybackService {
         let fingerprint_song_id = format!("{song_id}\0{plan_identity}");
         let fingerprint =
             plan_fingerprint(&fingerprint_song_id, &config, &schedule, &timing_policy)?;
-        let source_action_count = schedule.actions.len();
         let schedule_duration_us = schedule.duration_us;
         let qpc_frequency_hz = if config.dry_run {
             None
@@ -513,8 +512,7 @@ impl NativePlaybackService {
                 sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
                     compiled,
                     qpc_frequency_hz.expect("physical Prepare requires QPC admission"),
-                    timing_policy.min_hold_us,
-                    compiled.compile_memory.caller_retained_capacity_bytes,
+                    compiled.compile_memory().caller_retained_capacity_bytes,
                     || {
                         if cancelled.load(Ordering::Acquire) {
                             Err("native dispatch materialization cancelled".to_string())
@@ -527,17 +525,9 @@ impl NativePlaybackService {
             )
         };
         let timing_advisory = if let Some(compiled) = &base_runtime_schedule {
-            self.analyze_timing_variant(
-                source_action_count,
-                compiled,
-                &config,
-                &timing_policy,
-                &fingerprint,
-                cancelled,
-            )
+            self.analyze_timing_variant(compiled, &config, &timing_policy, &fingerprint, cancelled)
         } else {
             timing_advisory::unavailable_compiled_variant(
-                source_action_count,
                 &config,
                 &timing_policy,
                 &fingerprint,
@@ -616,7 +606,8 @@ impl NativePlaybackService {
                     &recommended_schedule,
                     &recommended_policy,
                 )?;
-                let recommended_action_count = recommended_schedule.actions.len();
+                let base_schedule_capacity_bytes =
+                    schedule_metadata_heap_capacity_bytes(&schedule)?;
                 let base_runtime_schedule_capacity_bytes = base_runtime_schedule
                     .as_ref()
                     .map(|compiled| runtime_schedule_capacity_bytes(compiled, cancelled))
@@ -624,6 +615,7 @@ impl NativePlaybackService {
                     .unwrap_or(0);
                 let recommendation_caller_retained_capacity_bytes = checked_capacity_sum([
                     other_prepared_capacity_bytes,
+                    base_schedule_capacity_bytes,
                     base_runtime_schedule_capacity_bytes,
                     base_dispatch_capacity_bytes,
                 ])?;
@@ -669,17 +661,16 @@ impl NativePlaybackService {
                             .recommended_plan_caller_capacity_override_for_test
                             .unwrap_or(
                                 recommended_compiled
-                                    .compile_memory
+                                    .compile_memory()
                                     .caller_retained_capacity_bytes,
                             );
                         #[cfg(not(all(test, feature = "tauri-test")))]
                         let caller_retained_capacity_bytes = recommended_compiled
-                            .compile_memory
+                            .compile_memory()
                             .caller_retained_capacity_bytes;
                         match sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
                             &recommended_compiled,
                             qpc_frequency_hz.expect("physical recommendation requires QPC admission"),
-                            recommended_policy.min_hold_us,
                             caller_retained_capacity_bytes,
                             || {
                                 if cancelled.load(Ordering::Acquire) {
@@ -698,7 +689,6 @@ impl NativePlaybackService {
                     };
                     if config.dry_run || recommended_dispatch.is_some() {
                         let recommended_timing_advisory = self.analyze_timing_variant(
-                            recommended_action_count,
                             &recommended_compiled,
                             &recommended_config,
                             &recommended_policy,
@@ -741,7 +731,6 @@ impl NativePlaybackService {
                 )?;
                 let dry_run_timing_advisory = if let Some(compiled) = &base_runtime_schedule {
                     self.analyze_timing_variant(
-                        source_action_count,
                         compiled,
                         &dry_run_config,
                         &timing_policy,
@@ -750,7 +739,6 @@ impl NativePlaybackService {
                     )
                 } else {
                     timing_advisory::unavailable_compiled_variant(
-                        source_action_count,
                         &dry_run_config,
                         &timing_policy,
                         &dry_run_fingerprint,
@@ -916,8 +904,7 @@ impl NativePlaybackService {
 
     fn analyze_timing_variant(
         &self,
-        source_action_count: usize,
-        schedule: &sky_player::adapter_support::RuntimeSchedule,
+        schedule: &sky_player::adapter_support::OnsetPlan,
         config: &PlaybackConfigDto,
         policy: &MaterializedTimingPolicy,
         fingerprint: &str,
@@ -931,7 +918,6 @@ impl NativePlaybackService {
                 .ok()
                 .and_then(|mut hook| hook.take());
             timing_advisory::analyze_compiled_variant_with_model_hook(
-                source_action_count,
                 schedule,
                 config,
                 policy,
@@ -945,14 +931,7 @@ impl NativePlaybackService {
             )
         }
         #[cfg(not(test))]
-        timing_advisory::analyze_compiled_variant(
-            source_action_count,
-            schedule,
-            config,
-            policy,
-            fingerprint,
-            cancelled,
-        )
+        timing_advisory::analyze_compiled_variant(schedule, config, policy, fingerprint, cancelled)
     }
 
     fn compile_prepared_schedule(
@@ -960,7 +939,7 @@ impl NativePlaybackService {
         schedule: &ScheduleMetadata,
         caller_retained_capacity_bytes: usize,
         cancelled: &AtomicBool,
-    ) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
+    ) -> Result<sky_player::adapter_support::OnsetPlan, String> {
         if cancelled.load(Ordering::Acquire) {
             return Err("native schedule preparation cancelled".into());
         }
@@ -2722,19 +2701,10 @@ pub(in crate::native_runtime) fn plan_fingerprint(
     schedule: &ScheduleMetadata,
     policy: &MaterializedTimingPolicy,
 ) -> Result<String, String> {
-    let actions = schedule
-        .actions
+    let chords = schedule
+        .chords
         .iter()
-        .map(|action| {
-            serde_json::json!([
-                match action.kind {
-                    ActionKind::Down => "down",
-                    ActionKind::Up => "up",
-                },
-                action.at_us,
-                action.scan_codes,
-            ])
-        })
+        .map(|chord| serde_json::json!([chord.at_us, chord.scan_codes]))
         .collect::<Vec<_>>();
     // Construct every nested object with json! rather than serializing the
     // Rust DTO directly. This keeps the fingerprint field order independent
@@ -2754,7 +2724,7 @@ pub(in crate::native_runtime) fn plan_fingerprint(
             "timing_margin_us": policy.timing_margin_us,
             "min_hold_us": policy.min_hold_us,
         },
-        "actions": actions,
+        "chords": chords,
     });
     let bytes = serde_json::to_vec(&payload).map_err(json_error)?;
     let digest = Sha256::digest(bytes);
@@ -2946,7 +2916,7 @@ fn recommended_schedule(
 pub(super) fn compile_dispatch_schedule(
     schedule: &ScheduleMetadata,
     cancelled: &AtomicBool,
-) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
+) -> Result<sky_player::adapter_support::OnsetPlan, String> {
     compile_dispatch_schedule_with_checkpoint(schedule, 0, cancelled, |_| {})
 }
 
@@ -2955,70 +2925,88 @@ fn compile_dispatch_schedule_with_checkpoint(
     caller_retained_capacity_bytes: usize,
     cancelled: &AtomicBool,
     mut checkpoint: impl FnMut(usize),
-) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
+) -> Result<sky_player::adapter_support::OnsetPlan, String> {
     if cancelled.load(Ordering::Acquire) {
         return Err("native schedule compilation cancelled".into());
     }
-    if schedule.actions.len() > sky_player::adapter_support::MAX_COMPILED_ACTIONS {
-        return Err("native schedule exceeds compiler action limit".into());
+    if schedule.chords.len() > sky_player::adapter_support::MAX_CHORDS {
+        return Err("native schedule exceeds onset chord limit".into());
+    }
+    let caller_retained_capacity_bytes = caller_retained_capacity_bytes
+        .checked_add(schedule_metadata_heap_capacity_bytes(schedule)?)
+        .ok_or_else(|| "native caller-retained startup capacity overflow".to_string())?;
+    let estimated_spilled_scan_bytes: usize = schedule
+        .chords
+        .iter()
+        .filter(|chord| chord.scan_codes.len() > 4)
+        .try_fold(0usize, |total, chord| {
+            checked_capacity_bytes(chord.scan_codes.len(), std::mem::size_of::<u16>())
+                .and_then(|bytes| checked_capacity_sum([total, bytes]))
+        })?;
+    let estimated_input_bytes = checked_capacity_sum([
+        checked_capacity_bytes(
+            schedule.chords.len(),
+            std::mem::size_of::<OnsetChordInput>(),
+        )?,
+        estimated_spilled_scan_bytes,
+    ])?;
+    let preflight_bytes =
+        checked_capacity_sum([caller_retained_capacity_bytes, estimated_input_bytes])?;
+    if preflight_bytes > sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES {
+        return Err(format!(
+            "native onset chord input preflight ({preflight_bytes} bytes) exceeds the {} byte retained-dispatch budget",
+            sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES
+        ));
     }
     checkpoint(0);
-    let mut actions = Vec::new();
-    actions
-        .try_reserve(schedule.actions.len())
-        .map_err(|error| format!("native action allocation failed: {error}"))?;
-    for (index, action) in schedule.actions.iter().enumerate() {
+    let mut chords = Vec::new();
+    chords
+        .try_reserve(schedule.chords.len())
+        .map_err(|error| format!("native onset chord allocation failed: {error}"))?;
+    for (index, chord) in schedule.chords.iter().enumerate() {
         if index.is_multiple_of(256) && cancelled.load(Ordering::Acquire) {
             return Err("native schedule compilation cancelled".into());
         }
-        if action.scan_codes.is_empty()
-            || action.scan_codes.len() > sky_app_core::song::SKY_SCAN_CODES.len()
+        if chord.scan_codes.is_empty()
+            || chord.scan_codes.len() > sky_app_core::song::SKY_SCAN_CODES.len()
         {
-            return Err(format!("native action {index} has invalid scan code count"));
-        }
-        if action.reason.len() > sky_player::adapter_support::MAX_COMPILED_REASON_BYTES {
-            return Err(format!(
-                "native action {index} reason exceeds compiler limit"
-            ));
+            return Err(format!("native chord {index} has invalid scan code count"));
         }
         let mut scan_codes = SmallVec::<[u16; 4]>::new();
         scan_codes
-            .try_reserve(action.scan_codes.len())
+            .try_reserve(chord.scan_codes.len())
             .map_err(|error| format!("native scan code allocation failed: {error}"))?;
-        scan_codes.extend_from_slice(&action.scan_codes);
-        actions.push(KeyActionInput {
-            source_action_index: u32::try_from(index)
-                .map_err(|_| "native action index overflow")?,
-            kind: match action.kind {
-                ActionKind::Down => DispatchActionKind::Down,
-                ActionKind::Up => DispatchActionKind::Up,
-            },
-            scheduled_us: action.at_us,
+        scan_codes.extend_from_slice(&chord.scan_codes);
+        chords.push(OnsetChordInput {
+            source_action_index: u32::try_from(index).map_err(|_| "native chord index overflow")?,
+            scheduled_us: chord.at_us,
             scan_codes,
-            reason: Arc::<str>::from(action.reason.as_str()),
         });
         if (index + 1).is_multiple_of(256) {
             checkpoint(index + 1);
         }
     }
-    let caller_retained_capacity_bytes = caller_retained_capacity_bytes
-        .checked_add(schedule_metadata_heap_capacity_bytes(schedule)?)
-        .ok_or_else(|| "native caller-retained startup capacity overflow".to_string())?;
-    sky_player::adapter_support::compile_runtime_intents_with_memory_accounting(
-        &actions,
+    // `chords` (and any spilled SmallVec scan-code storage) is temporary to this
+    // compile call and is counted once by `build_onset_plan_with_memory_accounting`
+    // in `input_capacity_bytes`. `caller_retained_capacity_bytes` excludes those
+    // temporary inputs so they are neither double-counted during build nor carried
+    // into subsequent QPC materialization after `chords` is dropped.
+    sky_player::adapter_support::build_onset_plan_with_memory_accounting(
+        &chords,
         &sky_app_core::song::SKY_SCAN_CODES,
-        actions.capacity(),
+        schedule.hold_us,
+        chords.capacity(),
         caller_retained_capacity_bytes,
         || cancelled.load(Ordering::Acquire),
     )
-    .map_err(|error| format!("native schedule compilation failed: {error}"))
+    .map_err(|error| format!("native onset plan construction failed: {error}"))
 }
 
 fn compile_dispatch_schedule_with_prepared_capacity(
     schedule: &ScheduleMetadata,
     caller_retained_capacity_bytes: usize,
     cancelled: &AtomicBool,
-) -> Result<sky_player::adapter_support::RuntimeSchedule, String> {
+) -> Result<sky_player::adapter_support::OnsetPlan, String> {
     compile_dispatch_schedule_with_checkpoint(
         schedule,
         caller_retained_capacity_bytes,
@@ -3042,36 +3030,32 @@ fn checked_capacity_sum(values: impl IntoIterator<Item = usize>) -> Result<usize
 }
 
 fn runtime_schedule_capacity_bytes(
-    schedule: &sky_player::adapter_support::RuntimeSchedule,
+    schedule: &sky_player::adapter_support::OnsetPlan,
     cancelled: &AtomicBool,
 ) -> Result<usize, String> {
-    let memory = schedule.memory_metrics_with_checkpoint(|| {
-        if cancelled.load(Ordering::Acquire) {
-            Err("runtime schedule capacity accounting cancelled".to_string())
-        } else {
-            Ok(())
-        }
-    })?;
+    if cancelled.load(Ordering::Acquire) {
+        return Err("onset plan capacity accounting cancelled".to_string());
+    }
+    let memory = schedule.memory_metrics()?;
     memory
         .heap_payload_bytes
         .checked_add(memory.struct_bytes)
-        .ok_or_else(|| "runtime schedule capacity overflow".to_string())
+        .ok_or_else(|| "onset plan capacity overflow".to_string())
 }
 
 /// Heap payload retained by one source schedule. Struct headers are counted
 /// by the containing prepared variant; allocator metadata is excluded.
 fn schedule_metadata_heap_capacity_bytes(schedule: &ScheduleMetadata) -> Result<usize, String> {
-    let action_headers = checked_capacity_bytes(
-        schedule.actions.capacity(),
-        std::mem::size_of::<sky_app_core::song::KeyAction>(),
+    let chord_headers = checked_capacity_bytes(
+        schedule.chords.capacity(),
+        std::mem::size_of::<sky_app_core::song::OnsetChord>(),
     )?;
-    let action_payloads = schedule.actions.iter().try_fold(0usize, |total, action| {
+    let chord_payloads = schedule.chords.iter().try_fold(0usize, |total, chord| {
         let scan_codes =
-            checked_capacity_bytes(action.scan_codes.capacity(), std::mem::size_of::<u16>())?;
+            checked_capacity_bytes(chord.scan_codes.capacity(), std::mem::size_of::<u16>())?;
         total
             .checked_add(scan_codes)
-            .and_then(|bytes| bytes.checked_add(action.reason.capacity()))
-            .ok_or_else(|| "native action source capacity overflow".to_string())
+            .ok_or_else(|| "native chord source capacity overflow".to_string())
     })?;
     let warning_headers =
         checked_capacity_bytes(schedule.warnings.capacity(), std::mem::size_of::<String>())?;
@@ -3084,8 +3068,8 @@ fn schedule_metadata_heap_capacity_bytes(schedule: &ScheduleMetadata) -> Result<
                 .ok_or_else(|| "native warning source capacity overflow".to_string())
         })?;
     checked_capacity_sum([
-        action_headers,
-        action_payloads,
+        chord_headers,
+        chord_payloads,
         warning_headers,
         warning_payloads,
     ])
@@ -3326,24 +3310,17 @@ mod preparation_cancellation_tests {
     #[test]
     fn valid_one_million_single_key_actions_fit_prepared_runtime_budget() {
         const ACTION_COUNT: usize = 1_000_000;
-        let mut actions = Vec::with_capacity(ACTION_COUNT);
+        let mut chords = Vec::with_capacity(ACTION_COUNT / 2);
         for index in 0..(ACTION_COUNT / 2) {
             let start = (index as u64) * 2;
-            actions.push(sky_app_core::song::KeyAction {
+            chords.push(sky_app_core::song::OnsetChord {
                 at_us: start,
                 scan_codes: vec![0x15],
-                kind: sky_app_core::song::ActionKind::Down,
-                reason: "one-key".into(),
-            });
-            actions.push(sky_app_core::song::KeyAction {
-                at_us: start + 1,
-                scan_codes: vec![0x15],
-                kind: sky_app_core::song::ActionKind::Up,
-                reason: "one-key".into(),
             });
         }
         let schedule = sky_app_core::song::ScheduleMetadata {
-            actions,
+            chords,
+            hold_us: 1,
             source_duration_us: ACTION_COUNT as u64,
             playback_duration_us: ACTION_COUNT as u64,
             duration_us: ACTION_COUNT as u64,
@@ -3362,55 +3339,6 @@ mod preparation_cancellation_tests {
         let source_capacity_bytes =
             schedule_metadata_heap_capacity_bytes(&schedule).expect("source schedule capacity");
         let qpc_frequency = std::num::NonZeroU64::new(1_000_000).expect("QPC frequency");
-        let baseline_started = std::time::Instant::now();
-        let baseline_compiled = compile_dispatch_schedule_with_checkpoint(
-            &schedule,
-            0,
-            &std::sync::atomic::AtomicBool::new(false),
-            |_| {},
-        )
-        .expect("baseline-equivalent one-million-action compile");
-        sky_player::adapter_support::validate_min_hold_feasibility_ticks(
-            &baseline_compiled,
-            0,
-            sky_player::adapter_support::DurationTicks::ZERO,
-            |microseconds| {
-                Some(sky_player::adapter_support::TimelineTicks::from_raw(
-                    microseconds,
-                ))
-            },
-        )
-        .expect("baseline-equivalent session admission validation");
-        let baseline_compile_memory = baseline_compiled.compile_memory;
-        let baseline_schedule_memory = baseline_compiled
-            .memory_metrics()
-            .expect("baseline compiled schedule capacity");
-        let baseline_executor = sky_player::adapter_support::DispatchExecutor::new(
-            &baseline_compiled,
-            sky_player::adapter_support::DurationTicks::ZERO,
-            |microseconds| {
-                Ok::<_, std::convert::Infallible>(
-                    sky_player::adapter_support::TimelineTicks::from_raw(microseconds),
-                )
-            },
-        )
-        .expect("baseline-equivalent worker executor construction");
-        let baseline_executor_memory = baseline_executor
-            .try_memory_metrics()
-            .expect("baseline executor capacity metrics");
-        let baseline_start_compile_validate_and_executor_us =
-            baseline_started.elapsed().as_micros();
-        let baseline_retained_capacity_bytes = baseline_compile_memory
-            .caller_retained_capacity_bytes
-            .checked_add(baseline_schedule_memory.heap_payload_bytes)
-            .and_then(|bytes| bytes.checked_add(baseline_schedule_memory.struct_bytes))
-            .and_then(|bytes| bytes.checked_add(baseline_executor_memory.total_bytes))
-            .expect("baseline source, schedule, and executor capacity");
-        let baseline_peak_capacity_bytes = baseline_compile_memory
-            .phase_peak_capacity_bytes
-            .max(baseline_retained_capacity_bytes);
-        drop(baseline_executor);
-        drop(baseline_compiled);
 
         let candidate_prepare_started = std::time::Instant::now();
         let compiled = compile_dispatch_schedule_with_checkpoint(
@@ -3420,8 +3348,8 @@ mod preparation_cancellation_tests {
             |_| {},
         )
         .expect("candidate one-million-action Prepare compile");
-        assert_eq!(compiled.generation_count, (ACTION_COUNT / 2) as u64);
-        let compile_memory = compiled.compile_memory;
+        assert_eq!(compiled.generation_count(), (ACTION_COUNT / 2) as u64);
+        let compile_memory = compiled.compile_memory();
         let schedule_memory = compiled
             .memory_metrics()
             .expect("compiled schedule capacity");
@@ -3432,7 +3360,6 @@ mod preparation_cancellation_tests {
         let prepared = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
             &compiled,
             qpc_frequency,
-            0,
             compile_memory.caller_retained_capacity_bytes,
         )
         .expect("one-million-action Prepare materialization");
@@ -3455,9 +3382,9 @@ mod preparation_cancellation_tests {
         assert!(executor_memory.chord_heap_bytes > 0);
         assert!(retained_capacity_bytes <= budget_bytes);
         assert!(startup_peak_capacity_bytes <= budget_bytes);
-        assert!(baseline_peak_capacity_bytes <= budget_bytes);
         eprintln!(
-            "prepared_playback_evidence workload=valid_one_key actions={ACTION_COUNT} source_schedule_capacity_bytes={source_capacity_bytes} baseline_equivalent_start_compile_validate_plus_executor_us={baseline_start_compile_validate_and_executor_us} candidate_prepare_compile_validate_plus_plan_materialization_us={candidate_prepare_compile_and_materialize_us} candidate_start_plan_move_and_session_state_ns={candidate_start_plan_move_ns} baseline_retained_capacity_bytes={baseline_retained_capacity_bytes} baseline_peak_capacity_bytes={baseline_peak_capacity_bytes} candidate_caller_retained_capacity_bytes={} candidate_compiler_input_capacity_bytes={} candidate_compiler_temporary_capacity_bytes={} candidate_compiled_schedule_capacity_bytes={schedule_capacity_bytes} candidate_prepared_plan_capacity_bytes={} candidate_runtime_executor_heap_bytes={} candidate_runtime_executor_struct_bytes={} candidate_runtime_executor_total_bytes={} candidate_prepare_overlapping_peak_capacity_bytes={retained_capacity_bytes} candidate_compiler_phase_peak_capacity_bytes={} candidate_startup_peak_capacity_bytes={startup_peak_capacity_bytes} policy_bytes={budget_bytes} timing_basis=wall_clock_single_offline_run_not_a_gate baseline_basis=baseline-equivalent_raw_compile_validation_plus_executor_path_on_candidate_source candidate_basis=compile_validate_and_prepare_plan_then_move_plan_on_candidate_source start_arm_timing=executor-construction-only native_process_setup_and_real_worker_arm=not_measured memory_basis=calculated_size_and_capacity complete_application_process_peak=not_measured windows_process_memory=not_measured",
+            "prepared_playback_evidence workload=valid_one_key chords={} source_schedule_capacity_bytes={source_capacity_bytes} prepare_compile_validate_plus_plan_materialization_us={candidate_prepare_compile_and_materialize_us} start_plan_move_and_session_state_ns={candidate_start_plan_move_ns} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_capacity_bytes={schedule_capacity_bytes} prepared_plan_capacity_bytes={} runtime_executor_heap_bytes={} runtime_executor_struct_bytes={} runtime_executor_total_bytes={} prepare_overlapping_peak_capacity_bytes={retained_capacity_bytes} compiler_phase_peak_capacity_bytes={} startup_peak_capacity_bytes={startup_peak_capacity_bytes} policy_bytes={budget_bytes} timing_basis=wall_clock_single_offline_run_not_a_gate basis=compile_validate_and_prepare_plan_then_move_plan start_arm_timing=executor-construction-only native_process_setup_and_real_worker_arm=not_measured memory_basis=calculated_size_and_capacity complete_application_process_peak=not_measured windows_process_memory=not_measured",
+            ACTION_COUNT / 2,
             compile_memory.caller_retained_capacity_bytes,
             compile_memory.input_capacity_bytes,
             compile_memory.temporary_capacity_bytes,
@@ -3467,13 +3394,131 @@ mod preparation_cancellation_tests {
             executor_memory.total_bytes,
             compile_memory.phase_peak_capacity_bytes,
         );
-        eprintln!(
-            "prepared_playback_baseline_detail actions={ACTION_COUNT} caller_retained_capacity_bytes={} compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} compiled_schedule_heap_capacity_bytes={} executor_total_capacity_bytes={} retained_capacity_bytes={baseline_retained_capacity_bytes} peak_capacity_bytes={baseline_peak_capacity_bytes}",
-            baseline_compile_memory.caller_retained_capacity_bytes,
-            baseline_compile_memory.input_capacity_bytes,
-            baseline_compile_memory.temporary_capacity_bytes,
-            baseline_schedule_memory.heap_payload_bytes,
-            baseline_executor_memory.total_bytes,
+    }
+
+    #[test]
+    fn spilled_chord_memory_accounting_counts_once_and_drops_temporary_inputs() {
+        let wide_codes = vec![0x15, 0x16, 0x17, 0x18, 0x19, 0x23];
+        assert!(wide_codes.len() > 4, "must spill SmallVec<[u16; 4]>");
+        let schedule = sky_app_core::song::ScheduleMetadata {
+            chords: vec![
+                sky_app_core::song::OnsetChord {
+                    at_us: 0,
+                    scan_codes: wide_codes.clone(),
+                },
+                sky_app_core::song::OnsetChord {
+                    at_us: 50_000,
+                    scan_codes: wide_codes,
+                },
+            ],
+            hold_us: 16_667,
+            source_duration_us: 66_667,
+            playback_duration_us: 66_667,
+            duration_us: 66_667,
+            note_count: 12,
+            deduplicated_note_count: 12,
+            duplicate_note_count: 0,
+            impossible_same_key_repeats: 0,
+            max_polyphony: 6,
+            shortest_same_key_interval_us: Some(50_000),
+            min_same_key_up_gap_us: Some(33_333),
+            short_up_gap_repeat_count: 0,
+            recommended_hold_frames: None,
+            recommended_tempo_scale: None,
+            warnings: Vec::new(),
+        };
+        let source_capacity_bytes =
+            super::schedule_metadata_heap_capacity_bytes(&schedule).expect("source capacity");
+        let external_retained = 4096usize;
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+
+        let compiled = super::compile_dispatch_schedule_with_checkpoint(
+            &schedule,
+            external_retained,
+            &cancelled,
+            |_| {},
+        )
+        .expect("spilled chord compile");
+        let cm = compiled.compile_memory();
+
+        // Caller retained excludes temporary OnsetChordInput headers and spilled SmallVec payloads.
+        assert_eq!(
+            cm.caller_retained_capacity_bytes,
+            external_retained + source_capacity_bytes
+        );
+        // Core counts input Vec headers + spilled scan-code capacity once.
+        let min_input_bytes = schedule.chords.len()
+            * std::mem::size_of::<sky_player::adapter_support::OnsetChordInput>()
+            + schedule.chords.len() * 6 * std::mem::size_of::<u16>();
+        assert!(
+            cm.input_capacity_bytes >= min_input_bytes,
+            "input_capacity_bytes ({}) must include headers and spilled scan codes (>= {min_input_bytes})",
+            cm.input_capacity_bytes
+        );
+        assert_eq!(
+            cm.phase_peak_capacity_bytes,
+            cm.caller_retained_capacity_bytes
+                + cm.input_capacity_bytes
+                + cm.schedule_capacity_bytes
+        );
+
+        // Near-budget boundary: exact remaining budget succeeds (would fail if spilled bytes were double-counted).
+        let budget = sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES;
+        let exact_external =
+            budget - source_capacity_bytes - cm.input_capacity_bytes - cm.schedule_capacity_bytes;
+        let at_limit = super::compile_dispatch_schedule_with_checkpoint(
+            &schedule,
+            exact_external,
+            &cancelled,
+            |_| {},
+        )
+        .expect("exact budget boundary must succeed without double-counting spilled scan codes");
+        assert_eq!(at_limit.compile_memory().phase_peak_capacity_bytes, budget);
+        assert_eq!(
+            at_limit.compile_memory().caller_retained_capacity_bytes,
+            exact_external + source_capacity_bytes
+        );
+
+        // Materialization after temporary inputs are dropped must not carry temporary input bytes
+        // as retained caller storage; prepared chord storage fits in the remaining budget when
+        // prepared_plan_bytes <= input_capacity_bytes.
+        let qpc_hz = std::num::NonZeroU64::new(1_000_000).expect("qpc");
+        let prepared = sky_player::adapter_support::PreparedDispatchSchedule::prepare(
+            &compiled,
+            qpc_hz,
+            cm.caller_retained_capacity_bytes,
+        )
+        .expect("prepared materialization");
+        let plan_memory = compiled.memory_metrics().expect("plan memory");
+        let source_plan_bytes = plan_memory.heap_payload_bytes + plan_memory.struct_bytes;
+        let materialize_overlap = cm.caller_retained_capacity_bytes
+            + source_plan_bytes
+            + prepared.memory_metrics().plan_capacity_bytes;
+        assert_eq!(
+            prepared.memory_metrics().overlapping_peak_capacity_bytes,
+            materialize_overlap.max(cm.phase_peak_capacity_bytes)
+        );
+
+        // 1 byte over budget must fail cleanly.
+        let over_limit = super::compile_dispatch_schedule_with_checkpoint(
+            &schedule,
+            exact_external + 1,
+            &cancelled,
+            |_| {},
+        );
+        assert!(over_limit.is_err(), "1 byte over budget must be rejected");
+
+        // Overflow must fail cleanly via checked arithmetic without huge allocation.
+        let overflow = super::compile_dispatch_schedule_with_checkpoint(
+            &schedule,
+            usize::MAX,
+            &cancelled,
+            |_| {},
+        );
+        assert!(
+            overflow
+                .expect_err("usize::MAX must overflow")
+                .contains("overflow")
         );
     }
 
@@ -3536,34 +3581,22 @@ mod preparation_cancellation_tests {
         generation: u64,
         settings_fingerprint: &str,
     ) -> NativePreparedInput {
-        use sky_app_core::song::{ActionKind as SourceActionKind, KeyAction};
+        use sky_app_core::song::OnsetChord;
 
         const PAIR_COUNT: u64 = 25_001;
         let mut prepared = recommendation_input(generation, settings_fingerprint);
-        let actions = (0..PAIR_COUNT)
-            .flat_map(|index| {
-                let base = index * 40_000;
-                [
-                    KeyAction {
-                        at_us: base,
-                        scan_codes: vec![0x15],
-                        kind: SourceActionKind::Down,
-                        reason: "variant-action-limit-down".into(),
-                    },
-                    KeyAction {
-                        at_us: base + 20_000,
-                        scan_codes: vec![0x15],
-                        kind: SourceActionKind::Up,
-                        reason: "variant-action-limit-up".into(),
-                    },
-                ]
+        let chords = (0..PAIR_COUNT)
+            .map(|index| OnsetChord {
+                at_us: index * 40_000,
+                scan_codes: vec![0x15],
             })
             .collect::<Vec<_>>();
-        let duration_us = actions.last().expect("last authored action").at_us;
+        let duration_us =
+            chords.last().expect("last onset chord").at_us + prepared.schedule.hold_us;
         prepared.schedule.duration_us = duration_us;
         prepared.schedule.playback_duration_us = duration_us;
         prepared.schedule.source_duration_us = duration_us;
-        prepared.schedule.actions = actions;
+        prepared.schedule.chords = chords;
         prepared
     }
 
@@ -3909,13 +3942,13 @@ mod preparation_cancellation_tests {
         let settings = sky_app_core::settings::ApplicationSettings::default();
         let fingerprint = super::settings_fingerprint(&settings).expect("settings fingerprint");
         let prepared = large_recommendation_input(1, &fingerprint);
-        assert_eq!(prepared.schedule.actions.len(), 50_002);
+        assert_eq!(prepared.schedule.chords.len(), 25_001);
         let recommended_policy =
             MaterializedTimingPolicy::from_user_margin(60, 1.25, 800).expect("recommended policy");
         let recommended_schedule =
             super::recommended_schedule(&prepared.song, None, 0.9, &recommended_policy)
                 .expect("recommended schedule");
-        assert_eq!(recommended_schedule.actions.len(), 2);
+        assert_eq!(recommended_schedule.chords.len(), 1);
         let service = NativePlaybackService::new(ActivityCoordinator::default());
         let result = service
             .prepare(prepared)
@@ -4026,58 +4059,7 @@ mod preparation_cancellation_tests {
             }
         }));
         let prepared_input = input(1, "prepared-runtime");
-        let source_action_count = prepared_input.schedule.actions.len();
-        let baseline_schedule = prepared_input.schedule.clone();
-        let baseline_clock = sky_dispatch_win32::clock::QpcClock::initialize()
-            .expect("baseline-equivalent QPC clock");
-        let baseline_started = std::time::Instant::now();
-        let baseline_compiled = super::compile_dispatch_schedule(
-            &baseline_schedule,
-            &std::sync::atomic::AtomicBool::new(false),
-        )
-        .expect("baseline-equivalent raw schedule compile");
-        let baseline_min_hold = baseline_clock
-            .duration_from_us(prepared_input.timing_policy.min_hold_us)
-            .expect("baseline H conversion");
-        sky_player::adapter_support::validate_min_hold_feasibility_ticks(
-            &baseline_compiled,
-            prepared_input.timing_policy.min_hold_us,
-            baseline_min_hold,
-            |microseconds| baseline_clock.timeline_from_us(microseconds).ok(),
-        )
-        .expect("baseline-equivalent session admission validation");
-        let baseline_executor = sky_player::adapter_support::DispatchExecutor::new(
-            &baseline_compiled,
-            baseline_min_hold,
-            |microseconds| {
-                baseline_clock
-                    .timeline_from_us(microseconds)
-                    .map_err(|error| format!("{error:?}"))
-            },
-        )
-        .expect("baseline-equivalent executor construction");
-        let baseline_executor_memory = baseline_executor
-            .try_memory_metrics()
-            .expect("baseline executor capacity metrics");
-        let baseline_schedule_memory = baseline_compiled
-            .memory_metrics()
-            .expect("baseline schedule capacity metrics");
-        let baseline_start_compile_validate_plus_executor_us =
-            baseline_started.elapsed().as_micros();
-        let baseline_retained_capacity_bytes = baseline_compiled
-            .compile_memory
-            .caller_retained_capacity_bytes
-            .checked_add(baseline_schedule_memory.heap_payload_bytes)
-            .and_then(|bytes| bytes.checked_add(baseline_schedule_memory.struct_bytes))
-            .and_then(|bytes| bytes.checked_add(baseline_executor_memory.total_bytes))
-            .expect("baseline retained capacity");
-        let baseline_peak_capacity_bytes = baseline_compiled
-            .compile_memory
-            .phase_peak_capacity_bytes
-            .max(baseline_retained_capacity_bytes);
-        drop(baseline_executor);
-        drop(baseline_compiled);
-        drop(baseline_schedule);
+        let source_chord_count = prepared_input.schedule.chords.len();
         let prepare_started = std::time::Instant::now();
         let prepared = service.prepare(prepared_input).expect("physical Prepare");
         let prepare_elapsed_us = prepare_started.elapsed().as_micros();
@@ -4114,44 +4096,29 @@ mod preparation_cancellation_tests {
         assert_eq!(executor.active_mask(), 0);
         assert_eq!(executor.total_chords(), 1);
         eprintln!(
-            "prepared_playback_evidence workload=short source_actions={source_action_count} baseline_equivalent_start_compile_validate_plus_executor_us={baseline_start_compile_validate_plus_executor_us} candidate_runtime_schedule_compile_count={runtime_schedule_compile_count} candidate_desktop_prepare_wall_us={prepare_elapsed_us} candidate_prepared_executor_move_and_state_init_ns={start_runtime_move_ns} baseline_executor_total_capacity_bytes={} baseline_retained_capacity_bytes={baseline_retained_capacity_bytes} baseline_peak_capacity_bytes={baseline_peak_capacity_bytes} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={} timing_basis=wall_clock_single_offline_run_not_a_gate baseline_basis=raw_compile_validation_plus_executor_on_candidate_source candidate_basis=desktop_prepare_and_prepared_executor_move start_arm_timing=executor-construction-only native_process_setup_and_real_worker_arm=not_measured memory_basis=calculated_size_and_capacity disposition=valid_physical_plan_prepared_and_consumed",
-            baseline_executor_memory.total_bytes,
-            metrics.plan_capacity_bytes,
-            metrics.overlapping_peak_capacity_bytes,
+            "prepared_playback_evidence workload=short source_chords={source_chord_count} runtime_schedule_compile_count={runtime_schedule_compile_count} desktop_prepare_wall_us={prepare_elapsed_us} prepared_executor_move_and_state_init_ns={start_runtime_move_ns} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={} timing_basis=wall_clock_single_offline_run_not_a_gate basis=desktop_prepare_and_prepared_executor_move start_arm_timing=executor-construction-only native_process_setup_and_real_worker_arm=not_measured memory_basis=calculated_size_and_capacity disposition=valid_physical_plan_prepared_and_consumed",
+            metrics.plan_capacity_bytes, metrics.overlapping_peak_capacity_bytes,
         );
     }
 
     #[test]
     fn generation_advisory_does_not_block_large_physical_preparation() {
-        use sky_app_core::song::{ActionKind as SourceActionKind, KeyAction};
+        use sky_app_core::song::OnsetChord;
 
         const PAIR_COUNT: u64 = 25_001;
         let service = NativePlaybackService::new(ActivityCoordinator::default());
         let mut prepared = input(1, "advisory-over-limit");
-        let actions = (0..PAIR_COUNT)
-            .flat_map(|index| {
-                let base = index * 40_000;
-                [
-                    KeyAction {
-                        at_us: base,
-                        scan_codes: vec![0x15],
-                        kind: SourceActionKind::Down,
-                        reason: "advisory-limit-down".into(),
-                    },
-                    KeyAction {
-                        at_us: base + 20_000,
-                        scan_codes: vec![0x15],
-                        kind: SourceActionKind::Up,
-                        reason: "advisory-limit-up".into(),
-                    },
-                ]
+        let chords = (0..PAIR_COUNT)
+            .map(|index| OnsetChord {
+                at_us: index * 40_000,
+                scan_codes: vec![0x15],
             })
             .collect::<Vec<_>>();
-        let duration_us = actions.last().expect("last action").at_us;
+        let duration_us = chords.last().expect("last chord").at_us + prepared.schedule.hold_us;
         prepared.schedule.duration_us = duration_us;
         prepared.schedule.playback_duration_us = duration_us;
         prepared.schedule.source_duration_us = duration_us;
-        prepared.schedule.actions = actions;
+        prepared.schedule.chords = chords;
 
         let result = service
             .prepare(prepared)
@@ -4196,33 +4163,21 @@ mod preparation_cancellation_tests {
 
     #[test]
     fn shutdown_cancels_an_in_flight_prepare_compiler_and_releases_activity() {
-        use sky_app_core::song::{ActionKind as SourceActionKind, KeyAction};
+        use sky_app_core::song::OnsetChord;
 
         let service = Arc::new(NativePlaybackService::new(ActivityCoordinator::default()));
         let mut prepared = input(1, "settings-a");
-        let actions = (0..150u64)
-            .flat_map(|index| {
-                let base = index * 100_000;
-                [
-                    KeyAction {
-                        at_us: base,
-                        scan_codes: vec![0x15],
-                        kind: SourceActionKind::Down,
-                        reason: "startup-cancel-down".into(),
-                    },
-                    KeyAction {
-                        at_us: base + 50_000,
-                        scan_codes: vec![0x15],
-                        kind: SourceActionKind::Up,
-                        reason: "startup-cancel-up".into(),
-                    },
-                ]
+        let chords = (0..300u64)
+            .map(|index| OnsetChord {
+                at_us: index * 100_000,
+                scan_codes: vec![0x15],
             })
             .collect::<Vec<_>>();
-        prepared.schedule.duration_us = actions.last().expect("last action").at_us;
+        prepared.schedule.duration_us =
+            chords.last().expect("last chord").at_us + prepared.schedule.hold_us;
         prepared.schedule.playback_duration_us = prepared.schedule.duration_us;
         prepared.schedule.source_duration_us = prepared.schedule.duration_us;
-        prepared.schedule.actions = actions;
+        prepared.schedule.chords = chords;
         let (compiler_entered_tx, compiler_entered_rx) = mpsc::channel();
         let (compiler_release_tx, compiler_release_rx) = mpsc::channel();
         let compiler_release_rx = Mutex::new(compiler_release_rx);

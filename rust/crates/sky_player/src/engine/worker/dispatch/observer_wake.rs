@@ -196,7 +196,7 @@ pub(crate) fn publish_pending_wait_observation(
 #[cfg(test)]
 mod tests {
     use super::super::observation::{
-        DispatchObservation, OBSERVATION_QUEUE_CAPACITY, StaleMetadataObservation,
+        DispatchObservation, DownObservation, OBSERVATION_QUEUE_CAPACITY,
     };
     use super::super::observer::PendingObservationQueue;
     use super::{publish_pending_wait_observation, record_wait_attempt, take_deadline_wake_qpc};
@@ -226,11 +226,7 @@ mod tests {
 
         for index in 0..OBSERVATION_QUEUE_CAPACITY {
             queue.push(
-                DispatchObservation::StaleMetadata(StaleMetadataObservation {
-                    source_action_index: u32::try_from(index).unwrap_or(u32::MAX),
-                    effective_scheduled_ticks: TimelineTicks::from_raw(index as u64),
-                    suppressed_intent_count: 1,
-                }),
+                DispatchObservation::Down(DownObservation::test_fixture(index as u64)),
                 &mut dropped,
             );
         }

@@ -514,7 +514,7 @@ fn architecture_helpers_cover_context_function_glob_and_schedule_rules() {
         &BTreeMap::new(),
         "rust/crates/sky_player/src/engine/worker.rs",
         "runtime_schedule_clone",
-        "worker must not clone RuntimeSchedule",
+        "worker must not clone OnsetPlan",
     );
     assert_eq!(schedule_errors.len(), 1);
     assert!(!runtime_schedule_clone_violation(

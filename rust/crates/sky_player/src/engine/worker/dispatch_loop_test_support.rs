@@ -1,8 +1,8 @@
 pub(super) use crate::engine::test_support::ProductionDispatchTestHarness;
 pub(super) use sky_dispatch_core::executor::{
-    DispatchDecision, DispatchTimingWindow, DownChordMetadata,
+    DispatchDecision, DispatchTimingWindow, PreparedChord,
 };
-pub(super) use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+pub(super) use sky_dispatch_core::model::OnsetChordInput;
 pub(super) use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
 pub(super) use sky_dispatch_win32::input::{
     PacketRetryReason, SendEvidence, SendTransactionOutcome, SendTransactionStatus,
@@ -15,7 +15,7 @@ pub(super) fn staged_send_at(
     harness: &mut ProductionDispatchTestHarness,
     at: QpcTicks,
     epoch: QpcTicks,
-) -> (u16, Option<DownChordMetadata>, DispatchTimingWindow) {
+) -> (u16, Option<PreparedChord>, DispatchTimingWindow) {
     match harness
         .evaluate_live_scheduler_for_test(at, epoch)
         .expect("evaluate production scheduler")
@@ -24,7 +24,8 @@ pub(super) fn staged_send_at(
             up_mask,
             down_chord,
             timing_window,
-        } => (up_mask, down_chord.map(Into::into), timing_window),
+            ..
+        } => (up_mask, down_chord, timing_window),
         decision => panic!("expected packet send at {at:?}, got {decision:?}"),
     }
 }
@@ -66,17 +67,10 @@ pub(super) fn wait_until_qpc(harness: &ProductionDispatchTestHarness, target: Qp
     }
 }
 
-pub(super) fn test_action(
-    index: u32,
-    kind: ActionKind,
-    scheduled_us: u64,
-    scan: u16,
-) -> KeyActionInput {
-    KeyActionInput {
+pub(super) fn test_chord(index: u32, scheduled_us: u64, scan: u16) -> OnsetChordInput {
+    OnsetChordInput {
         source_action_index: index,
-        kind,
         scheduled_us,
         scan_codes: smallvec::smallvec![scan],
-        reason: "production dispatch regression".into(),
     }
 }

@@ -423,6 +423,10 @@ fn mixed_packet_preserves_one_wait_with_matching_identity() {
         super::super::StagedDispatchOutcome::Dispatched
     ));
     let target = harness.qpc_now_for_test().expect("wait target");
+    let mixed_offset = super::support::qpc_offset(
+        &harness,
+        crate::engine::test_support::dispatch_harness::DISPATCH_EFFECTIVE_HOLD_US,
+    );
     harness.runtime.pending_wait_observation = crate::engine::worker::dispatch::record_wait_attempt(
         Some(&harness.observer),
         Some(sky_dispatch_win32::wait::WaitResult {
@@ -437,18 +441,18 @@ fn mixed_packet_preserves_one_wait_with_matching_identity() {
         }),
         target,
         DurationTicks::from_raw(100),
-        TimelineTicks::from_raw(1_000),
+        mixed_offset,
         harness.resources.playback.epoch,
         None,
         &mut harness.local_metrics,
     );
     let chord = harness.current_executor_chord_for_test();
     let mixed = harness
-        .stage_candidate_with_observer_for_test(1, chord, TimelineTicks::from_raw(1_000), true)
+        .stage_candidate_with_observer_for_test(1, chord, mixed_offset, true)
         .expect("stage mixed")
         .expect("mixed");
-    assert_ne!(mixed.packet_masks.up_mask, 0);
-    assert_ne!(mixed.packet_masks.down_mask, 0);
+    assert_ne!(mixed.packet_masks().up_mask, 0);
+    assert_ne!(mixed.packet_masks().down_mask, 0);
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(mixed, true),
         super::super::StagedDispatchOutcome::Dispatched
@@ -607,40 +611,34 @@ fn final_control_rejects_staged_down_and_up_before_send() {
 
 #[test]
 fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
-    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
-    let actions = [
-        KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 0,
-            scan_codes: vec![0x15, 0x16].into(),
-            reason: "two-down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 20_000,
-            scan_codes: vec![0x15].into(),
-            reason: "first-up".into(),
-        },
-        KeyActionInput {
-            source_action_index: 2,
-            kind: ActionKind::Up,
-            scheduled_us: 21_000,
-            scan_codes: vec![0x16].into(),
-            reason: "second-up".into(),
-        },
+    let chords = [
+        super::support::test_chord(1, 0, 0x15),
+        super::support::test_chord(2, 1_000, 0x16),
     ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     harness.configure_mock_packet_sender_for_test(&[0, 0, 0, 0]);
     harness.attach_executor_for_test().expect("attach executor");
+    let epoch = harness.resources.playback.epoch;
     let chord = harness.current_executor_chord_for_test();
     let first = harness
         .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
-        .expect("stage Down")
-        .expect("Down");
+        .expect("stage first Down")
+        .expect("first Down");
+    harness.set_mock_sender_start_qpc_for_test(epoch);
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(first, false),
+        super::super::StagedDispatchOutcome::Dispatched
+    ));
+    let second_offset = super::support::qpc_offset(&harness, 1_000);
+    let second_qpc = super::support::target_at(&harness, epoch, 1_000);
+    let second_chord = harness.current_executor_chord_for_test();
+    let second = harness
+        .stage_candidate_for_test(0, second_chord, second_offset)
+        .expect("stage second Down")
+        .expect("second Down");
+    harness.set_mock_sender_start_qpc_for_test(second_qpc);
+    assert!(matches!(
+        harness.dispatch_staged_candidate_for_test(second, false),
         super::super::StagedDispatchOutcome::Dispatched
     ));
     let both_ups_due = TimelineTicks::from_raw(
@@ -671,18 +669,9 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
         .expect("consume Up evidence");
     let slots = &collector.output.up_slot_records;
     assert_eq!(slots.len(), 2);
-    let first_up_ticks = harness
-        .resources
-        .clock
-        .duration_from_us(20_000)
-        .expect("first authored Up QPC offset")
-        .as_u64();
-    let second_up_ticks = harness
-        .resources
-        .clock
-        .duration_from_us(21_000)
-        .expect("second authored Up QPC offset")
-        .as_u64();
+    let hold_ticks = harness.resources.scheduler.hold_ticks().as_u64();
+    let first_up_ticks = hold_ticks;
+    let second_up_ticks = second_offset.as_u64() + hold_ticks;
     assert_eq!(
         (
             slots[0].source_action_index,
@@ -720,31 +709,12 @@ fn coalesced_up_packet_preserves_each_authored_source_in_consumer() {
 
 #[test]
 fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
-    use sky_dispatch_core::model::{ActionKind, KeyActionInput};
-    let actions = [
-        KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 0,
-            scan_codes: vec![0x15, 0x16].into(),
-            reason: "two-down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 20_000,
-            scan_codes: vec![0x15].into(),
-            reason: "first-up".into(),
-        },
-        KeyActionInput {
-            source_action_index: 2,
-            kind: ActionKind::Up,
-            scheduled_us: 21_000,
-            scan_codes: vec![0x16].into(),
-            reason: "second-up".into(),
-        },
-    ];
-    let mut harness = ProductionDispatchTestHarness::create_harness(&actions);
+    let chords = [sky_dispatch_core::model::OnsetChordInput {
+        source_action_index: 0,
+        scheduled_us: 0,
+        scan_codes: smallvec::smallvec![0x15, 0x16],
+    }];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     harness.configure_mock_packet_sender_for_test(&[0, 0, 0, 0]);
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
@@ -766,12 +736,10 @@ fn coalesced_up_sidecar_loss_is_counted_when_parent_observation_is_dropped() {
     );
     for index in 0..crate::engine::worker::dispatch::observation::OBSERVATION_QUEUE_CAPACITY {
         harness.observer.push(
-            crate::engine::worker::dispatch::observation::DispatchObservation::StaleMetadata(
-                crate::engine::worker::dispatch::observation::StaleMetadataObservation {
-                    source_action_index: u32::try_from(index).unwrap_or(u32::MAX),
-                    effective_scheduled_ticks: TimelineTicks::from_raw(index as u64),
-                    suppressed_intent_count: 1,
-                },
+            crate::engine::worker::dispatch::observation::DispatchObservation::Down(
+                crate::engine::worker::dispatch::observation::DownObservation::test_fixture(
+                    u64::try_from(index).unwrap_or(u64::MAX),
+                ),
             ),
             &mut harness.local_metrics.observer_dropped_samples,
         );
@@ -808,16 +776,14 @@ fn telemetry_ring_drop_accounts_each_coalesced_up_slot() {
             slot: 0,
             scan_code: 21,
             source_action_index: 5,
-            authored_up_offset_ticks: TimelineTicks::from_raw(100),
-            paired_up_not_before_offset_ticks: TimelineTicks::from_raw(100),
+            nominal_up_offset_ticks: TimelineTicks::from_raw(100),
             release_not_before_qpc: sky_dispatch_win32::clock::QpcTicks::from_raw(1_120),
         },
         sky_dispatch_core::executor::UpSlotTiming {
             slot: 1,
             scan_code: 22,
             source_action_index: 6,
-            authored_up_offset_ticks: TimelineTicks::from_raw(110),
-            paired_up_not_before_offset_ticks: TimelineTicks::from_raw(110),
+            nominal_up_offset_ticks: TimelineTicks::from_raw(110),
             release_not_before_qpc: sky_dispatch_win32::clock::QpcTicks::from_raw(1_145),
         },
     ]);
@@ -895,13 +861,9 @@ fn missing_pool_storage_is_counted_once_when_observer_queue_is_also_full() {
     let mut metrics = WorkerMetricsLocal::default();
     for index in 0..OBSERVATION_QUEUE_CAPACITY {
         observer.push(
-            DispatchObservation::StaleMetadata(
-                crate::engine::worker::dispatch::observation::StaleMetadataObservation {
-                    source_action_index: u32::try_from(index).expect("queue source index"),
-                    effective_scheduled_ticks: TimelineTicks::from_raw(index as u64),
-                    suppressed_intent_count: 1,
-                },
-            ),
+            DispatchObservation::Down(DownObservation::test_fixture(
+                u64::try_from(index).expect("queue source index"),
+            )),
             &mut metrics.observer_dropped_samples,
         );
     }

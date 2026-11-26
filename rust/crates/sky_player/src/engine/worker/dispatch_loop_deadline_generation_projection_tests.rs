@@ -1,7 +1,7 @@
 use super::replan_timing::{
-    elapsed_us, stage_from_worker_outer_evaluation, timing_action, timing_harness_without_focus,
+    elapsed_us, stage_from_worker_outer_evaluation, timing_chord, timing_harness_without_focus,
 };
-use super::support::{ActionKind, ProductionDispatchTestHarness, QpcTicks, StagedDispatchOutcome};
+use super::support::{ProductionDispatchTestHarness, QpcTicks, StagedDispatchOutcome};
 
 fn wait_to_packet_deadline(
     harness: &mut ProductionDispatchTestHarness,
@@ -35,13 +35,8 @@ fn wait_to_packet_deadline(
 
 #[test]
 fn scheduler_h_floor_and_authored_repeat_trace_uses_single_sender_commits() {
-    let actions = [
-        timing_action(6670, ActionKind::Down, 0),
-        timing_action(6671, ActionKind::Up, 20_000),
-        timing_action(6672, ActionKind::Down, 20_000),
-        timing_action(6673, ActionKind::Up, 40_000),
-    ];
-    let (mut harness, packets, epoch) = timing_harness_without_focus(&actions, &[40_000, 0, 0]);
+    let chords = [timing_chord(6670, 0), timing_chord(6672, 20_000)];
+    let (mut harness, packets, epoch) = timing_harness_without_focus(&chords, &[40_000, 0, 0]);
     let clock = harness.resources.clock;
 
     let down_eval_qpc = harness.qpc_now_for_test().expect("Down scheduler QPC");
@@ -81,7 +76,7 @@ fn scheduler_h_floor_and_authored_repeat_trace_uses_single_sender_commits() {
     let up_projection_evaluations = super::super::scheduler_evaluation_count_for_test();
     assert!(matches!(
         up_action,
-        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc > up_eval_qpc
+        sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } if deadline_qpc > up_eval_qpc
     ));
     assert_eq!(up_projection_evaluations, 2, "now plus deadline projection");
     let up = super::super::stage_scheduler_send_candidate(
@@ -103,12 +98,12 @@ fn scheduler_h_floor_and_authored_repeat_trace_uses_single_sender_commits() {
     assert!(matches!(
         super::super::evaluate_scheduler_action(&harness.resources.scheduler, before_h, epoch)
             .expect("H floor minus one tick"),
-        super::super::SchedulerAction::Wait { deadline_qpc } if deadline_qpc == h_floor_qpc
+        sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc } if deadline_qpc == h_floor_qpc
     ));
     assert!(matches!(
         super::super::evaluate_scheduler_action(&harness.resources.scheduler, h_floor_qpc, epoch)
             .expect("exact H floor"),
-        super::super::SchedulerAction::Send { .. }
+        sky_dispatch_core::executor::DispatchDecision::Send { .. }
     ));
     let after_h = h_floor_qpc
         .checked_add_duration(one_tick)
@@ -116,7 +111,7 @@ fn scheduler_h_floor_and_authored_repeat_trace_uses_single_sender_commits() {
     assert!(matches!(
         super::super::evaluate_scheduler_action(&harness.resources.scheduler, after_h, epoch)
             .expect("H floor plus one tick"),
-        super::super::SchedulerAction::Send { .. }
+        sky_dispatch_core::executor::DispatchDecision::Send { .. }
     ));
 
     let (selected_h_deadline, h_wake) =
@@ -151,10 +146,11 @@ fn scheduler_h_floor_and_authored_repeat_trace_uses_single_sender_commits() {
     let down_b_projection_evaluations = super::super::scheduler_evaluation_count_for_test();
     assert!(matches!(
         down_b_action,
-        super::super::SchedulerAction::Send {
+        sky_dispatch_core::executor::DispatchDecision::Send {
             up_mask: 0,
             down_chord: Some(chord),
             timing_window,
+            ..
         } if chord.source_action_index == 6672
             && timing_window.down_not_before_qpc <= down_b_eval_qpc
     ));

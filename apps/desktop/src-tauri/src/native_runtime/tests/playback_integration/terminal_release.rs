@@ -518,6 +518,88 @@ fn native_worker_release_error_after_stop_quarantines_successor_admission() {
     ));
 }
 
+fn wait_for_session_playback_failed(
+    events: &Arc<Mutex<NativeEventHub>>,
+    session_id: &str,
+    expected_code: &str,
+    timeout: Duration,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let matched = events
+            .lock()
+            .expect("event hub")
+            .buffered_for_test()
+            .iter()
+            .any(|event| {
+                matches!(
+                    event,
+                    UiEvent::PlaybackFailed { payload, .. }
+                        if payload.session_id == session_id && payload.code == expected_code
+                )
+            });
+        if matched {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn wait_for_session_playback_failed_rejects_missing_or_mismatched_event() {
+    let expected_session = "a".repeat(32);
+    let other_session = "b".repeat(32);
+    let song_id = "c".repeat(32);
+    let events = Arc::new(Mutex::new(NativeEventHub::default()));
+    assert!(!wait_for_session_playback_failed(
+        &events,
+        &expected_session,
+        "target_not_found",
+        Duration::from_millis(5),
+    ));
+    events
+        .lock()
+        .expect("event hub")
+        .publish(UiEvent::PlaybackFailed {
+            v: crate::DESKTOP_PROTOCOL_VERSION,
+            payload: crate::ui_events::PlaybackFailedPayload {
+                session_id: other_session,
+                song_id: song_id.clone(),
+                code: "target_not_found".into(),
+                message: "wrong session".into(),
+            },
+        })
+        .expect("publish wrong-session event");
+    assert!(!wait_for_session_playback_failed(
+        &events,
+        &expected_session,
+        "target_not_found",
+        Duration::from_millis(5),
+    ));
+    events
+        .lock()
+        .expect("event hub")
+        .publish(UiEvent::PlaybackFailed {
+            v: crate::DESKTOP_PROTOCOL_VERSION,
+            payload: crate::ui_events::PlaybackFailedPayload {
+                session_id: expected_session.clone(),
+                song_id,
+                code: "other_error".into(),
+                message: "wrong code".into(),
+            },
+        })
+        .expect("publish wrong-code event");
+    assert!(!wait_for_session_playback_failed(
+        &events,
+        &expected_session,
+        "target_not_found",
+        Duration::from_millis(5),
+    ));
+}
+
 #[test]
 fn physical_startup_target_failure_retires_without_reentrant_active_lock() {
     let activity = ActivityCoordinator::default();
@@ -631,16 +713,14 @@ fn physical_startup_target_failure_retires_without_reentrant_active_lock() {
             .is_some_and(|message| message.contains("Sky window was not found"))
     );
     assert!(
-        events
-            .lock()
-            .expect("event hub")
-            .buffered_for_test()
-            .iter()
-            .any(
-                |event| matches!(event, UiEvent::PlaybackFailed { payload, .. }
-                if payload.session_id == first_terminal.session_id
-                    && payload.code == "target_not_found")
-            )
+        wait_for_session_playback_failed(
+            &events,
+            &first_terminal.session_id,
+            "target_not_found",
+            Duration::from_secs(1),
+        ),
+        "expected session-specific PlaybackFailed(target_not_found) event for {} after retirement",
+        first_terminal.session_id,
     );
 
     let reservation = activity

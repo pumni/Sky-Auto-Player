@@ -5,13 +5,12 @@
 
 pub mod accounting;
 pub mod clock;
-pub mod compile;
 pub mod executor;
 pub mod model;
+pub mod plan;
 #[cfg(any(test, feature = "test-support"))]
 pub mod testing;
 pub mod time;
-pub mod validation;
 
 pub const SCHEMA_VERSION: u32 = 4;
 

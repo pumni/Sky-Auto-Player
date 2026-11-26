@@ -287,7 +287,7 @@ fn settings_fingerprint_excludes_appearance_and_auto_play() {
             &policy,
         )
         .expect("plan fingerprint"),
-        "7419a0423c750dc172e393ad9c522c2a7965f662859ff6d35ce97217f9ca6429"
+        "225c6c4d21154ac9a12d52f5ff7f38674f5bcd9e927bae26340abb6851e85ad0"
     );
 }
 

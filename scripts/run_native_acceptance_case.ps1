@@ -1,11 +1,13 @@
-param(
-    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')]
+﻿param(
+    [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3', 'ChordWidthPilotV1')]
     [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
-[ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'short-up-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-active-cleanup', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved')]
+[ValidateSet('canonical-single', 'canonical-chord', 'canonical-max-chord', 'hold', 'long-single-sequence', 'dense-alternating', 'chord-sweep', 'near-minimum-retrigger', 'rapid-retrigger', 'short-up-gap-stress', 'mixed-up-down', 'ambiguous-packet', 'preflight-user-held', 'modifier-held-final-boundary', 'modifier-held-after-owned', 'cleanup-full-release', 'focus-loss', 'target-hwnd-change', 'owner-mismatch', 'owner-query-failure', 'owner-process-termination', 'pause-resume', 'pause-resume-active-cleanup', 'suspend-resume', 'stop-cleanup', 'skip-cleanup', 'supervisor-lease-expiry', 'lease-age-watchdog-delayed', 'noncanonical-profile', 'timing-margin-sweep', 'long-idle', 'hol-interleaved', 'chord-width-pilot-v1')]
     [string]$Scenario,
-    [ValidateSet('canonical-single', 'safety-smoke', 'dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle', 'boundary-60fps-margin-0', 'boundary-120fps-margin-500')]
+    [ValidateSet('canonical-single', 'safety-smoke', 'dense-alternating', 'mixed-up-down', 'canonical-max-chord', 'near-minimum-retrigger', 'long-idle', 'boundary-60fps-margin-0', 'boundary-120fps-margin-500', 'chord-width-pilot-v1')]
     [string]$Workload,
+    [ValidateSet(0, 1, 5, 15)]
+    [int]$PilotChordWidth = 0,
     [Parameter(Mandatory)]
     [ValidateScript({ $_ -ge 0 -and $_ -le 3000 -and $_ % 100 -eq 0 })]
     [int]$TimingMarginUs,
@@ -27,7 +29,13 @@ param(
     [int]$HolStallUs = 0,
     [int]$HolCycles = 0,
     [ValidateSet('control-a', 'candidate-b-up-diagnostic')]
-    [string]$AdmissionVariant = 'control-a'
+    [string]$AdmissionVariant = 'control-a',
+    [string]$ApprovedPreflightPlanPath,
+    [string]$ExpectedApprovedSourceRevision,
+    [string]$ExpectedApprovedSourceTree,
+    [string]$ExpectedApprovedManifestSha256,
+    [string]$ExpectedApprovedBinarySha256,
+    [string]$ExpectedApprovedPreflightPlanSha256
 )
 
 $ErrorActionPreference = 'Stop'
@@ -42,13 +50,31 @@ Import-Module (Join-Path $PSScriptRoot 'dispatch_qualification_report.psm1') -Fo
 $isDispatchCleanupM3 = $QualificationProfile -eq 'DispatchCleanupM3'
 $isSessionRedesignProfile = $QualificationProfile -eq 'DispatchSessionRedesignM3'
 $isPlaybackCoreLifecycle = $QualificationProfile -in @('PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')
-if ($PreflightOnly -and -not $isPlaybackCoreLifecycle) {
-    throw '-PreflightOnly is restricted to PlaybackCoreLifecycle profiles'
+$isChordWidthPilotV1 = $QualificationProfile -eq 'ChordWidthPilotV1'
+if ($PreflightOnly -and -not ($isPlaybackCoreLifecycle -or $isChordWidthPilotV1)) {
+    throw '-PreflightOnly is restricted to PlaybackCoreLifecycle and ChordWidthPilotV1 profiles'
 }
 if ($PreflightOnly -and $OwnerApprovedReceiveOnlyRun) {
     throw '-PreflightOnly cannot be combined with -OwnerApprovedReceiveOnlyRun'
 }
-$usesSessionQualificationContracts = $isDispatchCleanupM3 -or $isSessionRedesignProfile -or $isPlaybackCoreLifecycle
+if ($isChordWidthPilotV1) {
+    if ($Scenario -ne 'chord-width-pilot-v1' -or $Workload -ne 'chord-width-pilot-v1' -or
+        $PilotChordWidth -notin @(1, 5, 15) -or $GameFps -ne 60 -or $TimingMarginUs -ne 500 -or
+        $SampleSeconds -ne 15 -or $CalibrationPlacement -ne 'Baseline' -or
+        -not $TimingObserverForQualification -or $AdmissionVariant -ne 'control-a' -or
+        $CpuContention -or $HolStallUs -ne 0 -or $HolCycles -ne 0) {
+        throw 'ChordWidthPilotV1 requires scenario/workload chord-width-pilot-v1, PilotChordWidth in {1,5,15}, 60 FPS, 500 us margin (H=17167), 15s sample, Baseline calibration, TimingObserverForQualification, control-a, quiet-only, and no HOL overrides'
+    }
+} elseif ($PilotChordWidth -ne 0 -or $Scenario -eq 'chord-width-pilot-v1' -or $Workload -eq 'chord-width-pilot-v1' -or
+    -not [string]::IsNullOrWhiteSpace($ApprovedPreflightPlanPath) -or
+    -not [string]::IsNullOrWhiteSpace($ExpectedApprovedSourceRevision) -or
+    -not [string]::IsNullOrWhiteSpace($ExpectedApprovedSourceTree) -or
+    -not [string]::IsNullOrWhiteSpace($ExpectedApprovedManifestSha256) -or
+    -not [string]::IsNullOrWhiteSpace($ExpectedApprovedBinarySha256) -or
+    -not [string]::IsNullOrWhiteSpace($ExpectedApprovedPreflightPlanSha256)) {
+    throw 'chord-width-pilot-v1, -PilotChordWidth, and pilot entry-gate approval parameters are valid only with -QualificationProfile ChordWidthPilotV1'
+}
+$usesSessionQualificationContracts = $isDispatchCleanupM3 -or $isSessionRedesignProfile -or $isPlaybackCoreLifecycle -or $isChordWidthPilotV1
 $dispatchCleanupM3 = if ($isDispatchCleanupM3) { Get-DispatchCleanupM3Profile } else { $null }
 $sessionRedesignProfile = if ($isSessionRedesignProfile) { Get-DispatchSessionRedesignM3Profile } else { $null }
 $playbackCoreProfile = if ($isPlaybackCoreLifecycle) { Get-PlaybackCoreLifecycleProfileForName -Name $QualificationProfile } else { $null }
@@ -68,6 +94,8 @@ $sessionTimingFloors = if ($isDispatchCleanupM3) {
     Assert-PlaybackCoreLifecycleSessionIdentity -Scenario $Scenario -Workload $Workload `
         -TimingMarginUs $TimingMarginUs -GameFps $GameFps -SampleSeconds $SampleSeconds `
         -ProfileVersion $playbackCoreProfile.Version
+} elseif ($isChordWidthPilotV1) {
+    @{ expected_hold_us = 17167; configured_H_us = 17167 }
 } else { $null }
 if ($usesSessionQualificationContracts) {
     if (-not $HarnessPath -or -not $HarnessManifestPath -or -not $OutputRoot) {
@@ -81,7 +109,7 @@ if ($usesSessionQualificationContracts) {
     }
 }
 $sinkScript = Join-Path $root 'scripts\native_acceptance_sink.ps1'
-$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3')
+$qualifiedProfile = $QualificationProfile -in @('Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3', 'ChordWidthPilotV1')
 $receiveOnlyObserverVersion = if ($qualifiedProfile) {
     'scheduler-receiveonly-queue-v3-compat3'
 } else {
@@ -122,6 +150,14 @@ $report = $null
 $windowIntegrity = $false
 $resultCode = 2
 $head = $null
+$pilotEntryGateVerified = $false
+$pilotRemoteTip = $null
+$pilotActualLockSha = $null
+$pilotCargoVer = $null
+$pilotSinkSha = $null
+$pilotAnalyzerSha = $null
+$pilotCaseRunnerSha = $null
+$pilotPrepareSha = $null
 $profileBaseRevision = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineRevision } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.BaselineRevision } elseif ($QualificationProfile -eq 'FrameSnapshot') { '8a800ff07a5dc362a5ee3aaa59204ff40b6ae327' } else { 'b9ed666e3ddddc4952831626f1654e1cc9071a10' }
 $profileBaseTree = if ($isDispatchCleanupM3) { $dispatchCleanupM3.BaselineTree } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.BaselineTree } elseif ($QualificationProfile -eq 'FrameSnapshot') { '48eec424c155e98fa1a81ad018bc832b6e6b964f' } else { 'f554c41b23a3969d02ed29842d4178f6143c9d86' }
 $profileBranch = if ($isDispatchCleanupM3) { $dispatchCleanupM3.CandidateLineageBranch } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.CandidateLineageBranch } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } else { 'refactor/scheduler-single-owner-20261112' }
@@ -382,9 +418,145 @@ function Assert-PathOutsideRepository {
     }
 }
 
+function Assert-NoReparsePointInPilotPath {
+    param([Parameter(Mandatory)] [string]$Path, [Parameter(Mandatory)] [string]$Label)
+    $current = [System.IO.Path]::GetFullPath($Path)
+    while (-not [string]::IsNullOrWhiteSpace($current)) {
+        if (Test-Path -LiteralPath $current) {
+            $item = Get-Item -LiteralPath $current -Force
+            if (($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
+                throw ($Label + ' contains a reparse point / symlink at ' + $current)
+            }
+        }
+        $parent = Split-Path -Path $current -Parent
+        if ([string]::IsNullOrWhiteSpace($parent) -or $parent -eq $current) { break }
+        $current = $parent
+    }
+}
+
+function Assert-ChordWidthPilotV1ExecutionEntryGate {
+    # Fail-closed pilot execution entry gate. Hash agreement is integrity binding
+    # to the reviewed source/build/preflight artifacts, not proof of an
+    # independently trusted authority.
+    if ([string]::IsNullOrWhiteSpace($ApprovedPreflightPlanPath) -or
+        [string]::IsNullOrWhiteSpace($ExpectedApprovedSourceRevision) -or
+        [string]::IsNullOrWhiteSpace($ExpectedApprovedSourceTree) -or
+        [string]::IsNullOrWhiteSpace($ExpectedApprovedManifestSha256) -or
+        [string]::IsNullOrWhiteSpace($ExpectedApprovedBinarySha256) -or
+        [string]::IsNullOrWhiteSpace($ExpectedApprovedPreflightPlanSha256)) {
+        throw 'ChordWidthPilotV1 execution entry gate requires -ApprovedPreflightPlanPath and all five independently supplied -ExpectedApproved* hashes (SourceRevision, SourceTree, ManifestSha256, BinarySha256, PreflightPlanSha256)'
+    }
+    if ($ExpectedApprovedSourceRevision -notmatch '^[0-9a-f]{40}$' -or
+        $ExpectedApprovedSourceTree -notmatch '^[0-9a-f]{40}$' -or
+        $ExpectedApprovedManifestSha256 -notmatch '^[0-9a-f]{64}$' -or
+        $ExpectedApprovedBinarySha256 -notmatch '^[0-9a-f]{64}$' -or
+        $ExpectedApprovedPreflightPlanSha256 -notmatch '^[0-9a-f]{64}$') {
+        throw 'ChordWidthPilotV1 execution entry gate expected hashes must be exact lowercase hex (40-hex SHA-1 / 64-hex SHA-256)'
+    }
+    $planFull = [System.IO.Path]::GetFullPath($ApprovedPreflightPlanPath)
+    Assert-PathOutsideRepository $planFull 'approved preflight plan'
+    Assert-NoReparsePointInPilotPath -Path $planFull -Label 'approved preflight plan'
+    if (-not (Test-Path -LiteralPath $planFull -PathType Leaf)) {
+        throw ('ChordWidthPilotV1 approved preflight plan missing at ' + $planFull)
+    }
+    $actualPlanSha = Get-Sha256 $planFull
+    if ($actualPlanSha -ne $ExpectedApprovedPreflightPlanSha256) {
+        throw ('ChordWidthPilotV1 approved preflight plan SHA-256 mismatch (' + $actualPlanSha + ' != ' + $ExpectedApprovedPreflightPlanSha256 + ')')
+    }
+    if ($head -ne $ExpectedApprovedSourceRevision -or
+        $sourceTree -ne $ExpectedApprovedSourceTree -or
+        $harnessManifestHash -ne $ExpectedApprovedManifestSha256 -or
+        $harnessManifest.binary_sha256 -ne $ExpectedApprovedBinarySha256) {
+        throw 'ChordWidthPilotV1 current source, tree, manifest, or binary identity does not match independently supplied approved values'
+    }
+    if ($harnessManifest.build_provenance -ne 'fresh_pinned_dist_build') {
+        throw ('ChordWidthPilotV1 execution entry gate rejects non-fresh manifest build_provenance=' + $harnessManifest.build_provenance)
+    }
+    $plan = Get-Content -LiteralPath $planFull -Raw | ConvertFrom-Json
+    if ($plan.schema_version -ne 1 -or
+        $plan.qualification_profile -ne 'ChordWidthPilotV1' -or
+        $plan.pilot_identity -ne 'ChordWidthPilotV1' -or
+        $plan.mode -ne 'PreflightOnly' -or
+        $plan.native_build_status -ne 'BUILT_NONPHYSICAL_DIST' -or
+        $plan.native_manifest_status -ne 'VERIFIED_FRESH_PINNED_BUILD' -or
+        $plan.build_provenance -ne 'fresh_pinned_dist_build' -or
+        -not [bool]$plan.binary_provenance_verified_by_fresh_build -or
+        $plan.cargo_build_exit_code -ne 0 -or
+        [string]::IsNullOrWhiteSpace([string]$plan.cargo_build_command) -or
+        $plan.source_revision -ne $head -or
+        $plan.source_tree -ne $sourceTree -or
+        $plan.branch -ne 'refactor/completion-anchored-pulse-engine' -or
+        $plan.remote_tip_revision -ne $pilotRemoteTip -or
+        $plan.frozen_baseline_revision -ne 'e7293877a6ce58a387cb8edfe0a88399a85d2b15' -or
+        $plan.cargo_lock_sha256 -ne $pilotActualLockSha -or
+        $plan.rustc_version -ne $rustcVersion.Trim() -or
+        $plan.cargo_version -ne $pilotCargoVer -or
+        $plan.sink_script_sha256 -ne $pilotSinkSha -or
+        $plan.analyzer_script_sha256 -ne $pilotAnalyzerSha -or
+        $plan.case_runner_script_sha256 -ne $pilotCaseRunnerSha -or
+        $plan.preflight_script_sha256 -ne $pilotPrepareSha -or
+        $plan.manifest_sha256 -ne $harnessManifestHash -or
+        $plan.binary_sha256 -ne $harnessManifest.binary_sha256 -or
+        [bool]$plan.receiver_started -or
+        [bool]$plan.harness_started -or
+        -not [bool]$plan.no_native_invocation -or
+        $plan.sendinput_calls -ne 0) {
+        throw 'ChordWidthPilotV1 approved preflight plan provenance, fresh-build status, source/remote/lock/toolchain/script/manifest/binary hashes, or nonphysical markers failed validation'
+    }
+    if ($null -eq $plan.receiver_contract -or
+        $plan.receiver_contract.role -ne 'ReceiveOnly' -or
+        [bool]$plan.receiver_contract.game_target -or
+        $plan.receiver_contract.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
+        $plan.receiver_contract.observer_version -ne 'scheduler-receiveonly-queue-v3-compat3' -or
+        $plan.receiver_contract.event_schema_version -ne 3 -or
+        $plan.receiver_contract.observer_queue_capacity -ne 32768) {
+        throw 'ChordWidthPilotV1 approved preflight plan receiver contract mismatch'
+    }
+    $expectedWidthOrder = @(15, 1, 5)
+    $plannedSessions = @($plan.planned_sessions)
+    $preflightResults = @($plan.case_runner_preflight_results)
+    if ($plan.planned_smoke_session_count -ne 3 -or $plannedSessions.Count -ne 3 -or $preflightResults.Count -ne 3) {
+        throw 'ChordWidthPilotV1 approved preflight plan must contain exactly 3 planned sessions and 3 passing case-runner preflight results'
+    }
+    for ($i = 0; $i -lt 3; $i++) {
+        $s = $plannedSessions[$i]
+        $r = $preflightResults[$i]
+        $wantW = $expectedWidthOrder[$i]
+        if ([int]$s.pilot_chord_width -ne $wantW -or
+            $s.qualification_profile -ne 'ChordWidthPilotV1' -or
+            $s.scenario -ne 'chord-width-pilot-v1' -or
+            $s.workload_definition_identity -ne 'chord-width-pilot-v1' -or
+            $s.admission_variant -ne 'control-a' -or
+            $s.calibration_placement -ne 'baseline' -or
+            $s.load_condition -ne 'Quiet' -or
+            $s.game_fps -ne 60 -or
+            $s.timing_margin_us -ne 500 -or
+            $s.configured_hold_us -ne 17167 -or
+            $s.cadence_us -ne 100000 -or
+            $s.onset_count -ne 150 -or
+            $s.sample_seconds -ne 15 -or
+            $s.observer_mode -ne 'SchedulerQueuedV3Compat3' -or
+            $s.event_schema_version -ne 3 -or
+            -not [bool]$s.timing_observer_for_qualification) {
+            throw ('ChordWidthPilotV1 approved preflight plan session ' + ($i + 1) + ' geometry or width order (expected 15->1->5) is invalid')
+        }
+        if ([int]$r.pilot_chord_width -ne $wantW -or
+            $r.status -ne 'CASE_PREFLIGHT_ONLY PASS' -or
+            [bool]$r.output_created -or
+            [bool]$r.receiver_started -or
+            [bool]$r.harness_started) {
+            throw ('ChordWidthPilotV1 approved preflight plan case-runner preflight result ' + ($i + 1) + ' is missing or invalid')
+        }
+    }
+    $actualPlanSha
+}
+
 try {
     if ($isPlaybackCoreLifecycle -and -not $OwnerApprovedReceiveOnlyRun -and -not $PreflightOnly) {
         throw 'PlaybackCoreLifecycle native case requires -OwnerApprovedReceiveOnlyRun after explicit owner approval of this Windows machine and project-owned receiver'
+    }
+    if ($isChordWidthPilotV1 -and -not $OwnerApprovedReceiveOnlyRun -and -not $PreflightOnly) {
+        throw 'ChordWidthPilotV1 native case requires -OwnerApprovedReceiveOnlyRun after explicit owner approval of this Windows machine and project-owned receiver'
     }
     if (-not $PreflightOnly -and -not [Environment]::UserInteractive) {
         throw 'Windows is not interactive; refusing physical acceptance'
@@ -395,8 +567,8 @@ try {
     if ($QualificationProfile -eq 'FrameSnapshot' -and -not $HarnessManifestPath) {
         throw 'FrameSnapshot acceptance requires its immutable role-specific manifest and binary path'
     }
-    if ($SampleSeconds -and $Scenario -notin @('canonical-max-chord', 'dense-alternating', 'near-minimum-retrigger', 'mixed-up-down', 'long-idle', 'hol-interleaved')) {
-        throw '-SampleSeconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, long-idle, and hol-interleaved'
+    if ($SampleSeconds -and $Scenario -notin @('canonical-max-chord', 'dense-alternating', 'near-minimum-retrigger', 'mixed-up-down', 'long-idle', 'hol-interleaved', 'chord-width-pilot-v1')) {
+        throw '-SampleSeconds is valid only for canonical-max-chord, dense-alternating, near-minimum-retrigger, mixed-up-down, long-idle, hol-interleaved, and chord-width-pilot-v1'
     }
     if ($QpcReadCountingEvidenceOnly -and (-not $HarnessManifestPath -or $Scenario -ne 'canonical-single' -or $SampleSeconds -or -not $TimingObserverForQualification)) {
         throw 'QPC counting evidence requires an immutable counted harness, one canonical-single ReceiveOnly case, no timed sample, and the qualification observer'
@@ -483,6 +655,73 @@ try {
                 throw 'PlaybackCoreLifecycle manifest source identity differs from its exact source checkout'
             }
             Assert-ImmutableHarnessManifestIntegrity -Manifest $harnessManifest -ManifestPath $HarnessManifestPath | Out-Null
+        } elseif ($isChordWidthPilotV1) {
+            $manifestSourceRoot = [System.IO.Path]::GetFullPath([string]$harnessManifest.source_root)
+            if ($harnessManifest.qualification_profile -ne 'ChordWidthPilotV1' -or
+                $harnessManifest.source_role -ne 'Candidate' -or
+                -not [bool]$harnessManifest.source_tree_clean -or
+                $harnessManifest.base_source_revision -ne 'e7293877a6ce58a387cb8edfe0a88399a85d2b15' -or
+                $harnessManifest.base_source_tree_sha -ne '1e2aa8c1a6b1d48a46cd419d89536a1051510890' -or
+                $harnessManifest.receiveonly_observer_mode -ne 'SchedulerQueuedV3Compat3' -or
+                $harnessManifest.receiveonly_observer_version -ne 'scheduler-receiveonly-queue-v3-compat3' -or
+                $harnessManifest.receiveonly_observer_event_schema_version -ne 3 -or
+                -not (Test-Path -LiteralPath (Join-Path $manifestSourceRoot 'rust\Cargo.toml') -PathType Leaf)) {
+                throw 'ChordWidthPilotV1 manifest role, pinned base, observer protocol, source cleanliness, or source root is invalid'
+            }
+            $manifestSourceRevision = (& git -C $manifestSourceRoot rev-parse HEAD).Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'ChordWidthPilotV1 manifest source root is not a Git checkout' }
+            $manifestSourceTree = (& git -C $manifestSourceRoot rev-parse 'HEAD^{tree}').Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'ChordWidthPilotV1 manifest source tree could not be resolved' }
+            $manifestSourceBranch = ((& git -C $manifestSourceRoot branch --show-current) -join '').Trim()
+            if ($LASTEXITCODE -ne 0) { throw 'ChordWidthPilotV1 manifest source branch could not be resolved' }
+            $manifestSourceChanges = (& git -C $manifestSourceRoot status --porcelain --untracked-files=all) -join ''
+            if ($LASTEXITCODE -ne 0 -or -not [string]::IsNullOrWhiteSpace($manifestSourceChanges) -or
+                -not [string]::Equals($manifestSourceRoot, $root, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $manifestSourceRevision -ne $head -or $manifestSourceRevision -ne $harnessManifest.source_revision -or
+                $manifestSourceTree -ne $sourceTree -or $manifestSourceTree -ne $harnessManifest.source_tree_sha -or
+                $manifestSourceBranch -ne 'refactor/completion-anchored-pulse-engine') {
+                throw 'ChordWidthPilotV1 candidate manifest must match the current clean refactor/completion-anchored-pulse-engine checkout'
+            }
+            & git -C $manifestSourceRoot merge-base --is-ancestor 'e7293877a6ce58a387cb8edfe0a88399a85d2b15' HEAD
+            if ($LASTEXITCODE -ne 0) { throw 'ChordWidthPilotV1 candidate does not descend from frozen baseline e7293877a6ce58a387cb8edfe0a88399a85d2b15' }
+            $pilotRemoteRef = 'refs/heads/refactor/completion-anchored-pulse-engine'
+            $pilotRemoteLines = @(& git -C $manifestSourceRoot ls-remote --heads origin $pilotRemoteRef 2>&1 | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+            if ($LASTEXITCODE -ne 0 -or $pilotRemoteLines.Count -ne 1) {
+                throw 'ChordWidthPilotV1 could not verify unique origin/refactor/completion-anchored-pulse-engine remote tip'
+            }
+            $pilotRemoteTip = ($pilotRemoteLines[0].Trim() -split '\s+')[0]
+            if ($pilotRemoteTip -ne $head -or $harnessManifest.remote_tip_revision -ne $pilotRemoteTip) {
+                throw 'ChordWidthPilotV1 local HEAD or manifest remote_tip_revision does not match pushed origin tip'
+            }
+            $pilotLockPath = Join-Path $manifestSourceRoot 'rust\Cargo.lock'
+            if (-not (Test-Path -LiteralPath $pilotLockPath -PathType Leaf)) { throw 'ChordWidthPilotV1 rust/Cargo.lock is missing' }
+            $pilotLockBytes = [System.IO.File]::ReadAllBytes($pilotLockPath)
+            if ($pilotLockBytes -contains [byte]13) { throw 'ChordWidthPilotV1 rust/Cargo.lock contains CR bytes' }
+            $pilotActualLockSha = Get-Sha256 $pilotLockPath
+            if ($pilotActualLockSha -ne '9b9ba6c03131d96029421bfa9f6f69f9ce331e003e32e095eac54a714e73021e' -or
+                $harnessManifest.cargo_lock_sha256 -ne $pilotActualLockSha) {
+                throw 'ChordWidthPilotV1 rust/Cargo.lock LF SHA-256 does not match frozen expected lock or manifest'
+            }
+            $pilotCargoVer = ((& cargo --version) -join ' ').Trim()
+            if ($LASTEXITCODE -ne 0 -or $pilotCargoVer -notmatch '^cargo 1\.99\.1(?:\s|$)' -or $harnessManifest.cargo_version -ne $pilotCargoVer) {
+                throw 'ChordWidthPilotV1 manifest cargo_version mismatch'
+            }
+            $pilotSinkSha = Get-Sha256 (Join-Path $manifestSourceRoot 'scripts\native_acceptance_sink.ps1')
+            $pilotAnalyzerSha = Get-Sha256 (Join-Path $manifestSourceRoot 'scripts\analyze_chord_reception.mjs')
+            $pilotCaseRunnerSha = Get-Sha256 (Join-Path $manifestSourceRoot 'scripts\run_native_acceptance_case.ps1')
+            $pilotPrepareSha = Get-Sha256 (Join-Path $manifestSourceRoot 'scripts\prepare_chord_width_pilot_v1.ps1')
+            if ($harnessManifest.sink_script_sha256 -ne $pilotSinkSha -or
+                $harnessManifest.analyzer_script_sha256 -ne $pilotAnalyzerSha -or
+                $harnessManifest.case_runner_script_sha256 -ne $pilotCaseRunnerSha -or
+                $harnessManifest.preflight_script_sha256 -ne $pilotPrepareSha) {
+                throw 'ChordWidthPilotV1 manifest script SHA-256 provenance mismatch'
+            }
+            $peHeader = New-Object byte[] 2
+            $fs = [System.IO.File]::OpenRead($harness)
+            try { $readCount = $fs.Read($peHeader, 0, 2) } finally { $fs.Dispose() }
+            if ($readCount -lt 2 -or $peHeader[0] -ne 0x4D -or $peHeader[1] -ne 0x5A) {
+                throw 'ChordWidthPilotV1 harness binary does not have a valid Windows PE MZ header'
+            }
         } elseif ($qualifiedProfile) {
             $manifestSourceRoot = [System.IO.Path]::GetFullPath([string]$harnessManifest.source_root)
             if ($QualificationProfile -eq 'FrameSnapshot') {
@@ -548,8 +787,8 @@ try {
         if ($harnessManifest.qualification_profile -ne $QualificationProfile) {
             throw ($QualificationProfile + ' case runner cannot consume a ' + $harnessManifest.qualification_profile + ' harness manifest')
         }
-        $expectedSourceBranch = if (($qualifiedProfile -and $harnessManifest.source_role -eq 'Baseline') -or ($usesSessionQualificationContracts -and -not $isPlaybackCoreLifecycle)) { '' } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.CandidateLineageBranch } else { 'perf/dispatch-core-20261109' }
-        $expectedWorkloadVersion = if ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.WorkloadVersion } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
+        $expectedSourceBranch = if ($isChordWidthPilotV1) { 'refactor/completion-anchored-pulse-engine' } elseif (($qualifiedProfile -and $harnessManifest.source_role -eq 'Baseline') -or ($usesSessionQualificationContracts -and -not $isPlaybackCoreLifecycle)) { '' } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'refactor/frame-snapshot-dispatch' } elseif ($QualificationProfile -eq 'Scheduler') { 'refactor/scheduler-single-owner-20261112' } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.CandidateLineageBranch } else { 'perf/dispatch-core-20261109' }
+        $expectedWorkloadVersion = if ($isChordWidthPilotV1) { 'chord-width-pilot-v1' } elseif ($isDispatchCleanupM3) { $dispatchCleanupM3.WorkloadVersion } elseif ($isSessionRedesignProfile) { $sessionRedesignProfile.WorkloadVersion } elseif ($isPlaybackCoreLifecycle) { $playbackCoreProfile.WorkloadVersion } elseif ($QualificationProfile -eq 'FrameSnapshot') { 'frame-snapshot-v1' } elseif ($QualificationProfile -eq 'Scheduler') { 'scheduler-single-owner-v1' } else { 'dispatch-core-646-a1' }
         $sourceIdentityAllowed = if ($isDispatchCleanupM3) {
             $true
         } elseif ($qualifiedProfile) {
@@ -598,12 +837,28 @@ try {
         if (Test-Path -LiteralPath $evidenceRoot) {
             throw '-PreflightOnly requires a nonexistent output root so it cannot create or alter case evidence'
         }
+        $pilotGateStatus = ''
+        if ($isChordWidthPilotV1 -and (
+            -not [string]::IsNullOrWhiteSpace($ApprovedPreflightPlanPath) -or
+            -not [string]::IsNullOrWhiteSpace($ExpectedApprovedSourceRevision) -or
+            -not [string]::IsNullOrWhiteSpace($ExpectedApprovedSourceTree) -or
+            -not [string]::IsNullOrWhiteSpace($ExpectedApprovedManifestSha256) -or
+            -not [string]::IsNullOrWhiteSpace($ExpectedApprovedBinarySha256) -or
+            -not [string]::IsNullOrWhiteSpace($ExpectedApprovedPreflightPlanSha256))) {
+            $verifiedPlanSha = Assert-ChordWidthPilotV1ExecutionEntryGate
+            $pilotGateStatus = ' entry_gate_binding=VERIFIED plan_sha256=' + $verifiedPlanSha
+        }
+        $pilotExtra = if ($isChordWidthPilotV1) { ' pilot_chord_width=' + $PilotChordWidth + ' observer_mode=SchedulerQueuedV3Compat3 event_schema=3 manifest_hash_verified_only=true manifest_build_provenance=' + [string]$harnessManifest.build_provenance + $pilotGateStatus } else { '' }
         Write-Output ('CASE_PREFLIGHT_ONLY PASS profile=' + $QualificationProfile + ' role=' + $harnessManifest.source_role +
-            ' schema=' + $harnessManifest.schema_version + ' scenario=' + $Scenario + ' workload=' + $Workload +
+            ' schema=' + $harnessManifest.schema_version + ' scenario=' + $Scenario + ' workload=' + $Workload + $pilotExtra +
             ' manifest_sha256=' + $harnessManifestHash + ' binary_sha256=' + $harnessManifest.binary_sha256 +
             ' receiver_started=false harness_started=false output_created=false')
         $resultCode = 0
         return
+    }
+    if ($isChordWidthPilotV1) {
+        $verifiedPlanSha = Assert-ChordWidthPilotV1ExecutionEntryGate
+        $pilotEntryGateVerified = $true
     }
     New-Item -ItemType Directory -Force -Path $runDir | Out-Null
     $sessionId = (Get-Process -Id $PID).SessionId
@@ -742,6 +997,7 @@ try {
         '--game-fps', [string]$GameFps
     )
     if ($SampleSeconds) { $harnessArgs += @('--sample-seconds', [string]$SampleSeconds) }
+    if ($isChordWidthPilotV1) { $harnessArgs += @('--pilot-chord-width', [string]$PilotChordWidth) }
     if ($TimingObserverForQualification) { $harnessArgs += '--timing-observer-for-qualification' }
     if ($HolStallUs -gt 0) {
         $harnessArgs += @('--hol-stall-us', [string]$HolStallUs)
@@ -760,6 +1016,21 @@ try {
     }
     if ($harnessManifest -and (Get-Sha256 $HarnessManifestPath) -ne $harnessManifestHash) {
         throw 'immutable harness manifest changed after identity validation'
+    }
+    if ($isChordWidthPilotV1) {
+        if ((Get-Sha256 $harness) -ne $ExpectedApprovedBinarySha256) {
+            throw 'ChordWidthPilotV1 approved harness binary changed before child launch'
+        }
+        if ((Get-Sha256 $ApprovedPreflightPlanPath) -ne $ExpectedApprovedPreflightPlanSha256) {
+            throw 'ChordWidthPilotV1 approved preflight plan changed before child launch'
+        }
+        $preLaunchHead = (& git -C $root rev-parse HEAD).Trim()
+        $preLaunchTree = (& git -C $root rev-parse 'HEAD^{tree}').Trim()
+        $preLaunchDirty = (& git -C $root status --porcelain --untracked-files=all) -join ''
+        if ($LASTEXITCODE -ne 0 -or $preLaunchHead -ne $ExpectedApprovedSourceRevision -or
+            $preLaunchTree -ne $ExpectedApprovedSourceTree -or -not [string]::IsNullOrWhiteSpace($preLaunchDirty)) {
+            throw 'ChordWidthPilotV1 checkout identity or cleanliness changed before child launch'
+        }
     }
 
     # Signal the sink process to bring itself to the foreground via the existing ActivateRequestFile mechanism
@@ -1020,6 +1291,9 @@ try {
     if ($PreflightOnly) {
         Write-Output ('CASE_PREFLIGHT_ONLY REJECTED profile=' + $QualificationProfile + ' scenario=' + $Scenario +
             ' workload=' + $Workload + ' error=' + $_.Exception.Message)
+    } elseif ($isChordWidthPilotV1 -and -not $pilotEntryGateVerified) {
+        Write-Output ('PILOT_ENTRY_GATE REJECTED profile=' + $QualificationProfile + ' scenario=' + $Scenario +
+            ' workload=' + $Workload + ' output_created=false receiver_started=false harness_started=false error=' + $_.Exception.Message)
     } else {
         New-Item -ItemType Directory -Force -Path $runDir | Out-Null
         $failure = [ordered]@{
@@ -1064,7 +1338,7 @@ try {
     }
 }
 
-if ($PreflightOnly) { exit $resultCode }
+if ($PreflightOnly -or ($isChordWidthPilotV1 -and -not $pilotEntryGateVerified)) { exit $resultCode }
 
 $checksumLines = @(Get-ChildItem -LiteralPath $runDir -File | Where-Object Name -ne 'SHA256SUMS.txt' | Sort-Object Name | ForEach-Object {
     $hash = Get-Sha256 $_.FullName

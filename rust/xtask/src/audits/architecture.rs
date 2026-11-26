@@ -331,8 +331,11 @@ const CONTEXT_FIELD_ADVISORY_LIMIT: usize = 12;
 const DISPATCH_FUNCTION_HARD_LIMIT: usize = 180;
 const WORKER_SCHEDULE_CLONE_PATTERNS: &[&str] = &[
     "schedule.clone()",
+    "plan.clone()",
     "Clone::clone(&schedule",
     "Clone::clone(&config.schedule",
+    "Clone::clone(&plan",
+    "Clone::clone(&config.plan",
 ];
 const FACADES: &[&str] = &["engine.rs", "input.rs", "wait.rs", "lib.rs"];
 const LEGACY_DISPATCH_PATHS: &[&str] = &[
@@ -860,7 +863,7 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
                     &allowlist,
                     &relative,
                     "runtime_schedule_clone",
-                    "production worker must move RuntimeSchedule into the coordinator; cloning the schedule is forbidden",
+                    "production worker must move OnsetPlan into the coordinator; cloning the schedule is forbidden",
                 );
             }
             if !gated_test_support(&clean, &relative) {

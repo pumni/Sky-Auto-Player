@@ -1,153 +1,81 @@
 use super::*;
-use crate::compile::compile_runtime_intents;
-use crate::model::{ActionKind, KeyActionInput};
-use crate::time::{DurationTicks, QpcTicks, TimelineTicks};
+use crate::model::OnsetChordInput;
+use crate::plan::build_onset_plan;
+use crate::time::{QpcTicks, TimelineTicks};
 
 #[test]
 fn executor_new_with_cancellation_and_memory_metrics() {
     let allowed = vec![0x15];
-    let actions = vec![
-        KeyActionInput {
-            source_action_index: 0,
-            kind: ActionKind::Down,
-            scheduled_us: 10_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 1,
-            kind: ActionKind::Up,
-            scheduled_us: 20_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "up".into(),
-        },
-    ];
-    let sched = compile_runtime_intents(&actions, &allowed).expect("schedule");
+    let chords = vec![OnsetChordInput {
+        source_action_index: 0,
+        scheduled_us: 10_000,
+        scan_codes: smallvec::smallvec![0x15],
+    }];
+    let plan = build_onset_plan(&chords, &allowed, 5_000).expect("plan");
+    let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
 
-    // 1. Cancellation aborts creation
+    // 1. Cancellation aborts preparation
     let mut check_count = 0;
-    let res = DispatchExecutor::new_with_cancellation(
-        &sched,
-        DurationTicks::from_raw(5_000),
-        |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
-        || {
-            check_count += 1;
-            if check_count > 1 {
-                Err("aborted".to_string())
-            } else {
-                Ok(())
-            }
-        },
-    );
-    assert!(res.is_err());
+    let res = PreparedDispatchSchedule::prepare_with_cancellation(&plan, qpc_1mhz, 0, || {
+        check_count += 1;
+        if check_count > 1 {
+            Err("aborted".to_string())
+        } else {
+            Ok(())
+        }
+    });
     assert_eq!(res.unwrap_err(), "aborted");
 
     // 2. Successful creation and memory metrics reporting
-    let exec = DispatchExecutor::new_with_cancellation(
-        &sched,
-        DurationTicks::from_raw(5_000),
-        |us| Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us)),
-        || Ok(()),
-    )
-    .expect("executor creation");
+    let prepared =
+        PreparedDispatchSchedule::prepare_with_cancellation(&plan, qpc_1mhz, 0, || Ok(()))
+            .expect("prepared schedule creation");
+    let exec = DispatchExecutor::from_prepared_schedule(prepared);
 
     let mem = exec.memory_metrics();
     assert_eq!(mem.chord_count, 1);
     assert!(mem.chord_capacity >= 1);
-    assert_eq!(mem.intent_count, 1);
-    assert!(mem.intent_capacity >= 1);
-    assert_eq!(
-        mem.chord_header_heap_bytes,
-        mem.chord_capacity * std::mem::size_of::<DownChordHeaderTicks>()
-    );
-    assert_eq!(
-        mem.intent_heap_bytes,
-        mem.intent_capacity * std::mem::size_of::<DownIntentTicks>()
-    );
     assert_eq!(
         mem.chord_heap_bytes,
-        mem.chord_header_heap_bytes + mem.intent_heap_bytes
+        mem.chord_capacity * std::mem::size_of::<PreparedChord>()
     );
     assert_eq!(mem.struct_bytes, std::mem::size_of::<DispatchExecutor>());
     assert_eq!(mem.total_bytes, mem.chord_heap_bytes + mem.struct_bytes);
 }
 
 #[test]
-fn compact_executor_arena_tracks_one_five_and_fifteen_key_chords() {
+fn onset_executor_tracks_one_five_and_fifteen_key_chords() {
+    let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
     for key_count in [1usize, 5, crate::model::MAX_KEYS] {
         let allowed: Vec<u16> = (0..key_count).map(|index| 0x15 + index as u16).collect();
-        let actions = vec![
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 10_000,
-                scan_codes: smallvec::SmallVec::from_slice(&allowed),
-                reason: "full chord Down".into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 30_000,
-                scan_codes: smallvec::SmallVec::from_slice(&allowed),
-                reason: "full chord Up".into(),
-            },
-        ];
-        let schedule = compile_runtime_intents(&actions, &allowed).expect("schedule");
-        let executor = DispatchExecutor::new(&schedule, DurationTicks::from_raw(1_000), |us| {
-            Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
-        })
-        .expect("compact executor");
-        let chord = executor.current_chord().expect("compiled Down chord");
+        let chords = vec![OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 10_000,
+            scan_codes: smallvec::SmallVec::from_slice(&allowed),
+        }];
+        let plan = build_onset_plan(&chords, &allowed, 1_000).expect("plan");
+        let prepared = PreparedDispatchSchedule::prepare(&plan, qpc_1mhz, 0).expect("prepared");
+        let executor = DispatchExecutor::from_prepared_schedule(prepared);
+        let chord = executor.current_chord().expect("prepared onset chord");
         assert_eq!(chord.chord_index, 0);
         assert_eq!(chord.source_action_index, 0);
-        assert_eq!(chord.scheduled_us, 10_000);
-        assert!(
-            std::mem::size_of::<DownChordMetadata>() < std::mem::size_of::<DownChordTicks>(),
-            "production staged provenance must not retain the owned chord fixture"
-        );
-        let actual_scan_codes: Vec<u16> = chord
-            .intents
-            .iter()
-            .map(|intent| intent.scan_code)
-            .collect();
-        assert_eq!(
-            actual_scan_codes, allowed,
-            "intent order for {key_count} keys"
-        );
-        assert_eq!(chord.intents.len(), key_count);
-        assert_eq!(chord.down_mask.count_ones() as usize, key_count);
+        assert_eq!(chord.onset_us, 10_000);
+        assert_eq!(chord.key_count(), key_count);
+        assert_eq!(chord.key_mask.count_ones() as usize, key_count);
 
         let memory = executor
             .try_memory_metrics()
             .expect("executor memory metrics");
         assert_eq!(memory.chord_count, 1);
-        assert_eq!(memory.intent_count, key_count);
-        assert_eq!(
-            memory.chord_header_heap_bytes,
-            memory.chord_capacity * std::mem::size_of::<DownChordHeaderTicks>()
-        );
-        assert_eq!(
-            memory.intent_heap_bytes,
-            memory.intent_capacity * std::mem::size_of::<DownIntentTicks>()
-        );
         assert_eq!(
             memory.chord_heap_bytes,
-            memory.chord_header_heap_bytes + memory.intent_heap_bytes
-        );
-        assert!(memory.chord_capacity >= memory.chord_count);
-        assert!(memory.intent_capacity >= memory.intent_count);
-        assert_eq!(
-            memory.chord_heap_bytes,
-            memory.chord_header_heap_bytes + memory.intent_heap_bytes
+            memory.chord_capacity * std::mem::size_of::<PreparedChord>()
         );
         eprintln!(
-            "dispatch_memory workload=full_chord keys={key_count} executor_struct_bytes={} compact_headers={} header_capacity_bytes={} intent_count={} intent_capacity={} intent_capacity_bytes={} executor_vector_capacity_bytes={} executor_total_bytes={} memory_basis=actual_vector_capacities",
+            "dispatch_memory workload=full_chord keys={key_count} executor_struct_bytes={} chord_count={} chord_capacity={} chord_capacity_bytes={} executor_total_bytes={} memory_basis=actual_vector_capacities",
             memory.struct_bytes,
             memory.chord_count,
-            memory.chord_header_heap_bytes,
-            memory.intent_count,
-            memory.intent_capacity,
-            memory.intent_heap_bytes,
+            memory.chord_capacity,
             memory.chord_heap_bytes,
             memory.total_bytes,
         );
@@ -155,50 +83,58 @@ fn compact_executor_arena_tracks_one_five_and_fifteen_key_chords() {
 }
 
 #[test]
-fn up_slot_timings_preserves_exact_authored_and_floor() {
-    let allowed = vec![0x15];
-    let actions = vec![
-        KeyActionInput {
-            source_action_index: 10,
-            kind: ActionKind::Down,
-            scheduled_us: 10_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 11,
-            kind: ActionKind::Up,
-            scheduled_us: 25_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "up".into(),
-        },
-    ];
-    let sched = compile_runtime_intents(&actions, &allowed).expect("schedule");
-    let mut exec = DispatchExecutor::new(&sched, DurationTicks::from_raw(8_000), |us| {
-        Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
-    })
-    .expect("executor");
+fn up_slot_timings_derives_nominal_up_and_preserves_completion_floor() {
+    let allowed = vec![0x15, 0x16];
+    let chords = vec![OnsetChordInput {
+        source_action_index: 10,
+        scheduled_us: 10_000,
+        scan_codes: smallvec::smallvec![0x15, 0x16],
+    }];
+    let plan = build_onset_plan(&chords, &allowed, 8_000).expect("plan");
+    let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
+    let prepared = PreparedDispatchSchedule::prepare(&plan, qpc_1mhz, 0).expect("prepared");
+    let mut exec = DispatchExecutor::from_prepared_schedule(prepared);
 
-    // Before Down completion: slot 0 is inactive
-    let timings_before = exec.up_slot_timings(1);
-    assert!(timings_before.is_empty());
+    assert!(exec.up_slot_timings(0b11).is_empty());
 
-    // Complete Down at 12_000 ticks
-    exec.on_send_completed(0, 1, TimelineTicks::from_raw(12_000))
+    // Complete Down late at 12_000 ticks (authored onset was 10_000).
+    // Completion-anchored release floor = 12_000 + 8_000 = 20_000.
+    // Diagnostic nominal Up = 10_000 + 8_000 = 18_000.
+    exec.on_send_completed(0, 0b11, TimelineTicks::from_raw(12_000))
         .expect("down send completed");
 
-    // After Down completion: slot 0 has authored Up offset (25_000) and hold floor (12_000 + 8_000 = 20_000).
-    let timings_after = exec.up_slot_timings(1);
-    assert_eq!(timings_after.len(), 1);
-    let timing = timings_after[0];
-    assert_eq!(timing.slot, 0);
-    assert_eq!(timing.scan_code, 0x15);
-    assert_eq!(timing.source_action_index, 11);
+    let timings = exec.up_slot_timings(0b11);
+    assert_eq!(timings.len(), 2);
+    for (slot, scan_code) in [(0u8, 0x15u16), (1u8, 0x16u16)] {
+        let timing = timings.iter().find(|t| t.slot == slot).expect("slot");
+        assert_eq!(timing.scan_code, scan_code);
+        assert_eq!(timing.source_action_index, 10);
+        assert_eq!(
+            timing.nominal_up_offset_ticks,
+            TimelineTicks::from_raw(18_000)
+        );
+        assert_eq!(timing.release_not_before_qpc, QpcTicks::from_raw(20_000));
+    }
+
+    let epoch = QpcTicks::from_raw(1_000);
+    let DispatchDecision::Send {
+        up_mask: 0b11,
+        up_summary: Some(summary),
+        ..
+    } = exec
+        .evaluate_at(QpcTicks::from_raw(20_000), epoch)
+        .expect("evaluate summary")
+    else {
+        panic!("expected due Up send with summary");
+    };
+    assert_eq!(summary.slot_count, 2);
+    assert_eq!(summary.first_source_action_index, 10);
+    assert_eq!(summary.authored_target_qpc, QpcTicks::from_raw(19_000));
     assert_eq!(
-        timing.authored_up_offset_ticks,
-        TimelineTicks::from_raw(25_000)
+        summary.musical_up_not_before_qpc,
+        QpcTicks::from_raw(20_000)
     );
-    assert_eq!(timing.release_not_before_qpc, QpcTicks::from_raw(20_000));
+    assert_eq!(summary.hold_floor_mask, 0b11);
 }
 
 #[test]
@@ -212,67 +148,25 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
         if selected.is_some_and(|count| count != chord_count) {
             continue;
         }
-        let mut actions = Vec::with_capacity(chord_count * 2);
+        let mut inputs = Vec::with_capacity(chord_count);
         for i in 0..chord_count {
-            // Keep a 20 ms authored Up-to-next-Down gap so the pinned legacy
-            // release-gap policy can Prepare the same workload.
             let t = (i as u64 + 1) * 30_000;
-            actions.push(KeyActionInput {
-                source_action_index: (i * 2) as u32,
-                kind: ActionKind::Down,
+            inputs.push(OnsetChordInput {
+                source_action_index: i as u32,
                 scheduled_us: t,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "down".into(),
-            });
-            actions.push(KeyActionInput {
-                source_action_index: (i * 2 + 1) as u32,
-                kind: ActionKind::Up,
-                scheduled_us: t + 10_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "up".into(),
             });
         }
-        let sched = compile_runtime_intents(&actions, &allowed).expect("schedule");
-        assert_eq!(sched.down_chords.len(), chord_count);
-        let schedule_memory = sched.memory_metrics().expect("schedule memory metrics");
-        let compile_memory = schedule_memory.compile_memory;
-        let executor = DispatchExecutor::new(&sched, DurationTicks::from_raw(8_000), |us| {
-            Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
-        })
-        .expect("production executor construction");
-        let executor_memory = executor
-            .try_memory_metrics()
-            .expect("executor memory metrics");
-        assert_eq!(executor.down_chord_count(), chord_count);
-        let runtime_schedule_capacity_bytes = schedule_memory.heap_payload_bytes;
-        let live_scheduler_owned_bytes = runtime_schedule_capacity_bytes
-            .checked_add(executor_memory.total_bytes)
-            .expect("schedule plus executor capacity");
-        let startup_peak_capacity_bound = compile_memory
-            .phase_peak_capacity_bytes
-            .max(live_scheduler_owned_bytes);
-        assert!(live_scheduler_owned_bytes <= crate::model::MAX_RETAINED_DISPATCH_BYTES);
-        assert!(executor_memory.total_bytes <= MAX_EXECUTOR_BYTES);
-        eprintln!(
-            "dispatch_memory workload=one_key chords={chord_count} memory_basis=calculated_size_and_capacity complete_application_process_peak=not_measured compiler_input_capacity_bytes={} compiler_temporary_capacity_bytes={} caller_retained_capacity_bytes={} runtime_schedule_heap_capacity_bytes={} executor_heap_capacity_bytes={} executor_struct_bytes={} executor_total_bytes={} schedule_and_executor_retained_capacity_bytes={live_scheduler_owned_bytes} compiler_phase_peak_capacity_bytes={} startup_peak_capacity_bound_bytes={startup_peak_capacity_bound} lifetime_model=compiled_schedule_and_executor_coexist_after_executor_construction;compiler_temporary_capacity_drops_after_compile;complete_worker_and_process_overhead_not_measured",
-            compile_memory.input_capacity_bytes,
-            compile_memory.temporary_capacity_bytes,
-            compile_memory.caller_retained_capacity_bytes,
-            runtime_schedule_capacity_bytes,
-            executor_memory.chord_heap_bytes,
-            executor_memory.struct_bytes,
-            executor_memory.total_bytes,
-            compile_memory.phase_peak_capacity_bytes,
-        );
-
-        drop(executor);
+        let plan = build_onset_plan(&inputs, &allowed, 8_000).expect("plan");
+        assert_eq!(plan.chords.len(), chord_count);
+        let plan_memory = plan.memory_metrics().expect("plan memory metrics");
+        let compile_memory = plan_memory.compile_memory;
         let prepared = PreparedDispatchSchedule::prepare(
-            &sched,
+            &plan,
             std::num::NonZeroU64::new(1_000_000).expect("QPC frequency"),
-            8_000,
             compile_memory.caller_retained_capacity_bytes,
         )
-        .expect("prepared dispatch plan for the representative capacity workload");
+        .expect("prepared dispatch plan");
         let prepared_memory = prepared.memory_metrics();
         let prepared_startup_peak_capacity_bound = compile_memory
             .phase_peak_capacity_bytes
@@ -282,140 +176,44 @@ fn executor_memory_scaling_100_1000_10000_and_budget_proof() {
                 <= crate::model::MAX_RETAINED_DISPATCH_BYTES
         );
         assert!(prepared_startup_peak_capacity_bound <= crate::model::MAX_RETAINED_DISPATCH_BYTES);
+        let executor = DispatchExecutor::from_prepared_schedule(prepared);
+        let executor_memory = executor
+            .try_memory_metrics()
+            .expect("executor memory metrics");
+        assert_eq!(executor.down_chord_count(), chord_count);
+        let plan_heap_bytes = plan_memory.heap_payload_bytes;
+        let live_scheduler_owned_bytes = plan_heap_bytes
+            .checked_add(executor_memory.total_bytes)
+            .expect("plan plus executor capacity");
+        assert!(live_scheduler_owned_bytes <= crate::model::MAX_RETAINED_DISPATCH_BYTES);
+        assert!(executor_memory.total_bytes <= MAX_EXECUTOR_BYTES);
         eprintln!(
-            "prepared_dispatch_memory workload=one_key chords={chord_count} memory_basis=calculated_size_and_capacity complete_application_process_peak=not_measured compiler_phase_peak_capacity_bytes={} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={} prepared_startup_peak_capacity_bound_bytes={prepared_startup_peak_capacity_bound} policy_min_hold_us=8000 qpc_frequency_hz=1000000 complete_worker_and_process_overhead_not_measured",
+            "prepared_dispatch_memory workload=one_key chords={chord_count} compiler_phase_peak_capacity_bytes={} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={} prepared_startup_peak_capacity_bound_bytes={prepared_startup_peak_capacity_bound} policy_min_hold_us=8000 qpc_frequency_hz=1000000",
             compile_memory.phase_peak_capacity_bytes,
             prepared_memory.plan_capacity_bytes,
             prepared_memory.overlapping_peak_capacity_bytes,
         );
-        assert!(
-            live_scheduler_owned_bytes <= crate::model::MAX_RETAINED_DISPATCH_BYTES,
-            "chord_count={chord_count} exceeded compiled schedule plus executor capacity budget: {live_scheduler_owned_bytes} > {}",
-            crate::model::MAX_RETAINED_DISPATCH_BYTES
-        );
 
-        // Verify linearity: per-chord compiled schedule plus executor capacity is bounded.
         let per_chord_bytes = live_scheduler_owned_bytes / chord_count;
         assert!(
-            per_chord_bytes < 2048,
+            per_chord_bytes < 256,
             "per chord bytes too large: {per_chord_bytes}"
         );
     }
 }
 
 #[test]
-fn up_slot_timings_multiple_slots_with_distinct_authored_and_floor() {
-    let allowed = vec![0x15, 0x16];
-    let actions = vec![
-        KeyActionInput {
-            source_action_index: 10,
-            kind: ActionKind::Down,
-            scheduled_us: 10_000,
-            scan_codes: smallvec::smallvec![0x15, 0x16],
-            reason: "down".into(),
-        },
-        KeyActionInput {
-            source_action_index: 11,
-            kind: ActionKind::Up,
-            scheduled_us: 25_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "up0".into(),
-        },
-        KeyActionInput {
-            source_action_index: 12,
-            kind: ActionKind::Up,
-            scheduled_us: 40_000,
-            scan_codes: smallvec::smallvec![0x16],
-            reason: "up1".into(),
-        },
-    ];
-    let sched = compile_runtime_intents(&actions, &allowed).expect("schedule");
-    let mut exec = DispatchExecutor::new(&sched, DurationTicks::from_raw(8_000), |us| {
-        Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
-    })
-    .expect("executor");
-
-    // Complete Down at 20_000 ticks.
-    // Hold floor H = 8_000, so Up is due at 20_000 + 8_000 = 28_000 for both keys.
-    exec.on_send_completed(0, 0b11, TimelineTicks::from_raw(20_000))
-        .expect("down send completed");
-
-    // Query both active slots
-    let timings = exec.up_slot_timings(0b11);
-    assert_eq!(timings.len(), 2);
-
-    let timing0 = timings.iter().find(|t| t.slot == 0).expect("slot 0");
-    let timing1 = timings.iter().find(|t| t.slot == 1).expect("slot 1");
-
-    assert_eq!(timing0.scan_code, 0x15);
-    assert_eq!(timing0.source_action_index, 11);
-    assert_eq!(
-        timing0.authored_up_offset_ticks,
-        TimelineTicks::from_raw(25_000)
-    );
-    assert_eq!(timing0.release_not_before_qpc, QpcTicks::from_raw(28_000));
-    // Key 0 floor displacement = 28_000 - 25_000 = 3_000 ticks
-    let floor_disp0 = timing0
-        .release_not_before_qpc
-        .as_u64()
-        .saturating_sub(timing0.authored_up_offset_ticks.as_u64());
-    assert_eq!(floor_disp0, 3_000);
-
-    assert_eq!(timing1.scan_code, 0x16);
-    assert_eq!(timing1.source_action_index, 12);
-    assert_eq!(
-        timing1.authored_up_offset_ticks,
-        TimelineTicks::from_raw(40_000)
-    );
-    assert_eq!(timing1.release_not_before_qpc, QpcTicks::from_raw(28_000));
-    // Key 1 floor displacement = 0 ticks (authored 40_000 > floor 28_000)
-    let floor_disp1 = timing1
-        .release_not_before_qpc
-        .as_u64()
-        .saturating_sub(timing1.authored_up_offset_ticks.as_u64());
-    assert_eq!(floor_disp1, 0);
-
-    let epoch = QpcTicks::from_raw(1_000);
-    let summary = exec
-        .up_slot_timing_summary(0b11, epoch)
-        .expect("summary arithmetic")
-        .expect("active Up slots");
-    assert_eq!(summary.slot_count, 2);
-    assert_eq!(summary.first_source_action_index, 11);
-    assert_eq!(summary.authored_target_qpc, QpcTicks::from_raw(26_000));
-    assert_eq!(
-        summary.musical_up_not_before_qpc,
-        QpcTicks::from_raw(41_000)
-    );
-    assert_eq!(summary.hold_floor_mask, 0b01);
-    assert_eq!(
-        exec.up_slot_timing_summary(0x8001, epoch)
-            .expect("summary ignores bits outside the 15-slot scheduler")
-            .expect("slot zero remains active"),
-        exec.up_slot_timing_summary(0b1, epoch)
-            .expect("in-range summary arithmetic")
-            .expect("slot zero remains active")
-    );
-}
-#[test]
 fn executor_storage_admission_rejects_overflow_and_budget_excess() {
-    let header_size = std::mem::size_of::<DownChordHeaderTicks>();
-    let intent_size = std::mem::size_of::<DownIntentTicks>();
-    let per_chord_size = header_size + intent_size;
-    let largest_admitted = MAX_EXECUTOR_BYTES / per_chord_size;
-    assert!(checked_executor_storage_bytes(largest_admitted, largest_admitted).is_ok());
+    let chord_size = std::mem::size_of::<PreparedChord>();
+    let largest_admitted = MAX_EXECUTOR_BYTES / chord_size;
+    assert!(checked_executor_storage_bytes(largest_admitted).is_ok());
     assert!(
-        checked_executor_storage_bytes(largest_admitted + 1, largest_admitted + 1)
+        checked_executor_storage_bytes(largest_admitted + 1)
             .unwrap_err()
             .contains("exceeds budget")
     );
     assert!(
-        checked_executor_storage_bytes(usize::MAX, 0)
-            .unwrap_err()
-            .contains("overflow")
-    );
-    assert!(
-        checked_executor_storage_bytes(0, usize::MAX)
+        checked_executor_storage_bytes(usize::MAX)
             .unwrap_err()
             .contains("overflow")
     );
@@ -428,57 +226,111 @@ fn executor_reservation_reports_real_try_reserve_failure() {
         .expect_err("unrepresentable Vec capacity must be denied by try_reserve_exact");
     assert!(error.contains("executor chord capacity allocation failed"));
     assert!(chords.is_empty());
-
-    let mut intents = Vec::new();
-    let error = reserve_executor_intents(&mut intents, usize::MAX)
-        .expect_err("unrepresentable intent arena capacity must be denied by try_reserve_exact");
-    assert!(error.contains("executor intent-arena capacity allocation failed"));
-    assert!(intents.is_empty());
 }
 
 #[test]
 fn executor_cancellation_interrupts_large_materialization() {
-    let mut actions = Vec::new();
+    let mut inputs = Vec::new();
     for index in 0..9_000u32 {
-        actions.push(KeyActionInput {
-            source_action_index: index * 2,
-            kind: ActionKind::Down,
+        inputs.push(OnsetChordInput {
+            source_action_index: index,
             scheduled_us: u64::from(index) * 20_000,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "down".into(),
-        });
-        actions.push(KeyActionInput {
-            source_action_index: index * 2 + 1,
-            kind: ActionKind::Up,
-            scheduled_us: u64::from(index) * 20_000 + 10_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "up".into(),
         });
     }
-    let schedule = compile_runtime_intents(&actions, &[0x15]).expect("schedule");
+    let plan = build_onset_plan(&inputs, &[0x15], 8_000).expect("plan");
+    let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
     let mut checks = 0;
-    let mut converted_timestamps = 0;
-    let result = DispatchExecutor::new_with_cancellation(
-        &schedule,
-        DurationTicks::from_raw(8_000),
-        |us| {
-            converted_timestamps += 1;
-            Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
-        },
-        || {
-            checks += 1;
-            if checks == 4 {
-                Err("cancelled during materialization".into())
-            } else {
-                Ok(())
-            }
-        },
-    );
+    let result = PreparedDispatchSchedule::prepare_with_cancellation(&plan, qpc_1mhz, 0, || {
+        checks += 1;
+        if checks == 4 {
+            Err("cancelled during materialization".into())
+        } else {
+            Ok(())
+        }
+    });
     assert!(
         result
             .unwrap_err()
             .contains("cancelled during materialization")
     );
     assert_eq!(checks, 4);
-    assert_eq!(converted_timestamps, 2 * 4_096);
+}
+
+#[test]
+fn prepare_preflight_rejects_over_budget_caller_without_reserving_chords() {
+    let inputs: Vec<OnsetChordInput> = (0..10_000u32)
+        .map(|i| OnsetChordInput {
+            source_action_index: i,
+            scheduled_us: u64::from(i) * 20_000,
+            scan_codes: smallvec::smallvec![0x15],
+        })
+        .collect();
+    let plan = build_onset_plan(&inputs, &[0x15], 8_000).expect("plan");
+    let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
+    let mut checkpoint_calls = 0usize;
+    let err = PreparedDispatchSchedule::prepare_with_cancellation(
+        &plan,
+        qpc_1mhz,
+        crate::model::MAX_RETAINED_DISPATCH_BYTES,
+        || {
+            checkpoint_calls += 1;
+            Ok(())
+        },
+    )
+    .expect_err("over-budget caller retained capacity must fail preflight");
+    assert!(err.contains("preflight capacity"), "{err}");
+    // Only the initial entry checkpoint ran; build_prepared_chords never reserved or looped.
+    assert_eq!(checkpoint_calls, 1);
+}
+
+#[test]
+fn prepare_rejects_forged_internal_plan_invariants() {
+    let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
+    let valid = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 1_000,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &[0x15],
+        8_000,
+    )
+    .expect("valid plan");
+
+    // 1. Key mask outside registered key_registry (only slot 0 registered, bit 1 forged)
+    let mut bad_mask = valid.clone();
+    bad_mask.chords[0].key_mask = 0b10;
+    assert!(
+        PreparedDispatchSchedule::prepare(&bad_mask, qpc_1mhz, 0)
+            .unwrap_err()
+            .contains("invalid key mask")
+    );
+
+    // 2. Non-contiguous chord_index
+    let mut bad_idx = valid.clone();
+    bad_idx.chords[0].chord_index = 99;
+    assert!(
+        PreparedDispatchSchedule::prepare(&bad_idx, qpc_1mhz, 0)
+            .unwrap_err()
+            .contains("chord index mismatch")
+    );
+
+    // 3. Mismatched generation_count
+    let mut bad_gen = valid.clone();
+    bad_gen.generation_count = 42;
+    assert!(
+        PreparedDispatchSchedule::prepare(&bad_gen, qpc_1mhz, 0)
+            .unwrap_err()
+            .contains("generation count mismatch")
+    );
+
+    // 4. schedule_end_offset_us earlier than final pulse end
+    let mut bad_end = valid.clone();
+    bad_end.schedule_end_offset_us = 1_000;
+    assert!(
+        PreparedDispatchSchedule::prepare(&bad_end, qpc_1mhz, 0)
+            .unwrap_err()
+            .contains("precedes final pulse end")
+    );
 }

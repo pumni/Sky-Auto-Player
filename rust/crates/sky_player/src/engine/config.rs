@@ -265,7 +265,6 @@ pub struct StartupOrderingHook {
     down_sender_attempt_count: AtomicU64,
     interrupted_wait_count: AtomicU64,
     interrupted_wait_evidence: std::sync::Mutex<Option<InterruptedWaitEvidence>>,
-    pub(crate) unmatched_up_prepare_count: AtomicU64,
     prepared_schedule_executor_consumption_count: AtomicU64,
     watchdog_hold: AtomicBool,
     watchdog_waiting: AtomicBool,
@@ -329,7 +328,6 @@ pub enum StartupCheckpoint {
     WakeCalibration = 12,
     #[cfg(any(test, feature = "test-support"))]
     WorkerCompletionPublished = 13,
-    PrepareDiagnosticChunk = 14,
     #[cfg(any(test, feature = "test-support"))]
     PhysicalWait = 16,
     #[cfg(any(test, feature = "test-support"))]
@@ -386,13 +384,6 @@ impl StartupOrderingHook {
             .lock()
             .map(|trace| *trace)
             .unwrap_or_default()
-    }
-
-    pub(crate) fn record_unmatched_up_prepare(&self, intent_count: usize) {
-        self.unmatched_up_prepare_count.fetch_add(
-            u64::try_from(intent_count).unwrap_or(u64::MAX),
-            Ordering::AcqRel,
-        );
     }
 
     #[cfg(test)]

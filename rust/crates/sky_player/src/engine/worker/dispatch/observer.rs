@@ -619,10 +619,6 @@ pub(crate) fn drain_one_observer(
             DispatchObservation::Wait(wait) => {
                 super::observation::drain_wait_observation(wait, health, local_metrics, qpc_clock)?;
             }
-            #[cfg(any(test, feature = "test-support"))]
-            DispatchObservation::StaleMetadata(stale) => {
-                super::observer_trace::drain_stale_metadata_observation(stale, telemetry)?;
-            }
         }
         #[cfg(any(test, feature = "test-support"))]
         {
@@ -652,12 +648,6 @@ pub(crate) fn drain_one_observer(
             &mut health.observer_window,
             local_metrics,
         );
-        #[cfg(any(test, feature = "test-support"))]
-        let is_immediate_publish = matches!(
-            observation,
-            DispatchObservation::Wait(_) | DispatchObservation::StaleMetadata(_)
-        );
-        #[cfg(not(any(test, feature = "test-support")))]
         let is_immediate_publish = matches!(observation, DispatchObservation::Wait(_));
         if is_immediate_publish {
             try_publish_observer_metrics(local_metrics, metrics, qpc_clock, now_qpc_ticks, false);

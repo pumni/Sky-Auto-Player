@@ -362,6 +362,9 @@ impl NativeDispatchSession {
             sky_dispatch_win32::input::InstrumentKeyProfile::try_from_spec(profile_spec)
                 .map(sky_dispatch_win32::input::MaterializedInstrumentKeyProfile::from_validated)
                 .map_err(|error| format!("native instrument profile admission failed: {error}"))?;
+        instrument_key_profile
+            .validate_ordered_slot_mapping(options.schedule.key_registry().scan_codes())
+            .map_err(|error| format!("native instrument profile admission failed: {error}"))?;
         let initial_heartbeat_ticks = qpc_clock
             .now()
             .map_err(|error| format!("QPC admission failed before session creation: {error:?}"))?;

@@ -89,21 +89,26 @@ change hold, release, FPS, or margin behavior.
 ## Existing schedule and risk path
 
 The planner applies tempo_scale once to produce each scheduled microsecond
-onset, then passes those timestamps and target scan codes into the existing
+onset, then passes those timestamps and target scan codes into the onset-only
 schedule builder. The plan retains both source and scheduled onsets so this
 transformation is visible. Before scheduling each mapped onset, the planner
 rejects a scaled timestamp outside the u64 range or one that cannot
-accommodate the materialized minimum physical hold; it never uses saturating
-time arithmetic for the new conversion path. Each Up is authored at Down + H
-with checked arithmetic. A repeat less than H remains infeasible and is
-rejected during Prepare with its source action positions. A physically feasible
-repeat whose Up-to-Down gap is shorter than one configured frame is counted in
-the risk report and raises a medium risk, so the existing confirmation flow can
-show the sampling warning and offer Proceed. Equal Up/Down deadlines are
-ordered Up first. Tempo advice for an infeasible repeat is computed from H, and
-Prepare rebuilds and revalidates any selected variant. These warnings do not
-rewrite saved timing settings or silently change hold or tempo. Conversion
-status does not override a downstream preparation or physical-risk gate.
+accommodate the materialized minimum physical hold (`H`); it never uses
+saturating time arithmetic for the new conversion path. The schedule stores
+strictly increasing onset chords plus one fixed pulse duration `hold_us = H`
+(no per-note authored Up stream); the runtime anchors each key's release to its
+successful Down completion (`release_not_before = completion_qpc + H_ticks`),
+while diagnostic nominal Up is derived on demand as `onset + H`. A same-key
+repeat interval shorter than `H` remains infeasible and is rejected during
+Prepare with its source chord positions. A physically feasible repeat whose
+nominal Up-to-Down gap (`next_onset - (prev_onset + H)`) is shorter than one
+configured frame is counted in the risk report and raises a medium risk, so the
+existing confirmation flow can show the sampling warning and offer Proceed.
+When a due release and a disjoint due onset coincide, Up is ordered before
+Down. Tempo advice for an infeasible repeat is computed from `H`, and Prepare
+rebuilds and revalidates any selected variant. These warnings do not rewrite
+saved timing settings or silently change hold or tempo. Conversion status does
+not override a downstream preparation or physical-risk gate.
 
 ### Numeric compatibility and checked scheduling
 

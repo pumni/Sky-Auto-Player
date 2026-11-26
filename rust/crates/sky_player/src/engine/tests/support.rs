@@ -3,7 +3,7 @@ use super::*;
 pub(super) const TEST_WALL_CLOCK_PREROLL_US: u64 = 500_000;
 
 pub(super) fn test_session_options(
-    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    schedule: sky_dispatch_core::model::OnsetPlan,
     _allowed_count: usize,
     backend: BackendConfig,
 ) -> NativeSessionOptions {
@@ -11,16 +11,17 @@ pub(super) fn test_session_options(
 }
 
 pub(super) fn test_session_options_with_timing_margin(
-    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    schedule: sky_dispatch_core::model::OnsetPlan,
     backend: BackendConfig,
     timing_margin_us: u64,
 ) -> NativeSessionOptions {
+    let effective_margin_us = timing_margin_us.min(schedule.hold_us());
     let timing = TimingOptions {
         game_fps: 60,
-        min_hold_us: timing_margin_us,
+        min_hold_us: schedule.hold_us(),
         frame_us: 16_667,
-        frame_base_hold_us: 0,
-        timing_margin_us,
+        frame_base_hold_us: schedule.hold_us().saturating_sub(effective_margin_us),
+        timing_margin_us: effective_margin_us,
         strict_timing: false,
         strict_down_completion_late_us: 2_000,
         strict_up_completion_late_us: 2_000,
@@ -30,8 +31,7 @@ pub(super) fn test_session_options_with_timing_margin(
     let prepared_schedule = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
         &schedule,
         qpc.frequency_hz(),
-        timing.min_hold_us,
-        schedule.compile_memory.caller_retained_capacity_bytes,
+        schedule.compile_memory().caller_retained_capacity_bytes,
     )
     .expect("prepare native test schedule before session admission");
     NativeSessionOptions {
@@ -76,57 +76,37 @@ pub(super) fn start_with_test_wall_clock_slack(session: &NativeDispatchSession) 
     session.arm(TEST_WALL_CLOCK_PREROLL_US).expect("worker arm");
 }
 
-pub(super) fn startup_boundary_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
-    sky_dispatch_core::compile::compile_runtime_intents(
-        &[
-            KeyActionInput {
-                source_action_index: 0,
-                kind: ActionKind::Down,
-                scheduled_us: 0,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "startup-down".to_string().into(),
-            },
-            KeyActionInput {
-                source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 100_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "startup-up".to_string().into(),
-            },
-        ],
+pub(super) fn startup_boundary_schedule() -> sky_dispatch_core::model::OnsetPlan {
+    sky_dispatch_core::plan::build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
         &[0x15],
+        100_000,
     )
     .expect("valid startup boundary schedule")
 }
 
 pub(super) fn large_startup_materialization_schedule(
     pair_count: usize,
-) -> sky_dispatch_core::model::RuntimeSchedule {
-    let mut actions = Vec::with_capacity(pair_count.saturating_mul(2));
+) -> sky_dispatch_core::model::OnsetPlan {
+    let mut chords = Vec::with_capacity(pair_count);
     for pair in 0..pair_count {
         let down_us = (pair as u64).saturating_mul(40_000);
-        actions.push(KeyActionInput {
-            source_action_index: u32::try_from(pair.saturating_mul(2)).expect("down action index"),
-            kind: ActionKind::Down,
+        chords.push(OnsetChordInput {
+            source_action_index: u32::try_from(pair).expect("chord index"),
             scheduled_us: down_us,
             scan_codes: smallvec::smallvec![0x15],
-            reason: "large-startup-down".into(),
-        });
-        actions.push(KeyActionInput {
-            source_action_index: u32::try_from(pair.saturating_mul(2).saturating_add(1))
-                .expect("up action index"),
-            kind: ActionKind::Up,
-            scheduled_us: down_us + 20_000,
-            scan_codes: smallvec::smallvec![0x15],
-            reason: "large-startup-up".into(),
         });
     }
-    sky_dispatch_core::compile::compile_runtime_intents(&actions, &[0x15])
+    sky_dispatch_core::plan::build_onset_plan(&chords, &[0x15], 20_000)
         .expect("large startup schedule must compile")
 }
 
 pub(super) fn checkpointed_session(
-    schedule: sky_dispatch_core::model::RuntimeSchedule,
+    schedule: sky_dispatch_core::model::OnsetPlan,
     checkpoint: StartupCheckpoint,
     occurrence: usize,
     require_focus: bool,
@@ -193,43 +173,26 @@ pub(super) fn assert_checkpointed_terminal_stop(
     assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
 }
 
-pub(super) fn progress_idle_gap_schedule() -> sky_dispatch_core::model::RuntimeSchedule {
-    sky_dispatch_core::compile::compile_runtime_intents(
+pub(super) fn progress_idle_gap_schedule() -> sky_dispatch_core::model::OnsetPlan {
+    sky_dispatch_core::plan::build_onset_plan(
         &[
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 0,
-                kind: ActionKind::Down,
                 // Keep the pause/resume lifecycle in an idle interval. No
                 // physical generation is owned while the test acknowledges
                 // the pause, so the test does not conflate pause observation
                 // with terminal cleanup of an active key.
                 scheduled_us: 200_000,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "progress-idle-down".to_string().into(),
             },
-            KeyActionInput {
+            OnsetChordInput {
                 source_action_index: 1,
-                kind: ActionKind::Up,
-                scheduled_us: 300_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "progress-idle-up".to_string().into(),
-            },
-            KeyActionInput {
-                source_action_index: 2,
-                kind: ActionKind::Down,
                 scheduled_us: 5_000_000,
                 scan_codes: smallvec::smallvec![0x15],
-                reason: "progress-idle-second-down".to_string().into(),
-            },
-            KeyActionInput {
-                source_action_index: 3,
-                kind: ActionKind::Up,
-                scheduled_us: 5_100_000,
-                scan_codes: smallvec::smallvec![0x15],
-                reason: "progress-idle-second-up".to_string().into(),
             },
         ],
         &[0x15],
+        100_000,
     )
     .expect("valid progress idle-gap schedule")
 }

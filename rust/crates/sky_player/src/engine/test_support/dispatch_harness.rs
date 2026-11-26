@@ -17,13 +17,12 @@ use crate::engine::worker::{
 };
 use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::clock::PlaybackClockState;
-use sky_dispatch_core::compile::compile_runtime_intents;
 use sky_dispatch_core::executor::{
-    DispatchDecision, DispatchExecutor, DispatchTimingWindow, DownChordMetadata,
+    DispatchDecision, DispatchExecutor, DispatchTimingWindow, PreparedChord,
 };
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::model::OnsetChordInput;
+use sky_dispatch_core::plan::build_onset_plan;
 use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
-use sky_dispatch_core::validation::validate_min_hold_feasibility;
 use sky_dispatch_win32::clock::{QpcClock, qpc_frequency_checked};
 use sky_dispatch_win32::event::OwnedEvent;
 use sky_dispatch_win32::input::{
@@ -96,32 +95,24 @@ pub struct ProductionDispatchTestHarness {
 }
 
 impl ProductionDispatchTestHarness {
-    pub fn create_harness(actions: &[KeyActionInput]) -> Self {
-        Self::create(actions)
+    pub fn create_harness(chords: &[OnsetChordInput]) -> Self {
+        Self::create(chords)
     }
 
     pub fn new_down_only() -> Self {
-        Self::create(&[
-            action(0, ActionKind::Down, 0, &[0x15]),
-            action(1, ActionKind::Up, 10_000_000, &[0x15]),
-        ])
+        Self::create(&[chord(0, 0, &[0x15])])
     }
 
     pub fn new_down_chord(key_count: usize) -> Self {
         assert!((1..=PHYSICAL_INSTRUMENT_SCAN_CODES.len()).contains(&key_count));
         let scan_codes = &PHYSICAL_INSTRUMENT_SCAN_CODES[..key_count];
-        Self::create(&[
-            action(0, ActionKind::Down, 0, scan_codes),
-            action(1, ActionKind::Up, 1_000_000, scan_codes),
-        ])
+        Self::create(&[chord(0, 0, scan_codes)])
     }
 
     pub fn new_mixed() -> Self {
         Self::create(&[
-            action(0, ActionKind::Down, 0, &[0x15]),
-            action(1, ActionKind::Up, 20_000, &[0x15]),
-            action(2, ActionKind::Down, 20_000, &[0x16]),
-            action(3, ActionKind::Up, 40_000, &[0x16]),
+            chord(0, 0, &[0x15]),
+            chord(1, DISPATCH_EFFECTIVE_HOLD_US, &[0x16]),
         ])
     }
 
@@ -129,18 +120,9 @@ impl ProductionDispatchTestHarness {
         qpc_frequency_hz: u64,
         odd_frequency_vector: bool,
     ) -> Result<Self, String> {
-        let offsets = if odd_frequency_vector {
-            [0, 17_168, 34_336, 51_504]
-        } else {
-            [0, 17_167, 34_334, 51_501]
-        };
+        let second_onset = if odd_frequency_vector { 34_336 } else { 34_334 };
         let harness = Self::create_with_frequency(
-            &[
-                action(0, ActionKind::Down, offsets[0], &[0x15]),
-                action(1, ActionKind::Up, offsets[1], &[0x15]),
-                action(2, ActionKind::Down, offsets[2], &[0x15]),
-                action(3, ActionKind::Up, offsets[3], &[0x15]),
-            ],
+            &[chord(0, 0, &[0x15]), chord(1, second_onset, &[0x15])],
             qpc_frequency_hz,
         )?;
         Ok(harness)
@@ -148,56 +130,47 @@ impl ProductionDispatchTestHarness {
 
     pub fn new_hol_sequence_for_test(qpc_frequency_hz: u64) -> Result<Self, String> {
         Self::create_with_frequency(
-            &[
-                action(0, ActionKind::Down, 0, &[0x15]),
-                action(1, ActionKind::Down, 10_000, &[0x16]),
-                action(2, ActionKind::Up, 30_000, &[0x15]),
-                action(3, ActionKind::Up, 40_000, &[0x16]),
-            ],
+            &[chord(0, 0, &[0x15]), chord(1, 10_000, &[0x16])],
             qpc_frequency_hz,
         )
     }
 
-    fn create(actions: &[KeyActionInput]) -> Self {
-        Self::create_with_frequency(actions, qpc_frequency_checked().expect("QPC frequency"))
+    fn create(chords: &[OnsetChordInput]) -> Self {
+        Self::create_with_frequency(chords, qpc_frequency_checked().expect("QPC frequency"))
             .expect("production executor fixture admission")
     }
 
     fn create_with_frequency(
-        actions: &[KeyActionInput],
+        chords: &[OnsetChordInput],
         qpc_frequency_hz: u64,
     ) -> Result<Self, String> {
         let frequency = NonZeroU64::new(qpc_frequency_hz)
             .ok_or_else(|| "QPC frequency must be nonzero".to_string())?;
         let clock = QpcClock::from_frequency_hz(frequency);
-        let mut scan_codes = actions
+        let mut scan_codes = chords
             .iter()
             .flat_map(|entry| entry.scan_codes.iter().copied())
             .collect::<Vec<_>>();
         scan_codes.sort_unstable();
         scan_codes.dedup();
-        let schedule = compile_runtime_intents(actions, &scan_codes)
-            .map_err(|error| format!("production schedule compilation failed: {error}"))?;
+        if scan_codes.is_empty() {
+            scan_codes.push(PHYSICAL_INSTRUMENT_SCAN_CODES[0]);
+        }
 
         let mut config = WorkerConfig::default();
         config.timing.frame_us = DISPATCH_FRAME_US;
         config.timing.frame_base_hold_us = DISPATCH_FRAME_US;
         config.timing.timing_margin_us = DISPATCH_MARGIN_US;
         config.timing.min_hold_us = DISPATCH_EFFECTIVE_HOLD_US;
-        validate_min_hold_feasibility(&schedule, config.timing.min_hold_us)
-            .map_err(|error| format!("production scheduler admission failed: {error}"))?;
-        let min_hold_ticks = clock
-            .duration_from_us(config.timing.min_hold_us)
-            .map_err(|error| format!("minimum hold conversion failed: {error:?}"))?;
-        let scheduler = DispatchExecutor::new(
-            &schedule,
-            DurationTicks::from_raw(min_hold_ticks.as_u64()),
-            |us| {
-                clock
-                    .timeline_from_us(us)
-                    .map_err(|error| format!("{error:?}"))
-            },
+
+        let plan = build_onset_plan(chords, &scan_codes, config.timing.min_hold_us)
+            .map_err(|error| format!("production onset plan failed: {error}"))?;
+        let prepared = sky_dispatch_core::executor::PreparedDispatchSchedule::prepare(
+            &plan,
+            clock.frequency_hz(),
+            plan.compile_memory().caller_retained_capacity_bytes,
         )?;
+        let scheduler = DispatchExecutor::from_prepared_schedule(prepared);
 
         let mut backend = TrackedKeyState::with_qpc_clock(clock);
         backend.set_test_emitters();
@@ -278,21 +251,21 @@ impl ProductionDispatchTestHarness {
         &self,
         now: QpcTicks,
         epoch: QpcTicks,
-    ) -> Result<DispatchDecision<'_>, String> {
+    ) -> Result<DispatchDecision, String> {
         self.resources
             .scheduler
             .evaluate_at(now, epoch)
             .map_err(|error| format!("live scheduler QPC evaluation failed: {error}"))
     }
 
-    pub fn current_executor_chord_for_test(&self) -> Option<DownChordMetadata> {
-        self.resources.scheduler.current_chord().map(Into::into)
+    pub fn current_executor_chord_for_test(&self) -> Option<PreparedChord> {
+        self.resources.scheduler.current_chord()
     }
 
     pub fn stage_candidate_for_test(
         &mut self,
         up_mask: u16,
-        down_chord: Option<DownChordMetadata>,
+        down_chord: Option<PreparedChord>,
         fallback_ticks: TimelineTicks,
     ) -> Result<Option<StagedCandidate>, String> {
         self.stage_candidate_with_observer_for_test(up_mask, down_chord, fallback_ticks, false)
@@ -301,7 +274,7 @@ impl ProductionDispatchTestHarness {
     pub fn stage_candidate_with_observer_for_test(
         &mut self,
         up_mask: u16,
-        down_chord: Option<DownChordMetadata>,
+        down_chord: Option<PreparedChord>,
         fallback_ticks: TimelineTicks,
         capture_up_slot_timings: bool,
     ) -> Result<Option<StagedCandidate>, String> {
@@ -322,16 +295,13 @@ impl ProductionDispatchTestHarness {
                 .map_err(|error| format!("live staging deadline evaluation failed: {error}"))?,
             decision => decision,
         };
-        let (actual_up_mask, actual_chord, timing_window): (
-            u16,
-            Option<DownChordMetadata>,
-            DispatchTimingWindow,
-        ) = match decision {
+        let (actual_up_mask, actual_chord, timing_window, up_summary) = match decision {
             DispatchDecision::Send {
                 up_mask,
                 down_chord,
                 timing_window,
-            } => (up_mask, down_chord.map(Into::into), timing_window),
+                up_summary,
+            } => (up_mask, down_chord, timing_window, up_summary),
             decision => {
                 return Err(format!(
                     "production executor did not offer Send: {decision:?}"
@@ -339,26 +309,30 @@ impl ProductionDispatchTestHarness {
             }
         };
         if actual_up_mask != up_mask
-            || actual_chord.map(|chord| chord.down_mask) != down_chord.map(|chord| chord.down_mask)
+            || actual_chord.map(|chord| chord.key_mask) != down_chord.map(|chord| chord.key_mask)
         {
             return Err(format!(
                 "staged masks do not match the live executor decision: requested up={up_mask:#06x}, down={:?}; live up={actual_up_mask:#06x}, down={:?}",
-                down_chord.map(|chord| chord.down_mask),
-                actual_chord.map(|chord| chord.down_mask),
+                down_chord.map(|chord| chord.key_mask),
+                actual_chord.map(|chord| chord.key_mask),
             ));
         }
-        self.stage_candidate_with_scheduler_window_and_observer_for_test(
+        stage_candidate(
             actual_up_mask,
             actual_chord,
             timing_window,
+            up_summary,
             capture_up_slot_timings,
+            &self.target,
+            &mut self.resources,
+            &mut self.runtime,
         )
     }
 
     pub fn stage_candidate_with_scheduler_window_for_test(
         &mut self,
         up_mask: u16,
-        down_chord: Option<DownChordMetadata>,
+        down_chord: Option<PreparedChord>,
         timing_window: DispatchTimingWindow,
     ) -> Result<Option<StagedCandidate>, String> {
         self.stage_candidate_with_scheduler_window_and_observer_for_test(
@@ -372,14 +346,45 @@ impl ProductionDispatchTestHarness {
     pub fn stage_candidate_with_scheduler_window_and_observer_for_test(
         &mut self,
         up_mask: u16,
-        down_chord: Option<DownChordMetadata>,
+        down_chord: Option<PreparedChord>,
         timing_window: DispatchTimingWindow,
         capture_up_slot_timings: bool,
     ) -> Result<Option<StagedCandidate>, String> {
+        let up_summary = (up_mask != 0).then(|| {
+            let timings = self.resources.scheduler.up_slot_timings(up_mask);
+            let epoch = self.resources.playback.epoch;
+            let mut authored_target_qpc: Option<QpcTicks> = None;
+            let mut musical_up_not_before_qpc: Option<QpcTicks> = None;
+            let mut hold_floor_mask = 0u16;
+            for t in &timings {
+                let nominal = epoch
+                    .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+                        t.nominal_up_offset_ticks.as_u64(),
+                    ))
+                    .expect("test nominal Up QPC");
+                authored_target_qpc = Some(authored_target_qpc.map_or(nominal, |c| c.min(nominal)));
+                musical_up_not_before_qpc = Some(
+                    musical_up_not_before_qpc.map_or(t.release_not_before_qpc, |c| {
+                        c.max(t.release_not_before_qpc)
+                    }),
+                );
+                if t.release_not_before_qpc > nominal {
+                    hold_floor_mask |= 1u16 << t.slot;
+                }
+            }
+            sky_dispatch_core::executor::UpSlotTimingSummary {
+                slot_count: timings.len() as u8,
+                first_source_action_index: timings.first().map_or(0, |t| t.source_action_index),
+                authored_target_qpc: authored_target_qpc.expect("non-empty up_mask"),
+                musical_up_not_before_qpc: musical_up_not_before_qpc.expect("non-empty up_mask"),
+                hold_floor_mask,
+            }
+        });
         stage_candidate(
             up_mask,
             down_chord,
             timing_window,
+            up_summary,
             capture_up_slot_timings,
             &self.target,
             &mut self.resources,
@@ -392,6 +397,28 @@ impl ProductionDispatchTestHarness {
         candidate: &StagedCandidate,
     ) -> DispatchTimingWindow {
         candidate.timing_window
+    }
+
+    pub fn reselect_candidate_after_wait_for_test(
+        &mut self,
+        mut staged: Option<StagedCandidate>,
+        observed_wake_qpc: QpcTicks,
+        capture_up_slot_timings: bool,
+    ) -> Result<Option<StagedCandidate>, String> {
+        match crate::engine::worker::reselect_candidate_after_wait(
+            &mut staged,
+            observed_wake_qpc,
+            self.resources.playback.epoch,
+            capture_up_slot_timings,
+            &self.target,
+            &mut self.resources,
+            &mut self.runtime,
+        )? {
+            crate::engine::worker::PostWaitSelection::SendReady => Ok(staged),
+            crate::engine::worker::PostWaitSelection::Replan
+            | crate::engine::worker::PostWaitSelection::Finished
+            | crate::engine::worker::PostWaitSelection::TargetInvalidated => Ok(None),
+        }
     }
 
     pub fn dispatch_staged_candidate_for_test(
@@ -834,13 +861,11 @@ impl ProductionDispatchTestHarness {
     }
 }
 
-fn action(index: u32, kind: ActionKind, scheduled_us: u64, scan_codes: &[u16]) -> KeyActionInput {
-    KeyActionInput {
+fn chord(index: u32, scheduled_us: u64, scan_codes: &[u16]) -> OnsetChordInput {
+    OnsetChordInput {
         source_action_index: index,
-        kind,
         scheduled_us,
         scan_codes: scan_codes.iter().copied().collect(),
-        reason: Arc::from("production executor fixture"),
     }
 }
 

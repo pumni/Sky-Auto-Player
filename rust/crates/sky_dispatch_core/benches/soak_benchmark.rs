@@ -6,7 +6,7 @@
 use std::env;
 use std::time::Instant;
 
-use sky_dispatch_core::model::{ActionKind, KeyActionInput};
+use sky_dispatch_core::model::OnsetChordInput;
 use sky_dispatch_core::testing::simulate_schedule;
 
 const DEFAULT_NOTES: usize = 800;
@@ -18,33 +18,18 @@ const SCAN_CODES: &[u16] = &[
 ];
 const POLYPHONY: &[usize] = &[1, 3, 6, 10, 15];
 
-fn build_actions(notes: usize) -> Vec<KeyActionInput> {
-    let mut actions = Vec::with_capacity(notes.saturating_mul(8));
-    let mut source_action_index = 0;
-
+fn build_chords(notes: usize) -> Vec<OnsetChordInput> {
+    let mut chords = Vec::with_capacity(notes);
     for note in 0..notes {
         let scheduled_us = note as u64 * NOTE_INTERVAL_US;
         let polyphony = POLYPHONY[note % POLYPHONY.len()];
-        let scan_codes: Vec<u16> = SCAN_CODES.iter().copied().take(polyphony).collect();
-        actions.push(KeyActionInput {
-            source_action_index,
-            kind: ActionKind::Down,
+        chords.push(OnsetChordInput {
+            source_action_index: note as u32,
             scheduled_us,
-            scan_codes: scan_codes.clone().into(),
-            reason: "soak down".into(),
+            scan_codes: SCAN_CODES.iter().copied().take(polyphony).collect(),
         });
-        source_action_index += 1;
-        actions.push(KeyActionInput {
-            source_action_index,
-            kind: ActionKind::Up,
-            scheduled_us: scheduled_us + NOTE_HOLD_US,
-            scan_codes: scan_codes.into(),
-            reason: "soak up".into(),
-        });
-        source_action_index += 1;
     }
-
-    actions
+    chords
 }
 
 fn main() {
@@ -52,9 +37,9 @@ fn main() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(DEFAULT_NOTES);
-    let actions = build_actions(notes);
+    let chords = build_chords(notes);
     let started = Instant::now();
-    let result = simulate_schedule(&actions, SCAN_CODES, NOTE_HOLD_US, SEND_LATENCY_US)
+    let result = simulate_schedule(&chords, SCAN_CODES, NOTE_HOLD_US, SEND_LATENCY_US)
         .expect("executor soak simulation must complete");
     let elapsed_us = started.elapsed().as_micros();
     let expected_released = (0..notes)
@@ -66,10 +51,6 @@ fn main() {
     assert_eq!(
         result.status_counts.get("released"),
         Some(&expected_released)
-    );
-    assert!(
-        !result.status_counts.contains_key("release_pending"),
-        "legacy pending-release state must not exist"
     );
 
     let report = serde_json::json!({
