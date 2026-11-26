@@ -5,6 +5,7 @@
   }
 
   .home-page {
+    --home-chapter-gap: clamp(4.5rem, 21vw, 6rem);
     --home-opening-gap: clamp(2rem, 3.95vw, 2.5rem);
     --home-heading: clamp(1.75rem, 1.25rem + 1.85vw, 3rem);
     --home-lead: clamp(1rem, 0.9rem + 0.4vw, 1.375rem);
@@ -14,21 +15,30 @@
   }
 
   .home-page > section ~ section {
-    margin-block-start: clamp(3.5rem, 6.8vw, 8rem);
+    margin-block-start: var(--home-chapter-gap);
   }
 
   .home-page > section:nth-of-type(2) {
     margin-block-start: var(--home-opening-gap);
   }
 
+  @media (min-width: 40rem) {
+    .home-page {
+      --home-chapter-gap: clamp(5.5rem, 10vw, 7rem);
+    }
+  }
+
   @media (min-width: 64rem) {
     .home-page {
+      --home-chapter-gap: clamp(6rem, 9.375vw, 7.5rem);
       --home-opening-gap: clamp(2.5rem, 3.35vw, 3.5rem);
       padding-block-start: clamp(3rem, 3.9vw, 4rem);
     }
+  }
 
-    .home-page > section ~ section {
-      margin-block-start: clamp(6rem, 6.8vw, 8rem);
+  @media (min-width: 80rem) {
+    .home-page {
+      --home-chapter-gap: clamp(7.5rem, 9.375vw, 9rem);
     }
   }
 
@@ -36,13 +46,6 @@
     .home-page {
       --gutter: 1.25rem;
     }
-  }
-
-  .home-page > [id],
-  #formats,
-  #faq-preview,
-  #timing-model {
-    scroll-margin-top: 6rem;
   }
 
   @media (min-width: 48rem) and (max-width: 63.99rem) {
@@ -53,7 +56,6 @@
 
   .section-shell {
     padding-block: var(--section-default);
-    scroll-margin-top: 6rem;
   }
 
   .section-shell--compact {

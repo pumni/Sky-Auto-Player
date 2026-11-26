@@ -72,6 +72,14 @@ const defaultView = data.views[0];
       </li>
     ))}
   </ul>
+  <div class="product-showcase__features">
+    {data.features.map((feature) => (
+      <div>
+        <h3>{feature.title}</h3>
+        <p>{feature.description}</p>
+      </div>
+    ))}
+  </div>
 </section>
 
 <style>
@@ -216,6 +224,31 @@ const defaultView = data.views[0];
       min-block-size: 44px;
       align-items: center;
       color: var(--color-action);
+    }
+
+    .product-showcase__features {
+      display: grid;
+      gap: clamp(1.5rem, 3vw, 2.5rem);
+      margin-block-start: clamp(1.5rem, 3vw, 3rem);
+      padding-block-start: clamp(1.5rem, 2.5vw, 2.5rem);
+      border-block-start: 1px solid var(--line-default);
+    }
+
+    .product-showcase__features h3 {
+      margin: 0 0 0.75rem;
+      font-size: var(--type-h3);
+    }
+
+    .product-showcase__features p {
+      max-inline-size: 56ch;
+      margin: 0;
+      color: var(--color-text-secondary);
+    }
+
+    @media (min-width: 48rem) {
+      .product-showcase__features {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
     }
 
     @media (forced-colors: active) {

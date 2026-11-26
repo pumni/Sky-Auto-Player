@@ -34,10 +34,7 @@ const timingGuide = withBase(
     <header class="playback-demo__intro">
       <h2 id="playback-title">{data.title}</h2>
       <p class="playback-demo__description">{data.description}</p>
-      <p class="playback-demo__timing-note" id="timing-model">
-        {data.schematicNote}
-        <a href={timingGuide}>{data.timingLinkLabel}</a>
-      </p>
+      <p class="playback-demo__dry-run">{data.dryRunNote}</p>
     </header>
 
     <div
@@ -152,6 +149,10 @@ const timingGuide = withBase(
           {data.manualOnly}
         </p>
       </div>
+      <p class="playback-demo__timing-note" id="timing-model">
+        {data.demoNote}
+        <a href={timingGuide}>{data.timingLinkLabel}</a>
+      </p>
       <p class="sr-only" role="status" aria-live="polite" data-demo-status>
         {data.initialStatus}
       </p>
@@ -164,6 +165,8 @@ const timingGuide = withBase(
     .playback-demo__layout {
       display: grid;
       gap: var(--home-content-gap);
+      padding-block-start: var(--home-content-gap);
+      border-block-start: 1px solid var(--line-faint);
     }
 
     @media (min-width: 64rem) {
@@ -207,6 +210,12 @@ const timingGuide = withBase(
       .playback-demo__stage {
         padding: clamp(1.5rem, 2.25vw, 2rem);
       }
+    }
+
+    .playback-demo__dry-run {
+      margin: 1rem 0 0;
+      color: var(--color-text-secondary);
+      max-inline-size: 54ch;
     }
 
     .playback-demo__time {
@@ -395,6 +404,11 @@ const timingGuide = withBase(
       color: var(--color-text-tertiary);
       font-size: var(--type-small);
       line-height: 1.5;
+    }
+
+    .playback-demo__timing-note {
+      max-inline-size: 70ch;
+      color: var(--color-text-secondary);
     }
 
     .playback-demo__motion-note {

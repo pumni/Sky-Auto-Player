@@ -1,9 +1,15 @@
 @layer base {
   html {
     background: var(--color-page);
-    scroll-padding-top: 5.5rem;
+    scroll-padding-block-start: 1.5rem;
     scroll-behavior: smooth;
     scrollbar-gutter: stable;
+  }
+
+  @media (min-width: 64rem) {
+    html {
+      scroll-padding-block-start: 5.5rem;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {

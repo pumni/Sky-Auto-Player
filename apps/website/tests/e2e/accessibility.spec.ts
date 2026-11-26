@@ -61,34 +61,83 @@ test.describe('accessibility and responsive contracts', () => {
     });
   }
 
-  test('public homepage anchors clear the sticky header at desktop widths', async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto('/Sky-Auto-Player/');
-    await page.addStyleTag({ content: 'html { scroll-behavior: auto !important; }' });
+  for (const width of [390, 1024, 1440]) {
+    test(`${width}px fragment links use one header clearance and clamp at the document end`, async ({
+      page,
+      browser,
+    }) => {
+      const viewport = { width, height: width === 390 ? 844 : width === 1024 ? 768 : 900 };
+      const desktop = width >= 1024;
+      const clearance = desktop ? { min: 85, max: 105 } : { min: 16, max: 32 };
+      const home = '/Sky-Auto-Player/';
+      const readAnchor = async (targetPage: typeof page, id: string) => {
+        await targetPage.evaluate(() => document.fonts.ready);
+        await expect
+          .poll(async () =>
+            targetPage.locator('#' + id).evaluate((target, { min, max }) => {
+              const top = target.getBoundingClientRect().top;
+              const maximum = document.documentElement.scrollHeight - innerHeight;
+              const documentTop = scrollY + top;
+              return (
+                (top >= min && top <= max) ||
+                (documentTop <= max && scrollY <= 1) ||
+                (documentTop - max >= maximum && maximum - scrollY <= 1)
+              );
+            }, clearance),
+          )
+          .toBe(true);
+      };
 
-    for (const anchor of [
-      'top',
-      'product',
-      'playback',
-      'how-it-works',
-      'formats',
-      'technical',
-      'timing-model',
-      'faq-preview',
-    ]) {
-      await page.evaluate((id) => {
-        document.getElementById(id)?.scrollIntoView({ block: 'start' });
-      }, anchor);
-      const offset = await page.evaluate(
-        (id) => ({
-          target: document.getElementById(id)!.getBoundingClientRect().top,
-          header: document.querySelector('.site-header')!.getBoundingClientRect().bottom,
-        }),
-        anchor,
-      );
-      expect(offset.target, anchor).toBeGreaterThanOrEqual(offset.header - 1);
-    }
-  });
+      await page.setViewportSize(viewport);
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.goto(home);
+      await page.locator('.hero__secondary').press('Enter');
+      await expect(page).toHaveURL(/#product$/);
+      await readAnchor(page, 'product');
+      if (!desktop) await page.locator('.menu-toggle').click();
+      await page.locator('.site-nav a[href$="#how-it-works"]').press('Enter');
+      await expect(page.locator('#how-it-works')).toBeFocused();
+      await readAnchor(page, 'how-it-works');
+
+      for (const id of [
+        'top',
+        'product',
+        'playback',
+        'how-it-works',
+        'formats',
+        'technical',
+        'timing-model',
+        'faq-preview',
+      ]) {
+        await page.goto(home + '#' + id);
+        await readAnchor(page, id);
+      }
+      expect(
+        await page.evaluate(() => document.documentElement.scrollHeight - innerHeight - scrollY),
+      ).toBeLessThanOrEqual(1);
+
+      await page.goto(home + 'faq/#account-safety');
+      await expect(page.locator('#account-safety')).toHaveAttribute('open', '');
+      await readAnchor(page, 'account-safety');
+      await page.goto(home + 'guides/windows-setup/#adding-songs');
+      await readAnchor(page, 'adding-songs');
+
+      const context = await browser.newContext({
+        viewport,
+        javaScriptEnabled: false,
+        reducedMotion: 'reduce',
+      });
+      try {
+        const staticPage = await context.newPage();
+        await staticPage.goto(home + '#product');
+        await readAnchor(staticPage, 'product');
+        await staticPage.goto(home + 'guides/windows-setup/#adding-songs');
+        await readAnchor(staticPage, 'adding-songs');
+      } finally {
+        await context.close();
+      }
+    });
+  }
 
   for (const route of ['/', '/vi/']) {
     for (const width of [320, 390, 768, 1024, 1152, 1440, 1920]) {
@@ -125,8 +174,8 @@ test.describe('accessibility and responsive contracts', () => {
   test('chapter gaps, shared alignment, and FAQ spacing hold at responsive widths', async ({
     page,
   }) => {
-    const widths = [320, 1280, 1920];
-    const expected = { default: [48, 76.8, 96] };
+    const widths = [320, 390, 768, 1024, 1440, 1920];
+    const faqSpacing = [48, 48, 48, 61.44, 86.4, 96];
     await page.goto('/Sky-Auto-Player/');
     for (const width of widths) {
       await page.setViewportSize({ width, height: 900 });
@@ -148,14 +197,25 @@ test.describe('accessibility and responsive contracts', () => {
       const [opening, ...later] = spacing.gaps;
       expect(opening).toBeGreaterThanOrEqual(width >= 1024 ? 40 : 32);
       expect(opening).toBeLessThanOrEqual(width >= 1024 ? 56 : 40);
+      const [min, max] =
+        width >= 1280
+          ? [120, 144]
+          : width >= 1024
+            ? [96, 120]
+            : width >= 640
+              ? [88, 112]
+              : width > 320
+                ? [80, 96]
+                : [72, 80];
       for (const gap of later) {
-        expect(gap).toBeGreaterThanOrEqual(width >= 1024 ? 96 : 56);
-        expect(gap).toBeLessThanOrEqual(128);
+        expect(gap).toBeGreaterThanOrEqual(min - 0.1);
+        expect(gap).toBeLessThanOrEqual(max + 0.1);
       }
       expect(spacing.footerLeft).toBeGreaterThanOrEqual(16);
       expect(spacing.footerWidth).toBeLessThanOrEqual(1200.5);
-      expect(spacing.quickStartLeft).toBeCloseTo(spacing.footerLeft, 0);
-      expect(spacing.quickStartWidth).toBeCloseTo(spacing.footerWidth, 0);
+      const localGutter = width === 390 ? 4 : 0;
+      expect(spacing.quickStartLeft - spacing.footerLeft).toBeCloseTo(localGutter, 0);
+      expect(spacing.footerWidth - spacing.quickStartWidth).toBeCloseTo(2 * localGutter, 0);
     }
 
     await page.goto('/Sky-Auto-Player/faq/');
@@ -164,7 +224,7 @@ test.describe('accessibility and responsive contracts', () => {
       const defaultSpacing = await page
         .locator('.faq-layout')
         .evaluate((element) => Number.parseFloat(getComputedStyle(element).marginBottom));
-      expect(Math.abs(defaultSpacing - expected.default[index])).toBeLessThan(0.2);
+      expect(Math.abs(defaultSpacing - faqSpacing[index])).toBeLessThan(0.2);
     }
   });
 
@@ -291,7 +351,7 @@ test.describe('accessibility and responsive contracts', () => {
     await page.waitForTimeout(350);
     await expect(image).toHaveAttribute('src', /desktop-library-browser-preview-1366x768\.png/);
     await expect(page.locator('[data-product-caption]')).toHaveText(
-      'Browse the library, favorites and playlists.',
+      'Search bundled songs, save favorites and organize playlists.',
     );
 
     await group.getByRole('button', { name: 'Song details' }).click();
@@ -306,7 +366,7 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(image).toHaveAttribute('src', /desktop-song-detail-browser-preview-1366x768\.png/);
     await expect(image).toHaveAttribute('alt', /selected example song and its sheet details/);
     await expect(page.locator('[data-product-caption]')).toHaveText(
-      'Review a sheet before playback. Blue Bird is selected in the preview.',
+      'Review sheet compatibility before playback. Blue Bird is selected in this preview.',
     );
     await expect(fullSize).toHaveAttribute(
       'href',
@@ -327,7 +387,7 @@ test.describe('accessibility and responsive contracts', () => {
       /desktop-settings-playback-browser-preview-1366x768\.png/,
     );
     await expect(page.locator('[data-product-caption]')).toHaveText(
-      'Adjust playback defaults and key hold duration.',
+      'Adjust playback defaults and key-hold duration.',
     );
   });
 
@@ -439,7 +499,7 @@ test.describe('accessibility and responsive contracts', () => {
       await expect(image).toHaveAttribute('src', /desktop-library/);
       await expect(image).toHaveAttribute('alt', /song library/);
       await expect(page.locator('[data-product-caption]')).toHaveText(
-        'Browse the library, favorites and playlists.',
+        'Search bundled songs, save favorites and organize playlists.',
       );
       await expect(page.locator('[data-product-full-size]')).toHaveAttribute(
         'href',
@@ -519,7 +579,7 @@ test.describe('accessibility and responsive contracts', () => {
       /desktop-library-browser-preview-1366x768\.png/,
     );
     await expect(page.locator('[data-product-caption]')).toHaveText(
-      'Browse the library, favorites and playlists.',
+      'Search bundled songs, save favorites and organize playlists.',
     );
     await expect(page.locator('[data-product-status]')).toHaveText(/preview could not load/);
     await expect(page.locator('.product-showcase__fallback')).toBeVisible();
@@ -560,7 +620,7 @@ test.describe('accessibility and responsive contracts', () => {
       /bài hát mẫu đã chọn và chi tiết sheet/,
     );
     await expect(page.locator('[data-product-caption]')).toHaveText(
-      'Xem thông tin bản nhạc trước khi phát. Ví dụ đang chọn Blue Bird.',
+      'Kiểm tra khả năng tương thích trước khi phát. Ảnh minh họa đang chọn Blue Bird.',
     );
     await expect(page.locator('[data-product-full-size]')).toHaveAttribute(
       'href',
@@ -975,6 +1035,35 @@ test.describe('accessibility and responsive contracts', () => {
     expect(focusStyle.outlineWidth).toBeGreaterThanOrEqual(2);
   });
 
+  test('both locales explain imports, compatibility and the desktop dry run once', async ({
+    page,
+  }) => {
+    for (const route of ['/', '/vi/']) {
+      await page.goto('/Sky-Auto-Player' + route);
+      const features = page.locator('#product .product-showcase__features');
+      await expect(features.getByRole('heading', { level: 3 })).toHaveText(
+        route === '/'
+          ? ['Bring your own sheets', 'Check compatibility before playing']
+          : ['Dùng bản nhạc của riêng bạn', 'Kiểm tra trước khi phát'],
+      );
+      await expect(features).toContainText(
+        route === '/' ? 'original files stay where they are' : 'Các tệp gốc vẫn ở nguyên vị trí',
+      );
+      await expect(page.locator('#playback').getByText(/Test playback \(no input\)/)).toHaveCount(
+        1,
+      );
+      await expect(page.locator('#timing-model')).toContainText(
+        route === '/' ? 'No sound' : 'Không có âm thanh',
+      );
+      await expect(page.locator('#how-it-works ol li')).toHaveCount(3);
+      await expect(page.locator('#how-it-works ol')).toContainText('15');
+      await expect(page.locator('#how-it-works .quick-start__setup')).toHaveAttribute(
+        'href',
+        /windows-setup\/$/,
+      );
+    }
+  });
+
   test('download and trust section preserves the current install and safety details', async ({
     page,
   }) => {
@@ -992,9 +1081,14 @@ test.describe('accessibility and responsive contracts', () => {
       await expect(page.locator('#technical')).toContainText('_x64-setup.exe');
       await expect(page.locator('#technical')).toContainText('.exe.sig');
       await expect(page.locator('#technical')).toContainText(
-        route === '/' ? 'stable Windows x64 installer' : 'bộ cài Windows 64-bit của bản ổn định',
+        route === '/' ? 'stable Windows installer' : 'bộ cài Windows ổn định',
       );
-      await expect(page.locator('#technical a[href*="account-safety"]')).toBeVisible();
+      const trust = page.locator('#technical');
+      await expect(trust.getByRole('heading', { level: 3 })).toHaveText(
+        route === '/' ? ['Installation', 'Account safety'] : ['Cài đặt', 'An toàn tài khoản'],
+      );
+      await expect(trust).toContainText(/SmartScreen/);
+      await expect(trust.locator('a[href*="account-safety"]')).toBeVisible();
       await expect(page.locator('#technical')).not.toContainText('100% safe');
     }
     await expect(page.locator('#faq-preview a')).toHaveCount(3);

@@ -56,7 +56,7 @@ The canonical installer is intentionally unsigned for Authenticode under the cur
 2. Create or select a playlist and use **Add songs** to import the local file or its folder.
 3. Imports reference the original files; the app does not move or delete them. Keep each source file at its original location.
 
-To start playback, equip a compatible 15-key instrument in Sky. Select your song in Sky Auto Player and use **Play**. Keep the Sky window in focus during playback.
+To start playback, equip a compatible 15-key instrument in Sky. Select your song in Sky Auto Player and use **Play**. Return focus to the Sky window and keep it there during playback.
 
 ## Desktop shortcuts
 

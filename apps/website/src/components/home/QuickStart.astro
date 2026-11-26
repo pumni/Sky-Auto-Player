@@ -61,7 +61,7 @@ const { data } = Astro.props;
 
     .quick-start__steps {
       display: grid;
-      gap: 1.5rem;
+      gap: clamp(1.75rem, 3vw, 2.25rem);
       margin: 0;
       padding: 0;
       list-style: none;
@@ -71,6 +71,12 @@ const { data } = Astro.props;
       display: grid;
       grid-template-columns: 2.5rem minmax(0, 1fr);
       gap: 1rem;
+    }
+
+    @media (max-width: 40rem) {
+      .quick-start__step {
+        grid-template-columns: 2rem minmax(0, 1fr);
+      }
     }
 
     .quick-start__number {
@@ -127,7 +133,7 @@ const { data } = Astro.props;
     @media (min-width: 72rem) {
       .quick-start__steps {
         grid-template-columns: repeat(3, minmax(0, 1fr));
-        gap: 2rem;
+        gap: clamp(2rem, 3.3vw, 3rem);
       }
 
       .quick-start__formats {

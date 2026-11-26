@@ -28,38 +28,54 @@ export const homeEn: HomeContent = {
   },
   product: {
     title: 'Explore the player',
-    description: 'Browse songs, favorites, playlists and playback settings.',
+    description: 'Find your music and prepare it for playback.',
     selectorLabel: 'Choose a player view',
     fullSizeLabel: 'View full size',
     fallbackLabel: 'Open another player view',
     pendingMessage: 'Loading preview…',
     errorMessage: 'The preview could not load. Try again or open it directly.',
-    captureNote: 'Desktop preview · Sample data · Browser mock, not a native capture',
+    captureNote:
+      'Desktop interface preview · Sample data · Rendered in browser, not a native capture',
+    features: [
+      {
+        title: 'Bring your own sheets',
+        description:
+          'Import compatible files or folders into playlists. Your original files stay where they are.',
+      },
+      {
+        title: 'Check compatibility before playing',
+        description:
+          'Inspect sheet details, choose supported tracks or pitch where available, and review possible conversion losses.',
+      },
+    ],
     views: [
       {
         label: 'Library',
         alt: 'Browser mock preview of the desktop song library with example songs and a playlist sidebar.',
-        caption: 'Browse the library, favorites and playlists.',
+        caption: 'Search bundled songs, save favorites and organize playlists.',
         src: '/assets/images/desktop-library-browser-preview-1366x768.png',
       },
       {
         label: 'Song details',
         alt: 'Browser mock preview of a selected example song and its sheet details in the desktop interface.',
-        caption: 'Review a sheet before playback. Blue Bird is selected in the preview.',
+        caption:
+          'Review sheet compatibility before playback. Blue Bird is selected in this preview.',
         src: '/assets/images/desktop-song-detail-browser-preview-1366x768.png',
       },
       {
         label: 'Playback settings',
         alt: 'Browser mock preview of the desktop playback settings with example data.',
-        caption: 'Adjust playback defaults and key hold duration.',
+        caption: 'Adjust playback defaults and key-hold duration.',
         src: '/assets/images/desktop-settings-playback-browser-preview-1366x768.png',
       },
     ],
   },
   playback: {
-    title: 'More than a sequence of keys.',
+    title: 'Playback built around musical timing',
     description:
-      'See how the player schedules a chord, a single note and a held note from a sheet.',
+      'The player schedules notes, chords and holds from the sheet, with adjustable tempo and key-hold settings.',
+    dryRunNote:
+      'Check your settings first. In the desktop app, Test playback (no input) runs a preview without sending key presses.',
     eventTypes: { chord: 'Chord', note: 'Note', hold: 'Hold' },
     controlsLabel: 'Playback demonstration controls',
     play: 'Run demo',
@@ -75,25 +91,26 @@ export const homeEn: HomeContent = {
     pausedStatus: 'Paused',
     completeStatus: 'Phrase complete. No keys are active.',
     manualOnly: 'Reduced motion is on. Use Previous and Next to step through the phrase.',
-    schematicNote: '2.6-second demo · No audio or in-game timing measurement.',
+    demoNote:
+      'Run the visual demo to see a chord, note and hold. No sound or game timing measurement.',
     timingLinkLabel: 'How timing works',
     secondsAbbreviation: 's',
   },
   quickStart: {
-    title: 'From sheet to playback.',
+    title: 'Start playing in three steps',
     items: [
       {
-        title: 'Install Sky Auto Player',
+        title: 'Install',
         description: 'Get the stable Windows installer from official GitHub Releases.',
       },
       {
-        title: 'Choose your music',
-        description: 'Browse the library or import a compatible sheet.',
+        title: 'Choose a song',
+        description: 'Choose a built-in song or import a compatible sheet.',
       },
       {
-        title: 'Get ready in Sky',
+        title: 'Play in Sky',
         description:
-          'Equip an instrument in Sky, choose a song and use Play. Keep the Sky window in focus during playback.',
+          'Open a compatible 15-key instrument in Sky. Choose a song, press Play in the app and return focus to the Sky window.',
       },
     ],
     setupGuideLabel: 'Read the setup guide',
@@ -105,13 +122,16 @@ export const homeEn: HomeContent = {
   },
   trust: {
     title: 'Get Sky Auto Player',
-    installerGuidance:
-      'On GitHub Releases, choose the stable Windows x64 installer ending in _x64-setup.exe. The .exe.sig file is for the updater, not manual installation.',
+    platformSummary: 'Windows 11 x64 · Free and open source',
+    installationTitle: 'Installation',
+    installerGuidance: 'Choose the stable Windows installer ending in _x64-setup.exe.',
+    signatureNote: 'The .exe.sig file is for the updater, not manual installation.',
     installScope: 'Installs for the current Windows user.',
     signingValue: 'Unsigned installer; Windows may show Unknown Publisher or SmartScreen.',
     safetyNote:
       'Uses Windows SendInput. It does not inspect game memory or change game files; this cannot guarantee account safety.',
-    safetyLink: 'Account safety',
+    safetyTitle: 'Account safety',
+    safetyLink: 'Read about account risk',
     supportLabel: 'Help',
     supportLinks: [
       { label: 'Setup', href: '/guides/windows-setup/' },

@@ -30,6 +30,10 @@ export interface HomeContent {
     pendingMessage: string;
     errorMessage: string;
     captureNote: string;
+    features: readonly [
+      { title: string; description: string },
+      { title: string; description: string },
+    ];
     views: {
       label: string;
       alt: string;
@@ -50,6 +54,7 @@ export interface HomeContent {
   playback: {
     title: string;
     description: string;
+    dryRunNote: string;
     eventTypes: { chord: string; note: string; hold: string };
     controlsLabel: string;
     play: string;
@@ -65,16 +70,20 @@ export interface HomeContent {
     pausedStatus: string;
     completeStatus: string;
     manualOnly: string;
-    schematicNote: string;
+    demoNote: string;
     timingLinkLabel: string;
     secondsAbbreviation: string;
   };
   trust: {
     title: string;
+    platformSummary: string;
+    installationTitle: string;
     installerGuidance: string;
+    signatureNote: string;
     installScope: string;
     signingValue: string;
     safetyNote: string;
+    safetyTitle: string;
     safetyLink: string;
     supportLabel: string;
     supportLinks: ReadonlyArray<{ label: string; href: string }>;

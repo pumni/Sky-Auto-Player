@@ -271,8 +271,8 @@ test('localized technical copy follows the current playback, install, import, an
   expect(viFormats).toContain('30, 60, 90, 120, 144, 165 hoặc 240');
   expect(homeEn.trust.signingValue).toMatch(/unsigned installer/i);
   expect(homeVi.trust.signingValue).toMatch(/không có chữ ký Authenticode/i);
-  expect(homeEn.trust.installerGuidance).toContain('.exe.sig');
-  expect(homeVi.trust.installerGuidance).toContain('.exe.sig');
+  expect(homeEn.trust.signatureNote).toContain('.exe.sig');
+  expect(homeVi.trust.signatureNote).toContain('.exe.sig');
   expect(homeEn.trust.safetyNote).toMatch(/Windows SendInput/);
   expect(homeVi.trust.safetyNote).toMatch(/Windows SendInput/);
 });

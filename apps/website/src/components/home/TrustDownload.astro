@@ -22,6 +22,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
   <div class="container trust-download__layout">
     <div class="trust-download__lead">
       <h2 id="trust-download-title">{data.title}</h2>
+      <p class="trust-download__platform">{data.platformSummary}</p>
       <a class="button button--primary trust-download__button" href={SITE.stableReleaseUrl}>
         {downloadCta}
       </a>
@@ -30,11 +31,14 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
 
     <div class="trust-download__details">
       <div>
+        <h3>{data.installationTitle}</h3>
         <p>{data.installerGuidance}</p>
+        <p>{data.signatureNote}</p>
         <p>{data.installScope}</p>
         <p>{data.signingValue}</p>
       </div>
       <div>
+        <h3>{data.safetyTitle}</h3>
         <p class="trust-download__safety">
           {data.safetyNote}
           <a href={safetyUrl}>{data.safetyLink}</a>
@@ -62,7 +66,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       display: grid;
       justify-items: center;
       gap: 1rem;
-      padding: clamp(1.5rem, 5vw, 5rem) clamp(1rem, 4vw, 4rem);
+      padding: clamp(1.5rem, 3.2vw, 3rem) clamp(1rem, 4vw, 4rem);
       border: 1px solid var(--line-default);
       border-radius: var(--radius-md);
       background: var(--color-surface-stage);
@@ -75,6 +79,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       line-height: var(--leading-heading);
     }
 
+    .trust-download__platform,
     .trust-download__destination {
       margin: 0;
       color: var(--color-text-secondary);
@@ -90,10 +95,10 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
 
     .trust-download__details {
       display: grid;
-      gap: var(--home-content-gap);
+      gap: clamp(1.5rem, 2.2vw, 2rem);
       inline-size: min(100%, 66rem);
       margin-inline: auto;
-      padding-block: 1rem;
+      padding-block: clamp(1.5rem, 2vw, 2rem);
       border-block: 1px solid var(--line-faint);
       color: var(--color-text-secondary);
       line-height: 1.6;
@@ -112,6 +117,7 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       }
     }
 
+    .trust-download__details h3,
     .trust-download__details p {
       margin: 0;
     }
