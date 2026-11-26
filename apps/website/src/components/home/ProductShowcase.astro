@@ -19,30 +19,29 @@ const defaultView = data.views[0];
   data-pending-message={data.pendingMessage}
   data-error-message={data.errorMessage}
 >
-  <div class="product-showcase__workspace">
-    <div class="product-showcase__header">
-      <header class="product-showcase__intro">
-        <h2 id="product-title">{data.title}</h2>
-      </header>
-      <div class="product-selector" role="group" aria-label={data.selectorLabel} hidden>
-        {data.views.map((view, index) => (
-          <button
-            class="product-selector__button"
-            type="button"
-            aria-pressed={index === 0 ? 'true' : 'false'}
-            data-product-view
-            data-src={withBase(view.src)}
-            data-alt={view.alt}
-            data-caption={view.caption}
-          >
-            {view.label}
-          </button>
-        ))}
-      </div>
+  <div class="product-showcase__header">
+    <header class="product-showcase__intro">
+      <h2 id="product-title">{data.title}</h2>
+    </header>
+    <div class="product-selector" role="group" aria-label={data.selectorLabel} hidden>
+      {data.views.map((view, index) => (
+        <button
+          class="product-selector__button"
+          type="button"
+          aria-pressed={index === 0 ? 'true' : 'false'}
+          data-product-view
+          data-src={withBase(view.src)}
+          data-alt={view.alt}
+          data-caption={view.caption}
+        >
+          {view.label}
+        </button>
+      ))}
     </div>
+  </div>
 
-    <figure class="product-showcase__figure">
-      <div class="product-showcase__frame">
+  <figure class="product-showcase__figure">
+    <div class="product-showcase__frame">
       <img
         class="product-showcase__image"
         src={withBase(defaultView.src)}
@@ -54,68 +53,203 @@ const defaultView = data.views[0];
         decoding="async"
         data-product-image
       />
+    </div>
+    <figcaption class="product-showcase__caption">
+      <div>
+        <span data-product-caption>{defaultView.caption}</span>
+        <p class="product-showcase__provenance">{data.captureNote}</p>
       </div>
-      <figcaption class="product-showcase__caption">
-        <div>
-          <span data-product-caption>{defaultView.caption}</span>
-          <p class="product-showcase__provenance">{data.captureNote}</p>
-        </div>
-        <a href={withBase(defaultView.src)} target="_blank" rel="noreferrer" data-product-full-size>
-          {data.fullSizeLabel}
-          <span aria-hidden="true"> ↗</span>
+      <a href={withBase(defaultView.src)} target="_blank" rel="noreferrer" data-product-full-size>
+        {data.fullSizeLabel}
+        <span aria-hidden="true"> ↗</span>
+      </a>
+    </figcaption>
+  </figure>
+
+  <p class="product-showcase__status" role="status" data-product-status></p>
+
+  <ul class="product-showcase__fallback" aria-label={data.fallbackLabel}>
+    {data.views.map((view) => (
+      <li>
+        <a href={withBase(view.src)} target="_blank" rel="noreferrer">
+          {view.label}
         </a>
-      </figcaption>
-    </figure>
-
-    <p class="product-showcase__status" role="status" data-product-status></p>
-
-    <ul class="product-showcase__fallback" aria-label={data.fallbackLabel}>
-      {data.views.map((view) => (
-        <li>
-          <a href={withBase(view.src)} target="_blank" rel="noreferrer">
-            {view.label}
-          </a>
-        </li>
-      ))}
-    </ul>
-  </div>
+      </li>
+    ))}
+  </ul>
 </section>
 
 <style>
   @layer components {
-    .product-showcase { min-inline-size: 0; }
-    .product-showcase__header { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem 1rem; flex-wrap: wrap; margin-block-end: 0.8125rem; }
-    .product-showcase__intro h2 { margin: 0; font-family: var(--font-body); font-weight: 600; font-size: 0.8125rem; color: var(--color-text-secondary); line-height: 1.35; }
-    .product-selector[hidden], .product-showcase__fallback[hidden] { display: none; }
-    .product-selector { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.3125rem; min-inline-size: 0; }
-    .product-selector__button { min-block-size: 44px; padding: 0.375rem 0.6875rem; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-secondary); cursor: pointer; font-size: 0.8125rem; font-weight: 500; line-height: 1.25; overflow-wrap: anywhere; transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard), border-color var(--duration-fast) var(--ease-standard); }
-    .product-selector__button:hover { background: var(--color-surface-instrument); color: var(--color-text-primary); }
-    .product-selector__button[aria-pressed='true'] { background: var(--color-surface-instrument); color: var(--color-text-primary); box-shadow: inset 0 -2px var(--color-action); font-weight: 600; }
-    .product-selector__button[data-pending] { border-color: var(--color-interactive-border); border-style: dashed; }
-    .product-showcase__figure { margin: 0; }
-    .product-showcase__frame { padding: 0.5rem; border: 1px solid #46494b; border-radius: 0.9375rem; background: #25272a; box-shadow: 0 24px 70px rgb(0 0 0 / 33%); }
-    .product-showcase__image { display: block; inline-size: 100%; block-size: auto; aspect-ratio: 1366 / 768; object-fit: contain; border-radius: 0.5rem; background: var(--color-surface-quiet); }
-    .product-showcase__caption { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.375rem 1rem; padding-block-start: 1rem; color: var(--color-text-secondary); font-size: 0.875rem; line-height: 1.5; }
-    .product-showcase__caption a { display: inline-flex; min-block-size: 44px; align-items: center; align-self: start; color: var(--color-text-primary); font-size: 0.8125rem; text-decoration: underline; text-decoration-color: var(--color-info); text-underline-offset: 0.2em; }
-    .product-showcase__caption a:hover { color: var(--color-action); }
-    .product-showcase__provenance { margin: 0.375rem 0 0; color: var(--color-text-tertiary); font-size: 0.75rem; line-height: 1.45; }
-    .product-showcase__status { margin: 0; color: var(--color-info); font-size: var(--type-small); }
-    .product-showcase__status:not(:empty) { margin-block-start: var(--space-2); }
-    .product-showcase__status[data-error] { color: var(--color-error); }
-    .product-showcase__fallback { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; margin: 0.75rem 0 0; padding: 0; list-style: none; }
-    .product-showcase__fallback a { display: inline-flex; min-block-size: 44px; align-items: center; color: var(--color-action); }
+    .product-showcase {
+      min-inline-size: 0;
+    }
+    .product-showcase__header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem 1rem;
+      flex-wrap: wrap;
+      margin-block-end: 0.8125rem;
+    }
+    .product-showcase__intro h2 {
+      margin: 0;
+      font-family: var(--font-body);
+      font-weight: 600;
+      font-size: 0.8125rem;
+      color: var(--color-text-secondary);
+      line-height: 1.35;
+    }
+    .product-selector[hidden],
+    .product-showcase__fallback[hidden] {
+      display: none;
+    }
+    .product-selector {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 0.3125rem;
+      min-inline-size: 0;
+    }
+    .product-selector__button {
+      min-block-size: 44px;
+      padding: 0.375rem 0.6875rem;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--color-text-secondary);
+      cursor: pointer;
+      font-size: 0.8125rem;
+      font-weight: 500;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+      transition:
+        background-color var(--duration-fast) var(--ease-standard),
+        color var(--duration-fast) var(--ease-standard),
+        border-color var(--duration-fast) var(--ease-standard);
+    }
+    .product-selector__button:hover {
+      background: var(--color-surface-instrument);
+      color: var(--color-text-primary);
+    }
+    .product-selector__button[aria-pressed='true'] {
+      background: var(--color-surface-instrument);
+      color: var(--color-text-primary);
+      box-shadow: inset 0 -2px var(--color-action);
+      font-weight: 600;
+    }
+    .product-selector__button[data-pending] {
+      border-color: var(--color-interactive-border);
+      border-style: dashed;
+    }
+    .product-showcase__figure {
+      margin: 0;
+    }
+    .product-showcase__frame {
+      padding: 0.5rem;
+      border: 1px solid #46494b;
+      border-radius: 0.9375rem;
+      background: #25272a;
+      box-shadow: 0 24px 70px rgb(0 0 0 / 33%);
+    }
+    .product-showcase__image {
+      display: block;
+      inline-size: 100%;
+      block-size: auto;
+      aspect-ratio: 1366 / 768;
+      object-fit: contain;
+      border-radius: 0.5rem;
+      background: var(--color-surface-quiet);
+    }
+    .product-showcase__caption {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 0.375rem 1rem;
+      padding-block-start: 1rem;
+      color: var(--color-text-secondary);
+      font-size: 0.875rem;
+      line-height: 1.5;
+    }
+    .product-showcase__caption a {
+      display: inline-flex;
+      min-block-size: 44px;
+      align-items: center;
+      align-self: start;
+      color: var(--color-text-primary);
+      font-size: 0.8125rem;
+      text-decoration: underline;
+      text-decoration-color: var(--color-info);
+      text-underline-offset: 0.2em;
+    }
+    .product-showcase__caption a:hover {
+      color: var(--color-action);
+    }
+    .product-showcase__provenance {
+      margin: 0.375rem 0 0;
+      color: var(--color-text-tertiary);
+      font-size: 0.75rem;
+      line-height: 1.45;
+    }
+    .product-showcase__status {
+      margin: 0;
+      color: var(--color-info);
+      font-size: var(--type-small);
+    }
+    .product-showcase__status:not(:empty) {
+      margin-block-start: var(--space-2);
+    }
+    .product-showcase__status[data-error] {
+      color: var(--color-error);
+    }
+    .product-showcase__fallback {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.25rem 1rem;
+      margin: 0.75rem 0 0;
+      padding: 0;
+      list-style: none;
+    }
+    .product-showcase__fallback a {
+      display: inline-flex;
+      min-block-size: 44px;
+      align-items: center;
+      color: var(--color-action);
+    }
     @media (max-width: 39.99rem) {
-      .product-showcase__header { gap: 0.375rem; margin-block-end: 0.5625rem; }
-      .product-selector { inline-size: 100%; }
-      .product-selector__button { font-size: 0.75rem; padding-inline: 0.25rem; }
-      .product-showcase__frame { padding: 0.3125rem; border-radius: 0.625rem; }
-      .product-showcase__image { border-radius: 0.3125rem; }
-      .product-showcase__caption { grid-template-columns: 1fr; gap: 0.125rem; padding-block-start: 0.625rem; font-size: 0.8125rem; }
-      .product-showcase__caption a { justify-self: start; }
+      .product-showcase__header {
+        gap: 0.375rem;
+        margin-block-end: 0.5625rem;
+      }
+      .product-selector {
+        inline-size: 100%;
+      }
+      .product-selector__button {
+        font-size: 0.75rem;
+        padding-inline: 0.25rem;
+      }
+      .product-showcase__frame {
+        padding: 0.3125rem;
+        border-radius: 0.625rem;
+      }
+      .product-showcase__image {
+        border-radius: 0.3125rem;
+      }
+      .product-showcase__caption {
+        grid-template-columns: 1fr;
+        gap: 0.125rem;
+        padding-block-start: 0.625rem;
+        font-size: 0.8125rem;
+      }
+      .product-showcase__caption a {
+        justify-self: start;
+      }
     }
     @media (forced-colors: active) {
-      .product-showcase__frame { border-color: CanvasText; }
-      .product-selector__button[aria-pressed='true'] { outline: 1px solid Highlight; }
+      .product-showcase__frame {
+        border-color: CanvasText;
+      }
+      .product-selector__button[aria-pressed='true'] {
+        outline: 1px solid Highlight;
+      }
     }
   }
 </style>

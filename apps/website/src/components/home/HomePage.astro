@@ -21,7 +21,31 @@ const { content } = Astro.props;
       <div class="product-showcase__features">
         {content.product.features.map((feature, index) => (
           <div>
-            {index === 0 ? (<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h7l2 2h9v11H3zM12 2v10m-4-4 4 4 4-4"/></svg>) : (<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l5 5v13H5V3h2m7 0v6h5M8 15l2 2 5-5"/></svg>)}
+            {index === 0 ? (
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.65"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M3 7h7l2 2h9v11H3zM12 2v10m-4-4 4 4 4-4" />
+              </svg>
+            ) : (
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.65"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <path d="M7 3h7l5 5v13H5V3h2m7 0v6h5M8 15l2 2 5-5" />
+              </svg>
+            )}
             <div>
               <h3>{feature.title}</h3>
               <p>{feature.description}</p>

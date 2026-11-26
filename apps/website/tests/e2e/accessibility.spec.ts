@@ -205,7 +205,8 @@ test.describe('accessibility and responsive contracts', () => {
         const bounds = (selector: string) =>
           document.querySelector(selector)!.getBoundingClientRect();
         const contentGaps = [
-          bounds('.product-showcase__features').top - Math.max(bounds('#top').bottom, bounds('#product').bottom),
+          bounds('.product-showcase__features').top -
+            Math.max(bounds('#top').bottom, bounds('#product').bottom),
           bounds('#playback').top - bounds('.product-showcase__features').bottom,
           bounds('.quick-start__layout').top - bounds('#playback').bottom,
           bounds('.trust-download__layout').top - bounds('.quick-start__resources').bottom,
@@ -368,11 +369,15 @@ test.describe('accessibility and responsive contracts', () => {
         if (viewport.width >= 1024) {
           expect(geometry.product.left).toBeGreaterThan(geometry.hero.right);
           expect(geometry.playbackStage.left).toBeGreaterThan(geometry.playbackHeader.right);
-          expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(geometry.playbackHeader.bottom);
+          expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(
+            geometry.playbackHeader.bottom,
+          );
         } else {
           expect(geometry.product.top).toBeGreaterThan(geometry.hero.bottom);
           expect(geometry.playbackHeader.bottom).toBeLessThanOrEqual(geometry.playbackStage.top);
-          expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(geometry.playbackStage.bottom + 20);
+          expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(
+            geometry.playbackStage.bottom + 20,
+          );
         }
 
         if (viewport.width >= 768) {

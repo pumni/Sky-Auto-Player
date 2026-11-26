@@ -64,10 +64,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       id="site-nav"
       aria-label={isVi ? 'Điều hướng chính' : 'Primary navigation'}
     >
-      <a
-        class="site-nav__link"
-        href={withBase(`${homePath}#product`)}
-      >
+      <a class="site-nav__link" href={withBase(`${homePath}#product`)}>
         {nav.overview}
       </a>
       <a class="site-nav__link" href={withBase(isVi ? '/vi/#how-it-works' : '/#how-it-works')}>
@@ -92,51 +89,73 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         {nav.github}
       </a>
 
-      {!isHome && <div
-        class="locale-switch"
-        role="group"
-        aria-label={isVi ? 'Chọn ngôn ngữ' : 'Choose language'}
-      >
-        <a
-          class="locale-switch__option"
-          href={isVi ? otherLocalePath : currentPath}
-          lang="en"
-          hreflang="en"
-          aria-label="EN — English"
-          aria-current={!isVi ? 'page' : undefined}
+      {!isHome && (
+        <div
+          class="locale-switch"
+          role="group"
+          aria-label={isVi ? 'Chọn ngôn ngữ' : 'Choose language'}
         >
-          EN
-        </a>
-        <a
-          class="locale-switch__option"
-          href={isVi ? currentPath : otherLocalePath}
-          lang="vi"
-          hreflang="vi"
-          aria-label="VI — Tiếng Việt"
-          aria-current={isVi ? 'page' : undefined}
-        >
-          VI
-        </a>
-      </div>}
+          <a
+            class="locale-switch__option"
+            href={isVi ? otherLocalePath : currentPath}
+            lang="en"
+            hreflang="en"
+            aria-label="EN — English"
+            aria-current={!isVi ? 'page' : undefined}
+          >
+            EN
+          </a>
+          <a
+            class="locale-switch__option"
+            href={isVi ? currentPath : otherLocalePath}
+            lang="vi"
+            hreflang="vi"
+            aria-label="VI — Tiếng Việt"
+            aria-current={isVi ? 'page' : undefined}
+          >
+            VI
+          </a>
+        </div>
+      )}
     </nav>
 
     <div class="site-actions">
       {isHome ? (
-        <a class="home-language" href={otherLocalePath} lang={isVi ? "en" : "vi"} hreflang={isVi ? "en" : "vi"} aria-label={isVi ? "Chuyển sang tiếng Anh" : "Switch language to Vietnamese"}>
-          <svg aria-hidden="true" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="9"/><ellipse cx="12" cy="12" rx="4" ry="9"/><path d="M3 12h18"/></svg>
-          {isVi ? "EN" : "VI"}
+        <a
+          class="home-language"
+          href={otherLocalePath}
+          lang={isVi ? 'en' : 'vi'}
+          hreflang={isVi ? 'en' : 'vi'}
+          aria-label={isVi ? 'EN — Chuyển sang tiếng Anh' : 'VI — Switch language to Vietnamese'}
+        >
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            width="18"
+            height="18"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <ellipse cx="12" cy="12" rx="4" ry="9" />
+            <path d="M3 12h18" />
+          </svg>
+          {isVi ? 'EN' : 'VI'}
         </a>
-      ) : (<a
-        class="button button--secondary button--small header-download"
-        href={SITE.stableReleaseUrl}
-        aria-label={
-          isVi
-            ? 'Tải xuống — tải cho Windows trên GitHub Releases'
-            : 'Download for Windows from GitHub Releases'
-        }
-      >
-        {nav.release}
-      </a>)}
+      ) : (
+        <a
+          class="button button--secondary button--small header-download"
+          href={SITE.stableReleaseUrl}
+          aria-label={
+            isVi
+              ? 'Tải xuống — tải cho Windows trên GitHub Releases'
+              : 'Download for Windows from GitHub Releases'
+          }
+        >
+          {nav.release}
+        </a>
+      )}
     </div>
   </div>
 </header>

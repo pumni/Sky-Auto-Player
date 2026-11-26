@@ -109,7 +109,9 @@ test('the signature demo uses the approved event intervals, keys, and visible ti
 
 test('the hero leads with concise product value and both locales disclose the release journey', () => {
   expect([homeEn.hero.titleStart, homeEn.hero.titleEnd].join(' ')).toBe('Your music. Into Sky.');
-  expect([homeVi.hero.titleStart, homeVi.hero.titleEnd].join(' ')).toBe('Âm nhạc của bạn. Trong Sky.');
+  expect([homeVi.hero.titleStart, homeVi.hero.titleEnd].join(' ')).toBe(
+    'Âm nhạc của bạn. Trong Sky.',
+  );
   expect(homeEn.downloadCta).toBe('Download for Windows');
   expect(homeVi.downloadCta).toBe('Tải cho Windows');
   expect(homeEn.hero.meta).toContain('GitHub Releases');

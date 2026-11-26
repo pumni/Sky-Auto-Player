@@ -322,7 +322,9 @@ test.describe('navigation and route contracts', () => {
     });
   }
 
-  test('Home language switch stays outside the menu and documentation retains the release action', async ({ page }) => {
+  test('Home language switch stays outside the menu and documentation retains the release action', async ({
+    page,
+  }) => {
     for (const width of [320, 390, 768]) {
       await page.setViewportSize({ width, height: 900 });
       await page.goto('/Sky-Auto-Player/');
@@ -337,7 +339,10 @@ test.describe('navigation and route contracts', () => {
       await expect(page).toHaveURL(/\/Sky-Auto-Player\/$/);
       await page.goto('/Sky-Auto-Player/faq/');
       await expect(page.locator('.header-download')).toBeVisible();
-      await expect(page.locator('.header-download')).toHaveAttribute('href', 'https://github.com/pumni/Sky-Auto-Player/releases/latest');
+      await expect(page.locator('.header-download')).toHaveAttribute(
+        'href',
+        'https://github.com/pumni/Sky-Auto-Player/releases/latest',
+      );
       await expect(page.locator('.header-download')).toHaveAccessibleName(/GitHub Releases/);
     }
   });

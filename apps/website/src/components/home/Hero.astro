@@ -18,7 +18,9 @@ const { data, downloadCta, locale } = Astro.props;
   data-home-section="hero"
 >
   <p class="hero__eyebrow">{data.eyebrow}</p>
-  <h1 id="hero-title">{data.titleStart}{' '}<span>{data.titleEnd}</span></h1>
+  <h1 id="hero-title">
+    {data.titleStart} <span>{data.titleEnd}</span>
+  </h1>
   <div class="hero__copy">
     <p class="hero__description">{data.description}</p>
     <div class="hero__actions">
@@ -37,52 +39,125 @@ const { data, downloadCta, locale } = Astro.props;
 
 <style>
   @layer components {
-    .hero { min-inline-size: 0; }
+    .hero {
+      min-inline-size: 0;
+    }
     .hero__eyebrow {
-      display: flex; align-items: center; gap: 0.5625rem;
-      margin: 0 0 1.5rem; font-size: 0.8125rem;
-      color: var(--color-text-secondary); font-weight: 550;
+      display: flex;
+      align-items: center;
+      gap: 0.5625rem;
+      margin: 0 0 1.5rem;
+      font-size: 0.8125rem;
+      color: var(--color-text-secondary);
+      font-weight: 550;
     }
     .hero__eyebrow::before {
-      content: ''; inline-size: 7px; block-size: 7px;
-      flex: none; border-radius: 50%; background: var(--color-action);
+      content: '';
+      inline-size: 7px;
+      block-size: 7px;
+      flex: none;
+      border-radius: 50%;
+      background: var(--color-action);
     }
     .hero h1 {
-      margin: 0; font-size: clamp(3rem, 5.3vw, 5.125rem);
-      font-family: var(--font-body); font-weight: 650;
-      line-height: 1.05; letter-spacing: -0.065em; text-wrap: balance;
+      margin: 0;
+      font-size: clamp(3rem, 5.3vw, 5.125rem);
+      font-family: var(--font-body);
+      font-weight: 650;
+      line-height: 1.05;
+      letter-spacing: -0.065em;
+      text-wrap: balance;
     }
-    .hero h1 span { color: var(--color-action); }
+    .hero h1 span {
+      color: var(--color-action);
+    }
     .hero--vi h1 {
-      font-size: clamp(2.75rem, 4.8vw, 4.75rem); line-height: 1.12; letter-spacing: -0.045em;
+      font-size: clamp(2.75rem, 4.8vw, 4.75rem);
+      line-height: 1.12;
+      letter-spacing: -0.045em;
     }
     .hero__description {
-      max-inline-size: 38ch; margin: 1.5rem 0 0;
-      color: var(--color-text-secondary); font-size: var(--home-lead); line-height: 1.58;
+      max-inline-size: 38ch;
+      margin: 1.5rem 0 0;
+      color: var(--color-text-secondary);
+      font-size: var(--home-lead);
+      line-height: 1.58;
     }
     .hero__actions {
-      display: flex; flex-wrap: wrap; align-items: center;
-      gap: 0.3125rem 1.25rem; margin-block-start: 1.875rem;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.3125rem 1.25rem;
+      margin-block-start: 1.875rem;
     }
-    .hero__primary { min-block-size: 54px; padding-inline: 1.3125rem; border-radius: 0.5625rem; font-size: 0.9375rem; }
-    .hero__secondary { color: var(--color-text-primary); gap: 0.5rem; padding-inline: 0; text-decoration: none; font-size: 0.875rem; }
-    .hero__secondary:hover { color: var(--color-action); }
-    .hero__meta, .hero__risk { color: var(--color-text-secondary); font-size: 0.8125rem; line-height: 1.55; margin: 1rem 0 0; }
-    .hero__risk { margin-block-start: 0.75rem; max-inline-size: 49ch; }
+    .hero__primary {
+      min-block-size: 54px;
+      padding-inline: 1.3125rem;
+      border-radius: 0.5625rem;
+      font-size: 0.9375rem;
+    }
+    .hero__secondary {
+      color: var(--color-text-primary);
+      gap: 0.5rem;
+      padding-inline: 0;
+      text-decoration: none;
+      font-size: 0.875rem;
+    }
+    .hero__secondary:hover {
+      color: var(--color-action);
+    }
+    .hero__meta,
+    .hero__risk {
+      color: var(--color-text-secondary);
+      font-size: 0.8125rem;
+      line-height: 1.55;
+      margin: 1rem 0 0;
+    }
+    .hero__risk {
+      margin-block-start: 0.75rem;
+      max-inline-size: 49ch;
+    }
     @media (min-width: 64rem) {
-      .hero { padding-block-start: 1.5rem; }
-      .hero h1 span { display: block; }
+      .hero {
+        padding-block-start: 1.5rem;
+      }
+      .hero h1 span {
+        display: block;
+      }
     }
     @media (max-width: 39.99rem) {
-      .hero h1, .hero--vi h1 { font-size: clamp(2.5rem, 10vw, 3.4375rem); line-height: 1.1; }
-      .hero__eyebrow { margin-block-end: 1rem; }
-      .hero__description { margin-block-start: 1.0625rem; font-size: 1rem; }
-      .hero__actions { margin-block-start: 1.375rem; gap: 0.3125rem 1rem; }
-      .hero__primary { min-block-size: 48px; padding-inline: 1rem; font-size: 0.875rem; }
-      .hero__meta, .hero__risk { font-size: 0.75rem; margin-block-start: 0.5rem; }
+      .hero h1,
+      .hero--vi h1 {
+        font-size: clamp(2.5rem, 10vw, 3.4375rem);
+        line-height: 1.1;
+      }
+      .hero__eyebrow {
+        margin-block-end: 1rem;
+      }
+      .hero__description {
+        margin-block-start: 1.0625rem;
+        font-size: 1rem;
+      }
+      .hero__actions {
+        margin-block-start: 1.375rem;
+        gap: 0.3125rem 1rem;
+      }
+      .hero__primary {
+        min-block-size: 48px;
+        padding-inline: 1rem;
+        font-size: 0.875rem;
+      }
+      .hero__meta,
+      .hero__risk {
+        font-size: 0.75rem;
+        margin-block-start: 0.5rem;
+      }
     }
     @media (max-width: 21.875rem) {
-      .hero h1, .hero--vi h1 { font-size: 2.375rem; }
+      .hero h1,
+      .hero--vi h1 {
+        font-size: 2.375rem;
+      }
     }
   }
 </style>
