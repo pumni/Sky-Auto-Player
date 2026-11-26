@@ -37,7 +37,8 @@ const { data } = Astro.props;
           <p>{data.setupGuideDescription}</p>
         </div>
         <a class="quick-start__resource-link" href={withBase(data.setupGuideHref)}>
-          {data.setupGuideLabel}<span aria-hidden="true">→</span>
+          {data.setupGuideLabel}
+          <span aria-hidden="true">→</span>
         </a>
       </div>
       <div class="quick-start__formats" id="formats">
@@ -45,13 +46,16 @@ const { data } = Astro.props;
         <div class="quick-start__resource-body">
           <ul class="quick-start__format-list" aria-label={data.formatsLabel}>
             {data.formats.map((format) => (
-              <li><code>{format}</code></li>
+              <li>
+                <code>{format}</code>
+              </li>
             ))}
           </ul>
           <p>{data.formatsNote}</p>
         </div>
         <a class="quick-start__resource-link" href={withBase(data.formatsHref)}>
-          {data.formatsLinkLabel}<span aria-hidden="true">→</span>
+          {data.formatsLinkLabel}
+          <span aria-hidden="true">→</span>
         </a>
       </div>
     </div>

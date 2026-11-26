@@ -30,7 +30,6 @@
     --color-info: var(--sky-1);
     --color-text-on-action: var(--color-page);
     --color-error: #f2a8a8;
-    --stage-elevation: 0 16px 40px rgb(0 0 0 / 30%);
     --color-focus: var(--color-info);
     --color-interactive-border: var(--color-text-tertiary);
     --color-interactive-hover: var(--color-surface-active);
@@ -39,7 +38,6 @@
 
     --line-faint: rgb(244 239 227 / 10%);
     --line-default: rgb(244 239 227 / 18%);
-    --line-accent: rgb(239 202 120 / 34%);
 
     --font-display: 'Playfair Display Variable', Georgia, 'Times New Roman', serif;
     --font-body: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
@@ -99,7 +97,6 @@
       --sky-1: oklch(80% 0.045 224);
       --line-faint: color-mix(in oklch, var(--color-text-primary) 8%, transparent);
       --line-default: color-mix(in oklch, var(--color-text-primary) 15%, transparent);
-      --line-accent: color-mix(in oklch, var(--color-action) 42%, transparent);
     }
   }
 }

@@ -55,7 +55,12 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
       <span>{data.supportLabel}</span>
       <ul class="trust-download__support-links">
         {data.supportLinks.map((link) => (
-          <li><a href={withBase(link.href)}>{link.label}<span aria-hidden="true">→</span></a></li>
+          <li>
+            <a href={withBase(link.href)}>
+              {link.label}
+              <span aria-hidden="true">→</span>
+            </a>
+          </li>
         ))}
       </ul>
     </nav>

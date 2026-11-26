@@ -38,15 +38,23 @@ test.describe('accessibility and responsive contracts', () => {
         .toEqual(homepageSections);
       await expect(page.locator('.hero__primary')).toContainText(locale.cta);
       await expect(page.locator('.hero__primary')).toHaveAttribute('href', releaseUrl);
-      await expect(page.locator('.site-header .button--primary, main .button--primary')).toHaveCount(1);
+      await expect(
+        page.locator('.site-header .button--primary, main .button--primary'),
+      ).toHaveCount(1);
       await expect(page.locator('.header-download')).toHaveAttribute('href', releaseUrl);
       await expect(page.locator('.trust-download__button')).toHaveAttribute('href', releaseUrl);
       await expect(page.locator('#formats code')).toHaveText(['.json', '.skysheet', '.txt']);
       await expect(page.locator('#formats p')).toContainText('JSON');
-      await expect(page.locator('.quick-start__setup a')).toHaveAttribute('href', /guides\/windows-setup\/$/);
+      await expect(page.locator('.quick-start__setup a')).toHaveAttribute(
+        'href',
+        /guides\/windows-setup\/$/,
+      );
       await expect(page.locator('#faq-preview a')).toHaveCount(2);
       await expect(page.locator('#faq-preview a').nth(0)).toHaveAttribute('href', /faq\/$/);
-      await expect(page.locator('#faq-preview a').nth(1)).toHaveAttribute('href', /guides\/troubleshooting\/$/);
+      await expect(page.locator('#faq-preview a').nth(1)).toHaveAttribute(
+        'href',
+        /guides\/troubleshooting\/$/,
+      );
       await expect(page.locator('.hero__secondary')).toHaveAttribute('href', '#product');
       await expect(page.locator('.hero__description')).not.toContainText(
         /QPC|SendInput|foreground/i,
@@ -189,7 +197,8 @@ test.describe('accessibility and responsive contracts', () => {
     for (const width of widths) {
       await page.setViewportSize({ width, height: 900 });
       const spacing = await page.evaluate(() => {
-        const bounds = (selector: string) => document.querySelector(selector)!.getBoundingClientRect();
+        const bounds = (selector: string) =>
+          document.querySelector(selector)!.getBoundingClientRect();
         const contentGaps = [
           bounds('#product').top - bounds('#top').bottom,
           bounds('.playback-demo__header').top - bounds('#product').bottom,
@@ -303,7 +312,9 @@ test.describe('accessibility and responsive contracts', () => {
             productSelector: bounds('.product-selector'),
             setupGuide: bounds('.quick-start__setup'),
             formats: bounds('.quick-start__formats'),
-            resourceLinks: [...document.querySelectorAll('.quick-start__resource-link')].map((link) => link.getBoundingClientRect().top),
+            resourceLinks: [...document.querySelectorAll('.quick-start__resource-link')].map(
+              (link) => link.getBoundingClientRect().top,
+            ),
             playbackHeader: bounds('.playback-demo__header'),
             playbackStage: bounds('.playback-demo__stage'),
             playbackSupport: bounds('.playback-demo__support'),
@@ -324,7 +335,6 @@ test.describe('accessibility and responsive contracts', () => {
             ctaAction: bounds('.trust-download__cta-action'),
             ctaButton,
             ctaNote,
-
           };
         });
 
@@ -351,12 +361,18 @@ test.describe('accessibility and responsive contracts', () => {
           expect(product.width).toBeCloseTo(1120, 0);
         }
         expect(geometry.playbackStage.width).toBeCloseTo(playback.width, 0);
-        expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(geometry.playbackStage.bottom + 20);
+        expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(
+          geometry.playbackStage.bottom + 20,
+        );
         if (viewport.width >= 1024) {
-          expect(geometry.productSelector.left).toBeGreaterThanOrEqual(geometry.productIntro.right + 24);
+          expect(geometry.productSelector.left).toBeGreaterThanOrEqual(
+            geometry.productIntro.right + 24,
+          );
           expect(geometry.playbackKeys.left).toBeGreaterThan(geometry.playbackTimeline.right);
         } else {
-          expect(geometry.productSelector.top).toBeGreaterThanOrEqual(geometry.productIntro.bottom + 8);
+          expect(geometry.productSelector.top).toBeGreaterThanOrEqual(
+            geometry.productIntro.bottom + 8,
+          );
           expect(geometry.playbackKeys.top).toBeGreaterThan(geometry.playbackTimeline.bottom);
         }
 
@@ -373,7 +389,9 @@ test.describe('accessibility and responsive contracts', () => {
           }
           expect(geometry.ctaAction.left).toBeGreaterThan(geometry.ctaCopy.left);
           expect(geometry.formats.left).toBeGreaterThan(geometry.setupGuide.right);
-          expect(Math.abs(geometry.resourceLinks[0] - geometry.resourceLinks[1])).toBeLessThanOrEqual(1);
+          expect(
+            Math.abs(geometry.resourceLinks[0] - geometry.resourceLinks[1]),
+          ).toBeLessThanOrEqual(1);
         } else {
           expect(geometry.formats.top).toBeGreaterThan(geometry.setupGuide.bottom);
           expect(geometry.quickStartSteps[0].top).toBeLessThan(geometry.quickStartSteps[1].top);
@@ -385,7 +403,6 @@ test.describe('accessibility and responsive contracts', () => {
         }
         expect(geometry.ctaButton.bottom).toBeLessThanOrEqual(geometry.ctaNote.top);
         expect(geometry.ctaNote.top - geometry.ctaButton.bottom).toBeLessThanOrEqual(12);
-
       }
     }
   });
@@ -1221,10 +1238,9 @@ test.describe('accessibility and responsive contracts', () => {
       );
       await expect(page.locator('#how-it-works ol li')).toHaveCount(3);
       await expect(page.locator('#how-it-works ol')).toContainText('15');
-      await expect(page.locator('#how-it-works .quick-start__setup')).toHaveAttribute(
-        'href',
-        /windows-setup\/$/,
-      );
+      await expect(
+        page.locator('#how-it-works .quick-start__setup .quick-start__resource-link'),
+      ).toHaveAttribute('href', /windows-setup\/$/);
     }
   });
 

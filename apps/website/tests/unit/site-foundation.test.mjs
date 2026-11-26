@@ -49,10 +49,13 @@ test('English and Vietnamese homepage data keep every section structurally align
   ]);
   expect(homeEn.quickStart.items).toHaveLength(3);
   expect(homeVi.quickStart.items).toHaveLength(3);
-  expect(homeEn.trust.supportLinks.map((link) => link.label)).toEqual([
-    'Setup',
-    'FAQ',
-    'Troubleshooting',
+  expect(homeEn.trust.supportLinks.map((link) => link.href)).toEqual([
+    '/faq/',
+    '/guides/troubleshooting/',
+  ]);
+  expect(homeVi.trust.supportLinks.map((link) => link.href)).toEqual([
+    '/vi/faq/',
+    '/vi/guides/troubleshooting/',
   ]);
 });
 
@@ -105,8 +108,8 @@ test('the signature demo uses the approved event intervals, keys, and visible ti
 });
 
 test('the hero leads with concise product value and both locales disclose the release journey', () => {
-  expect(homeEn.hero.titleEmphasis).toBe('your music');
-  expect(homeVi.hero.titleEmphasis).toBe('âm nhạc');
+  expect(homeEn.hero.title).toBe('Bring your music into Sky.');
+  expect(homeVi.hero.title).toBe('Mang âm nhạc đến thế giới Sky.');
   expect(homeEn.downloadCta).toBe('Download for Windows');
   expect(homeVi.downloadCta).toBe('Tải cho Windows');
   expect(homeEn.hero.meta).toContain('GitHub Releases');
