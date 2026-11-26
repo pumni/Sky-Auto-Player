@@ -112,6 +112,7 @@ pub fn simulate_schedule(
                 up_mask,
                 down_chord,
                 timing_window,
+                ..
             } => {
                 let scheduled_us = timing_window.authored_target_qpc.as_u64();
                 let actual_us = now_us.max(scheduled_us);

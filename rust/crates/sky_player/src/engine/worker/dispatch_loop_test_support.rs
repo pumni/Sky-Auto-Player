@@ -24,6 +24,7 @@ pub(super) fn staged_send_at(
             up_mask,
             down_chord,
             timing_window,
+            ..
         } => (up_mask, down_chord, timing_window),
         decision => panic!("expected packet send at {at:?}, got {decision:?}"),
     }

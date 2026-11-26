@@ -112,6 +112,19 @@ committed (bounded wait deadline `max(authored_onset, latest_blocking_release)`)
 After a successful Up commits, the next same-key Down can be sent at its
 authored onset time after a fresh scheduler evaluation.
 
+When the worker stages a candidate before waiting for a future deadline and
+wakes on `Due` with an authoritative observed QPC `dispatch_qpc`, it
+re-evaluates the scheduler at `dispatch_qpc` before final admission:
+
+- If the packet masks, chord index, timing window, and Up summary match the
+  staged candidate, the worker reuses the staged packet bytes without
+  rebuilding or allocating.
+- If a late wake makes additional independent Up releases eligible alongside
+  a disjoint staged Down (or makes new work eligible), the worker rebuilds the
+  packet once with all due Ups before the intact Down, then runs fresh final
+  admission before `SendInput`.
+- Interrupted or early wakes never send stale staged bytes.
+
 Timing and telemetry use five distinct timestamp concepts:
 
 - **Authored onset**: the chord's scheduled musical onset (`epoch + onset_ticks`).

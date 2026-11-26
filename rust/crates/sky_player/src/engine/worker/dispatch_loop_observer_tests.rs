@@ -451,8 +451,8 @@ fn mixed_packet_preserves_one_wait_with_matching_identity() {
         .stage_candidate_with_observer_for_test(1, chord, mixed_offset, true)
         .expect("stage mixed")
         .expect("mixed");
-    assert_ne!(mixed.packet_masks.up_mask, 0);
-    assert_ne!(mixed.packet_masks.down_mask, 0);
+    assert_ne!(mixed.packet_masks().up_mask, 0);
+    assert_ne!(mixed.packet_masks().down_mask, 0);
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(mixed, true),
         super::super::StagedDispatchOutcome::Dispatched

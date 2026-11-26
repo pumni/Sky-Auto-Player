@@ -175,10 +175,16 @@ fn diagnostic_nominal_up_preserves_exact_ceil_rounding_at_nonintegral_qpc_and_la
         TimelineTicks::from_raw(15)
     );
     assert_eq!(timings[0].release_not_before_qpc, QpcTicks::from_raw(1_016));
-    let summary = exec
-        .up_slot_timing_summary(1, epoch)
-        .expect("summary")
-        .expect("active slot");
+    let DispatchDecision::Send {
+        up_mask: 1,
+        up_summary: Some(summary),
+        ..
+    } = exec
+        .evaluate_at(QpcTicks::from_raw(1_016), epoch)
+        .expect("evaluate summary")
+    else {
+        panic!("expected due Up send with summary");
+    };
     assert_eq!(summary.authored_target_qpc, QpcTicks::from_raw(1_015));
     assert_eq!(summary.musical_up_not_before_qpc, QpcTicks::from_raw(1_016));
     assert_eq!(summary.hold_floor_mask, 1);
@@ -322,21 +328,15 @@ fn forced_conversion_failure_fails_executor_construction() {
     let plan = build_onset_plan(
         &[OnsetChordInput {
             source_action_index: 0,
-            scheduled_us: 1_000,
+            scheduled_us: 2_000_000,
             scan_codes: smallvec::smallvec![0x15],
         }],
         &[0x15],
         16_667,
     )
     .expect("plan");
-    let qpc_1mhz = NonZeroU64::new(1_000_000).expect("1 MHz");
-    let err = DispatchExecutor::new_with_converter_for_test(
-        &plan,
-        qpc_1mhz,
-        DurationTicks::from_raw(16_667),
-        |_| Err::<TimelineTicks, &str>("injected clock conversion failure"),
-        || Ok(()),
-    )
-    .expect_err("conversion failure must reject executor construction");
-    assert!(err.contains("injected clock conversion failure"), "{err}");
+    let overflowing_freq = NonZeroU64::new(u64::MAX).expect("max frequency");
+    let err = PreparedDispatchSchedule::prepare(&plan, overflowing_freq, 0)
+        .expect_err("conversion overflow must reject prepared schedule construction");
+    assert!(err.contains("overflow"), "{err}");
 }

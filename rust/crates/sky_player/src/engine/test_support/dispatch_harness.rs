@@ -295,16 +295,13 @@ impl ProductionDispatchTestHarness {
                 .map_err(|error| format!("live staging deadline evaluation failed: {error}"))?,
             decision => decision,
         };
-        let (actual_up_mask, actual_chord, timing_window): (
-            u16,
-            Option<PreparedChord>,
-            DispatchTimingWindow,
-        ) = match decision {
+        let (actual_up_mask, actual_chord, timing_window, up_summary) = match decision {
             DispatchDecision::Send {
                 up_mask,
                 down_chord,
                 timing_window,
-            } => (up_mask, down_chord, timing_window),
+                up_summary,
+            } => (up_mask, down_chord, timing_window, up_summary),
             decision => {
                 return Err(format!(
                     "production executor did not offer Send: {decision:?}"
@@ -320,11 +317,15 @@ impl ProductionDispatchTestHarness {
                 actual_chord.map(|chord| chord.key_mask),
             ));
         }
-        self.stage_candidate_with_scheduler_window_and_observer_for_test(
+        stage_candidate(
             actual_up_mask,
             actual_chord,
             timing_window,
+            up_summary,
             capture_up_slot_timings,
+            &self.target,
+            &mut self.resources,
+            &mut self.runtime,
         )
     }
 
@@ -349,10 +350,41 @@ impl ProductionDispatchTestHarness {
         timing_window: DispatchTimingWindow,
         capture_up_slot_timings: bool,
     ) -> Result<Option<StagedCandidate>, String> {
+        let up_summary = (up_mask != 0).then(|| {
+            let timings = self.resources.scheduler.up_slot_timings(up_mask);
+            let epoch = self.resources.playback.epoch;
+            let mut authored_target_qpc: Option<QpcTicks> = None;
+            let mut musical_up_not_before_qpc: Option<QpcTicks> = None;
+            let mut hold_floor_mask = 0u16;
+            for t in &timings {
+                let nominal = epoch
+                    .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+                        t.nominal_up_offset_ticks.as_u64(),
+                    ))
+                    .expect("test nominal Up QPC");
+                authored_target_qpc = Some(authored_target_qpc.map_or(nominal, |c| c.min(nominal)));
+                musical_up_not_before_qpc = Some(
+                    musical_up_not_before_qpc.map_or(t.release_not_before_qpc, |c| {
+                        c.max(t.release_not_before_qpc)
+                    }),
+                );
+                if t.release_not_before_qpc > nominal {
+                    hold_floor_mask |= 1u16 << t.slot;
+                }
+            }
+            sky_dispatch_core::executor::UpSlotTimingSummary {
+                slot_count: timings.len() as u8,
+                first_source_action_index: timings.first().map_or(0, |t| t.source_action_index),
+                authored_target_qpc: authored_target_qpc.expect("non-empty up_mask"),
+                musical_up_not_before_qpc: musical_up_not_before_qpc.expect("non-empty up_mask"),
+                hold_floor_mask,
+            }
+        });
         stage_candidate(
             up_mask,
             down_chord,
             timing_window,
+            up_summary,
             capture_up_slot_timings,
             &self.target,
             &mut self.resources,
@@ -365,6 +397,28 @@ impl ProductionDispatchTestHarness {
         candidate: &StagedCandidate,
     ) -> DispatchTimingWindow {
         candidate.timing_window
+    }
+
+    pub fn reselect_candidate_after_wait_for_test(
+        &mut self,
+        mut staged: Option<StagedCandidate>,
+        observed_wake_qpc: QpcTicks,
+        capture_up_slot_timings: bool,
+    ) -> Result<Option<StagedCandidate>, String> {
+        match crate::engine::worker::reselect_candidate_after_wait(
+            &mut staged,
+            observed_wake_qpc,
+            self.resources.playback.epoch,
+            capture_up_slot_timings,
+            &self.target,
+            &mut self.resources,
+            &mut self.runtime,
+        )? {
+            crate::engine::worker::PostWaitSelection::SendReady => Ok(staged),
+            crate::engine::worker::PostWaitSelection::Replan
+            | crate::engine::worker::PostWaitSelection::Finished
+            | crate::engine::worker::PostWaitSelection::TargetInvalidated => Ok(None),
+        }
     }
 
     pub fn dispatch_staged_candidate_for_test(

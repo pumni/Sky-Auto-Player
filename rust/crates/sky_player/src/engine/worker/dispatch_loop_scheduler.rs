@@ -8,6 +8,7 @@ enum SchedulerAction {
         up_mask: u16,
         down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
         timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
+        up_summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
     },
 }
 
@@ -156,7 +157,7 @@ fn attribute_modifier_up_deadline_wake(
         return;
     };
     if candidate.is_some_and(|candidate| {
-        candidate.packet_masks.up_mask != 0
+        candidate.packet_masks().up_mask != 0
             && candidate.timing_window.musical_up_not_before_qpc == up_deadline_qpc
     }) {
         runtime.last_dispatch_deadline_wake_qpc = Some(wake_qpc);
@@ -266,10 +267,12 @@ fn evaluate_scheduler_action(
             up_mask,
             down_chord,
             timing_window,
+            up_summary,
         } => Ok(SchedulerAction::Send {
             up_mask,
             down_chord,
             timing_window,
+            up_summary,
         }),
     }
 }
@@ -308,18 +311,15 @@ struct SchedulerStageAdmission<'a> {
 }
 
 fn up_only_timing_window(
-    mut timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
-    summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
-) -> Result<sky_dispatch_core::executor::DispatchTimingWindow, String> {
-    let summary = summary
-        .filter(|summary| summary.slot_count != 0)
-        .ok_or_else(|| "Up-only selection has no active scheduler Up slots".to_string())?;
-    timing_window.authored_target_qpc = summary.authored_target_qpc;
-    timing_window.musical_up_not_before_qpc = summary.musical_up_not_before_qpc;
-    timing_window.down_not_before_qpc = summary.authored_target_qpc;
-    timing_window.packet_not_before_qpc = summary.musical_up_not_before_qpc;
-    timing_window.hold_floor_mask = summary.hold_floor_mask;
-    Ok(timing_window)
+    summary: sky_dispatch_core::executor::UpSlotTimingSummary,
+) -> sky_dispatch_core::executor::DispatchTimingWindow {
+    sky_dispatch_core::executor::DispatchTimingWindow {
+        authored_target_qpc: summary.authored_target_qpc,
+        musical_up_not_before_qpc: summary.musical_up_not_before_qpc,
+        down_not_before_qpc: summary.authored_target_qpc,
+        packet_not_before_qpc: summary.musical_up_not_before_qpc,
+        hold_floor_mask: summary.hold_floor_mask,
+    }
 }
 
 fn stage_scheduler_send_candidate(
@@ -332,6 +332,7 @@ fn stage_scheduler_send_candidate(
         up_mask,
         down_chord,
         timing_window,
+        up_summary,
     } = action
     else {
         return Ok(None);
@@ -340,11 +341,85 @@ fn stage_scheduler_send_candidate(
         up_mask,
         down_chord,
         timing_window,
+        up_summary,
         admission.capture_up_slot_timings,
         admission.target,
         resources,
         runtime,
     )
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PostWaitSelection {
+    SendReady,
+    Replan,
+    Finished,
+    TargetInvalidated,
+}
+
+/// Evaluate current scheduler state against the authoritative observed wake QPC.
+/// Reuses the already-staged candidate bytes in `staged` without rebuilding when
+/// the packet and timing evidence are unchanged; otherwise rebuilds for newly
+/// due Ups or newly eligible work. Never sends a stale candidate if not eligible
+/// at wake.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn reselect_candidate_after_wait(
+    staged: &mut Option<StagedCandidate>,
+    observed_wake_qpc: sky_dispatch_win32::clock::QpcTicks,
+    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
+    capture_up_slot_timings: bool,
+    target: &SessionTarget,
+    resources: &mut super::WorkerResources,
+    runtime: &mut super::WorkerRuntime,
+) -> Result<PostWaitSelection, String> {
+    match evaluate_scheduler_action(&resources.scheduler, observed_wake_qpc, epoch_qpc)? {
+        SchedulerAction::Finished => {
+            *staged = None;
+            Ok(PostWaitSelection::Finished)
+        }
+        SchedulerAction::Wait { .. } => {
+            *staged = None;
+            Ok(PostWaitSelection::Replan)
+        }
+        SchedulerAction::Send {
+            up_mask,
+            down_chord,
+            timing_window,
+            up_summary,
+        } => {
+            if let Some(existing) = staged.as_ref() {
+                let existing_packet = existing.packet_masks();
+                if existing_packet.up_mask == up_mask
+                    && existing_packet.down_mask == down_chord.map_or(0, |c| c.key_mask)
+                    && existing.down_chord.map(|c| c.chord_index)
+                        == down_chord.map(|c| c.chord_index)
+                    && existing.timing_window == timing_window
+                    && existing.up_slot_timing_summary == up_summary
+                {
+                    return Ok(PostWaitSelection::SendReady);
+                }
+            }
+            match stage_candidate(
+                up_mask,
+                down_chord,
+                timing_window,
+                up_summary,
+                capture_up_slot_timings,
+                target,
+                resources,
+                runtime,
+            )? {
+                Some(rebuilt) => {
+                    *staged = Some(rebuilt);
+                    Ok(PostWaitSelection::SendReady)
+                }
+                None => {
+                    *staged = None;
+                    Ok(PostWaitSelection::TargetInvalidated)
+                }
+            }
+        }
+    }
 }
 
 pub(crate) fn pre_wait_candidate_admission(
@@ -355,7 +430,8 @@ pub(crate) fn pre_wait_candidate_admission(
     control_signals: FinalControlSignals<'_>,
     runtime: &mut super::WorkerRuntime,
 ) -> StagedDispatchOutcome {
-    if candidate.packet_masks.down_mask != 0 || candidate.packet_masks.up_mask != 0 {
+    let packet_masks = candidate.packet_masks();
+    if packet_masks.down_mask != 0 || packet_masks.up_mask != 0 {
         let expected = candidate
             .target_stamp
             .expect("target stamp checked in staging");
@@ -836,7 +912,7 @@ mod scheduler_tests {
             DispatchDecision::Send {
                 up_mask: 0,
                 down_chord: Some(_),
-                timing_window: _,
+                ..
             }
         ));
     }

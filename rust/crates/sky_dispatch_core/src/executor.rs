@@ -60,8 +60,8 @@ impl PreparedChord {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct ActiveSlotOrigin {
     chord_index: usize,
+    nominal_up_offset_ticks: TimelineTicks,
     source_action_index: u32,
-    down_onset_us: u64,
 }
 
 /// Absolute-QPC decision made by the production scheduler.
@@ -72,6 +72,7 @@ pub enum DispatchDecision {
         up_mask: u16,
         down_chord: Option<PreparedChord>,
         timing_window: DispatchTimingWindow,
+        up_summary: Option<UpSlotTimingSummary>,
     },
     /// No physical work ready; wait until the specified deadline.
     Wait { deadline_qpc: QpcTicks },
@@ -145,8 +146,6 @@ pub struct PreparedDispatchSchedule {
     qpc_frequency_hz: NonZeroU64,
     hold_us: u64,
     hold_ticks: DurationTicks,
-    total_us: u64,
-    has_down: bool,
     memory_metrics: PreparedDispatchMemoryMetrics,
 }
 
@@ -174,19 +173,28 @@ pub fn us_to_duration_ticks_ceil(
         .map(|ticks| DurationTicks::from_raw(ticks.as_u64()))
 }
 
-fn validate_plan_structural_invariants(plan: &OnsetPlan) -> Result<(), String> {
-    if plan.key_registry.len() > MAX_KEYS {
-        return Err(format!(
-            "onset plan key registry exceeds {MAX_KEYS} slots ({})",
-            plan.key_registry.len()
-        ));
-    }
+fn validate_and_build_prepared_chords(
+    plan: &OnsetPlan,
+    qpc_frequency_hz: NonZeroU64,
+    hold_ticks: DurationTicks,
+    mut checkpoint: impl FnMut() -> Result<(), String>,
+) -> Result<Vec<PreparedChord>, String> {
     let allowed_mask = plan.allowed_key_mask();
+    let chord_count = plan.chords.len();
+    checked_executor_storage_bytes(chord_count)?;
+    checkpoint()?;
+
+    let mut chords = Vec::new();
+    reserve_executor_chords(&mut chords, chord_count)?;
+
     let mut prev_scheduled_us: Option<u64> = None;
     let mut generation_sum = 0u64;
     let mut last_end_us = 0u64;
 
     for (index, chord) in plan.chords.iter().enumerate() {
+        if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL) {
+            checkpoint()?;
+        }
         if chord.chord_index != index {
             return Err(format!(
                 "onset chord index mismatch: expected {index}, got {}",
@@ -215,6 +223,32 @@ fn validate_plan_structural_invariants(plan: &OnsetPlan) -> Result<(), String> {
             .scheduled_us
             .checked_add(plan.hold_us)
             .ok_or_else(|| format!("onset chord {} nominal end overflow", chord.chord_index))?;
+
+        let onset_ticks = us_to_timeline_ticks_ceil(chord.scheduled_us, qpc_frequency_hz)
+            .ok_or_else(|| {
+                format!(
+                    "scheduled timestamp conversion failed for chord at {}us",
+                    chord.scheduled_us
+                )
+            })?;
+        // Prove both physical onset+hold and diagnostic nominal release fit in TimelineTicks.
+        onset_ticks
+            .checked_add_duration(hold_ticks)
+            .map_err(|error| format!("prepared hold-floor conversion overflow: {error}"))?;
+        us_to_timeline_ticks_ceil(last_end_us, qpc_frequency_hz).ok_or_else(|| {
+            format!(
+                "nominal Up timestamp conversion failed for chord at {}us",
+                chord.scheduled_us
+            )
+        })?;
+
+        chords.push(PreparedChord {
+            chord_index: chord.chord_index,
+            onset_ticks,
+            onset_us: chord.scheduled_us,
+            key_mask: chord.key_mask,
+            source_action_index: chord.source_action_index,
+        });
     }
     if generation_sum != plan.generation_count {
         return Err(format!(
@@ -227,44 +261,6 @@ fn validate_plan_structural_invariants(plan: &OnsetPlan) -> Result<(), String> {
             "onset plan schedule_end_offset_us {}us precedes final pulse end {last_end_us}us",
             plan.schedule_end_offset_us
         ));
-    }
-    Ok(())
-}
-
-fn build_prepared_chords<C, F>(
-    plan: &OnsetPlan,
-    hold_ticks: DurationTicks,
-    mut checkpoint: C,
-    mut timestamp_ticks: F,
-) -> Result<Vec<PreparedChord>, String>
-where
-    C: FnMut() -> Result<(), String>,
-    F: FnMut(u64) -> Result<TimelineTicks, String>,
-{
-    validate_plan_structural_invariants(plan)?;
-    let chord_count = plan.chords.len();
-    checked_executor_storage_bytes(chord_count)?;
-    checkpoint()?;
-
-    let mut chords = Vec::new();
-    reserve_executor_chords(&mut chords, chord_count)?;
-
-    for (index, chord) in plan.chords.iter().enumerate() {
-        if index.is_multiple_of(EXECUTOR_BUILD_CHECKPOINT_INTERVAL) {
-            checkpoint()?;
-        }
-        let onset_ticks = timestamp_ticks(chord.scheduled_us)?;
-        // Prove onset_ticks + hold_ticks fits in TimelineTicks (checked arithmetic).
-        onset_ticks
-            .checked_add_duration(hold_ticks)
-            .map_err(|error| format!("prepared hold-floor conversion overflow: {error}"))?;
-        chords.push(PreparedChord {
-            chord_index: chord.chord_index,
-            onset_ticks,
-            onset_us: chord.scheduled_us,
-            key_mask: chord.key_mask,
-            source_action_index: chord.source_action_index,
-        });
     }
     Ok(chords)
 }
@@ -294,7 +290,12 @@ impl PreparedDispatchSchedule {
         mut checkpoint: impl FnMut() -> Result<(), String>,
     ) -> Result<Self, String> {
         checkpoint()?;
-        validate_plan_structural_invariants(plan)?;
+        if plan.key_registry.len() > MAX_KEYS {
+            return Err(format!(
+                "onset plan key registry exceeds {MAX_KEYS} slots ({})",
+                plan.key_registry.len()
+            ));
+        }
         let hold_ticks = us_to_duration_ticks_ceil(plan.hold_us, qpc_frequency_hz)
             .ok_or_else(|| "prepared hold-floor conversion overflow".to_string())?;
         let schedule_end_offset_ticks =
@@ -323,11 +324,12 @@ impl PreparedDispatchSchedule {
             ));
         }
 
-        let chords = build_prepared_chords(plan, hold_ticks, &mut checkpoint, |microseconds| {
-            us_to_timeline_ticks_ceil(microseconds, qpc_frequency_hz).ok_or_else(|| {
-                format!("scheduled timestamp conversion failed for chord at {microseconds}us")
-            })
-        })?;
+        let chords = validate_and_build_prepared_chords(
+            plan,
+            qpc_frequency_hz,
+            hold_ticks,
+            &mut checkpoint,
+        )?;
         checkpoint()?;
 
         // Postcheck actual reserved capacity after materialization.
@@ -358,7 +360,6 @@ impl PreparedDispatchSchedule {
             overlapping_peak_capacity_bytes,
         };
         Ok(Self {
-            has_down: !chords.is_empty(),
             chords,
             schedule_end_offset_ticks,
             schedule_end_offset_us: plan.schedule_end_offset_us,
@@ -367,7 +368,6 @@ impl PreparedDispatchSchedule {
             qpc_frequency_hz,
             hold_us: plan.hold_us,
             hold_ticks,
-            total_us: plan.schedule_end_offset_us,
             memory_metrics,
         })
     }
@@ -389,7 +389,7 @@ impl PreparedDispatchSchedule {
     }
 
     pub fn total_us(&self) -> u64 {
-        self.total_us
+        self.schedule_end_offset_us
     }
 
     pub fn generation_count(&self) -> u64 {
@@ -401,7 +401,7 @@ impl PreparedDispatchSchedule {
     }
 
     pub fn has_down(&self) -> bool {
-        self.has_down
+        !self.chords.is_empty()
     }
 
     pub fn memory_metrics(&self) -> PreparedDispatchMemoryMetrics {
@@ -508,58 +508,6 @@ impl DispatchExecutor {
         }
     }
 
-    /// Test-only constructor with injectable timestamp converter to exercise
-    /// conversion-failure paths without bypassing production preparation.
-    #[cfg(test)]
-    pub(crate) fn new_with_converter_for_test<F, E, C>(
-        plan: &OnsetPlan,
-        qpc_frequency_hz: NonZeroU64,
-        hold_ticks: DurationTicks,
-        mut us_to_ticks: F,
-        mut checkpoint: C,
-    ) -> Result<Self, String>
-    where
-        F: FnMut(u64) -> Result<TimelineTicks, E>,
-        E: std::fmt::Display,
-        C: FnMut() -> Result<(), String>,
-    {
-        let chords = build_prepared_chords(plan, hold_ticks, &mut checkpoint, |microseconds| {
-            us_to_ticks(microseconds).map_err(|error| {
-                format!(
-                    "scheduled timestamp conversion failed for chord at {microseconds}us: {error}"
-                )
-            })
-        })?;
-        checked_executor_storage_bytes(chords.capacity())?;
-        checkpoint()?;
-
-        let schedule_end_offset_ticks =
-            us_to_ticks(plan.schedule_end_offset_us).map_err(|error| {
-                format!(
-                    "schedule end offset timestamp conversion failed at {}us: {error}",
-                    plan.schedule_end_offset_us
-                )
-            })?;
-
-        Ok(Self {
-            chords,
-            schedule_end_offset_ticks,
-            schedule_end_offset_us: plan.schedule_end_offset_us,
-            key_registry: plan.key_registry.clone(),
-            cursor: 0,
-            active_mask: 0,
-            release_not_before_qpc: [QpcTicks::ZERO; MAX_KEYS],
-            active_slot_origin: [ActiveSlotOrigin::default(); MAX_KEYS],
-            qpc_frequency_hz,
-            hold_us: plan.hold_us,
-            hold_ticks,
-            verified_cleanup_seen: false,
-            counters: GenerationCounters::default(),
-            total_generations: plan.generation_count,
-            activated_generations: 0,
-        })
-    }
-
     /// Return measured memory metrics for this executor instance.
     pub fn memory_metrics(&self) -> ExecutorMemoryMetrics {
         self.try_memory_metrics()
@@ -581,18 +529,6 @@ impl DispatchExecutor {
         })
     }
 
-    /// Exact diagnostic nominal release offset: `ceil((onset_us + hold_us) * f / 1e6)`.
-    /// Distinct from the physical lower-bound `ceil(onset_us * f / 1e6) + ceil(hold_us * f / 1e6)`.
-    #[inline]
-    fn nominal_up_offset_ticks(&self, slot: usize) -> Result<TimelineTicks, TimeArithmeticError> {
-        let nominal_up_us = self.active_slot_origin[slot]
-            .down_onset_us
-            .checked_add(self.hold_us)
-            .ok_or(TimeArithmeticError::Overflow)?;
-        us_to_timeline_ticks_ceil(nominal_up_us, self.qpc_frequency_hz)
-            .ok_or(TimeArithmeticError::Overflow)
-    }
-
     /// Extract per-slot diagnostic Up metadata for the keys active in `up_mask`.
     pub fn up_slot_timings(&self, up_mask: u16) -> SmallVec<[UpSlotTiming; MAX_KEYS]> {
         let mut timings = SmallVec::new();
@@ -602,69 +538,15 @@ impl DispatchExecutor {
             remaining &= remaining - 1;
             let scan_code = self.key_registry.scan_code_for(slot_idx as u8).unwrap_or(0);
             let origin = self.active_slot_origin[slot_idx];
-            let nominal_up_offset_ticks = self
-                .nominal_up_offset_ticks(slot_idx)
-                .unwrap_or(self.schedule_end_offset_ticks);
             timings.push(UpSlotTiming {
                 slot: slot_idx as u8,
                 scan_code,
                 source_action_index: origin.source_action_index,
-                nominal_up_offset_ticks,
+                nominal_up_offset_ticks: origin.nominal_up_offset_ticks,
                 release_not_before_qpc: self.release_not_before_qpc[slot_idx],
             });
         }
         timings
-    }
-
-    /// Summarize Up timing without constructing per-slot observer records.
-    pub fn up_slot_timing_summary(
-        &self,
-        up_mask: u16,
-        epoch_qpc: QpcTicks,
-    ) -> Result<Option<UpSlotTimingSummary>, TimeArithmeticError> {
-        let mut remaining = up_mask & self.active_mask;
-        let mut slot_count = 0u8;
-        let mut first_source_action_index = None;
-        let mut authored_target_qpc = None;
-        let mut musical_up_not_before_qpc = None;
-        let mut hold_floor_mask = 0u16;
-
-        while remaining != 0 {
-            let slot_idx = remaining.trailing_zeros() as usize;
-            let slot_bit = 1u16 << slot_idx;
-            remaining &= !slot_bit;
-
-            let nominal_up_offset = self.nominal_up_offset_ticks(slot_idx)?;
-            let nominal_up_qpc = epoch_qpc
-                .checked_add_duration(DurationTicks::from_raw(nominal_up_offset.as_u64()))?;
-            let release_not_before_qpc = self.release_not_before_qpc[slot_idx];
-            slot_count += 1;
-            first_source_action_index
-                .get_or_insert(self.active_slot_origin[slot_idx].source_action_index);
-            authored_target_qpc = Some(
-                authored_target_qpc.map_or(nominal_up_qpc, |current: QpcTicks| {
-                    current.min(nominal_up_qpc)
-                }),
-            );
-            musical_up_not_before_qpc = Some(
-                musical_up_not_before_qpc.map_or(release_not_before_qpc, |current: QpcTicks| {
-                    current.max(release_not_before_qpc)
-                }),
-            );
-            if release_not_before_qpc > nominal_up_qpc {
-                hold_floor_mask |= slot_bit;
-            }
-        }
-
-        Ok(authored_target_qpc.zip(musical_up_not_before_qpc).map(
-            |(authored_target_qpc, musical_up_not_before_qpc)| UpSlotTimingSummary {
-                slot_count,
-                first_source_action_index: first_source_action_index.unwrap_or_default(),
-                authored_target_qpc,
-                musical_up_not_before_qpc,
-                hold_floor_mask,
-            },
-        ))
     }
 
     /// Return the earliest completion-anchored release deadline among every
@@ -780,6 +662,7 @@ impl DispatchExecutor {
         let mut earliest_future_up_due_qpc: Option<QpcTicks> = None;
         let mut up_packet_not_before_qpc: Option<QpcTicks> = None;
         let mut up_authored_target_qpc: Option<QpcTicks> = None;
+        let mut up_first_source_action_index: Option<u32> = None;
         let mut up_hold_floor_mask = 0u16;
 
         let mut active = self.active_mask;
@@ -793,9 +676,11 @@ impl DispatchExecutor {
                 up_ready_mask |= slot_bit;
                 up_packet_not_before_qpc =
                     Some(up_packet_not_before_qpc.map_or(due, |value| value.max(due)));
-                let nominal_up_offset = self.nominal_up_offset_ticks(slot_idx)?;
-                let nominal_up_qpc = epoch_qpc
-                    .checked_add_duration(DurationTicks::from_raw(nominal_up_offset.as_u64()))?;
+                let origin = self.active_slot_origin[slot_idx];
+                up_first_source_action_index.get_or_insert(origin.source_action_index);
+                let nominal_up_qpc = epoch_qpc.checked_add_duration(DurationTicks::from_raw(
+                    origin.nominal_up_offset_ticks.as_u64(),
+                ))?;
                 up_authored_target_qpc = Some(
                     up_authored_target_qpc
                         .map_or(nominal_up_qpc, |value| value.min(nominal_up_qpc)),
@@ -840,6 +725,15 @@ impl DispatchExecutor {
         let down_authored_qpc = chord_authored_target_qpc.filter(|_| chord_eligible);
 
         if up_ready_mask != 0 || chord_eligible {
+            let up_summary = up_authored_qpc.zip(up_ready_qpc).map(
+                |(authored_target_qpc, musical_up_not_before_qpc)| UpSlotTimingSummary {
+                    slot_count: up_ready_mask.count_ones() as u8,
+                    first_source_action_index: up_first_source_action_index.unwrap_or_default(),
+                    authored_target_qpc,
+                    musical_up_not_before_qpc,
+                    hold_floor_mask: up_hold_floor_mask,
+                },
+            );
             let authored_target_qpc = match (up_authored_qpc, down_authored_qpc) {
                 (Some(up), Some(down)) => up.min(down),
                 (Some(up), None) => up,
@@ -858,6 +752,7 @@ impl DispatchExecutor {
                     packet_not_before_qpc: musical_up_not_before_qpc.max(down_not_before_qpc),
                     hold_floor_mask: up_hold_floor_mask,
                 },
+                up_summary,
             });
         }
 
@@ -936,7 +831,7 @@ impl DispatchExecutor {
             None
         };
 
-        let chord = if confirmed_down_mask != 0 {
+        let chord_and_nominal_up = if confirmed_down_mask != 0 {
             let chord =
                 self.chords.get(self.cursor).copied().ok_or_else(|| {
                     "confirmed Down chord when chord cursor is exhausted".to_string()
@@ -954,10 +849,18 @@ impl DispatchExecutor {
                     "attempted to activate already active slot {slot_idx}"
                 ));
             }
-            Some(chord)
+            let nominal_up_us = chord
+                .onset_us
+                .checked_add(self.hold_us)
+                .ok_or_else(|| "Down nominal Up offset overflow".to_string())?;
+            let nominal_up_offset_ticks =
+                us_to_timeline_ticks_ceil(nominal_up_us, self.qpc_frequency_hz)
+                    .ok_or_else(|| "Down nominal Up QPC conversion overflow".to_string())?;
+            Some((chord, nominal_up_offset_ticks))
         } else {
             None
         };
+        let chord = chord_and_nominal_up.map(|(chord, _)| chord);
 
         let next_released = self
             .counters
@@ -987,7 +890,7 @@ impl DispatchExecutor {
         }
         self.active_mask &= !confirmed_up_mask;
 
-        if let Some(chord) = chord {
+        if let Some((chord, nominal_up_offset_ticks)) = chord_and_nominal_up {
             let release_deadline = new_up_floor.expect("Down commit computed release floor");
             let mut down_slots = chord.key_mask;
             while down_slots != 0 {
@@ -996,8 +899,8 @@ impl DispatchExecutor {
                 self.release_not_before_qpc[slot_idx] = release_deadline;
                 self.active_slot_origin[slot_idx] = ActiveSlotOrigin {
                     chord_index: chord.chord_index,
+                    nominal_up_offset_ticks,
                     source_action_index: chord.source_action_index,
-                    down_onset_us: chord.onset_us,
                 };
             }
             self.active_mask |= chord.key_mask;

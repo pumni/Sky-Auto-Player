@@ -75,6 +75,7 @@ fn dispatch_live_scheduler_next(
             up_mask,
             down_chord,
             timing_window,
+            ..
         } => (up_mask, down_chord, timing_window),
         decision => panic!("expected production scheduler Send decision, got {decision:?}"),
     };

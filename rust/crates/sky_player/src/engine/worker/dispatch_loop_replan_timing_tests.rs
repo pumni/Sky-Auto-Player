@@ -115,7 +115,7 @@ fn immediate_resume_worker_decision_sends_due_down_before_retired_cleanup_floor(
         )
         .expect("stage active first Down")
         .expect("first Down candidate");
-    assert_eq!(first_down.source_action_index, 900);
+    assert_eq!(first_down.source_action_index(), 900);
     harness.set_mock_sender_start_qpc_for_test(first_down_now);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(first_down, false),
@@ -196,6 +196,7 @@ fn immediate_resume_worker_decision_sends_due_down_before_retired_cleanup_floor(
             up_mask: 0,
             down_chord: Some(chord),
             timing_window,
+            ..
         } if chord.source_action_index == 902
             && timing_window.packet_not_before_qpc <= resume_commit_qpc
     ));
@@ -312,10 +313,10 @@ fn prepare_due_mixed_fallback_candidate() -> (
         .expect("stage scheduler-due Mixed packet")
         .expect("scheduler-produced Mixed candidate");
     assert_eq!(
-        mixed.packet_masks,
+        mixed.packet_masks(),
         sky_dispatch_win32::input::PhysicalPacket::new(1, 2)
     );
-    assert!(mixed.up_only_timing_window.is_some());
+    assert!(mixed.up_only_timing_window().is_some());
     packets.lock().expect("packet capture").clear();
     (harness, packets, mixed)
 }
@@ -459,7 +460,7 @@ fn scheduler_selects_independent_up_before_down_and_replans_after_interrupt() {
     let first_candidate =
         stage_scheduler_action(&mut harness, up_only_send_action(action_to_stage));
     assert_eq!(
-        first_candidate.packet_masks,
+        first_candidate.packet_masks(),
         sky_dispatch_win32::input::PhysicalPacket::new(1, 0)
     );
     assert_eq!(
@@ -467,7 +468,7 @@ fn scheduler_selects_independent_up_before_down_and_replans_after_interrupt() {
         up_deadline
     );
     assert!(
-        first_candidate.up_only_timing_window.is_none(),
+        first_candidate.up_only_timing_window().is_none(),
         "a scheduler-native UpOnly candidate keeps its authored timing window"
     );
     assert_eq!(
@@ -553,10 +554,10 @@ fn scheduler_reachable_mixed_modifier_fallback_trace_spans_both_gates_without_wa
     let (mut harness, packets, mixed) = prepare_due_mixed_fallback_candidate();
     let qpc_clock = harness.resources.clock;
     let up_window = mixed
-        .up_only_timing_window
+        .up_only_timing_window()
         .expect("scheduler-derived Mixed Up timing window");
-    assert!(mixed.packet_masks.down_mask != 0);
-    assert!(mixed.packet_masks.up_mask != 0);
+    assert!(mixed.packet_masks().down_mask != 0);
+    assert!(mixed.packet_masks().up_mask != 0);
     assert!(up_window.musical_up_not_before_qpc <= harness.qpc_now_for_test().unwrap());
     assert!(up_window.packet_not_before_qpc <= harness.qpc_now_for_test().unwrap());
 

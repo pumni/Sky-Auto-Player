@@ -168,6 +168,136 @@ fn wait_for_blocked_resume_replan(
     }
 }
 
+fn publish_playback_progress_state(
+    shared: &super::super::shared::SessionShared,
+    playback: &super::PlaybackClockState,
+) {
+    let progress_state = if playback.is_paused() {
+        crate::engine::WorkerProgressState::Paused
+    } else {
+        crate::engine::WorkerProgressState::Active
+    };
+    shared
+        .publication
+        .worker_progress
+        .store(progress_state as u8, Ordering::Release);
+    shared.publication.progress_clock.publish(playback);
+}
+
+enum ResumeTargetCheck {
+    Ready(TargetStamp),
+    Replan,
+    Exit,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn resolve_resume_target_or_wait(
+    now_ticks: sky_dispatch_win32::clock::QpcTicks,
+    resume_wait_signals: FinalControlSignals<'_>,
+    manual_pause: bool,
+    focus_active: &AtomicBool,
+    require_focus: bool,
+    target: &SessionTarget,
+    must_match: Option<TargetStamp>,
+    clear_focus_restore_on_wait: bool,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    waiter: &sky_dispatch_win32::wait::HybridWaiter,
+    interrupt: &sky_dispatch_win32::event::OwnedEvent,
+    runtime: &mut super::WorkerRuntime,
+    metrics: &mut super::WorkerMetricsLocal,
+) -> ResumeTargetCheck {
+    let Some(stamp) = load_target_stamp(target) else {
+        runtime.verified_target = None;
+        if clear_focus_restore_on_wait {
+            runtime.focus_restore_started_ticks = None;
+        }
+        return if wait_for_blocked_resume_replan(
+            now_ticks,
+            resume_wait_signals,
+            manual_pause,
+            focus_active,
+            focus_matches(require_focus, focus_active),
+            require_focus,
+            target,
+            None,
+            qpc_clock,
+            waiter,
+            interrupt,
+            metrics,
+            &mut runtime.terminal_error,
+        ) {
+            ResumeTargetCheck::Replan
+        } else {
+            ResumeTargetCheck::Exit
+        };
+    };
+    let stale_against_expected = must_match
+        .is_some_and(|expected| !target_stamp_still_current(target, expected) || stamp != expected);
+    if !focus_matches_hwnd(require_focus, focus_active, stamp.hwnd)
+        || !target_stamp_still_current(target, stamp)
+        || stale_against_expected
+    {
+        runtime.verified_target = None;
+        if clear_focus_restore_on_wait {
+            runtime.focus_restore_started_ticks = None;
+        }
+        return if wait_for_blocked_resume_replan(
+            now_ticks,
+            resume_wait_signals,
+            manual_pause,
+            focus_active,
+            focus_matches(require_focus, focus_active),
+            require_focus,
+            target,
+            Some(stamp),
+            qpc_clock,
+            waiter,
+            interrupt,
+            metrics,
+            &mut runtime.terminal_error,
+        ) {
+            ResumeTargetCheck::Replan
+        } else {
+            ResumeTargetCheck::Exit
+        };
+    }
+    ResumeTargetCheck::Ready(stamp)
+}
+
+fn complete_pause_exit(
+    reason: PauseReason,
+    qpc_clock: sky_dispatch_win32::clock::QpcClock,
+    supervisor_expired: &SupervisorLeaseState,
+    lease_timeout_ticks: DurationTicks,
+    playback: &mut super::PlaybackClockState,
+    runtime: &mut super::WorkerRuntime,
+    clear_focus_restore_on_lease_expiry: bool,
+) -> Result<sky_dispatch_win32::clock::QpcTicks, ()> {
+    let resumed_ticks = match qpc_clock.now() {
+        Ok(value) => value,
+        Err(error) => {
+            runtime.terminal_error = Some(format!("QPC runtime failure: {error:?}"));
+            return Err(());
+        }
+    };
+    if supervisor_expired.is_expired()
+        || supervisor_expired.check_expired(resumed_ticks, lease_timeout_ticks)
+    {
+        runtime.verified_target = None;
+        if clear_focus_restore_on_lease_expiry {
+            runtime.focus_restore_started_ticks = None;
+        }
+        runtime.terminal_error = Some("supervisor lease expired while paused".to_string());
+        return Err(());
+    }
+    if let Err(error) = playback.exit_pause(reason, resumed_ticks) {
+        runtime.verified_target = None;
+        runtime.terminal_error = Some(format!("playback clock failure: {error}"));
+        return Err(());
+    }
+    Ok(resumed_ticks)
+}
+
 pub(crate) fn publish_live_metrics_after_dispatch(
     local: &mut super::WorkerMetricsLocal,
     backend: &sky_dispatch_win32::input::TrackedKeyState,
@@ -317,22 +447,60 @@ pub(crate) fn apply_scheduler_resumable_lifecycle_transition_for_test(
 #[derive(Debug)]
 pub struct StagedCandidate {
     pub(crate) down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
-    pub(crate) packet_masks: sky_dispatch_win32::input::PhysicalPacket,
     pub(crate) prepared_packet: sky_dispatch_win32::input::PreparedPhysicalPacket,
     pub(crate) authored_target_ticks: TimelineTicks,
-    pub(crate) authored_target_qpc: sky_dispatch_win32::clock::QpcTicks,
-    pub(crate) down_authored_target_ticks: Option<TimelineTicks>,
-    pub(crate) down_authored_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     pub(crate) timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
-    pub(crate) up_only_timing_window: Option<sky_dispatch_core::executor::DispatchTimingWindow>,
-    pub(crate) up_only_authored_target_ticks: Option<TimelineTicks>,
     /// Stable HWND/generation snapshot captured during staging. Down-bearing
     /// packets also pass physical-key preflight against this exact stamp.
     pub(crate) target_stamp: Option<TargetStamp>,
-    pub(crate) source_action_index: u32,
-    pub(crate) trace_kind: u8,
     pub(crate) up_slot_timing_summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
     pub(crate) up_slot_timings: Option<SmallVec<[sky_dispatch_core::executor::UpSlotTiming; 15]>>,
+}
+
+impl StagedCandidate {
+    #[inline]
+    pub(crate) fn packet_masks(&self) -> sky_dispatch_win32::input::PhysicalPacket {
+        self.prepared_packet.packet()
+    }
+
+    #[inline]
+    pub(crate) fn source_action_index(&self) -> u32 {
+        self.down_chord.map_or_else(
+            || {
+                self.up_slot_timing_summary
+                    .map_or(0, |summary| summary.first_source_action_index)
+            },
+            |chord| chord.source_action_index,
+        )
+    }
+
+    #[inline]
+    pub(crate) fn trace_kind(&self) -> u8 {
+        trace_kind_for_packet(self.prepared_packet.packet())
+    }
+
+    #[cfg(test)]
+    #[inline]
+    pub(crate) fn up_only_timing_window(
+        &self,
+    ) -> Option<sky_dispatch_core::executor::DispatchTimingWindow> {
+        let packet = self.prepared_packet.packet();
+        if packet.up_mask == 0 || packet.down_mask == 0 {
+            return None;
+        }
+        self.up_slot_timing_summary
+            .filter(|summary| summary.slot_count != 0)
+            .map(up_only_timing_window)
+    }
+}
+
+#[inline]
+fn trace_kind_for_packet(packet: sky_dispatch_win32::input::PhysicalPacket) -> u8 {
+    match (packet.up_mask != 0, packet.down_mask != 0) {
+        (true, true) => crate::engine::TRACE_KIND_MIXED,
+        (false, true) => crate::engine::TRACE_KIND_DOWN,
+        _ => crate::engine::TRACE_KIND_UP,
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -340,9 +508,6 @@ struct EffectivePacket<'a> {
     view: sky_dispatch_win32::input::PreparedPacketView<'a>,
     down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
     authored_target_ticks: TimelineTicks,
-    authored_target_qpc: sky_dispatch_win32::clock::QpcTicks,
-    down_authored_target_ticks: Option<TimelineTicks>,
-    down_authored_target_qpc: Option<sky_dispatch_win32::clock::QpcTicks>,
     timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
     target_stamp: Option<TargetStamp>,
     source_action_index: u32,
@@ -362,6 +527,17 @@ impl EffectivePacket<'_> {
         let packet = self.packet();
         MusicalPacketKind::from_masks(packet.down_mask, packet.up_mask)
             .expect("prepared effective packet has a non-zero mask")
+    }
+
+    #[inline]
+    fn authored_target_qpc(&self) -> sky_dispatch_win32::clock::QpcTicks {
+        self.timing_window.authored_target_qpc
+    }
+
+    #[inline]
+    fn down_authored_target(&self) -> Option<(TimelineTicks, sky_dispatch_win32::clock::QpcTicks)> {
+        self.down_chord
+            .map(|chord| (chord.onset_ticks, self.timing_window.down_not_before_qpc))
     }
 }
 
@@ -426,19 +602,19 @@ fn effective_packet(candidate: &StagedCandidate) -> EffectivePacket<'_> {
         view: candidate.prepared_packet.as_view(),
         down_chord: candidate.down_chord,
         authored_target_ticks: candidate.authored_target_ticks,
-        authored_target_qpc: candidate.authored_target_qpc,
-        down_authored_target_ticks: candidate.down_authored_target_ticks,
-        down_authored_target_qpc: candidate.down_authored_target_qpc,
         timing_window: candidate.timing_window,
         target_stamp: candidate.target_stamp,
-        source_action_index: candidate.source_action_index,
-        trace_kind: candidate.trace_kind,
+        source_action_index: candidate.source_action_index(),
+        trace_kind: candidate.trace_kind(),
         up_slot_timing_summary: candidate.up_slot_timing_summary,
         up_slot_timings: candidate.up_slot_timings.as_deref(),
     }
 }
 
-fn effective_up_prefix(candidate: &StagedCandidate) -> Result<EffectivePacket<'_>, String> {
+fn effective_up_prefix(
+    candidate: &StagedCandidate,
+    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
+) -> Result<EffectivePacket<'_>, String> {
     let original_packet = candidate.prepared_packet.packet();
     if original_packet.up_mask == 0 || original_packet.down_mask == 0 {
         return Err("Up-prefix fallback requires a prepared Mixed packet".to_string());
@@ -452,20 +628,17 @@ fn effective_up_prefix(candidate: &StagedCandidate) -> Result<EffectivePacket<'_
         .prepared_packet
         .up_prefix_view()
         .ok_or_else(|| "prepared Mixed packet has no initialized Up prefix".to_string())?;
-    let timing_window = candidate
-        .up_only_timing_window
-        .ok_or_else(|| "staged Mixed packet is missing its Up-only timing window".to_string())?;
-    let authored_target_ticks = candidate
-        .up_only_authored_target_ticks
-        .ok_or_else(|| "staged Mixed packet is missing its Up-only authored target".to_string())?;
+    let timing_window = up_only_timing_window(summary);
+    let authored_target_ticks = timing_window
+        .authored_target_qpc
+        .checked_duration_since(epoch_qpc)
+        .map(|ticks| TimelineTicks::from_raw(ticks.as_u64()))
+        .map_err(|error| format!("Up-only authored target precedes playback epoch: {error}"))?;
 
     Ok(EffectivePacket {
         view,
         down_chord: None,
         authored_target_ticks,
-        authored_target_qpc: timing_window.authored_target_qpc,
-        down_authored_target_ticks: None,
-        down_authored_target_qpc: None,
         timing_window,
         target_stamp: candidate.target_stamp,
         source_action_index: summary.first_source_action_index,
@@ -510,20 +683,6 @@ fn proven_raw_zero_down_only(
         && evidence.first_win32_error == evidence.last_win32_error
         && evidence.timing_error.is_none()
         && completed.checked_duration_since(started).is_ok()
-}
-
-fn down_authored_target(
-    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
-    down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
-) -> Result<Option<(TimelineTicks, sky_dispatch_win32::clock::QpcTicks)>, String> {
-    down_chord
-        .map(|chord| {
-            let target_qpc = epoch_qpc
-                .checked_add_duration(DurationTicks::from_raw(chord.onset_ticks.as_u64()))
-                .map_err(|error| format!("Down authored target QPC overflow: {error}"))?;
-            Ok((chord.onset_ticks, target_qpc))
-        })
-        .transpose()
 }
 
 fn source_action_target(
@@ -621,10 +780,12 @@ pub(crate) struct StagedDispatchContext<'a> {
     pub(crate) metrics: &'a super::SharedMetrics,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn stage_candidate(
     up_mask: u16,
     down_chord: Option<sky_dispatch_core::executor::PreparedChord>,
     timing_window: sky_dispatch_core::executor::DispatchTimingWindow,
+    up_slot_timing_summary: Option<sky_dispatch_core::executor::UpSlotTimingSummary>,
     capture_up_slot_timings: bool,
     target: &SessionTarget,
     resources: &mut super::WorkerResources,
@@ -664,30 +825,14 @@ pub(crate) fn stage_candidate(
         None
     };
 
-    let up_slot_timing_summary = resources
-        .scheduler
-        .up_slot_timing_summary(up_mask, resources.playback.epoch)
-        .map_err(|error| format!("Up slot timing summary arithmetic failure: {error}"))?;
-    let mixed_packet = up_mask != 0 && down_mask != 0;
-    let prepared_up_timing_window = if !mixed_packet {
-        None
-    } else {
-        Some(up_only_timing_window(
-            timing_window,
-            up_slot_timing_summary,
-        )?)
-    };
-    let up_only_authored_target_ticks = prepared_up_timing_window
-        .map(|window| {
-            window
-                .authored_target_qpc
-                .checked_duration_since(resources.playback.epoch)
-                .map(|ticks| TimelineTicks::from_raw(ticks.as_u64()))
-                .map_err(|error| {
-                    format!("Up-only authored target precedes playback epoch: {error}")
-                })
+    if up_mask != 0
+        && up_slot_timing_summary.is_none_or(|summary| {
+            summary.slot_count == 0
+                || usize::from(summary.slot_count) != up_mask.count_ones() as usize
         })
-        .transpose()?;
+    {
+        return Err("missing or inconsistent Up slot timing summary from scheduler".to_string());
+    }
     let up_slot_timings = capture_up_slot_timings.then(|| {
         if up_mask != 0 {
             resources.scheduler.up_slot_timings(up_mask)
@@ -702,13 +847,12 @@ pub(crate) fn stage_candidate(
         return Err("Up slot timing summary disagrees with observer attribution".to_string());
     }
 
-    let authored_target_qpc = timing_window.authored_target_qpc;
-    let authored_target_ticks = authored_target_qpc
+    let authored_target_ticks = timing_window
+        .authored_target_qpc
         .checked_duration_since(resources.playback.epoch)
         .map_err(|error| format!("authored target precedes current playback epoch: {error}"))?
         .as_u64();
     let authored_target_ticks = TimelineTicks::from_raw(authored_target_ticks);
-    let down_target = down_authored_target(resources.playback.epoch, down_chord)?;
 
     let prepared_packet =
         match sky_dispatch_win32::input::PreparedPhysicalPacket::try_new_with_profile(
@@ -718,33 +862,13 @@ pub(crate) fn stage_candidate(
             Ok(p) => p,
             Err(err) => return Err(format!("failed to prepare physical packet: {err}")),
         };
-    let trace_kind = match (up_mask != 0, down_mask != 0) {
-        (true, true) => crate::engine::TRACE_KIND_MIXED,
-        (false, true) => crate::engine::TRACE_KIND_DOWN,
-        _ => crate::engine::TRACE_KIND_UP,
-    };
-    let source_action_index = if has_down {
-        down_chord.map_or(0, |c| c.source_action_index)
-    } else if let Some(summary) = up_slot_timing_summary {
-        summary.first_source_action_index
-    } else {
-        0
-    };
 
     Ok(Some(StagedCandidate {
         down_chord,
-        packet_masks,
         prepared_packet,
         authored_target_ticks,
-        authored_target_qpc,
-        down_authored_target_ticks: down_target.map(|target| target.0),
-        down_authored_target_qpc: down_target.map(|target| target.1),
         timing_window,
-        up_only_timing_window: prepared_up_timing_window,
-        up_only_authored_target_ticks,
         target_stamp,
-        source_action_index,
-        trace_kind,
         up_slot_timing_summary,
         up_slot_timings,
     }))
@@ -791,7 +915,7 @@ pub(crate) fn dispatch_staged_candidate(
         hook.maybe_inject_hol_stall(candidate.packet().down_mask, source_idx, qpc_clock);
     }
 
-    if staged_candidate.packet_masks.up_mask != 0
+    if staged_candidate.packet_masks().up_mask != 0
         && staged_candidate.up_slot_timing_summary.is_none()
     {
         runtime.terminal_error =
@@ -799,7 +923,7 @@ pub(crate) fn dispatch_staged_candidate(
         return DispatchAttemptOutcome::Exit;
     }
     if observer.is_some()
-        && staged_candidate.packet_masks.up_mask != 0
+        && staged_candidate.packet_masks().up_mask != 0
         && staged_candidate.up_slot_timings.is_none()
     {
         runtime.terminal_error =
@@ -900,7 +1024,7 @@ pub(crate) fn dispatch_staged_candidate(
                 // The modifier blocks only the Down half. Reuse the staged
                 // packet's initialized Up prefix, then run the complete fresh
                 // Up-only admission contract before any sender effects.
-                candidate = match effective_up_prefix(&staged_candidate) {
+                candidate = match effective_up_prefix(&staged_candidate, resources.playback.epoch) {
                     Ok(candidate) => candidate,
                     Err(error) => {
                         runtime.terminal_error = Some(error);
@@ -1179,10 +1303,8 @@ pub(crate) fn dispatch_staged_candidate(
     }
     let (source_action_target_ticks, source_action_target_qpc) = source_action_target(
         candidate.authored_target_ticks,
-        candidate.authored_target_qpc,
-        candidate
-            .down_authored_target_ticks
-            .zip(candidate.down_authored_target_qpc),
+        candidate.authored_target_qpc(),
+        candidate.down_authored_target(),
     );
     if let Some(started_qpc) = send_result.evidence.started_ticks {
         let _ = super::health::record_sendinput_pre_call_lateness(
@@ -1273,7 +1395,7 @@ pub(crate) fn dispatch_staged_candidate(
             up_pre_call_available: send_result.evidence.started_ticks.is_some(),
             epoch_qpc: resources.playback.epoch,
             allow_pre_epoch_startup_dispatch: runtime.allow_pre_epoch_startup_dispatch,
-            physical_target_qpc: candidate.authored_target_qpc,
+            physical_target_qpc: candidate.authored_target_qpc(),
             physical_timing_window: candidate.timing_window,
             final_policy_qpc: precision_gate_end_qpc,
             pre_call_qpc,
@@ -1495,58 +1617,28 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     }
                 };
                 if focus_grace_elapsed >= timing.focus_restore_grace_ticks {
-                    let Some(preflight_target) = load_target_stamp(target) else {
-                        core.runtime.verified_target = None;
-                        core.runtime.focus_restore_started_ticks = None;
-                        if !wait_for_blocked_resume_replan(
-                            now_ticks,
-                            resume_wait_signals,
-                            manual_pause,
-                            focus_active,
-                            focus_matches(config.focus.require_focus, focus_active),
-                            config.focus.require_focus,
-                            target,
-                            None,
-                            qpc_clock,
-                            &resources.waiter,
-                            interrupt,
-                            &mut core.metrics,
-                            &mut core.runtime.terminal_error,
-                        ) {
-                            break;
-                        }
-                        continue;
+                    let preflight_target = match resolve_resume_target_or_wait(
+                        now_ticks,
+                        resume_wait_signals,
+                        manual_pause,
+                        focus_active,
+                        config.focus.require_focus,
+                        target,
+                        None,
+                        true,
+                        qpc_clock,
+                        &resources.waiter,
+                        interrupt,
+                        &mut core.runtime,
+                        &mut core.metrics,
+                    ) {
+                        ResumeTargetCheck::Ready(stamp) => stamp,
+                        ResumeTargetCheck::Replan => continue,
+                        ResumeTargetCheck::Exit => break,
                     };
                     let manual_pause_active =
                         manual_pause || resources.playback.has_pause_reason(PauseReason::Manual);
                     core.runtime.verified_target = None;
-                    if !focus_matches_hwnd(
-                        config.focus.require_focus,
-                        focus_active,
-                        preflight_target.hwnd,
-                    ) || !target_stamp_still_current(target, preflight_target)
-                    {
-                        core.runtime.verified_target = None;
-                        core.runtime.focus_restore_started_ticks = None;
-                        if !wait_for_blocked_resume_replan(
-                            now_ticks,
-                            resume_wait_signals,
-                            manual_pause,
-                            focus_active,
-                            focus_matches(config.focus.require_focus, focus_active),
-                            config.focus.require_focus,
-                            target,
-                            Some(preflight_target),
-                            qpc_clock,
-                            &resources.waiter,
-                            interrupt,
-                            &mut core.metrics,
-                            &mut core.runtime.terminal_error,
-                        ) {
-                            break;
-                        }
-                        continue;
-                    }
                     if !manual_pause_active {
                         if (core.runtime.musical_physical_attempt_started
                             || resources.backend.release_obligation_mask() != 0)
@@ -1602,56 +1694,25 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             super::dispatch::observation::ObserverLifecycle::ResetAll,
                         );
                     }
-                    let Some(post_restore_target) = load_target_stamp(target) else {
-                        core.runtime.verified_target = None;
-                        core.runtime.focus_restore_started_ticks = None;
-                        if !wait_for_blocked_resume_replan(
-                            now_ticks,
-                            resume_wait_signals,
-                            manual_pause,
-                            focus_active,
-                            focus_matches(config.focus.require_focus, focus_active),
-                            config.focus.require_focus,
-                            target,
-                            None,
-                            qpc_clock,
-                            &resources.waiter,
-                            interrupt,
-                            &mut core.metrics,
-                            &mut core.runtime.terminal_error,
-                        ) {
-                            break;
-                        }
-                        continue;
-                    };
-                    if !focus_matches_hwnd(
-                        config.focus.require_focus,
+                    let post_restore_target = match resolve_resume_target_or_wait(
+                        now_ticks,
+                        resume_wait_signals,
+                        manual_pause,
                         focus_active,
-                        post_restore_target.hwnd,
-                    ) || !target_stamp_still_current(target, preflight_target)
-                        || post_restore_target != preflight_target
-                    {
-                        core.runtime.verified_target = None;
-                        core.runtime.focus_restore_started_ticks = None;
-                        if !wait_for_blocked_resume_replan(
-                            now_ticks,
-                            resume_wait_signals,
-                            manual_pause,
-                            focus_active,
-                            focus_matches(config.focus.require_focus, focus_active),
-                            config.focus.require_focus,
-                            target,
-                            Some(post_restore_target),
-                            qpc_clock,
-                            &resources.waiter,
-                            interrupt,
-                            &mut core.metrics,
-                            &mut core.runtime.terminal_error,
-                        ) {
-                            break;
-                        }
-                        continue;
-                    }
+                        config.focus.require_focus,
+                        target,
+                        Some(preflight_target),
+                        true,
+                        qpc_clock,
+                        &resources.waiter,
+                        interrupt,
+                        &mut core.runtime,
+                        &mut core.metrics,
+                    ) {
+                        ResumeTargetCheck::Ready(stamp) => stamp,
+                        ResumeTargetCheck::Replan => continue,
+                        ResumeTargetCheck::Exit => break,
+                    };
                     if let Err(error) = validate_resume_prerequisites(
                         now_ticks,
                         target,
@@ -1684,39 +1745,20 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             Some(format!("focus resume journal cleanup failed: {error}"));
                         break;
                     }
-                    let resumed_ticks = qpc_ticks_or_terminal!();
-                    if supervisor_expired.is_expired()
-                        || supervisor_expired
-                            .check_expired(resumed_ticks, timing.lease_timeout_ticks)
+                    if complete_pause_exit(
+                        PauseReason::Focus,
+                        qpc_clock,
+                        supervisor_expired,
+                        timing.lease_timeout_ticks,
+                        &mut resources.playback,
+                        &mut core.runtime,
+                        true,
+                    )
+                    .is_err()
                     {
-                        core.runtime.verified_target = None;
-                        core.runtime.focus_restore_started_ticks = None;
-                        core.runtime.terminal_error =
-                            Some("supervisor lease expired while paused".to_string());
                         break;
                     }
-                    if let Err(error) = resources
-                        .playback
-                        .exit_pause(PauseReason::Focus, resumed_ticks)
-                    {
-                        core.runtime.verified_target = None;
-                        core.runtime.terminal_error =
-                            Some(format!("playback clock failure: {error}"));
-                        break;
-                    }
-                    let progress_state = if resources.playback.is_paused() {
-                        crate::engine::WorkerProgressState::Paused
-                    } else {
-                        crate::engine::WorkerProgressState::Active
-                    };
-                    shared
-                        .publication
-                        .worker_progress
-                        .store(progress_state as u8, Ordering::Release);
-                    shared
-                        .publication
-                        .progress_clock
-                        .publish(&resources.playback);
+                    publish_playback_progress_state(shared, &resources.playback);
                     if desired_pause.load(Ordering::Acquire) {
                         core.runtime.verified_target = None;
                     }
@@ -1776,14 +1818,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     core.runtime.terminal_error = Some(format!("playback clock failure: {error}"));
                     break;
                 }
-                shared.publication.worker_progress.store(
-                    crate::engine::WorkerProgressState::Paused as u8,
-                    Ordering::Release,
-                );
-                shared
-                    .publication
-                    .progress_clock
-                    .publish(&resources.playback);
+                publish_playback_progress_state(shared, &resources.playback);
             } else if !manual_pause && resources.playback.has_pause_reason(PauseReason::Manual) {
                 if !resources.playback.has_pause_reason(PauseReason::Focus) {
                     if core.runtime.manual_pause_suspension_pending {
@@ -1806,53 +1841,25 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             super::dispatch::observation::ObserverLifecycle::ResetAll,
                         );
                     }
-                    let Some(preflight_target) = load_target_stamp(target) else {
-                        core.runtime.verified_target = None;
-                        if !wait_for_blocked_resume_replan(
-                            now_ticks,
-                            resume_wait_signals,
-                            manual_pause,
-                            focus_active,
-                            focus_matches(config.focus.require_focus, focus_active),
-                            config.focus.require_focus,
-                            target,
-                            None,
-                            qpc_clock,
-                            &resources.waiter,
-                            interrupt,
-                            &mut core.metrics,
-                            &mut core.runtime.terminal_error,
-                        ) {
-                            break;
-                        }
-                        continue;
-                    };
-                    if !focus_matches_hwnd(
-                        config.focus.require_focus,
+                    let preflight_target = match resolve_resume_target_or_wait(
+                        now_ticks,
+                        resume_wait_signals,
+                        manual_pause,
                         focus_active,
-                        preflight_target.hwnd,
-                    ) || !target_stamp_still_current(target, preflight_target)
-                    {
-                        core.runtime.verified_target = None;
-                        if !wait_for_blocked_resume_replan(
-                            now_ticks,
-                            resume_wait_signals,
-                            manual_pause,
-                            focus_active,
-                            focus_matches(config.focus.require_focus, focus_active),
-                            config.focus.require_focus,
-                            target,
-                            Some(preflight_target),
-                            qpc_clock,
-                            &resources.waiter,
-                            interrupt,
-                            &mut core.metrics,
-                            &mut core.runtime.terminal_error,
-                        ) {
-                            break;
-                        }
-                        continue;
-                    }
+                        config.focus.require_focus,
+                        target,
+                        None,
+                        false,
+                        qpc_clock,
+                        &resources.waiter,
+                        interrupt,
+                        &mut core.runtime,
+                        &mut core.metrics,
+                    ) {
+                        ResumeTargetCheck::Ready(stamp) => stamp,
+                        ResumeTargetCheck::Replan => continue,
+                        ResumeTargetCheck::Exit => break,
+                    };
                     if let Err(error) = validate_resume_prerequisites(
                         now_ticks,
                         target,
@@ -1894,45 +1901,25 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         ));
                         break;
                     }
-                    let resumed_ticks = qpc_ticks_or_terminal!();
-                    if supervisor_expired.is_expired()
-                        || supervisor_expired
-                            .check_expired(resumed_ticks, timing.lease_timeout_ticks)
-                    {
-                        core.runtime.verified_target = None;
-                        core.runtime.terminal_error =
-                            Some("supervisor lease expired while paused".to_string());
+                    let Ok(_resumed_ticks) = complete_pause_exit(
+                        PauseReason::Manual,
+                        qpc_clock,
+                        supervisor_expired,
+                        timing.lease_timeout_ticks,
+                        &mut resources.playback,
+                        &mut core.runtime,
+                        false,
+                    ) else {
                         break;
-                    }
-                    if let Err(error) = resources
-                        .playback
-                        .exit_pause(PauseReason::Manual, resumed_ticks)
-                    {
-                        core.runtime.verified_target = None;
-                        core.runtime.terminal_error =
-                            Some(format!("playback clock failure: {error}"));
-                        break;
-                    }
+                    };
                     #[cfg(any(test, feature = "test-support"))]
                     if !resources.playback.is_paused()
-                        && let Ok(elapsed_ticks) = resources.playback.get_elapsed(resumed_ticks)
+                        && let Ok(elapsed_ticks) = resources.playback.get_elapsed(_resumed_ticks)
                     {
                         command_timing
-                            .record_manual_resume_commit(resumed_ticks, elapsed_ticks.as_u64());
+                            .record_manual_resume_commit(_resumed_ticks, elapsed_ticks.as_u64());
                     }
-                    let progress_state = if resources.playback.is_paused() {
-                        crate::engine::WorkerProgressState::Paused
-                    } else {
-                        crate::engine::WorkerProgressState::Active
-                    };
-                    shared
-                        .publication
-                        .worker_progress
-                        .store(progress_state as u8, Ordering::Release);
-                    shared
-                        .publication
-                        .progress_clock
-                        .publish(&resources.playback);
+                    publish_playback_progress_state(shared, &resources.playback);
                 } else {
                     core.runtime.verified_target = None;
                 }
@@ -2092,6 +2079,7 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                 candidate.as_ref(),
                 &mut core.runtime,
             );
+            let mut candidate = candidate;
             if wait_target_qpc > now_ticks {
                 if let Some(staged_candidate) = candidate.as_ref() {
                     let control_signals = FinalControlSignals {
@@ -2121,14 +2109,14 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                             if target_stale {
                                 core.runtime.verified_target = None;
                                 core.runtime.terminal_error.get_or_insert_with(|| {
-                                    if target.is_valid() {
-                                        "staged target stamp no longer matches its immutable session binding"
-                                            .to_string()
-                                    } else {
-                                        "immutable session target or owner identity was invalidated"
-                                            .to_string()
-                                    }
-                                });
+                            if target.is_valid() {
+                                "staged target stamp no longer matches its immutable session binding"
+                                    .to_string()
+                            } else {
+                                "immutable session target or owner identity was invalidated"
+                                    .to_string()
+                            }
+                        });
                                 break;
                             }
                             // Target, foreground, and control replans retain
@@ -2139,112 +2127,139 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         StagedDispatchOutcome::Exit => break,
                     }
                 }
-                if wait_target_qpc > now_ticks {
-                    #[cfg(any(test, feature = "test-support"))]
-                    if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
-                        hook.visit_startup_checkpoint(
-                            super::super::config::StartupCheckpoint::DispatchWait,
-                        );
-                    }
-                    #[cfg(any(test, feature = "test-support"))]
-                    if candidate
-                        .as_ref()
-                        .is_some_and(|candidate| candidate.packet_masks.down_mask != 0)
-                        && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
-                        && let Some(candidate) = candidate.as_ref()
-                    {
-                        hook.record_down_window(
-                            candidate.timing_window.authored_target_qpc.as_u64(),
-                            candidate.timing_window.packet_not_before_qpc.as_u64(),
-                        );
-                        hook.visit_startup_checkpoint(
-                            super::super::config::StartupCheckpoint::PhysicalWait,
-                        );
-                    }
-                    let authored_target_ticks = candidate.as_ref().map_or_else(
-                        || {
-                            TimelineTicks::from_raw(
-                                wait_target_qpc
-                                    .as_u64()
-                                    .saturating_sub(resources.playback.epoch.as_u64()),
-                            )
-                        },
-                        |candidate| candidate.authored_target_ticks,
+                #[cfg(any(test, feature = "test-support"))]
+                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                    hook.visit_startup_checkpoint(
+                        super::super::config::StartupCheckpoint::DispatchWait,
                     );
+                }
+                #[cfg(any(test, feature = "test-support"))]
+                if candidate
+                    .as_ref()
+                    .is_some_and(|candidate| candidate.packet_masks().down_mask != 0)
+                    && let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
+                    && let Some(candidate) = candidate.as_ref()
+                {
+                    hook.record_down_window(
+                        candidate.timing_window.authored_target_qpc.as_u64(),
+                        candidate.timing_window.packet_not_before_qpc.as_u64(),
+                    );
+                    hook.visit_startup_checkpoint(
+                        super::super::config::StartupCheckpoint::PhysicalWait,
+                    );
+                }
+                let authored_target_ticks = candidate.as_ref().map_or_else(
+                    || {
+                        TimelineTicks::from_raw(
+                            wait_target_qpc
+                                .as_u64()
+                                .saturating_sub(resources.playback.epoch.as_u64()),
+                        )
+                    },
+                    |candidate| candidate.authored_target_ticks,
+                );
 
-                    match wait_for_next_boundary(WaitBoundaryInput {
-                        deadline: WaitDeadline {
-                            physical_target_qpc: Some(wait_target_qpc),
-                            spin_threshold_ticks: if candidate.is_some() {
-                                timing.effective_spin_threshold_ticks
-                            } else {
-                                DurationTicks::ZERO
-                            },
-                            qpc_clock,
+                match wait_for_next_boundary(WaitBoundaryInput {
+                    deadline: WaitDeadline {
+                        physical_target_qpc: Some(wait_target_qpc),
+                        spin_threshold_ticks: if candidate.is_some() {
+                            timing.effective_spin_threshold_ticks
+                        } else {
+                            DurationTicks::ZERO
                         },
-                        signals: WaitSignals {
-                            waiter: &resources.waiter,
-                            interrupt,
-                        },
-                        mutable: WaitMutable {
-                            local_metrics: &mut core.metrics,
-                            terminal_error: &mut core.runtime.terminal_error,
-                        },
-                    }) {
-                        WaitBoundary::Due {
-                            wait_result,
-                            target_qpc,
-                            dispatch_qpc,
-                            planned_wait_ticks,
-                        } => {
-                            super::dispatch::publish_pending_wait_observation(
-                                &mut core.runtime,
+                        qpc_clock,
+                    },
+                    signals: WaitSignals {
+                        waiter: &resources.waiter,
+                        interrupt,
+                    },
+                    mutable: WaitMutable {
+                        local_metrics: &mut core.metrics,
+                        terminal_error: &mut core.runtime.terminal_error,
+                    },
+                }) {
+                    WaitBoundary::Due {
+                        wait_result,
+                        target_qpc,
+                        dispatch_qpc,
+                        planned_wait_ticks,
+                    } => {
+                        super::dispatch::publish_pending_wait_observation(
+                            &mut core.runtime,
+                            core.observer.pending.as_ref(),
+                            &mut core.metrics,
+                        );
+                        core.runtime.pending_wait_observation =
+                            super::dispatch::record_wait_attempt(
                                 core.observer.pending.as_ref(),
-                                &mut core.metrics,
-                            );
-                            core.runtime.pending_wait_observation =
-                                super::dispatch::record_wait_attempt(
-                                    core.observer.pending.as_ref(),
-                                    wait_result,
-                                    target_qpc,
-                                    planned_wait_ticks,
-                                    authored_target_ticks,
-                                    resources.playback.epoch,
-                                    None,
-                                    &mut core.metrics,
-                                );
-                            if let Some(wait_result) = wait_result {
-                                core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
-                                core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
-                            } else {
-                                core.runtime.last_dispatch_deadline_wake_qpc = Some(dispatch_qpc);
-                                core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
-                            }
-                        }
-                        WaitBoundary::Interrupted(wait_result, target_qpc, planned_wait_ticks) => {
-                            core.runtime.last_dispatch_deadline_wake_qpc = None;
-                            core.runtime.last_dispatch_deadline_target_qpc = None;
-                            super::dispatch::publish_interrupted_physical_wait(
-                                &mut core.runtime,
-                                core.observer.pending.as_ref(),
-                                &mut core.metrics,
                                 wait_result,
                                 target_qpc,
                                 planned_wait_ticks,
                                 authored_target_ticks,
                                 resources.playback.epoch,
-                            );
-                            let _ = interrupt.try_take();
-                            continue;
-                        }
-                        WaitBoundary::Exit => {
-                            super::dispatch::publish_pending_wait_observation(
-                                &mut core.runtime,
-                                core.observer.pending.as_ref(),
+                                None,
                                 &mut core.metrics,
                             );
-                            break;
+                        if let Some(wait_result) = wait_result {
+                            core.runtime.last_dispatch_deadline_wake_qpc = wait_result.wake_qpc;
+                            core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
+                        } else {
+                            core.runtime.last_dispatch_deadline_wake_qpc = Some(dispatch_qpc);
+                            core.runtime.last_dispatch_deadline_target_qpc = Some(target_qpc);
                         }
+                        match reselect_candidate_after_wait(
+                            &mut candidate,
+                            dispatch_qpc,
+                            resources.playback.epoch,
+                            core.observer.pending.is_some(),
+                            target,
+                            resources,
+                            &mut core.runtime,
+                        ) {
+                            Ok(PostWaitSelection::SendReady) => {}
+                            Ok(PostWaitSelection::Replan) => continue,
+                            Ok(PostWaitSelection::Finished) => break,
+                            Ok(PostWaitSelection::TargetInvalidated) => {
+                                core.runtime.terminal_error.get_or_insert_with(|| {
+                                    if target.is_valid() {
+                                        "post-wake restaging rejected the immutable session target"
+                                            .to_string()
+                                    } else {
+                                        "immutable session target or owner identity was invalidated"
+                                            .to_string()
+                                    }
+                                });
+                                break;
+                            }
+                            Err(error) => {
+                                core.runtime.terminal_error = Some(error);
+                                break;
+                            }
+                        }
+                    }
+                    WaitBoundary::Interrupted(wait_result, target_qpc, planned_wait_ticks) => {
+                        core.runtime.last_dispatch_deadline_wake_qpc = None;
+                        core.runtime.last_dispatch_deadline_target_qpc = None;
+                        super::dispatch::publish_interrupted_physical_wait(
+                            &mut core.runtime,
+                            core.observer.pending.as_ref(),
+                            &mut core.metrics,
+                            wait_result,
+                            target_qpc,
+                            planned_wait_ticks,
+                            authored_target_ticks,
+                            resources.playback.epoch,
+                        );
+                        let _ = interrupt.try_take();
+                        continue;
+                    }
+                    WaitBoundary::Exit => {
+                        super::dispatch::publish_pending_wait_observation(
+                            &mut core.runtime,
+                            core.observer.pending.as_ref(),
+                            &mut core.metrics,
+                        );
+                        break;
                     }
                 }
             }

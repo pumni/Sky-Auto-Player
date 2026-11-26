@@ -44,7 +44,7 @@ fn due_candidate_rechecks_stop_skip_focus_and_owner_before_sender() {
             )
             .expect("stage future final-gate candidate")
             .expect("future Down candidate");
-        assert_eq!(candidate.source_action_index, 6690);
+        assert_eq!(candidate.source_action_index(), 6690);
         assert_eq!(
             harness.pre_wait_candidate_admission_for_test(&candidate),
             StagedDispatchOutcome::Dispatched

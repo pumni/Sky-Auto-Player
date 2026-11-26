@@ -1,7 +1,7 @@
 use super::*;
 use crate::model::OnsetChordInput;
 use crate::plan::build_onset_plan;
-use crate::time::{DurationTicks, QpcTicks, TimelineTicks};
+use crate::time::{QpcTicks, TimelineTicks};
 
 #[test]
 fn executor_new_with_cancellation_and_memory_metrics() {
@@ -117,10 +117,16 @@ fn up_slot_timings_derives_nominal_up_and_preserves_completion_floor() {
     }
 
     let epoch = QpcTicks::from_raw(1_000);
-    let summary = exec
-        .up_slot_timing_summary(0b11, epoch)
-        .expect("summary arithmetic")
-        .expect("active Up slots");
+    let DispatchDecision::Send {
+        up_mask: 0b11,
+        up_summary: Some(summary),
+        ..
+    } = exec
+        .evaluate_at(QpcTicks::from_raw(20_000), epoch)
+        .expect("evaluate summary")
+    else {
+        panic!("expected due Up send with summary");
+    };
     assert_eq!(summary.slot_count, 2);
     assert_eq!(summary.first_source_action_index, 10);
     assert_eq!(summary.authored_target_qpc, QpcTicks::from_raw(19_000));
@@ -235,31 +241,20 @@ fn executor_cancellation_interrupts_large_materialization() {
     let plan = build_onset_plan(&inputs, &[0x15], 8_000).expect("plan");
     let qpc_1mhz = std::num::NonZeroU64::new(1_000_000).expect("1 MHz");
     let mut checks = 0;
-    let mut converted_timestamps = 0;
-    let result = DispatchExecutor::new_with_converter_for_test(
-        &plan,
-        qpc_1mhz,
-        DurationTicks::from_raw(8_000),
-        |us| {
-            converted_timestamps += 1;
-            Ok::<TimelineTicks, String>(TimelineTicks::from_raw(us))
-        },
-        || {
-            checks += 1;
-            if checks == 4 {
-                Err("cancelled during materialization".into())
-            } else {
-                Ok(())
-            }
-        },
-    );
+    let result = PreparedDispatchSchedule::prepare_with_cancellation(&plan, qpc_1mhz, 0, || {
+        checks += 1;
+        if checks == 4 {
+            Err("cancelled during materialization".into())
+        } else {
+            Ok(())
+        }
+    });
     assert!(
         result
             .unwrap_err()
             .contains("cancelled during materialization")
     );
     assert_eq!(checks, 4);
-    assert_eq!(converted_timestamps, 2 * 4_096);
 }
 
 #[test]

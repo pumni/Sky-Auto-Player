@@ -222,7 +222,7 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
             .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
             .expect("stage candidate")
             .expect("Down candidate");
-        let packet_mask = candidate.packet_masks.down_mask;
+        let packet_mask = candidate.packet_masks().down_mask;
         let accounting_before = harness.resources.scheduler.accounting();
         let clock = harness.resources.clock;
         harness.resources.backend.set_packet_emitter(move |packet| {
@@ -335,6 +335,7 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
                 up_mask,
                 down_chord,
                 timing_window,
+                ..
             } => (up_mask, down_chord, timing_window),
             decision => panic!("expected production mixed Up+Down, got {decision:?}"),
         };
@@ -344,8 +345,8 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
             .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
             .expect("stage production mixed packet")
             .expect("mixed packet candidate");
-        assert_eq!(candidate.packet_masks.up_mask, 0b01);
-        assert_eq!(candidate.packet_masks.down_mask, 0b10);
+        assert_eq!(candidate.packet_masks().up_mask, 0b01);
+        assert_eq!(candidate.packet_masks().down_mask, 0b10);
 
         let attempts = Arc::new(AtomicUsize::new(0));
         let observed_attempts = Arc::clone(&attempts);
@@ -484,6 +485,7 @@ fn invalidated_session_target_does_not_send_origin_up() {
             up_mask,
             down_chord,
             timing_window,
+            ..
         } => (up_mask, down_chord, timing_window),
         decision => panic!("expected mixed Up+Down candidate, got {decision:?}"),
     };
@@ -497,7 +499,7 @@ fn invalidated_session_target_does_not_send_origin_up() {
         )
         .expect("stage mixed candidate")
         .expect("mixed candidate");
-    assert_eq!(mixed.packet_masks.down_mask, 0b10);
+    assert_eq!(mixed.packet_masks().down_mask, 0b10);
     let accounting_before_replan = harness.generation_accounting_for_test();
 
     harness.invalidate_focus_owner_for_test(2, 202);
@@ -707,8 +709,8 @@ fn suspend_after_sender_return_mixed_commits_and_preserves_remaining_down_safety
         .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage Mixed")
         .expect("Mixed candidate");
-    assert_eq!(mixed_candidate.packet_masks.up_mask, 0b01);
-    assert_eq!(mixed_candidate.packet_masks.down_mask, 0b10);
+    assert_eq!(mixed_candidate.packet_masks().up_mask, 0b01);
+    assert_eq!(mixed_candidate.packet_masks().down_mask, 0b10);
 
     let clock = harness.resources.clock;
     let system_power = Arc::clone(&harness.system_power);

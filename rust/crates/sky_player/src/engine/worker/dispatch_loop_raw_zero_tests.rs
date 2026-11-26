@@ -53,6 +53,7 @@ fn stage_at_qpc(
             up_mask,
             down_chord,
             timing_window,
+            ..
         } => {
             let candidate = harness
                 .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
@@ -135,7 +136,7 @@ fn proven_raw_zero_down_only_clears_only_the_new_obligation_and_terminates() {
         )
         .expect("stage A Down")
         .expect("A Down candidate");
-    assert_eq!(first.source_action_index, 600);
+    assert_eq!(first.source_action_index(), 600);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(first, false),
         StagedDispatchOutcome::Dispatched
@@ -147,7 +148,7 @@ fn proven_raw_zero_down_only_clears_only_the_new_obligation_and_terminates() {
     let (b_up_mask, b_down, b) = stage_at_qpc(&mut harness, b_at, epoch);
     assert_eq!(b_up_mask, 0);
     assert_eq!(b_down.map(|chord| chord.source_action_index), Some(601));
-    assert_eq!(b.packet_masks, PhysicalPacket::new(0, 0b0010));
+    assert_eq!(b.packet_masks(), PhysicalPacket::new(0, 0b0010));
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(b, false),
         StagedDispatchOutcome::Exit
@@ -193,7 +194,7 @@ fn raw_zero_does_not_create_a_completion_floor_or_send_later_events() {
         )
         .expect("stage A Down")
         .expect("A Down candidate");
-    assert_eq!(first.source_action_index, 600);
+    assert_eq!(first.source_action_index(), 600);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(first, false),
         StagedDispatchOutcome::Dispatched
@@ -203,7 +204,7 @@ fn raw_zero_does_not_create_a_completion_floor_or_send_later_events() {
     wait_until_qpc(&harness, b_at);
     let (_, b_down, b) = stage_at_qpc(&mut harness, b_at, epoch);
     assert_eq!(b_down.map(|chord| chord.source_action_index), Some(601));
-    assert_eq!(b.packet_masks, PhysicalPacket::new(0, 0b0010));
+    assert_eq!(b.packet_masks(), PhysicalPacket::new(0, 0b0010));
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(b, false),
         StagedDispatchOutcome::Exit
@@ -347,7 +348,7 @@ fn raw_zero_classifier_rejects_short_packet_and_contradictory_qpc() {
         let b_at = qpc_at_offset(&harness, epoch, 5_000);
         wait_until_qpc(&harness, b_at);
         let (_, _, b) = stage_at_qpc(&mut harness, b_at, epoch);
-        assert_eq!(b.packet_masks.down_mask.count_ones(), 2);
+        assert_eq!(b.packet_masks().down_mask.count_ones(), 2);
         assert_eq!(
             harness.dispatch_staged_candidate_for_test(b, false),
             StagedDispatchOutcome::Exit
@@ -449,7 +450,7 @@ fn mixed_up_a_down_b_raw_zero_uses_conservative_reconciliation() {
     let (up_mask, down, mixed) = stage_at_qpc(&mut harness, mixed_at, epoch);
     assert_eq!(up_mask, 0b0001);
     assert_eq!(down.map(|chord| chord.source_action_index), Some(642));
-    assert_eq!(mixed.packet_masks, PhysicalPacket::new(0b0001, 0b0010));
+    assert_eq!(mixed.packet_masks(), PhysicalPacket::new(0b0001, 0b0010));
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(mixed, false),
         StagedDispatchOutcome::Exit

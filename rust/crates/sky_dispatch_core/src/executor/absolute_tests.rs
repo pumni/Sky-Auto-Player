@@ -44,6 +44,7 @@ fn absolute_qpc_no_early_down_and_completion_anchored_release() {
         up_mask: 0,
         down_chord: Some(chord),
         timing_window,
+        ..
     } = decision
     else {
         panic!("expected Down send, got {decision:?}");
@@ -84,6 +85,7 @@ fn absolute_qpc_no_early_down_and_completion_anchored_release() {
         up_mask: 1,
         down_chord: None,
         timing_window,
+        ..
     } = up_decision
     else {
         panic!("expected Up send, got {up_decision:?}");

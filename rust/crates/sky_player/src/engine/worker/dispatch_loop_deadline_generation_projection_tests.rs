@@ -150,6 +150,7 @@ fn scheduler_h_floor_and_authored_repeat_trace_uses_single_sender_commits() {
             up_mask: 0,
             down_chord: Some(chord),
             timing_window,
+            ..
         } if chord.source_action_index == 6672
             && timing_window.down_not_before_qpc <= down_b_eval_qpc
     ));

@@ -49,6 +49,7 @@ fn run_trace(
                 up_mask,
                 down_chord,
                 timing_window,
+                ..
             } => {
                 let down_mask = down_chord.map_or(0, |c| c.key_mask);
                 assert_eq!(up_mask & down_mask, 0, "Up and Down masks must be disjoint");

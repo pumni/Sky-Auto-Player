@@ -1152,8 +1152,8 @@ fn run_windows(args: RunArgs) -> i32 {
     }
     if args.scenario == Scenario::TargetHwndChange && (!target_changed || !target_change_cleanup_exception(&snapshot) || !sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "target HWND transition did not fail closed before gameplay delivery with zero transport events", details); }
     if let Some((verdict, reason)) = owner_identity::failure_result(args.scenario, snapshot.terminal_error.as_deref(), sink_events.is_empty(), snapshot.final_release_obligation_mask, owner_binding.process_termination_verified(), down_sender_attempt_count) { return write_report(&args, verdict, reason, details); }
-    if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
-    if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty()) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
+    if args.scenario == Scenario::StopCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("quit") || sink_events.is_empty() || (outcome.attempted_mask & 1) == 0 || outcome.attempts == 0) { return write_report(&args, Verdict::Fail, "explicit stop did not clean up an active physical key", details); }
+    if args.scenario == Scenario::SkipCleanup && (!first_physical_commit_observed || snapshot.outcome.as_deref() != Some("skipped") || sink_events.is_empty() || (outcome.attempted_mask & 1) == 0 || outcome.attempts == 0) { return write_report(&args, Verdict::Fail, "explicit skip did not clean up an active physical key", details); }
     if args.scenario == Scenario::PauseResume && (!first_physical_commit_observed || !pause_observed || !resume_requested) { return write_report(&args, Verdict::Fail, "pause/resume control evidence is incomplete", details); }
     if args.scenario == Scenario::PauseResumeActiveCleanup
         && (!first_physical_commit_observed
@@ -1195,6 +1195,8 @@ fn run_windows(args: RunArgs) -> i32 {
         if !first_physical_commit_observed
             || !system_suspend_terminal_observed
             || resume_requested
+            || (outcome.attempted_mask & 1) == 0
+            || outcome.attempts == 0
             || power.suspend_notifications == 0
             || power.resume_notifications != 0
             || !power.suspended

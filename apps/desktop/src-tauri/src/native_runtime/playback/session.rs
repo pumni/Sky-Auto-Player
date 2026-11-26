@@ -2954,10 +2954,21 @@ fn compile_dispatch_schedule_with_checkpoint(
     let caller_retained_capacity_bytes = caller_retained_capacity_bytes
         .checked_add(schedule_metadata_heap_capacity_bytes(schedule)?)
         .ok_or_else(|| "native caller-retained startup capacity overflow".to_string())?;
-    let estimated_input_bytes = checked_capacity_bytes(
-        schedule.chords.len(),
-        std::mem::size_of::<OnsetChordInput>(),
-    )?;
+    let estimated_spilled_scan_bytes: usize = schedule
+        .chords
+        .iter()
+        .filter(|chord| chord.scan_codes.len() > 4)
+        .try_fold(0usize, |total, chord| {
+            checked_capacity_bytes(chord.scan_codes.len(), std::mem::size_of::<u16>())
+                .and_then(|bytes| checked_capacity_sum([total, bytes]))
+        })?;
+    let estimated_input_bytes = checked_capacity_sum([
+        checked_capacity_bytes(
+            schedule.chords.len(),
+            std::mem::size_of::<OnsetChordInput>(),
+        )?,
+        estimated_spilled_scan_bytes,
+    ])?;
     let preflight_bytes =
         checked_capacity_sum([caller_retained_capacity_bytes, estimated_input_bytes])?;
     if preflight_bytes > sky_player::adapter_support::MAX_RETAINED_DISPATCH_BYTES {
@@ -2971,6 +2982,7 @@ fn compile_dispatch_schedule_with_checkpoint(
     chords
         .try_reserve(schedule.chords.len())
         .map_err(|error| format!("native onset chord allocation failed: {error}"))?;
+    let mut spilled_scan_code_bytes = 0usize;
     for (index, chord) in schedule.chords.iter().enumerate() {
         if index.is_multiple_of(256) && cancelled.load(Ordering::Acquire) {
             return Err("native schedule compilation cancelled".into());
@@ -2985,6 +2997,12 @@ fn compile_dispatch_schedule_with_checkpoint(
             .try_reserve(chord.scan_codes.len())
             .map_err(|error| format!("native scan code allocation failed: {error}"))?;
         scan_codes.extend_from_slice(&chord.scan_codes);
+        if scan_codes.spilled() {
+            spilled_scan_code_bytes = checked_capacity_sum([
+                spilled_scan_code_bytes,
+                checked_capacity_bytes(scan_codes.capacity(), std::mem::size_of::<u16>())?,
+            ])?;
+        }
         chords.push(OnsetChordInput {
             source_action_index: u32::try_from(index).map_err(|_| "native chord index overflow")?,
             scheduled_us: chord.at_us,
@@ -2994,12 +3012,14 @@ fn compile_dispatch_schedule_with_checkpoint(
             checkpoint(index + 1);
         }
     }
+    let temporary_retained_capacity_bytes =
+        checked_capacity_sum([caller_retained_capacity_bytes, spilled_scan_code_bytes])?;
     sky_player::adapter_support::build_onset_plan_with_memory_accounting(
         &chords,
         &sky_app_core::song::SKY_SCAN_CODES,
         schedule.hold_us,
         chords.capacity(),
-        caller_retained_capacity_bytes,
+        temporary_retained_capacity_bytes,
         || cancelled.load(Ordering::Acquire),
     )
     .map_err(|error| format!("native onset plan construction failed: {error}"))

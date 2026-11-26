@@ -166,6 +166,7 @@ fn production_verified_cleanup_resume_fixture() -> (
             up_mask,
             down_chord,
             timing_window,
+            ..
         } => (up_mask, down_chord, timing_window),
         decision => panic!("expected initial production Down, got {decision:?}"),
     };
@@ -433,6 +434,7 @@ fn lifecycle_verified_cleanup_resume_dispatches_without_allocating() {
                 up_mask,
                 down_chord,
                 timing_window,
+                ..
             } => (up_mask, down_chord, timing_window),
             other => panic!("expected immediate authored Send decision, got {other:?}"),
         };
@@ -520,6 +522,7 @@ fn production_blocked_same_key_repeat_wait_and_replan_no_alloc() {
             up_mask,
             down_chord,
             timing_window,
+            ..
         } => (up_mask, down_chord, timing_window),
         other => panic!("expected Up-only Send while repeat is blocked, got {other:?}"),
     };
@@ -550,6 +553,7 @@ fn production_blocked_same_key_repeat_wait_and_replan_no_alloc() {
             up_mask,
             down_chord,
             timing_window,
+            ..
         } => (up_mask, down_chord, timing_window),
         other => panic!("expected unblocked repeat Down Send, got {other:?}"),
     };
@@ -573,4 +577,71 @@ fn production_blocked_same_key_repeat_wait_and_replan_no_alloc() {
     assert_eq!(packets[0].0, PhysicalPacket::new(0, 1));
     assert_eq!(packets[1].0, PhysicalPacket::new(1, 0));
     assert_eq!(packets[2].0, PhysicalPacket::new(0, 1));
+}
+
+#[test]
+fn production_post_wake_newly_due_up_replan_no_alloc() {
+    use sky_dispatch_core::executor::DispatchDecision;
+
+    let _lock = TEST_LOCK.lock();
+    let clock = clock();
+    // Chord 0 on slot 0 at 0ms, Chord 1 on slot 1 at 20ms (disjoint).
+    let chords = [chord(0, 0, &[0x15]), chord(1, 20_000, &[0x16])];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
+    harness
+        .attach_executor_for_test()
+        .expect("executor invariants");
+    let epoch = reanchor_in_the_past(&mut harness, clock);
+
+    // 1. Dispatch Chord 0.
+    let now = clock.now().expect("first Down QPC");
+    let first_chord = harness.current_executor_chord_for_test();
+    assert!(matches!(
+        stage_and_dispatch(&mut harness, epoch, now, 0, first_chord),
+        StagedDispatchOutcome::Dispatched
+    ));
+
+    // 2. Stage Chord 1 (Down-only) before Chord 0's Up is due.
+    //    Chord 0 completed at `now`, so its Up floor is `now + H` (~17.167ms).
+    let c1_authored = epoch
+        .checked_add_duration(clock.duration_from_us(20_000).expect("20ms offset"))
+        .expect("c1 authored");
+    let DispatchDecision::Send {
+        up_mask: 0,
+        down_chord: Some(c1_chord),
+        timing_window: c1_window,
+        ..
+    } = harness
+        .evaluate_live_scheduler_for_test(c1_authored, epoch)
+        .expect("evaluate c1")
+    else {
+        panic!("expected Down-only c1 before Up0 is due");
+    };
+    let staged_c1 = harness
+        .stage_candidate_with_scheduler_window_for_test(0, Some(c1_chord), c1_window)
+        .expect("stage c1")
+        .expect("c1");
+
+    // 3. Simulate a late wake after Chord 0's release floor (now + 25ms > now + 17.167ms)
+    //    and verify post-wake reselection rebuilds into Mixed (Up 0 + Down 1)
+    //    and dispatches with ZERO heap allocations!
+    let late_wake = now
+        .checked_add_duration(clock.duration_from_us(25_000).expect("25ms late wake"))
+        .expect("late wake");
+    enable_counting();
+    let reselected = harness
+        .reselect_candidate_after_wait_for_test(Some(staged_c1), late_wake, false)
+        .expect("post-wake reselect")
+        .expect("reselected mixed candidate");
+    harness.set_mock_sender_start_qpc_for_test(late_wake);
+    let outcome = harness.dispatch_staged_candidate_for_test(reselected, false);
+    let allocs = disable_counting();
+    assert_eq!(allocs, 0, "post-wake newly due Up replan allocated");
+    assert!(matches!(outcome, StagedDispatchOutcome::Dispatched));
+
+    let packets = packets.lock().expect("packet capture");
+    assert_eq!(packets.len(), 2);
+    assert_eq!(packets[0].0, PhysicalPacket::new(0, 1));
+    assert_eq!(packets[1].0, PhysicalPacket::new(1, 2));
 }

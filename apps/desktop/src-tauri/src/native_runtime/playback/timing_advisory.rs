@@ -113,16 +113,31 @@ fn analyze_compiled_variant_with_hook(
 
 /// Count the distinct union of authored onset timestamps (`chord.scheduled_us`)
 /// and nominal release timestamps (`chord.scheduled_us + hold_us`) in O(n) time
-/// and O(1) extra space using two sorted cursors.
+/// and O(1) extra space using two sorted cursors, with bounded cancellation checks.
+#[cfg(test)]
 pub(crate) fn count_authored_timestamp_groups(
     chords: &[sky_player::adapter_support::OnsetChord],
     hold_us: u64,
 ) -> Result<u64, String> {
+    count_authored_timestamp_groups_with_cancellation(chords, hold_us, &AtomicBool::new(false))
+}
+
+pub(crate) fn count_authored_timestamp_groups_with_cancellation(
+    chords: &[sky_player::adapter_support::OnsetChord],
+    hold_us: u64,
+    cancelled: &AtomicBool,
+) -> Result<u64, String> {
+    const CHECKPOINT_INTERVAL: usize = 4096;
     let n = chords.len();
     let mut i = 0usize;
     let mut j = 0usize;
     let mut count = 0u64;
+    let mut steps = 0usize;
     while i < n && j < n {
+        if steps.is_multiple_of(CHECKPOINT_INTERVAL) && cancelled.load(Ordering::Acquire) {
+            return Err("analysis was cancelled during timestamp group scan".to_string());
+        }
+        steps += 1;
         let onset_us = chords[i].scheduled_us;
         let release_us = chords[j]
             .scheduled_us
@@ -141,6 +156,10 @@ pub(crate) fn count_authored_timestamp_groups(
             .ok_or_else(|| "timestamp group count overflow".to_string())?;
     }
     while j < n {
+        if steps.is_multiple_of(CHECKPOINT_INTERVAL) && cancelled.load(Ordering::Acquire) {
+            return Err("analysis was cancelled during timestamp group scan".to_string());
+        }
+        steps += 1;
         chords[j]
             .scheduled_us
             .checked_add(hold_us)
@@ -151,6 +170,10 @@ pub(crate) fn count_authored_timestamp_groups(
             .ok_or_else(|| "timestamp group count overflow".to_string())?;
     }
     while i < n {
+        if steps.is_multiple_of(CHECKPOINT_INTERVAL) && cancelled.load(Ordering::Acquire) {
+            return Err("analysis was cancelled during timestamp group scan".to_string());
+        }
+        steps += 1;
         i += 1;
         count = count
             .checked_add(1)
@@ -176,11 +199,14 @@ fn analyze_compiled_stream(
         Ok(count) => count,
         Err(_) => return unavailable(result, "The generation count exceeds addressable memory."),
     };
-    let timestamp_group_count =
-        match count_authored_timestamp_groups(compiled.chords(), compiled.hold_us()) {
-            Ok(count) => count,
-            Err(reason) => return unavailable(result, &reason),
-        };
+    let timestamp_group_count = match count_authored_timestamp_groups_with_cancellation(
+        compiled.chords(),
+        compiled.hold_us(),
+        cancelled,
+    ) {
+        Ok(count) => count,
+        Err(reason) => return unavailable(result, &reason),
+    };
     result.total_authored_timestamp_group_count = Some(timestamp_group_count);
     result.down_generation_count = Some(compiled.generation_count());
     result.unmatched_up_count = Some(0);
@@ -431,6 +457,7 @@ fn simulate_dispatch_schedule(
                 up_mask,
                 down_chord,
                 timing_window,
+                ..
             } => {
                 let down_mask = down_chord.map_or(0, |chord| chord.key_mask);
                 if up_mask & down_mask != 0 || up_mask | down_mask == 0 {

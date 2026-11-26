@@ -19,7 +19,7 @@ fn dispatch_with_source(
     candidate: crate::engine::worker::StagedCandidate,
     expected_source_action: &AtomicU32,
 ) {
-    expected_source_action.store(candidate.source_action_index, Ordering::Release);
+    expected_source_action.store(candidate.source_action_index(), Ordering::Release);
     assert!(matches!(
         harness.dispatch_staged_candidate_for_test(candidate, false),
         StagedDispatchOutcome::Dispatched
@@ -77,14 +77,14 @@ fn assert_up_only_anomaly_terminates(fault: UpOnlyQpcFault) {
     harness.attach_executor_for_test().expect("attach executor");
 
     let first = candidate_at(&mut harness, epoch, epoch);
-    assert_eq!(first.source_action_index, 10);
+    assert_eq!(first.source_action_index(), 10);
     dispatch_with_source(&mut harness, first, source.as_ref());
 
     let up_a_target = target_at(&harness, epoch, 20_000);
     wait_until_qpc(&harness, up_a_target);
     let up_a = candidate_at(&mut harness, up_a_target, epoch);
-    assert_eq!(up_a.source_action_index, 10);
-    assert_eq!(up_a.packet_masks, PhysicalPacket::new(1, 0));
+    assert_eq!(up_a.source_action_index(), 10);
+    assert_eq!(up_a.packet_masks(), PhysicalPacket::new(1, 0));
     let qualified_before = (
         harness.local_metrics.authored_lateness_samples,
         harness.local_metrics.residual_lateness_samples,
@@ -342,7 +342,7 @@ fn up_only_anomaly_preserves_residual_when_late_suspend_arrives_before_finalize(
     let up_target = target_at(&harness, epoch, 20_000);
     wait_until_qpc(&harness, up_target);
     let up = candidate_at(&mut harness, up_target, epoch);
-    assert_eq!(up.source_action_index, 0);
+    assert_eq!(up.source_action_index(), 0);
     source.store(0, Ordering::Release);
     assert_eq!(
         harness.dispatch_staged_candidate_for_test(up, false),
@@ -440,7 +440,7 @@ fn suspend_during_partial_progress_down_terminates_error_with_retained_suspend_c
         )
         .expect("stage Down")
         .expect("Down candidate");
-    assert_eq!(candidate.packet_masks, PhysicalPacket::new(0, 3));
+    assert_eq!(candidate.packet_masks(), PhysicalPacket::new(0, 3));
 
     let dispatch_outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
     assert_eq!(

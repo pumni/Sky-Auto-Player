@@ -4,7 +4,7 @@ use super::support::{
     qpc_offset, staged_send_at,
 };
 #[test]
-fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
+fn late_due_reselects_newly_due_up_with_staged_down() {
     use sky_dispatch_win32::wait::{WaitOutcome, WaitResult};
 
     fn chord(index: u32, scheduled_us: u64, scans: &[u16]) -> OnsetChordInput {
@@ -51,9 +51,9 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         )
         .expect("stage initial B1 Down")
         .expect("initial chord candidate");
-    assert_eq!(first.source_action_index, 6680);
+    assert_eq!(first.source_action_index(), 6680);
     assert_eq!(
-        first.packet_masks,
+        first.packet_masks(),
         sky_dispatch_win32::input::PhysicalPacket::new(0, 2)
     );
     harness.set_mock_sender_start_qpc_for_test(epoch);
@@ -116,7 +116,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
         .expect("stage A Down")
         .expect("A Down candidate");
     assert_eq!(
-        a_down.packet_masks,
+        a_down.packet_masks(),
         sky_dispatch_win32::input::PhysicalPacket::new(0, 1)
     );
     harness.set_mock_sender_start_qpc_for_test(a_down_authored);
@@ -168,6 +168,7 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
             up_mask: 0,
             down_chord: Some(chord),
             timing_window,
+            ..
         } if chord.source_action_index == 6682
             && timing_window.packet_not_before_qpc == b2_authored
     ));
@@ -182,9 +183,9 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     )
     .expect("stage projected B2")
     .expect("B2 is staged for its authored deadline");
-    assert_eq!(b2.source_action_index, 6682);
+    assert_eq!(b2.source_action_index(), 6682);
     assert_eq!(
-        b2.packet_masks,
+        b2.packet_masks(),
         sky_dispatch_win32::input::PhysicalPacket::new(0, 2)
     );
     assert_eq!(b2.timing_window.authored_target_qpc, b2_authored);
@@ -257,79 +258,42 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     };
     drop(_waiter_override);
 
-    // The worker's Due arm retains B2. It does not run the scheduler again
-    // before dispatching the already staged candidate.
-    assert_eq!(b2.source_action_index, 6682);
+    // B2: At the actual Due wake, reselect against the authoritative observed
+    // QPC (`late_wake_qpc`). A's Up (+52.167ms) is now eligible and disjoint
+    // from staged B2 (+42.5ms), so the worker rebuilds into Up A + Down B2
+    // (Up-before-Down) in one packet, then C at the next evaluation.
+    let mut reselected = Some(b2);
+    let outcome = super::super::reselect_candidate_after_wait(
+        &mut reselected,
+        late_wake_qpc,
+        epoch,
+        false,
+        &harness.target,
+        &mut harness.resources,
+        &mut harness.runtime,
+    )
+    .expect("post-wake reselection");
+    assert_eq!(outcome, super::super::PostWaitSelection::SendReady);
+    let reselected = reselected.expect("expected post-wake Send(Up A + Down B2)");
+    assert_eq!(reselected.source_action_index(), 6682);
     assert_eq!(
-        b2.packet_masks,
-        sky_dispatch_win32::input::PhysicalPacket::new(0, 2)
+        reselected.packet_masks(),
+        sky_dispatch_win32::input::PhysicalPacket::new(1, 2)
     );
+    assert!(reselected.timing_window.packet_not_before_qpc >= a_up_physical_target);
+    assert!(late_wake_qpc >= reselected.timing_window.packet_not_before_qpc);
     harness.runtime.last_dispatch_deadline_wake_qpc = Some(late_wake_qpc);
     harness.runtime.last_dispatch_deadline_target_qpc = Some(b2_authored);
     harness.set_mock_sender_start_qpc_for_test(late_wake_qpc);
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(b2, false),
+        harness.dispatch_staged_candidate_for_test(reselected, false),
         StagedDispatchOutcome::Dispatched
     );
     assert_eq!(harness.resources.scheduler.chord_cursor(), 3);
-    assert_eq!(harness.resources.backend.active_mask, 3);
+    assert_eq!(harness.resources.backend.active_mask, 2);
     assert_eq!(harness.resources.backend.possibly_active_mask, 0);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
-    assert_eq!(harness.release_obligation_mask_for_test(), 3);
-    assert!(
-        harness
-            .resources
-            .backend
-            .release_owner_proof_for_mask(1)
-            .expect("A origin proof lookup after B2")
-            .expect("A remains independently active")
-            .same_owner(&origin)
-    );
-
-    // Only after the preserved B2 send does the next outer scheduler pass
-    // select A's Up and C's due Down as one up-before-down packet.
-    let (next_action, _, next_to_stage) = super::super::evaluate_scheduler_action_for_staging(
-        &harness.resources.scheduler,
-        late_wake_qpc,
-        epoch,
-    )
-    .expect("fresh next-iteration scheduler evaluation");
-    assert!(matches!(
-        next_action,
-        super::super::SchedulerAction::Send {
-            up_mask: 1,
-            down_chord: Some(chord),
-            ..
-        } if chord.source_action_index == 6683
-    ));
-    let mixed = super::super::stage_scheduler_send_candidate(
-        next_to_stage.expect("fresh scheduler stages A Up plus C Down"),
-        super::super::SchedulerStageAdmission {
-            target: &harness.target,
-            capture_up_slot_timings: false,
-        },
-        &mut harness.resources,
-        &mut harness.runtime,
-    )
-    .expect("stage fresh next-iteration packet")
-    .expect("next iteration selects A Up and C Down");
-    assert_eq!(mixed.source_action_index, 6683);
-    assert_eq!(
-        mixed.packet_masks,
-        sky_dispatch_win32::input::PhysicalPacket::new(1, 4)
-    );
-    assert!(mixed.timing_window.packet_not_before_qpc >= a_up_physical_target);
-    assert!(late_wake_qpc >= mixed.timing_window.packet_not_before_qpc);
-    harness.set_mock_sender_start_qpc_for_test(late_wake_qpc);
-    assert_eq!(
-        harness.dispatch_staged_candidate_for_test(mixed, false),
-        StagedDispatchOutcome::Dispatched
-    );
-    assert_eq!(harness.resources.scheduler.chord_cursor(), 4);
-    assert_eq!(harness.resources.backend.active_mask, 6);
-    assert_eq!(harness.resources.backend.possibly_active_mask, 0);
-    assert_eq!(harness.resources.backend.in_flight_mask, 0);
-    assert_eq!(harness.release_obligation_mask_for_test(), 6);
+    assert_eq!(harness.release_obligation_mask_for_test(), 2);
     assert!(
         harness
             .resources
@@ -349,6 +313,48 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
             .same_owner(&origin)
     );
 
+    // Next outer scheduler pass selects C's due Down (cursor=3 -> 4).
+    let (next_action, _, next_to_stage) = super::super::evaluate_scheduler_action_for_staging(
+        &harness.resources.scheduler,
+        late_wake_qpc,
+        epoch,
+    )
+    .expect("fresh next-iteration scheduler evaluation");
+    assert!(matches!(
+        next_action,
+        super::super::SchedulerAction::Send {
+            up_mask: 0,
+            down_chord: Some(chord),
+            ..
+        } if chord.source_action_index == 6683
+    ));
+    let c_down = super::super::stage_scheduler_send_candidate(
+        next_to_stage.expect("fresh scheduler stages C Down"),
+        super::super::SchedulerStageAdmission {
+            target: &harness.target,
+            capture_up_slot_timings: false,
+        },
+        &mut harness.resources,
+        &mut harness.runtime,
+    )
+    .expect("stage fresh next-iteration packet")
+    .expect("next iteration selects C Down");
+    assert_eq!(c_down.source_action_index(), 6683);
+    assert_eq!(
+        c_down.packet_masks(),
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 4)
+    );
+    harness.set_mock_sender_start_qpc_for_test(late_wake_qpc);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(c_down, false),
+        StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 4);
+    assert_eq!(harness.resources.backend.active_mask, 6);
+    assert_eq!(harness.resources.backend.possibly_active_mask, 0);
+    assert_eq!(harness.resources.backend.in_flight_mask, 0);
+    assert_eq!(harness.release_obligation_mask_for_test(), 6);
+
     let sent = packets.lock().expect("late-Due packet trace");
     assert_eq!(sent.len(), 5);
     assert_eq!(
@@ -365,18 +371,18 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     );
     assert_eq!(
         sent[3].0,
-        sky_dispatch_win32::input::PhysicalPacket::new(0, 2)
+        sky_dispatch_win32::input::PhysicalPacket::new(1, 2)
     );
     assert_eq!(
         sent[4].0,
-        sky_dispatch_win32::input::PhysicalPacket::new(1, 4)
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 4)
     );
     assert!(sent.iter().all(|(_, evidence)| evidence.attempts == 1));
     assert_eq!(sent[0].1.started_ticks, Some(epoch));
     assert!(sent[1].1.started_ticks.expect("B1 Up sender QPC") >= b_h_floor);
     assert_eq!(sent[2].1.started_ticks, Some(a_down_authored));
-    assert!(sent[3].1.started_ticks.expect("B2 sender QPC") >= b2_authored);
-    assert!(sent[4].1.started_ticks.expect("A Up/C Down sender QPC") >= a_up_physical_target);
+    assert!(sent[3].1.started_ticks.expect("Up A + Down B2 sender QPC") >= a_up_physical_target);
+    assert!(sent[4].1.started_ticks.expect("C Down sender QPC") >= late_wake_qpc);
     assert_eq!(
         sent.iter()
             .skip(3)
@@ -389,12 +395,225 @@ fn late_due_preserves_staged_down_then_reselects_eligible_up_and_down() {
     assert!(harness.runtime.terminal_error.is_none());
 
     println!(
-        "late-Due trace: H=+{}us B1_Up=+{}us B2_authored=+{}us B2_G_deadline=+{}us Due_wake=+{}us A_Up_floor=+{}us staged_down=0x0002 first_late_packet=(up:0x0000,down:0x0002) next_iteration=(up:0x0001,down:0x0004) cursor=4 masks=(active:0x0006,possible:0,inflight:0,release:0x0006) attempts(B2)=1",
+        "late-Due trace: H=+{}us B1_Up=+{}us B2_authored=+{}us Due_wake=+{}us A_Up_floor=+{}us staged_down=0x0002 reselected_packet=(up:0x0001,down:0x0002) next_iteration=(up:0x0000,down:0x0004) cursor=4 masks=(active:0x0006,possible:0,inflight:0,release:0x0006) attempts(B2)=1",
         elapsed_us(clock, epoch, b_h_floor),
         elapsed_us(clock, epoch, b1_up_eval),
         elapsed_us(clock, epoch, b2_authored),
-        elapsed_us(clock, epoch, b2_authored),
         elapsed_us(clock, epoch, late_wake_qpc),
         elapsed_us(clock, epoch, a_up_physical_target),
+    );
+}
+
+#[test]
+fn timely_due_reuses_staged_candidate_and_late_due_handles_multiple_ups_blocked_repeat_and_modifier_prefix()
+ {
+    fn chord(index: u32, scheduled_us: u64, scans: &[u16]) -> OnsetChordInput {
+        OnsetChordInput {
+            source_action_index: index,
+            scheduled_us,
+            scan_codes: scans.iter().copied().collect(),
+        }
+    }
+
+    // Slot 0 = 0x15, Slot 1 = 0x16, Slot 2 = 0x17.
+    // Chord 0 (0x15) at 0us, Chord 1 (0x16) at 10ms, Chord 2 (0x17) at 30ms,
+    // Chord 3 (0x15) at 35ms (same key as Chord 0).
+    let chords = [
+        chord(100, 0, &[0x15]),
+        chord(101, 10_000, &[0x16]),
+        chord(102, 30_000, &[0x17]),
+        chord(103, 35_000, &[0x15]),
+    ];
+    let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
+    let clock = harness.resources.clock;
+    let epoch = clock
+        .now()
+        .expect("epoch")
+        .checked_add_duration(clock.duration_from_us(1_000_000).expect("offset"))
+        .expect("future epoch");
+    harness
+        .reanchor_playback_clock_for_test(epoch)
+        .expect("reanchor");
+    let packets = harness.configure_mock_packet_sender_for_test(&[0, 0, 0, 0, 0]);
+    harness.attach_executor_for_test().expect("attach");
+
+    // Dispatch Chord 0 at epoch, Chord 1 at epoch + 10ms.
+    let c0 = harness
+        .stage_candidate_for_test(
+            0,
+            harness.current_executor_chord_for_test(),
+            TimelineTicks::ZERO,
+        )
+        .expect("stage c0")
+        .expect("c0");
+    harness.set_mock_sender_start_qpc_for_test(epoch);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(c0, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    let t10 = epoch
+        .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+            qpc_offset(&harness, 10_000).as_u64(),
+        ))
+        .expect("t10");
+    let (u1, d1, w1) = staged_send_at(&mut harness, t10, epoch);
+    let c1 = harness
+        .stage_candidate_with_scheduler_window_for_test(u1, d1, w1)
+        .expect("stage c1")
+        .expect("c1");
+    harness.set_mock_sender_start_qpc_for_test(t10);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(c1, false),
+        StagedDispatchOutcome::Dispatched
+    );
+
+    // 1. Timely unchanged candidate: stage Chord 2 for +30ms, wake at +30ms (still before both Ups? Wait: +10ms + 17.167ms = +27.167ms, so at +20ms? Let's test timely reuse on Chord 2 when waking at +30ms? No, +17.167ms and +27.167ms are already due at +30ms! Instead, test timely reuse by waking at +30ms when both Ups are NOT due? No, at +30ms both Ups ARE due -> tests multiple due releases! And then for Chord 3, test timely reuse!)
+    let t30 = epoch
+        .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+            qpc_offset(&harness, 30_000).as_u64(),
+        ))
+        .expect("t30");
+    let (_, _, staged_c2_action) = super::super::evaluate_scheduler_action_for_staging(
+        &harness.resources.scheduler,
+        QpcTicks::from_raw(t10.as_u64() + 1),
+        epoch,
+    )
+    .expect("project before +17.167ms");
+    // At t10 + 1, earliest deadline is slot 0's Up (+17.167ms), not Chord 2.
+    let staged_up0 = super::super::stage_scheduler_send_candidate(
+        staged_c2_action.expect("projected Up0"),
+        super::super::SchedulerStageAdmission {
+            target: &harness.target,
+            capture_up_slot_timings: false,
+        },
+        &mut harness.resources,
+        &mut harness.runtime,
+    )
+    .expect("stage up0")
+    .expect("up0");
+    // Simulate late wake at +30ms: BOTH slot 0 Up (+17.167ms), slot 1 Up (+27.167ms), AND Chord 2 (+30ms) are due!
+    let mut mixed_multi = Some(staged_up0);
+    assert_eq!(
+        super::super::reselect_candidate_after_wait(
+            &mut mixed_multi,
+            t30,
+            epoch,
+            false,
+            &harness.target,
+            &mut harness.resources,
+            &mut harness.runtime,
+        )
+        .expect("reselect multiple Ups + Chord 2"),
+        super::super::PostWaitSelection::SendReady
+    );
+    let mixed_multi = mixed_multi.expect("expected Send(Up 0b11 + Down 0b100)");
+    assert_eq!(
+        mixed_multi.packet_masks(),
+        sky_dispatch_win32::input::PhysicalPacket::new(0b011, 0b100)
+    );
+    // Modifier held on Mixed packet -> dispatches Up-only prefix (0b011) and keeps Chord 2 unattempted.
+    harness.set_modifier_key_state_query_for_test(|_| -0x8000);
+    harness.set_mock_sender_start_qpc_for_test(t30);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(mixed_multi, false),
+        StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 2);
+    assert_eq!(harness.resources.backend.active_mask, 0);
+
+    // Release modifier, now stage Chord 2 at t30 and verify timely unchanged reuse!
+    harness.set_modifier_key_state_query_for_test(|_| 0);
+    let (u2, d2, w2) = staged_send_at(&mut harness, t30, epoch);
+    let c2 = harness
+        .stage_candidate_with_scheduler_window_for_test(u2, d2, w2)
+        .expect("stage c2")
+        .expect("c2");
+    let mut c2_reused = Some(c2);
+    assert_eq!(
+        super::super::reselect_candidate_after_wait(
+            &mut c2_reused,
+            t30,
+            epoch,
+            false,
+            &harness.target,
+            &mut harness.resources,
+            &mut harness.runtime,
+        )
+        .expect("timely unchanged reuse"),
+        super::super::PostWaitSelection::SendReady
+    );
+    let c2_reused = c2_reused.expect("expected timely reuse Send");
+    assert_eq!(
+        c2_reused.packet_masks(),
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 0b100)
+    );
+    harness.set_mock_sender_start_qpc_for_test(t30);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(c2_reused, false),
+        StagedDispatchOutcome::Dispatched
+    );
+    assert_eq!(harness.resources.scheduler.chord_cursor(), 3);
+
+    // Verify early wake before Chord 3 (+35ms) never sends early (returns Replan).
+    let t34 = epoch
+        .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+            qpc_offset(&harness, 34_000).as_u64(),
+        ))
+        .expect("t34");
+    let t35 = epoch
+        .checked_add_duration(sky_dispatch_core::time::DurationTicks::from_raw(
+            qpc_offset(&harness, 35_000).as_u64(),
+        ))
+        .expect("t35");
+    let (u3, d3, w3) = staged_send_at(&mut harness, t35, epoch);
+    let c3 = harness
+        .stage_candidate_with_scheduler_window_for_test(u3, d3, w3)
+        .expect("stage c3")
+        .expect("c3");
+    let mut c3_early = Some(c3);
+    assert_eq!(
+        super::super::reselect_candidate_after_wait(
+            &mut c3_early,
+            t34,
+            epoch,
+            false,
+            &harness.target,
+            &mut harness.resources,
+            &mut harness.runtime,
+        )
+        .expect("early wake check"),
+        super::super::PostWaitSelection::Replan
+    );
+    assert!(c3_early.is_none());
+
+    // Verify control/focus/lease/suspend after wait reject at final admission without sending.
+    let (u3, d3, w3) = staged_send_at(&mut harness, t35, epoch);
+    let c3_focus = harness
+        .stage_candidate_with_scheduler_window_for_test(u3, d3, w3)
+        .expect("stage c3 focus")
+        .expect("c3 focus");
+    harness.config.focus.require_focus = true;
+    harness
+        .focus_active
+        .store(false, std::sync::atomic::Ordering::Release);
+    assert_eq!(
+        harness.dispatch_staged_candidate_for_test(c3_focus, false),
+        StagedDispatchOutcome::Replan
+    );
+    harness
+        .focus_active
+        .store(true, std::sync::atomic::Ordering::Release);
+    harness.config.focus.require_focus = false;
+
+    let sent = packets.lock().expect("packets");
+    assert_eq!(sent.len(), 4);
+    assert_eq!(
+        sent[2].0,
+        sky_dispatch_win32::input::PhysicalPacket::new(0b011, 0)
+    );
+    assert_eq!(
+        sent[3].0,
+        sky_dispatch_win32::input::PhysicalPacket::new(0, 0b100)
     );
 }

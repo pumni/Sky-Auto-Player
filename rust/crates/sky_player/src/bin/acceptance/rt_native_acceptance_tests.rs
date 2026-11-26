@@ -1147,5 +1147,36 @@ fn parse_args_rejects_invalid_or_duplicate_admission_variant() {
     assert!(parse_args(duplicate_args).is_err());
 }
 
+#[test]
+fn b6_ambiguous_packet_and_mixed_distinguish_order() {
+    let ambiguous = scenario_plan(Scenario::AmbiguousPacket, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    assert_eq!(ambiguous.expected_down_slots, vec![0, 1]);
+    assert!(ambiguous.allow_unpaired_cleanup_ups);
+
+    let plan = scenario_plan(Scenario::MixedUpDown, ACCEPTANCE_TIMING_MARGIN_US).unwrap();
+    let expected_down = expected_physical_keys(plan.profile.as_ref(), &plan.expected_down_slots);
+    let expected_up = expected_physical_keys(plan.profile.as_ref(), &plan.expected_up_slots);
+    let (down_pairs, _) = expected_down.as_chunks::<2>();
+    let (up_pairs, _) = expected_up.as_chunks::<2>();
+    let split_events: Vec<EventRecord> = down_pairs
+        .iter()
+        .zip(up_pairs.iter())
+        .enumerate()
+        .flat_map(|(i, (d, u))| {
+            let base = (i as u64) * 10;
+            [
+                event(base + 1, "key_press", d[0].scan_code),
+                event(base + 2, "key_press", d[1].scan_code),
+                event(base + 3, "key_release", u[0].scan_code),
+                event(base + 4, "key_release", u[1].scan_code),
+            ]
+        })
+        .collect();
+    let split_obs = reconcile_mixed_up_down_events(&split_events, &expected_down, &expected_up)
+        .expect("split order is valid");
+    assert_eq!(split_obs.mixed_order_cycles, 0);
+    assert!(split_obs.split_order_cycles > 0);
+}
+
 #[path = "benchmark_schedule_tests.rs"]
 mod benchmark_schedule_tests;
