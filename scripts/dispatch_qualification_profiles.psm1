@@ -1,4 +1,4 @@
-﻿function Get-DispatchSessionRedesignM3Profile {
+function Get-DispatchSessionRedesignM3Profile {
     $safetyCases = @(
         [pscustomobject]@{ Id = 'focus-loss'; Scenario = 'focus-loss'; Workload = 'safety-smoke'; Load = 'Quiet'; GameFps = 60; TimingMarginUs = 500; SampleSeconds = 0 },
         [pscustomobject]@{ Id = 'stop-cleanup'; Scenario = 'stop-cleanup'; Workload = 'safety-smoke'; Load = 'Quiet'; GameFps = 60; TimingMarginUs = 500; SampleSeconds = 0 },
@@ -567,6 +567,37 @@ function Assert-PlaybackCoreLifecycleSourceCheckout {
     $identity
 }
 
+function New-CompletionAnchoredPulseV1SafetyRow {
+    param(
+        [Parameter(Mandatory)] [string]$Id,
+        [Parameter(Mandatory)] [int]$EffectiveHoldUs,
+        [Parameter(Mandatory)] [ValidateSet('acceptance-floor', 'acceptance-floor-unused-no-down', 'isolated-long-hold')] [string]$HoldSource,
+        [Parameter(Mandatory)] [ValidateSet('planned native', 'controlled mock', 'conditional')] [string]$EvidenceClass,
+        [switch]$PreDownFailClosed,
+        [Parameter(Mandatory)] [string]$Trigger,
+        [Parameter(Mandatory)] [string]$ObligationAtTrigger,
+        [Parameter(Mandatory)] [string]$Mask,
+        [Parameter(Mandatory)] [string]$Verdict,
+        [Parameter(Mandatory)] [string]$Proof,
+        [Parameter(Mandatory)] [string]$RustRef
+    )
+    [pscustomobject][ordered]@{
+        id = $Id
+        scenario = $Id
+        workload = 'safety-smoke'
+        effective_hold_us = $EffectiveHoldUs
+        hold_source = $HoldSource
+        evidence_class = $EvidenceClass
+        pre_down_fail_closed = [bool]$PreDownFailClosed
+        control_trigger = $Trigger
+        obligation_at_trigger = $ObligationAtTrigger
+        expected_active_obligation_mask = $Mask
+        proof_criteria = $Proof
+        harness_classification = $Verdict
+        rust_source_ref = $RustRef
+    }
+}
+
 function Get-CompletionAnchoredPulseV1Profile {
     [pscustomobject]@{
         Name = 'CompletionAnchoredPulseV1'
@@ -596,157 +627,124 @@ function Get-CompletionAnchoredPulseV1Profile {
         PairedPerformanceWorkloads = @('dense-alternating', 'near-minimum-retrigger', 'long-idle')
         ExcludedFromPairedPerformance = @('mixed-up-down', 'canonical-max-chord')
         CandidateOnlyGeometryWorkloads = @('mixed-up-down', 'canonical-max-chord')
+        ExpectedAuthoredStreams = @{
+            'dense-alternating' = [pscustomobject]@{ event_count = 896; group_count = 896; first_us = 50000; last_us = 15414465; sha256 = '802e84e0d9fa26cec3b293ed20af9a03202b5eb49b5f0cf66531d5b81f41fe73' }
+            'near-minimum-retrigger' = [pscustomobject]@{ event_count = 880; group_count = 880; first_us = 50000; last_us = 15139793; sha256 = '2a01c69071ecfc28deafcfe719e3c35be882c15bcd41b291ba99d0a63306247c' }
+            'long-idle' = [pscustomobject]@{ event_count = 32; group_count = 32; first_us = 50000; last_us = 16324672; sha256 = '7da0dce05f83dc76ee9429b3d5a2b820a43dea2274c12b18ce1e00774459f672' }
+        }
         SafetyScenarios = @(
-            [pscustomobject][ordered]@{
-                id = 'focus-loss'
-                scenario = 'focus-loss'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Foreground focus leaves target HWND while keys are held'
-                expected_active_obligation_mask = 'nonzero_at_trigger_cleared_to_zero'
-                proof_criteria = 'Verified terminal/focus-loss release of all owned keys; zero sends after release'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'owner-mismatch'
-                scenario = 'owner-mismatch'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Target HWND belongs to unexpected process/owner'
-                expected_active_obligation_mask = 'zero_pre_send_aborted'
-                proof_criteria = 'Dispatch aborts before SendInput with zero owned keys leaked'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'owner-process-termination'
-                scenario = 'owner-process-termination'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Target process exits during active hold'
-                expected_active_obligation_mask = 'nonzero_at_trigger_cleared_to_zero'
-                proof_criteria = 'Supervisor detects process exit and completes bounded cleanup within margin'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'pause-resume'
-                scenario = 'pause-resume'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Pause during hold followed by Resume'
-                expected_active_obligation_mask = 'nonzero_at_pause_zero_while_paused'
-                proof_criteria = 'Verified cleanup on Pause; zero sends while paused; fresh due Down on Resume'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'pause-resume-active-cleanup'
-                scenario = 'pause-resume-active-cleanup'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Pause during active hold with isolated long H so keys remain held at trigger'
-                expected_active_obligation_mask = 'nonzero_at_pause_zero_while_paused'
-                proof_criteria = 'Active held keys released and verified on Pause; zero sends while paused; clean Resume'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'suspend-resume'
-                scenario = 'suspend-resume'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'System suspend/resume signal during active hold'
-                expected_active_obligation_mask = 'nonzero_at_suspend_zero_on_resume'
-                proof_criteria = 'All owned keys released before suspend completes; clean post-resume state'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'stop-cleanup'
-                scenario = 'stop-cleanup'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Stop command issued while keys are actively held'
-                expected_active_obligation_mask = 'nonzero_at_stop_cleared_to_zero'
-                proof_criteria = 'Terminal cleanup releases all held keys within margin; raw_calls recorded'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'skip-cleanup'
-                scenario = 'skip-cleanup'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Skip/seek control issued while keys are actively held'
-                expected_active_obligation_mask = 'nonzero_at_skip_cleared_to_zero'
-                proof_criteria = 'Owned keys released before schedule jump; zero stuck keys'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'supervisor-lease-expiry'
-                scenario = 'supervisor-lease-expiry'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Supervisor heartbeat/lease expires without renewal'
-                expected_active_obligation_mask = 'nonzero_at_expiry_cleared_to_zero'
-                proof_criteria = 'Watchdog/lease expiry triggers terminal release within bounded deadline'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'short-up-gap-stress'
-                scenario = 'short-up-gap-stress'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Minimum-gap Up-to-Down retrigger cadence under completion-anchored floor'
-                expected_active_obligation_mask = 'alternating_held_and_released'
-                proof_criteria = 'Zero Up/Down inversion; every physical release satisfies completion_qpc + H_ticks'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'target-hwnd-change'
-                scenario = 'target-hwnd-change'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Foreground HWND switches away from pinned target HWND'
-                expected_active_obligation_mask = 'nonzero_at_switch_cleared_to_zero'
-                proof_criteria = 'Focus-guard aborts further sends and releases active keys'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'modifier-held-final-boundary'
-                scenario = 'modifier-held-final-boundary'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Modifier key held across final boundary'
-                expected_active_obligation_mask = 'modifier_tracked_through_final_release'
-                proof_criteria = 'Modifier/owned state cleanly reconciled at final boundary'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'modifier-held-after-owned'
-                scenario = 'modifier-held-after-owned'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'User holds modifier after owned playback keys release'
-                expected_active_obligation_mask = 'owned_cleared_user_modifier_preserved'
-                proof_criteria = 'Owned keys released without interfering with user-held external modifier'
-                harness_classification = 'DeterministicPassOrFail'
-            },
-            [pscustomobject][ordered]@{
-                id = 'ambiguous-packet'
-                scenario = 'ambiguous-packet'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'Control trigger during mixed Up+Down packet dispatch'
-                expected_active_obligation_mask = 'mixed_packet_active_keys_nonzero'
-                proof_criteria = 'If mixed packet is reached, all active keys are released and verified; otherwise Inconclusive'
-                harness_classification = 'Inconclusive if mixed packet not reached; Pass when mixed packet active keys released and verified'
-            },
-            [pscustomobject][ordered]@{
-                id = 'preflight-user-held'
-                scenario = 'preflight-user-held'
-                workload = 'safety-smoke'
-                configured_H_us = 17167
-                control_trigger = 'User holds playback key prior to session start'
-                expected_active_obligation_mask = 'zero_pre_start_aborted'
-                proof_criteria = 'Preflight detects pre-held key and refuses dispatch before first SendInput'
-                harness_classification = 'DeterministicPassOrFail'
-            }
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'focus-loss' -EffectiveHoldUs 17167 -HoldSource 'acceptance-floor' -EvidenceClass 'planned native' `
+                -Trigger 'After the first Down/Up pair is observed, a project-owned probe window takes foreground and a foreground hint reports target focus loss; the sink is then restored and a focused hint is published' `
+                -ObligationAtTrigger 'zero: first note pair already released; the session is idle until the 3 s second onset' `
+                -Mask 'zero_at_trigger_idle_between_notes' `
+                -Verdict 'Pass when focus_evidence_clean holds (gate observed, focus-loss and target-change counters, probe and sink windows clean) and the common cleanup checks are clean; Inconclusive when a focus transition cannot be established or does not resume within the bounded proof deadline; Fail otherwise' `
+                -Proof 'Session pauses on focus loss, resumes after restoration, no probe-window key events, no residue' `
+                -RustRef 'scenarios.rs FocusLoss; rt_native_acceptance.rs needs_focus_probe branch and focus_evidence_clean'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'owner-mismatch' -EffectiveHoldUs 17167 -HoldSource 'acceptance-floor-unused-no-down' -EvidenceClass 'controlled mock' -PreDownFailClosed `
+                -Trigger 'Test-only owner identity override makes the prepared Down fail window-owner verification before the sender' `
+                -ObligationAtTrigger 'zero: no Down is sent' `
+                -Mask 'zero_pre_down_fail_closed' `
+                -Verdict 'Pass when terminal error is prepared_down_owner_mismatch, ReceiveOnly sink events are empty and the release obligation mask is zero; Fail otherwise' `
+                -Proof 'Prepared-Down owner authority failure stops before gameplay delivery with zero sink events' `
+                -RustRef 'scenarios.rs OwnerMismatch (no Down slots); owner_identity.rs failure_result'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'owner-process-termination' -EffectiveHoldUs 17167 -HoldSource 'acceptance-floor-unused-no-down' -EvidenceClass 'conditional' -PreDownFailClosed `
+                -Trigger 'At first Down admission the harness terminates the identity-bound project-owned ReceiveOnly owner process' `
+                -ObligationAtTrigger 'zero: first Down is not yet sent; zero Down sender attempts required' `
+                -Mask 'zero_pre_down_fail_closed' `
+                -Verdict 'Pass only when OS process termination is verified, terminal error is prepared_down_owner_process_terminated or focus_lost_during_preroll, sink events are empty, mask is zero and Down sender attempts are zero; Inconclusive when the checkpoint stops before the sender but termination is not verified; Fail otherwise' `
+                -Proof 'Owner process termination fails closed before the sender; no cleanup transport is required' `
+                -RustRef 'scenarios.rs OwnerProcessTermination (no Down slots); owner_identity.rs failure_result'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'pause-resume' -EffectiveHoldUs 17167 -HoldSource 'acceptance-floor' -EvidenceClass 'planned native' `
+                -Trigger 'Pause after the first Down/Up pair is observed (keys idle), 50 ms later Resume; second onset at 500 ms' `
+                -ObligationAtTrigger 'zero: ordinary Pause between notes; this is not the active-key cleanup case' `
+                -Mask 'zero_at_pause_idle_between_notes' `
+                -Verdict 'Pass when the pause commits, Resume is requested and common cleanup, sink-sequence and residue checks are clean; Fail when pause/resume control evidence is incomplete' `
+                -Proof 'Pause observed, Resume requested, both notes delivered, no residue' `
+                -RustRef 'scenarios.rs PauseResume; rt_native_acceptance.rs PauseResume branch'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'pause-resume-active-cleanup' -EffectiveHoldUs 450000 -HoldSource 'isolated-long-hold' -EvidenceClass 'planned native' `
+                -Trigger 'Pause while the first Down (onset 50 ms, H 450 ms) is still held; Resume; second same-key onset at 600 ms' `
+                -ObligationAtTrigger 'nonzero: slot 0 held, bit 0 of the pause cleanup obligation mask must be set' `
+                -Mask 'nonzero_bit0_at_pause_cleared_while_paused' `
+                -Verdict 'Pass when pause cleanup is verified with bit 0 set, QPC ordering of pause, cleanup-verified, Resume request/call/worker-commit and resume Down sender pre-call holds, and the sink sequence is press/release/press/release; Fail otherwise; Inconclusive on bounded-wait or ordering-evidence unavailability' `
+                -Proof 'Active key released and verified at Pause; worker-committed Resume follows; fresh Down after Resume' `
+                -RustRef 'scenarios.rs isolated_long_hold_us PauseResumeActiveCleanup=450000; rt_native_acceptance.rs PauseResumeActiveCleanup branch and active_cleanup_resume_evidence_is_ordered'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'suspend-resume' -EffectiveHoldUs 450000 -HoldSource 'isolated-long-hold' -EvidenceClass 'controlled mock' `
+                -Trigger 'After the first Down is committed the harness injects a synthetic system-suspend notification (no real OS suspend); no resume notification is injected' `
+                -ObligationAtTrigger 'nonzero: slot 0 held; cleanup attempted_mask bit 0 and at least one cleanup attempt are required' `
+                -Mask 'nonzero_bit0_at_suspend_cleared' `
+                -Verdict 'Pass when the session terminates with outcome system_suspend within the bounded deadline, suspend notifications are nonzero, resume notifications are zero, Down remains blocked, timeline rebase count is zero and the sink sequence is press/release; Fail on incomplete evidence; Inconclusive when suspend is not accepted or does not terminate in time. Does not prove cleanup before a real OS suspend completes, and no resume phase is exercised' `
+                -Proof 'Synthetic suspend terminal cleanup of the held key; Down blocked afterward' `
+                -RustRef 'scenarios.rs isolated_long_hold_us SuspendResume=450000; rt_native_acceptance.rs SuspendResume branch (notify_system_power(true) only)'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'stop-cleanup' -EffectiveHoldUs 9950000 -HoldSource 'isolated-long-hold' -EvidenceClass 'planned native' `
+                -Trigger 'Stop (session quit) requested after the first Down is committed and while H 9.95 s keeps the key held' `
+                -ObligationAtTrigger 'nonzero: slot 0 held; cleanup attempted_mask bit 0 and at least one attempt required' `
+                -Mask 'nonzero_bit0_at_stop_cleared' `
+                -Verdict 'Pass when outcome is quit, sink events are nonempty, cleanup attempted_mask bit 0 is set with nonzero attempts and common residue checks are clean; Fail otherwise; stop-to-release latency is recorded, not gated by this plan' `
+                -Proof 'Terminal cleanup releases the active physical key; raw terminal Up calls recorded where available' `
+                -RustRef 'scenarios.rs isolated_long_hold_us StopCleanup=9950000; rt_native_acceptance.rs StopCleanup branch'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'skip-cleanup' -EffectiveHoldUs 9950000 -HoldSource 'isolated-long-hold' -EvidenceClass 'planned native' `
+                -Trigger 'Skip requested after the first Down is committed and while H 9.95 s keeps the key held' `
+                -ObligationAtTrigger 'nonzero: slot 0 held; cleanup attempted_mask bit 0 and at least one attempt required' `
+                -Mask 'nonzero_bit0_at_skip_cleared' `
+                -Verdict 'Pass when outcome is skipped, sink events are nonempty, cleanup attempted_mask bit 0 is set with nonzero attempts and common residue checks are clean; Fail otherwise' `
+                -Proof 'Owned key released by skip cleanup; no residue' `
+                -RustRef 'scenarios.rs isolated_long_hold_us SkipCleanup=9950000; rt_native_acceptance.rs SkipCleanup branch'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'cleanup-full-release' -EffectiveHoldUs 9950000 -HoldSource 'isolated-long-hold' -EvidenceClass 'planned native' `
+                -Trigger 'All 15 keys are Down in one chord (H 9.95 s), the harness waits for all Down events, then requests quit' `
+                -ObligationAtTrigger 'nonzero: all 15 key slots held (mask 0x7fff)' `
+                -Mask 'nonzero_all_15_at_quit_cleared' `
+                -Verdict 'Pass when the full-release cleanup evidence is clean (cleanup_evidence_clean with full release requested) and common residue checks are clean; Fail otherwise; Inconclusive when the Down events are not observed before the proof deadline' `
+                -Proof 'Full 15-key terminal release verified with zero stuck keys' `
+                -RustRef 'scenarios.rs CleanupFullRelease (MAX_KEYS=15) and isolated_long_hold_us=9950000; rt_native_acceptance.rs CleanupFullRelease branch'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'supervisor-lease-expiry' -EffectiveHoldUs 17167 -HoldSource 'acceptance-floor-unused-no-down' -EvidenceClass 'planned native' -PreDownFailClosed `
+                -Trigger 'A session supervisor progress point is seeded once and then not renewed; the only onset is at 5 s, so the lease watchdog expires before any Down' `
+                -ObligationAtTrigger 'zero: no Down is sent before expiry' `
+                -Mask 'zero_pre_down_fail_closed' `
+                -Verdict 'Pass when the supervisor-expiry cleanup exception holds, the wait was interrupted, timeline rebase count is zero, sink events are empty and the independent helper liveness probe advanced; Fail otherwise' `
+                -Proof 'Session watchdog fails closed while an unrelated helper stays alive' `
+                -RustRef 'scenarios.rs SupervisorLeaseExpiry (no Down slots); rt_native_acceptance.rs SupervisorLeaseExpiry branch'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'short-up-gap-stress' -EffectiveHoldUs 17167 -HoldSource 'acceptance-floor' -EvidenceClass 'planned native' `
+                -Trigger 'Authored same-key Down at exactly onset + H for 513 consecutive cycles; the executor must send Up first, commit it, then re-evaluate Down' `
+                -ObligationAtTrigger 'alternating: key held for each hold and released at each boundary' `
+                -Mask 'alternating_held_and_released' `
+                -Verdict 'Pass when physical hold-floor violations are zero and at least 512 hold samples are observed with clean residue checks; Fail on any hold-floor violation or sample shortfall' `
+                -Proof 'Zero hold-floor violations; every observed physical hold meets H' `
+                -RustRef 'generation_stress.rs SHORT_UP_GAP_STRESS_CYCLES=513, SHORT_UP_GAP_STRESS_MIN_HOLD_SAMPLES=512, production_visibility_qualification'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'target-hwnd-change' -EffectiveHoldUs 17167 -HoldSource 'acceptance-floor-unused-no-down' -EvidenceClass 'controlled mock' -PreDownFailClosed `
+                -Trigger 'After Armed publication the harness invalidates the pinned target through the test seam; the only onset is at 500 ms' `
+                -ObligationAtTrigger 'zero: no Down is sent' `
+                -Mask 'zero_pre_down_fail_closed' `
+                -Verdict 'Pass when the target-change preflight error and cleanup exception hold with zero sink transport events and zero release obligation; Fail otherwise' `
+                -Proof 'Target change fails closed before gameplay delivery with zero transport events' `
+                -RustRef 'scenarios.rs TargetHwndChange (no Down slots); rt_native_acceptance.rs invalidate_target_for_test and TargetHwndChange assertion'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'modifier-held-final-boundary' -EffectiveHoldUs 17167 -HoldSource 'acceptance-floor-unused-no-down' -EvidenceClass 'controlled mock' -PreDownFailClosed `
+                -Trigger 'Test-support GetAsyncKeyState seam reports Shift (VK 0x10) held before the first Down; this is not physical user input' `
+                -ObligationAtTrigger 'zero: first-Down modifier rejection; no gameplay and no manufactured cleanup' `
+                -Mask 'zero_pre_down_fail_closed' `
+                -Verdict 'Pass when terminal error contains physical_modifier_held, sink events are empty and cleanup attempted_mask and attempts are zero; Fail otherwise' `
+                -Proof 'Modifier guard rejects the first Down with zero events and zero cleanup' `
+                -RustRef 'modifier_guard.rs query_for_scenario and validate_rejection (ModifierHeldFinalBoundary)'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'modifier-held-after-owned' -EffectiveHoldUs 100000 -HoldSource 'isolated-long-hold' -EvidenceClass 'controlled mock' `
+                -Trigger 'After the first owned Down is committed (H 100 ms) the test-support seam asserts Shift held; the second onset at 100 ms is rejected. The modifier is a seam value, not journal-owned' `
+                -ObligationAtTrigger 'nonzero journal-owned: slot 0 only; the modifier is externally held and never owned' `
+                -Mask 'owned_bit0_cleared_modifier_not_owned' `
+                -Verdict 'Pass when terminal error contains physical_modifier_held, the sink sequence is press/release of the first key, and cleanup attempted_mask is 1 with exactly 1 attempt; Fail otherwise; Inconclusive when the first committed Down cannot be confirmed' `
+                -Proof 'Cleanup is limited to the prior owned key; no modifier release is attempted' `
+                -RustRef 'scenarios.rs isolated_long_hold_us ModifierHeldAfterOwned=100000; modifier_guard.rs arm_after_owned_down and validate_rejection'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'ambiguous-packet' -EffectiveHoldUs 17167 -HoldSource 'acceptance-floor' -EvidenceClass 'conditional' `
+                -Trigger 'Injected partial SendInput outcome (mask 0b11) on a mixed Up+Down packet, only if timely split dispatch actually produces a mixed packet' `
+                -ObligationAtTrigger 'conditional: nonzero cleanup mask 0b11 only when the injection is reached' `
+                -Mask 'conditional_cleanup_mask_0b11' `
+                -Verdict 'Inconclusive when sendinput_partial_events is zero (mixed packet never reached); Pass when the cleanup mask is exactly 0b11 with release verified and the exact bounded event sequence; Fail otherwise' `
+                -Proof 'If a mixed packet is reached, exactly the bounded active keys are released and verified' `
+                -RustRef 'scenarios.rs AmbiguousPacket; rt_native_acceptance.rs AmbiguousPacket verdicts; snapshot_report.rs ambiguous_packet_cleanup_qualified'),
+            (New-CompletionAnchoredPulseV1SafetyRow -Id 'preflight-user-held' -EffectiveHoldUs 17167 -HoldSource 'acceptance-floor-unused-no-down' -EvidenceClass 'controlled mock' -PreDownFailClosed `
+                -Trigger 'Preflight user-held injection reports a playback key held before session start' `
+                -ObligationAtTrigger 'zero: the session is rejected before arming' `
+                -Mask 'zero_pre_start_aborted' `
+                -Verdict 'Pass when the pre-arm UserHeld preflight rejection holds with zero keyboard transport events; Fail otherwise' `
+                -Proof 'Preflight refuses dispatch before any key event or cleanup transport' `
+                -RustRef 'snapshot_report.rs preflight_user_held_result')
         )
         TargetIdentity = [ordered]@{
             target_class = 'project-owned-non-game-receive-only'
@@ -844,6 +842,53 @@ function Get-GitObjectRawSha256 {
     [System.BitConverter]::ToString([System.Security.Cryptography.SHA256]::HashData($bytes)).Replace('-', '').ToLowerInvariant()
 }
 
+function Test-CompletionAnchoredPulseV1ParityInt {
+    param($Value, [long]$Minimum)
+    ($Value -is [int] -or $Value -is [long]) -and ([long]$Value -ge $Minimum)
+}
+
+function Get-CompletionAnchoredPulseV1ParityRejection {
+    param(
+        [Parameter(Mandatory)] $Entry,
+        [Parameter(Mandatory)] $Profile,
+        [Parameter(Mandatory)] [hashtable]$Identities
+    )
+    $expected = $Profile.ExpectedAuthoredStreams[[string]$Entry.workload]
+    $names = @($Entry.PSObject.Properties.Name)
+    $settings = [ordered]@{ game_fps = $Profile.GameFps; timing_margin_us = $Profile.PerformanceTimingMarginUs; configured_H_us = $Profile.ConfiguredHUs; sample_seconds = $Profile.SampleSeconds }
+    if ($names -notcontains 'evidence_origin' -or [string]::IsNullOrWhiteSpace([string]$Entry.evidence_origin)) { return 'missing evidence_origin' }
+    foreach ($key in $settings.Keys) {
+        if ($names -notcontains $key -or -not (Test-CompletionAnchoredPulseV1ParityInt $Entry.$key 0)) { return ('missing or non-integer workload setting ' + $key) }
+        if ([long]$Entry.$key -ne [long]$settings[$key]) { return ('workload setting ' + $key + ' is ' + $Entry.$key + ', expected ' + $settings[$key]) }
+    }
+    foreach ($role in @('baseline', 'candidate')) {
+        foreach ($field in @('revision', 'tree', 'lock_sha256')) {
+            $name = $role + '_' + $field
+            $pattern = if ($field -eq 'lock_sha256') { '^[0-9a-f]{64}$' } else { '^[0-9a-f]{40}$' }
+            if ($names -notcontains $name -or [string]$Entry.$name -cnotmatch $pattern) { return ('missing or malformed ' + $name) }
+            if ([string]$Entry.$name -ne [string]$Identities[$name]) { return ('stale or mismatched ' + $name + ': evidence ' + $Entry.$name + ', verified ' + $Identities[$name]) }
+        }
+        if ($names -notcontains ($role + '_verified') -or $Entry.($role + '_verified') -isnot [bool] -or $Entry.($role + '_verified') -ne $true) { return ($role + '_verified must be boolean true') }
+        $sha = $role + '_sha256'
+        if ($names -notcontains $sha -or [string]$Entry.$sha -cnotmatch '^[0-9a-f]{64}$') { return ('missing or invalid ' + $sha + ' (64 lowercase hex required)') }
+        foreach ($field in @('event_count', 'group_count')) {
+            $name = $role + '_' + $field
+            if ($names -notcontains $name -or -not (Test-CompletionAnchoredPulseV1ParityInt $Entry.$name 1)) { return ('missing or non-positive ' + $name) }
+        }
+        $first = $role + '_first_us'; $last = $role + '_last_us'
+        if ($names -notcontains $first -or -not (Test-CompletionAnchoredPulseV1ParityInt $Entry.$first 0)) { return ('missing or negative ' + $first) }
+        if ($names -notcontains $last -or -not (Test-CompletionAnchoredPulseV1ParityInt $Entry.$last 0)) { return ('missing or negative ' + $last) }
+        if ([long]$Entry.$last -lt [long]$Entry.$first) { return ($role + ' last_us precedes first_us') }
+        if ([long]$Entry.($role + '_group_count') -gt [long]$Entry.($role + '_event_count')) { return ($role + ' group_count exceeds event_count') }
+        if ([string]$Entry.$sha -ne $expected.sha256 -or
+            [long]$Entry.($role + '_event_count') -ne $expected.event_count -or
+            [long]$Entry.($role + '_group_count') -ne $expected.group_count -or
+            [long]$Entry.$first -ne $expected.first_us -or
+            [long]$Entry.$last -ne $expected.last_us) { return ($role + ' stream digest or geometry differs from the immutable expected authored stream') }
+    }
+    $null
+}
+
 function New-CompletionAnchoredPulseV1NonphysicalPlan {
     param(
         [Parameter(Mandatory)] [string]$RepositoryRoot,
@@ -897,54 +942,87 @@ function New-CompletionAnchoredPulseV1NonphysicalPlan {
     $candidateLock = Assert-CompletionAnchoredPulseV1LockfileBytes -RepositoryRoot $identity.root -SourceRole Candidate
     [void](Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $identity.root -CandidateRevision $identity.revision -RemoteTipRevision $remoteTipRevision -SourceRole Candidate)
 
-    # Validate authored-stream parity evidence for paired eligibility
+    # Bind caller-supplied authored-stream parity evidence to the exact verified identities, settings and
+    # immutable expected streams. The plan never executes the parity test itself.
+    $identities = @{
+        baseline_revision = $actualBaselineCommit
+        baseline_tree = $actualBaselineTree
+        baseline_lock_sha256 = $actualBaselineLockSha
+        candidate_revision = $identity.revision
+        candidate_tree = $identity.tree
+        candidate_lock_sha256 = $candidateLock
+    }
     $parityByWorkload = @{}
+    $parityRejections = @()
+    $evidenceIndex = 0
     if ($null -ne $ParityEvidence) {
-        foreach ($item in $ParityEvidence) {
-            if ($null -ne $item -and -not [string]::IsNullOrWhiteSpace([string]$item.workload)) {
-                $parityByWorkload[[string]$item.workload] = $item
+        foreach ($item in @($ParityEvidence)) {
+            $evidenceIndex++
+            if ($null -eq $item -or $null -eq $item.PSObject.Properties['workload'] -or [string]::IsNullOrWhiteSpace([string]$item.workload)) {
+                $parityRejections += [pscustomobject][ordered]@{ index = $evidenceIndex; workload = $null; reason = 'entry is null or has no workload' }
+                continue
             }
+            $name = [string]$item.workload
+            if ($profile.PairedPerformanceWorkloads -cnotcontains $name) {
+                $parityRejections += [pscustomobject][ordered]@{ index = $evidenceIndex; workload = $name; reason = 'unknown workload is not a paired performance workload' }
+                continue
+            }
+            if (-not $parityByWorkload.ContainsKey($name)) { $parityByWorkload[$name] = @() }
+            $parityByWorkload[$name] += ,$item
         }
     }
     $eligiblePairedWorkloads = @()
     $excludedByParity = @()
     $paritySummary = @()
     foreach ($workload in $profile.PairedPerformanceWorkloads) {
-        $entry = $parityByWorkload[$workload]
-        $verified = $false
+        $entries = @()
+        if ($parityByWorkload.ContainsKey($workload)) { $entries = @($parityByWorkload[$workload]) }
+        $entry = $null
+        $bound = $false
         $reason = 'no parity evidence supplied'
-        if ($null -ne $entry) {
-            $bOk = ($entry.baseline_verified -eq $true)
-            $cOk = ($entry.candidate_verified -eq $true)
-            $shaMatch = (-not [string]::IsNullOrWhiteSpace([string]$entry.baseline_sha256)) -and ([string]$entry.baseline_sha256 -eq [string]$entry.candidate_sha256)
-            $geomMatch = ($entry.baseline_event_count -eq $entry.candidate_event_count) -and
-                ($entry.baseline_group_count -eq $entry.candidate_group_count) -and
-                ($entry.baseline_first_us -eq $entry.candidate_first_us) -and
-                ($entry.baseline_last_us -eq $entry.candidate_last_us)
-            if ($bOk -and $cOk -and $shaMatch -and $geomMatch) {
-                $verified = $true
-                $reason = 'verified identical authored stream at baseline and candidate'
+        if ($entries.Count -gt 1) {
+            $reason = 'duplicate parity evidence entries (' + $entries.Count + '); workload excluded'
+        } elseif ($entries.Count -eq 1) {
+            $entry = $entries[0]
+            $rejection = Get-CompletionAnchoredPulseV1ParityRejection -Entry $entry -Profile $profile -Identities $identities
+            if ($null -eq $rejection) {
+                $bound = $true
+                $reason = 'caller-supplied evidence bound to exact baseline/candidate identities, settings and immutable expected authored stream; not executed by this plan'
             } else {
-                $reason = 'authored-stream parity mismatch or incomplete verification'
+                $reason = 'evidence rejected: ' + $rejection
             }
         }
-        $paritySummary += [pscustomobject][ordered]@{
+        $summary = [ordered]@{
             workload = $workload
-            verified = $verified
+            evidence_bound = $bound
             reason = $reason
-            baseline_sha256 = if ($null -ne $entry) { $entry.baseline_sha256 } else { $null }
-            candidate_sha256 = if ($null -ne $entry) { $entry.candidate_sha256 } else { $null }
+            evidence_origin = if ($bound) { [string]$entry.evidence_origin } else { $null }
+            baseline_sha256 = if ($bound) { [string]$entry.baseline_sha256 } else { $null }
+            candidate_sha256 = if ($bound) { [string]$entry.candidate_sha256 } else { $null }
+            baseline_revision = if ($bound) { [string]$entry.baseline_revision } else { $null }
+            baseline_tree = if ($bound) { [string]$entry.baseline_tree } else { $null }
+            candidate_revision = if ($bound) { [string]$entry.candidate_revision } else { $null }
+            candidate_tree = if ($bound) { [string]$entry.candidate_tree } else { $null }
+            event_count = if ($bound) { [long]$entry.candidate_event_count } else { $null }
+            group_count = if ($bound) { [long]$entry.candidate_group_count } else { $null }
+            first_us = if ($bound) { [long]$entry.candidate_first_us } else { $null }
+            last_us = if ($bound) { [long]$entry.candidate_last_us } else { $null }
+            game_fps = if ($bound) { [long]$entry.game_fps } else { $null }
+            timing_margin_us = if ($bound) { [long]$entry.timing_margin_us } else { $null }
+            configured_H_us = if ($bound) { [long]$entry.configured_H_us } else { $null }
+            sample_seconds = if ($bound) { [long]$entry.sample_seconds } else { $null }
         }
-        if ($verified) {
+        $paritySummary += [pscustomobject]$summary
+        if ($bound) {
             $eligiblePairedWorkloads += $workload
         } else {
             $excludedByParity += $workload
         }
     }
     $pairedEligibilityStatus = if ($eligiblePairedWorkloads.Count -eq $profile.PairedPerformanceWorkloads.Count) {
-        'VERIFIED_ALL_PAIRED_WORKLOADS'
+        'EVIDENCE_BOUND_ALL_PAIRED_WORKLOADS'
     } elseif ($eligiblePairedWorkloads.Count -gt 0) {
-        'PARTIAL_PARITY_VERIFIED'
+        'PARTIAL_EVIDENCE_BOUND'
     } else {
         'UNVERIFIED_NO_PARITY_EVIDENCE_SUPPLIED'
     }
@@ -994,9 +1072,12 @@ function New-CompletionAnchoredPulseV1NonphysicalPlan {
         candidate_lock_sha256 = $candidateLock
         locks_identical = ($candidateLock -eq $actualBaselineLockSha)
         paired_eligibility_status = $pairedEligibilityStatus
+        parity_evidence_origin = 'caller_supplied_test_output'
+        parity_executed_by_plan = $false
+        parity_evidence_rejections = @($parityRejections)
         paired_performance_workloads = @($eligiblePairedWorkloads)
-        excluded_due_to_unverified_parity = @($excludedByParity)
-        parity_verification = @($paritySummary)
+        excluded_due_to_unbound_parity = @($excludedByParity)
+        parity_evidence_summary = @($paritySummary)
         excluded_from_paired_performance = @($profile.ExcludedFromPairedPerformance)
         planned_paired_session_count = $plannedPairedSessions.Count
         planned_paired_session_count_if_all_verified = ($profile.PairedPerformanceWorkloads.Count * $profile.LoadCells.Count * $profile.PairCount * 2)

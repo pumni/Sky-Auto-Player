@@ -1,4 +1,4 @@
-﻿$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Stop'
 
 $runnerPath = Join-Path $PSScriptRoot 'qualify_dispatch_core.ps1'
 $tokens = $null
@@ -2885,13 +2885,13 @@ if ($capV1Profile.Name -ne 'CompletionAnchoredPulseV1' -or
     $capV1Profile.ConfiguredHUs -ne 17167 -or
     ($capV1Profile.PairedPerformanceWorkloads -join ',') -ne 'dense-alternating,near-minimum-retrigger,long-idle' -or
     ($capV1Profile.ExcludedFromPairedPerformance -join ',') -ne 'mixed-up-down,canonical-max-chord' -or
-    $capV1Profile.SafetyScenarios.Count -ne 15) {
+    $capV1Profile.SafetyScenarios.Count -ne 16) {
     throw 'CompletionAnchoredPulseV1 profile constants do not match the frozen C3 specification'
 }
 foreach ($s in $capV1Profile.SafetyScenarios) {
     if ([string]::IsNullOrWhiteSpace([string]$s.id) -or
         [string]::IsNullOrWhiteSpace([string]$s.scenario) -or
-        $s.configured_H_us -ne 17167 -or
+        -not ($s.effective_hold_us -is [int]) -or $s.effective_hold_us -le 0 -or [string]::IsNullOrWhiteSpace([string]$s.evidence_class) -or [string]::IsNullOrWhiteSpace([string]$s.obligation_at_trigger) -or [string]::IsNullOrWhiteSpace([string]$s.rust_source_ref) -or
         [string]::IsNullOrWhiteSpace([string]$s.control_trigger) -or
         [string]::IsNullOrWhiteSpace([string]$s.expected_active_obligation_mask) -or
         [string]::IsNullOrWhiteSpace([string]$s.proof_criteria) -or
@@ -2902,6 +2902,55 @@ foreach ($s in $capV1Profile.SafetyScenarios) {
 $capV1AmbiguousScenario = @($capV1Profile.SafetyScenarios | Where-Object { $_.id -eq 'ambiguous-packet' })[0]
 if ($null -eq $capV1AmbiguousScenario -or -not $capV1AmbiguousScenario.harness_classification.Contains('Inconclusive')) {
     throw 'CompletionAnchoredPulseV1 ambiguous-packet scenario must record Inconclusive fallback classification'
+}
+$capV1RustScenarios = [IO.File]::ReadAllText((Join-Path $playbackCoreRepoRoot 'rust\crates\sky_player\src\bin\acceptance\scenarios.rs'))
+$capV1HoldFunction = [regex]::Match($capV1RustScenarios, '(?s)fn isolated_long_hold_us\(.*?\n\}\n').Value
+$capV1RustHolds = @{}
+foreach ($capV1Arm in [regex]::Matches($capV1HoldFunction, '(?s)((?:Scenario::\w+\s*\|?\s*)+)=>\s*\{?\s*Some\(([\d_]+)\)')) {
+    foreach ($capV1Variant in [regex]::Matches($capV1Arm.Groups[1].Value, 'Scenario::(\w+)')) {
+        $capV1RustHolds[$capV1Variant.Groups[1].Value] = [long]($capV1Arm.Groups[2].Value -replace '_', '')
+    }
+}
+$capV1PreDownVariants = @{}
+foreach ($capV1Arm in [regex]::Matches($capV1RustScenarios, '(?s)((?:Scenario::\w+\s*\|?\s*)+)=>\s*\(\s*vec!\[onset\([^=;]*?\)\],\s*None,\s*vec!\[\],\s*vec!\[\],')) {
+    foreach ($capV1Variant in [regex]::Matches($capV1Arm.Groups[1].Value, 'Scenario::(\w+)')) { $capV1PreDownVariants[$capV1Variant.Groups[1].Value] = $true }
+}
+if ($capV1RustHolds.Count -lt 7 -or $capV1PreDownVariants.Count -lt 6) { throw 'CompletionAnchoredPulseV1 could not parse Rust scenario hold and pre-Down definitions' }
+$capV1FloorUs = 1 * [long][math]::Ceiling(1000000 / $capV1Profile.GameFps) + $capV1Profile.PerformanceTimingMarginUs
+foreach ($s in $capV1Profile.SafetyScenarios) {
+    $capV1Variant = (($s.id -split '-') | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) }) -join ''
+    $capV1ExpectedHold = if ($capV1RustHolds.ContainsKey($capV1Variant)) { $capV1RustHolds[$capV1Variant] } else { $capV1FloorUs }
+    if ($s.effective_hold_us -ne $capV1ExpectedHold) { throw ('CompletionAnchoredPulseV1 safety row ' + $s.id + ' effective_hold_us ' + $s.effective_hold_us + ' differs from Rust scenario hold ' + $capV1ExpectedHold) }
+    if (($s.hold_source -eq 'isolated-long-hold') -ne $capV1RustHolds.ContainsKey($capV1Variant)) { throw ('CompletionAnchoredPulseV1 safety row ' + $s.id + ' hold_source disagrees with Rust isolated_long_hold_us') }
+    if ($s.pre_down_fail_closed -ne $capV1PreDownVariants.ContainsKey($capV1Variant)) { throw ('CompletionAnchoredPulseV1 safety row ' + $s.id + ' pre_down_fail_closed disagrees with the Rust scenario Down slots') }
+    if ($s.pre_down_fail_closed -and $s.expected_active_obligation_mask -notmatch '^zero_') { throw ('CompletionAnchoredPulseV1 pre-Down safety row ' + $s.id + ' must declare a zero obligation') }
+}
+$capV1ByIdHold = @{}; foreach ($s in $capV1Profile.SafetyScenarios) { $capV1ByIdHold[$s.id] = $s }
+if ($capV1ByIdHold['pause-resume'].expected_active_obligation_mask -eq $capV1ByIdHold['pause-resume-active-cleanup'].expected_active_obligation_mask -or
+    $capV1ByIdHold['pause-resume'].effective_hold_us -eq $capV1ByIdHold['pause-resume-active-cleanup'].effective_hold_us -or
+    $capV1ByIdHold['target-hwnd-change'].expected_active_obligation_mask -notmatch '^zero_' -or
+    $capV1ByIdHold['supervisor-lease-expiry'].expected_active_obligation_mask -notmatch '^zero_' -or
+    $capV1ByIdHold['suspend-resume'].evidence_class -ne 'controlled mock' -or
+    $capV1ByIdHold['suspend-resume'].harness_classification -notmatch 'no resume phase' -or
+    $capV1ByIdHold['modifier-held-after-owned'].expected_active_obligation_mask -notmatch 'modifier_not_owned' -or
+    $capV1ByIdHold['owner-process-termination'].evidence_class -ne 'conditional' -or
+    $capV1ByIdHold['ambiguous-packet'].evidence_class -ne 'conditional' -or
+    -not $capV1ByIdHold.ContainsKey('cleanup-full-release') -or
+    (@($capV1Profile.SafetyScenarios | Where-Object { $_.evidence_class -notin @('planned native', 'controlled mock', 'conditional') }).Count -ne 0) -or
+    (@($capV1Profile.SafetyScenarios | Where-Object { $_.harness_classification -match 'within margin|before (the )?OS suspend completes' }).Count -ne 0)) {
+    throw 'CompletionAnchoredPulseV1 safety metadata contradicts the Rust harness contracts'
+}
+foreach ($capV1Source in @(
+        @('owner_identity.rs', 'prepared_down_owner_mismatch', 'owner-mismatch'),
+        @('owner_identity.rs', 'prepared_down_owner_process_terminated', 'owner-process-termination'),
+        @('generation_stress.rs', 'SHORT_UP_GAP_STRESS_CYCLES: usize = 513', 'short-up-gap-stress'),
+        @('generation_stress.rs', 'SHORT_UP_GAP_STRESS_MIN_HOLD_SAMPLES: u64 = 512', 'short-up-gap-stress'),
+        @('modifier_guard.rs', 'physical_modifier_held', 'modifier-held-after-owned'))) {
+    $capV1Text = [IO.File]::ReadAllText((Join-Path $playbackCoreRepoRoot ('rust\crates\sky_player\src\bin\acceptance\' + $capV1Source[0])))
+    $capV1RowText = ($capV1ByIdHold[$capV1Source[2]] | ConvertTo-Json -Depth 3)
+    $capV1Needle = ($capV1Source[1] -replace ' usize = ', ' ' -replace ' u64 = ', ' ')
+    $capV1Token = if ($capV1Source[1] -match '=\s*(\d+)$') { $Matches[1] } else { $capV1Source[1] }
+    if (-not $capV1Text.Contains($capV1Source[1]) -or -not $capV1RowText.Contains($capV1Token)) { throw ('CompletionAnchoredPulseV1 safety row ' + $capV1Source[2] + ' is not tied to Rust contract token ' + $capV1Source[1]) }
 }
 $capV1Head = (& git -C $playbackCoreRepoRoot rev-parse HEAD).Trim()
 if (-not (Assert-CompletionAnchoredPulseV1Lineage -RepositoryRoot $playbackCoreRepoRoot -CandidateRevision $capV1Head -RemoteTipRevision $capV1Head -SourceRole Candidate)) {
@@ -2938,53 +2987,24 @@ try { [void](New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $playb
 }
 if (-not $capV1NoPlanRejected) { throw 'CompletionAnchoredPulseV1 allowed execution without -PlanOnly' }
 
-$capV1ParityEvidence = @(
-    [pscustomobject]@{
-        workload = 'dense-alternating'
-        baseline_verified = $true
-        candidate_verified = $true
-        baseline_event_count = 896
-        candidate_event_count = 896
-        baseline_group_count = 896
-        candidate_group_count = 896
-        baseline_first_us = 50000
-        candidate_first_us = 50000
-        baseline_last_us = 15414465
-        candidate_last_us = 15414465
-        baseline_sha256 = '802e84e0d9fa26cec3b293ed20af9a03202b5eb49b5f0cf66531d5b81f41fe73'
-        candidate_sha256 = '802e84e0d9fa26cec3b293ed20af9a03202b5eb49b5f0cf66531d5b81f41fe73'
-    },
-    [pscustomobject]@{
-        workload = 'near-minimum-retrigger'
-        baseline_verified = $true
-        candidate_verified = $true
-        baseline_event_count = 880
-        candidate_event_count = 880
-        baseline_group_count = 880
-        candidate_group_count = 880
-        baseline_first_us = 50000
-        candidate_first_us = 50000
-        baseline_last_us = 15139793
-        candidate_last_us = 15139793
-        baseline_sha256 = '2a01c69071ecfc28deafcfe719e3c35be882c15bcd41b291ba99d0a63306247c'
-        candidate_sha256 = '2a01c69071ecfc28deafcfe719e3c35be882c15bcd41b291ba99d0a63306247c'
-    },
-    [pscustomobject]@{
-        workload = 'long-idle'
-        baseline_verified = $true
-        candidate_verified = $true
-        baseline_event_count = 32
-        candidate_event_count = 32
-        baseline_group_count = 32
-        candidate_group_count = 32
-        baseline_first_us = 50000
-        candidate_first_us = 50000
-        baseline_last_us = 16324672
-        candidate_last_us = 16324672
-        baseline_sha256 = '7da0dce05f83dc76ee9429b3d5a2b820a43dea2274c12b18ce1e00774459f672'
-        candidate_sha256 = '7da0dce05f83dc76ee9429b3d5a2b820a43dea2274c12b18ce1e00774459f672'
+$capV1CandidateTree = (& git -C $playbackCoreRepoRoot rev-parse 'HEAD^{tree}').Trim()
+$capV1ParityEvidence = @(foreach ($capV1Name in $capV1Profile.PairedPerformanceWorkloads) {
+    $capV1Expected = $capV1Profile.ExpectedAuthoredStreams[$capV1Name]
+    $capV1Row = [ordered]@{ workload = $capV1Name; evidence_origin = 'caller-supplied-test-output'; game_fps = 60; timing_margin_us = 500; configured_H_us = 17167; sample_seconds = 15 }
+    foreach ($capV1Role in @('baseline', 'candidate')) {
+        $capV1Row[$capV1Role + '_revision'] = if ($capV1Role -eq 'baseline') { $capV1Profile.BaselineRevision } else { $capV1Head }
+        $capV1Row[$capV1Role + '_tree'] = if ($capV1Role -eq 'baseline') { $capV1Profile.BaselineTree } else { $capV1CandidateTree }
+        $capV1Row[$capV1Role + '_lock_sha256'] = $capV1Profile.BaselineLockSha256
+        $capV1Row[$capV1Role + '_verified'] = $true
+        $capV1Row[$capV1Role + '_event_count'] = $capV1Expected.event_count
+        $capV1Row[$capV1Role + '_group_count'] = $capV1Expected.group_count
+        $capV1Row[$capV1Role + '_first_us'] = $capV1Expected.first_us
+        $capV1Row[$capV1Role + '_last_us'] = $capV1Expected.last_us
+        $capV1Row[$capV1Role + '_sha256'] = $capV1Expected.sha256
     }
-)
+    [pscustomobject]$capV1Row
+})
+function Copy-CapV1Evidence { param([object[]]$Evidence) @($Evidence | ForEach-Object { $_ | ConvertTo-Json -Depth 4 | ConvertFrom-Json }) }
 
 $capV1CleanTemp = Join-Path $env:TEMP ('cap-v1-plan-' + [guid]::NewGuid().ToString('N'))
 $capV1BareOrigin = Join-Path $capV1CleanTemp 'bare-origin.git'
@@ -3014,10 +3034,83 @@ try {
         $capV1Plan.sendinput_calls -ne 0 -or
         -not $capV1Plan.baseline_identity_verified_from_git_objects -or
         $capV1Plan.remote_tip_revision -ne $capV1Head -or
-        $capV1Plan.paired_eligibility_status -ne 'VERIFIED_ALL_PAIRED_WORKLOADS' -or
+        $capV1Plan.paired_eligibility_status -ne 'EVIDENCE_BOUND_ALL_PAIRED_WORKLOADS' -or
         $capV1Plan.planned_paired_session_count -ne 72 -or
         -not $capV1Plan.locks_identical) {
         throw 'CompletionAnchoredPulseV1 PlanOnly output did not satisfy nonphysical 72-session contract'
+    }
+    $capV1NegativeCases = @(
+        @{ Name = 'missing numeric geometry'; Pattern = 'missing or non-positive'; Mutate = { param($e) $e.PSObject.Properties.Remove('candidate_event_count'); $e.PSObject.Properties.Remove('baseline_event_count') } },
+        @{ Name = 'missing first_us on both roles'; Pattern = 'missing or negative'; Mutate = { param($e) $e.PSObject.Properties.Remove('candidate_first_us'); $e.PSObject.Properties.Remove('baseline_first_us') } },
+        @{ Name = 'non-integer geometry'; Pattern = 'missing or non-positive'; Mutate = { param($e) $e.candidate_group_count = '32'; $e.baseline_group_count = '32' } },
+        @{ Name = 'negative first_us'; Pattern = 'missing or negative'; Mutate = { param($e) $e.candidate_first_us = -1; $e.baseline_first_us = -1 } },
+        @{ Name = 'last before first'; Pattern = 'precedes first_us'; Mutate = { param($e) $e.candidate_last_us = 1; $e.baseline_last_us = 1 } },
+        @{ Name = 'group count exceeds event count'; Pattern = 'group_count exceeds'; Mutate = { param($e) $e.candidate_group_count = 33; $e.baseline_group_count = 33 } },
+        @{ Name = 'geometry differs from immutable stream'; Pattern = 'differs from the immutable expected'; Mutate = { param($e) $e.candidate_last_us = [long]$e.candidate_last_us + 1; $e.baseline_last_us = [long]$e.baseline_last_us + 1 } },
+        @{ Name = 'arbitrary non-SHA equal digest'; Pattern = 'invalid (baseline|candidate)_sha256'; Mutate = { param($e) $e.candidate_sha256 = 'x'; $e.baseline_sha256 = 'x' } },
+        @{ Name = '63-hex digest'; Pattern = 'invalid (baseline|candidate)_sha256'; Mutate = { param($e) $e.candidate_sha256 = ('a' * 63); $e.baseline_sha256 = ('a' * 63) } },
+        @{ Name = 'uppercase digest'; Pattern = 'invalid (baseline|candidate)_sha256'; Mutate = { param($e) $e.candidate_sha256 = $e.candidate_sha256.ToUpperInvariant(); $e.baseline_sha256 = $e.baseline_sha256.ToUpperInvariant() } },
+        @{ Name = 'valid-looking equal digest that is not the immutable stream'; Pattern = 'differs from the immutable expected'; Mutate = { param($e) $e.candidate_sha256 = ('a' * 64); $e.baseline_sha256 = ('a' * 64) } },
+        @{ Name = 'stale candidate revision'; Pattern = 'stale or mismatched candidate_revision'; Mutate = { param($e) $e.candidate_revision = ('1' * 40) } },
+        @{ Name = 'stale candidate tree'; Pattern = 'stale or mismatched candidate_tree'; Mutate = { param($e) $e.candidate_tree = ('2' * 40) } },
+        @{ Name = 'wrong baseline revision'; Pattern = 'stale or mismatched baseline_revision'; Mutate = { param($e) $e.baseline_revision = ('3' * 40) } },
+        @{ Name = 'wrong baseline tree'; Pattern = 'stale or mismatched baseline_tree'; Mutate = { param($e) $e.baseline_tree = ('4' * 40) } },
+        @{ Name = 'missing candidate revision'; Pattern = 'missing or malformed candidate_revision'; Mutate = { param($e) $e.PSObject.Properties.Remove('candidate_revision') } },
+        @{ Name = 'wrong candidate lock'; Pattern = 'stale or mismatched candidate_lock_sha256'; Mutate = { param($e) $e.candidate_lock_sha256 = ('5' * 64) } },
+        @{ Name = 'wrong fps'; Pattern = 'workload setting game_fps'; Mutate = { param($e) $e.game_fps = 120 } },
+        @{ Name = 'wrong margin'; Pattern = 'workload setting timing_margin_us'; Mutate = { param($e) $e.timing_margin_us = 0 } },
+        @{ Name = 'wrong H'; Pattern = 'workload setting configured_H_us'; Mutate = { param($e) $e.configured_H_us = 16667 } },
+        @{ Name = 'wrong sample seconds'; Pattern = 'workload setting sample_seconds'; Mutate = { param($e) $e.sample_seconds = 10 } },
+        @{ Name = 'missing settings'; Pattern = 'missing or non-integer workload setting'; Mutate = { param($e) $e.PSObject.Properties.Remove('sample_seconds') } },
+        @{ Name = 'verified flag not boolean true'; Pattern = 'candidate_verified must be boolean true'; Mutate = { param($e) $e.candidate_verified = 'true' } },
+        @{ Name = 'missing evidence origin'; Pattern = 'missing evidence_origin'; Mutate = { param($e) $e.PSObject.Properties.Remove('evidence_origin') } }
+    )
+    foreach ($capV1Case in $capV1NegativeCases) {
+        $capV1Mutated = Copy-CapV1Evidence $capV1ParityEvidence
+        & $capV1Case.Mutate $capV1Mutated[2]
+        $capV1CasePlan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1Mutated
+        $capV1CaseSummary = @($capV1CasePlan.parity_evidence_summary | Where-Object { $_.workload -eq 'long-idle' })[0]
+        if ($capV1CasePlan.planned_paired_session_count -ne 48 -or
+            $capV1CasePlan.paired_eligibility_status -ne 'PARTIAL_EVIDENCE_BOUND' -or
+            ($capV1CasePlan.excluded_due_to_unbound_parity -join ',') -ne 'long-idle' -or
+            $capV1CaseSummary.evidence_bound -or
+            $capV1CaseSummary.reason -notmatch $capV1Case.Pattern) {
+            throw ('CompletionAnchoredPulseV1 parity negative case was not excluded for the intended reason: ' + $capV1Case.Name + ' => ' + $capV1CaseSummary.reason)
+        }
+    }
+
+    # The previously accepted bare shape: both flags true, equal non-SHA digests, no geometry.
+    $capV1BareEvidence = @(foreach ($capV1Name in $capV1Profile.PairedPerformanceWorkloads) {
+        [pscustomobject]@{ workload = $capV1Name; baseline_verified = $true; candidate_verified = $true; baseline_sha256 = 'x'; candidate_sha256 = 'x' }
+    })
+    $capV1BarePlan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1BareEvidence
+    if ($capV1BarePlan.planned_paired_session_count -ne 0 -or $capV1BarePlan.paired_eligibility_status -ne 'UNVERIFIED_NO_PARITY_EVIDENCE_SUPPLIED') {
+        throw 'CompletionAnchoredPulseV1 PlanOnly qualified sessions from bare flag-and-string parity evidence'
+    }
+
+    $capV1StaleAll = Copy-CapV1Evidence $capV1ParityEvidence
+    foreach ($capV1StaleEntry in $capV1StaleAll) { $capV1StaleEntry.candidate_revision = ('1' * 40); $capV1StaleEntry.candidate_tree = ('2' * 40) }
+    $capV1StalePlan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1StaleAll
+    if ($capV1StalePlan.planned_paired_session_count -ne 0) { throw 'CompletionAnchoredPulseV1 PlanOnly accepted evidence from a different candidate HEAD' }
+
+    $capV1Duplicate = Copy-CapV1Evidence $capV1ParityEvidence
+    $capV1Duplicate = @($capV1Duplicate) + @(Copy-CapV1Evidence @($capV1ParityEvidence[0]))
+    $capV1DuplicatePlan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1Duplicate
+    $capV1DuplicateSummary = @($capV1DuplicatePlan.parity_evidence_summary | Where-Object { $_.workload -eq 'dense-alternating' })[0]
+    if ($capV1DuplicatePlan.planned_paired_session_count -ne 48 -or
+        ($capV1DuplicatePlan.excluded_due_to_unbound_parity -join ',') -ne 'dense-alternating' -or
+        $capV1DuplicateSummary.reason -notmatch 'duplicate parity evidence') {
+        throw 'CompletionAnchoredPulseV1 PlanOnly must exclude duplicated workload evidence'
+    }
+
+    $capV1Unknown = @(Copy-CapV1Evidence $capV1ParityEvidence) + @([pscustomobject]@{ workload = 'mixed-up-down'; baseline_verified = $true }) + @($null)
+    $capV1UnknownPlan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1Unknown
+    if ($capV1UnknownPlan.planned_paired_session_count -ne 72 -or @($capV1UnknownPlan.parity_evidence_rejections).Count -ne 2) {
+        throw 'CompletionAnchoredPulseV1 PlanOnly must record unknown and null evidence entries as rejections without affecting bound workloads'
+    }
+    if ($capV1Plan.parity_evidence_origin -ne 'caller_supplied_test_output' -or $capV1Plan.parity_executed_by_plan -or
+        @($capV1Plan.parity_evidence_summary | Where-Object { -not $_.evidence_bound -or $_.candidate_revision -ne $capV1Head -or $_.baseline_revision -ne $capV1Profile.BaselineRevision -or $_.game_fps -ne 60 -or $_.configured_H_us -ne 17167 }).Count -ne 0) {
+        throw 'CompletionAnchoredPulseV1 PlanOnly must record bound evidence identities and settings and label evidence as caller supplied'
     }
 
     $capV1NoParityPlan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly
@@ -3026,12 +3119,12 @@ try {
         throw 'CompletionAnchoredPulseV1 PlanOnly without parity evidence must exclude unverified workloads'
     }
 
-    $capV1MismatchParity = @($capV1ParityEvidence | ForEach-Object { $_ | ConvertTo-Json -Depth 4 | ConvertFrom-Json })
+    $capV1MismatchParity = Copy-CapV1Evidence $capV1ParityEvidence
     $capV1MismatchParity[2].candidate_sha256 = '0' * 64
     $capV1PartialPlan = New-CompletionAnchoredPulseV1NonphysicalPlan -RepositoryRoot $capV1Repo -PlanOnly -ParityEvidence $capV1MismatchParity
     if ($capV1PartialPlan.planned_paired_session_count -ne 48 -or
-        $capV1PartialPlan.paired_eligibility_status -ne 'PARTIAL_PARITY_VERIFIED' -or
-        ($capV1PartialPlan.excluded_due_to_unverified_parity -join ',') -ne 'long-idle') {
+        $capV1PartialPlan.paired_eligibility_status -ne 'PARTIAL_EVIDENCE_BOUND' -or
+        ($capV1PartialPlan.excluded_due_to_unbound_parity -join ',') -ne 'long-idle') {
         throw 'CompletionAnchoredPulseV1 PlanOnly must exclude mismatched workload from paired eligibility'
     }
 

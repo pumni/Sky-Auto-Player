@@ -427,9 +427,34 @@ Limitations of `-PlanOnly`:
 
 - `native_build_status` is `NOT BUILT`, `native_manifest_status` is `NOT VERIFIED`, and `binary_sha256` is `NOT_BUILT` (no harness build or execution occurs).
 - `receiver_started` and `harness_started` are `false` with `no_native_invocation = true`.
-- Paired session eligibility (72 sessions: 3 workloads x 2 loads x 6 AB/BA pairs x 2 arms) is conditional on verified identical authored streams supplied in `-ParityEvidence` (`dense-alternating`, `near-minimum-retrigger`, `long-idle`); unverified or mismatched workloads are excluded from planned paired sessions.
+- Paired session eligibility (72 sessions: 3 workloads x 2 loads x 6 AB/BA pairs x 2 arms) is conditional on **caller-supplied** authored-stream parity evidence (`-ParityEvidence`) for `dense-alternating`, `near-minimum-retrigger` and `long-idle`. The plan does not execute the parity test; it only binds the supplied records to the identities it verified itself (below). Unbound, malformed, stale, mismatched or duplicated workloads are excluded with an explicit per-workload `reason`; unknown or null entries are listed in `parity_evidence_rejections`. Status values are `EVIDENCE_BOUND_ALL_PAIRED_WORKLOADS`, `PARTIAL_EVIDENCE_BOUND` and `UNVERIFIED_NO_PARITY_EVIDENCE_SUPPLIED`; the plan records `parity_evidence_origin = caller_supplied_test_output` and `parity_executed_by_plan = false`.
 - `mixed-up-down` and `canonical-max-chord` are excluded from paired performance comparison and retained as candidate-only fixed-pulse geometry checks.
-- `ambiguous-packet` is classified `Inconclusive` if the mixed packet state is not reached during execution.
+- Safety rows (`safety_scenarios`, 16) carry the effective hold from `scenarios.rs` (`17167` us acceptance floor; `450000` for `pause-resume-active-cleanup` and `suspend-resume`; `9950000` for `stop-cleanup`, `skip-cleanup` and `cleanup-full-release`; `100000` for `modifier-held-after-owned`), the trigger, obligation at trigger, expected mask, verdict contract, `evidence_class` (`planned native`, `controlled mock` or `conditional`) and the Rust source reference. `owner-mismatch`, `owner-process-termination`, `supervisor-lease-expiry`, `target-hwnd-change`, `modifier-held-final-boundary` and `preflight-user-held` are pre-Down fail-closed cases with zero sink events and a zero obligation. `suspend-resume` injects a synthetic suspend notification only: it proves terminal cleanup of the held key and blocked Down, not cleanup before a real OS suspend completes, and exercises no resume phase. Ordinary `pause-resume` pauses between notes (zero obligation) and is distinct from `pause-resume-active-cleanup`. `modifier-held-*` use a test-support modifier seam, not physical input; the modifier is never journal-owned. `ambiguous-packet` is `Inconclusive` unless the mixed-packet injection is reached. `scripts/test_qualify_dispatch_core_contracts.ps1` parses `scenarios.rs`, `generation_stress.rs`, `owner_identity.rs` and `modifier_guard.rs` and fails when a row's hold, pre-Down status or contract token drifts. These are plans for a later owner-authorized ReceiveOnly run, not results.
+
+#### Parity evidence object
+
+One object per paired workload, flat properties, all required:
+
+| Property | Contract |
+| --- | --- |
+| `workload` | one of the three paired workloads; duplicates exclude that workload |
+| `evidence_origin` | nonempty string naming the producer, e.g. `caller-supplied-test-output` |
+| `game_fps`, `timing_margin_us`, `configured_H_us`, `sample_seconds` | integers equal to `60`, `500`, `17167`, `15` |
+| `baseline_revision`, `candidate_revision` | 40 lowercase hex; must equal the commit the plan verified (profile baseline; clean pushed candidate tip) |
+| `baseline_tree`, `candidate_tree` | 40 lowercase hex; must equal the verified trees |
+| `baseline_lock_sha256`, `candidate_lock_sha256` | 64 lowercase hex; must equal the verified `rust/Cargo.lock` hashes |
+| `baseline_verified`, `candidate_verified` | boolean `true` (the authored-stream test passed in that tree) |
+| `<role>_event_count`, `<role>_group_count` | integers >= 1, group <= event |
+| `<role>_first_us`, `<role>_last_us` | integers >= 0, last >= first |
+| `<role>_sha256` | 64 lowercase hex |
+
+Each role's digest and geometry must also equal the immutable expected stream in the profile (`ExpectedAuthoredStreams`, the digests asserted by `benchmark_schedule_tests.rs::paired_workloads_match_the_immutable_pr_base_authored_streams`). A missing field is never compared as equal.
+
+Generate the evidence by running the existing no-send test in a clean checkout of each exact source tree, with the pinned toolchain:
+
+    node scripts/toolchain-pin.mjs exec -- cargo test --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance paired_workloads_match_the_immutable_pr_base_authored_streams
+
+The test asserts the expected digest and geometry itself and sends no input; record the command, exit code, revision, tree and lock hash per role, and write the object file outside tracked source. Use `ConvertFrom-Json` on that file as `$parityEvidence`. Any new commit invalidates the candidate record; rerun it before reusing the evidence.
 
 Record native results only for work actually run. Until separately authorized
 and performed, report:
