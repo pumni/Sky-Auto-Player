@@ -30,14 +30,16 @@ const { data } = Astro.props;
         </li>
       ))}
     </ol>
-    <a class="quick-start__setup" href={withBase(data.setupGuideHref)}>
-      {data.setupGuideLabel}
-    </a>
-    <p class="quick-start__formats" id="formats">
-      <strong>{data.formatsLabel}</strong>
-      <span>{data.formatsValue}</span>
-      <a href={withBase(data.formatsHref)}>{data.formatsLinkLabel}</a>
-    </p>
+    <div class="quick-start__resources">
+      <a class="quick-start__setup" href={withBase(data.setupGuideHref)}>
+        {data.setupGuideLabel}
+      </a>
+      <p class="quick-start__formats" id="formats">
+        <strong>{data.formatsLabel}</strong>
+        <span>{data.formatsValue}</span>
+        <a href={withBase(data.formatsHref)}>{data.formatsLinkLabel}</a>
+      </p>
+    </div>
   </div>
 </section>
 
@@ -57,7 +59,7 @@ const { data } = Astro.props;
 
     .quick-start__steps {
       display: grid;
-      gap: clamp(1.75rem, 4vw, 2.25rem);
+      gap: 2rem;
       margin: 0;
       padding: 0;
       list-style: none;
@@ -66,7 +68,9 @@ const { data } = Astro.props;
     .quick-start__step {
       display: grid;
       grid-template-columns: 2.5rem minmax(0, 1fr);
-      gap: 1rem;
+      gap: 1.25rem;
+      padding-block-start: 1.5rem;
+      border-block-start: 1px solid var(--line-default);
     }
 
     @media (max-width: 40rem) {
@@ -78,13 +82,13 @@ const { data } = Astro.props;
     .quick-start__number {
       color: var(--color-action);
       font-family: var(--font-display);
-      font-size: clamp(1.5rem, 1.2rem + 0.6vw, 2rem);
+      font-size: clamp(1.75rem, 1.3rem + 1vw, 2.5rem);
       line-height: 1.2;
       font-variant-numeric: tabular-nums;
     }
 
     .quick-start__step h3 {
-      margin: 0 0 0.5rem;
+      margin: 0 0 0.875rem;
       font-size: clamp(1.25rem, 1rem + 0.5vw, 1.5rem);
       line-height: 1.35;
     }
@@ -94,10 +98,16 @@ const { data } = Astro.props;
       margin: 0;
       color: var(--color-text-secondary);
       font-size: var(--type-body);
-      line-height: 1.68;
+      line-height: 1.75;
     }
 
-    .quick-start__setup,
+    .quick-start__resources {
+      display: grid;
+      gap: 1.5rem;
+      padding-block-start: clamp(1.5rem, 3vw, 2.5rem);
+      border-block-start: 1px solid var(--line-faint);
+    }
+
     .quick-start__formats a {
       color: var(--color-action);
       text-decoration: underline;
@@ -109,6 +119,7 @@ const { data } = Astro.props;
       display: inline-flex;
       min-block-size: 2.75rem;
       align-items: center;
+      font-size: var(--type-small);
     }
 
     .quick-start__setup {
@@ -117,19 +128,31 @@ const { data } = Astro.props;
       align-items: center;
       justify-self: start;
       font-weight: 600;
+      padding: 0.625rem 1rem;
+      border: 1px solid var(--color-interactive-border);
+      border-radius: var(--radius-sm);
+      color: var(--color-text-primary);
+      text-decoration: none;
+      align-self: start;
+    }
+
+    .quick-start__setup:hover {
+      border-color: var(--color-action);
+      color: var(--color-action);
     }
 
     .quick-start__formats {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: baseline;
-      gap: 0.5rem 1rem;
+      display: grid;
+
+
+      gap: 0.5rem;
       margin: 0;
-      padding-block-start: 1rem;
-      border-block-start: 1px solid var(--line-faint);
+
+
       color: var(--color-text-secondary);
-      font-size: var(--type-small);
+      font-size: var(--type-body);
       line-height: 1.6;
+      justify-items: start;
     }
 
     .quick-start__formats strong {
@@ -141,33 +164,27 @@ const { data } = Astro.props;
       .quick-start__steps {
         grid-template-columns: repeat(3, minmax(0, 1fr));
         align-items: start;
-        gap: clamp(1.5rem, 3.5vw, 3.5rem);
+        gap: clamp(1.5rem, 4vw, 4rem);
       }
 
       .quick-start__step {
         grid-template-columns: minmax(0, 1fr);
-        gap: 0.75rem;
+        gap: 1.25rem;
         align-content: start;
-        padding-block-start: 1rem;
-        border-block-start: 1px solid var(--line-faint);
+
+
       }
 
       .quick-start__number {
-        min-block-size: 2.4rem;
-        font-size: clamp(1.75rem, 1.5rem + 0.5vw, 2.125rem);
+        min-block-size: 2.75rem;
+        font-size: clamp(2rem, 1.5rem + 1.2vw, 2.75rem);
         line-height: 1;
       }
 
-      .quick-start__formats {
-        gap-inline: 1rem;
-      }
-    }
-
-    @media (max-width: 39.99rem) {
-      .quick-start__formats {
-        flex-direction: column;
+      .quick-start__resources {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 2.5rem;
         align-items: start;
-        gap: 0.5rem;
       }
     }
   }

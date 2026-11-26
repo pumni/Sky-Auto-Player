@@ -27,18 +27,23 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
     </div>
     <nav class="site-footer__links" aria-label={isVi ? 'Liên kết chân trang' : 'Footer links'}>
       <div class="site-footer__group">
+        <span class="site-footer__group-title">{isVi ? 'Tài nguyên' : 'Resources'}</span>
         <a href={SITE.releaseHistoryUrl}>{isVi ? 'Bản phát hành' : 'Releases'}</a>
         <a href={withBase(isVi ? '/vi/guides/' : '/guides/')}>{isVi ? 'Hướng dẫn' : 'Guides'}</a>
         <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>FAQ</a>
       </div>
       <div class="site-footer__group">
+        <span class="site-footer__group-title">{isVi ? 'Dự án' : 'Project'}</span>
         <a href={SITE.repositoryUrl}>{isVi ? 'Mã nguồn' : 'Source'}</a>
         <a href={`${SITE.repositoryUrl}/blob/main/LICENSE`}>{isVi ? 'Giấy phép' : 'License'}</a>
         <a href={`${SITE.repositoryUrl}/issues`}>{isVi ? 'Báo lỗi' : 'Issues'}</a>
       </div>
-      <a href={otherLocalePath} lang={isVi ? 'en' : 'vi'} hreflang={isVi ? 'en' : 'vi'}>
-        {isVi ? 'English' : 'Tiếng Việt'}
-      </a>
+      <div class="site-footer__group">
+        <span class="site-footer__group-title">{isVi ? 'Ngôn ngữ' : 'Language'}</span>
+        <a href={otherLocalePath} lang={isVi ? 'en' : 'vi'} hreflang={isVi ? 'en' : 'vi'}>
+          {isVi ? 'English' : 'Tiếng Việt'}
+        </a>
+      </div>
     </nav>
   </div>
 </footer>
@@ -55,17 +60,18 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
     .site-footer__layout {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
-      gap: var(--space-7);
-      align-items: end;
+      gap: clamp(2rem, 4vw, 4rem);
+      align-items: start;
     }
 
     .site-footer__identity {
       display: grid;
-      gap: var(--space-3);
+      gap: 1rem;
     }
 
     .site-footer__identity p {
       max-inline-size: 34rem;
+      line-height: 1.7;
     }
 
     .site-footer__brand {
@@ -84,18 +90,34 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
     }
 
     .site-footer__links {
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: flex-end;
-      gap: var(--space-2) var(--space-4);
+      display: grid;
+
+
+      gap: 1.5rem;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
     .site-footer__group {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0 var(--space-3);
-      padding-inline-end: var(--space-4);
-      border-inline-end: 1px solid var(--line-default);
+      display: grid;
+
+      gap: 0.125rem;
+
+
+      align-content: start;
+      justify-items: start;
+    }
+
+    .site-footer__group-title {
+      color: var(--color-text-primary);
+      font-size: var(--type-small);
+      font-weight: 650;
+      margin-block-end: 0.5rem;
+    }
+
+    @media (min-width: 40rem) {
+      .site-footer__links {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
     }
 
     .site-footer__links a {
@@ -118,10 +140,6 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
       .site-footer__layout {
         grid-template-columns: 1fr;
         align-items: start;
-      }
-
-      .site-footer__links {
-        justify-content: flex-start;
       }
     }
 

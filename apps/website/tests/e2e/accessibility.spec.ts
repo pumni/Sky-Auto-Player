@@ -203,18 +203,16 @@ test.describe('accessibility and responsive contracts', () => {
       });
       expect(spacing.gaps).toHaveLength(4);
       const [opening, ...later] = spacing.gaps;
-      expect(opening).toBeGreaterThanOrEqual(width >= 1024 ? 40 : 32);
-      expect(opening).toBeLessThanOrEqual(width >= 1024 ? 56 : 40);
+      expect(opening).toBeGreaterThanOrEqual(width >= 1024 ? 56 : 36);
+      expect(opening).toBeLessThanOrEqual(width >= 1024 ? 72 : 40);
       const [min, max] =
         width >= 1280
-          ? [120, 144]
+          ? [144, 176]
           : width >= 1024
-            ? [96, 120]
+            ? [120, 144]
             : width >= 640
-              ? [88, 112]
-              : width > 320
-                ? [80, 96]
-                : [72, 80];
+              ? [104, 128]
+              : [88, 112];
       for (const gap of later) {
         expect(gap).toBeGreaterThanOrEqual(min - 0.1);
         expect(gap).toBeLessThanOrEqual(max + 0.1);
@@ -294,6 +292,10 @@ test.describe('accessibility and responsive contracts', () => {
               bounds('.trust-download__layout'),
             ],
             productImage: bounds('[data-product-image]'),
+            productIntro: bounds('.product-showcase__intro'),
+            productSelector: bounds('.product-selector'),
+            setupGuide: bounds('.quick-start__setup'),
+            formats: bounds('.quick-start__formats'),
             playbackHeader: bounds('.playback-demo__header'),
             playbackStage: bounds('.playback-demo__stage'),
             playbackSupport: bounds('.playback-demo__support'),
@@ -351,11 +353,14 @@ test.describe('accessibility and responsive contracts', () => {
           expect(geometry.playbackStage.width).toBeLessThanOrEqual(580);
         }
         if (viewport.width >= 1024) {
+          expect(geometry.productSelector.left).toBeGreaterThanOrEqual(geometry.productIntro.right + 24);
+          expect(Math.abs(geometry.productSelector.bottom - geometry.productIntro.bottom)).toBeLessThanOrEqual(1);
           expect(geometry.playbackSupport.left).toBeGreaterThan(geometry.playbackStage.right);
           expect(
             Math.abs(geometry.playbackSupport.top - geometry.playbackStage.top),
           ).toBeLessThanOrEqual(1);
         } else {
+          expect(geometry.productSelector.top).toBeGreaterThanOrEqual(geometry.productIntro.bottom + 8);
           expect(geometry.playbackSupport.top).toBeGreaterThanOrEqual(
             geometry.playbackStage.bottom + 20,
           );
@@ -373,7 +378,9 @@ test.describe('accessibility and responsive contracts', () => {
             expect(Math.abs(headingTopValue - trustHeadingTop)).toBeLessThanOrEqual(1);
           }
           expect(geometry.ctaAction.left).toBeGreaterThan(geometry.ctaCopy.left);
+          expect(geometry.formats.left).toBeGreaterThan(geometry.setupGuide.right);
         } else {
+          expect(geometry.formats.top).toBeGreaterThan(geometry.setupGuide.bottom);
           expect(geometry.quickStartSteps[0].top).toBeLessThan(geometry.quickStartSteps[1].top);
           expect(geometry.quickStartSteps[1].top).toBeLessThan(geometry.quickStartSteps[2].top);
           expect(geometry.quickStartSteps[0].left).toBeCloseTo(geometry.quickStartSteps[1].left, 0);
@@ -386,14 +393,12 @@ test.describe('accessibility and responsive contracts', () => {
 
         const laterMinMax =
           viewport.width >= 1280
-            ? [120, 144]
+            ? [144, 176]
             : viewport.width >= 1024
-              ? [96, 120]
+              ? [120, 144]
               : viewport.width >= 640
-                ? [88, 112]
-                : viewport.width > 320
-                  ? [80, 96]
-                  : [72, 80];
+                ? [104, 128]
+                : [88, 112];
         for (const gap of geometry.chapterGaps.slice(1)) {
           expect(gap).toBeGreaterThanOrEqual(laterMinMax[0] - 0.1);
           expect(gap).toBeLessThanOrEqual(laterMinMax[1] + 0.1);
