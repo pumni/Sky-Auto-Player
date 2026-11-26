@@ -26,12 +26,16 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
       </p>
     </div>
     <nav class="site-footer__links" aria-label={isVi ? 'Liên kết chân trang' : 'Footer links'}>
-      <a href={SITE.releaseUrl}>{isVi ? 'Bản phát hành' : 'Releases'}</a>
-      <a href={withBase(isVi ? '/vi/guides/' : '/guides/')}>{isVi ? 'Hướng dẫn' : 'Guides'}</a>
-      <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>FAQ</a>
-      <a href={SITE.repositoryUrl}>{isVi ? 'Mã nguồn' : 'Source'}</a>
-      <a href={`${SITE.repositoryUrl}/blob/main/LICENSE`}>{isVi ? 'Giấy phép' : 'License'}</a>
-      <a href={`${SITE.repositoryUrl}/issues`}>{isVi ? 'Báo lỗi' : 'Issues'}</a>
+      <div class="site-footer__group">
+        <a href={SITE.releaseUrl}>{isVi ? 'Bản phát hành' : 'Releases'}</a>
+        <a href={withBase(isVi ? '/vi/guides/' : '/guides/')}>{isVi ? 'Hướng dẫn' : 'Guides'}</a>
+        <a href={withBase(isVi ? '/vi/faq/' : '/faq/')}>FAQ</a>
+      </div>
+      <div class="site-footer__group">
+        <a href={SITE.repositoryUrl}>{isVi ? 'Mã nguồn' : 'Source'}</a>
+        <a href={`${SITE.repositoryUrl}/blob/main/LICENSE`}>{isVi ? 'Giấy phép' : 'License'}</a>
+        <a href={`${SITE.repositoryUrl}/issues`}>{isVi ? 'Báo lỗi' : 'Issues'}</a>
+      </div>
       <a href={otherLocalePath} lang={isVi ? 'en' : 'vi'} hreflang={isVi ? 'en' : 'vi'}>
         {isVi ? 'English' : 'Tiếng Việt'}
       </a>
@@ -84,6 +88,14 @@ const otherLocalePath = localizedPath(Astro.url.pathname, isVi ? 'en' : 'vi');
       flex-wrap: wrap;
       justify-content: flex-end;
       gap: var(--space-2) var(--space-4);
+    }
+
+    .site-footer__group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0 var(--space-3);
+      padding-inline-end: var(--space-4);
+      border-inline-end: 1px solid var(--line-default);
     }
 
     .site-footer__links a {

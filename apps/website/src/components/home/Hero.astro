@@ -43,8 +43,13 @@ const { data, downloadCta, locale } = Astro.props;
       margin-block-end: 1.25rem;
       letter-spacing: -0.025em;
       line-height: 1.08;
-      max-inline-size: 14ch;
+      max-inline-size: 17ch;
+      color: var(--color-text-primary);
       text-wrap: balance;
+    }
+
+    .hero h1::first-line {
+      color: var(--color-action-hover);
     }
 
     .hero--vi h1 {

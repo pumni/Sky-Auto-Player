@@ -196,6 +196,15 @@ const timingGuide = withBase(
 
     .playback-demo__stage {
       inline-size: min(100%, 54rem);
+      padding: clamp(0.75rem, 2vw, 1.5rem);
+      border: 1px solid var(--line-default);
+      border-radius: var(--radius-md);
+      background: linear-gradient(
+        155deg,
+        var(--color-surface-stage),
+        var(--color-surface-instrument) 65%
+      );
+      box-shadow: var(--stage-elevation);
     }
 
     .playback-demo__time {
@@ -300,21 +309,23 @@ const timingGuide = withBase(
       display: grid;
       min-block-size: 2.75rem;
       place-items: center;
-      border-block-end: 2px solid var(--line-default);
+      border: 1px solid var(--line-default);
+      box-shadow: inset 0 -2px var(--line-default);
       border-radius: var(--radius-xs);
       background: var(--color-surface-quiet);
       color: var(--color-text-secondary);
       font-size: var(--type-small);
       font-variant-numeric: tabular-nums;
       transition:
-        background-color var(--duration-fast) var(--ease-standard),
-        color var(--duration-fast) var(--ease-standard),
-        border-color var(--duration-fast) var(--ease-standard);
+        background-color var(--duration-press) var(--ease-standard),
+        color var(--duration-press) var(--ease-standard),
+        border-color var(--duration-press) var(--ease-standard),
+        box-shadow var(--duration-press) var(--ease-standard);
     }
 
     .playback-key.is-active {
-      border: 1px solid var(--color-action);
-      border-block-end-width: 4px;
+      border-color: var(--color-action);
+      box-shadow: inset 0 -3px var(--color-action);
       background: var(--color-surface-active);
       color: var(--color-text-primary);
     }
@@ -460,6 +471,7 @@ const timingGuide = withBase(
       let frameId = 0;
       let semanticState = '';
       let lastVisibleTime = '';
+      let lastAccessibleElapsed = -1;
       let markerTravel = 0;
 
       const measureMarkerTravel = () => {
@@ -563,7 +575,10 @@ const timingGuide = withBase(
           elapsedMs >= PLAYBACK_DEMO_DURATION_MS
             ? PLAYBACK_DEMO_DURATION_MS
             : Math.floor(elapsedMs / 100) * 100;
-        progress.setAttribute('aria-valuenow', String(accessibleElapsed));
+        if (accessibleElapsed !== lastAccessibleElapsed) {
+          progress.setAttribute('aria-valuenow', String(accessibleElapsed));
+          lastAccessibleElapsed = accessibleElapsed;
+        }
         const visibleTime = formatPlaybackTime(elapsedMs, locale);
         if (visibleTime !== lastVisibleTime) {
           elapsed.textContent = visibleTime;

@@ -24,6 +24,8 @@ export interface HomeContent {
     selectorLabel: string;
     fullSizeLabel: string;
     fallbackLabel: string;
+    pendingMessage: string;
+    errorMessage: string;
     captureNote: string;
     views: {
       label: string;

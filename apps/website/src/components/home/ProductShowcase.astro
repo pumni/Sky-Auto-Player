@@ -16,6 +16,8 @@ const defaultView = data.views[0];
   aria-label={data.sectionLabel}
   data-home-section="product"
   data-product-showcase
+  data-pending-message={data.pendingMessage}
+  data-error-message={data.errorMessage}
 >
   <div class="product-selector" role="group" aria-label={data.selectorLabel} hidden>
     {data.views.map((view, index) => (
@@ -55,6 +57,8 @@ const defaultView = data.views[0];
   </figure>
   <p class="product-showcase__provenance">{data.captureNote}</p>
 
+  <p class="product-showcase__status" role="status" data-product-status></p>
+
   <ul class="product-showcase__fallback" aria-label={data.fallbackLabel}>
     {data.views.map((view) => (
       <li>
@@ -88,7 +92,7 @@ const defaultView = data.views[0];
     .product-selector__button {
       min-block-size: 44px;
       padding: 0.4rem 0.7rem;
-      border: 0;
+      border: 1px solid transparent;
       border-radius: var(--radius-sm);
       background: transparent;
       color: var(--color-text-secondary);
@@ -101,8 +105,11 @@ const defaultView = data.views[0];
     }
 
     .product-selector__button[aria-pressed='true'] {
-      background: var(--color-surface-quiet);
+      border-color: var(--color-action);
+      background: var(--color-surface-active);
       color: var(--color-text-primary);
+      text-decoration: underline;
+      text-underline-offset: 0.22em;
     }
 
     .product-showcase__figure {
@@ -111,6 +118,8 @@ const defaultView = data.views[0];
 
     .product-showcase__image {
       display: block;
+      border: 1px solid var(--line-default);
+      box-shadow: var(--stage-elevation);
       overflow: hidden;
       border-radius: var(--radius-md);
       background: var(--color-surface-quiet);
@@ -150,6 +159,25 @@ const defaultView = data.views[0];
       line-height: 1.45;
     }
 
+    .product-showcase__status {
+      margin: 0;
+      color: var(--color-info);
+      font-size: var(--type-small);
+    }
+
+    .product-showcase__status:not(:empty) {
+      margin-block-start: var(--space-2);
+    }
+
+    .product-showcase__status[data-error] {
+      color: var(--color-error);
+    }
+
+    .product-selector__button[data-pending] {
+      border-color: var(--color-interactive-border);
+      border-style: dashed;
+    }
+
     .product-showcase__fallback {
       display: flex;
       flex-wrap: wrap;
@@ -176,49 +204,70 @@ const defaultView = data.views[0];
 
 <script>
   const showcase = document.querySelector<HTMLElement>('[data-product-showcase]');
-
   if (showcase) {
     const controls = showcase.querySelector<HTMLElement>('.product-selector');
     const fallback = showcase.querySelector<HTMLElement>('.product-showcase__fallback');
     const image = showcase.querySelector<HTMLImageElement>('[data-product-image]');
-    const fullSizeLink = showcase.querySelector<HTMLAnchorElement>('[data-product-full-size]');
+    const link = showcase.querySelector<HTMLAnchorElement>('[data-product-full-size]');
     const caption = showcase.querySelector<HTMLElement>('[data-product-caption]');
+    const status = showcase.querySelector<HTMLElement>('[data-product-status]');
     const buttons = Array.from(showcase.querySelectorAll<HTMLButtonElement>('[data-product-view]'));
-
-    if (controls && fallback && image && fullSizeLink && caption && buttons.length) {
+    let committed = buttons[0];
+    if (controls && fallback && image && link && caption && status && committed) {
       controls.hidden = false;
       fallback.hidden = true;
-      let selectionIntent = 0;
-
-      for (const button of buttons) {
-        button.addEventListener('click', () => {
-          const { src, alt, caption: nextCaption } = button.dataset;
-          if (!src || !alt || !nextCaption) return;
-          const intent = ++selectionIntent;
-          if (button.getAttribute('aria-pressed') === 'true') return;
-
-          const nextImage = new Image();
-          const commitSelection = () => {
-            if (intent !== selectionIntent) return;
-            image.src = src;
-            image.alt = alt;
-            fullSizeLink.href = src;
-            caption.textContent = nextCaption;
-            fallback.hidden = true;
-            for (const candidate of buttons) {
-              candidate.setAttribute('aria-pressed', String(candidate === button));
-            }
-          };
-          const revealFallback = () => {
-            if (intent === selectionIntent) fallback.hidden = false;
-          };
-
-          nextImage.addEventListener('load', commitSelection, { once: true });
-          nextImage.addEventListener('error', revealFallback, { once: true });
-          nextImage.src = src;
-          if (nextImage.complete && nextImage.naturalWidth > 0) commitSelection();
-        });
-      }
+      let cancelPending = () => {};
+      controls.addEventListener('click', (event) => {
+        const button =
+          event.target instanceof Element
+            ? event.target.closest<HTMLButtonElement>('[data-product-view]')
+            : null;
+        if (!button) return;
+        const { src, alt, caption: nextCaption } = button.dataset;
+        if (!src || !alt || !nextCaption) return;
+        cancelPending();
+        if (button === committed) return;
+        status.textContent = '';
+        status.removeAttribute('data-error');
+        const request = new AbortController();
+        const preview = new Image();
+        const timer = window.setTimeout(() => {
+          button.setAttribute('data-pending', '');
+          status.textContent = showcase.dataset.pendingMessage ?? '';
+        }, 150);
+        cancelPending = () => {
+          request.abort();
+          window.clearTimeout(timer);
+          button.removeAttribute('data-pending');
+          status.textContent = '';
+          cancelPending = () => {};
+        };
+        const commitSelection = () => {
+          cancelPending();
+          image.src = src;
+          image.alt = alt;
+          link.href = src;
+          caption.textContent = nextCaption;
+          fallback.hidden = true;
+          committed.setAttribute('aria-pressed', 'false');
+          button.setAttribute('aria-pressed', 'true');
+          committed = button;
+        };
+        preview.addEventListener('load', commitSelection, { signal: request.signal });
+        preview.addEventListener(
+          'error',
+          () => {
+            cancelPending();
+            fallback.hidden = false;
+            status.setAttribute('data-error', '');
+            status.textContent = showcase.dataset.errorMessage ?? '';
+          },
+          { signal: request.signal },
+        );
+        preview.src = src;
+        if (preview.complete && preview.naturalWidth > 0) commitSelection();
+      });
+      window.addEventListener('pagehide', () => cancelPending());
     }
   }
 </script>

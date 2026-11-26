@@ -14,7 +14,7 @@ export const homeEn: HomeContent = {
     guides: 'Guides',
     faq: 'FAQ',
     github: 'GitHub',
-    release: 'Releases',
+    release: 'Download',
   },
   hero: {
     title: 'Play the sheet. Not the keyboard.',
@@ -29,6 +29,8 @@ export const homeEn: HomeContent = {
     selectorLabel: 'Choose a player view',
     fullSizeLabel: 'View full size',
     fallbackLabel: 'Open another player view',
+    pendingMessage: 'Loading preview…',
+    errorMessage: 'The preview could not load. Try again or open it directly.',
     captureNote:
       'Browser mock preview from the current desktop source, with example data; not a native Tauri capture.',
     views: [

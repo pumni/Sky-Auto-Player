@@ -7,6 +7,7 @@
   .home-opening {
     display: grid;
     align-items: center;
+    background: radial-gradient(ellipse at 72% 40%, rgb(184 204 214 / 10%), transparent 65%);
     gap: clamp(2rem, 3vw, 3rem);
     padding-block-start: clamp(1.5rem, 3vw, 2.5rem);
   }

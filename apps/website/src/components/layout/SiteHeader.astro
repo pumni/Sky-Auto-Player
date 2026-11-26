@@ -127,11 +127,12 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         href={SITE.releaseUrl}
         aria-label={
           isVi
-            ? 'Bản phát hành — mở GitHub Releases để tải bộ cài Windows'
-            : 'Releases — open GitHub Releases to get the Windows installer'
+            ? 'Tải xuống — tải cho Windows trên GitHub Releases'
+            : 'Download for Windows from GitHub Releases'
         }
       >
-        {nav.release}
+        <span class="header-download__compact">{nav.release}</span>
+        <span class="header-download__full">{content.downloadCta}</span>
       </a>
     </div>
   </div>
@@ -225,6 +226,10 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
       align-items: center;
       gap: var(--space-2);
       order: 3;
+    }
+
+    .header-download__full {
+      display: none;
     }
 
     .header-download {
@@ -357,6 +362,13 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
     }
 
     @media (min-width: 64rem) {
+      .header-download__compact {
+        display: none;
+      }
+      .header-download__full {
+        display: inline;
+      }
+
       .site-header {
         position: sticky;
         top: 0;
@@ -439,7 +451,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         pointer-events: none;
         transform: translateY(-0.35rem);
         visibility: hidden;
-        --nav-transition-duration: 160ms;
+        --nav-transition-duration: var(--duration-fast);
         transition:
           opacity var(--nav-transition-duration) var(--ease-standard),
           transform var(--nav-transition-duration) var(--ease-out),
@@ -453,6 +465,7 @@ const otherLocalePath = localizedPath(currentPath, isVi ? 'en' : 'vi');
         pointer-events: auto;
         transform: translateY(0);
         visibility: visible;
+        --nav-transition-duration: var(--duration-standard);
         transition-delay: 0s;
       }
 

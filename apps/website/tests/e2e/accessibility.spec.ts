@@ -316,6 +316,44 @@ test.describe('accessibility and responsive contracts', () => {
     );
   });
 
+  test('slow preview keeps the committed view and cancels when it is reselected', async ({
+    page,
+  }) => {
+    let release!: () => void;
+    const response = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    try {
+      await page.route('**/desktop-song-detail-browser-preview-1366x768.png', async (route) => {
+        await response;
+        await route.continue();
+      });
+      await page.goto('/Sky-Auto-Player/vi/');
+      const group = page.getByRole('group', { name: 'Chọn giao diện trình phát' });
+      const library = group.getByRole('button', { name: 'Thư viện' });
+      const detail = group.getByRole('button', { name: 'Chi tiết bài hát' });
+      await detail.click();
+      await expect(page.locator('[data-product-status]')).toHaveText('Đang tải ảnh xem trước…');
+      await expect(library).toHaveAttribute('aria-pressed', 'true');
+      await expect(detail).toHaveAttribute('aria-pressed', 'false');
+      await expect(page.locator('[data-product-image]')).toHaveAttribute('src', /desktop-library/);
+      await expect(page.locator('[data-product-full-size]')).toHaveAttribute(
+        'href',
+        /desktop-library/,
+      );
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await library.click();
+      await expect(page.locator('[data-product-status]')).toBeEmpty();
+      const loaded = page.waitForResponse((asset) => asset.url().includes('desktop-song-detail'));
+      release();
+      await (await loaded).finished();
+      await expect(library).toHaveAttribute('aria-pressed', 'true');
+      await expect(page.locator('[data-product-status]')).toBeEmpty();
+    } finally {
+      release();
+    }
+  });
+
   test('failed capture selection preserves the current image and accessible selection', async ({
     page,
   }) => {
@@ -339,16 +377,19 @@ test.describe('accessibility and responsive contracts', () => {
     await expect(page.locator('[data-product-caption]')).toHaveText(
       'Browse songs, favorites, and playlists.',
     );
+    await expect(page.locator('[data-product-status]')).toHaveText(/preview could not load/);
     await expect(page.locator('.product-showcase__fallback')).toBeVisible();
     await expect(
       page.locator('.product-showcase__fallback').getByRole('link', { name: 'Settings' }),
     ).toHaveAttribute('href', /desktop-settings-playback-browser-preview-1366x768\.png/);
 
-    await group.getByRole('button', { name: 'Song Detail' }).click();
-    await expect(group.getByRole('button', { name: 'Song Detail' })).toHaveAttribute(
+    await page.unroute('**/desktop-settings-playback-browser-preview-1366x768.png');
+    await group.getByRole('button', { name: 'Settings' }).click();
+    await expect(group.getByRole('button', { name: 'Settings' })).toHaveAttribute(
       'aria-pressed',
       'true',
     );
+    await expect(page.locator('[data-product-status]')).toBeEmpty();
     await expect(page.locator('.product-showcase__fallback')).toBeHidden();
   });
 
@@ -490,13 +531,23 @@ test.describe('accessibility and responsive contracts', () => {
     expect(start.width).toBe(3);
     expect(Math.abs(start.leftGap)).toBeLessThanOrEqual(1);
     await expect(demo.locator('.playback-key.is-active').first()).toHaveCSS(
-      'border-block-end-width',
-      '4px',
+      'box-shadow',
+      /0px -3px 0px 0px inset/,
     );
     await expect(demo.locator('[data-demo-event="0"]')).toHaveCSS(
       'border-inline-start-width',
       '2px',
     );
+    const firstKey = demo.locator('[data-demo-key="A1"]');
+    const keyGeometry = () =>
+      firstKey.evaluate((key) => {
+        const { x, y, width, height } = key.getBoundingClientRect();
+        return [x + scrollX, y + scrollY, width, height];
+      });
+    const pressedGeometry = await keyGeometry();
+    await demo.locator('[data-action="next"]').click();
+    expect(await keyGeometry()).toEqual(pressedGeometry);
+    await demo.locator('[data-action="previous"]').click();
     const segmentGrid = await demo.locator('.playback-timeline__segments').getAttribute('style');
     expect(await demo.locator('.playback-timeline__legend').getAttribute('style')).toBe(
       segmentGrid,
@@ -879,7 +930,7 @@ test.describe('accessibility and responsive contracts', () => {
     }
   });
 
-  test('Markdown tables and architecture diagrams scroll inside their article on mobile', async ({
+  test('Markdown tables stay contained and the six-step diagram reflows on mobile', async ({
     page,
   }) => {
     await page.setViewportSize({ width: 390, height: 844 });
@@ -896,7 +947,18 @@ test.describe('accessibility and responsive contracts', () => {
         };
       });
       expect(localOverflow).not.toBeNull();
-      expect(localOverflow!.content).toBeGreaterThanOrEqual(localOverflow!.client);
+      if (route.includes('how-it-works')) {
+        expect(localOverflow!.content).toBe(localOverflow!.client);
+        const steps = page.locator('.arch-diagram li');
+        await expect(steps).toHaveCount(6);
+        const boxes = await Promise.all((await steps.all()).map((step) => step.boundingBox()));
+        for (let i = 1; i < boxes.length; i++) {
+          expect(boxes[i]!.y).toBeGreaterThan(boxes[i - 1]!.y + boxes[i - 1]!.height);
+        }
+        await expect(steps.last()).toContainText('Process boundary');
+      } else {
+        expect(localOverflow!.content).toBeGreaterThanOrEqual(localOverflow!.client);
+      }
       expect(localOverflow!.document).toBeLessThanOrEqual(localOverflow!.viewport + 1);
     }
   });

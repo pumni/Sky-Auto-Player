@@ -49,6 +49,17 @@ const { Content } = await render(faq);
     .faq-item[open] summary::after {
       content: '−';
     }
+    @media (prefers-reduced-motion: no-preference) {
+      .faq-item[open] .faq-answer {
+        animation: faq-answer-in var(--duration-fast) var(--ease-out);
+      }
+      @keyframes faq-answer-in {
+        from {
+          opacity: 0;
+        }
+      }
+    }
+
     .faq-answer {
       margin-top: var(--space-4);
       color: var(--color-text-tertiary);

@@ -52,6 +52,7 @@ const byCategory = categories.map((category) => ({
                 {guide.data.title}
                 <span aria-hidden="true"> ↗</span>
               </a>
+              <p>{guide.data.summary}</p>
             </li>
           ))}
         </ul>
@@ -102,6 +103,13 @@ const byCategory = categories.map((category) => ({
       line-height: 1.45;
       text-decoration-thickness: 1px;
       text-underline-offset: 0.2em;
+    }
+
+    .guide-hub__category p {
+      margin: 0 0 var(--space-4);
+      color: var(--color-text-secondary);
+      font-size: var(--type-body);
+      line-height: var(--leading-body);
     }
 
     .guide-hub__category a:hover {

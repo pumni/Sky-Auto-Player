@@ -14,7 +14,7 @@ export const homeVi: HomeContent = {
     guides: 'Hướng dẫn',
     faq: 'FAQ',
     github: 'GitHub',
-    release: 'Bản phát hành',
+    release: 'Tải xuống',
   },
   hero: {
     title: 'Chơi bản nhạc, không chơi bàn phím.',
@@ -29,6 +29,8 @@ export const homeVi: HomeContent = {
     selectorLabel: 'Chọn giao diện trình phát',
     fullSizeLabel: 'Xem ảnh kích thước đầy đủ',
     fallbackLabel: 'Mở giao diện trình phát khác',
+    pendingMessage: 'Đang tải ảnh xem trước…',
+    errorMessage: 'Không tải được ảnh xem trước. Hãy thử lại hoặc mở ảnh trực tiếp.',
     captureNote:
       'Ảnh xem trước bằng browser mock từ mã nguồn desktop hiện tại, dùng dữ liệu mẫu; không phải ảnh chụp Tauri native.',
     views: [

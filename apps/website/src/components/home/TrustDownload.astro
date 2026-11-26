@@ -43,8 +43,13 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
           ? '. Tệp .exe.sig chỉ dùng làm chữ ký updater.'
           : '. The .exe.sig file is only the updater signature.'}
       </p>
-      <p>{data.signingValue}</p>
-      <p>{data.updaterValue}</p>
+      <p>
+        <strong>{locale === 'vi' ? 'Chữ ký bộ cài' : 'Authenticode'}</strong> {data.signingValue}
+      </p>
+      <p>
+        <strong>{locale === 'vi' ? 'Xác minh bản cập nhật' : 'Updater verification'}</strong>{' '}
+        {data.updaterValue}
+      </p>
     </div>
 
     <p class="trust-download__safety">
@@ -92,14 +97,21 @@ const safetyUrl = withBase(locale === 'vi' ? '/vi/faq/#account-safety' : '/faq/#
     }
 
     .trust-download__details {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.25rem 1.5rem;
+      display: grid;
+      gap: var(--space-3);
       padding-block: 1rem;
       border-block: 1px solid var(--line-faint);
       color: var(--color-text-tertiary);
       font-size: var(--type-small);
       line-height: 1.5;
+    }
+
+    .trust-download__installer code {
+      overflow-wrap: anywhere;
+    }
+
+    .trust-download__details strong {
+      color: var(--color-text-primary);
     }
 
     .trust-download__details p {
