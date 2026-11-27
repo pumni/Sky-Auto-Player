@@ -2,6 +2,12 @@
   "schema_version": 1,
   "songs": [
     {
+      "id": "bfda70cf3b72e2414af8321a9a876e61",
+      "path": "sheets/A Cruel Angel's Thesis.json",
+      "title": "A Cruel Angel's Thesis - Yoko Takahashi",
+      "sha256": "bfda70cf3b72e2414af8321a9a876e615995cf1371eefba352d542d56b5c9d7d"
+    },
+    {
       "id": "7b068a22b73c0c1fcffc269c4c75360e",
       "path": "sheets/A Thousand Years.json",
       "title": "A Thousand Years - Twilight",
@@ -78,6 +84,12 @@
       "path": "sheets/Comptine d'un autre été.json",
       "title": "Comptine d'un autre été - Yann Tiersen",
       "sha256": "8658729999d05891a40aad670ae19f687016358cbce61284e9df9c3d3ace22e1"
+    },
+    {
+      "id": "3c76aa440c645ad1a09d2881b38ff60d",
+      "path": "sheets/Count on Me.json",
+      "title": "Count on Me - Bruno Mars",
+      "sha256": "3c76aa440c645ad1a09d2881b38ff60dcd62cf81c399cc21fcb2013e3ad41094"
     },
     {
       "id": "fe4dec121d56e39e3ed38a271b02bff2",
@@ -164,6 +176,12 @@
       "sha256": "21f39b08809deffa47e6ce8d0a370e6b87cf1f0010f2f39238640ec6b782522e"
     },
     {
+      "id": "7bf246856c597ea4cd068629455cc076",
+      "path": "sheets/From the Start.json",
+      "title": "From the Start - Laufey",
+      "sha256": "7bf246856c597ea4cd068629455cc076620d7ebc66b05815a6b322bdf5fa54fc"
+    },
+    {
       "id": "6e8a58e9d97d1ddc55ec9311ea0b8560",
       "path": "sheets/Glimpse of Us.json",
       "title": "Glimpse of Us",
@@ -176,6 +194,12 @@
       "sha256": "0c341b5e4f06009c5d7a8b22a7265d474537b0aef6aee54f6a5f45f09f5c0363"
     },
     {
+      "id": "a862dbef1cbf5963ea07645b4588b20f",
+      "path": "sheets/Goodbye to a World.json",
+      "title": "Goodbye to a World - Porter Robinson",
+      "sha256": "a862dbef1cbf5963ea07645b4588b20f978ccbd1fe1a1c7579691dc7775bd757"
+    },
+    {
       "id": "2a5be1fd1a6b4442b3f463fda00bf4ca",
       "path": "sheets/Hallelujah.json",
       "title": "Hallelujah - Leonard Cohen",
@@ -186,6 +210,12 @@
       "path": "sheets/Happier-Marshmello.json",
       "title": "Happier - Marshmello",
       "sha256": "ef7bd2c58aca09bfc540faa81f53eb7b8d4cd4b39e9d2da3c6bf59ade70dda6c"
+    },
+    {
+      "id": "d4362103d82a869bb83eca1e662df9ce",
+      "path": "sheets/Heather.json",
+      "title": "Heather - Conan Gray",
+      "sha256": "d4362103d82a869bb83eca1e662df9ce257f6656a0e833dca4426994b233d7bd"
     },
     {
       "id": "b2149e9050fef4f280bd45f5cb736c23",
@@ -356,6 +386,12 @@
       "sha256": "76781708d30a950e6b59bb43d3b58ecf49ae0562c9e4134d593b79da5fce7927"
     },
     {
+      "id": "e3b5d0c2f69d2edd2f14a421b5696ba4",
+      "path": "sheets/Nothing's New.json",
+      "title": "Nothing's New - Rio Romeo",
+      "sha256": "e3b5d0c2f69d2edd2f14a421b5696ba482df8fa4a2cd878f1bdc6948e3a8291e"
+    },
+    {
       "id": "077a618915d240d19cbfd8383b0a8aac",
       "path": "sheets/Nuvole Bianche.json",
       "title": "Nuvole Bianche - Ludovico Einaudi",
@@ -392,6 +428,12 @@
       "sha256": "cf3b1ecbebe4fa946dae4f63fd2f3b5194511a361bbe2f5bb50182601f6e917e"
     },
     {
+      "id": "b65e80803d45999b7f10df3c75c45179",
+      "path": "sheets/One Call Away.json",
+      "title": "One Call Away - Charlie Puth",
+      "sha256": "b65e80803d45999b7f10df3c75c451798bcfdcd6101ba530ef505553e0144694"
+    },
+    {
       "id": "f1202b16cbe968dc58dfad9992a0b2a6",
       "path": "sheets/Only_LeeHi.json",
       "title": "Only_LeeHi",
@@ -408,6 +450,12 @@
       "path": "sheets/Passacaglia (Shinraki Sky).json",
       "title": "Passacaglia (Shinraki Sky)",
       "sha256": "aec609bd1286a48f1a9839e45211eb38e931e950d361314a5e5168b7e8a96779"
+    },
+    {
+      "id": "36e09b3c5eecdce0fe869b2620bd2636",
+      "path": "sheets/Past Lives.json",
+      "title": "Past Lives - sapientdream",
+      "sha256": "36e09b3c5eecdce0fe869b2620bd2636409e5d61edca7217a610488610d8a49a"
     },
     {
       "id": "9cf4f96c3e1e0e2ca42d35392cabc401",
@@ -456,6 +504,12 @@
       "path": "sheets/Renai Circulation.json",
       "title": "Renai Circulation",
       "sha256": "3628b099fcb08fac557d4da2b6226c263590e620c971b02d497aa3d98cb0ad96"
+    },
+    {
+      "id": "ac3afbde8aa5459988c853587e3d16f5",
+      "path": "sheets/Rewrite the Stars.json",
+      "title": "Rewrite the Stars - Zac Efron & Zendaya",
+      "sha256": "ac3afbde8aa5459988c853587e3d16f5a2c1d788899703bcd98f7babffad348f"
     },
     {
       "id": "107c1e94f2a3abd5196a0b6a67e43ab0",
@@ -512,6 +566,12 @@
       "sha256": "08f9c4059e1c96aff02a6f1bd0aba2550227cb8ddca7c090ae4df6300fcf1de5"
     },
     {
+      "id": "d261e1ee8c5e538bf2560f8dd84ede82",
+      "path": "sheets/Snowman.json",
+      "title": "Snowman - Sia",
+      "sha256": "d261e1ee8c5e538bf2560f8dd84ede82af43d2ee5338d83dbbdbec2575c9c5a6"
+    },
+    {
       "id": "ee87c417d6fc493249ee8205616bc04b",
       "path": "sheets/Someone You Loved.json",
       "title": "Someone You Loved",
@@ -566,10 +626,22 @@
       "sha256": "01cd2b035ceafb9ad82dc7b7d495fa71130895d8ec3eeed928536e5ff46259d3"
     },
     {
+      "id": "4b14c90ffc7c0428d2524f30bde3e314",
+      "path": "sheets/Suzume.json",
+      "title": "Suzume - RADWIMPS feat. Toaka",
+      "sha256": "4b14c90ffc7c0428d2524f30bde3e314a117f8a12a822bb8482e427e7f390a52"
+    },
+    {
       "id": "c05b7e32018c402697197e4a32057d80",
       "path": "sheets/Sweden.json",
       "title": "Sweden - C418",
       "sha256": "a929eeea30984d8a5aeaff07ea6cd5dd71f49aa52c9bd4445abb1a4d9d9a450b"
+    },
+    {
+      "id": "25e74e5fe296d9edf53fd6abcaa61334",
+      "path": "sheets/Talking to the Moon.json",
+      "title": "Talking to the Moon - Bruno Mars",
+      "sha256": "25e74e5fe296d9edf53fd6abcaa61334ce4ab1333075329e026693b87dd18879"
     },
     {
       "id": "be821a19c7e35023e5ed008845d7a364",
@@ -650,6 +722,12 @@
       "sha256": "1cf3a9ebc89820de8c0acf0487309223a804c2cf79fc0b24d843c5fe6bb64df9"
     },
     {
+      "id": "f3723cc18910b74f3fa238acfdf8c2b7",
+      "path": "sheets/What Was I Made For.json",
+      "title": "What Was I Made For - Billie Eilish",
+      "sha256": "f3723cc18910b74f3fa238acfdf8c2b78dc6986228f41038a721ba19b2668b0e"
+    },
+    {
       "id": "09c646b8a2b4c1ffaefdb12763567840",
       "path": "sheets/Xe Đạp - Sakurairo Maukoro.json",
       "title": "Xe Đạp - Sakurairo Maukoro",
@@ -668,6 +746,12 @@
       "sha256": "30e77d67be200280338d2d1cf566ddc3640a7fa8d825bf53ff4b7d4525f910ce"
     },
     {
+      "id": "1795a4412221d48dd7ac5ad1352d708e",
+      "path": "sheets/Young and Beautiful.json",
+      "title": "Young and Beautiful - Lana Del Rey",
+      "sha256": "1795a4412221d48dd7ac5ad1352d708e35415b73488e0869111b60fcef752e5d"
+    },
+    {
       "id": "22292ee3073a6b6a5d9cd1e41bdfbb8a",
       "path": "sheets/Yume To Hazakura.json",
       "title": "Yume To Hazakura",
@@ -684,6 +768,12 @@
       "path": "sheets/blue.json",
       "title": "blue",
       "sha256": "40e1fd6f4eb43d2a4c619ee91b0927d7f4553c018b149b4e5b1fa081343137a0"
+    },
+    {
+      "id": "d4775214058ddc0bd1e71e17c26fe821",
+      "path": "sheets/deja vu.json",
+      "title": "deja vu - Olivia Rodrigo",
+      "sha256": "d4775214058ddc0bd1e71e17c26fe8219c74df0d8f2242e7efa1388c620573c3"
     },
     {
       "id": "bdf08eed1e909d6d0b1f1e28d7b48f2e",
