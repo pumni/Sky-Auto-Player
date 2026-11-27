@@ -98,7 +98,6 @@ describe('Sky Graphite 2 semantic theme', () => {
       ['--color-scrollbar-thumb-active', '--scrollbar-thumb-active'],
       ['--color-scrim', '--scrim'],
       ['--color-overlay-border', '--overlay-border'],
-      ['--color-chrome-input-border', '--chrome-input-border'],
     ] as const) {
       expect(tailwindTheme[utility], utility).toBe(`var(${token})`);
     }
@@ -207,12 +206,8 @@ describe('Sky Graphite 2 semantic theme', () => {
       'color-mix(in srgb, var(--text-secondary) 70%, var(--background))',
     );
     expect(root['--scrollbar-thumb-active']).toBe('var(--text-secondary)');
-    expect(root['--chrome-input-border']).toBe('#66696d');
-    expect(light['--chrome-input-border']).toBe('#888a90');
-    expect(
-      Object.keys(root).filter((key) => key !== '--focus-gap' && key !== '--chrome-input-border'),
-    ).toHaveLength(47);
-    expect(Object.keys(light).filter((key) => key !== '--chrome-input-border')).toHaveLength(47);
+    expect(Object.keys(root).filter((key) => key !== '--focus-gap')).toHaveLength(47);
+    expect(Object.keys(light)).toHaveLength(47);
 
     const themes = new Map<string, Record<string, string>>();
     for (const rule of paletteRules) {

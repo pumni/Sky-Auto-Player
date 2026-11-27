@@ -129,18 +129,19 @@ function SearchInput({
   }, [useStore, cancelQueuedSearch]);
 
   const inputValue =
-    draftState?.scopeKey === scopeKey && draftState.baseQuery === query
-      ? draftState.draft
-      : query;
+    draftState?.scopeKey === scopeKey && draftState.baseQuery === query ? draftState.draft : query;
 
   const issueSearch = (nextQuery: string) => {
     // Only the store owns committed query and request-generation fencing.
     // Promise completion must never mutate the input draft.
-    void useStore.getState().search(nextQuery).catch((error: unknown) => {
-      if (import.meta.env.DEV) {
-        console.error('Search request failed:', error);
-      }
-    });
+    void useStore
+      .getState()
+      .search(nextQuery)
+      .catch((error: unknown) => {
+        if (import.meta.env.DEV) {
+          console.error('Search request failed:', error);
+        }
+      });
   };
 
   const handleChange = (nextDraft: string) => {

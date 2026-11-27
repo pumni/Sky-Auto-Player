@@ -62,15 +62,6 @@ const themeRoles = [
 
 type ThemeRole = (typeof themeRoles)[number];
 
-const globalSearchChromeBorders: Record<(typeof palettes)[number], string> = {
-  graphite: '#66696d',
-  aurora: '#586984',
-  minimalist: '#69727d',
-  slate: '#5a7384',
-  cyberpunk: '#865a86',
-  classic: '#796a58',
-};
-
 function rgb(color: string): [number, number, number] {
   const shortHex = color.match(/^#([\da-f])([\da-f])([\da-f])$/i);
   const longHex = color.match(/^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i);
@@ -165,42 +156,45 @@ async function resolvedGlobalSearchBoundary(page: import('@playwright/test').Pag
   return page.locator('[data-slot="global-search"]').evaluate((element) => {
     const wrapperStyle = getComputedStyle(element);
     const input = element.querySelector<HTMLInputElement>('input[type="search"]');
+    const icon = element.querySelector<SVGElement>('svg');
     return {
-      token: getComputedStyle(document.documentElement)
-        .getPropertyValue('--chrome-input-border')
-        .trim()
-        .toLowerCase(),
+      borderToken: getComputedStyle(document.documentElement).getPropertyValue('--border').trim(),
       border: wrapperStyle.borderTopColor,
       background: wrapperStyle.backgroundColor,
+      icon: icon ? getComputedStyle(icon).color : '',
       placeholder: input ? getComputedStyle(input, '::placeholder').color : '',
+      value: input?.value ?? '',
+      valueColor: input ? getComputedStyle(input).color : '',
       outlineColor: wrapperStyle.outlineColor,
       outlineStyle: wrapperStyle.outlineStyle,
       outlineWidth: wrapperStyle.outlineWidth,
+      outlineOffset: wrapperStyle.outlineOffset,
     };
   });
 }
 
 function expectGlobalSearchBoundary(
   measured: Awaited<ReturnType<typeof resolvedGlobalSearchBoundary>>,
-  expectedBorder: string,
+  expectedBorder: '--border' | '--overlay-border',
   theme: Record<ThemeRole, string>,
   scene: string,
 ) {
-  expect(measured.token, `${scene} semantic token`).toBe(expectedBorder);
-  expect(measured.border, `${scene} rendered border`).toBe(computedRgb(expectedBorder));
+  expect(measured.border, `${scene} rendered ${expectedBorder}`).toBe(theme[expectedBorder]);
   expect(measured.background, `${scene} rendered field surface`).toBe(theme['--surface']);
   expect(
-    contrast(measured.border, theme['--card']),
-    `${scene} border/card contrast`,
-  ).toBeGreaterThanOrEqual(3);
-  expect(
-    contrast(measured.border, measured.background),
-    `${scene} border/surface contrast`,
+    contrast(measured.icon, measured.background),
+    `${scene} rendered magnifier contrast`,
   ).toBeGreaterThanOrEqual(3);
   expect(
     contrast(measured.placeholder, measured.background),
     `${scene} placeholder contrast`,
   ).toBeGreaterThanOrEqual(4.5);
+  if (measured.value.length > 0) {
+    expect(
+      contrast(measured.valueColor, measured.background),
+      `${scene} search value contrast`,
+    ).toBeGreaterThanOrEqual(4.5);
+  }
 }
 
 function mixSrgb(first: string, weightPercent: number, second: string): string {
@@ -1149,31 +1143,67 @@ test('Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and
     await page.emulateMedia({ colorScheme: 'dark' });
     await selectPalette(page, palette);
     const darkSnapshot = await resolvedComputedTheme(page);
+    const searchWrapper = page.locator('[data-slot="global-search"]');
+    const searchInput = searchWrapper.locator('input[type="search"]');
     await expect(shell).toHaveCSS(
       'background-color',
       darkSnapshot[palette === 'graphite' ? '--card' : '--background'],
     );
-    const darkSearchBoundary = await resolvedGlobalSearchBoundary(page);
+
+    await searchInput.evaluate((input) => input.blur());
+    await page.mouse.move(0, 0);
+    let darkSearchBoundary = await resolvedGlobalSearchBoundary(page);
     expectGlobalSearchBoundary(
       darkSearchBoundary,
-      globalSearchChromeBorders[palette],
+      '--border',
       darkSnapshot,
-      `${palette} dark search`,
+      `${palette} dark rest`,
     );
-    await page.locator('[data-slot="global-search"] input').focus();
+    await searchWrapper.hover();
+    darkSearchBoundary = await resolvedGlobalSearchBoundary(page);
+    expectGlobalSearchBoundary(
+      darkSearchBoundary,
+      '--overlay-border',
+      darkSnapshot,
+      `${palette} dark hover`,
+    );
+
+    await page.mouse.move(0, 0);
+    await searchInput.focus();
     const darkSearchFocus = await resolvedGlobalSearchBoundary(page);
+    expectGlobalSearchBoundary(
+      darkSearchFocus,
+      '--overlay-border',
+      darkSnapshot,
+      `${palette} dark focus`,
+    );
     expect(darkSearchFocus.outlineStyle).toBe('solid');
     expect(darkSearchFocus.outlineWidth).toBe('2px');
+    expect(darkSearchFocus.outlineOffset).toBe('1px');
     expect(darkSearchFocus.outlineColor).toBe(darkSnapshot['--ring']);
     expect(contrast(darkSearchFocus.outlineColor, darkSnapshot['--card'])).toBeGreaterThanOrEqual(
       3,
     );
-    await page.locator('[data-slot="global-search"] input').evaluate((input) => input.blur());
+
+    await searchInput.fill('Blue');
+    await expect(page.getByRole('row', { name: /Blue Bird/ })).toBeVisible();
+    await expect(page.getByRole('row', { name: /Aurora Landing/ })).toHaveCount(0);
+    const populatedDarkSearch = await resolvedGlobalSearchBoundary(page);
+    expect(populatedDarkSearch.value).toBe('Blue');
+    expectGlobalSearchBoundary(
+      populatedDarkSearch,
+      '--overlay-border',
+      darkSnapshot,
+      `${palette} dark populated`,
+    );
+    await searchInput.evaluate((input) => input.blur());
     await expect(titlebar).toHaveCSS(
       'background-color',
       palette === 'graphite' ? 'rgba(0, 0, 0, 0)' : darkSnapshot['--card'],
     );
     await expect(titlebar).toHaveCSS('border-bottom-width', palette === 'graphite' ? '0px' : '1px');
+    await page.getByRole('button', { name: 'Clear search' }).click();
+    await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
 
     if (palette !== 'graphite') {
       const baseline = BASELINE_NON_GRAPHITE_PALETTES[palette];
@@ -1207,22 +1237,53 @@ test('Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and
     await expect(page.locator('html')).toHaveAttribute('data-palette', palette);
     const lightSnapshot = await resolvedComputedTheme(page);
     expect(lightSnapshot, `${palette} saved palette in Light`).toEqual(referenceLight);
-    const lightSearchBoundary = await resolvedGlobalSearchBoundary(page);
+    await searchInput.evaluate((input) => input.blur());
+    await page.mouse.move(0, 0);
+    let lightSearchBoundary = await resolvedGlobalSearchBoundary(page);
     expectGlobalSearchBoundary(
       lightSearchBoundary,
-      '#888a90',
+      '--border',
       lightSnapshot,
-      `${palette} Light search`,
+      `${palette} Light rest`,
     );
-    await page.locator('[data-slot="global-search"] input').focus();
+    await searchWrapper.hover();
+    lightSearchBoundary = await resolvedGlobalSearchBoundary(page);
+    expectGlobalSearchBoundary(
+      lightSearchBoundary,
+      '--overlay-border',
+      lightSnapshot,
+      `${palette} Light hover`,
+    );
+    await page.mouse.move(0, 0);
+    await searchInput.focus();
     const lightSearchFocus = await resolvedGlobalSearchBoundary(page);
+    expectGlobalSearchBoundary(
+      lightSearchFocus,
+      '--overlay-border',
+      lightSnapshot,
+      `${palette} Light focus`,
+    );
     expect(lightSearchFocus.outlineStyle).toBe('solid');
     expect(lightSearchFocus.outlineWidth).toBe('2px');
+    expect(lightSearchFocus.outlineOffset).toBe('1px');
     expect(lightSearchFocus.outlineColor).toBe(lightSnapshot['--ring']);
     expect(contrast(lightSearchFocus.outlineColor, lightSnapshot['--card'])).toBeGreaterThanOrEqual(
       3,
     );
-    await page.locator('[data-slot="global-search"] input').evaluate((input) => input.blur());
+
+    await searchInput.fill('Blue');
+    await expect(page.getByRole('row', { name: /Blue Bird/ })).toBeVisible();
+    await expect(page.getByRole('row', { name: /Aurora Landing/ })).toHaveCount(0);
+    const populatedLightSearch = await resolvedGlobalSearchBoundary(page);
+    expect(populatedLightSearch.value).toBe('Blue');
+    expectGlobalSearchBoundary(
+      populatedLightSearch,
+      '--overlay-border',
+      lightSnapshot,
+      `${palette} Light populated`,
+    );
+    await page.getByRole('button', { name: 'Clear search' }).click();
+    await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
     await expect(shell).toHaveCSS('background-color', referenceLight['--card']);
     await expect(titlebar).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)');
     await expect(titlebar).toHaveCSS('border-bottom-width', '0px');
@@ -1239,7 +1300,7 @@ test('Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and
   await page.emulateMedia({ forcedColors: 'active' });
   await expect(titlebar).toHaveCSS('border-bottom-width', '1px');
   const forcedSearchBoundary = await resolvedGlobalSearchBoundary(page);
-  expect(forcedSearchBoundary.token).toBe('buttontext');
+  expect(forcedSearchBoundary.borderToken).toBe('CanvasText');
   expect(forcedSearchBoundary.border).not.toBe('rgba(0, 0, 0, 0)');
   const searchInput = page.locator('[data-slot="global-search"] input');
   await searchInput.fill('Blue');
@@ -1299,14 +1360,9 @@ test('rendered control contrast, Switch visual cues, M15 child instant switch, a
         .evaluate((el) => getComputedStyle(el).backgroundColor),
     ).toBe(theme['--selection']);
 
-    // GlobalSearch essential border + placeholder rendered contrast
+    // GlobalSearch uses a decorative shared boundary and identifiable rendered text/icon.
     const searchStyles = await resolvedGlobalSearchBoundary(page);
-    expectGlobalSearchBoundary(
-      searchStyles,
-      mode === 'dark' ? globalSearchChromeBorders.graphite : '#888a90',
-      theme,
-      `${mode} workbench search`,
-    );
+    expectGlobalSearchBoundary(searchStyles, '--border', theme, `${mode} workbench search`);
     expect(await expectRenderedTextContrast(page, `${mode} workbench`)).toBeGreaterThanOrEqual(4.5);
 
     // TrackRow wide typography (14/20/46px)

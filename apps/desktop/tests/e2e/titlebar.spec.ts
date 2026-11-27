@@ -113,6 +113,54 @@ test('Global Search keeps one clear affordance, focus, and current results throu
   await page.waitForTimeout(600);
   await expect(search).toHaveValue('');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+
+  for (const viewport of [
+    { width: 1366, height: 768 },
+    { width: 800, height: 560 },
+  ]) {
+    await page.setViewportSize(viewport);
+    const geometry = await globalSearch.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const input = element.querySelector<HTMLInputElement>('input[type="search"]');
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        width: bounds.width,
+        height: bounds.height,
+        scrollWidth: element.scrollWidth,
+        clientWidth: element.clientWidth,
+        inputWidth: input?.getBoundingClientRect().width ?? 0,
+        viewportWidth: document.documentElement.clientWidth,
+      };
+    });
+    expect(geometry.left).toBeGreaterThanOrEqual(0);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth);
+    expect(geometry.width).toBeGreaterThanOrEqual(160);
+    expect(geometry.height).toBe(32);
+    expect(geometry.inputWidth).toBeGreaterThan(0);
+    expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
+
+    await search.fill('Blue');
+    await page.waitForTimeout(150);
+    await expect(clear).toBeVisible();
+    await expect(globalSearch.getByRole('button', { name: 'Clear search' })).toHaveCount(1);
+    const clearBounds = await clear.boundingBox();
+    expect(clearBounds).not.toBeNull();
+    if (clearBounds) {
+      expect(clearBounds.width).toBeGreaterThanOrEqual(24);
+      expect(clearBounds.height).toBeGreaterThanOrEqual(24);
+      expect(clearBounds.x).toBeGreaterThanOrEqual(geometry.left);
+      expect(clearBounds.x + clearBounds.width).toBeLessThanOrEqual(geometry.right);
+    }
+    await page.keyboard.press('Tab');
+    await expect(clear).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(search).toHaveValue('');
+    await expect(search).toBeFocused();
+    await page.waitForTimeout(750);
+    await expect(search).toHaveValue('');
+    await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  }
 });
 
 test('update dialog owns focus standalone and when opened from Settings', async ({ page }) => {

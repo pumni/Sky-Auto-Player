@@ -96,9 +96,7 @@ export function App({ bridge }: AppProps) {
       const hasPlainControlModifier = event.ctrlKey && !event.metaKey && !event.altKey;
       const isSettingsShortcut = event.key === ',' && hasPlainControlModifier;
       const isInspectorShortcut =
-        normalizedKey === 'i' &&
-        hasPlainControlModifier &&
-        !isEditableTarget(event.target);
+        normalizedKey === 'i' && hasPlainControlModifier && !isEditableTarget(event.target);
       const isSlashShortcut =
         event.key === '/' &&
         !event.ctrlKey &&
