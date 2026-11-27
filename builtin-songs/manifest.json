@@ -74,6 +74,12 @@
       "sha256": "ba73c278d652d059ed0909c9af5f7aefdfb0055efd91e23ff4161cac3e031885"
     },
     {
+      "id": "ffcc87ff11e34f439c7a4ecb359fe8e2",
+      "path": "sheets/Comptine d'un autre été.json",
+      "title": "Comptine d'un autre été - Yann Tiersen",
+      "sha256": "8658729999d05891a40aad670ae19f687016358cbce61284e9df9c3d3ace22e1"
+    },
+    {
       "id": "fe4dec121d56e39e3ed38a271b02bff2",
       "path": "sheets/Counting Star.json",
       "title": "Counting Star",
@@ -170,6 +176,12 @@
       "sha256": "0c341b5e4f06009c5d7a8b22a7265d474537b0aef6aee54f6a5f45f09f5c0363"
     },
     {
+      "id": "2a5be1fd1a6b4442b3f463fda00bf4ca",
+      "path": "sheets/Hallelujah.json",
+      "title": "Hallelujah - Leonard Cohen",
+      "sha256": "ebd1e32aa49f93f7e341edf6de1e6b71c8274574ce5db6a06dd19a4774d71008"
+    },
+    {
       "id": "15ddc01725fe8ad63e940796238314ff",
       "path": "sheets/Happier-Marshmello.json",
       "title": "Happier - Marshmello",
@@ -218,6 +230,12 @@
       "sha256": "1619721e9e5bf0f5c185820cf1f13d89c0ff60f5ebf6c08dd5d0e4d3e355f8b2"
     },
     {
+      "id": "22cf76e4e638491597054e20e9467937",
+      "path": "sheets/Interstellar Main Theme.json",
+      "title": "Interstellar Main Theme - Hans Zimmer",
+      "sha256": "050ad78cbed8e58acd0ce8273958327446c96422ea547adbdd7bd7996d1a15c9"
+    },
+    {
       "id": "bb2005dd2b0775342f6f05b58de8d4ba",
       "path": "sheets/Jingle Bells.json",
       "title": "Jingle Bells",
@@ -228,6 +246,12 @@
       "path": "sheets/KILL BILL.json",
       "title": "KILL BILL",
       "sha256": "69abf9fd50342cf0cbdb40c51c9e821d5304f820f44e27c7d62e31839abf7861"
+    },
+    {
+      "id": "875e366a0c5947339d16ff5723a82035",
+      "path": "sheets/Kamado Tanjiro no Uta.json",
+      "title": "Kamado Tanjiro no Uta - Go Shiina",
+      "sha256": "58d162ab84dc8bd6080d978609d9601edc51619184f5fcfec353c6d76085866b"
     },
     {
       "id": "fc98410a1421a0b90d23429663be90c8",
@@ -302,6 +326,12 @@
       "sha256": "e811d8ca5f5c27483fcf5e2ef3f5d1a50b288c0fc94350b20aae45bf6396b24a"
     },
     {
+      "id": "b78c6079e99b4694adc276d3a0bfe12b",
+      "path": "sheets/Mariage d'Amour.json",
+      "title": "Mariage d'Amour - Paul de Senneville",
+      "sha256": "cfab6ae28229f9b329a1654ebf150bdc2a9e47629865ec419efc72e8c595738c"
+    },
+    {
       "id": "6683944935975a712b7ab032bf660e2b",
       "path": "sheets/Mary On A Cross - Ghost.json",
       "title": "Mary On A Cross - Ghost",
@@ -318,6 +348,18 @@
       "path": "sheets/Memories.json",
       "title": "Memories",
       "sha256": "2c71a61bfe14b76c84b073102d3e0d7c9b1288e1c0f9567b0c731d80237764e7"
+    },
+    {
+      "id": "0ee90313cfe94743a55258f8e1f75d9a",
+      "path": "sheets/Merry Christmas Mr. Lawrence.json",
+      "title": "Merry Christmas Mr. Lawrence - Ryuichi Sakamoto",
+      "sha256": "76781708d30a950e6b59bb43d3b58ecf49ae0562c9e4134d593b79da5fce7927"
+    },
+    {
+      "id": "077a618915d240d19cbfd8383b0a8aac",
+      "path": "sheets/Nuvole Bianche.json",
+      "title": "Nuvole Bianche - Ludovico Einaudi",
+      "sha256": "131d473e0675c2194cd8ce32daf29ed0d823c5a4f347bc169c38f4cf02c7c064"
     },
     {
       "id": "b54c02629122b17eb3f61ec26ad4de05",
@@ -524,6 +566,12 @@
       "sha256": "01cd2b035ceafb9ad82dc7b7d495fa71130895d8ec3eeed928536e5ff46259d3"
     },
     {
+      "id": "c05b7e32018c402697197e4a32057d80",
+      "path": "sheets/Sweden.json",
+      "title": "Sweden - C418",
+      "sha256": "a929eeea30984d8a5aeaff07ea6cd5dd71f49aa52c9bd4445abb1a4d9d9a450b"
+    },
+    {
       "id": "be821a19c7e35023e5ed008845d7a364",
       "path": "sheets/Thang dien.json",
       "title": "Thang dien",
@@ -540,6 +588,12 @@
       "path": "sheets/The Spectre.json",
       "title": "The Spectre",
       "sha256": "b6713cc1d0f8a5d30b661fc56dbe9e534e9c7514e59a943f50b3b0ecfd15fc60"
+    },
+    {
+      "id": "2b45ec91d68c42e2b791b254f17d0bf2",
+      "path": "sheets/The Truth That You Leave.json",
+      "title": "The Truth That You Leave - Pianoboy",
+      "sha256": "5f29acf0b5345b186cf1a3ac4ee9f927bb93529e55fa189c76072ca84b7a0b8b"
     },
     {
       "id": "68e880775ddb0b7841e17450088404cd",
@@ -564,6 +618,12 @@
       "path": "sheets/Victory.json",
       "title": "Victory",
       "sha256": "f28ae280f98b81f9fb1e00cf8f65d828ff8d9c063854762c98ed22f1a0e2b033"
+    },
+    {
+      "id": "4fbea831476f4ad9a8b33f10eec7e61b",
+      "path": "sheets/Viva La Vida.json",
+      "title": "Viva La Vida - Coldplay",
+      "sha256": "e46376641d3aeb674aa816503c62dbf6fe0e31545a187f9a78d3bef449c92e4a"
     },
     {
       "id": "e64f6e5346ab94fa7c8d15e0680c98b8",
