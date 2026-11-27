@@ -2,6 +2,12 @@
   "schema_version": 1,
   "songs": [
     {
+      "id": "140b8a1e8ad03fe41715b71ac9e11fc3",
+      "path": "sheets/3107.json",
+      "title": "3107 - W/n, Duongg, Nâu",
+      "sha256": "226d4f8240a373a304fc0e9f494ac8d638dda5e897eae23a96a57b9e9be7ea5f"
+    },
+    {
       "id": "bfda70cf3b72e2414af8321a9a876e61",
       "path": "sheets/A Cruel Angel's Thesis.json",
       "title": "A Cruel Angel's Thesis - Yoko Takahashi",
@@ -38,10 +44,28 @@
       "sha256": "04219ac0b7942596e3573f11c4e4dc6dd8d1b8014287c7a55649d703c52fbcc3"
     },
     {
+      "id": "8113d46d2cc3c0da96e2fd7cf1a50790",
+      "path": "sheets/Arcade.json",
+      "title": "Arcade - Duncan Laurence",
+      "sha256": "99e5be786f28fbb1a0d107bc873e58fd6ba81a9666d21ac9336cbe4bc49c9815"
+    },
+    {
       "id": "b257ae11c14a2c86ace1244e7bd0776b",
       "path": "sheets/As It Was.json",
       "title": "As It Was",
       "sha256": "564e9109f57e9ee44514d86b31ad43a6b74b9e838399d73a343c9872f5414344"
+    },
+    {
+      "id": "6606b59b0ac26837d1cd88336822a66e",
+      "path": "sheets/Atlantis.json",
+      "title": "Atlantis - Seafret",
+      "sha256": "ced32ed06396b397151d2620aaabaee39e6a647abe8fdc86a351447654018eec"
+    },
+    {
+      "id": "8959c688306f3c4b4ea773fa57daf253",
+      "path": "sheets/Birds of a Feather.json",
+      "title": "Birds of a Feather - Billie Eilish",
+      "sha256": "1ebe89ca2043ca5547f16b021a0a30dd0cf124680e9b14c5d82e2fe49076038c"
     },
     {
       "id": "423bbbbb4b4280694bd32e4b1333c318",
@@ -104,6 +128,12 @@
       "sha256": "55a021dd7e9ac87ac2fb0dd3dfc6cbefcb66d782d20f6ba24ad14685753bb02e"
     },
     {
+      "id": "3c41085adb1ed39213759570dfbe0da1",
+      "path": "sheets/Có Chàng Trai Viết Lên Cây.json",
+      "title": "Có Chàng Trai Viết Lên Cây - Phan Mạnh Quỳnh",
+      "sha256": "8303d3ccd1efd3eb2fae050b99b8007947ff20326f12b60cb29bd8a2a25e5f82"
+    },
+    {
       "id": "9579da007b6fd59a805dbb33c3ca4a17",
       "path": "sheets/Dandelions.json",
       "title": "Dandelions",
@@ -150,6 +180,12 @@
       "path": "sheets/Dusk Till Dawn.json",
       "title": "Dusk Till Dawn - Sia",
       "sha256": "a71e8db9267907b4e19a78cf291d61af1013b470973f9911b75b63936577c6f4"
+    },
+    {
+      "id": "5e6960703b72b590548b9bdfea0c7fa8",
+      "path": "sheets/Enchanted.json",
+      "title": "Enchanted - Taylor Swift",
+      "sha256": "7b7d91900bd2a3e35225c2be3f7f8abb5cd7c7cce50351265779473dfd72fdd2"
     },
     {
       "id": "b5a0432faac1d85c730e39898f56f7ac",
@@ -332,10 +368,28 @@
       "sha256": "5130327eab50a68388cf84f6d9186c2456f04e0f044958af11456c59b9a68ef3"
     },
     {
+      "id": "c59d9bc929086d7388ee2bcc8802df4b",
+      "path": "sheets/Let Me Down Slowly.json",
+      "title": "Let Me Down Slowly - Alec Benjamin",
+      "sha256": "ee9269d2a91f9624c41d3826d4dcd13c4bbb2b95588a422120da89de060f8650"
+    },
+    {
+      "id": "48882ed132c26e0557c66414672128d1",
+      "path": "sheets/Let You Break My Heart Again.json",
+      "title": "Let You Break My Heart Again - Laufey",
+      "sha256": "5b23903311938899dc04bf5680165ff9a04ad26fe5c3e6e6e5b44dbf4741c19b"
+    },
+    {
       "id": "9b5f63c7b9d7a173572bab5a328e4cd7",
       "path": "sheets/Lily (uma).json",
       "title": "Lily (uma)",
       "sha256": "4a70cdeee568d5768786bd280da77384c55f6ef0793271746c96848b9b3b71df"
+    },
+    {
+      "id": "c360c5a1d2732448d7db48d518293306",
+      "path": "sheets/Line Without a Hook.json",
+      "title": "Line Without a Hook - Ricky Montgomery",
+      "sha256": "c108ee3d1714bb5f929092f3eceb99694f73f5f8ac14178ac704f41342156fb1"
     },
     {
       "id": "4a8b3fad5acf2e8e1c7cc42d7f799d40",
@@ -384,6 +438,18 @@
       "path": "sheets/Merry Christmas Mr. Lawrence.json",
       "title": "Merry Christmas Mr. Lawrence - Ryuichi Sakamoto",
       "sha256": "76781708d30a950e6b59bb43d3b58ecf49ae0562c9e4134d593b79da5fce7927"
+    },
+    {
+      "id": "0ac0608d7eab0383527ffb712a3442c4",
+      "path": "sheets/Một Đêm Say.json",
+      "title": "Một Đêm Say - Thịnh Suy",
+      "sha256": "bc896468baa5b0dec1ba5d61a385f3520356671e6c35ebb947ee7e4cfb4e133b"
+    },
+    {
+      "id": "fbd46ec3bb066965372b9a2d6ab28c47",
+      "path": "sheets/Nandemonaiya.json",
+      "title": "Nandemonaiya - RADWIMPS",
+      "sha256": "b26778d298b16baca14d08e17a83b1b8418a6c0575a59b8c483b176834804d1a"
     },
     {
       "id": "e3b5d0c2f69d2edd2f14a421b5696ba4",
@@ -530,6 +596,12 @@
       "sha256": "51d37f9f4d1f88c8b2e6be4ca70c059cd066e4c04e8d87b2a3f806349b297488"
     },
     {
+      "id": "6677ea1fbe0eb72d28518053c9f2c23e",
+      "path": "sheets/Secret Base.json",
+      "title": "Secret Base - ZONE (Anohana OST)",
+      "sha256": "1211a9c584c7061cdda48eb1153681438d3550193b1767fea44aab578305f5ed"
+    },
+    {
       "id": "7f72ed3e10c531b346570c31e7fca4e7",
       "path": "sheets/Senorita   (Snejok).skysheet",
       "title": "Senorita   (Snejok)",
@@ -572,6 +644,12 @@
       "sha256": "d261e1ee8c5e538bf2560f8dd84ede82af43d2ee5338d83dbbdbec2575c9c5a6"
     },
     {
+      "id": "2af4459d3b60a11d5441000c69f7b1e7",
+      "path": "sheets/Someone Like You.json",
+      "title": "Someone Like You - Adele",
+      "sha256": "4eb5f17bc2f05b7c4daf408068a3d8c1d7d1ab91c612568715f05545ed9ffe43"
+    },
+    {
       "id": "ee87c417d6fc493249ee8205616bc04b",
       "path": "sheets/Someone You Loved.json",
       "title": "Someone You Loved",
@@ -582,6 +660,12 @@
       "path": "sheets/Something Just Like This.json",
       "title": "Something Just Like This - The Chainsmokers",
       "sha256": "787c5eada868330fe8f098faac5e75aff5a2ef6107f48184c3372543208fe69b"
+    },
+    {
+      "id": "340e6196b9a36e90d66540bd4e7352de",
+      "path": "sheets/Somewhere Only We Know.json",
+      "title": "Somewhere Only We Know - Keane",
+      "sha256": "95bae9198264cc9a2b13730e818f44282e704c863203ce49195b0b53a419b448"
     },
     {
       "id": "6800882a45e9119d5787a4b3f8d3e723",
@@ -674,6 +758,12 @@
       "sha256": "ce94903c6311a4de6753e75c24886ccecb942f49883796969e632f9527820394"
     },
     {
+      "id": "a706a318044b63a08534d52e05ddcba3",
+      "path": "sheets/To Zanarkand.json",
+      "title": "To Zanarkand - Final Fantasy X",
+      "sha256": "9bf2202986edceb4030165fec58bab376c22f4640e2a8c60db3ca54af027a10e"
+    },
+    {
       "id": "ad631e138ec12653e483d8b84a8c34fc",
       "path": "sheets/Too Sweet.json",
       "title": "Too Sweet",
@@ -726,6 +816,12 @@
       "path": "sheets/What Was I Made For.json",
       "title": "What Was I Made For - Billie Eilish",
       "sha256": "f3723cc18910b74f3fa238acfdf8c2b78dc6986228f41038a721ba19b2668b0e"
+    },
+    {
+      "id": "5735992e9a27d9b3b55ec3885361610b",
+      "path": "sheets/When I Was Your Man.json",
+      "title": "When I Was Your Man - Bruno Mars",
+      "sha256": "c2cb2f8fc2238bc1b45f1b39367c6262c67a45d07fea4802e1095c25273e16b1"
     },
     {
       "id": "09c646b8a2b4c1ffaefdb12763567840",
