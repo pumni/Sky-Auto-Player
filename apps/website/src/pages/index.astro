@@ -2,7 +2,6 @@
 import BaseLayout from '../layouts/BaseLayout.astro';
 import HomePage from '../components/home/HomePage.astro';
 import { homeEn } from '../data/home.en';
-import { PRODUCT_RELEASE } from '../data/product-release';
 import { SITE } from '../data/site';
 import { withBase } from '../utils/urls';
 
@@ -25,14 +24,12 @@ const structuredData = {
       '@type': 'SoftwareApplication',
       '@id': softwareId,
       name: 'Sky Auto Player',
-      description:
-        'A timing-first music sheet player for Sky: Children of the Light on Windows. Reads user-provided sheet files and simulates keyboard input through the Windows SendInput API. Not affiliated with thatgamecompany.',
-      softwareVersion: PRODUCT_RELEASE.version,
+      description: homeEn.seo.description,
       applicationCategory: 'MultimediaApplication',
-      operatingSystem: 'Windows 10, Windows 11 (64-bit)',
+      operatingSystem: 'Windows 11 (64-bit)',
       url: siteUrl,
       image: new URL(withBase('/assets/og-banner.jpg'), SITE.productionOrigin).href,
-      downloadUrl: SITE.releaseUrl,
+      downloadUrl: SITE.stableReleaseUrl,
       license: 'https://www.gnu.org/licenses/gpl-3.0.html',
       isAccessibleForFree: true,
       inLanguage: 'en',

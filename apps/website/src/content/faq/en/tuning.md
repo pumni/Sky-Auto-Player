@@ -6,8 +6,4 @@ category: 'Troubleshooting'
 question: 'Can I tune Sky Auto Player for a weak PC?'
 ---
 
-Yes. Open the in-app **Settings** and **Diagnostics** panels to inspect runtime status and adjust playback parameters:
-
-- **Game FPS & Hold Timing**: Align the selected Game FPS with your in-game frame rate cap (e.g., 30 or 60 FPS) and adjust hold frames and timing margin to ensure reliable note registration.
-- **Timing Margin & Tolerances**: Fine-tune the timing margin and late-down tolerance to match system dispatch capabilities.
-- **Diagnostics Panel**: Review real-time dispatch telemetry and focus status directly inside the application.
+There is no command-line tuning preset for weak PCs. Use **Diagnostics** to review sender-side dispatch measurements. In the Player Dock's **Playback profile**, **Base Hold** offers 1, 1.25, or 1.5 frames; **Tempo** offers 0.90×, 0.95×, 1.0×, 1.05×, or 1.10×. **Advanced timing** offers FPS values of 30, 60, 90, 120, 144, 165, or 240 and a 0–3,000 µs timing margin in 100 µs steps. These app playback defaults are not stored per song and cannot change Windows scheduling or Sky's input sampling.

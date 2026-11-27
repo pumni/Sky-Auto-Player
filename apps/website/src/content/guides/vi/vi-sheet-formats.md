@@ -12,7 +12,7 @@ summary: >-
 category: getting-started
 order: 2
 published: '2026-08-08'
-updated: '2026-08-08'
+updated: '2026-11-26'
 draft: false
 related:
   - windows-setup
@@ -42,11 +42,7 @@ Cả ba dùng cùng cấu trúc dữ liệu — phần mở rộng xác định 
 
 ## Đặt file bài hát ở đâu
 
-Dùng Library desktop để nhập file sheet. Dữ liệu ứng dụng được lưu ở vùng app-data của người
-dùng, tách khỏi thư mục installer và không được quản lý như file cạnh executable.
-
-Sau khi thêm file, nhấn **Reload songs** trong Library desktop mà không cần khởi động lại ứng
-dụng.
+Tạo hoặc chọn playlist trong Library desktop, sau đó chọn **Add songs** để nhập file hoặc cả thư mục. Thao tác nhập tham chiếu file gốc tại chỗ; ứng dụng không di chuyển hay xóa file. Nếu bạn di chuyển hoặc xóa file nguồn, mục đã nhập có thể không còn dùng được.
 
 ## Lấy file sheet ở đâu
 
@@ -58,18 +54,15 @@ dụng.
 ## Các lỗi thường gặp
 
 **File không hiện trong Library**
-: Dùng **Reload songs** trong GUI desktop.
-Nếu vẫn không hiện, kiểm tra phần mở rộng file phải là `.json`, `.skysheet`, hoặc `.txt`.
-Các phần mở rộng khác không được nhận diện.
+: Kiểm tra file đã được nhập vào playlist và nguồn còn ở đường dẫn ban đầu. Phần mở rộng phải là .json, .skysheet, hoặc .txt; các định dạng khác không được nhận diện.
 
 **Lỗi "Failed to parse"**
 : Nội dung file không phải JSON hợp lệ. Mở file trong text editor để xác nhận nó chứa
 một JSON object, không phải văn bản thường hay dữ liệu nhị phân.
 
 **Bài hát phát nốt không đúng thứ tự hoặc bỏ qua đoạn**
-: Sheet có thể chứa dữ liệu timing không khớp với FPS hay tempo đã cấu hình. Thử điều
-chỉnh tempo multiplier hoặc FPS trong cài đặt theo bài.
+: Sheet có thể chứa timing không khớp với FPS hoặc tempo đã cấu hình. Xem **Tempo** và FPS trong **Playback profile** của Player Dock. Lịch chạy Windows và vòng lấy mẫu input của game vẫn ảnh hưởng thời điểm phím được đăng ký.
 
-## Cấu hình theo bài
+## Playback profile
 
-Sky Auto Player lưu cài đặt riêng cho từng bài (chọn hold frame, tempo, FPS, bảng màu) tách biệt với file sheet. Thay đổi file sheet không reset các cài đặt này.
+**Playback profile** trong Player Dock điều khiển cấu hình playback mặc định của ứng dụng; các giá trị này không được lưu riêng theo bài hay nhúng trong sheet. **Base Hold** có các giá trị 1, 1,25 và 1,5 frame; **Tempo** có 0,90×, 0,95×, 1,0×, 1,05× và 1,10×. Mục **Advanced timing** hỗ trợ FPS 30, 60, 90, 120, 144, 165 hoặc 240 và timing margin từ 0 đến 3.000 µs, bước 100 µs.

@@ -5,7 +5,7 @@ import '../styles/tokens.css';
 import '../styles/reset.css';
 import '../styles/global.css';
 import '../styles/layout.css';
-import '../styles/patterns.css';
+import '../styles/components.css';
 import '../styles/utilities.css';
 
 import { SITE, type Locale } from '../data/site';
@@ -40,6 +40,7 @@ interface Props {
 const { locale, seo, structuredData } = Astro.props;
 const isVi = locale === 'vi';
 const currentPath = Astro.url.pathname;
+const isHome = [withBase('/'), withBase('/vi/')].includes(currentPath);
 const canonicalUrl = seo.canonical ?? new URL(currentPath, SITE.productionOrigin).href;
 const hreflangEn = new URL(localizedPath(currentPath, 'en'), SITE.productionOrigin).href;
 const hreflangVi = new URL(localizedPath(currentPath, 'vi'), SITE.productionOrigin).href;
@@ -71,7 +72,7 @@ const structuredDataJson = structuredData ? JSON.stringify(structuredData) : nul
     <link rel="alternate" hreflang="vi" href={hreflangVi} />
     <link rel="alternate" hreflang="x-default" href={hreflangEn} />
 
-    <meta name="theme-color" content="#07090d" />
+    <meta name="theme-color" content="#111315" />
     <meta name="color-scheme" content="dark" />
     <link rel="icon" type="image/png" href={withBase('/favicon-16x16.png')} sizes="16x16" />
     <link rel="icon" type="image/png" href={withBase('/favicon-32x32.png')} sizes="32x32" />
@@ -109,7 +110,7 @@ const structuredDataJson = structuredData ? JSON.stringify(structuredData) : nul
       <script is:inline type="application/ld+json" set:html={structuredDataJson} />
     )}
   </head>
-  <body class={`page-layout page-layout--${locale}`}>
+  <body class:list={[isHome && 'site-home']}>
     <a class="skip-link" href="#main-content">
       {isVi ? 'Chuyển đến nội dung chính' : 'Skip to content'}
     </a>

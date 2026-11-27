@@ -34,7 +34,6 @@ import {
   PRODUCTION_ORIGIN,
   BASE,
 } from './canonical-routes.mjs';
-import { PRODUCT_RELEASE } from '../src/data/product-release.ts';
 
 const scriptDir = fileURLToPath(new URL('.', import.meta.url));
 const dist = resolve(scriptDir, '..', 'dist');
@@ -331,12 +330,14 @@ for (const route of CANONICAL_ROUTES) {
 
       if (softwareApplications.length !== 1) {
         fail(`Expected one SoftwareApplication JSON-LD node on ${route.path}`);
-      } else if (softwareApplications[0].softwareVersion !== PRODUCT_RELEASE.version) {
-        fail(
-          `SoftwareApplication version on ${route.path} must match published release ${PRODUCT_RELEASE.version}`,
-        );
+      } else if (
+        softwareApplications[0].downloadUrl !==
+          'https://github.com/pumni/Sky-Auto-Player/releases/latest' ||
+        Object.hasOwn(softwareApplications[0], 'softwareVersion')
+      ) {
+        fail(`SoftwareApplication on ${route.path} must link to GitHub Latest without a version`);
       } else {
-        pass(`SoftwareApplication version: ${PRODUCT_RELEASE.version}`);
+        pass('SoftwareApplication links to GitHub Latest without a version');
       }
     }
   }

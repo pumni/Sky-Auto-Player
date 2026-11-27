@@ -4,72 +4,128 @@
     margin-inline: auto;
   }
 
-  .grid-12 {
+  .site-home {
+    --container-max: 80rem;
+    --gutter: clamp(1.25rem, 4.4vw, 4rem);
+  }
+
+  .home-page {
+    --home-heading: clamp(2rem, 3.2vw, 3rem);
+    --home-lead: clamp(1rem, 1.45vw, 1.25rem);
+    --home-content-gap: clamp(1.75rem, 3.5vw, 3.5rem);
+    --home-pair-gap: clamp(1.5rem, 4vw, 3rem);
+    --home-band-space: clamp(4rem, 8vw, 7.25rem);
+    --font-display: var(--font-body);
+  }
+
+  .home-intro {
+    background: radial-gradient(ellipse at 76% 30%, #2b2924, #1a1d20 31%, transparent 63%);
+  }
+
+  .home-intro__layout {
     display: grid;
-    grid-template-columns: repeat(12, minmax(0, 1fr));
-    gap: var(--grid-gap);
+    align-items: start;
+    gap: clamp(2rem, 5vw, 4.75rem);
+    padding-block-start: clamp(3.25rem, 7vw, 6.75rem);
+  }
+
+  .home-intro__layout > * {
+    min-inline-size: 0;
+  }
+
+  .product-showcase__features {
+    display: grid;
+    gap: 1.5rem var(--home-pair-gap);
+    padding-block: 2.5rem 3rem;
+    border-block-start: 1px solid var(--line-default);
+  }
+
+  .product-showcase__features > div {
+    display: grid;
+    grid-template-columns: 1.625rem minmax(0, 1fr);
+    gap: 1rem;
+  }
+
+  .product-showcase__features svg {
+    inline-size: 1.625rem;
+    block-size: 1.625rem;
+    color: var(--color-action);
+  }
+
+  .product-showcase__features h3 {
+    margin: 0;
+    font-size: 1.25rem;
+    line-height: 1.35;
+    letter-spacing: -0.025em;
+  }
+
+  .product-showcase__features p {
+    max-inline-size: 52ch;
+    margin: 0.5rem 0 0;
+    color: var(--color-text-secondary);
+    font-size: 1rem;
+    line-height: 1.65;
+  }
+
+  @media (min-width: 48rem) {
+    .product-showcase__features {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+  }
+
+  @media (min-width: 64rem) {
+    .home-intro__layout {
+      grid-template-columns: minmax(0, 0.82fr) minmax(0, 1.18fr);
+    }
+    .product-showcase__features {
+      grid-column: 1 / -1;
+    }
+  }
+
+  @media (max-width: 39.99rem) {
+    .home-intro__layout {
+      gap: 1.75rem;
+      padding-block-start: 2.5rem;
+    }
+    .product-showcase__features {
+      padding-block: 1.75rem 2rem;
+    }
+    .product-showcase__features h3 {
+      font-size: 1.125rem;
+    }
+  }
+
+  @media (max-width: 21.875rem) {
+    .site-home {
+      --gutter: 1rem;
+    }
+  }
+
+  @media (forced-colors: active) {
+    .home-intro {
+      background: Canvas;
+    }
+    .product-showcase__features {
+      border-color: CanvasText;
+    }
+  }
+
+  @media (min-width: 48rem) and (max-width: 63.99rem) {
+    :root {
+      --container-max: 56rem;
+    }
   }
 
   .section-shell {
-    padding-block: var(--section-space-default);
-    scroll-margin-top: 6rem;
-  }
-
-  .section-shell--bordered {
-    border-top: 1px solid var(--line-faint);
+    padding-block: var(--section-default);
   }
 
   .section-shell--compact {
-    padding-block: var(--section-space-compact);
-  }
-
-  .section-shell--feature {
-    padding-block: var(--section-space-feature);
-  }
-
-  .section-shell--proof {
-    padding-block: var(--section-space-transition);
-  }
-
-  .section-shell--open {
-    padding-block: var(--section-space-explanation);
-  }
-
-  /* Product showcase peak: largest vertical breath on the page. */
-  .section-shell--peak {
-    padding-block: var(--section-space-product);
-  }
-
-  .section-shell--utility {
-    padding-block: var(--section-space-utility);
+    padding-block: var(--section-compact);
   }
 
   /* First section under site header: pull content up without killing feature bottom space. */
   .section-shell--after-header {
     padding-top: clamp(2.25rem, 3.5vw, 3.25rem);
-  }
-
-  .section-shell--opening {
-    padding-block: var(--section-space-opening);
-  }
-
-  .section-shell--opening.section-shell--after-header {
-    padding-top: clamp(1.25rem, 2.5vw, 2.5rem);
-  }
-
-  .section-shell--closure {
-    padding-block: var(--section-space-closure);
-  }
-
-  .text-measure-body {
-    max-inline-size: var(--readable-max);
-  }
-
-  .text-measure-lead {
-    max-inline-size: 48ch;
-  }
-
-  .text-measure-display {
-    max-inline-size: 11ch;
   }
 }

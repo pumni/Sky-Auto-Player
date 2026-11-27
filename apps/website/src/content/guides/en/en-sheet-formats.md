@@ -12,7 +12,7 @@ summary: >-
 category: getting-started
 order: 2
 published: '2026-08-08'
-updated: '2026-08-08'
+updated: '2026-11-26'
 draft: false
 related:
   - windows-setup
@@ -44,11 +44,7 @@ is detected; the parser reads the JSON content regardless.
 
 ## Import song files
 
-Use the desktop Library to import sheet files. Application data is kept in the user app-data
-boundary rather than beside the installed executable.
-
-After adding files, press **Reload songs** in the desktop Library without restarting the
-application.
+Create or select a playlist in the desktop Library, then choose **Add songs** and import local files or a folder. Imports reference the original files in place; the app does not move or delete them. If a source file is moved or removed, the imported entry may no longer be available.
 
 ## Getting a sheet file
 
@@ -60,9 +56,7 @@ application.
 ## Common issues
 
 **File not appearing in the Library**
-: Use **Reload songs** in the desktop GUI.
-If the file still does not appear, verify the file extension is `.json`, `.skysheet`, or `.txt`.
-Other extensions are not recognised.
+: Check that the file was imported into a playlist and that its source is still available at the original path. Verify the extension is `.json`, `.skysheet`, or `.txt`; other extensions are not recognised.
 
 **"Failed to parse" error**
 : The file content is not valid JSON. Open the file in a text editor to confirm it
@@ -70,9 +64,12 @@ contains a JSON object, not plain text or binary data.
 
 **Song plays notes out of order or skips sections**
 : The sheet may contain timing data that does not align with the configured FPS or tempo.
-Try adjusting the tempo multiplier or FPS in the per-song settings.
+Review the Tempo and FPS values in the Player Dock's **Playback profile**. Windows scheduling
+and the game's input sampling still affect when a sent key is registered.
 
-## Per-song configuration
+## Playback profile
 
-Sky Auto Player stores per-song settings (hold frame selection, tempo, FPS, color palette) separately
-from the sheet files. Changing a sheet file does not reset these settings.
+The Player Dock's **Playback profile** controls app playback defaults; these values are not
+stored per song or embedded in sheet files. **Base Hold** offers 1, 1.25, and 1.5 frames, and
+**Tempo** offers 0.90×, 0.95×, 1.0×, 1.05×, and 1.10×. **Advanced timing** offers FPS values
+of 30, 60, 90, 120, 144, 165, or 240 and a timing margin from 0 to 3,000 µs in 100 µs steps.

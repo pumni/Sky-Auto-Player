@@ -1,0 +1,81 @@
+---
+import type { CollectionEntry } from 'astro:content';
+import BaseLayout from '../../layouts/BaseLayout.astro';
+import { SITE, type Locale } from '../../data/site';
+import { withBase } from '../../utils/urls';
+import GuideHub from './GuideHub.astro';
+
+interface Props {
+  locale: Locale;
+  guides: CollectionEntry<'guides'>[];
+}
+
+const { locale, guides } = Astro.props;
+const isVi = locale === 'vi';
+const canonicalUrl = new URL(withBase(isVi ? '/vi/guides/' : '/guides/'), SITE.productionOrigin)
+  .href;
+const seo = isVi
+  ? {
+      title: 'Hướng dẫn — Sky Auto Player',
+      description:
+        'Hướng dẫn kỹ thuật Sky Auto Player trên Windows 11 64-bit: cài đặt, timing, định dạng sheet nhạc, ranh giới bảo mật và xử lý sự cố.',
+    }
+  : {
+      title: 'Guides — Sky Auto Player',
+      description:
+        'Technical guides for Sky Auto Player on Windows 11 x64: setup, timing model, sheet formats, security boundaries, and troubleshooting.',
+    };
+const collectionDescription = isVi
+  ? 'Hướng dẫn kỹ thuật Sky Auto Player trên Windows 11 64-bit: cài đặt, timing, định dạng sheet, ranh giới bảo mật và xử lý sự cố.'
+  : seo.description;
+
+const structuredData = {
+  '@context': 'https://schema.org',
+  '@type': 'CollectionPage',
+  name: isVi ? 'Hướng dẫn Sky Auto Player' : 'Sky Auto Player Guides',
+  description: collectionDescription,
+  url: canonicalUrl,
+  inLanguage: locale,
+  isPartOf: {
+    '@id': new URL(withBase('/'), SITE.productionOrigin).href + '#website',
+  },
+};
+---
+
+<BaseLayout locale={locale} seo={seo} structuredData={structuredData}>
+  <header class="guides-hub-page section-shell section-shell--compact section-shell--after-header">
+    <div class="container">
+      <h1>{isVi ? 'Hướng dẫn' : 'Guides'}</h1>
+      <p>
+        {isVi
+          ? 'Tìm hướng dẫn cài đặt, dùng sheet, timing và xử lý sự cố.'
+          : 'Find help with setup, sheet files, timing, and troubleshooting.'}
+      </p>
+    </div>
+  </header>
+  <div class="container guides-hub-page__body">
+    <GuideHub locale={locale} guides={guides} />
+  </div>
+</BaseLayout>
+
+<style>
+  @layer components {
+    .guides-hub-page h1 {
+      margin-block-end: var(--space-2);
+      font-family: var(--font-body);
+      font-size: var(--type-h2);
+      line-height: 1.2;
+    }
+
+    .guides-hub-page p {
+      max-inline-size: 58ch;
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--type-body);
+    }
+
+    .guides-hub-page__body {
+      padding-block: var(--space-4) var(--space-8);
+    }
+  }
+</style>

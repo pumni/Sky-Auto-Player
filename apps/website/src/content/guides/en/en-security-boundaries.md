@@ -11,7 +11,7 @@ summary: >-
 category: technical-safety
 order: 1
 published: '2026-08-08'
-updated: '2026-11-18'
+updated: '2026-11-26'
 draft: false
 related:
   - how-it-works
@@ -32,8 +32,11 @@ Sky Auto Player sends gameplay keystrokes through the public Windows
 SendInput API. It does not read or modify game memory or files, inject code,
 install keyboard/input hooks, attach a debugger, or bypass anti-cheat.
 
-The audited foreground event callback only provides a hint to recheck the
-current target. It cannot authorize a key send.
+Every new musical packet is admitted only after fresh foreground and retained
+target identity checks. The audited foreground event callback only provides a
+hint to recheck the current target; it cannot authorize a key send. Bounded
+safety cleanup may separately attempt releases for keys already recorded in
+its journal.
 
 ## Canonical policy
 

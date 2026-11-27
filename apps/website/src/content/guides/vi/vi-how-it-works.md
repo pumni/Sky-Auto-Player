@@ -12,7 +12,7 @@ summary: >-
 category: getting-started
 order: 1
 published: '2026-08-08'
-updated: '2026-11-18'
+updated: '2026-11-26'
 draft: false
 showDiagram: true
 related:
@@ -54,12 +54,14 @@ theo dõi thời gian giữ phím và khoảng cách trước khi nhấn lại c
 hợp âm khỏe được gửi trong một prepared packet; nếu các lần nhả phím và nốt
 mới đến hạn cùng lúc, sự kiện nhả được xếp trước lần nhấn mới.
 
-Trước mỗi musical packet, native sender kiểm tra cửa sổ foreground hiện tại
-và identity của target đã giữ. Foreground event chỉ là hint để kiểm tra lại
-focus. Tauri shell điều phối pause và stop, join worker rồi ghi nhận
-retirement trước khi thông báo kết quả lên UI.
+Trước mỗi musical packet, native sender kiểm tra lại cửa sổ foreground hiện tại
+và identity của target đã giữ. Foreground event chỉ là hint để kiểm tra lại focus,
+không cấp quyền gửi. Safety cleanup có giới hạn có thể thử nhả riêng các phím
+đã ghi trong journal. Tauri shell điều phối pause và stop, join worker rồi ghi
+nhận retirement trước khi thông báo kết quả lên UI.
 
-Xem [hợp đồng playback engine](https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md)
+Xem hợp đồng playback engine tại
+[tài liệu playback engine](https://github.com/pumni/Sky-Auto-Player/blob/main/docs/playback-engine.md)
 để biết quy tắc timing, cleanup và recovery hiện hành.
 
 ## Phạm vi và giới hạn

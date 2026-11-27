@@ -2,89 +2,101 @@ import type { Locale } from './site';
 
 export interface HomeContent {
   locale: Locale;
-  seo: {
-    title: string;
-    description: string;
-  };
+  downloadCta: string;
+  seo: { title: string; description: string };
   navigation: {
-    playback: string;
+    overview: string;
     howItWorks: string;
-    technical: string;
     guides: string;
     faq: string;
     github: string;
+    release: string;
   };
   hero: {
-    kicker: string;
-    titleLines: [string, string];
+    eyebrow: string;
+    titleStart: string;
+    titleEnd: string;
     description: string;
-    primaryCta: string;
     secondaryCta: string;
-    metadata: string[];
+    meta: string;
     riskNote: string;
-    riskNoteLink: string;
-    /** Visible unofficial project disclaimer. */
-    affiliationDisclaimer: string;
   };
-  /** Dense transition strip under hero — product signals, not playback mechanism bullets. */
-  proofStrip: {
-    kicker: string;
-    metric: string;
-    signals: string[];
+  product: {
+    title: string;
+    selectorLabel: string;
+    fullSizeLabel: string;
+    fallbackLabel: string;
+    pendingMessage: string;
+    errorMessage: string;
+    captureNote: string;
+    features: readonly [
+      { title: string; description: string },
+      { title: string; description: string },
+    ];
+    views: {
+      label: string;
+      alt: string;
+      caption: string;
+      src: string;
+    }[];
+  };
+  quickStart: {
+    eyebrow: string;
+    title: string;
+    description: string;
+    items: { title: string; description: string }[];
+    setupGuideLabel: string;
+    setupGuideHref: string;
+    formatsLabel: string;
+    formats: readonly string[];
+    formatsNote: string;
+    formatsLinkLabel: string;
+    formatsHref: string;
   };
   playback: {
     kicker: string;
+    demoTitle: string;
     title: string;
     description: string;
-    points: string[];
+    dryRunTitle: string;
+    dryRunNote: string;
+    eventTypes: { chord: string; note: string; hold: string };
+    controlsLabel: string;
+    play: string;
+    resume: string;
+    pause: string;
+    replay: string;
+    previous: string;
+    next: string;
+    progressLabel: string;
+    keyboardLabel: string;
+    initialStatus: string;
+    playingStatus: string;
+    pausedStatus: string;
+    completeStatus: string;
+    manualOnly: string;
+    demoNote: string;
+    timingLinkLabel: string;
+    secondsAbbreviation: string;
   };
-  comparison: {
-    kicker: string;
+  trust: {
     title: string;
-    macroHeader: string;
-    playerHeader: string;
-    rows: { macro: string; player: string }[];
-  };
-  product: {
-    kicker: string;
-    title: string;
-    description: string;
-    annotations: string[];
-  };
-  steps: {
-    kicker: string;
-    title: string;
-    items: { title: string; description: string }[];
-    hotkeyNote: string;
-  };
-  technical: {
-    kicker: string;
-    title: string;
-    description: string;
-    ledger: { term: string; definition: string; state: 'yes' | 'no' | 'info' }[];
-    notice: string;
-  };
-  formats: {
-    kicker: string;
-    title: string;
-    items: { extension: string; name: string; description: string; tags: string }[];
-  };
-  faqPreview: {
-    kicker: string;
-    title: string;
-    readMoreLink: string;
-    items: ReadonlyArray<{
-      question: string;
-      /** Locale path without origin; may include hash. Example: "/faq/#download" */
-      href: string;
-    }>;
-    /** Optional contextual guide cross-links below FAQ items. */
-    guideLinks?: ReadonlyArray<{ label: string; href: string }>;
-  };
-  finalCta: {
-    title: string;
-    description: string;
-    primaryCta: string;
-    secondaryCta: string;
+    platformSummary: string;
+    releaseLinkLabel: string;
+    releaseDestinationNote: string;
+    installationTitle: string;
+    installerGuidance: string;
+    installerSuffix: string;
+    signatureNote: string;
+    installScope: string;
+    signingValue: string;
+    safetyNote: string;
+    safetyBoundary: string;
+    safetyRisk: string;
+    safetyTitle: string;
+    safetyLink: string;
+    supportLabel: string;
+    supportDescription: string;
+    supportLinks: ReadonlyArray<{ label: string; description: string; href: string }>;
   };
 }
