@@ -1,9 +1,27 @@
-import { expect, test } from '@playwright/test';
-import { palettes, selectPalette } from './testHelpers';
+import { expect, test, type Page } from '@playwright/test';
+import { palettes, selectPalette, type PaletteId } from './testHelpers';
 
 function channels(color: string): [number, number, number] {
   const rgbMatch = color.match(/^rgba?\((\d+),\s*(\d+),\s*(\d+)/);
   if (rgbMatch) return [Number(rgbMatch[1]), Number(rgbMatch[2]), Number(rgbMatch[3])];
+
+  // CSS Color 4 sRGB components are already encoded, on a 0–1 scale.
+  const srgbMatch = color.match(
+    /^color\(srgb\s+([^\s()/]+)\s+([^\s()/]+)\s+([^\s()/]+)(?:\s*\/\s*([^\s()/]+))?\s*\)$/,
+  );
+  if (srgbMatch) {
+    const [, red, green, blue, alpha = '1'] = srgbMatch;
+    const components = [red, green, blue, alpha];
+    const cssNumber = /^[+-]?(?:[0-9]*\.[0-9]+|[0-9]+)(?:e[+-]?[0-9]+)?$/i;
+    const [r, g, b, opacity] = components.map(Number);
+    if (
+      components.every((component) => cssNumber.test(component)) &&
+      [r, g, b].every((channel) => Number.isFinite(channel) && channel >= 0 && channel <= 1) &&
+      opacity === 1
+    ) {
+      return [r * 255, g * 255, b * 255];
+    }
+  }
 
   const oklabMatch = color.match(
     /^oklab\(\s*([+-]?(?:\d+\.?\d*|\.\d+))\s+([+-]?(?:\d+\.?\d*|\.\d+))\s+([+-]?(?:\d+\.?\d*|\.\d+))/,
@@ -42,6 +60,36 @@ function contrast(first: string, second: string): number {
   const right = luminance(second);
   return (Math.max(left, right) + 0.05) / (Math.min(left, right) + 0.05);
 }
+
+test('contrast accepts opaque Chromium sRGB serialization without rounding', () => {
+  const dark = channels('color(srgb 0.476863 0.483529 0.498431)');
+  const light = channels('color(srgb 0.500863 0.535686 0.573412 / 1)');
+  for (const [actual, expected] of [...dark, ...light].map((channel, index) => [
+    channel,
+    [121.600065, 123.299895, 127.099905, 127.720065, 136.59993, 146.22006][index],
+  ])) {
+    expect(actual).toBeCloseTo(expected, 8);
+  }
+  expect(contrast('color(srgb 0.2 0.4 0.6)', 'rgb(51, 102, 153)')).toBeCloseTo(1, 10);
+  expect(contrast('color(srgb 0 0 0)', 'rgb(255, 255, 255)')).toBe(21);
+  expect(contrast('rgb(20, 30, 40)', 'rgb(20, 30, 40)')).toBe(1);
+});
+
+test('contrast rejects unsupported or malformed sRGB serialization', () => {
+  for (const value of [
+    'color(display-p3 0 0 0)',
+    'color(srgb 0 0)',
+    'color(srgb 0 0 1.1)',
+    'color(srgb 0 0 -0.1)',
+    'color(srgb 0 0 0x1)',
+    'color(srgb 0 0 1e999)',
+    'color(srgb 0 0 NaN)',
+    'color(srgb 0 0 0 / 0.5)',
+    'color(srgb 0 0 0) trailing',
+  ]) {
+    expect(() => channels(value)).toThrow('Unsupported computed color');
+  }
+});
 
 test('Runtime tabs fill the available width and use one raised segmented indicator', async ({
   page,
@@ -195,9 +243,11 @@ test('Runtime tabs fill the available width and use one raised segmented indicat
     .toBe(true);
 });
 
-test('scrollbar visibility follows scrolling and thumb drag, not hover or focus', async ({
-  page,
-}) => {
+async function verifyScrollbarPalette(
+  page: Page,
+  palette: PaletteId,
+  options: { withKeyboardAndDrag?: boolean; withLightAndForcedColors?: boolean } = {},
+) {
   await page.goto('/');
   const grid = page.getByRole('grid');
   const scrollArea = page.locator('[data-slot="scroll-area"]:has([role="grid"])');
@@ -295,9 +345,70 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
       }
     }
   };
+  const readContrastColors = async () =>
+    scrollArea.evaluate((area) => {
+      const track = area.querySelector<HTMLElement>('[role="grid"]');
+      const thumbElement = area.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
+      const scrollbarElement = area.querySelector<HTMLElement>(
+        '[data-slot="scroll-area-scrollbar"]',
+      );
+      if (!track || !thumbElement || !scrollbarElement) return null;
+      return {
+        thumb: getComputedStyle(thumbElement).backgroundColor,
+        surface: getComputedStyle(track).backgroundColor,
+        track: getComputedStyle(scrollbarElement).backgroundColor,
+      };
+    });
 
-  for (const [paletteIndex, palette] of palettes.entries()) {
+  await test.step(`select ${palette} and verify the menu closes`, async () => {
     await selectPalette(page, palette);
+  });
+
+  if (options.withLightAndForcedColors) {
+    await test.step('preserve contrast and visibility in light mode', async () => {
+      await page.emulateMedia({ colorScheme: 'light' });
+      await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
+      await grid.evaluate((element) => {
+        element.scrollTop = 0;
+      });
+      await page.mouse.move(0, 0);
+      await expectHidden();
+      const previousTop = await grid.evaluate((element) => element.scrollTop);
+      await grid.hover();
+      await expectScrollRevealObserved(async () => {
+        await page.mouse.wheel(0, 320);
+        await page.mouse.wheel(0, 320);
+        await expect
+          .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
+          .toBeGreaterThan(previousTop);
+      });
+      const colors = await readContrastColors();
+      expect(colors).not.toBeNull();
+      if (colors) expect(contrast(colors.thumb, colors.surface)).toBeGreaterThanOrEqual(3);
+    });
+
+    await test.step('retain visible scrollbar controls in forced colors', async () => {
+      await page.emulateMedia({ forcedColors: 'active' });
+      const mode = await page.evaluate(() => ({
+        matches: matchMedia('(forced-colors: active)').matches,
+        palette: document.documentElement.dataset.palette,
+        colorMode: document.documentElement.dataset.colorMode,
+      }));
+      expect(mode).toEqual({ matches: true, palette, colorMode: 'light' });
+      await expect
+        .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).opacity))
+        .toBe('1');
+      await expect
+        .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).pointerEvents))
+        .toBe('auto');
+      await expect
+        .poll(() => thumb.evaluate((element) => getComputedStyle(element).backgroundColor))
+        .not.toBe('rgba(0, 0, 0, 0)');
+    });
+    return;
+  }
+
+  await test.step('keep the scrollbar hidden while idle and hovered', async () => {
     await grid.evaluate((element) => {
       element.scrollTop = 0;
     });
@@ -305,23 +416,27 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
     await expectHidden();
     await page.getByRole('row', { name: /Aurora Landing/ }).hover();
     await expectHidden();
-    if (paletteIndex === 0) {
+  });
+
+  if (options.withKeyboardAndDrag) {
+    await test.step('reveal the scrollbar through focused keyboard scrolling', async () => {
       await grid.focus();
       await expect(grid).toBeFocused();
       await expectHidden();
-
-      const previousTopBeforeKeyboard = await grid.evaluate((element) => element.scrollTop);
+      const previousTop = await grid.evaluate((element) => element.scrollTop);
       await expectScrollRevealObserved(async () => {
         await page.keyboard.press('PageDown');
         await page.keyboard.press('PageDown');
         await expect
           .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
-          .toBeGreaterThan(previousTopBeforeKeyboard);
+          .toBeGreaterThan(previousTop);
       });
       await waitForScrollToSettle();
       await expectHidden();
-    }
+    });
+  }
 
+  await test.step('reveal the scrollbar during wheel scrolling and retain contrast', async () => {
     const previousTop = await grid.evaluate((element) => element.scrollTop);
     await grid.hover();
     await expectScrollRevealObserved(async () => {
@@ -332,24 +447,16 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
         .toBeGreaterThan(previousTop);
     });
 
-    const colors = await scrollArea.evaluate((area) => {
-      const track = area.querySelector<HTMLElement>('[role="grid"]');
-      const thumb = area.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
-      const scrollbar = area.querySelector<HTMLElement>('[data-slot="scroll-area-scrollbar"]');
-      if (!track || !thumb || !scrollbar) return null;
-      return {
-        thumb: getComputedStyle(thumb).backgroundColor,
-        surface: getComputedStyle(track).backgroundColor,
-        track: getComputedStyle(scrollbar).backgroundColor,
-      };
-    });
+    const colors = await readContrastColors();
     expect(colors).not.toBeNull();
     if (colors) {
       expect(colors.track).toBe('rgba(0, 0, 0, 0)');
       expect(contrast(colors.thumb, colors.surface)).toBeGreaterThanOrEqual(3);
     }
+  });
 
-    if (paletteIndex === 0) {
+  if (options.withKeyboardAndDrag) {
+    await test.step('preserve thumb drag and pointer-cancel cleanup', async () => {
       const thumbBox = await thumb.boundingBox();
       expect(thumbBox).not.toBeNull();
       if (!thumbBox) throw new Error('The overflowing Library thumb has no bounds.');
@@ -399,53 +506,24 @@ test('scrollbar visibility follows scrolling and thumb drag, not hover or focus'
       await page.mouse.up();
       await waitForScrollToSettle();
       await expectHidden();
-    } else {
+    });
+  } else {
+    await test.step('hide the scrollbar after scrolling settles', async () => {
       await waitForScrollToSettle();
       await expectHidden();
-    }
+    });
   }
+}
 
-  await page.emulateMedia({ colorScheme: 'light' });
-  await expect(page.locator('html')).toHaveAttribute('data-color-mode', 'light');
-  await grid.evaluate((element) => {
-    element.scrollTop = 0;
+for (const [paletteIndex, palette] of palettes.entries()) {
+  test(`scrollbar visibility stays correct for the ${palette} palette`, async ({ page }) => {
+    await verifyScrollbarPalette(page, palette, { withKeyboardAndDrag: paletteIndex === 0 });
   });
-  await page.mouse.move(0, 0);
-  await expectHidden();
-  const lightPreviousTop = await grid.evaluate((element) => element.scrollTop);
-  await grid.hover();
-  await expectScrollRevealObserved(async () => {
-    await page.mouse.wheel(0, 320);
-    await page.mouse.wheel(0, 320);
-    await expect
-      .poll(() => grid.evaluate((element) => element.scrollTop), { intervals: [10, 20, 40] })
-      .toBeGreaterThan(lightPreviousTop);
-  });
-  const lightColors = await scrollArea.evaluate((area) => {
-    const track = area.querySelector<HTMLElement>('[role="grid"]');
-    const thumb = area.querySelector<HTMLElement>('[data-slot="scroll-area-thumb"]');
-    if (!track || !thumb) return null;
-    return {
-      thumb: getComputedStyle(thumb).backgroundColor,
-      surface: getComputedStyle(track).backgroundColor,
-    };
-  });
-  expect(lightColors).not.toBeNull();
-  if (lightColors)
-    expect(contrast(lightColors.thumb, lightColors.surface)).toBeGreaterThanOrEqual(3);
+}
 
-  await page.emulateMedia({ forcedColors: 'active' });
-  await expect
-    .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).opacity))
-    .toBe('1');
-  await expect
-    .poll(() => scrollbar.evaluate((element) => getComputedStyle(element).pointerEvents))
-    .toBe('auto');
-  await expect
-    .poll(() => thumb.evaluate((element) => getComputedStyle(element).backgroundColor))
-    .not.toBe('rgba(0, 0, 0, 0)');
+test('scrollbar visibility remains correct in light and forced colors', async ({ page }) => {
+  await verifyScrollbarPalette(page, 'classic', { withLightAndForcedColors: true });
 });
-
 test('expanded Playback Profile fits at 800 by 560 and keeps Select inside the viewport', async ({
   page,
 }) => {

@@ -1,0 +1,838 @@
+---
+import type { HomeContent } from '../../data/home.types';
+import {
+  PLAYBACK_DEMO_DURATION_MS,
+  PLAYBACK_DEMO_EVENTS,
+  PLAYBACK_DEMO_KEYS,
+  formatPlaybackDuration,
+  formatPlaybackTime,
+} from '../../data/playback-demo';
+import { withBase } from '../../utils/urls';
+
+interface Props {
+  data: HomeContent['playback'];
+  locale: 'en' | 'vi';
+}
+
+const { data, locale } = Astro.props;
+const timelineColumns = PLAYBACK_DEMO_EVENTS.map(
+  (event) => `${event.endMs - event.startMs}fr`,
+).join(' ');
+const firstEventKeys = new Set<string>(PLAYBACK_DEMO_EVENTS[0].keys);
+const timingGuide = withBase(
+  locale === 'vi' ? '/vi/guides/timing-engine/' : '/guides/timing-engine/',
+);
+---
+
+<section
+  id="playback"
+  class="playback-demo"
+  aria-labelledby="playback-title"
+  data-home-section="playback"
+>
+  <div class="container playback-demo__layout">
+    <header class="playback-demo__header">
+      <p class="playback-demo__kicker">{data.kicker}</p>
+      <h2 id="playback-title">{data.title}</h2>
+      <p class="playback-demo__description">{data.description}</p>
+    </header>
+
+    <div
+      class="playback-demo__stage"
+      data-playback-demo
+      data-initial-status={data.initialStatus}
+      data-playing-status={data.playingStatus}
+      data-paused-status={data.pausedStatus}
+      data-complete-status={data.completeStatus}
+      data-play-label={data.play}
+      data-resume-label={data.resume}
+      data-pause-label={data.pause}
+      data-replay-label={data.replay}
+      data-locale={locale}
+    >
+      <div class="playback-demo__instrument-header">
+        <strong>{data.demoTitle}</strong>
+        <div class="playback-demo__time" aria-hidden="true">
+          <span data-elapsed>{formatPlaybackTime(0, locale)}</span>
+          <span>
+            {' '}
+            / {formatPlaybackTime(PLAYBACK_DEMO_DURATION_MS, locale)} {data.secondsAbbreviation}
+          </span>
+        </div>
+      </div>
+      <div class="playback-timeline" style={`--playback-columns: ${timelineColumns}`}>
+        <div
+          class="playback-timeline__track"
+          role="progressbar"
+          aria-label={data.progressLabel}
+          aria-valuemin="0"
+          aria-valuemax={PLAYBACK_DEMO_DURATION_MS}
+          aria-valuenow="0"
+          aria-describedby="playback-legend"
+          data-demo-progress
+        >
+          <span class="playback-timeline__segments" aria-hidden="true">
+            {PLAYBACK_DEMO_EVENTS.map((_event, index) => (
+              <span
+                class="playback-timeline__segment"
+                aria-current={index === 0 ? 'step' : undefined}
+                data-demo-segment={index}
+              ></span>
+            ))}
+          </span>
+          <span class="playback-timeline__playhead" aria-hidden="true" data-playhead></span>
+        </div>
+        <ol class="playback-timeline__legend" id="playback-legend">
+          {PLAYBACK_DEMO_EVENTS.map((event, index) => (
+            <li
+              aria-current={index === 0 ? 'step' : undefined}
+              data-demo-event={index}
+              data-kind={data.eventTypes[event.kind]}
+              data-keys={event.keys.join(' + ')}
+            >
+              <strong>{data.eventTypes[event.kind]}</strong>
+              <span class="playback-timeline__keys">
+                {event.keys.map((key, keyIndex) => (
+                  <span class="playback-timeline__key-token">
+                    {keyIndex > 0 && ' + '}
+                    {key}
+                  </span>
+                ))}
+              </span>
+              <time datetime={`PT${(event.endMs - event.startMs) / 1000}S`}>
+                {formatPlaybackDuration(event.endMs - event.startMs, locale)}
+              </time>
+            </li>
+          ))}
+        </ol>
+      </div>
+
+      <div class="playback-keyboard">
+        <p class="playback-keyboard__label">{data.keyboardLabel}</p>
+        <div class="playback-keyboard__keys" aria-hidden="true">
+          {PLAYBACK_DEMO_KEYS.map((key) => (
+            <span
+              class:list={['playback-key', firstEventKeys.has(key) && 'is-active']}
+              data-demo-key={key}
+            >
+              {key}
+            </span>
+          ))}
+        </div>
+      </div>
+
+      <div class="playback-demo__controls-wrap">
+        <div
+          class="playback-demo__controls"
+          role="group"
+          aria-label={data.controlsLabel}
+          hidden
+          data-demo-controls
+        >
+          <button
+            class="button button--secondary playback-demo__play"
+            type="button"
+            data-action="play"
+          >
+            {data.play}
+          </button>
+          <button
+            class="playback-demo__step"
+            type="button"
+            aria-label={data.previous}
+            aria-disabled="true"
+            data-action="previous"
+          >
+            <span aria-hidden="true">←</span>
+          </button>
+          <button
+            class="playback-demo__step"
+            type="button"
+            aria-label={data.next}
+            data-action="next"
+          >
+            <span aria-hidden="true">→</span>
+          </button>
+        </div>
+        <p class="playback-demo__motion-note" hidden data-motion-note>
+          {data.manualOnly}
+        </p>
+      </div>
+      <p class="sr-only" role="status" aria-live="polite" data-demo-status>
+        {data.initialStatus}
+      </p>
+      <div class="playback-demo__note">
+        <p class="playback-demo__timing-note" id="timing-model">
+          {data.demoNote}
+        </p>
+        <a class="playback-demo__timing-link" href={timingGuide}>
+          {data.timingLinkLabel}
+        </a>
+      </div>
+    </div>
+
+    <aside class="playback-demo__support">
+      <div class="playback-demo__dry-run">
+        <h3>{data.dryRunTitle}</h3>
+        <p>{data.dryRunNote}</p>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<style>
+  @layer components {
+    .playback-demo {
+      padding-block: var(--home-band-space);
+      background: var(--color-surface-quiet);
+      border-block: 1px solid var(--line-default);
+    }
+    .playback-demo__layout {
+      display: grid;
+      gap: 1.875rem;
+    }
+    .playback-demo__kicker {
+      margin: 0 0 1rem;
+      font-size: 0.875rem;
+      color: var(--color-text-secondary);
+      font-weight: 550;
+    }
+    .playback-demo__header h2 {
+      margin: 0;
+      font-size: var(--home-heading);
+      line-height: 1.12;
+      letter-spacing: -0.045em;
+    }
+    .playback-demo__description {
+      max-inline-size: 47ch;
+      margin: 1.125rem 0 0;
+      color: var(--color-text-secondary);
+      font-size: var(--home-lead);
+      line-height: 1.65;
+    }
+    .playback-demo__stage {
+      display: grid;
+      gap: 1.25rem;
+      align-items: start;
+      min-inline-size: 0;
+      padding: clamp(1rem, 2.5vw, 2.125rem);
+      border: 1px solid #414649;
+      border-radius: 1.0625rem;
+      background: var(--color-page);
+    }
+    .playback-demo__instrument-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      font-size: 1rem;
+    }
+    .playback-demo__time {
+      display: flex;
+      gap: 0.25rem;
+      margin: 0;
+      color: var(--color-text-secondary);
+      font: 500 0.875rem/1.4 var(--font-mono);
+    }
+    .playback-demo__support {
+      padding-block-start: 1.5rem;
+      border-block-start: 1px solid var(--line-default);
+    }
+    .playback-demo__dry-run h3 {
+      margin: 0;
+      font-size: 1.125rem;
+    }
+    .playback-demo__dry-run p,
+    .playback-demo__timing-note {
+      max-inline-size: 55ch;
+      margin: 0.5rem 0 0;
+      color: var(--color-text-secondary);
+      font-size: 1rem;
+      line-height: 1.65;
+    }
+    .playback-demo__note {
+      display: grid;
+      justify-items: start;
+      gap: 0.125rem;
+      border-block-start: 1px solid var(--line-default);
+      padding-block-start: 1rem;
+    }
+    .playback-demo__timing-note {
+      font-size: 0.875rem;
+      margin: 0;
+    }
+    .playback-demo__timing-link {
+      display: inline-flex;
+      min-block-size: 44px;
+      align-items: center;
+      color: var(--color-text-primary);
+      font-size: 0.875rem;
+      text-decoration: underline;
+      text-decoration-color: var(--color-info);
+      text-underline-offset: 0.22em;
+    }
+    @media (min-width: 64rem) {
+      .playback-demo__layout {
+        grid-template-columns: minmax(0, 0.78fr) minmax(0, 1.22fr);
+        grid-template-rows: 1fr 1fr;
+        column-gap: clamp(2.25rem, 6vw, 5.875rem);
+        row-gap: 2rem;
+      }
+      .playback-demo__header {
+        grid-column: 1;
+        grid-row: 1;
+        align-self: end;
+      }
+      .playback-demo__stage {
+        grid-column: 2;
+        grid-row: 1 / span 2;
+        align-self: center;
+      }
+      .playback-demo__support {
+        grid-column: 1;
+        grid-row: 2;
+        align-self: start;
+      }
+    }
+    @media (max-width: 21.875rem) {
+      .playback-demo__stage {
+        padding: 0.75rem;
+      }
+    }
+    .playback-timeline__track {
+      position: relative;
+      block-size: 0.625rem;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--color-surface-quiet);
+    }
+
+    .playback-timeline__segments {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      grid-template-columns: var(--playback-columns);
+      gap: 2px;
+    }
+
+    .playback-timeline__segment {
+      background: var(--color-surface-active);
+    }
+
+    .playback-timeline__segment[aria-current='step'] {
+      background: var(--color-action);
+      box-shadow: inset 0 -2px var(--color-text-primary);
+    }
+
+    .playback-timeline__playhead {
+      position: absolute;
+      inset: 0 auto 0 0;
+      inline-size: 3px;
+      border-radius: 999px;
+      background: var(--color-text-primary);
+      transform: translateX(0);
+    }
+
+    .playback-timeline__legend {
+      display: grid;
+      grid-template-columns: var(--playback-columns);
+      gap: 0.75rem 0.35rem;
+      margin: 1.125rem 0 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    @media (max-width: 30rem) {
+      .playback-timeline__legend {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+    }
+
+    .playback-timeline__legend li {
+      min-block-size: 2.75rem;
+      display: grid;
+      gap: 0.25rem;
+      min-inline-size: 0;
+      padding-inline-start: 0.5rem;
+      border-inline-start: 2px solid transparent;
+      color: var(--color-text-secondary);
+      font-size: 0.875rem;
+      line-height: 1.35;
+    }
+
+    .playback-timeline__legend li[aria-current='step'] {
+      border-inline-start-color: var(--color-action);
+      color: var(--color-text-primary);
+      font-weight: 600;
+    }
+
+    .playback-timeline__legend li[aria-current='step'] strong {
+      text-decoration: underline;
+      text-decoration-color: var(--color-action);
+      text-decoration-thickness: 2px;
+      text-underline-offset: 0.18em;
+    }
+
+    .playback-timeline__legend strong {
+      color: var(--color-text-primary);
+      font-weight: 600;
+    }
+
+    .playback-timeline__key-token {
+      white-space: nowrap;
+    }
+
+    .playback-keyboard {
+      margin: 0;
+    }
+
+    .playback-keyboard__label {
+      margin-block-end: 0.75rem;
+      color: var(--color-text-secondary);
+      font-size: var(--type-small);
+    }
+
+    .playback-keyboard__keys {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 0.5rem;
+    }
+
+    .playback-key {
+      display: grid;
+      min-block-size: 3.125rem;
+      place-items: center;
+      border: 1px solid var(--line-default);
+      box-shadow: inset 0 -2px var(--line-default);
+      border-radius: 0.5rem;
+      background: var(--color-surface-quiet);
+      color: var(--color-text-secondary);
+      font-size: 0.9375rem;
+      font-variant-numeric: tabular-nums;
+      transition:
+        background-color var(--duration-press) var(--ease-standard),
+        color var(--duration-press) var(--ease-standard),
+        border-color var(--duration-press) var(--ease-standard),
+        box-shadow var(--duration-press) var(--ease-standard);
+      font-family: var(--font-mono);
+    }
+
+    .playback-key.is-active {
+      border-color: var(--color-action);
+      box-shadow: inset 0 -3px var(--color-action);
+      background: var(--color-surface-active);
+      color: var(--color-action-hover);
+      font-weight: 650;
+    }
+
+    .playback-demo__controls-wrap {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: start;
+      gap: 1rem;
+    }
+
+    .playback-demo__controls[hidden],
+    .playback-demo__play[hidden],
+    .playback-demo__motion-note[hidden] {
+      display: none;
+    }
+
+    .playback-demo__controls {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      max-inline-size: 100%;
+    }
+
+    .playback-demo__play {
+      min-block-size: 2.75rem;
+      min-inline-size: 0;
+      border-radius: var(--radius-sm);
+      background: var(--color-surface-active);
+      font-size: 0.875rem;
+    }
+
+    .playback-demo__step {
+      display: grid;
+      inline-size: 2.75rem;
+      block-size: 2.75rem;
+      place-items: center;
+      border: 1px solid var(--color-interactive-border);
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--color-text-primary);
+      cursor: pointer;
+      font-size: 1.2rem;
+    }
+
+    .playback-demo__step[aria-disabled='true'] {
+      color: var(--color-text-tertiary);
+      cursor: default;
+    }
+
+    .playback-demo__step:hover:not([aria-disabled='true']) {
+      border-color: var(--color-interactive-border);
+      background: var(--color-surface-quiet);
+    }
+
+    .playback-demo__motion-note {
+      margin: 0;
+      color: var(--color-text-secondary);
+      font-size: var(--type-small);
+      line-height: 1.5;
+    }
+
+    @media (max-width: 30rem) {
+      .playback-key {
+        min-block-size: 2.75rem;
+        font-size: var(--type-small);
+      }
+
+      .playback-demo__controls {
+        gap: 0.5rem;
+        inline-size: 100%;
+        flex-wrap: nowrap;
+      }
+
+      .playback-demo__play {
+        min-inline-size: 0;
+        flex: 1 1 auto;
+      }
+
+      .playback-demo__step {
+        inline-size: 2.75rem;
+        block-size: 2.75rem;
+        flex: 0 0 44px;
+      }
+    }
+
+    @media (forced-colors: active) {
+      .playback-demo {
+        background: Canvas;
+        border-color: CanvasText;
+      }
+      .playback-demo__stage,
+      .playback-demo__support,
+      .playback-demo__note {
+        border-color: CanvasText;
+      }
+
+      .playback-timeline__track {
+        outline: 1px solid CanvasText;
+        outline-offset: -1px;
+      }
+
+      .playback-timeline__segment[aria-current='step'] {
+        forced-color-adjust: none;
+        background: Highlight;
+      }
+
+      .playback-timeline__playhead {
+        forced-color-adjust: none;
+        background: Canvas;
+        box-shadow: inset 0 0 0 1px CanvasText;
+      }
+
+      .playback-key.is-active {
+        outline: 2px solid Highlight;
+        outline-offset: 1px;
+      }
+
+      .playback-timeline__legend li[aria-current='step'] {
+        border-inline-start-color: Highlight;
+      }
+
+      .playback-demo__step[aria-disabled='true'] {
+        color: GrayText;
+      }
+    }
+  }
+</style>
+
+<script>
+  import {
+    PLAYBACK_DEMO_DURATION_MS,
+    PLAYBACK_DEMO_EVENTS,
+    formatPlaybackDuration,
+    formatPlaybackTime,
+  } from '../../data/playback-demo';
+
+  type DemoState = 'idle' | 'playing' | 'paused' | 'complete';
+
+  const root = document.querySelector<HTMLElement>('[data-playback-demo]');
+
+  if (root) {
+    const controls = root.querySelector<HTMLElement>('[data-demo-controls]');
+    const playButton = root.querySelector<HTMLButtonElement>('[data-action="play"]');
+    const previousButton = root.querySelector<HTMLButtonElement>('[data-action="previous"]');
+    const nextButton = root.querySelector<HTMLButtonElement>('[data-action="next"]');
+    const elapsed = root.querySelector<HTMLElement>('[data-elapsed]');
+    const progress = root.querySelector<HTMLElement>('[data-demo-progress]');
+    const playhead = root.querySelector<HTMLElement>('[data-playhead]');
+    const status = root.querySelector<HTMLElement>('[data-demo-status]');
+    const motionNote = root.querySelector<HTMLElement>('[data-motion-note]');
+    const events = Array.from(root.querySelectorAll<HTMLElement>('[data-demo-event]'));
+    const segments = Array.from(root.querySelectorAll<HTMLElement>('[data-demo-segment]'));
+    const keys = Array.from(root.querySelectorAll<HTMLElement>('[data-demo-key]'));
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const strings = root.dataset;
+    const locale = strings.locale === 'vi' ? 'vi' : 'en';
+
+    if (
+      controls &&
+      playButton &&
+      previousButton &&
+      nextButton &&
+      elapsed &&
+      progress &&
+      playhead &&
+      status &&
+      motionNote &&
+      events.length === PLAYBACK_DEMO_EVENTS.length &&
+      segments.length === PLAYBACK_DEMO_EVENTS.length &&
+      keys.length === 15
+    ) {
+      let state: DemoState = 'idle';
+      let elapsedMs = 0;
+      let startedAt = 0;
+      let frameId = 0;
+      let semanticState = '';
+      let lastVisibleTime = '';
+      let lastAccessibleElapsed = -1;
+      let markerTravel = 0;
+
+      const measureMarkerTravel = () => {
+        markerTravel = Math.max(0, progress.clientWidth - playhead.offsetWidth);
+        render();
+      };
+      const markerSizeObserver = new ResizeObserver(measureMarkerTravel);
+      markerSizeObserver.observe(progress);
+
+      const currentEventIndex = () =>
+        PLAYBACK_DEMO_EVENTS.findIndex(
+          (event) => elapsedMs >= event.startMs && elapsedMs < event.endMs,
+        );
+
+      const cancelFrame = () => {
+        if (frameId) cancelAnimationFrame(frameId);
+        frameId = 0;
+      };
+
+      const renderMotionPreference = () => {
+        if (playButton.hidden !== reducedMotion.matches) {
+          playButton.hidden = reducedMotion.matches;
+        }
+        if (motionNote.hidden !== !reducedMotion.matches) {
+          motionNote.hidden = !reducedMotion.matches;
+        }
+      };
+
+      const renderSemanticState = (index: number) => {
+        renderMotionPreference();
+        const key = `${state}:${index}`;
+        if (key === semanticState) return;
+        semanticState = key;
+
+        const event = index >= 0 ? PLAYBACK_DEMO_EVENTS[index] : undefined;
+        const eventElement = index >= 0 ? events[index] : undefined;
+        const duration = event
+          ? formatPlaybackDuration(event.endMs - event.startMs, locale)
+          : formatPlaybackDuration(PLAYBACK_DEMO_DURATION_MS, locale);
+        const detail =
+          event && eventElement
+            ? `${eventElement.dataset.kind}: ${eventElement.dataset.keys}, ${duration}`
+            : '';
+
+        if (state === 'complete') {
+          status.textContent = `${strings.completeStatus || ''} ${formatPlaybackDuration(elapsedMs, locale)}.`;
+        } else if (state === 'playing') {
+          status.textContent = [
+            strings.playingStatus,
+            detail,
+            formatPlaybackDuration(elapsedMs, locale),
+          ]
+            .filter(Boolean)
+            .join('. ');
+        } else if (state === 'paused') {
+          status.textContent = [
+            strings.pausedStatus,
+            detail,
+            formatPlaybackDuration(elapsedMs, locale),
+          ]
+            .filter(Boolean)
+            .join('. ');
+        } else {
+          status.textContent = strings.initialStatus || '';
+        }
+
+        for (let eventIndex = 0; eventIndex < events.length; eventIndex += 1) {
+          if (eventIndex === index) events[eventIndex].setAttribute('aria-current', 'step');
+          else events[eventIndex].removeAttribute('aria-current');
+          if (eventIndex === index) segments[eventIndex].setAttribute('aria-current', 'step');
+          else segments[eventIndex].removeAttribute('aria-current');
+        }
+
+        const activeKeys = new Set<string>(event?.keys ?? []);
+        for (const keyNode of keys) {
+          keyNode.classList.toggle('is-active', activeKeys.has(keyNode.dataset.demoKey || ''));
+        }
+
+        const previousUnavailable = state !== 'complete' && index <= 0;
+        const nextUnavailable = state === 'complete';
+        previousButton.setAttribute('aria-disabled', String(previousUnavailable));
+        nextButton.setAttribute('aria-disabled', String(nextUnavailable));
+
+        const nextPlayLabel =
+          state === 'playing'
+            ? strings.pauseLabel
+            : state === 'complete'
+              ? strings.replayLabel
+              : state === 'paused'
+                ? strings.resumeLabel
+                : strings.playLabel;
+        if (nextPlayLabel && playButton.textContent !== nextPlayLabel) {
+          playButton.textContent = nextPlayLabel;
+        }
+      };
+
+      const render = () => {
+        const ratio = Math.min(1, Math.max(0, elapsedMs / PLAYBACK_DEMO_DURATION_MS));
+        playhead.style.transform = `translateX(${Math.round(markerTravel * ratio)}px)`;
+        const accessibleElapsed =
+          elapsedMs >= PLAYBACK_DEMO_DURATION_MS
+            ? PLAYBACK_DEMO_DURATION_MS
+            : Math.floor(elapsedMs / 100) * 100;
+        if (accessibleElapsed !== lastAccessibleElapsed) {
+          progress.setAttribute('aria-valuenow', String(accessibleElapsed));
+          lastAccessibleElapsed = accessibleElapsed;
+        }
+        const visibleTime = formatPlaybackTime(elapsedMs, locale);
+        if (visibleTime !== lastVisibleTime) {
+          elapsed.textContent = visibleTime;
+          lastVisibleTime = visibleTime;
+        }
+        renderSemanticState(currentEventIndex());
+      };
+
+      const pause = () => {
+        if (state !== 'playing') return;
+        cancelFrame();
+        state = 'paused';
+        render();
+      };
+
+      const stepTo = (eventIndex: number) => {
+        const event = PLAYBACK_DEMO_EVENTS[eventIndex];
+        if (!event) return;
+        cancelFrame();
+        elapsedMs = event.startMs;
+        state = 'paused';
+        render();
+      };
+
+      const tick = (now: number) => {
+        frameId = 0;
+        if (state !== 'playing') return;
+        elapsedMs = Math.min(PLAYBACK_DEMO_DURATION_MS, Math.max(0, now - startedAt));
+        if (elapsedMs >= PLAYBACK_DEMO_DURATION_MS) {
+          elapsedMs = PLAYBACK_DEMO_DURATION_MS;
+          state = 'complete';
+          render();
+          return;
+        }
+        render();
+        frameId = requestAnimationFrame(tick);
+      };
+
+      const play = () => {
+        if (reducedMotion.matches) return;
+        if (state === 'complete') elapsedMs = 0;
+        state = 'playing';
+        startedAt = performance.now() - elapsedMs;
+        render();
+        cancelFrame();
+        frameId = requestAnimationFrame(tick);
+      };
+
+      const onPlay = () => {
+        if (state === 'playing') pause();
+        else play();
+      };
+
+      const onPrevious = () => {
+        if (previousButton.getAttribute('aria-disabled') === 'true') return;
+        const index = currentEventIndex();
+        stepTo(state === 'complete' ? PLAYBACK_DEMO_EVENTS.length - 1 : index - 1);
+      };
+
+      const onNext = () => {
+        if (nextButton.getAttribute('aria-disabled') === 'true') return;
+        const index = currentEventIndex();
+        if (index === PLAYBACK_DEMO_EVENTS.length - 1) {
+          cancelFrame();
+          elapsedMs = PLAYBACK_DEMO_DURATION_MS;
+          state = 'complete';
+          render();
+          return;
+        }
+        stepTo(index + 1);
+      };
+
+      const settlePlayback = () => {
+        if (state === 'playing') pause();
+      };
+
+      const onMotionChange = () => {
+        const moveFocus = reducedMotion.matches && document.activeElement === playButton;
+        if (reducedMotion.matches) settlePlayback();
+        render();
+        if (moveFocus) {
+          const target =
+            nextButton.getAttribute('aria-disabled') === 'true' ? previousButton : nextButton;
+          target.focus();
+        }
+      };
+
+      const listeners = new AbortController();
+      const listenerOptions = { signal: listeners.signal };
+      controls.hidden = false;
+      controls.addEventListener(
+        'click',
+        (event) => {
+          const target = event.target;
+          if (!(target instanceof Element)) return;
+          const button = target.closest<HTMLButtonElement>('[data-action]');
+          if (!button) return;
+          if (button === playButton) onPlay();
+          else if (button === previousButton) onPrevious();
+          else if (button === nextButton) onNext();
+        },
+        listenerOptions,
+      );
+      reducedMotion.addEventListener('change', onMotionChange);
+      document.addEventListener(
+        'visibilitychange',
+        () => {
+          if (document.visibilityState === 'hidden') settlePlayback();
+        },
+        listenerOptions,
+      );
+      window.addEventListener(
+        'pagehide',
+        (event) => {
+          settlePlayback();
+          if (!(event as PageTransitionEvent).persisted) {
+            reducedMotion.removeEventListener('change', onMotionChange);
+            markerSizeObserver.disconnect();
+            listeners.abort();
+          }
+        },
+        listenerOptions,
+      );
+      render();
+    }
+  }
+</script>

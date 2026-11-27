@@ -2,181 +2,158 @@ import type { HomeContent } from './home.types';
 
 export const homeVi: HomeContent = {
   locale: 'vi',
+  downloadCta: 'Tải cho Windows',
   seo: {
-    title: 'Sky Auto Player — Trình phát nhạc Sky tự động trên Windows',
+    title: 'Sky Auto Player — Trình phát sheet nhạc Sky trên Windows 11',
     description:
-      'Nạp sheet nhạc Sky và phát nốt, hợp âm cùng nốt ngân đúng nhịp — căn theo mô hình timing của sheet và bù độ trễ phía gửi, không phải phát lại macro.',
+      'Trình phát sheet nhạc miễn phí, mã nguồn mở cho Sky trên Windows 11. Dùng sheet của bạn hoặc chọn bài từ thư viện tích hợp.',
   },
   navigation: {
-    playback: 'Phát nhạc',
-    howItWorks: 'Cách hoạt động',
-    technical: 'Kỹ thuật',
+    overview: 'Sản phẩm',
+    howItWorks: 'Bắt đầu',
     guides: 'Hướng dẫn',
     faq: 'FAQ',
     github: 'GitHub',
+    release: 'Tải xuống',
   },
   hero: {
-    kicker: 'Sky Auto Player cho Sky: Children of the Light · Windows 10/11',
-    titleLines: ['Chơi bản nhạc,', 'không chơi bàn phím.'],
+    eyebrow: 'Miễn phí và mã nguồn mở',
+    titleStart: 'Âm nhạc của bạn.',
+    titleEnd: 'Trong Sky.',
     description:
-      'Nạp một sheet nhạc Sky, chuyển sang game và để từng nốt, hợp âm cùng nốt ngân rơi đúng nhịp — lên lịch theo mô hình timing của sheet và bù độ trễ phía gửi, chứ không chỉ gửi phím tuần tự.',
-    primaryCta: 'Tải xuống cho Windows',
-    secondaryCta: 'Xem cách hoạt động',
-    metadata: ['JSON', 'SKYSHEET', 'TXT', 'MÃ NGUỒN MỞ', 'TAURI NSIS', 'CURRENT USER'],
-    riskNote: 'Tự động phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky.',
-    riskNoteLink: 'Hãy dùng có trách nhiệm và tự chịu rủi ro.',
-    affiliationDisclaimer:
-      'Dự án cộng đồng không chính thức. Không có liên kết hay sự chứng thực từ thatgamecompany.',
+      'Tự động chơi nhạc trong Sky: Children of the Light từ bài có sẵn hoặc sheet nhạc của bạn.',
+    secondaryCta: 'Bắt đầu',
+    meta: 'Windows 11 64-bit · GitHub Releases',
+    riskNote:
+      'Dự án không chính thức. Tự động phát nhạc có thể xung đột với Điều khoản Dịch vụ của Sky.',
   },
-  proofStrip: {
-    kicker: 'Hồ sơ trình diễn',
-    metric: 'SENDINPUT BATCH / MỤC TIÊU 60 FPS',
-    signals: [
-      'Nốt trong hợp âm được gửi trong cùng một batch SendInput — giảm độ lệch phía gửi',
-      'Ứng dụng thích nghi theo độ trễ hoàn tất phía gửi đo được trên từng máy',
-      'Nốt ngân giữ đủ trường độ, không bị cắt ngang',
-      'Phát nhạc và giao diện chạy rời rành — HUD vẫn mượt',
+  product: {
+    title: 'Khám phá trình phát',
+    selectorLabel: 'Chọn giao diện trình phát',
+    fullSizeLabel: 'Xem ảnh đầy đủ',
+    fallbackLabel: 'Mở giao diện trình phát khác',
+    pendingMessage: 'Đang tải ảnh xem trước…',
+    errorMessage: 'Không tải được ảnh xem trước. Hãy thử lại hoặc mở ảnh trực tiếp.',
+    captureNote:
+      'Giao diện minh họa · Dữ liệu mẫu · Mô phỏng trong trình duyệt, không phải ảnh chụp ứng dụng',
+    features: [
+      {
+        title: 'Dùng bản nhạc của riêng bạn',
+        description:
+          'Nhập tệp hoặc thư mục chứa sheet nhạc tương thích vào danh sách phát. Các tệp gốc vẫn ở nguyên vị trí.',
+      },
+      {
+        title: 'Kiểm tra trước khi phát',
+        description:
+          'Kiểm tra khả năng tương thích của sheet, chọn bè nhạc hoặc cao độ khi được hỗ trợ và xem những phần có thể bị mất khi chuyển đổi.',
+      },
+    ],
+    views: [
+      {
+        label: 'Thư viện',
+        alt: 'Ảnh xem trước bằng browser mock của thư viện bài hát desktop với bài hát mẫu và thanh bên danh sách phát.',
+        caption: 'Tìm bài trong thư viện, lưu bài yêu thích và sắp xếp danh sách phát.',
+        src: '/assets/images/desktop-library-browser-preview-1366x768.png',
+      },
+      {
+        label: 'Chi tiết bài',
+        alt: 'Ảnh xem trước bằng browser mock của bài hát mẫu đã chọn và chi tiết sheet trên giao diện desktop.',
+        caption: 'Kiểm tra khả năng tương thích trước khi phát. Ảnh minh họa đang chọn Blue Bird.',
+        src: '/assets/images/desktop-song-detail-browser-preview-1366x768.png',
+      },
+      {
+        label: 'Thiết lập phát',
+        alt: 'Ảnh xem trước bằng browser mock của thiết lập phát nhạc desktop với dữ liệu mẫu.',
+        caption: 'Điều chỉnh tùy chọn mặc định và thời gian giữ phím.',
+        src: '/assets/images/desktop-settings-playback-browser-preview-1366x768.png',
+      },
     ],
   },
   playback: {
-    kicker: 'Được xây dựng quanh bản nhạc',
-    title: 'Timing cũng là một phần của nhạc cụ.',
+    kicker: 'Điều khiển phát nhạc',
+    demoTitle: 'Minh họa phát nhạc',
+    title: 'Chủ động với nhịp điệu.',
     description:
-      'Sheet nhạc không chỉ là một danh sách phím. Hợp âm phải vang cùng lúc, đoạn nhanh cần khoảng cách ổn định và nốt ngân phải giữ đủ trường độ. Sky Auto Player lên lịch các sự kiện âm nhạc như một màn trình diễn thay vì phát lại một macro chung chung. Timing được đo tại ranh giới hoàn tất phía gửi — không phụ thuộc vào thời điểm game nhận phím hoặc phát âm thanh.',
-    points: [
-      'Nốt trong hợp âm trong một batch SendInput',
-      'Phát theo tempo',
-      'Nốt, hợp âm và nốt ngân',
-      'Độ trễ phía gửi tự học theo từng máy',
-      'Phát nhạc và HUD chạy trên hai luồng riêng',
-      'Xem thử bằng dry-run',
-    ],
+      'Phát nốt đơn, hợp âm và nốt ngân theo sheet nhạc. Tùy chỉnh tốc độ và thời gian giữ phím.',
+    dryRunTitle: 'Chạy thử trước khi chơi',
+    dryRunNote: 'Trong ứng dụng desktop, Test playback (no input) chạy thử mà không gửi phím.',
+    eventTypes: { chord: 'Hợp âm', note: 'Nốt đơn', hold: 'Nốt ngân' },
+    controlsLabel: 'Điều khiển minh họa phát nhạc',
+    play: 'Chạy minh họa',
+    resume: 'Tiếp tục',
+    pause: 'Tạm dừng',
+    replay: 'Phát lại',
+    previous: 'Sự kiện trước',
+    next: 'Sự kiện tiếp theo',
+    progressLabel: 'Tiến trình đoạn nhạc',
+    keyboardLabel: 'Phím',
+    initialStatus: 'Sẵn sàng. Đoạn nhạc gồm một hợp âm, một nốt đơn và một nốt ngân.',
+    playingStatus: 'Đang phát',
+    pausedStatus: 'Đã tạm dừng',
+    completeStatus: 'Đã phát xong. Không có phím nào đang hoạt động.',
+    manualOnly: 'Đang bật giảm chuyển động. Dùng nút Trước và Tiếp để chuyển từng phần.',
+    demoNote: 'Minh họa 2,6 giây, không có âm thanh và không đo thời điểm gửi phím trong game.',
+    timingLinkLabel: 'Cách tính thời gian phát',
+    secondsAbbreviation: 'giây',
   },
-  comparison: {
-    kicker: 'Không phải macro chung chung',
-    title: 'Xây cho âm nhạc, không phải chuỗi click.',
-    macroHeader: 'Macro thông thường',
-    playerHeader: 'Sky Auto Player',
-    rows: [
-      { macro: 'Gửi phím tuần tự', player: 'Hợp âm được căn vào cùng một frame gửi' },
-      { macro: 'Độ trễ cố định', player: 'Timing đi theo sheet và tempo' },
-      { macro: 'Chủ yếu giả định bấm-thả', player: 'Hỗ trợ nốt, hợp âm và nốt ngân' },
-      { macro: 'Một cấu hình dùng cho mọi bài', player: 'Profile timing riêng cho từng bài' },
-      {
-        macro: 'Độ trễ cố định, một loại cho mọi máy',
-        player: 'Tự học độ trễ máy bạn rồi bù trước',
-      },
-      { macro: 'HUD giật khi bận', player: 'Phát nốt và giao diện chạy trên hai luồng riêng' },
-    ],
-  },
-  product: {
-    kicker: 'Ứng dụng thực tế',
-    title: 'Thư viện, profile timing và điều khiển trong cùng một giao diện.',
-    description:
-      'Ứng dụng desktop Tauri giữ việc tìm kiếm, thiết lập phát và trạng thái trong một cửa sổ tập trung.',
-    annotations: [
-      'Tìm và chọn bài trong Library desktop.',
-      'Xem rủi ro timing và đề xuất trong Song Detail.',
-      'Luôn có sẵn playback, diagnostics và settings.',
-    ],
-  },
-  steps: {
-    kicker: 'Ba bước',
-    title: 'Từ tải xuống đến phát nhạc chỉ trong vài phút.',
+  quickStart: {
+    eyebrow: 'Bắt đầu sử dụng',
+    title: 'Từ sheet đến bản nhạc.',
+    description: 'Cài đặt trình phát, chọn bản nhạc và chơi trong Sky chỉ với ba bước.',
     items: [
       {
-        title: 'Tải xuống',
-        description:
-          'Tải installer Tauri NSIS canonical từ trang GitHub Releases chính thức của Sky Auto Player và cài đặt cho current user.',
+        title: 'Cài đặt ứng dụng',
+        description: 'Tải bộ cài Windows ổn định từ GitHub Releases chính thức.',
       },
       {
-        title: 'Thêm sheet nhạc',
-        description:
-          'Xuất sheet dạng JSON, .skysheet hoặc TXT tương thích từ Sky Music editor rồi nhập qua Library desktop.',
+        title: 'Chọn bản nhạc',
+        description: 'Chọn bài từ thư viện có sẵn hoặc nhập sheet nhạc tương thích.',
       },
       {
-        title: 'Phát nhạc',
+        title: 'Phát nhạc trong Sky',
         description:
-          'Mở Sky Auto Player, chọn bài hát rồi chuyển sang cửa sổ Sky khi bạn đã sẵn sàng.',
+          'Mở nhạc cụ 15 phím tương thích trong Sky. Chọn bài, nhấn Play trong ứng dụng rồi chuyển lại cửa sổ Sky.',
       },
     ],
-    hotkeyNote:
-      'Nhấn Reload songs trong GUI · / hoặc Ctrl+F để focus tìm kiếm · Esc đóng overlay an toàn',
+    setupGuideLabel: 'Đọc hướng dẫn cài đặt',
+    setupGuideHref: '/vi/guides/windows-setup/',
+    formatsLabel: 'Định dạng sheet hỗ trợ',
+    formats: ['.json', '.skysheet', '.txt'],
+    formatsNote: 'Tệp TXT phải chứa dữ liệu JSON tương thích.',
+    formatsLinkLabel: 'Xem hướng dẫn định dạng',
+    formatsHref: '/vi/guides/sheet-formats/',
   },
-  technical: {
-    kicker: 'Giới hạn kỹ thuật',
-    title: 'Rõ ràng về những gì ứng dụng làm và không làm.',
-    description:
-      'Sky Auto Player chạy như một ứng dụng Windows độc lập và gửi các sự kiện đầu vào tiêu chuẩn. Mã nguồn được công khai để mọi người có thể trực tiếp kiểm tra cách triển khai.',
-    ledger: [
-      { term: 'Đầu vào', definition: 'Windows SendInput', state: 'yes' },
-      { term: 'Tiến trình', definition: 'Ứng dụng độc lập', state: 'info' },
-      { term: 'Bộ nhớ game', definition: 'Không được đọc/kiểm tra', state: 'no' },
-      { term: 'Inject code', definition: 'Không sử dụng', state: 'no' },
-      { term: 'File game', definition: 'Không sửa đổi', state: 'no' },
-      { term: 'Giấy phép', definition: 'GNU GPL v3.0', state: 'info' },
+  trust: {
+    title: 'Sẵn sàng chơi nhạc?',
+    platformSummary: 'Windows 11 64-bit · Miễn phí, mã nguồn mở',
+    releaseLinkLabel: 'Xem bản phát hành ổn định',
+    releaseDestinationNote: 'Mở GitHub Releases',
+    installationTitle: 'Chọn đúng bộ cài',
+    installerGuidance: 'Chọn bộ cài Windows ổn định có tên kết thúc bằng',
+    installerSuffix: '_x64-setup.exe',
+    signatureNote: 'Tệp .exe.sig dành cho trình cập nhật, không cần khi cài thủ công.',
+    installScope: 'Cài đặt cho tài khoản Windows hiện tại.',
+    signingValue:
+      'Bộ cài không có chữ ký Authenticode; Windows có thể hiển thị Unknown Publisher hoặc SmartScreen.',
+    safetyNote: 'Ứng dụng gửi phím qua Windows SendInput.',
+    safetyBoundary: 'Không đọc bộ nhớ hoặc sửa tệp game.',
+    safetyRisk: 'Cách này không bảo đảm an toàn tài khoản.',
+    safetyTitle: 'An toàn tài khoản',
+    safetyLink: 'Đọc về rủi ro tài khoản',
+    supportLabel: 'Bạn cần trợ giúp?',
+    supportDescription:
+      'Tìm câu trả lời trước khi chơi hoặc khắc phục sự cố để tiếp tục phát nhạc.',
+    supportLinks: [
       {
-        term: 'Cập nhật',
-        definition: 'Trình cập nhật riêng có xác minh checksum',
-        state: 'info',
+        label: 'Câu hỏi thường gặp',
+        description: 'Cài đặt, định dạng, tương thích và an toàn tài khoản.',
+        href: '/vi/faq/',
+      },
+      {
+        label: 'Khắc phục sự cố phát nhạc',
+        description: 'Xử lý lỗi phát nhạc, thời gian phát và gửi phím.',
+        href: '/vi/guides/troubleshooting/',
       },
     ],
-    notice:
-      'Điều khoản Dịch vụ: Các giới hạn kỹ thuật trên không bảo đảm an toàn cho tài khoản. Tự động phát nhạc vẫn có thể xung đột với Điều khoản Dịch vụ của Sky. Hãy dùng công cụ có trách nhiệm và tự chịu rủi ro.',
-  },
-  formats: {
-    kicker: 'Sheet được hỗ trợ',
-    title: 'Nạp các định dạng cộng đồng đang sử dụng.',
-    items: [
-      {
-        extension: '.json',
-        name: 'JSON',
-        description:
-          'Sheet JSON có cấu trúc, chứa sự kiện âm nhạc và metadata mà trình phát hỗ trợ.',
-        tags: 'NỐT · HỢP ÂM · NGÂN',
-      },
-      {
-        extension: '.skysheet',
-        name: 'Skysheet',
-        description:
-          'Sheet dựa trên JSON với phần mở rộng .skysheet từ hệ sinh thái trình soạn nhạc Sky.',
-        tags: 'SHEET EXPORT',
-      },
-      {
-        extension: '.txt',
-        name: 'TXT tương thích JSON',
-        description: 'File văn bản thuần chứa cấu trúc sheet tương thích JSON.',
-        tags: 'VĂN BẢN THUẦN',
-      },
-    ],
-  },
-  faqPreview: {
-    kicker: 'Trước khi tải',
-    title: 'Một vài câu trả lời hữu ích.',
-    readMoreLink: 'Đọc toàn bộ FAQ',
-    items: [
-      {
-        question: 'Sky Auto Player có miễn phí và mã nguồn mở không?',
-        href: '/vi/faq/#free',
-      },
-      {
-        question: 'Hỗ trợ những định dạng sheet nào?',
-        href: '/vi/faq/#formats',
-      },
-      {
-        question: 'Việc dùng tool có ảnh hưởng tài khoản Sky không?',
-        href: '/vi/faq/#account-safety',
-      },
-    ],
-    guideLinks: [
-      { label: 'Sky Auto Player hoạt động như thế nào', href: '/vi/guides/how-it-works/' },
-      { label: 'Xử lý sự cố thường gặp', href: '/vi/guides/troubleshooting/' },
-    ],
-  },
-  finalCta: {
-    title: 'Màn trình diễn tiếp theo đã nằm sẵn trong sheet.',
-    description: 'Tải Sky Auto Player, thêm một sheet và để ứng dụng xử lý phần timing.',
-    primaryCta: 'Xem các bản phát hành',
-    secondaryCta: 'Xem mã nguồn trên GitHub',
   },
 };

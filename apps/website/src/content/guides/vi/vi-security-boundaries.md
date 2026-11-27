@@ -11,7 +11,7 @@ summary: >-
 category: technical-safety
 order: 1
 published: '2026-08-08'
-updated: '2026-11-18'
+updated: '2026-11-26'
 draft: false
 related:
   - how-it-works
@@ -28,12 +28,9 @@ evidence:
 
 ## Tóm tắt
 
-Sky Auto Player gửi phím gameplay qua Windows SendInput API công khai.
-Phần mềm không đọc hay sửa bộ nhớ hoặc file game, không inject code, không
-cài keyboard/input hook, không attach debugger và không bypass anti-cheat.
+Sky Auto Player gửi musical packet qua Windows SendInput chỉ sau khi kiểm tra mới foreground và identity của target đã giữ. Phần mềm không đọc hay sửa bộ nhớ hoặc file game, không inject code, không cài keyboard/input hook, không attach debugger và không bypass anti-cheat.
 
-Foreground event callback đã được audit chỉ phát hint để kiểm tra lại target
-hiện tại. Callback không thể cấp quyền gửi phím.
+Foreground event callback đã được audit chỉ phát hint để kiểm tra lại target hiện tại; callback không thể cấp quyền gửi. Safety cleanup có giới hạn có thể thử nhả riêng các phím đã ghi trong journal.
 
 ## Chính sách chính thức
 

@@ -28,10 +28,9 @@ const requiredStaticFiles = [
   'assets/sky-auto-player-mark-mono.svg',
   'assets/sky-auto-player-mark-no-bg.svg',
   'assets/og-banner.jpg',
-  'assets/images/library-real-tauri.png',
-  'assets/images/minimum-real-tauri.png',
-  'assets/images/detail-real-tauri.png',
-  'assets/images/settings-real-tauri.png',
+  'assets/images/desktop-library-browser-preview-1366x768.png',
+  'assets/images/desktop-song-detail-browser-preview-1366x768.png',
+  'assets/images/desktop-settings-playback-browser-preview-1366x768.png',
   'assets/images/og-banner.jpg',
 ];
 
@@ -58,10 +57,9 @@ for (const alias of COMPATIBILITY_ALIASES) {
 }
 
 for (const image of [
-  'assets/images/library-real-tauri.png',
-  'assets/images/minimum-real-tauri.png',
-  'assets/images/detail-real-tauri.png',
-  'assets/images/settings-real-tauri.png',
+  'assets/images/desktop-library-browser-preview-1366x768.png',
+  'assets/images/desktop-song-detail-browser-preview-1366x768.png',
+  'assets/images/desktop-settings-playback-browser-preview-1366x768.png',
 ]) {
   const bytes = statSync(resolve(dist, image)).size;
   if (bytes > 400_000) {

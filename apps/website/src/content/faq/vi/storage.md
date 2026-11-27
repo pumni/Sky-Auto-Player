@@ -8,4 +8,4 @@ question: 'Log và config của Sky Auto Player được lưu ở đâu?'
 
 Settings, cache, dữ liệu library và trạng thái calibration nằm trong vùng app-data tại
 `%LOCALAPPDATA%\io.github.pumni.skyautoplayer\`. Log ứng dụng được ghi tại thư mục con `logs\`.
-Vùng này tách biệt hoàn toàn khỏi thư mục cài đặt ứng dụng và được bảo toàn qua các bản cập nhật.
+Vùng này tách biệt hoàn toàn khỏi thư mục cài đặt ứng dụng và được bảo toàn qua các bản cập nhật. Sheet được nhập tham chiếu đến file gốc và file sẽ ở nguyên vị trí cho đến khi bạn tự di chuyển hoặc xóa.

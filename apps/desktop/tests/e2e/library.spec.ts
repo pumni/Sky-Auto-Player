@@ -2851,7 +2851,7 @@ test('F3.3 collapsed rail directly lists playlists and scrolls only its playlist
     await page.keyboard.press('Tab');
   }
   await expect(lastTile).toBeFocused();
-  await expect(page.getByRole('tooltip')).toHaveText(lastName);
+  await expect(page.getByRole('tooltip')).toHaveText([lastName]);
   const focusedScrollTop = await scroller.evaluate((element) => element.scrollTop);
   expect(focusedScrollTop).toBeGreaterThan(0);
   await page.keyboard.press('Enter');

@@ -4,14 +4,13 @@ locale: vi
 slug: windows-setup
 title: Cài Đặt Windows và Lần Khởi Động Đầu Tiên
 description: >-
-  Hướng dẫn từng bước cài đặt Sky Auto Player trên Windows 11: tải installer Tauri,
-  cài đặt, thêm bài hát và cấu hình hotkey.
+  Hướng dẫn cài đặt Sky Auto Player trên Windows 11, nhập sheet và tìm playback profile cùng các điều khiển desktop.
 summary: >-
   Tải installer Tauri NSIS canonical, cài cho current user và nhập sheet qua Library desktop.
 category: getting-started
 order: 3
 published: '2026-08-08'
-updated: '2026-11-18'
+updated: '2026-11-26'
 draft: false
 related:
   - sheet-formats
@@ -35,33 +34,34 @@ evidence:
 
 ## Tải xuống và cài đặt
 
-1. Vào [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases).
-2. Tải installer Tauri NSIS canonical và sidecar `.exe.sig`.
+1. Vào [trang GitHub Releases chính thức của Sky Auto Player](https://github.com/pumni/Sky-Auto-Player/releases/latest).
+2. Tải installer Tauri NSIS canonical. Sidecar `.exe.sig` dành cho in-app updater, không cần khi cài thủ công.
 3. Chạy installer và giữ vị trí current-user mặc định.
 4. Mở **Sky Auto Player** từ shortcut đã cài.
 
 ## Lần khởi động đầu tiên
 
-Lần đầu khởi động, ứng dụng tạo dữ liệu trong vùng app-data của user. Bạn không cần chỉnh sửa
-thủ công — mọi cài đặt được hỗ trợ đều có trong hộp thoại **Settings**.
+Lần đầu khởi động, ứng dụng tạo dữ liệu trong vùng app-data của user. Bạn không cần chỉnh sửa thủ công. **Settings** quản lý các tùy chọn chung của ứng dụng, bao gồm playback defaults. **Playback profile** trong Player Dock giúp truy cập nhanh **Base Hold**, **Tempo** và **Advanced timing** (FPS và timing margin).
 
-Installer canonical được xác minh Authenticode. Nếu Windows báo lỗi integrity hoặc publisher,
-hãy xóa file và tải lại từ trang GitHub Releases chính thức.
+Installer canonical hiện chưa được ký Authenticode theo chính sách đang áp dụng. Windows có thể hiển thị Unknown Publisher hoặc cảnh báo SmartScreen. Chỉ tải từ trang GitHub Releases chính thức. Tauri updater xác minh sidecar .exe.sig riêng; sidecar này không cần cho cài đặt thủ công.
 
 ## Thêm bài hát
 
 1. Export sheet từ [Sky Music editor](https://specy.github.io/skyMusic/) dưới dạng JSON, `.skysheet`, hoặc TXT.
-2. Nhập file qua Library desktop.
-3. Dùng nút refresh của Library nếu file được thêm từ trình chọn file bên ngoài.
+2. Tạo hoặc chọn playlist, rồi dùng **Add songs** để nhập file hoặc thư mục chứa file.
+3. File được nhập vẫn ở vị trí gốc; ứng dụng không di chuyển hay xóa chúng.
+
+Để phát nhạc, hãy mở nhạc cụ 15 phím tương thích trong Sky. Chọn bài trong Sky Auto Player rồi nhấn **Play**. Đưa tiêu điểm về cửa sổ Sky và giữ ở đó khi phát.
 
 ## Phím tắt desktop
 
-| Phím tắt | Hành động                    |
-| -------- | ---------------------------- |
-| `/`      | Focus ô tìm kiếm bài         |
-| `Ctrl+F` | Focus ô tìm kiếm bài         |
-| `Esc`    | Đóng overlay an toàn đang mở |
-| `q`      | Không thoát desktop GUI      |
+| Phím tắt | Hành động            |
+| -------- | -------------------- |
+| /        | Focus ô tìm kiếm bài |
+| Ctrl+F   | Focus ô tìm kiếm bài |
+| Ctrl+,   | Mở Settings          |
+| Ctrl+I   | Bật/tắt Inspector    |
+| Esc      | Đóng overlay đang mở |
 
 ## Cập nhật
 

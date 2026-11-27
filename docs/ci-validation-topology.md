@@ -130,17 +130,11 @@ runtime. New Tauri runtime adapters must be added to the explicit owner set.
   directly from that directory, and deployed as the exact validated Pages
   artifact.
 
-The website owns a committed snapshot of the latest verified public stable
-release in `apps/website/src/data/product-release.json`. Its metadata parser requires
-exact `MAJOR.MINOR.PATCH` with no prerelease or build metadata, plus the matching
-`v`-prefixed tag; Astro embeds that snapshot without reading the
-desktop Cargo manifest or calling Cargo, Tauri, or a release API. Site CI,
-local checks/builds, and manual Pages recovery invoke their Bun/Astro commands
-directly, without version synchronization pre-hooks. CI validates the
-metadata, site checks, build, output, SEO, and functional contracts; manual
-Pages recovery verifies the built output and SEO before deployment. Refresh
-the snapshot manually after a stable release is publicly published; see
-[`apps/website/README.md`](../apps/website/README.md#published-application-version).
+Site CI and local builds invoke Bun/Astro directly. The website embeds stable
+download and release history destinations without reading desktop version
+metadata or calling a release API. CI validates the build, output, SEO, and
+functional contracts. Manual Pages recovery verifies the built output and
+SEO before deployment. See the [website release policy](../apps/website/README.md#release-destinations).
 
 ## Deliberate non-deduplication
 
