@@ -59,9 +59,10 @@ Prepare reports two independent diagnostic signals:
   attributed Up slot, shared across all three scenarios. Preparation and
   other bounded scans are not individual work units: the timestamp-group scan
   is linear in the canonical chord count with cancellation checkpoints; after
-  the 50,000-generation admission limit, each scenario has at most `4G + 2`
-  executor iterations and at most `G` Down and Up slots each (`G` is the
-  generation count). The memory limit is checked separately. These scenarios are diagnostic only:
+  the 50,000-generation admission limit, each scenario has at most `4N + 2`
+  executor iterations and at most `N` Down and Up slots each (`N` is the
+  generation count). The memory limit is checked separately. These scenarios
+  are diagnostic only:
   they are not measured `SendInput` latency, do not change admission, schedule
   timing, or playback, and do not predict game observation.
 

@@ -79,13 +79,14 @@ export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
           <span>
             Reference ({reference.estimated_sender_setup_us}+{reference.estimated_per_input_us}
             /ev+{reference.estimated_post_send_us} µs): max Down lateness{' '}
-            {reference.max_modeled_down_lateness_us} µs (independent component maxima: key readiness{' '}
+            {reference.max_modeled_down_lateness_us} µs (key readiness{' '}
             {reference.max_modeled_key_readiness_displacement_us} µs · cursor-order{' '}
             {reference.max_modeled_cursor_order_displacement_us} µs · worker occupancy{' '}
             {reference.max_modeled_worker_occupancy_residual_us} µs) · max Up H-floor{' '}
             {reference.max_modeled_h_floor_displacement_us} µs
           </span>
         )}
+        {reference && <span>Component maxima are independent across chords.</span>}
         {stress && (
           <span>
             Stress ({stress.estimated_sender_setup_us}+{stress.estimated_per_input_us}/ev+
@@ -104,10 +105,9 @@ export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
         </summary>
         <span className="mt-1 block">{advisory.model_cost_disclaimer}</span>
         <span className="mt-1 block">
-          The advisory reports canonical Down generations and nominal same-key scheduling slack
-          (I - H). Its illustrative execution scenarios reuse the production DispatchExecutor and
-          do not model receiver observation or change authored timing, hold, tempo, admission, or
-          playback.
+          The advisory reports canonical Down generations and nominal same-key scheduling slack (I -
+          H). Its illustrative execution scenarios reuse the production DispatchExecutor and do not
+          model receiver observation or change authored timing, hold, tempo, admission, or playback.
         </span>
         <span className="mt-1 block">
           Bounds: {advisory.generation_limit} generations, {advisory.work_limit_units} work units,

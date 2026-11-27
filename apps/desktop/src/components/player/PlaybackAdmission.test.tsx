@@ -66,7 +66,7 @@ describe('PlaybackAdmission recovery actions', () => {
       'Bounds: 50000 generations, 3000000 work units, and 64 MiB working memory.',
     );
     expect(container.querySelector('[data-plan-fingerprint="mock-plan"]')).toHaveTextContent(
-      'independent component maxima:',
+      'Component maxima are independent across chords.',
     );
     expect(screen.getAllByRole('button')).toHaveLength(3);
     const proceedButton = screen.getByRole('button', { name: 'Proceed with current settings' });
