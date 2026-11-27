@@ -94,7 +94,8 @@ The aggregate reported PASS for repository/app boundaries, docs integrity, archi
 The xtask aggregate suppresses successful child-test output, so its transcript did not retain exact counts for each Rust, shell, frontend, or browser suite. To record Rust discovery without running tests, this command used a separate ignored target directory:
 
 ```text
-CARGO_TARGET_DIR=rust/target/check-all-rust-tests node scripts/toolchain-pin.mjs exec -- cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked -- --list
+$env:CARGO_TARGET_DIR = 'rust/target/check-all-rust-tests'
+node scripts/toolchain-pin.mjs exec -- cargo test --manifest-path rust/Cargo.toml --workspace --all-features --locked -- --list
 exit: 0
 duration: 52.83 s
 result: 30 harnesses, 1,502 listed test entries, 0 benchmarks
