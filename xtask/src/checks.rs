@@ -31,6 +31,7 @@ pub(crate) const STATIC_LEAF_CHECKS: &[&str] = &[
     "architecture",
     "security",
     "tauri-feature-contract",
+    "tauri-locked-build-contract",
     "supply-chain",
     "branding",
     "tauri-config",
@@ -781,6 +782,11 @@ fn run_rust_group(session: &mut CheckSession) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_check_inventory_includes_locked_tauri_builder_contract() {
+        assert!(STATIC_LEAF_CHECKS.contains(&"tauri-locked-build-contract"));
+    }
 
     #[test]
     fn check_session_reuses_only_a_successful_verification() {
