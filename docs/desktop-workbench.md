@@ -253,6 +253,28 @@ and its neutral selected (`#E4E5E7`) and playing (`#EDF0F4`) surfaces remain dis
 palettes and Light appearance are checked against the semantic role pairs in
 `apps/desktop/tests/e2e/theme-accessibility.spec.ts`.
 
+## Global Search
+
+`apps/desktop/src/components/chrome/GlobalSearch.tsx` owns the title-bar search composite. It keeps
+`type="search"`, the labelled searchbox, one custom accessible Clear button, and the existing
+search action/store authority. `globals.css` hides WebKit's native search cancel button only under
+`[data-slot='global-search']`. The custom button appears only for a nonempty draft. Clearing cancels
+the pending 120 ms typed debounce, immediately requests the empty query when the committed
+query is nonempty, and restores focus to the input whether or not the optional title-bar ref is passed.
+The store publishes the committed query synchronously before awaiting the bridge and owns request
+generation fencing. The component owns only the uncommitted draft and debounce; query or scope
+changes cancel queued typing, and request completion never writes the draft.
+
+The search composite uses the shared decorative `--border` at rest and `--overlay-border` on
+hover or focus within. The magnifier and visible search placeholder/value identify the control
+independently of the decorative perimeter. Normal appearance tests must verify rendered search
+icon contrast of at least 3:1 and text/placeholder contrast of at least 4.5:1. Focus within retains
+the 2 px `--ring` outline with the existing offset and at least 3:1 contrast against adjacent chrome,
+rather than a second bright border. Forced colors retain system CanvasText boundaries and Highlight
+focus. Generic input controls retain `--input` and their existing contrast requirements. This
+search-specific contract follows WCAG 2.2 SC 1.4.11's distinction between essential indicators and
+decorative boundaries; it is not a general exemption for input borders.
+
 Text contrast checks use 4.5:1 and essential non-text/focus checks use 3:1. The browser tests also
 check distinct selected/playing row surfaces, forced-colors focus, and reduced-motion overlay
 behavior. They use Chromium media emulation and computed styles; they do not sample every screenshot

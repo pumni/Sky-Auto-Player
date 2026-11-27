@@ -89,14 +89,14 @@ export function App({ bridge }: AppProps) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (typeof event.key !== 'string') return;
+      const normalizedKey = event.key.toLowerCase();
       const hasActiveModal = document.querySelector('[aria-modal="true"]') !== null;
-      const isFindShortcut = event.key.toLowerCase() === 'f' && event.ctrlKey;
+      const isFindShortcut = normalizedKey === 'f' && event.ctrlKey;
       const hasPlainControlModifier = event.ctrlKey && !event.metaKey && !event.altKey;
       const isSettingsShortcut = event.key === ',' && hasPlainControlModifier;
       const isInspectorShortcut =
-        event.key.toLowerCase() === 'i' &&
-        hasPlainControlModifier &&
-        !isEditableTarget(event.target);
+        normalizedKey === 'i' && hasPlainControlModifier && !isEditableTarget(event.target);
       const isSlashShortcut =
         event.key === '/' &&
         !event.ctrlKey &&

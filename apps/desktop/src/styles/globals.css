@@ -490,6 +490,13 @@ html[data-color-mode='light'] {
   }
 }
 
+/* Keep the browser cancel affordance from duplicating GlobalSearch's accessible Clear button. */
+[data-slot='global-search'] input[type='search']::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
 @media (forced-colors: active) {
   :root:root {
     color-scheme: light dark;

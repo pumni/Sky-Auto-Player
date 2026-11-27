@@ -285,6 +285,16 @@ describe('desktop application shell', () => {
     expect(document.activeElement).toBe(search);
   });
 
+  it('ignores a malformed keydown event without a string key', async () => {
+    render(<App bridge={createMockBridge()} />);
+    await screen.findByRole('searchbox');
+
+    const malformed = new Event('keydown') as KeyboardEvent;
+    Object.defineProperty(malformed, 'key', { value: undefined });
+
+    expect(() => window.dispatchEvent(malformed)).not.toThrow();
+  });
+
   it('does not prevent slash input in an editable control', async () => {
     render(<App bridge={createMockBridge()} />);
     const search = await screen.findByRole('searchbox');

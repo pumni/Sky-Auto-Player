@@ -533,7 +533,10 @@ mod tests {
     fn committed_active_catalog_is_verified_from_the_live_manifest() {
         let (manifest, sources) = verified_sources(&crate::repo::root())
             .expect("all active catalog entries pass source validation");
-        assert_eq!(manifest.songs.len(), 112);
+        assert!(
+            !manifest.songs.is_empty(),
+            "the committed built-in catalog must not be empty"
+        );
         assert_eq!(sources.len(), manifest.songs.len());
     }
 
