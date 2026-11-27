@@ -162,6 +162,184 @@ pub(super) fn tauri_feature_contract(root: &Path) -> Result<()> {
     Ok(())
 }
 
+fn validate_tauri_inner_cargo_args(
+    args: &[String],
+    surface: &str,
+) -> std::result::Result<(), String> {
+    let separator = args
+        .iter()
+        .position(|argument| argument == "--")
+        .ok_or_else(|| format!("{surface} is missing Tauri's Cargo argument separator"))?;
+    if !args[..separator]
+        .windows(2)
+        .any(|pair| pair[0] == "tauri" && pair[1] == "build")
+    {
+        return Err(format!("{surface} does not invoke `tauri build`"));
+    }
+    if args[..separator]
+        .iter()
+        .any(|argument| argument == "--locked")
+    {
+        return Err(format!(
+            "{surface} places `--locked` before Tauri's Cargo separator"
+        ));
+    }
+    let cargo_args = &args[separator + 1..];
+    let locked_count = cargo_args
+        .iter()
+        .filter(|argument| argument.as_str() == "--locked")
+        .count();
+    if locked_count != 1 {
+        return Err(format!(
+            "{surface} must pass exactly one `--locked` to Cargo after Tauri's separator"
+        ));
+    }
+    if !cargo_args
+        .windows(2)
+        .any(|pair| pair[0] == "--profile" && pair[1] == "dist")
+    {
+        return Err(format!(
+            "{surface} must preserve the `dist` Cargo profile after Tauri's separator"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_tauri_shell_command(command: &str, surface: &str) -> std::result::Result<(), String> {
+    let args = command
+        .split_whitespace()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    validate_tauri_inner_cargo_args(&args, surface)
+}
+
+fn rust_string_array_arguments(
+    source: &str,
+    function_marker: &str,
+    array_marker: &str,
+    array_end: &str,
+    surface: &str,
+) -> std::result::Result<Vec<String>, String> {
+    let function = source
+        .find(function_marker)
+        .map(|position| &source[position..])
+        .ok_or_else(|| format!("{surface} source function is missing"))?;
+    let array = function
+        .split_once(array_marker)
+        .map(|(_, remaining)| remaining)
+        .ok_or_else(|| format!("{surface} argument array is missing"))?;
+    let body = array
+        .split_once(array_end)
+        .map(|(body, _)| body)
+        .ok_or_else(|| format!("{surface} argument array is not terminated"))?;
+    let args = body
+        .split('"')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if args.is_empty() {
+        return Err(format!("{surface} has no literal command arguments"));
+    }
+    Ok(args)
+}
+
+fn validate_rust_tauri_build(
+    source: &str,
+    function_marker: &str,
+    array_marker: &str,
+    array_end: &str,
+    surface: &str,
+) -> std::result::Result<(), String> {
+    let args =
+        rust_string_array_arguments(source, function_marker, array_marker, array_end, surface)?;
+    validate_tauri_inner_cargo_args(&args, surface)
+}
+
+pub(super) fn tauri_locked_build_contract(root: &Path) -> Result<()> {
+    let package_path = root.join("apps/desktop/package.json");
+    let package = serde_json::from_str::<Value>(&fs::read_to_string(&package_path)?)?;
+    let package_command = package
+        .get("scripts")
+        .and_then(Value::as_object)
+        .and_then(|scripts| scripts.get("tauri:build"))
+        .and_then(Value::as_str)
+        .ok_or("desktop package must define its tauri:build script")?;
+    validate_tauri_shell_command(package_command, "apps/desktop tauri:build")
+        .map_err(|error| format!("{}: {error}", package_path.display()))?;
+
+    let ci_path = root.join(".github/workflows/ci.yml");
+    let ci = fs::read_to_string(&ci_path)?;
+    let ci_builds = ci
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains("bun run tauri build"))
+        .collect::<Vec<_>>();
+    if ci_builds.len() != 2 {
+        return Err(format!(
+            "CI must retain exactly two direct Tauri dist builders; found {}",
+            ci_builds.len()
+        )
+        .into());
+    }
+    for (index, command) in ci_builds.iter().enumerate() {
+        validate_tauri_shell_command(command, &format!("CI Tauri builder {}", index + 1))?;
+    }
+
+    let packaging_docs_path = root.join("docs/v4-tauri-packaging.md");
+    let packaging_docs = fs::read_to_string(&packaging_docs_path)?;
+    let documented_builds = packaging_docs
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.starts_with("bun run tauri build"))
+        .collect::<Vec<_>>();
+    if documented_builds.len() != 1 {
+        return Err(format!(
+            "{} must keep exactly one current Tauri packaging command example; found {}",
+            packaging_docs_path.display(),
+            documented_builds.len()
+        )
+        .into());
+    }
+    validate_tauri_shell_command(documented_builds[0], "v4 Tauri packaging example")?;
+
+    let release_path = root.join("rust/xtask/src/release_v4.rs");
+    let release = fs::read_to_string(&release_path)?;
+    validate_rust_tauri_build(
+        &release,
+        "fn build_unsigned(",
+        "let build_args = vec![",
+        "];",
+        "release_v4::build_unsigned",
+    )
+    .map_err(|error| format!("{}: {error}", release_path.display()))?;
+
+    let credential_path = root.join("rust/xtask/src/credential_cli.rs");
+    let credential = fs::read_to_string(&credential_path)?;
+    validate_rust_tauri_build(
+        &credential,
+        "fn build_candidate(",
+        ".args([",
+        "])",
+        "credential CLI candidate builder",
+    )
+    .map_err(|error| format!("{}: {error}", credential_path.display()))?;
+
+    let fixture_path = root.join("rust/xtask/src/updater_fixture.rs");
+    let fixture = fs::read_to_string(&fixture_path)?;
+    validate_rust_tauri_build(
+        &fixture,
+        "fn build_bridge_internal(",
+        "let build_args = vec![",
+        "];",
+        "updater fixture bridge builder",
+    )
+    .map_err(|error| format!("{}: {error}", fixture_path.display()))?;
+
+    println!("[xtask] Tauri Cargo lock mode: PASS (6 active builders)");
+    Ok(())
+}
+
 fn tauri_build_freshness_contract_manifest(source: &str) -> std::result::Result<(), String> {
     let config = serde_json::from_str::<Value>(source)
         .map_err(|error| format!("invalid Tauri config JSON: {error}"))?;
@@ -565,6 +743,57 @@ tauri-test = ["tauri/test"]
             resolution.dev,
             ["desktop-runtime".to_owned()].into_iter().collect()
         );
+    }
+
+    #[test]
+    fn tauri_builds_pass_locked_once_after_the_cargo_separator() {
+        let valid = [
+            "bun",
+            "run",
+            "tauri",
+            "build",
+            "--ci",
+            "--",
+            "--locked",
+            "--profile",
+            "dist",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        assert!(validate_tauri_inner_cargo_args(&valid, "fixture").is_ok());
+
+        let missing = ["tauri", "build", "--", "--profile", "dist"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        assert!(validate_tauri_inner_cargo_args(&missing, "fixture").is_err());
+
+        let misplaced = ["tauri", "build", "--locked", "--", "--profile", "dist"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        let error = validate_tauri_inner_cargo_args(&misplaced, "fixture").unwrap_err();
+        assert!(error.contains("before Tauri's Cargo separator"));
+
+        let duplicate = [
+            "tauri",
+            "build",
+            "--",
+            "--locked",
+            "--locked",
+            "--profile",
+            "dist",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+        assert!(validate_tauri_inner_cargo_args(&duplicate, "fixture").is_err());
+    }
+
+    #[test]
+    fn active_tauri_dist_builders_all_pass_locked_to_cargo() {
+        tauri_locked_build_contract(&repo::root()).unwrap();
     }
 
     #[test]

@@ -1415,6 +1415,7 @@ fn build_unsigned(root: &Path, options: &Options) -> Result<()> {
         "--config".to_owned(),
         config_path.to_string_lossy().into_owned(),
         "--".to_owned(),
+        "--locked".to_owned(),
         "--profile".to_owned(),
         "dist".to_owned(),
     ];

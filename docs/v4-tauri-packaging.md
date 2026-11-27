@@ -133,7 +133,7 @@ $testPublicKey = (Get-Content "$keyPath.pub" -Raw).Trim()
 } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $testConfigPath
 
 Push-Location apps/desktop
-bun run tauri build --ci --config $testConfigPath -- --profile dist
+bun run tauri build --ci --config $testConfigPath -- --locked --profile dist
 Pop-Location
 if ($LASTEXITCODE -ne 0) { throw "Tauri test package build failed with exit code $LASTEXITCODE" }
 

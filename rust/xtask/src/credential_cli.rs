@@ -236,7 +236,16 @@ fn build_candidate(
     let verify_key = key_path.clone();
     let mut command = Command::new("bun");
     command
-        .args(["run", "tauri", "build", "--ci", "--", "--profile", "dist"])
+        .args([
+            "run",
+            "tauri",
+            "build",
+            "--ci",
+            "--",
+            "--locked",
+            "--profile",
+            "dist",
+        ])
         .env("TAURI_SIGNING_PRIVATE_KEY", &key_path)
         .env("TAURI_SIGNING_PRIVATE_KEY_PATH", &key_path)
         .env("SKY_AUTHENTICODE_MODE", "unsigned-zero-budget")

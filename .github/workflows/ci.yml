@@ -865,7 +865,7 @@ jobs:
           }
           $configPath = Join-Path $env:SKY_HOSTED_PROOF_ROOT "unsigned-build-config.json"
           [System.IO.File]::WriteAllText($configPath, '{"bundle":{"createUpdaterArtifacts":false}}', [System.Text.UTF8Encoding]::new($false))
-          bun run tauri build --ci --bundles nsis --config $configPath -- --profile dist
+          bun run tauri build --ci --bundles nsis --config $configPath -- --locked --profile dist
           if ($LASTEXITCODE -ne 0) { throw "Unsigned hosted NSIS build failed with exit code $LASTEXITCODE" }
           $bundleDir = Join-Path $env:CARGO_TARGET_DIR "dist\bundle\nsis"
           $files = @(Get-ChildItem -LiteralPath $bundleDir -File)
@@ -1040,7 +1040,7 @@ jobs:
               $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
               $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
               $env:SKY_AUTHENTICODE_MODE = "unsigned-zero-budget"
-              bun run tauri build --ci --config $configPath -- --profile dist
+              bun run tauri build --ci --config $configPath -- --locked --profile dist
               if ($LASTEXITCODE -ne 0) { throw "Current Tauri candidate build failed with exit code $LASTEXITCODE" }
             } finally {
               Pop-Location

@@ -647,6 +647,9 @@ fn run_static_group(skip_supply_chain: bool, session: &mut CheckSession) -> Resu
     record_step(session, "tauri-feature-contract", || {
         tauri_metadata::tauri_feature_contract(&root)
     })?;
+    record_step(session, "tauri-locked-build-contract", || {
+        tauri_metadata::tauri_locked_build_contract(&root)
+    })?;
     if !skip_supply_chain {
         record_step(session, "supply-chain", || supply_chain::run(None))?;
     } else {
