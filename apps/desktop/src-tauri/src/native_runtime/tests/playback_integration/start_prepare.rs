@@ -790,7 +790,7 @@ fn native_catalog_and_prepare_share_sheet_plan_with_exact_loss_consent_and_sourc
 }
 
 #[test]
-fn native_prepare_short_up_gap_confirmation_offers_proceed_and_dry_run_without_recommendation() {
+fn native_prepare_small_nominal_slack_stays_ready_without_gate_and_reports_diagnostic_slack() {
     fn input(
         song_id: &str,
         song: &super::Song,
@@ -833,8 +833,8 @@ fn native_prepare_short_up_gap_confirmation_offers_proceed_and_dry_run_without_r
     let service = NativePlaybackService::new(ActivityCoordinator::default());
     let settings = ApplicationSettings::default();
     let song = super::parse_song_json(
-        br#"{"name":"Short Up gap","songNotes":[{"time":0,"key":"Key0"},{"time":18,"key":"Key0"}]}"#,
-        "short-up-gap",
+        br#"{"name":"Small nominal slack","songNotes":[{"time":0,"key":"Key0"},{"time":18,"key":"Key0"}]}"#,
+        "small-nominal-slack",
     )
     .expect("fixture song");
     let base_config = PlaybackConfigDto {
@@ -845,33 +845,25 @@ fn native_prepare_short_up_gap_confirmation_offers_proceed_and_dry_run_without_r
         dry_run: false,
     };
 
-    let confirmation = service
-        .prepare(input("short-up-gap", &song, &settings, base_config.clone()))
-        .expect("short-gap confirmation");
+    let prepared_dto = service
+        .prepare(input(
+            "small-nominal-slack",
+            &song,
+            &settings,
+            base_config.clone(),
+        ))
+        .expect("small nominal slack remains ready without a frame-gap gate");
     assert_eq!(
-        confirmation.admission,
-        crate::commands::PlaybackAdmission::ConfirmationRequired
+        prepared_dto.admission,
+        crate::commands::PlaybackAdmission::Ready
     );
-    assert_eq!(confirmation.risk.level, "medium");
-    assert_eq!(confirmation.risk.short_up_gap_repeat_count, 1);
-    assert_eq!(confirmation.decisions.len(), 2);
-    assert_eq!(
-        confirmation.decisions[0].decision,
-        crate::commands::PlaybackDecision::Proceed
-    );
-    assert_eq!(
-        confirmation.decisions[1].decision,
-        crate::commands::PlaybackDecision::DryRun
-    );
-    let recommendation = confirmation
-        .song
-        .recommendation
-        .as_ref()
-        .expect("risk summary remains available");
-    assert!(recommendation.recommended_hold_frames.is_none());
-    assert!(recommendation.recommended_tempo_scale.is_none());
-    assert_eq!(confirmation.variants.len(), 2);
-    let proceed = confirmation.variants.first().expect("Proceed variant");
+    assert_eq!(prepared_dto.risk.level, "low");
+    assert_eq!(prepared_dto.risk.same_key_repeat_count, 1);
+    assert_eq!(prepared_dto.risk.zero_slack_repeat_count, 0);
+    assert_eq!(prepared_dto.risk.min_same_key_slack_us, Some(533));
+    assert!(prepared_dto.decisions.is_empty());
+    assert_eq!(prepared_dto.variants.len(), 1);
+    let proceed = prepared_dto.variants.first().expect("Proceed variant");
     assert_eq!(proceed.decision, crate::commands::PlaybackDecision::Proceed);
     assert_eq!(proceed.config.hold_frames, base_config.hold_frames);
     assert_eq!(
@@ -884,11 +876,13 @@ fn native_prepare_short_up_gap_confirmation_offers_proceed_and_dry_run_without_r
     let advisory = proceed.timing_advisory.as_ref().expect("Proceed advisory");
     assert_eq!(
         advisory.status,
-        crate::commands::TimingAdvisoryStatus::ShortUpGapRisk
+        crate::commands::TimingAdvisoryStatus::Analyzed
     );
-    assert_eq!(advisory.short_up_gap_repeat_count, 1);
+    assert_eq!(advisory.same_key_repeat_count, 1);
+    assert_eq!(advisory.zero_slack_repeat_count, 0);
+    assert_eq!(advisory.min_same_key_slack_us, Some(533));
     assert_eq!(advisory.plan_fingerprint, proceed.plan_fingerprint);
-    let prepared_id = confirmation
+    let prepared_id = prepared_dto
         .prepared_id
         .as_ref()
         .expect("prepared plan identity");
@@ -898,7 +892,7 @@ fn native_prepare_short_up_gap_confirmation_offers_proceed_and_dry_run_without_r
         .find(|(id, _)| id == prepared_id)
         .map(|(_, record)| record)
         .expect("retained prepared plan");
-    assert_eq!(record.variants.len(), 2);
+    assert_eq!(record.variants.len(), 1);
     let native_proceed = record
         .variants
         .get(&crate::commands::PlaybackDecision::Proceed)
@@ -920,19 +914,6 @@ fn native_prepare_short_up_gap_confirmation_offers_proceed_and_dry_run_without_r
     assert_eq!(native_proceed.config.dry_run, proceed.config.dry_run);
     assert!(native_proceed.prepared_schedule.is_some());
     assert!(!advisory.dry_run_is_hypothetical);
-    let dry_run = confirmation
-        .variants
-        .iter()
-        .find(|variant| variant.decision == crate::commands::PlaybackDecision::DryRun)
-        .expect("Dry Run confirmation variant");
-    assert!(dry_run.config.dry_run);
-    assert!(
-        dry_run
-            .timing_advisory
-            .as_ref()
-            .expect("Dry Run advisory")
-            .dry_run_is_hypothetical
-    );
 }
 
 #[test]

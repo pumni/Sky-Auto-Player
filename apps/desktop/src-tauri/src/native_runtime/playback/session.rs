@@ -546,13 +546,6 @@ impl NativePlaybackService {
         } else {
             PlaybackAdmission::ConfirmationRequired
         };
-        let short_up_gap_only = risk.short_up_gap_repeat_count > 0
-            && schedule.short_up_gap_repeat_count > 0
-            && schedule.impossible_same_key_repeats == 0
-            && risk.dense_clusters.len() <= 5
-            && risk.max_polyphony <= 8
-            && risk.suggested_hold_frames.is_none()
-            && risk.suggested_tempo_scale.is_none();
         let prepared_id = opaque_native_id()?;
         let base_variant = NativePlaybackVariant {
             config: config.clone(),
@@ -576,7 +569,6 @@ impl NativePlaybackService {
                 label: "Proceed with current settings".into(),
             });
             if plan_source.is_none()
-                && !short_up_gap_only
                 && let (Some(hold_frames), Some(tempo_scale)) =
                     (risk.suggested_hold_frames, risk.suggested_tempo_scale)
                 && (hold_frames != config.hold_frames || tempo_scale != config.tempo_scale)
@@ -2761,7 +2753,9 @@ pub(in crate::native_runtime) fn risk_summary(risk: &RiskReport) -> RiskSummaryD
             vec![risk.reason.clone()]
         },
         recommendations: risk.recommendations.clone(),
-        short_up_gap_repeat_count: risk.short_up_gap_repeat_count as u64,
+        min_same_key_slack_us: risk.min_same_key_slack_us,
+        same_key_repeat_count: risk.same_key_repeat_count as u64,
+        zero_slack_repeat_count: risk.zero_slack_repeat_count as u64,
     }
 }
 
@@ -2813,7 +2807,9 @@ pub(in crate::native_runtime) fn blocked_playback_dto(
         headline: "Playback blocked".into(),
         reasons: vec![message.clone()],
         recommendations,
-        short_up_gap_repeat_count: 0,
+        min_same_key_slack_us: None,
+        same_key_repeat_count: 0,
+        zero_slack_repeat_count: 0,
     };
     PreparedPlaybackDto {
         prepared_id: None,
@@ -3327,8 +3323,9 @@ mod preparation_cancellation_tests {
             impossible_same_key_repeats: 0,
             max_polyphony: 1,
             shortest_same_key_interval_us: None,
-            min_same_key_up_gap_us: None,
-            short_up_gap_repeat_count: 0,
+            min_same_key_slack_us: None,
+            same_key_repeat_count: 0,
+            zero_slack_repeat_count: 0,
             recommended_hold_frames: None,
             recommended_tempo_scale: None,
             warnings: Vec::new(),
@@ -3418,8 +3415,9 @@ mod preparation_cancellation_tests {
             impossible_same_key_repeats: 0,
             max_polyphony: 6,
             shortest_same_key_interval_us: Some(50_000),
-            min_same_key_up_gap_us: Some(33_333),
-            short_up_gap_repeat_count: 0,
+            min_same_key_slack_us: Some(33_333),
+            same_key_repeat_count: 6,
+            zero_slack_repeat_count: 0,
             recommended_hold_frames: None,
             recommended_tempo_scale: None,
             warnings: Vec::new(),
@@ -3953,10 +3951,7 @@ mod preparation_cancellation_tests {
             .find(|variant| variant.decision == PlaybackDecision::Proceed)
             .expect("Proceed DTO");
         let proceed_advisory = proceed.timing_advisory.as_ref().expect("Proceed advisory");
-        assert_eq!(
-            proceed_advisory.status,
-            TimingAdvisoryStatus::NoShortUpGapRisk
-        );
+        assert_eq!(proceed_advisory.status, TimingAdvisoryStatus::Analyzed);
 
         let recommended = result
             .variants
@@ -3967,10 +3962,7 @@ mod preparation_cancellation_tests {
             .timing_advisory
             .as_ref()
             .expect("recommended advisory");
-        assert_eq!(
-            recommended_advisory.status,
-            TimingAdvisoryStatus::NoShortUpGapRisk
-        );
+        assert_eq!(recommended_advisory.status, TimingAdvisoryStatus::Analyzed);
         assert_eq!(
             recommended_advisory.plan_fingerprint,
             recommended.plan_fingerprint
@@ -4129,7 +4121,7 @@ mod preparation_cancellation_tests {
                 .as_ref()
                 .expect("advisory result")
                 .status,
-            crate::commands::TimingAdvisoryStatus::NoShortUpGapRisk
+            crate::commands::TimingAdvisoryStatus::Analyzed
         );
         let cache = service.prepared.lock().expect("prepared cache");
         let record = cache

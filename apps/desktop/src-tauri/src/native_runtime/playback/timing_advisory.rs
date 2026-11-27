@@ -1,17 +1,48 @@
 use super::*;
 use crate::commands::{
-    DispatchModelStatus, GenerationTimingAdvisoryDto, PlaybackConfigDto, TimingAdvisoryStatus,
+    DispatchModelScenarioDto, DispatchModelStatus, GenerationTimingAdvisoryDto, PlaybackConfigDto,
+    TimingAdvisoryStatus,
 };
 use sky_app_core::timing::MaterializedTimingPolicy;
 
 const MAX_TIMING_ADVISORY_GENERATIONS: usize = 50_000;
 const MAX_TIMING_ADVISORY_WORK_UNITS: u64 = 3_000_000;
 const MAX_TIMING_ADVISORY_MEMORY_BYTES: u64 = 64 * 1024 * 1024;
-const MAX_KEY_VISITS_PER_GENERATION: u64 = 60;
 const MODEL_QPC_FREQUENCY_HZ: u64 = 1_000_000;
-const ESTIMATED_SENDER_SETUP_US: u64 = 10;
-const ESTIMATED_PER_INPUT_US: u64 = 3;
-const ESTIMATED_POST_SEND_US: u64 = 5;
+const MODEL_COST_DISCLAIMER: &str = "Illustrative modeled cost only — not measured SendInput latency or a predictive gameplay guarantee.";
+
+#[derive(Debug, Clone, Copy)]
+struct ModelScenarioSpec {
+    scenario_id: &'static str,
+    label: &'static str,
+    sender_setup_us: u64,
+    per_input_us: u64,
+    post_send_us: u64,
+}
+
+const MODEL_SCENARIOS: [ModelScenarioSpec; 3] = [
+    ModelScenarioSpec {
+        scenario_id: "ideal",
+        label: "Ideal (illustrative modeled cost: 0 µs)",
+        sender_setup_us: 0,
+        per_input_us: 0,
+        post_send_us: 0,
+    },
+    ModelScenarioSpec {
+        scenario_id: "reference",
+        label: "Reference (illustrative modeled cost: 10 µs + 3 µs/event + 5 µs)",
+        sender_setup_us: 10,
+        per_input_us: 3,
+        post_send_us: 5,
+    },
+    ModelScenarioSpec {
+        scenario_id: "stress",
+        label: "Stress (illustrative modeled cost: 100 µs + 10 µs/event + 50 µs)",
+        sender_setup_us: 100,
+        per_input_us: 10,
+        post_send_us: 50,
+    },
+];
 
 #[cfg(test)]
 pub(super) fn analyze_variant(
@@ -213,38 +244,6 @@ fn analyze_compiled_stream(
             "The compiled generation schedule exceeds the offline advisory limit.",
         );
     }
-    let work_units = match u64::try_from(generation_count)
-        .ok()
-        .and_then(|count| count.checked_mul(MAX_KEY_VISITS_PER_GENERATION))
-    {
-        Some(work) if work <= MAX_TIMING_ADVISORY_WORK_UNITS => work,
-        _ => {
-            return unavailable(
-                result,
-                "The compiled generation schedule exceeds the offline advisory work budget.",
-            );
-        }
-    };
-    let compiled_memory_bytes = match compiled.memory_metrics() {
-        Ok(metrics) => metrics
-            .heap_payload_bytes
-            .checked_add(metrics.struct_bytes)
-            .map(|bytes| bytes.max(metrics.compile_memory.phase_peak_capacity_bytes)),
-        Err(_) => None,
-    };
-    let executor_memory_bytes =
-        sky_player::adapter_support::DispatchExecutor::estimated_memory_bytes(compiled).ok();
-    let total_memory_bytes = compiled_memory_bytes
-        .zip(executor_memory_bytes)
-        .and_then(|(compiled, executor)| compiled.checked_add(executor));
-    if total_memory_bytes.is_none_or(|bytes| {
-        bytes > usize::try_from(MAX_TIMING_ADVISORY_MEMORY_BYTES).unwrap_or(usize::MAX)
-    }) {
-        return unavailable(
-            result,
-            "The prepared generation schedule and executor simulation exceed the offline advisory memory budget.",
-        );
-    }
     result.work_limit_units = MAX_TIMING_ADVISORY_WORK_UNITS;
     result.working_memory_limit_bytes = MAX_TIMING_ADVISORY_MEMORY_BYTES;
 
@@ -255,10 +254,15 @@ fn analyze_compiled_stream(
         return unavailable(result, "analysis was cancelled before onset inspection");
     }
 
+    let mut work_units_used = 0u64;
     let mut prior_onset_by_slot: [Option<u64>; sky_player::adapter_support::MAX_KEYS] =
         [None; sky_player::adapter_support::MAX_KEYS];
+    let mut min_same_key_slack_us: Option<u64> = None;
+    let mut same_key_repeat_count = 0u64;
+    let mut zero_slack_repeat_count = 0u64;
+
     for (index, chord) in compiled.chords().iter().enumerate() {
-        if index % 256 == 0 && cancelled.load(Ordering::Acquire) {
+        if index.is_multiple_of(256) && cancelled.load(Ordering::Acquire) {
             return unavailable(
                 result,
                 "analysis was cancelled while inspecting generations",
@@ -272,6 +276,15 @@ fn analyze_compiled_stream(
         }
         let mut remaining = chord.key_mask;
         while remaining != 0 {
+            work_units_used = match work_units_used.checked_add(1) {
+                Some(used) if used <= MAX_TIMING_ADVISORY_WORK_UNITS => used,
+                _ => {
+                    return unavailable(
+                        result,
+                        "The compiled generation schedule exceeds the offline advisory work budget.",
+                    );
+                }
+            };
             let slot = remaining.trailing_zeros() as usize;
             remaining &= remaining - 1;
             let Some(prior_onset) = prior_onset_by_slot.get_mut(slot) else {
@@ -281,35 +294,76 @@ fn analyze_compiled_stream(
                 let Some(nominal_up_us) = prev_onset_us.checked_add(policy.min_hold_us) else {
                     return unavailable(result, "A nominal release timestamp overflowed.");
                 };
-                let Some(gap_us) = chord.scheduled_us.checked_sub(nominal_up_us) else {
+                let Some(slack_us) = chord.scheduled_us.checked_sub(nominal_up_us) else {
                     return unavailable(
                         result,
                         "A same-key onset interval is shorter than the required hold floor.",
                     );
                 };
-                if gap_us < policy.frame_us {
-                    result.short_up_gap_repeat_count += 1;
+                same_key_repeat_count = match same_key_repeat_count.checked_add(1) {
+                    Some(count) => count,
+                    None => {
+                        return unavailable(result, "Same-key repeat count overflowed.");
+                    }
+                };
+                if slack_us == 0 {
+                    zero_slack_repeat_count = match zero_slack_repeat_count.checked_add(1) {
+                        Some(count) => count,
+                        None => {
+                            return unavailable(result, "Zero-slack repeat count overflowed.");
+                        }
+                    };
                 }
+                min_same_key_slack_us =
+                    Some(min_same_key_slack_us.map_or(slack_us, |current| current.min(slack_us)));
             }
             *prior_onset = Some(chord.scheduled_us);
         }
     }
-    result.status = if result.short_up_gap_repeat_count > 0 {
-        TimingAdvisoryStatus::ShortUpGapRisk
-    } else {
-        TimingAdvisoryStatus::NoShortUpGapRisk
-    };
-    result.explanation = if result.short_up_gap_repeat_count > 0 {
+
+    result.min_same_key_slack_us = min_same_key_slack_us;
+    result.same_key_repeat_count = same_key_repeat_count;
+    result.zero_slack_repeat_count = zero_slack_repeat_count;
+    result.status = TimingAdvisoryStatus::Analyzed;
+    result.explanation = if same_key_repeat_count == 0 {
+        "No feasible same-key repeats in this schedule.".into()
+    } else if zero_slack_repeat_count > 0 {
         format!(
-            "{} feasible same-key repeat(s) have a nominal Up-to-Down gap shorter than one frame.",
-            result.short_up_gap_repeat_count
+            "{zero_slack_repeat_count} of {same_key_repeat_count} same-key repeat(s) have zero nominal scheduling slack (I = H; minimum slack 0 µs). Hold-only allows I = H; transport overhead can displace the following Down."
         )
     } else {
-        "No feasible same-key repeat has a nominal Up-to-Down gap shorter than one frame.".into()
+        format!(
+            "{same_key_repeat_count} same-key repeat(s); minimum nominal scheduling slack (I - H) is {} µs.",
+            min_same_key_slack_us.unwrap_or(0)
+        )
     };
 
-    let simulated = match simulate_dispatch_schedule(compiled, policy, cancelled) {
-        Ok(summary) => summary,
+    // Memory admission check before running the illustrative offline model.
+    // Nominal slack above remains valid even if the model exceeds work/memory caps.
+    let compiled_memory_bytes = match compiled.memory_metrics() {
+        Ok(metrics) => metrics
+            .heap_payload_bytes
+            .checked_add(metrics.struct_bytes)
+            .map(|bytes| bytes.max(metrics.compile_memory.phase_peak_capacity_bytes)),
+        Err(_) => None,
+    };
+    let executor_memory_bytes =
+        sky_player::adapter_support::DispatchExecutor::estimated_memory_bytes(compiled).ok();
+    let total_memory_bytes = compiled_memory_bytes
+        .zip(executor_memory_bytes)
+        .and_then(|(compiled_bytes, executor_bytes)| compiled_bytes.checked_add(executor_bytes));
+    if total_memory_bytes.is_none_or(|bytes| {
+        bytes > usize::try_from(MAX_TIMING_ADVISORY_MEMORY_BYTES).unwrap_or(usize::MAX)
+    }) {
+        return dispatch_model_unavailable(
+            result,
+            "The prepared generation schedule and executor simulation exceed the offline advisory memory budget.",
+        );
+    }
+
+    let scenarios = match simulate_all_scenarios(compiled, policy, cancelled, &mut work_units_used)
+    {
+        Ok(scenarios) => scenarios,
         Err(reason) => {
             if cancelled.load(Ordering::Acquire) {
                 return unavailable(
@@ -320,56 +374,46 @@ fn analyze_compiled_stream(
             return dispatch_model_unavailable(result, &reason);
         }
     };
-    result.modeled_send_count = simulated.send_count;
-    result.modeled_negative_slack_send_count = simulated.negative_slack_send_count;
-    result.modeled_h_floor_displaced_send_count = simulated.h_floor_displaced_send_count;
-    result.max_modeled_h_floor_displacement_us = simulated.max_h_floor_displacement_us;
-    result.modeled_head_of_line_send_count = simulated.head_of_line_send_count;
-    result.max_modeled_head_of_line_delay_us = simulated.max_head_of_line_delay_us;
-    result.max_modeled_lateness_us = simulated.max_lateness_us;
-    result.dispatch_model_status = if simulated.negative_slack_send_count > 0
-        || simulated.h_floor_displaced_send_count > 0
-        || simulated.head_of_line_send_count > 0
-    {
-        DispatchModelStatus::ModeledRisk
+
+    let reference = scenarios
+        .iter()
+        .find(|scenario| scenario.scenario_id == "reference");
+    let has_displacement = scenarios.iter().any(|scenario| {
+        scenario.modeled_late_down_count > 0
+            || scenario.modeled_h_floor_displaced_up_slot_count > 0
+            || scenario.modeled_late_up_packet_count > 0
+    });
+    result.dispatch_model_status = if has_displacement {
+        DispatchModelStatus::ModeledDisplacement
     } else {
-        DispatchModelStatus::NoModeledRisk
+        DispatchModelStatus::NoModeledDisplacement
     };
-    result.dispatch_model_explanation = match result.dispatch_model_status {
-        DispatchModelStatus::NoModeledRisk => format!(
-            "The illustrative executor model found no lateness, H-floor displacement, or head-of-line delay across {} sends.",
-            simulated.send_count
+    result.dispatch_model_explanation = match (result.dispatch_model_status, reference) {
+        (DispatchModelStatus::NoModeledDisplacement, Some(ref_scenario)) => format!(
+            "Illustrative modeled scenarios found no Down lateness or Up H-floor displacement across {} sends.",
+            ref_scenario.modeled_send_count
         ),
-        DispatchModelStatus::ModeledRisk => format!(
-            "The illustrative executor model found {} late send(s), {} H-floor displacement(s), and {} head-of-line delay(s).",
-            simulated.negative_slack_send_count,
-            simulated.h_floor_displaced_send_count,
-            simulated.head_of_line_send_count
+        (DispatchModelStatus::ModeledDisplacement, Some(ref_scenario)) => format!(
+            "Reference illustrative model: {} late Down(s) (max {} µs), {} H-floor Up slot(s) (max {} µs), {} cursor-order Down(s) (max {} µs).",
+            ref_scenario.modeled_late_down_count,
+            ref_scenario.max_modeled_down_lateness_us,
+            ref_scenario.modeled_h_floor_displaced_up_slot_count,
+            ref_scenario.max_modeled_h_floor_displacement_us,
+            ref_scenario.modeled_cursor_order_displaced_down_count,
+            ref_scenario.max_modeled_cursor_order_displacement_us,
         ),
-        DispatchModelStatus::NotAnalyzed | DispatchModelStatus::Unavailable => {
-            "The illustrative executor model could not be analyzed.".into()
-        }
+        _ => "The illustrative executor model could not be analyzed.".into(),
     };
-    let _ = work_units;
+    result.scenarios = scenarios;
     result
 }
 
-#[derive(Default)]
-struct DispatchSimulationSummary {
-    send_count: u64,
-    negative_slack_send_count: u64,
-    h_floor_displaced_send_count: u64,
-    max_h_floor_displacement_us: u64,
-    head_of_line_send_count: u64,
-    max_head_of_line_delay_us: u64,
-    max_lateness_us: u64,
-}
-
-fn simulate_dispatch_schedule(
+fn simulate_all_scenarios(
     plan: &sky_player::adapter_support::OnsetPlan,
     policy: &MaterializedTimingPolicy,
     cancelled: &AtomicBool,
-) -> Result<DispatchSimulationSummary, String> {
+    work_units_used: &mut u64,
+) -> Result<Vec<DispatchModelScenarioDto>, String> {
     if plan.hold_us() != policy.min_hold_us {
         return Err(format!(
             "onset plan hold_us ({}) does not match policy min_hold_us ({})",
@@ -377,8 +421,40 @@ fn simulate_dispatch_schedule(
             policy.min_hold_us
         ));
     }
+    let compiled_metrics = plan
+        .memory_metrics()
+        .map_err(|error| format!("compiled plan memory accounting failed: {error}"))?;
+    let retained_schedule_bytes = compiled_metrics
+        .heap_payload_bytes
+        .checked_add(compiled_metrics.struct_bytes)
+        .ok_or_else(|| "compiled plan memory accounting overflow".to_string())?
+        .max(compiled_metrics.compile_memory.phase_peak_capacity_bytes);
+
+    let mut results = Vec::with_capacity(MODEL_SCENARIOS.len());
+    for spec in MODEL_SCENARIOS {
+        let scenario = simulate_single_scenario(
+            plan,
+            retained_schedule_bytes,
+            spec,
+            cancelled,
+            work_units_used,
+        )?;
+        results.push(scenario);
+    }
+    Ok(results)
+}
+
+fn simulate_single_scenario(
+    plan: &sky_player::adapter_support::OnsetPlan,
+    retained_schedule_bytes: usize,
+    spec: ModelScenarioSpec,
+    cancelled: &AtomicBool,
+    work_units_used: &mut u64,
+) -> Result<DispatchModelScenarioDto, String> {
     let model_qpc_hz = std::num::NonZeroU64::new(MODEL_QPC_FREQUENCY_HZ)
         .ok_or_else(|| "model QPC frequency must be nonzero".to_string())?;
+    // Sequential per-scenario preparation keeps peak working memory bounded to
+    // one PreparedDispatchSchedule + shared immutable OnsetPlan at a time.
     let prepared =
         sky_player::adapter_support::PreparedDispatchSchedule::prepare_with_cancellation(
             plan,
@@ -394,14 +470,6 @@ fn simulate_dispatch_schedule(
         )?;
     let mut executor =
         sky_player::adapter_support::DispatchExecutor::from_prepared_schedule(prepared);
-    let compiled_metrics = plan
-        .memory_metrics()
-        .map_err(|error| format!("compiled plan memory accounting failed: {error}"))?;
-    let retained_schedule_bytes = compiled_metrics
-        .heap_payload_bytes
-        .checked_add(compiled_metrics.struct_bytes)
-        .ok_or_else(|| "compiled plan memory accounting overflow".to_string())?
-        .max(compiled_metrics.compile_memory.phase_peak_capacity_bytes);
     let actual_executor_bytes = executor
         .try_memory_metrics()
         .map_err(|error| format!("executor memory accounting failed: {error}"))?
@@ -416,15 +484,46 @@ fn simulate_dispatch_schedule(
             "the prepared onset plan and executor exceed the offline advisory memory budget".into(),
         );
     }
+
     let epoch = sky_player::adapter_support::QpcTicks::ZERO;
     let max_iterations = usize::try_from(plan.generation_count())
         .ok()
         .and_then(|count| count.checked_mul(4))
         .and_then(|count| count.checked_add(2))
         .ok_or_else(|| "executor simulation iteration bound overflow".to_string())?;
-    let mut summary = DispatchSimulationSummary::default();
+
+    let mut dto = DispatchModelScenarioDto {
+        scenario_id: spec.scenario_id.to_owned(),
+        label: spec.label.to_owned(),
+        estimated_sender_setup_us: spec.sender_setup_us,
+        estimated_per_input_us: spec.per_input_us,
+        estimated_post_send_us: spec.post_send_us,
+        modeled_send_count: 0,
+        modeled_down_packet_count: 0,
+        modeled_up_packet_count: 0,
+        modeled_late_down_count: 0,
+        max_modeled_down_lateness_us: 0,
+        modeled_key_readiness_displaced_down_count: 0,
+        max_modeled_key_readiness_displacement_us: 0,
+        modeled_cursor_order_displaced_down_count: 0,
+        max_modeled_cursor_order_displacement_us: 0,
+        modeled_worker_occupancy_displaced_down_count: 0,
+        max_modeled_worker_occupancy_residual_us: 0,
+        modeled_up_slot_count: 0,
+        modeled_h_floor_displaced_up_slot_count: 0,
+        max_modeled_h_floor_displacement_us: 0,
+        modeled_late_up_packet_count: 0,
+        max_modeled_up_lateness_us: 0,
+        max_modeled_up_pre_call_above_floor_us: 0,
+    };
+
     let mut now = epoch;
-    let mut previous_worker_free = None;
+    // Offline-only attribution state (not tracked in runtime executor):
+    // - slot_key_ready_us: modeled worker-free timestamp after the previous Up
+    //   on each slot (same-key Up must commit before the next Down).
+    // - prior_down_pre_call: modeled pre-call timestamp of the previous Down chord.
+    let mut slot_key_ready_us = [0u64; sky_player::adapter_support::MAX_KEYS];
+    let mut prior_down_pre_call: Option<u64> = None;
     let mut iterations = 0usize;
 
     loop {
@@ -437,6 +536,16 @@ fn simulate_dispatch_schedule(
         if iterations > max_iterations {
             return Err("the executor simulation exceeded its bounded iteration count".into());
         }
+        *work_units_used = work_units_used
+            .checked_add(1)
+            .ok_or_else(|| "executor simulation work budget overflow".to_string())?;
+        if *work_units_used > MAX_TIMING_ADVISORY_WORK_UNITS {
+            return Err(
+                "the illustrative executor scenarios exceed the offline advisory work budget"
+                    .into(),
+            );
+        }
+
         match executor
             .evaluate_at(now, epoch)
             .map_err(|error| format!("executor timeline arithmetic failed: {error}"))?
@@ -453,81 +562,167 @@ fn simulate_dispatch_schedule(
             sky_player::adapter_support::DispatchDecision::Send {
                 up_mask,
                 down_chord,
-                timing_window,
                 ..
             } => {
                 let down_mask = down_chord.map_or(0, |chord| chord.key_mask);
                 if up_mask & down_mask != 0 || up_mask | down_mask == 0 {
                     return Err("the executor returned an invalid physical send mask".into());
                 }
-                let authored_target = timing_window.authored_target_qpc.as_u64();
-                let mut h_constraint = 0u64;
-                let mut h_displacement = 0u64;
-                for timing in executor.up_slot_timings(up_mask) {
-                    let nominal_up = timing.nominal_up_offset_ticks.as_u64();
-                    let physical_up_floor = timing.release_not_before_qpc.as_u64();
-                    let floor = nominal_up.max(physical_up_floor);
-                    h_constraint = h_constraint.max(floor);
-                    h_displacement = h_displacement.max(floor.saturating_sub(nominal_up));
-                }
-                let floor_ready = authored_target.max(h_constraint);
-                let constraint_ready = h_constraint.max(previous_worker_free.unwrap_or(0));
-                let ready = now.as_u64().max(floor_ready);
-                let slack = i128::from(authored_target) - i128::from(constraint_ready);
-                let lateness = ready
-                    .checked_sub(authored_target)
-                    .ok_or_else(|| "executor model produced negative lateness".to_string())?;
-                if slack < 0 {
-                    summary.negative_slack_send_count = summary
-                        .negative_slack_send_count
+                let actual_pre_call = now.as_u64();
+
+                // 1. Musical Up direction attribution (independent of Down in mixed packets).
+                if up_mask != 0 {
+                    dto.modeled_up_packet_count = dto
+                        .modeled_up_packet_count
                         .checked_add(1)
-                        .ok_or_else(|| "negative-slack send count overflow".to_string())?;
+                        .ok_or_else(|| "modeled Up packet count overflow".to_string())?;
+                    let mut packet_max_up_lateness = 0u64;
+                    let mut packet_max_up_above_floor = 0u64;
+                    for timing in executor.up_slot_timings(up_mask) {
+                        *work_units_used = work_units_used.checked_add(1).ok_or_else(|| {
+                            "executor simulation work budget overflow".to_string()
+                        })?;
+                        if *work_units_used > MAX_TIMING_ADVISORY_WORK_UNITS {
+                            return Err(
+                                "the illustrative executor scenarios exceed the offline advisory work budget".into(),
+                            );
+                        }
+                        dto.modeled_up_slot_count = dto
+                            .modeled_up_slot_count
+                            .checked_add(1)
+                            .ok_or_else(|| "modeled Up slot count overflow".to_string())?;
+                        let nominal_up = timing.nominal_up_offset_ticks.as_u64();
+                        let physical_up_floor = timing.release_not_before_qpc.as_u64();
+                        let effective_floor = nominal_up.max(physical_up_floor);
+                        let h_floor_disp = effective_floor.saturating_sub(nominal_up);
+                        if h_floor_disp > 0 {
+                            dto.modeled_h_floor_displaced_up_slot_count = dto
+                                .modeled_h_floor_displaced_up_slot_count
+                                .checked_add(1)
+                                .ok_or_else(|| "H-floor Up slot count overflow".to_string())?;
+                            dto.max_modeled_h_floor_displacement_us =
+                                dto.max_modeled_h_floor_displacement_us.max(h_floor_disp);
+                        }
+                        let slot_lateness = actual_pre_call.saturating_sub(nominal_up);
+                        let slot_above_floor = actual_pre_call.saturating_sub(effective_floor);
+                        packet_max_up_lateness = packet_max_up_lateness.max(slot_lateness);
+                        packet_max_up_above_floor = packet_max_up_above_floor.max(slot_above_floor);
+                    }
+                    if packet_max_up_lateness > 0 {
+                        dto.modeled_late_up_packet_count = dto
+                            .modeled_late_up_packet_count
+                            .checked_add(1)
+                            .ok_or_else(|| "late Up packet count overflow".to_string())?;
+                    }
+                    dto.max_modeled_up_lateness_us =
+                        dto.max_modeled_up_lateness_us.max(packet_max_up_lateness);
+                    dto.max_modeled_up_pre_call_above_floor_us = dto
+                        .max_modeled_up_pre_call_above_floor_us
+                        .max(packet_max_up_above_floor);
                 }
-                if h_displacement > 0 {
-                    summary.h_floor_displaced_send_count = summary
-                        .h_floor_displaced_send_count
+
+                // 2. Musical Down chord attribution (uses Down chord's own authored onset,
+                //    non-double-counted decomposition: key_readiness + cursor_order +
+                //    worker_occupancy == down_lateness).
+                if let Some(chord) = down_chord {
+                    dto.modeled_down_packet_count = dto
+                        .modeled_down_packet_count
                         .checked_add(1)
-                        .ok_or_else(|| "H-floor send count overflow".to_string())?;
-                    summary.max_h_floor_displacement_us =
-                        summary.max_h_floor_displacement_us.max(h_displacement);
+                        .ok_or_else(|| "modeled Down packet count overflow".to_string())?;
+                    let authored = chord.onset_ticks.as_u64();
+                    let mut key_ready = 0u64;
+                    let mut remaining = chord.key_mask;
+                    while remaining != 0 {
+                        let slot = remaining.trailing_zeros() as usize;
+                        remaining &= remaining - 1;
+                        key_ready = key_ready.max(slot_key_ready_us[slot]);
+                    }
+                    let prior_down = prior_down_pre_call.unwrap_or(0);
+                    let down_lateness = actual_pre_call.checked_sub(authored).ok_or_else(|| {
+                        "executor model produced negative Down lateness".to_string()
+                    })?;
+                    let key_readiness_disp = key_ready.saturating_sub(authored);
+                    let after_key_ready = authored.max(key_ready);
+                    let cursor_order_disp = prior_down.saturating_sub(after_key_ready);
+                    let after_cursor_order = after_key_ready.max(prior_down);
+                    let worker_occupancy_res = actual_pre_call.saturating_sub(after_cursor_order);
+
+                    debug_assert_eq!(
+                        key_readiness_disp + cursor_order_disp + worker_occupancy_res,
+                        down_lateness
+                    );
+
+                    if down_lateness > 0 {
+                        dto.modeled_late_down_count = dto
+                            .modeled_late_down_count
+                            .checked_add(1)
+                            .ok_or_else(|| "late Down count overflow".to_string())?;
+                        dto.max_modeled_down_lateness_us =
+                            dto.max_modeled_down_lateness_us.max(down_lateness);
+                    }
+                    if key_readiness_disp > 0 {
+                        dto.modeled_key_readiness_displaced_down_count = dto
+                            .modeled_key_readiness_displaced_down_count
+                            .checked_add(1)
+                            .ok_or_else(|| "key-readiness count overflow".to_string())?;
+                        dto.max_modeled_key_readiness_displacement_us = dto
+                            .max_modeled_key_readiness_displacement_us
+                            .max(key_readiness_disp);
+                    }
+                    if cursor_order_disp > 0 {
+                        dto.modeled_cursor_order_displaced_down_count = dto
+                            .modeled_cursor_order_displaced_down_count
+                            .checked_add(1)
+                            .ok_or_else(|| "cursor-order count overflow".to_string())?;
+                        dto.max_modeled_cursor_order_displacement_us = dto
+                            .max_modeled_cursor_order_displacement_us
+                            .max(cursor_order_disp);
+                    }
+                    if worker_occupancy_res > 0 {
+                        dto.modeled_worker_occupancy_displaced_down_count = dto
+                            .modeled_worker_occupancy_displaced_down_count
+                            .checked_add(1)
+                            .ok_or_else(|| "worker-occupancy count overflow".to_string())?;
+                        dto.max_modeled_worker_occupancy_residual_us = dto
+                            .max_modeled_worker_occupancy_residual_us
+                            .max(worker_occupancy_res);
+                    }
+                    prior_down_pre_call = Some(actual_pre_call);
                 }
-                let hol_delay = previous_worker_free
-                    .map(|free| free.saturating_sub(floor_ready))
-                    .unwrap_or(0);
-                if hol_delay > 0 {
-                    summary.head_of_line_send_count = summary
-                        .head_of_line_send_count
-                        .checked_add(1)
-                        .ok_or_else(|| "head-of-line send count overflow".to_string())?;
-                    summary.max_head_of_line_delay_us =
-                        summary.max_head_of_line_delay_us.max(hol_delay);
-                }
-                summary.send_count = summary
-                    .send_count
+
+                dto.modeled_send_count = dto
+                    .modeled_send_count
                     .checked_add(1)
                     .ok_or_else(|| "modeled send count overflow".to_string())?;
-                summary.max_lateness_us = summary.max_lateness_us.max(lateness);
 
                 let event_count = u64::from(up_mask.count_ones() + down_mask.count_ones());
-                let sender_envelope = ESTIMATED_SENDER_SETUP_US
+                let sender_envelope = spec
+                    .sender_setup_us
                     .checked_add(
-                        ESTIMATED_PER_INPUT_US
+                        spec.per_input_us
                             .checked_mul(event_count)
                             .ok_or_else(|| "estimated SendInput cost overflow".to_string())?,
                     )
                     .ok_or_else(|| "estimated sender envelope overflow".to_string())?;
-                let sender_completion = ready
+                let sender_completion = actual_pre_call
                     .checked_add(sender_envelope)
                     .ok_or_else(|| "estimated sender completion overflow".to_string())?;
                 let worker_free = sender_completion
-                    .checked_add(ESTIMATED_POST_SEND_US)
+                    .checked_add(spec.post_send_us)
                     .ok_or_else(|| "estimated post-send time overflow".to_string())?;
+
                 executor.on_send_completed_at(
                     up_mask,
                     down_mask,
                     sky_player::adapter_support::QpcTicks::from_raw(sender_completion),
                 )?;
-                previous_worker_free = Some(worker_free);
+
+                let mut released = up_mask;
+                while released != 0 {
+                    let slot = released.trailing_zeros() as usize;
+                    released &= released - 1;
+                    slot_key_ready_us[slot] = worker_free;
+                }
                 now = sky_player::adapter_support::QpcTicks::from_raw(worker_free);
             }
         }
@@ -535,7 +730,7 @@ fn simulate_dispatch_schedule(
     if cancelled.load(Ordering::Acquire) {
         return Err("cancelled".into());
     }
-    Ok(summary)
+    Ok(dto)
 }
 
 fn dispatch_model_unavailable(
@@ -544,6 +739,7 @@ fn dispatch_model_unavailable(
 ) -> GenerationTimingAdvisoryDto {
     advisory.dispatch_model_status = DispatchModelStatus::Unavailable;
     advisory.dispatch_model_explanation = reason.to_owned();
+    advisory.scenarios.clear();
     advisory
 }
 
@@ -584,20 +780,14 @@ fn empty_advisory(
         generation_limit: MAX_TIMING_ADVISORY_GENERATIONS as u64,
         work_limit_units: MAX_TIMING_ADVISORY_WORK_UNITS,
         working_memory_limit_bytes: MAX_TIMING_ADVISORY_MEMORY_BYTES,
-        short_up_gap_repeat_count: 0,
+        min_same_key_slack_us: None,
+        same_key_repeat_count: 0,
+        zero_slack_repeat_count: 0,
         effective_hold_floor_h_us: Some(effective_hold_floor_h_us),
         dispatch_model_status: DispatchModelStatus::NotAnalyzed,
         dispatch_model_explanation: "The illustrative executor model has not been computed.".into(),
-        modeled_send_count: 0,
-        modeled_negative_slack_send_count: 0,
-        modeled_h_floor_displaced_send_count: 0,
-        max_modeled_h_floor_displacement_us: 0,
-        modeled_head_of_line_send_count: 0,
-        max_modeled_head_of_line_delay_us: 0,
-        max_modeled_lateness_us: 0,
-        estimated_sender_setup_us: ESTIMATED_SENDER_SETUP_US,
-        estimated_per_input_us: ESTIMATED_PER_INPUT_US,
-        estimated_post_send_us: ESTIMATED_POST_SEND_US,
+        model_cost_disclaimer: MODEL_COST_DISCLAIMER.into(),
+        scenarios: Vec::new(),
         dry_run_is_hypothetical: dry_run,
     }
 }
@@ -610,6 +800,7 @@ fn unavailable(
     advisory.explanation = reason.to_owned();
     advisory.dispatch_model_status = DispatchModelStatus::Unavailable;
     advisory.dispatch_model_explanation = reason.to_owned();
+    advisory.scenarios.clear();
     advisory
 }
 
@@ -637,6 +828,35 @@ mod tests {
         .expect("valid timing policy")
     }
 
+    fn schedule_chords(chords: &[(u64, &[u16])], hold_us: u64) -> ScheduleMetadata {
+        let chords = chords
+            .iter()
+            .map(|&(at_us, scan_codes)| OnsetChord {
+                at_us,
+                scan_codes: scan_codes.to_vec(),
+            })
+            .collect::<Vec<_>>();
+        ScheduleMetadata {
+            chords,
+            hold_us,
+            source_duration_us: 0,
+            playback_duration_us: 0,
+            duration_us: 0,
+            note_count: 0,
+            deduplicated_note_count: 0,
+            duplicate_note_count: 0,
+            impossible_same_key_repeats: 0,
+            max_polyphony: 0,
+            shortest_same_key_interval_us: None,
+            min_same_key_slack_us: None,
+            same_key_repeat_count: 0,
+            zero_slack_repeat_count: 0,
+            recommended_hold_frames: None,
+            recommended_tempo_scale: None,
+            warnings: Vec::new(),
+        }
+    }
+
     fn schedule(chords: &[(u64, u16)], hold_us: u64) -> ScheduleMetadata {
         let chords = chords
             .iter()
@@ -657,37 +877,285 @@ mod tests {
             impossible_same_key_repeats: 0,
             max_polyphony: 0,
             shortest_same_key_interval_us: None,
-            min_same_key_up_gap_us: None,
-            short_up_gap_repeat_count: 0,
+            min_same_key_slack_us: None,
+            same_key_repeat_count: 0,
+            zero_slack_repeat_count: 0,
             recommended_hold_frames: None,
             recommended_tempo_scale: None,
             warnings: Vec::new(),
         }
     }
 
+    fn scenario<'a>(
+        advisory: &'a GenerationTimingAdvisoryDto,
+        id: &str,
+    ) -> &'a DispatchModelScenarioDto {
+        advisory
+            .scenarios
+            .iter()
+            .find(|s| s.scenario_id == id)
+            .unwrap_or_else(|| panic!("missing scenario {id}"))
+    }
+
     #[test]
-    fn reports_canonical_generation_and_onset_group_counts() {
+    fn fixture_one_key_zero_slack_ideal_reference_and_stress_hand_calculated() {
         let config = config(false);
         let policy = policy(&config);
-        let authored = schedule(&[(0, 0x15), (17_467, 0x15)], policy.min_hold_us);
+        let h = policy.min_hold_us; // 17_467
+        let authored = schedule(&[(0, 0x15), (h, 0x15)], h);
         let advisory = analyze_variant(
             &authored,
             &config,
             &policy,
-            "same-key-plan",
+            "one-key-zero-slack",
             &AtomicBool::new(false),
         );
-        assert_eq!(advisory.status, TimingAdvisoryStatus::ShortUpGapRisk);
+        assert_eq!(advisory.status, TimingAdvisoryStatus::Analyzed);
         assert_eq!(advisory.total_authored_timestamp_group_count, Some(3));
         assert_eq!(advisory.down_generation_count, Some(2));
         assert_eq!(advisory.unmatched_up_count, Some(0));
-        assert_eq!(advisory.short_up_gap_repeat_count, 1);
-        assert_eq!(advisory.effective_hold_floor_h_us, Some(policy.min_hold_us));
-        assert_eq!(
-            advisory.dispatch_model_status,
-            DispatchModelStatus::ModeledRisk
+        assert_eq!(advisory.min_same_key_slack_us, Some(0));
+        assert_eq!(advisory.same_key_repeat_count, 1);
+        assert_eq!(advisory.zero_slack_repeat_count, 1);
+        assert_eq!(advisory.effective_hold_floor_h_us, Some(h));
+        assert_eq!(advisory.scenarios.len(), 3);
+        assert!(
+            advisory
+                .model_cost_disclaimer
+                .contains("Illustrative modeled cost")
         );
-        assert!(advisory.max_modeled_h_floor_displacement_us > 0);
+
+        // Ideal (0/0/0): zero lateness, zero H-floor displacement.
+        let ideal = scenario(&advisory, "ideal");
+        assert_eq!(ideal.modeled_send_count, 4);
+        assert_eq!(ideal.modeled_down_packet_count, 2);
+        assert_eq!(ideal.modeled_up_packet_count, 2);
+        assert_eq!(ideal.modeled_late_down_count, 0);
+        assert_eq!(ideal.max_modeled_down_lateness_us, 0);
+        assert_eq!(ideal.modeled_key_readiness_displaced_down_count, 0);
+        assert_eq!(ideal.modeled_cursor_order_displaced_down_count, 0);
+        assert_eq!(ideal.modeled_worker_occupancy_displaced_down_count, 0);
+        assert_eq!(ideal.modeled_up_slot_count, 2);
+        assert_eq!(ideal.modeled_h_floor_displaced_up_slot_count, 0);
+        assert_eq!(ideal.modeled_late_up_packet_count, 0);
+
+        // Reference (10/3/5):
+        // Down0@0: completion=13, worker_free=18.
+        // Up0: nominal=H, floor=H+13 -> pre_call=H+13 (h_floor_disp=13, up_lateness=13, above_floor=0),
+        //      completion=H+26, worker_free=H+31 -> key_ready=H+31.
+        // Down1@H: pre_call=H+31 -> key_readiness_disp=31, cursor_order=0, worker_occ=0, down_lateness=31.
+        //      completion=H+44, worker_free=H+49.
+        // Up1: nominal=2H, floor=2H+44 -> pre_call=2H+44 (h_floor_disp=44, up_lateness=44, above_floor=0).
+        let reference = scenario(&advisory, "reference");
+        assert_eq!(reference.modeled_send_count, 4);
+        assert_eq!(reference.modeled_down_packet_count, 2);
+        assert_eq!(reference.modeled_up_packet_count, 2);
+        assert_eq!(reference.modeled_late_down_count, 1);
+        assert_eq!(reference.max_modeled_down_lateness_us, 31);
+        assert_eq!(reference.modeled_key_readiness_displaced_down_count, 1);
+        assert_eq!(reference.max_modeled_key_readiness_displacement_us, 31);
+        assert_eq!(reference.modeled_cursor_order_displaced_down_count, 0);
+        assert_eq!(reference.max_modeled_cursor_order_displacement_us, 0);
+        assert_eq!(reference.modeled_worker_occupancy_displaced_down_count, 0);
+        assert_eq!(reference.max_modeled_worker_occupancy_residual_us, 0);
+        assert_eq!(reference.modeled_up_slot_count, 2);
+        assert_eq!(reference.modeled_h_floor_displaced_up_slot_count, 2);
+        assert_eq!(reference.max_modeled_h_floor_displacement_us, 44);
+        assert_eq!(reference.modeled_late_up_packet_count, 2);
+        assert_eq!(reference.max_modeled_up_lateness_us, 44);
+        assert_eq!(reference.max_modeled_up_pre_call_above_floor_us, 0);
+
+        // Stress (100/10/50):
+        // Down0@0: completion=110, worker_free=160.
+        // Up0: floor=H+110 -> completion=H+220, worker_free=H+270 -> key_ready=H+270.
+        // Down1@H: pre_call=H+270 -> key_readiness_disp=270, down_lateness=270.
+        //      completion=H+380.
+        // Up1: nominal=2H, floor=2H+380 -> h_floor_disp=380, up_lateness=380.
+        let stress = scenario(&advisory, "stress");
+        assert_eq!(stress.max_modeled_down_lateness_us, 270);
+        assert_eq!(stress.max_modeled_key_readiness_displacement_us, 270);
+        assert_eq!(stress.max_modeled_h_floor_displacement_us, 380);
+    }
+
+    #[test]
+    fn fixture_positive_slack_absorbs_reference_cost_with_zero_down_lateness() {
+        let config = config(false);
+        let policy = policy(&config);
+        let h = policy.min_hold_us;
+        let authored = schedule(&[(0, 0x15), (h + 500, 0x15)], h);
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "positive-slack",
+            &AtomicBool::new(false),
+        );
+        assert_eq!(advisory.status, TimingAdvisoryStatus::Analyzed);
+        assert_eq!(advisory.min_same_key_slack_us, Some(500));
+        assert_eq!(advisory.same_key_repeat_count, 1);
+        assert_eq!(advisory.zero_slack_repeat_count, 0);
+
+        // Reference: Up0 worker_free = H+31 <= H+500 -> Down1 starts right on time at H+500.
+        let reference = scenario(&advisory, "reference");
+        assert_eq!(reference.modeled_late_down_count, 0);
+        assert_eq!(reference.max_modeled_down_lateness_us, 0);
+        assert_eq!(reference.modeled_key_readiness_displaced_down_count, 0);
+        assert_eq!(reference.modeled_h_floor_displaced_up_slot_count, 2);
+        assert_eq!(reference.max_modeled_h_floor_displacement_us, 13);
+    }
+
+    #[test]
+    fn fixture_transport_cost_drift_accumulates_across_zero_slack_chain() {
+        let config = config(false);
+        let policy = policy(&config);
+        let h = policy.min_hold_us;
+        let authored = schedule(&[(0, 0x15), (h, 0x15), (2 * h, 0x15)], h);
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "drift-chain",
+            &AtomicBool::new(false),
+        );
+        assert_eq!(advisory.same_key_repeat_count, 2);
+        assert_eq!(advisory.zero_slack_repeat_count, 2);
+        assert_eq!(advisory.min_same_key_slack_us, Some(0));
+
+        // Reference (10/3/5):
+        // Down0@0 -> Up0@H+13 (free H+31) -> Down1@H+31 (lateness=31, free H+49)
+        // -> Up1@2H+44 (free 2H+62) -> Down2@2H+62 (lateness=62, key_readiness=62).
+        let reference = scenario(&advisory, "reference");
+        assert_eq!(reference.modeled_late_down_count, 2);
+        assert_eq!(reference.max_modeled_down_lateness_us, 62);
+        assert_eq!(reference.modeled_key_readiness_displaced_down_count, 2);
+        assert_eq!(reference.max_modeled_key_readiness_displacement_us, 62);
+        assert_eq!(reference.modeled_cursor_order_displaced_down_count, 0);
+        assert_eq!(reference.modeled_worker_occupancy_displaced_down_count, 0);
+    }
+
+    #[test]
+    fn fixture_independent_chord_behind_blocked_chord_separates_cursor_order_and_worker_occupancy()
+    {
+        let config = config(false);
+        let policy = policy(&config);
+        let h = policy.min_hold_us;
+        // Key0@0, Key0@H (blocked by Key0 Up until H+31), Key1@(H+10) (independent key!).
+        let authored = schedule(&[(0, 0x15), (h, 0x15), (h + 10, 0x16)], h);
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "cursor-order-vs-worker-occ",
+            &AtomicBool::new(false),
+        );
+        // Reference (10/3/5):
+        // Down0(Key0@0): pre_call=0, free=18.
+        // Up0(Key0): pre_call=H+13, free=H+31 -> key_ready[Key0]=H+31.
+        // Down1(Key0@H): pre_call=H+31 (key_ready=31, cursor=0, worker_occ=0), free=H+49.
+        // Down2(Key1@H+10): pre_call=H+49, authored=H+10, key_ready[Key1]=0, prior_down=H+31.
+        //   key_readiness_disp = 0
+        //   cursor_order_disp = (H+31) - (H+10) = 21
+        //   worker_occupancy_res = (H+49) - (H+31) = 18
+        //   down_lateness = 39 == 0 + 21 + 18!
+        let reference = scenario(&advisory, "reference");
+        assert_eq!(reference.modeled_key_readiness_displaced_down_count, 1);
+        assert_eq!(reference.max_modeled_key_readiness_displacement_us, 31);
+        assert_eq!(reference.modeled_cursor_order_displaced_down_count, 1);
+        assert_eq!(reference.max_modeled_cursor_order_displacement_us, 21);
+        assert_eq!(reference.modeled_worker_occupancy_displaced_down_count, 1);
+        assert_eq!(reference.max_modeled_worker_occupancy_residual_us, 18);
+        assert_eq!(reference.max_modeled_down_lateness_us, 39);
+    }
+
+    #[test]
+    fn fixture_mixed_up_and_down_retains_independent_authored_targets() {
+        let config = config(false);
+        let policy = policy(&config);
+        let h = policy.min_hold_us;
+        // Key0@0 -> Up0 floor is H+13 (nominal H).
+        // Key1@(H+13) -> combined into one mixed Up(Key0)+Down(Key1) packet at H+13!
+        let authored = schedule(&[(0, 0x15), (h + 13, 0x16)], h);
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "mixed-independent-targets",
+            &AtomicBool::new(false),
+        );
+        assert_eq!(advisory.same_key_repeat_count, 0);
+        assert_eq!(advisory.min_same_key_slack_us, None);
+
+        // Reference (10/3/5):
+        // Packet 0: Down(Key0)@0 -> completion=13, free=18.
+        // Packet 1 (MIXED): Up(Key0) + Down(Key1) at pre_call=H+13.
+        //   Up(Key0): nominal=H, floor=H+13 -> h_floor_disp=13, up_lateness=13, above_floor=0.
+        //   Down(Key1): authored=H+13 -> down_lateness=0!
+        //   2 events -> envelope=16, completion=H+29, free=H+34.
+        // Packet 2: Up(Key1): nominal=2H+13, floor=2H+29 -> h_floor_disp=16, up_lateness=16, above_floor=0.
+        let reference = scenario(&advisory, "reference");
+        assert_eq!(reference.modeled_send_count, 3);
+        assert_eq!(reference.modeled_down_packet_count, 2);
+        assert_eq!(reference.modeled_up_packet_count, 2);
+        assert_eq!(reference.modeled_late_down_count, 0);
+        assert_eq!(reference.max_modeled_down_lateness_us, 0);
+        assert_eq!(reference.modeled_h_floor_displaced_up_slot_count, 2);
+        assert_eq!(reference.max_modeled_h_floor_displacement_us, 16);
+        assert_eq!(reference.modeled_late_up_packet_count, 2);
+        assert_eq!(reference.max_modeled_up_lateness_us, 16);
+        assert_eq!(reference.max_modeled_up_pre_call_above_floor_us, 0);
+    }
+
+    #[test]
+    fn fixture_late_up_without_down_reports_pre_call_above_floor() {
+        let config = config(false);
+        let policy = policy(&config);
+        let h = policy.min_hold_us;
+        // Key0@0 -> Up0 floor = H+13 (nominal H).
+        // Key1@(H+5) -> Down(Key1) at H+5 finishes at worker_free = H+23,
+        // delaying Up(Key0) from floor H+13 to actual pre_call H+23!
+        let authored = schedule(&[(0, 0x15), (h + 5, 0x16)], h);
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "late-up-without-down",
+            &AtomicBool::new(false),
+        );
+        let reference = scenario(&advisory, "reference");
+        assert_eq!(reference.modeled_send_count, 4);
+        assert_eq!(reference.modeled_late_down_count, 0);
+        assert_eq!(reference.max_modeled_down_lateness_us, 0);
+        assert_eq!(reference.modeled_late_up_packet_count, 2);
+        // Up0: nominal=H, floor=H+13, actual=H+23 -> h_floor_disp=13, above_floor=10, up_lateness=23.
+        assert_eq!(reference.max_modeled_h_floor_displacement_us, 13);
+        assert_eq!(reference.max_modeled_up_pre_call_above_floor_us, 10);
+        assert_eq!(reference.max_modeled_up_lateness_us, 23);
+    }
+
+    #[test]
+    fn fixture_same_time_multi_key_chord_scales_per_input_cost() {
+        let config = config(false);
+        let policy = policy(&config);
+        let h = policy.min_hold_us;
+        let authored = schedule_chords(&[(0, &[0x15, 0x16])], h);
+        let advisory = analyze_variant(
+            &authored,
+            &config,
+            &policy,
+            "two-key-chord",
+            &AtomicBool::new(false),
+        );
+        assert_eq!(advisory.same_key_repeat_count, 0);
+        assert_eq!(advisory.min_same_key_slack_us, None);
+
+        // Reference: 2 keys -> envelope = 10 + 3*2 = 16 -> Up floor = H+16 (2 Up slots).
+        let reference = scenario(&advisory, "reference");
+        assert_eq!(reference.modeled_send_count, 2);
+        assert_eq!(reference.modeled_down_packet_count, 1);
+        assert_eq!(reference.modeled_up_packet_count, 1);
+        assert_eq!(reference.modeled_up_slot_count, 2);
+        assert_eq!(reference.modeled_h_floor_displaced_up_slot_count, 2);
+        assert_eq!(reference.max_modeled_h_floor_displacement_us, 16);
     }
 
     #[test]
@@ -709,40 +1177,19 @@ mod tests {
             count_authored_timestamp_groups(&[chord(0, 1_000)], 0).unwrap(),
             1
         );
-        // Coincident: onsets {0, H} U releases {H, 2H} = {0, H, 2H} -> 3 groups
         assert_eq!(
             count_authored_timestamp_groups(&[chord(0, 0), chord(1, 17_467)], 17_467).unwrap(),
             3
         );
-        // Disjoint: onsets {0, 40_000} U releases {17_467, 57_467} -> 4 groups
         assert_eq!(
             count_authored_timestamp_groups(&[chord(0, 0), chord(1, 40_000)], 17_467).unwrap(),
             4
         );
-        // Overflow: scheduled_us + hold_us > u64::MAX
         assert!(count_authored_timestamp_groups(&[chord(0, u64::MAX)], 1).is_err());
     }
 
     #[test]
-    fn exact_one_frame_nominal_up_gap_is_not_short_gap_risk() {
-        let config = config(false);
-        let policy = policy(&config);
-        let frame_us = policy.frame_us;
-        let h = policy.min_hold_us;
-        let authored = schedule(&[(0, 0x15), (h + frame_us, 0x15)], h);
-        let advisory = analyze_variant(
-            &authored,
-            &config,
-            &policy,
-            "one-frame-gap",
-            &AtomicBool::new(false),
-        );
-        assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
-        assert_eq!(advisory.short_up_gap_repeat_count, 0);
-    }
-
-    #[test]
-    fn sparse_nine_note_schedule_finishes_the_bounded_executor_model() {
+    fn sparse_nine_note_schedule_finishes_all_three_scenarios() {
         let config = config(false);
         let policy = policy(&config);
         let chords = (1..=9_u64)
@@ -758,94 +1205,49 @@ mod tests {
             &AtomicBool::new(false),
         );
 
-        assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
+        assert_eq!(advisory.status, TimingAdvisoryStatus::Analyzed);
         assert_eq!(advisory.down_generation_count, Some(9));
         assert_eq!(advisory.unmatched_up_count, Some(0));
-        assert_eq!(advisory.modeled_send_count, 18);
-        assert_ne!(
-            advisory.dispatch_model_status,
+        assert_eq!(advisory.same_key_repeat_count, 8);
+        assert_eq!(advisory.zero_slack_repeat_count, 0);
+        assert_eq!(
+            advisory.min_same_key_slack_us,
+            Some(100_000 - policy.min_hold_us)
+        );
+        assert_eq!(advisory.scenarios.len(), 3);
+        assert_eq!(scenario(&advisory, "reference").modeled_send_count, 18);
+    }
+
+    #[test]
+    fn cancellation_and_invalid_policy_fail_closed_without_partial_scenarios() {
+        let config = config(false);
+        let policy = policy(&config);
+        let authored = schedule(&[(0, 0x15), (policy.min_hold_us, 0x15)], policy.min_hold_us);
+
+        let cancelled = AtomicBool::new(true);
+        let cancelled_advisory =
+            analyze_variant(&authored, &config, &policy, "cancelled", &cancelled);
+        assert_eq!(cancelled_advisory.status, TimingAdvisoryStatus::Unavailable);
+        assert_eq!(
+            cancelled_advisory.dispatch_model_status,
             DispatchModelStatus::Unavailable
         );
-    }
+        assert!(cancelled_advisory.scenarios.is_empty());
 
-    #[test]
-    fn executor_model_reports_late_up_and_hol_independently_of_one_frame_nominal_gap() {
-        let config = config(false);
-        let policy = policy(&config);
-        let h = policy.min_hold_us;
-        let frame = policy.frame_us;
-        let authored = schedule(&[(0, 0x15), (10, 0x16), (h + frame, 0x15)], h);
-
-        let advisory = analyze_variant(
+        let mut mismatched = config.clone();
+        mismatched.fps = 120;
+        let invalid_advisory = analyze_variant(
             &authored,
-            &config,
+            &mismatched,
             &policy,
-            "modeled-pressure-with-one-frame-gap",
+            "mismatched-policy",
             &AtomicBool::new(false),
         );
-
-        assert_eq!(advisory.status, TimingAdvisoryStatus::NoShortUpGapRisk);
-        assert_eq!(advisory.short_up_gap_repeat_count, 0);
+        assert_eq!(invalid_advisory.status, TimingAdvisoryStatus::Unavailable);
         assert_eq!(
-            advisory.dispatch_model_status,
-            DispatchModelStatus::ModeledRisk
+            invalid_advisory.dispatch_model_status,
+            DispatchModelStatus::Unavailable
         );
-        assert!(advisory.modeled_negative_slack_send_count > 0);
-        assert!(advisory.modeled_h_floor_displaced_send_count > 0);
-        assert!(advisory.max_modeled_h_floor_displacement_us > 0);
-        assert!(advisory.modeled_head_of_line_send_count > 0);
-        assert!(advisory.max_modeled_head_of_line_delay_us > 0);
-        assert!(advisory.max_modeled_lateness_us > 0);
-    }
-
-    #[test]
-    fn cancelled_and_invalid_schedules_fail_closed_as_advisory_only() {
-        let config = config(false);
-        let policy = policy(&config);
-        let authored = schedule(&[(0, 0x15)], policy.min_hold_us);
-        let cancelled = analyze_variant(
-            &authored,
-            &config,
-            &policy,
-            "cancelled-plan",
-            &AtomicBool::new(true),
-        );
-        assert_eq!(cancelled.status, TimingAdvisoryStatus::Unavailable);
-
-        let invalid_order = schedule(&[(20_000, 0x15), (10_000, 0x15)], policy.min_hold_us);
-        let invalid = analyze_variant(
-            &invalid_order,
-            &config,
-            &policy,
-            "invalid-order-plan",
-            &AtomicBool::new(false),
-        );
-        assert_eq!(invalid.status, TimingAdvisoryStatus::Unavailable);
-        assert!(invalid.explanation.contains("could not be inspected"));
-    }
-
-    #[test]
-    fn dry_run_advisory_is_fingerprint_specific_and_hypothetical() {
-        let config = config(true);
-        let policy = policy(&config);
-        let authored = schedule(&[(0, 0x15)], policy.min_hold_us);
-        let first = analyze_variant(
-            &authored,
-            &config,
-            &policy,
-            "dry-run-a",
-            &AtomicBool::new(false),
-        );
-        let second = analyze_variant(
-            &authored,
-            &config,
-            &policy,
-            "dry-run-b",
-            &AtomicBool::new(false),
-        );
-        assert!(first.dry_run_is_hypothetical);
-        assert_eq!(first.plan_fingerprint, "dry-run-a");
-        assert_ne!(first.plan_fingerprint, second.plan_fingerprint);
-        assert_eq!(first.status, TimingAdvisoryStatus::NoShortUpGapRisk);
+        assert!(invalid_advisory.scenarios.is_empty());
     }
 }

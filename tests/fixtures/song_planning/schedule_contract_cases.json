@@ -344,8 +344,9 @@
         "duration_us": 37467,
         "impossible_same_key_repeats": 0,
         "max_polyphony": 1,
-        "min_same_key_up_gap_us": null,
-        "short_up_gap_repeat_count": 0,
+        "min_same_key_slack_us": null,
+        "same_key_repeat_count": 0,
+        "zero_slack_repeat_count": 0,
         "note_count": 2,
         "playback_duration_us": 37467,
         "recommended_hold_frames": null,
@@ -371,7 +372,9 @@
         "suggested_hold_frames": 1,
         "suggested_tempo_scale": 1,
         "timing_stress_rate": 0,
-        "short_up_gap_repeat_count": 0
+        "min_same_key_slack_us": null,
+        "same_key_repeat_count": 0,
+        "zero_slack_repeat_count": 0
       }
     },
     {
@@ -439,8 +442,9 @@
         "duration_us": 37534,
         "impossible_same_key_repeats": 0,
         "max_polyphony": 2,
-        "min_same_key_up_gap_us": 4572,
-        "short_up_gap_repeat_count": 1,
+        "min_same_key_slack_us": 4572,
+        "same_key_repeat_count": 1,
+        "zero_slack_repeat_count": 0,
         "note_count": 3,
         "playback_duration_us": 37534,
         "recommended_hold_frames": null,
@@ -458,16 +462,17 @@
         "min_any_note_gap_us": 15000,
         "min_same_key_gap_us": 15000,
         "peak_notes_per_second_1s": 2,
-        "reason": "short same-key Up gaps detected",
+        "reason": "No timing conflicts detected.",
         "recommendations": [
-          "1 physically feasible same-key repeat(s) have an Up-to-Down gap shorter than one frame; the game may miss a short Up pulse.",
           "Shortest same-key repeat interval: 15.8ms."
         ],
-        "severity": "medium",
-        "suggested_hold_frames": null,
-        "suggested_tempo_scale": null,
+        "severity": "low",
+        "suggested_hold_frames": 1.25,
+        "suggested_tempo_scale": 0.95,
         "timing_stress_rate": 0,
-        "short_up_gap_repeat_count": 1
+        "min_same_key_slack_us": 4572,
+        "same_key_repeat_count": 1,
+        "zero_slack_repeat_count": 0
       }
     },
     {
@@ -529,8 +534,9 @@
         "duration_us": 37167,
         "impossible_same_key_repeats": 0,
         "max_polyphony": 1,
-        "min_same_key_up_gap_us": null,
-        "short_up_gap_repeat_count": 0,
+        "min_same_key_slack_us": null,
+        "same_key_repeat_count": 0,
+        "zero_slack_repeat_count": 0,
         "note_count": 2,
         "playback_duration_us": 37167,
         "recommended_hold_frames": null,
@@ -556,7 +562,9 @@
         "suggested_hold_frames": 1,
         "suggested_tempo_scale": 1,
         "timing_stress_rate": 0,
-        "short_up_gap_repeat_count": 0
+        "min_same_key_slack_us": null,
+        "same_key_repeat_count": 0,
+        "zero_slack_repeat_count": 0
       }
     },
     {
@@ -576,8 +584,9 @@
         "duration_us": 0,
         "impossible_same_key_repeats": 0,
         "max_polyphony": 0,
-        "min_same_key_up_gap_us": null,
-        "short_up_gap_repeat_count": 0,
+        "min_same_key_slack_us": null,
+        "same_key_repeat_count": 0,
+        "zero_slack_repeat_count": 0,
         "note_count": 0,
         "playback_duration_us": 0,
         "recommended_hold_frames": null,
@@ -603,7 +612,9 @@
         "suggested_hold_frames": 1,
         "suggested_tempo_scale": 1,
         "timing_stress_rate": 0,
-        "short_up_gap_repeat_count": 0
+        "min_same_key_slack_us": null,
+        "same_key_repeat_count": 0,
+        "zero_slack_repeat_count": 0
       }
     },
     {
@@ -765,8 +776,9 @@
         "duration_us": 23467,
         "impossible_same_key_repeats": 0,
         "max_polyphony": 7,
-        "min_same_key_up_gap_us": null,
-        "short_up_gap_repeat_count": 0,
+        "min_same_key_slack_us": null,
+        "same_key_repeat_count": 0,
+        "zero_slack_repeat_count": 0,
         "note_count": 7,
         "playback_duration_us": 23467,
         "recommended_hold_frames": null,
@@ -798,7 +810,9 @@
         "suggested_hold_frames": 1.5,
         "suggested_tempo_scale": 1,
         "timing_stress_rate": 0,
-        "short_up_gap_repeat_count": 0
+        "min_same_key_slack_us": null,
+        "same_key_repeat_count": 0,
+        "zero_slack_repeat_count": 0
       }
     }
   ],

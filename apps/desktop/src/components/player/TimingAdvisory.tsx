@@ -7,8 +7,7 @@ interface TimingAdvisoryProps {
 const statusLabel: Record<GenerationTimingAdvisoryDto['status'], string> = {
   not_analyzed: 'Not analyzed',
   unavailable: 'Unavailable',
-  no_short_up_gap_risk: 'No short same-key Up gap',
-  short_up_gap_risk: 'Short same-key Up gap risk',
+  analyzed: 'Nominal scheduling slack analyzed',
 };
 
 const dispatchModelStatusLabel: Record<
@@ -17,8 +16,8 @@ const dispatchModelStatusLabel: Record<
 > = {
   not_analyzed: 'Executor model not analyzed',
   unavailable: 'Executor model unavailable',
-  no_modeled_risk: 'No modeled executor pressure',
-  modeled_risk: 'Modeled executor pressure',
+  no_modeled_displacement: 'No modeled executor displacement',
+  modeled_displacement: 'Modeled executor displacement',
 };
 
 export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
@@ -34,9 +33,12 @@ export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
     );
   }
 
+  const reference = advisory.scenarios.find((scenario) => scenario.scenario_id === 'reference');
+  const stress = advisory.scenarios.find((scenario) => scenario.scenario_id === 'stress');
+
   return (
     <div
-      className="grid min-w-0 gap-1 rounded-control border border-border bg-surface p-2 text-xs text-text-secondary data-[status=short_up_gap_risk]:border-warning-border data-[status=short_up_gap_risk]:bg-warning-surface"
+      className="grid min-w-0 gap-1 rounded-control border border-border bg-surface p-2 text-xs text-text-secondary"
       data-slot="timing-advisory"
       data-status={advisory.status}
       data-plan-fingerprint={advisory.plan_fingerprint}
@@ -53,29 +55,45 @@ export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
               ` · ${advisory.unmatched_up_count} unmatched Up metadata item(s)`}
           </span>
         )}
-      {advisory.status !== 'unavailable' && advisory.status !== 'not_analyzed' && (
+      {advisory.status === 'analyzed' && (
         <span>
-          Short authored Up gaps: {advisory.short_up_gap_repeat_count}
+          Same-key repeats: {advisory.same_key_repeat_count}
+          {advisory.min_same_key_slack_us !== null
+            ? ` · min nominal slack (I - H): ${advisory.min_same_key_slack_us} µs`
+            : ' · min nominal slack (I - H): n/a'}
+          {advisory.zero_slack_repeat_count > 0 &&
+            ` · zero-slack (I = H): ${advisory.zero_slack_repeat_count}`}
           {advisory.effective_hold_floor_h_us !== null &&
             ` · minimum hold H: ${advisory.effective_hold_floor_h_us} µs`}
         </span>
       )}
       <div
-        className="grid min-w-0 gap-1 border-t border-border pt-1.5 data-[status=modeled_risk]:text-warning"
+        className="grid min-w-0 gap-1 border-t border-border pt-1.5 data-[status=modeled_displacement]:text-warning"
         data-status={advisory.dispatch_model_status}
       >
         <strong className="font-semibold text-foreground">
           {dispatchModelStatusLabel[advisory.dispatch_model_status]}
         </strong>
         <span>{advisory.dispatch_model_explanation}</span>
-        <span>
-          {advisory.modeled_send_count} modeled sends · {advisory.modeled_negative_slack_send_count}{' '}
-          late boundaries · {advisory.modeled_h_floor_displaced_send_count} H-floor delays (max{' '}
-          {advisory.max_modeled_h_floor_displacement_us} µs) ·{' '}
-          {advisory.modeled_head_of_line_send_count} head-of-line delays (max{' '}
-          {advisory.max_modeled_head_of_line_delay_us} µs) · max lateness{' '}
-          {advisory.max_modeled_lateness_us} µs
-        </span>
+        {reference && (
+          <span>
+            Reference ({reference.estimated_sender_setup_us}+{reference.estimated_per_input_us}
+            /ev+{reference.estimated_post_send_us} µs): max Down lateness{' '}
+            {reference.max_modeled_down_lateness_us} µs (key readiness{' '}
+            {reference.max_modeled_key_readiness_displacement_us} µs · cursor-order{' '}
+            {reference.max_modeled_cursor_order_displacement_us} µs · worker occupancy{' '}
+            {reference.max_modeled_worker_occupancy_residual_us} µs) · max Up H-floor{' '}
+            {reference.max_modeled_h_floor_displacement_us} µs
+          </span>
+        )}
+        {stress && (
+          <span>
+            Stress ({stress.estimated_sender_setup_us}+{stress.estimated_per_input_us}/ev+
+            {stress.estimated_post_send_us} µs): max Down lateness{' '}
+            {stress.max_modeled_down_lateness_us} µs · max Up H-floor{' '}
+            {stress.max_modeled_h_floor_displacement_us} µs
+          </span>
+        )}
       </div>
       {advisory.dry_run_is_hypothetical && (
         <span>This is a prepared dry-run schedule; no input is sent.</span>
@@ -84,15 +102,15 @@ export function TimingAdvisory({ advisory }: TimingAdvisoryProps) {
         <summary className="cursor-pointer text-text-secondary hover:text-foreground">
           About this check
         </summary>
+        <span className="mt-1 block">{advisory.model_cost_disclaimer}</span>
         <span className="mt-1 block">
-          The advisory counts canonical Down generations and authored Up-to-Down gaps. Its
-          illustrative execution model reuses the production DispatchExecutor with{' '}
-          {advisory.estimated_sender_setup_us} µs sender setup, {advisory.estimated_per_input_us} µs
-          per input, and {advisory.estimated_post_send_us} µs post-send assumptions. It does not
-          model receiver observation or change authored timing, hold, tempo, admission, or playback.
+          The advisory reports canonical Down generations and nominal same-key scheduling slack
+          (I - H). Its illustrative execution scenarios reuse the production DispatchExecutor and
+          do not model receiver observation or change authored timing, hold, tempo, admission, or
+          playback.
         </span>
         <span className="mt-1 block">
-          Bounds: {advisory.generation_limit} generations, {advisory.work_limit_units} key visits,
+          Bounds: {advisory.generation_limit} generations, {advisory.work_limit_units} work units,
           and {Math.round(advisory.working_memory_limit_bytes / 1_048_576)} MiB working memory.
         </span>
       </details>

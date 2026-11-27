@@ -31,10 +31,7 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
     prepared?.admission === 'confirmation_required' && prepared.prepared_id !== null;
   const issue = playbackIssuePresentation(playback);
   const riskExplanation = prepared
-    ? prepared.risk.reasons.join(' ') ||
-      (prepared.risk.short_up_gap_repeat_count > 0
-        ? `${prepared.risk.short_up_gap_repeat_count} feasible same-key repeat(s) have an authored Up-to-Down gap shorter than one frame. The game may miss a short Up pulse.`
-        : 'Review the prepared schedule before starting.')
+    ? prepared.risk.reasons.join(' ') || 'Review the prepared schedule before starting.'
     : '';
   const blockedMessage =
     prepared?.admission === 'blocked' ? (prepared.error_message ?? playback.error) : null;
@@ -108,11 +105,12 @@ export function PlaybackAdmission({ useStore }: PlaybackAdmissionProps) {
                     const isPrimary = decision.decision === primaryDecision;
                     const descriptionId = `playback-decision-description-${decision.decision}`;
                     const estimateLabel =
-                      status === 'short_up_gap_risk'
-                        ? 'Short same-key Up gap risk'
-                        : status === 'no_short_up_gap_risk'
-                          ? 'No short same-key Up gap'
-                          : 'View timing estimate';
+                      status === 'analyzed'
+                        ? variant?.timing_advisory?.min_same_key_slack_us !== null &&
+                          variant?.timing_advisory?.min_same_key_slack_us !== undefined
+                          ? `Timing estimate (min slack ${variant.timing_advisory.min_same_key_slack_us} µs)`
+                          : 'Timing estimate (no same-key repeats)'
+                        : 'View timing estimate';
                     return (
                       <div
                         className="grid min-w-0 grid-rows-[minmax(48px,auto)_auto_auto] content-start gap-1.5"

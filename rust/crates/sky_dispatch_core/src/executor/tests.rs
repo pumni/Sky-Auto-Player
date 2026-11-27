@@ -340,3 +340,120 @@ fn forced_conversion_failure_fails_executor_construction() {
         .expect_err("conversion overflow must reject prepared schedule construction");
     assert!(err.contains("overflow"), "{err}");
 }
+
+#[test]
+fn prepared_nominal_up_exact_rounding_at_10mhz_and_3579545hz_and_compact_layout() {
+    // PreparedChord keeps 32-byte layout (nominal_up_offset_ticks replaces onset_us).
+    assert_eq!(std::mem::size_of::<PreparedChord>(), 32);
+
+    // 1. 10 MHz (exact integral 10 ticks/us): ceil((onset + H) * 10) == onset_ticks + hold_ticks.
+    let freq_10m = NonZeroU64::new(10_000_000).expect("10 MHz");
+    let plan_10m = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 1,
+            scheduled_us: 12_345,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &[0x15],
+        17_167,
+    )
+    .expect("10 MHz plan");
+    let prep_10m = PreparedDispatchSchedule::prepare(&plan_10m, freq_10m, 0).expect("10 MHz prep");
+    let exec_10m = DispatchExecutor::from_prepared_schedule(prep_10m);
+    let c10 = exec_10m.current_chord().expect("chord");
+    assert_eq!(c10.onset_ticks, TimelineTicks::from_raw(123_450));
+    assert_eq!(
+        c10.nominal_up_offset_ticks,
+        TimelineTicks::from_raw(295_120)
+    );
+
+    // 2. 3,579,545 Hz (NTSC colorburst non-integral QPC):
+    //    onset_us = 100, hold_us = 17_167:
+    //    ceil(100 * 3579545 / 1e6) = ceil(357.9545) = 358
+    //    ceil(17167 * 3579545 / 1e6) = ceil(61450.049015) = 61451
+    //    onset_ticks + hold_ticks = 358 + 61451 = 61809
+    //    ceil((100 + 17167) * 3579545 / 1e6) = ceil(61808.003515) = 61809 (same here);
+    //    Now test onset_us = 1, hold_us = 1:
+    //    ceil(1 * 3.579545) = 4; 4 + 4 = 8;
+    //    ceil(2 * 3.579545) = ceil(7.15909) = 8 (same);
+    //    Now test onset_us = 2, hold_us = 2:
+    //    ceil(2 * 3.579545) = ceil(7.15909) = 8; 8 + 8 = 16;
+    //    ceil(4 * 3.579545) = ceil(14.31818) = 15 (differs by 1 tick!).
+    let freq_ntsc = NonZeroU64::new(3_579_545).expect("3.579545 MHz");
+    let plan_ntsc = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 2,
+            scheduled_us: 2,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &[0x15],
+        2,
+    )
+    .expect("NTSC plan");
+    let prep_ntsc = PreparedDispatchSchedule::prepare(&plan_ntsc, freq_ntsc, 0).expect("NTSC prep");
+    assert_eq!(prep_ntsc.hold_ticks(), DurationTicks::from_raw(8));
+    let exec_ntsc = DispatchExecutor::from_prepared_schedule(prep_ntsc);
+    let cntsc = exec_ntsc.current_chord().expect("chord");
+    assert_eq!(cntsc.onset_ticks, TimelineTicks::from_raw(8));
+    assert_eq!(cntsc.nominal_up_offset_ticks, TimelineTicks::from_raw(15));
+    assert_ne!(
+        cntsc.nominal_up_offset_ticks.as_u64(),
+        cntsc.onset_ticks.as_u64() + exec_ntsc.hold_ticks().as_u64(),
+        "exact ceil((onset+H)*f/1e6) must stay distinct from ceil(onset*f/1e6) + ceil(H*f/1e6)"
+    );
+}
+
+#[test]
+fn epoch_overflow_during_send_timing_projection_fails_closed() {
+    let freq = NonZeroU64::new(1_000_000).expect("1 MHz");
+    let plan = build_onset_plan(
+        &[OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+        }],
+        &[0x15],
+        10_000,
+    )
+    .expect("plan");
+    let prep = PreparedDispatchSchedule::prepare(&plan, freq, 0).expect("prep");
+    let mut exec = DispatchExecutor::from_prepared_schedule(prep);
+    let near_max_epoch = QpcTicks::from_raw(u64::MAX - 5_000);
+    // Activate at near_max_epoch - 20_000 so completion + H fits u64,
+    // while epoch + nominal_up_offset_ticks (near_max_epoch + 10_000) overflows u64.
+    exec.on_send_completed_at(0, 1, QpcTicks::from_raw(u64::MAX - 20_000))
+        .expect("Down commit fits u64");
+    let err = exec
+        .evaluate_at(QpcTicks::from_raw(u64::MAX - 5_000), near_max_epoch)
+        .expect_err("epoch + nominal_up_offset_ticks overflow must fail closed");
+    assert!(matches!(err, TimeArithmeticError::Overflow));
+}
+
+#[test]
+fn compact_active_slot_origin_resets_cleanly_on_cleanup_and_terminal_shutdown() {
+    let mut exec = make_executor(
+        &[(10, 0, &[0x15, 0x16]), (20, 50_000, &[0x15])],
+        &[0x15, 0x16],
+        10_000,
+    );
+    let epoch = QpcTicks::from_raw(1_000);
+    exec.on_send_completed_at(0, 0b11, epoch)
+        .expect("commit Down");
+    assert_eq!(exec.up_source_action_index(0b11), Some(10));
+    assert!(exec.active_generation_for_slot(0).is_some());
+    assert!(exec.active_generation_for_slot(1).is_some());
+
+    assert_eq!(exec.on_verified_cleanup().expect("cleanup"), 2);
+    assert_eq!(exec.active_mask(), 0);
+    assert_eq!(exec.up_source_action_index(0b11), None);
+    assert_eq!(exec.active_generation_for_slot(0), None);
+    exec.check_invariants().unwrap();
+
+    // Terminal shutdown cancels remaining scheduled chord cleanly.
+    assert_eq!(
+        exec.cancel_remaining_generations_for_terminal_shutdown()
+            .expect("terminal cancel"),
+        1
+    );
+    exec.check_invariants().unwrap();
+}

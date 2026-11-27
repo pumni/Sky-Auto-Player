@@ -495,7 +495,9 @@ pub struct RiskSummaryDto {
     pub headline: String,
     pub reasons: Vec<String>,
     pub recommendations: Vec<String>,
-    pub short_up_gap_repeat_count: u64,
+    pub min_same_key_slack_us: Option<u64>,
+    pub same_key_repeat_count: u64,
+    pub zero_slack_repeat_count: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -534,8 +536,7 @@ pub struct RiskDecisionDto {
 pub enum TimingAdvisoryStatus {
     NotAnalyzed,
     Unavailable,
-    NoShortUpGapRisk,
-    ShortUpGapRisk,
+    Analyzed,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, TS, PartialEq, Eq)]
@@ -544,8 +545,36 @@ pub enum TimingAdvisoryStatus {
 pub enum DispatchModelStatus {
     NotAnalyzed,
     Unavailable,
-    NoModeledRisk,
-    ModeledRisk,
+    NoModeledDisplacement,
+    ModeledDisplacement,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchModelScenarioDto {
+    pub scenario_id: String,
+    pub label: String,
+    pub estimated_sender_setup_us: u64,
+    pub estimated_per_input_us: u64,
+    pub estimated_post_send_us: u64,
+    pub modeled_send_count: u64,
+    pub modeled_down_packet_count: u64,
+    pub modeled_up_packet_count: u64,
+    pub modeled_late_down_count: u64,
+    pub max_modeled_down_lateness_us: u64,
+    pub modeled_key_readiness_displaced_down_count: u64,
+    pub max_modeled_key_readiness_displacement_us: u64,
+    pub modeled_cursor_order_displaced_down_count: u64,
+    pub max_modeled_cursor_order_displacement_us: u64,
+    pub modeled_worker_occupancy_displaced_down_count: u64,
+    pub max_modeled_worker_occupancy_residual_us: u64,
+    pub modeled_up_slot_count: u64,
+    pub modeled_h_floor_displaced_up_slot_count: u64,
+    pub max_modeled_h_floor_displacement_us: u64,
+    pub modeled_late_up_packet_count: u64,
+    pub max_modeled_up_lateness_us: u64,
+    pub max_modeled_up_pre_call_above_floor_us: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq, Eq)]
@@ -561,20 +590,14 @@ pub struct GenerationTimingAdvisoryDto {
     pub generation_limit: u64,
     pub work_limit_units: u64,
     pub working_memory_limit_bytes: u64,
-    pub short_up_gap_repeat_count: u64,
+    pub min_same_key_slack_us: Option<u64>,
+    pub same_key_repeat_count: u64,
+    pub zero_slack_repeat_count: u64,
     pub effective_hold_floor_h_us: Option<u64>,
     pub dispatch_model_status: DispatchModelStatus,
     pub dispatch_model_explanation: String,
-    pub modeled_send_count: u64,
-    pub modeled_negative_slack_send_count: u64,
-    pub modeled_h_floor_displaced_send_count: u64,
-    pub max_modeled_h_floor_displacement_us: u64,
-    pub modeled_head_of_line_send_count: u64,
-    pub max_modeled_head_of_line_delay_us: u64,
-    pub max_modeled_lateness_us: u64,
-    pub estimated_sender_setup_us: u64,
-    pub estimated_per_input_us: u64,
-    pub estimated_post_send_us: u64,
+    pub model_cost_disclaimer: String,
+    pub scenarios: Vec<DispatchModelScenarioDto>,
     pub dry_run_is_hypothetical: bool,
 }
 
@@ -1195,9 +1218,9 @@ pub fn startup_window_revealed(
 #[cfg(test)]
 mod tests {
     use super::{
-        AppearanceMode, DispatchModelStatus, GenerationTimingAdvisoryDto, PlaybackCommandAckDto,
-        PlaybackConfigDto, PlaybackDecision, PlaybackPlanVariantDto, SettingsDto, SettingsPatch,
-        TimingAdvisoryStatus,
+        AppearanceMode, DispatchModelScenarioDto, DispatchModelStatus, GenerationTimingAdvisoryDto,
+        PlaybackCommandAckDto, PlaybackConfigDto, PlaybackDecision, PlaybackPlanVariantDto,
+        SettingsDto, SettingsPatch, TimingAdvisoryStatus,
     };
     use serde_json::json;
 
@@ -1375,32 +1398,73 @@ mod tests {
             config,
             plan_fingerprint: "plan-a".into(),
             timing_advisory: Some(GenerationTimingAdvisoryDto {
-                status: TimingAdvisoryStatus::ShortUpGapRisk,
+                status: TimingAdvisoryStatus::Analyzed,
                 plan_fingerprint: "plan-a".into(),
-                explanation: "1 feasible repeat has a short authored Up gap".into(),
+                explanation: "1 of 1 same-key repeat(s) have zero nominal scheduling slack (I = H; minimum slack 0 µs).".into(),
                 total_authored_timestamp_group_count: Some(3),
                 down_generation_count: Some(2),
-                unmatched_up_count: Some(1),
+                unmatched_up_count: Some(0),
                 generation_limit: 50_000,
                 work_limit_units: 3_000_000,
                 working_memory_limit_bytes: 67_108_864,
-                short_up_gap_repeat_count: 1,
+                min_same_key_slack_us: Some(0),
+                same_key_repeat_count: 1,
+                zero_slack_repeat_count: 1,
                 effective_hold_floor_h_us: Some(17_467),
-                dispatch_model_status: DispatchModelStatus::ModeledRisk,
-                dispatch_model_explanation: "Illustrative executor pressure".into(),
-                modeled_send_count: 4,
-                modeled_negative_slack_send_count: 1,
-                modeled_h_floor_displaced_send_count: 1,
-                max_modeled_h_floor_displacement_us: 13,
-                modeled_head_of_line_send_count: 1,
-                max_modeled_head_of_line_delay_us: 8,
-                max_modeled_lateness_us: 21,
-                estimated_sender_setup_us: 10,
-                estimated_per_input_us: 3,
-                estimated_post_send_us: 5,
+                dispatch_model_status: DispatchModelStatus::ModeledDisplacement,
+                dispatch_model_explanation: "Reference illustrative model: 1 late Down (max 31 µs), 2 H-floor Up slots (max 13 µs).".into(),
+                model_cost_disclaimer: "Illustrative modeled cost only — not measured SendInput latency or a predictive gameplay guarantee.".into(),
+                scenarios: vec![DispatchModelScenarioDto {
+                    scenario_id: "reference".into(),
+                    label: "Reference (illustrative modeled cost: 10 µs + 3 µs/event + 5 µs)".into(),
+                    estimated_sender_setup_us: 10,
+                    estimated_per_input_us: 3,
+                    estimated_post_send_us: 5,
+                    modeled_send_count: 4,
+                    modeled_down_packet_count: 2,
+                    modeled_up_packet_count: 2,
+                    modeled_late_down_count: 1,
+                    max_modeled_down_lateness_us: 31,
+                    modeled_key_readiness_displaced_down_count: 1,
+                    max_modeled_key_readiness_displacement_us: 31,
+                    modeled_cursor_order_displaced_down_count: 0,
+                    max_modeled_cursor_order_displacement_us: 0,
+                    modeled_worker_occupancy_displaced_down_count: 0,
+                    max_modeled_worker_occupancy_residual_us: 0,
+                    modeled_up_slot_count: 2,
+                    modeled_h_floor_displaced_up_slot_count: 2,
+                    max_modeled_h_floor_displacement_us: 13,
+                    modeled_late_up_packet_count: 2,
+                    max_modeled_up_lateness_us: 44,
+                    max_modeled_up_pre_call_above_floor_us: 0,
+                }],
                 dry_run_is_hypothetical: false,
             }),
         };
+        let scenario_json = json!({
+            "scenario_id": "reference",
+            "label": "Reference (illustrative modeled cost: 10 µs + 3 µs/event + 5 µs)",
+            "estimated_sender_setup_us": 10,
+            "estimated_per_input_us": 3,
+            "estimated_post_send_us": 5,
+            "modeled_send_count": 4,
+            "modeled_down_packet_count": 2,
+            "modeled_up_packet_count": 2,
+            "modeled_late_down_count": 1,
+            "max_modeled_down_lateness_us": 31,
+            "modeled_key_readiness_displaced_down_count": 1,
+            "max_modeled_key_readiness_displacement_us": 31,
+            "modeled_cursor_order_displaced_down_count": 0,
+            "max_modeled_cursor_order_displacement_us": 0,
+            "modeled_worker_occupancy_displaced_down_count": 0,
+            "max_modeled_worker_occupancy_residual_us": 0,
+            "modeled_up_slot_count": 2,
+            "modeled_h_floor_displaced_up_slot_count": 2,
+            "max_modeled_h_floor_displacement_us": 13,
+            "modeled_late_up_packet_count": 2,
+            "max_modeled_up_lateness_us": 44,
+            "max_modeled_up_pre_call_above_floor_us": 0
+        });
         assert_eq!(
             serde_json::to_value(present).expect("serialize modeled advisory"),
             json!({
@@ -1414,42 +1478,36 @@ mod tests {
                 },
                 "plan_fingerprint": "plan-a",
                 "timing_advisory": {
-                    "status": "short_up_gap_risk",
+                    "status": "analyzed",
                     "plan_fingerprint": "plan-a",
-                    "explanation": "1 feasible repeat has a short authored Up gap",
+                    "explanation": "1 of 1 same-key repeat(s) have zero nominal scheduling slack (I = H; minimum slack 0 µs).",
                     "total_authored_timestamp_group_count": 3,
                     "down_generation_count": 2,
-                    "unmatched_up_count": 1,
+                    "unmatched_up_count": 0,
                     "generation_limit": 50_000,
                     "work_limit_units": 3_000_000,
                     "working_memory_limit_bytes": 67_108_864,
-                    "short_up_gap_repeat_count": 1,
+                    "min_same_key_slack_us": 0,
+                    "same_key_repeat_count": 1,
+                    "zero_slack_repeat_count": 1,
                     "effective_hold_floor_h_us": 17_467,
-                    "dispatch_model_status": "modeled_risk",
-                    "dispatch_model_explanation": "Illustrative executor pressure",
-                    "modeled_send_count": 4,
-                    "modeled_negative_slack_send_count": 1,
-                    "modeled_h_floor_displaced_send_count": 1,
-                    "max_modeled_h_floor_displacement_us": 13,
-                    "modeled_head_of_line_send_count": 1,
-                    "max_modeled_head_of_line_delay_us": 8,
-                    "max_modeled_lateness_us": 21,
-                    "estimated_sender_setup_us": 10,
-                    "estimated_per_input_us": 3,
-                    "estimated_post_send_us": 5,
+                    "dispatch_model_status": "modeled_displacement",
+                    "dispatch_model_explanation": "Reference illustrative model: 1 late Down (max 31 µs), 2 H-floor Up slots (max 13 µs).",
+                    "model_cost_disclaimer": "Illustrative modeled cost only — not measured SendInput latency or a predictive gameplay guarantee.",
+                    "scenarios": [scenario_json],
                     "dry_run_is_hypothetical": false
                 }
             })
         );
         assert_eq!(
-            serde_json::to_value(TimingAdvisoryStatus::NoShortUpGapRisk)
-                .expect("serialize no-risk status"),
-            json!("no_short_up_gap_risk")
+            serde_json::to_value(TimingAdvisoryStatus::Analyzed)
+                .expect("serialize analyzed status"),
+            json!("analyzed")
         );
         assert_eq!(
-            serde_json::to_value(DispatchModelStatus::NoModeledRisk)
+            serde_json::to_value(DispatchModelStatus::NoModeledDisplacement)
                 .expect("serialize execution-model status"),
-            json!("no_modeled_risk")
+            json!("no_modeled_displacement")
         );
     }
 }

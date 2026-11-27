@@ -39,35 +39,105 @@ function mockTimingAdvisory(
   fingerprint: string,
   status: GenerationTimingAdvisoryDto['status'],
   dryRun: boolean,
+  zeroSlackRepeats = 0,
 ): GenerationTimingAdvisoryDto {
-  const hasShortGapRisk = status === 'short_up_gap_risk';
+  const minSlack = zeroSlackRepeats > 0 ? 0 : 500;
   return {
     status,
     plan_fingerprint: fingerprint,
-    explanation: hasShortGapRisk
-      ? '2 feasible same-key repeats have an authored Up-to-Down gap shorter than one frame.'
-      : 'No feasible same-key repeat has an authored Up-to-Down gap shorter than one frame.',
+    explanation:
+      zeroSlackRepeats > 0
+        ? `${zeroSlackRepeats} of 2 same-key repeat(s) have zero nominal scheduling slack (I = H; minimum slack 0 µs). Hold-only allows I = H; transport overhead can displace the following Down.`
+        : '2 same-key repeat(s); minimum nominal scheduling slack (I - H) is 500 µs.',
     total_authored_timestamp_group_count: 12,
     down_generation_count: 12,
     unmatched_up_count: 0,
     generation_limit: 50_000,
     work_limit_units: 3_000_000,
     working_memory_limit_bytes: 67_108_864,
-    short_up_gap_repeat_count: hasShortGapRisk ? 2 : 0,
+    min_same_key_slack_us: minSlack,
+    same_key_repeat_count: 2,
+    zero_slack_repeat_count: zeroSlackRepeats,
     effective_hold_floor_h_us: 17_467,
-    dispatch_model_status: 'modeled_risk',
+    dispatch_model_status: 'modeled_displacement',
     dispatch_model_explanation:
-      'The illustrative executor model found 1 late send, 1 H-floor displacement, and 1 head-of-line delay.',
-    modeled_send_count: 4,
-    modeled_negative_slack_send_count: 1,
-    modeled_h_floor_displaced_send_count: 1,
-    max_modeled_h_floor_displacement_us: 13,
-    modeled_head_of_line_send_count: 1,
-    max_modeled_head_of_line_delay_us: 8,
-    max_modeled_lateness_us: 21,
-    estimated_sender_setup_us: 10,
-    estimated_per_input_us: 3,
-    estimated_post_send_us: 5,
+      'Reference illustrative model: 1 late Down(s) (max 31 µs), 2 H-floor Up slot(s) (max 13 µs), 0 cursor-order Down(s) (max 0 µs).',
+    model_cost_disclaimer:
+      'Illustrative modeled cost only — not measured SendInput latency or a predictive gameplay guarantee.',
+    scenarios: [
+      {
+        scenario_id: 'ideal',
+        label: 'Ideal (illustrative modeled cost: 0 µs)',
+        estimated_sender_setup_us: 0,
+        estimated_per_input_us: 0,
+        estimated_post_send_us: 0,
+        modeled_send_count: 4,
+        modeled_down_packet_count: 2,
+        modeled_up_packet_count: 2,
+        modeled_late_down_count: 0,
+        max_modeled_down_lateness_us: 0,
+        modeled_key_readiness_displaced_down_count: 0,
+        max_modeled_key_readiness_displacement_us: 0,
+        modeled_cursor_order_displaced_down_count: 0,
+        max_modeled_cursor_order_displacement_us: 0,
+        modeled_worker_occupancy_displaced_down_count: 0,
+        max_modeled_worker_occupancy_residual_us: 0,
+        modeled_up_slot_count: 2,
+        modeled_h_floor_displaced_up_slot_count: 0,
+        max_modeled_h_floor_displacement_us: 0,
+        modeled_late_up_packet_count: 0,
+        max_modeled_up_lateness_us: 0,
+        max_modeled_up_pre_call_above_floor_us: 0,
+      },
+      {
+        scenario_id: 'reference',
+        label: 'Reference (illustrative modeled cost: 10 µs + 3 µs/event + 5 µs)',
+        estimated_sender_setup_us: 10,
+        estimated_per_input_us: 3,
+        estimated_post_send_us: 5,
+        modeled_send_count: 4,
+        modeled_down_packet_count: 2,
+        modeled_up_packet_count: 2,
+        modeled_late_down_count: 1,
+        max_modeled_down_lateness_us: 31,
+        modeled_key_readiness_displaced_down_count: 1,
+        max_modeled_key_readiness_displacement_us: 31,
+        modeled_cursor_order_displaced_down_count: 0,
+        max_modeled_cursor_order_displacement_us: 0,
+        modeled_worker_occupancy_displaced_down_count: 0,
+        max_modeled_worker_occupancy_residual_us: 0,
+        modeled_up_slot_count: 2,
+        modeled_h_floor_displaced_up_slot_count: 2,
+        max_modeled_h_floor_displacement_us: 13,
+        modeled_late_up_packet_count: 2,
+        max_modeled_up_lateness_us: 44,
+        max_modeled_up_pre_call_above_floor_us: 0,
+      },
+      {
+        scenario_id: 'stress',
+        label: 'Stress (illustrative modeled cost: 100 µs + 10 µs/event + 50 µs)',
+        estimated_sender_setup_us: 100,
+        estimated_per_input_us: 10,
+        estimated_post_send_us: 50,
+        modeled_send_count: 4,
+        modeled_down_packet_count: 2,
+        modeled_up_packet_count: 2,
+        modeled_late_down_count: 1,
+        max_modeled_down_lateness_us: 270,
+        modeled_key_readiness_displaced_down_count: 1,
+        max_modeled_key_readiness_displacement_us: 270,
+        modeled_cursor_order_displaced_down_count: 0,
+        max_modeled_cursor_order_displacement_us: 0,
+        modeled_worker_occupancy_displaced_down_count: 0,
+        max_modeled_worker_occupancy_residual_us: 0,
+        modeled_up_slot_count: 2,
+        modeled_h_floor_displaced_up_slot_count: 2,
+        max_modeled_h_floor_displacement_us: 380,
+        modeled_late_up_packet_count: 2,
+        max_modeled_up_lateness_us: 380,
+        max_modeled_up_pre_call_above_floor_us: 0,
+      },
+    ],
     dry_run_is_hypothetical: dryRun,
   };
 }
@@ -726,7 +796,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                 ],
           recommendations:
             found.risk_level === 'low' ? ['Keep the selected settings.'] : ['Try 0.9× tempo.'],
-          short_up_gap_repeat_count: 0,
+          min_same_key_slack_us: null,
+          same_key_repeat_count: 0,
+          zero_slack_repeat_count: 0,
         },
         recommendation: {
           recommended_hold_frames: 2,
@@ -1169,7 +1241,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                   : 'Dense note transitions may need a slower tempo.',
               ],
         recommendations: ['Keep the selected settings.'],
-        short_up_gap_repeat_count: 0,
+        min_same_key_slack_us: null,
+        same_key_repeat_count: 0,
+        zero_slack_repeat_count: 0,
       };
       const songDetail: PreparedPlayback['song'] = {
         song_id: found.song_id,
@@ -1213,9 +1287,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
         };
       }
       const proceedAdvisoryStatus =
-        risk === 'low'
-          ? (options.readyPlanAdvisoryStatus ?? 'no_short_up_gap_risk')
-          : 'short_up_gap_risk';
+        risk === 'low' ? (options.readyPlanAdvisoryStatus ?? 'analyzed') : 'analyzed';
       const preparedId = `prepared-${++preparedPlaybackSequence}-${found.song_id}`;
       preparedConfigs.set(preparedId, request.config);
       preparedSongIds.set(preparedId, found.song_id);
@@ -1228,8 +1300,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
           ...(hasDryRunVariant ? ([['dry_run', dryRunConfig]] as const) : []),
         ]),
       );
-      const shortGapReason =
-        '2 feasible same-key repeats have an authored Up-to-Down gap shorter than one frame. The game may miss a short Up pulse.';
+      const denseClusterReason = 'Dense note clusters detected.';
       return {
         prepared_id: preparedId,
         song: {
@@ -1247,10 +1318,12 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                 : [
                     found.song_id === mockId(LONG_CONTENT_INDEX)
                       ? LONG_CONTENT_REASON
-                      : shortGapReason,
+                      : denseClusterReason,
                   ],
             recommendations: [],
-            short_up_gap_repeat_count: risk === 'low' ? 0 : 2,
+            min_same_key_slack_us: risk === 'low' ? 500 : 0,
+            same_key_repeat_count: 2,
+            zero_slack_repeat_count: risk === 'low' ? 0 : 1,
           },
           recommendation: null,
           sheet_analysis: sheetAnalysis,
@@ -1266,10 +1339,12 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
               : [
                   found.song_id === mockId(LONG_CONTENT_INDEX)
                     ? LONG_CONTENT_REASON
-                    : shortGapReason,
+                    : denseClusterReason,
                 ],
           recommendations: [],
-          short_up_gap_repeat_count: risk === 'low' ? 0 : 2,
+          min_same_key_slack_us: risk === 'low' ? 500 : 0,
+          same_key_repeat_count: 2,
+          zero_slack_repeat_count: risk === 'low' ? 0 : 1,
         },
         decisions:
           risk === 'low'
@@ -1292,6 +1367,7 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                     'mock-plan',
                     proceedAdvisoryStatus,
                     request.config.dry_run,
+                    0,
                   ),
                 },
               ]
@@ -1302,8 +1378,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                   plan_fingerprint: 'mock-plan',
                   timing_advisory: mockTimingAdvisory(
                     'mock-plan',
-                    'short_up_gap_risk',
+                    'analyzed',
                     request.config.dry_run,
+                    1,
                   ),
                 },
                 ...(hasDryRunVariant
@@ -1314,8 +1391,9 @@ export function createMockBridge(options: MockBridgeOptions = {}): DesktopBridge
                         plan_fingerprint: 'mock-dry-run-plan',
                         timing_advisory: mockTimingAdvisory(
                           'mock-dry-run-plan',
-                          'short_up_gap_risk',
+                          'analyzed',
                           true,
+                          1,
                         ),
                       },
                     ]

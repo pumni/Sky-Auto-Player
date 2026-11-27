@@ -25,7 +25,7 @@ async function setupPlaying(emitSnapshots = true) {
 describe('PlaybackAdmission recovery actions', () => {
   afterEach(cleanup);
 
-  it('shows the short-gap warning with Proceed and Dry Run while preserving settings', async () => {
+  it('shows the confirmation warning with nominal slack advisory, Proceed, and Dry Run while preserving settings', async () => {
     const store = createDesktopStore(createMockBridge());
     await act(async () => store.getState().initialize());
     const row = selectRowAtIndex(store.getState().library, 0);
@@ -39,9 +39,6 @@ describe('PlaybackAdmission recovery actions', () => {
     const reason = container.querySelector('#playback-confirmation-reason');
     const consequence = container.querySelector('#playback-confirmation-consequence');
     expect(reason).toHaveTextContent(prepared.risk.reasons.join(' '));
-    expect(
-      reason?.textContent?.match(/2 feasible same-key repeats have an authored Up-to-Down gap/g),
-    ).toHaveLength(1);
     expect(consequence).toHaveTextContent(
       'This warning estimates how accurately the game may register notes. Choose an option below or cancel without starting.',
     );
@@ -54,17 +51,19 @@ describe('PlaybackAdmission recovery actions', () => {
       'playback-decision-description-dry_run',
     );
     expect(screen.getByRole('button', { name: 'Not now' })).toBeEnabled();
-    const estimates = screen.getAllByText('Short same-key Up gap risk', { selector: 'summary' });
+    const estimates = screen.getAllByText('Timing estimate (min slack 0 µs)', {
+      selector: 'summary',
+    });
     expect(estimates).toHaveLength(2);
     estimates.forEach((summary) => expect(summary).toBeVisible());
     expect(
       container.querySelector('[data-plan-fingerprint="mock-plan"]')?.getAttribute('data-status'),
-    ).toBe('short_up_gap_risk');
+    ).toBe('analyzed');
     expect(container.querySelector('[data-plan-fingerprint="mock-plan"]')).toHaveTextContent(
-      'Short authored Up gaps: 2 · minimum hold H: 17467 µs',
+      'Same-key repeats: 2 · min nominal slack (I - H): 0 µs · zero-slack (I = H): 1 · minimum hold H: 17467 µs',
     );
     expect(container.querySelector('[data-plan-fingerprint="mock-plan"]')).toHaveTextContent(
-      'Bounds: 50000 generations, 3000000 key visits, and 64 MiB working memory.',
+      'Bounds: 50000 generations, 3000000 work units, and 64 MiB working memory.',
     );
     expect(screen.getAllByRole('button')).toHaveLength(3);
     const proceedButton = screen.getByRole('button', { name: 'Proceed with current settings' });
@@ -107,7 +106,9 @@ describe('PlaybackAdmission recovery actions', () => {
     expect(screen.getByText(prepared.risk.reasons[0]!)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Proceed with current settings' })).toBeEnabled();
     expect(screen.getByRole('button', { name: 'Test playback (no input)' })).toBeEnabled();
-    const estimates = screen.getAllByText('Short same-key Up gap risk', { selector: 'summary' });
+    const estimates = screen.getAllByText('Timing estimate (min slack 0 µs)', {
+      selector: 'summary',
+    });
     expect(estimates).toHaveLength(2);
     for (const summary of estimates) {
       const collapse = summary.closest('details');
@@ -137,10 +138,10 @@ describe('PlaybackAdmission recovery actions', () => {
       ...proceedVariant,
       timing_advisory: {
         ...timingAdvisory,
-        status: 'no_short_up_gap_risk' as const,
-        explanation:
-          'No feasible same-key repeat has an authored Up-to-Down gap shorter than one frame.',
-        short_up_gap_repeat_count: 0,
+        status: 'analyzed' as const,
+        explanation: '2 same-key repeat(s); minimum nominal scheduling slack (I - H) is 500 µs.',
+        min_same_key_slack_us: 500,
+        zero_slack_repeat_count: 0,
       },
     };
     store.setState((state) => ({
@@ -153,7 +154,9 @@ describe('PlaybackAdmission recovery actions', () => {
             ...prepared.risk,
             reasons: ['Dense transitions may need a slower tempo.'],
             recommendations: ['Try 0.9× tempo.'],
-            short_up_gap_repeat_count: 0,
+            min_same_key_slack_us: 500,
+            same_key_repeat_count: 2,
+            zero_slack_repeat_count: 0,
           },
           decisions: [
             { decision: 'proceed', label: 'Proceed with current settings' },
@@ -260,9 +263,7 @@ describe('PlaybackAdmission recovery actions', () => {
   });
 
   it('keeps ready-plan timing data without flashing an advisory before Play', async () => {
-    const store = createDesktopStore(
-      createMockBridge({ readyPlanAdvisoryStatus: 'no_short_up_gap_risk' }),
-    );
+    const store = createDesktopStore(createMockBridge({ readyPlanAdvisoryStatus: 'analyzed' }));
     await act(async () => store.getState().initialize());
     const row = selectRowAtIndex(store.getState().library, 1);
     if (!row) throw new Error('mock Library is empty');
@@ -281,7 +282,7 @@ describe('PlaybackAdmission recovery actions', () => {
       .playback.prepared?.variants.find(
         (variant) => variant.decision === 'proceed',
       )?.timing_advisory;
-    expect(readyAdvisory?.status).toBe('no_short_up_gap_risk');
+    expect(readyAdvisory?.status).toBe('analyzed');
     expect(readyAdvisory?.plan_fingerprint).toBe('mock-plan');
     expect(screen.queryByLabelText('Prepared playback timing advisory')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Play' })).toBeEnabled();

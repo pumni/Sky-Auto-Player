@@ -30,18 +30,31 @@ on metrics locks. The guard is safely disarmed upon intentional termination
 (`quit`, `skip`, `panic_release`, and confirmed `join`).
 
 Preparation builds and validates the immutable onset-only dispatch plan
-(`OnsetPlan` -> `PreparedDispatchSchedule`) before a worker starts. The worker
-moves prepared storage into its executor; it does not compile or materialize
-the sheet. Healthy dispatch does not allocate.
+(`OnsetPlan` -> `PreparedDispatchSchedule`) before a worker starts,
+materializing each chord's exact onset ticks (`ceil(onset_us * f / 1e6)`) and
+exact nominal Up offset ticks (`ceil((onset_us + H) * f / 1e6)`) once at
+prepare time. The worker moves prepared storage into its executor; it does not
+compile, materialize, or reconvert microseconds on the hot path. Healthy
+dispatch does not allocate.
 
-Prepare reports two independent timing signals. The nominal Up-gap check counts
-feasible same-key repeats whose nominal Up-to-next-Down gap
-(`next_onset - (prev_onset + H)`) is shorter than one frame. A bounded offline
-estimate also advances the canonical onset plan through the production
-`DispatchExecutor` with explicit sender-cost assumptions and reports lateness,
-H-floor displacement, and head-of-line delay. The estimate is diagnostic only:
-it does not change admission, schedule timing, or playback, and does not
-predict whether the game observes an Up pulse.
+Prepare reports two independent diagnostic signals:
+
+- **Nominal same-key scheduling slack (`I - H`)**: reports `min_same_key_slack_us`
+  (`None` when there are no feasible same-key repeats), `same_key_repeat_count`,
+  and `zero_slack_repeat_count` (`I == H`). There is no frame-based release-gap
+  threshold, no gap-risk status, and no runtime gate; `I == H` is valid under
+  Hold-only and reported as zero nominal slack.
+- **Bounded offline executor scenarios**: sequentially advances the shared
+  immutable plan through the production `DispatchExecutor` under three
+  deterministic **illustrative modeled cost** assumptions (`ideal` 0 µs,
+  `reference` 10 µs + 3 µs/event + 5 µs, `stress` 100 µs + 10 µs/event + 50 µs)
+  within fixed generation, work, and memory bounds. Per-Down lateness is
+  decomposed without double counting into `modeled_key_readiness_displacement`,
+  `modeled_cursor_order_displacement`, and `worker_occupancy_residual`; musical
+  Up slots retain independent nominal-vs-H-floor and pre-call-vs-floor
+  attribution even inside mixed packets. These scenarios are diagnostic only:
+  they are not measured `SendInput` latency, do not change admission, schedule
+  timing, or playback, and do not predict game observation.
 
 ## Session authority and final admission
 
@@ -99,10 +112,14 @@ exact current foreground owner.
 
 One fixed 15-slot executor (`DispatchExecutor`) owns musical Down and Up
 eligibility over a flat onset-only chord plan (`Vec<PreparedChord>`) and one
-fixed pulse hold `H`. A healthy chord uses one prepared packet and is never
-split across packets. When disjoint Up and Down obligations are due together,
-they may share a packet with every Up ordered before every Down. Authored Down
-order is retained, and each slot's eligible Up is tracked independently.
+fixed pulse hold `H`. Each active slot retains only a compact chord index into
+the immutable `PreparedChord` slice (no duplicated per-slot origin metadata),
+and canonical eligibility selection (`select_at`) is separated from diagnostic
+timing projection (`project_send_timing`). A healthy chord uses one prepared
+packet and is never split across packets. When disjoint Up and Down obligations
+are due together, they may share a packet with every Up ordered before every
+Down. Authored Down order is retained, and each slot's eligible Up is tracked
+independently.
 
 Let T be the ceiling of 1,000,000 divided by configured FPS, in microseconds.
 The sender timing policy is:
