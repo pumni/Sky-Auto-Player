@@ -253,6 +253,23 @@ and its neutral selected (`#E4E5E7`) and playing (`#EDF0F4`) surfaces remain dis
 palettes and Light appearance are checked against the semantic role pairs in
 `apps/desktop/tests/e2e/theme-accessibility.spec.ts`.
 
+## Global Search
+
+`apps/desktop/src/components/chrome/GlobalSearch.tsx` owns the title-bar search composite. It keeps
+`type="search"`, the labelled searchbox, one custom accessible Clear button, and the existing
+search action/store authority. `globals.css` hides WebKit's native search cancel button only under
+`[data-slot='global-search']`. The custom button appears only for a nonempty draft. Clearing cancels
+the pending 120 ms typed debounce, immediately requests the empty query when a committed or older
+query is active, and restores focus to the input whether or not the optional title-bar ref is passed.
+The store's latest-intent fencing remains responsible for rejecting stale results; external query
+and source changes replace queued local drafts.
+
+The wrapper alone uses `--chrome-input-border` through Tailwind's
+`border-chrome-input-border` utility. Its idle and hover boundary values are Graphite Dark `#66696D`,
+Aurora Dark `#586984`, Minimalist Dark `#69727D`, Slate Dark `#5A7384`, Cyberpunk Dark `#865A86`,
+Classic Dark `#796A58`, and shared Light `#888A90`. Focus keeps the existing `--ring`; forced colors
+use the system `ButtonText` border. Generic controls retain `--input` and their existing baseline.
+
 Text contrast checks use 4.5:1 and essential non-text/focus checks use 3:1. The browser tests also
 check distinct selected/playing row surfaces, forced-colors focus, and reduced-motion overlay
 behavior. They use Chromium media emulation and computed styles; they do not sample every screenshot

@@ -157,11 +157,11 @@ Calculated from authoritative composed columns or recorded notes using the docum
 - [x] Source JSON and structural pre-screen; upstream Git blob identity verified.
 - [x] Register forty-one new opaque IDs and actual SHA-256 values; preserve existing active/retired identities.
 - [x] Canonical `builtin-catalog refresh` corrected the 16 independently confirmed batch-3 checksums after provenance verification; `builtin-catalog verify` passed with 153 active / 1 retired entries. `song-audit inventory` audited 153/153 and regenerated `inventory.json`, `inventory.csv`, and `inventory-summary.md`; the generated outputs were compared for deterministic bytes.
-- [x] Strict source decoding and planner diagnostics were reviewed for all 41 additions at the inventory policy (60 FPS, one-frame hold, zero margin): 41/41 parsed, 41/41 planned `ready`, all risk `low`, with zero parser warnings, planner losses, schedule warnings, omitted/unplayable/unpitched/unresolved events. The existing native catalog/Prepare parity regression remains in place; no physical input was dispatched. These structural and planning results do not establish listening quality or distribution rights.
+- [x] Strict source decoding and planner diagnostics were reviewed for all 41 additions at the inventory policy (60 FPS, one-frame hold, zero margin): 41/41 parsed, 41/41 planned `ready`, all risk `low`, with zero parser warnings, planner losses, schedule warnings, omitted/unplayable/unpitched/unresolved events. The existing native catalog/Prepare parity regression verifies shared plan-path consistency; it does not qualify each arrangement's native Prepare behavior. No physical input was dispatched. These structural and planning results do not establish listening quality or distribution rights.
 - [ ] Listen to the complete arrangements on a Sky-compatible piano; compare alternatives, particularly multi-track works and works with unexplored variants. Verify sections, tempo, musical fidelity and endings; reject or replace any weak candidates.
 - [ ] Establish distribution rights for each composition and arrangement before merge/release. See [upstream README](https://github.com/Ai-Vonie/Sky1984-Sheets-Collection/blob/fdf69c6ed0ba8e9804a03e3e240eec31fb3056ea/README.md).
 
-No claims of listening review, legal clearance or successful Rust tests are made here. The environment used to prepare this PR had no Cargo toolchain and could not clone GitHub.
+No acoustic-listening or legal-clearance claims are made. The initial curation pass lacked Cargo and could not clone GitHub; WP1 later verified catalog integrity and the Rust gates at [commit `371911b`](https://github.com/pumni/Sky-Auto-Player/commit/371911b1976cf79a3fa6d05fdff01d5f2b39c4fe). Those Rust results are structural validation and native plan-path parity evidence; per-arrangement native Prepare qualification and listening remain unperformed.
 
 
 ## Third expansion — sixteen additional candidates
@@ -197,7 +197,7 @@ The following files were selected after comparing available alternatives in the 
 - **When I Was Your Man:** selected Ayaya's 967-note, 3:25 version over Yun's 357-note, 1:46 alternative.
 - **Somewhere Only We Know:** selected Goldiegirl's composed-v3 version. Its 1,016-note onset-key sequence exactly matches the recorded-v2 alternative, while the v3 source carries explicit attribution.
 - **Let Me Down Slowly:** selected Komo's two-Piano composed-v3 arrangement (1,075 notes, 2:58, 62.0% chord onsets) over available one-track and Nugunga alternatives; it provides a fuller accompaniment structure while keeping maximum chord width at four.
-- **Secret Base:** selected Ikina's full 1,230-note, 3:19 arrangement over the shorter KiMuJo and easy versions; it covers 14/15 keys. Its 120 ms minimum same-key onset interval merits Prepare/listening review.
+- **Secret Base:** selected Ikina's full 1,230-note, 3:19 arrangement over the shorter KiMuJo and easy versions; it covers 14/15 keys. Its 120 ms minimum same-key onset interval merits per-arrangement native Prepare and listening review, neither of which has been performed.
 - **Arcade:** selected Emman's composed-v3 file over the near-identical recorded-v2 timing variant (99.2% exact onset-key sequence); the four-track multi-sheet alternative has 75.3% chord onsets and maximum eight-key chords.
 - **Birds of a Feather** and **Let You Break My Heart Again:** selected the matching piano arrangements found in this collection; they cover 13/15 and 14/15 keys respectively.
 - **To Zanarkand:** selected the only matching sheet found; it uses four Piano tracks, 384 notes, and 15-key coverage.
@@ -205,4 +205,4 @@ The following files were selected after comparing available alternatives in the 
 - **Có Chàng Trai Viết Lên Cây:** selected the PMQ-labelled KChip version (441 notes, 47.5% chord onsets, 15 keys) over the other KChip version (366 notes, 17.3%, 12 keys).
 - **Một Đêm Say:** selected the 567-note, 2:03 KChip piano sheet; no competing matching arrangement was found in this collection.
 
-All selected sources passed the independent JSON/schema, Sky app, Piano-only instrument, key-range (0–14), and layer-mask checks. Multi-track source masks are merged by the catalog planner and still require native planner/Prepare qualification. No listening review or distribution-rights clearance is claimed.
+All selected sources passed the independent JSON/schema, Sky app, Piano-only instrument, key-range (0–14), and layer-mask checks. Multi-track source masks are merged by the catalog planner; per-arrangement native Prepare qualification remains unperformed. No listening review or distribution-rights clearance is claimed.

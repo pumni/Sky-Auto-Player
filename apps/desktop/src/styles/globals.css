@@ -30,6 +30,7 @@
   --color-border: var(--border);
   --color-overlay-border: var(--overlay-border);
   --color-input: var(--input);
+  --color-chrome-input-border: var(--chrome-input-border);
   --color-ring: var(--ring);
   --color-surface: var(--surface);
   --color-selection: var(--selection);
@@ -115,6 +116,7 @@
   --border: #2a2b2c;
   --overlay-border: #454749;
   --input: #898c90;
+  --chrome-input-border: #66696d;
   --primary: #8e9dff;
   --primary-hover: #a3b0ff;
   --primary-pressed: #7888f0;
@@ -260,6 +262,7 @@ html[data-palette='aurora'] {
   --border: #243145;
   --overlay-border: #384a66;
   --input: #617390;
+  --chrome-input-border: #586984;
   --primary: #785ddd;
   --primary-hover: #825bdb;
   --primary-pressed: #6647bd;
@@ -294,6 +297,7 @@ html[data-palette='minimalist'] {
   --border: #3d444d;
   --overlay-border: #4e5662;
   --input: #77818d;
+  --chrome-input-border: #69727d;
   --primary: #a0b8d5;
   --primary-hover: #c4d0df;
   --primary-pressed: #88a4c4;
@@ -328,6 +332,7 @@ html[data-palette='slate'] {
   --border: #304755;
   --overlay-border: #425e70;
   --input: #6a8699;
+  --chrome-input-border: #5a7384;
   --primary: #6ca7d8;
   --primary-hover: #83b8e3;
   --primary-pressed: #568fbe;
@@ -362,6 +367,7 @@ html[data-palette='cyberpunk'] {
   --border: #4b2d59;
   --overlay-border: #663d78;
   --input: #976595;
+  --chrome-input-border: #865a86;
   --primary: #d95abf;
   --primary-hover: #ef78d4;
   --primary-pressed: #c954b1;
@@ -396,6 +402,7 @@ html[data-palette='classic'] {
   --border: #4b4033;
   --overlay-border: #615342;
   --input: #897864;
+  --chrome-input-border: #796a58;
   --primary: #c99242;
   --primary-hover: #e0aa5b;
   --primary-pressed: #a87832;
@@ -436,6 +443,7 @@ html[data-color-mode='light'] {
   --border: #dcdde0;
   --overlay-border: #c4c6ca;
   --input: #75787e;
+  --chrome-input-border: #888a90;
   --primary: #3c54cf;
   --primary-hover: #3248ba;
   --primary-pressed: #293da3;
@@ -490,6 +498,13 @@ html[data-color-mode='light'] {
   }
 }
 
+/* Keep the browser cancel affordance from duplicating GlobalSearch's accessible Clear button. */
+[data-slot='global-search'] input[type='search']::-webkit-search-cancel-button {
+  -webkit-appearance: none;
+  appearance: none;
+  display: none;
+}
+
 @media (forced-colors: active) {
   :root:root {
     color-scheme: light dark;
@@ -509,6 +524,7 @@ html[data-color-mode='light'] {
     --border: CanvasText;
     --overlay-border: CanvasText;
     --input: ButtonText;
+    --chrome-input-border: ButtonText;
     --primary: Highlight;
     --primary-foreground: HighlightText;
     --accent-ink: Highlight;

@@ -43,6 +43,78 @@ test('titlebar icon actions expose their update, reload, and settings guidance',
   );
 });
 
+test('Global Search keeps one clear affordance, focus, and current results through in-flight clear', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await page.goto('/?mockSearchDelayMs=700');
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+
+  const search = page.getByRole('searchbox', { name: 'Search Built-in Songs' });
+  const globalSearch = page.locator('[data-slot="global-search"]');
+  const clear = page.getByRole('button', { name: 'Clear search' });
+  expect(await globalSearch.getByRole('button', { name: 'Clear search' }).count()).toBe(0);
+  const nativeCancelSuppression = await search.evaluate((input) => {
+    const rules = [...document.styleSheets].flatMap((sheet) => {
+      try {
+        return [...(sheet.cssRules ?? [])].filter(
+          (rule): rule is CSSStyleRule => rule instanceof CSSStyleRule,
+        );
+      } catch {
+        return [];
+      }
+    });
+    const suppressionRule = rules.find(
+      (rule) =>
+        rule.selectorText ===
+        '[data-slot="global-search"] input[type="search"]::-webkit-search-cancel-button',
+    );
+    return {
+      scopedInput: input.closest('[data-slot="global-search"]') !== null,
+      selector: suppressionRule?.selectorText ?? null,
+      appearance: suppressionRule?.style.getPropertyValue('appearance') ?? null,
+      display: suppressionRule?.style.getPropertyValue('display') ?? null,
+    };
+  });
+  expect(nativeCancelSuppression).toEqual({
+    scopedInput: true,
+    selector: '[data-slot="global-search"] input[type="search"]::-webkit-search-cancel-button',
+    appearance: 'none',
+    display: 'none',
+  });
+
+  await search.fill('Blue');
+  await page.waitForTimeout(150);
+  await expect(clear).toBeVisible();
+  await expect(globalSearch.getByRole('button', { name: 'Clear search' })).toHaveCount(1);
+  await expect(search).toBeFocused();
+  await search.evaluate((input) => input.blur());
+  await expect(clear).toBeVisible();
+  await clear.click();
+  await expect(search).toHaveValue('');
+  await expect(search).toBeFocused();
+  await expect(clear).toHaveCount(0);
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
+  await page.waitForTimeout(600);
+  await expect(search).toHaveValue('');
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
+
+  await search.fill('Blue');
+  await page.waitForTimeout(150);
+  await page.keyboard.press('Tab');
+  await expect(clear).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(search).toHaveValue('');
+  await expect(search).toBeFocused();
+  await expect(clear).toHaveCount(0);
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  await page.waitForTimeout(600);
+  await expect(search).toHaveValue('');
+  await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+});
+
 test('update dialog owns focus standalone and when opened from Settings', async ({ page }) => {
   await page.goto('/?mockReleaseNotes=short');
   const update = page.getByRole('button', { name: 'Open update 4.0.0-alpha.2-mock' });
