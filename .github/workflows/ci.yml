@@ -286,7 +286,7 @@ jobs:
       - name: Set up canonical Rust toolchain
         uses: ./.github/actions/setup-rust-pinned
       - name: Set up pinned Go for workflow validation
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version: 1.25.0
           check-latest: false
@@ -576,7 +576,7 @@ jobs:
           key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-${{ hashFiles('rust/rust-toolchain.toml') }}
 
       - name: JavaScript dependency advisory scan
-        uses: google/osv-scanner-action/osv-scanner-action@9a96bc4d2b09685b6142bcfe25a3dc17cb2d7347 # v2.7.0
+        uses: google/osv-scanner-action/osv-scanner-action@d3c1414ded37de590f207572e37a7d180f1d0ef7 # v2.7.0
         with:
           scan-args: |-
             --lockfile=./apps/desktop/bun.lock

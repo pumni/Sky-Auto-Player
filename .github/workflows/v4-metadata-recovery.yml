@@ -195,7 +195,7 @@ jobs:
 
       - name: Mint contents-scoped metadata recovery App token
         id: metadata-app-token
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v2.1.0
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v2.1.0
         with:
           client-id: ${{ vars.V4_RELEASE_METADATA_APP_CLIENT_ID }}
           private-key: ${{ secrets.V4_RELEASE_METADATA_APP_PRIVATE_KEY }}
