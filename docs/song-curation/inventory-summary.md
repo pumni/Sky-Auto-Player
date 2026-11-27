@@ -1,7 +1,7 @@
 # Built-in song inventory summary
 
-- Active manifest entries audited: 112
-- Manifest SHA-256: `cadc4367bba6cb707c321466d365f1c0c4dba59be540ffd48935fe1eeec0d2ac`
+- Active manifest entries audited: 153
+- Manifest SHA-256: `fc3b24eb32c45301ec840dfb8fb2aed1a03cd9ef46b46fe8dcd9dc7ffe2239a3`
 - Generated with: `cargo xtask song-audit inventory`
 - Runtime/parser policy: existing source decoder, planner and frozen 60 FPS / one-frame / zero-margin policy.
 
@@ -9,14 +9,14 @@
 
 | Schema | Songs |
 | --- | ---: |
-| composed_v3 | 13 |
+| composed_v3 | 48 |
 | legacy_flat | 94 |
-| recorded_v2 | 5 |
+| recorded_v2 | 11 |
 
 ## Validation coverage
 
-- Strict source decoding: 112/112 passed.
-- Planner status `ready`: 18.
+- Strict source decoding: 153/153 passed.
+- Planner status `ready`: 59.
 - Planner status `ready_legacy_compatibility`: 94.
 
 ## Screening flags
@@ -42,16 +42,22 @@ These filters only surface measurements. They do not rate musical quality.
 - `sheets/save your tear.json`
 - `sheets/Something Just Like This.json`
 
-### Below 2 authored onsets per active second (8)
+### Below 2 authored onsets per active second (14)
 
 - `sheets/easy on me.json`
 - `sheets/Glimpse of Us.json`
 - `sheets/Howl's Moving Castle v2.json`
 - `sheets/In The End.json`
 - `sheets/Kiss The Rain.json`
+- `sheets/Let You Break My Heart Again.json`
 - `sheets/Lovely-Billie Eilish ft. Khalid.json`
+- `sheets/Nothing's New.json`
 - `sheets/Say So - Doja Cat.json`
+- `sheets/Somewhere Only We Know.json`
+- `sheets/Sweden.json`
 - `sheets/thần thoại OST.json`
+- `sheets/To Zanarkand.json`
+- `sheets/What Was I Made For.json`
 
 ### Maximum authored rest of at least 5 seconds (3)
 

@@ -70,7 +70,7 @@ acknowledgement risk.
   source has tracks that the 15-key plan cannot preserve. `null` means not
   measured or not applicable, not zero loss.
 - Missing or unsupported measures remain `null` and are accompanied by parser,
-  planner, or warning fields. A file can be present in the 112-row inventory
+  planner, or warning fields. A file can be present in the generated inventory
   while its planner status reports no playable notes.
 
 The manifest title/path/ID/hash are catalog identity. Source title and author
