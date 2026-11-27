@@ -136,16 +136,14 @@ fn attribute_modifier_up_deadline_wake(
         sky_dispatch_win32::clock::QpcTicks,
         sky_dispatch_win32::clock::QpcTicks,
     )>,
-    candidate: Option<&StagedCandidate>,
+    up_mask: u16,
+    musical_up_not_before_qpc: sky_dispatch_win32::clock::QpcTicks,
     runtime: &mut super::WorkerRuntime,
 ) {
     let Some((up_deadline_qpc, wake_qpc)) = pending_wake else {
         return;
     };
-    if candidate.is_some_and(|candidate| {
-        candidate.packet_masks().up_mask != 0
-            && candidate.timing_window.musical_up_not_before_qpc == up_deadline_qpc
-    }) {
+    if up_mask != 0 && musical_up_not_before_qpc == up_deadline_qpc {
         runtime.last_dispatch_deadline_wake_qpc = Some(wake_qpc);
         runtime.last_dispatch_deadline_target_qpc = Some(up_deadline_qpc);
     }
@@ -246,42 +244,20 @@ fn evaluate_scheduler_action(
         .map_err(|error| format!("scheduler eligibility arithmetic failure: {error}"))
 }
 
-fn evaluate_scheduler_action_for_staging(
+fn wait_authored_target_ticks_for_observation(
+    observer_enabled: bool,
     executor: &sky_dispatch_core::executor::DispatchExecutor,
-    now_qpc: sky_dispatch_win32::clock::QpcTicks,
+    deadline_qpc: sky_dispatch_win32::clock::QpcTicks,
     epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
-) -> Result<
-    (
-        sky_dispatch_core::executor::DispatchDecision,
-        sky_dispatch_win32::clock::QpcTicks,
-        Option<sky_dispatch_core::executor::DispatchDecision>,
-    ),
-    String,
-> {
-    let action = evaluate_scheduler_action(executor, now_qpc, epoch_qpc)?;
-    match action {
-        send @ sky_dispatch_core::executor::DispatchDecision::Send { .. } => {
-            Ok((action, now_qpc, Some(send)))
-        }
-        sky_dispatch_core::executor::DispatchDecision::Finished => Ok((action, now_qpc, None)),
-        sky_dispatch_core::executor::DispatchDecision::Wait { deadline_qpc }
-            if deadline_qpc > now_qpc =>
-        {
-            let at_deadline = evaluate_scheduler_action(executor, deadline_qpc, epoch_qpc)?;
-            let action_to_stage = match at_deadline {
-                send @ sky_dispatch_core::executor::DispatchDecision::Send { .. } => Some(send),
-                sky_dispatch_core::executor::DispatchDecision::Wait { .. }
-                | sky_dispatch_core::executor::DispatchDecision::Finished => None,
-            };
-            Ok((action, deadline_qpc, action_to_stage))
-        }
-        sky_dispatch_core::executor::DispatchDecision::Wait { .. } => Ok((action, now_qpc, None)),
+) -> Result<TimelineTicks, String> {
+    if !observer_enabled {
+        return Ok(TimelineTicks::from_raw(
+            deadline_qpc.as_u64().saturating_sub(epoch_qpc.as_u64()),
+        ));
     }
-}
-
-struct SchedulerStageAdmission<'a> {
-    target: &'a SessionTarget,
-    capture_up_slot_timings: bool,
+    executor
+        .wait_authored_target_ticks(deadline_qpc, epoch_qpc)
+        .map_err(|error| format!("wait authored-target attribution arithmetic failure: {error}"))
 }
 
 fn up_only_timing_window(
@@ -296,137 +272,57 @@ fn up_only_timing_window(
     }
 }
 
-fn stage_scheduler_send_candidate(
-    action: sky_dispatch_core::executor::DispatchDecision,
-    admission: SchedulerStageAdmission<'_>,
-    resources: &mut super::WorkerResources,
-    runtime: &mut super::WorkerRuntime,
-) -> Result<Option<StagedCandidate>, String> {
-    let sky_dispatch_core::executor::DispatchDecision::Send {
-        up_mask,
-        down_chord,
-        timing_window,
-        up_summary,
-    } = action
-    else {
-        return Ok(None);
-    };
-    stage_candidate(
-        up_mask,
-        down_chord,
-        timing_window,
-        up_summary,
-        admission.capture_up_slot_timings,
-        admission.target,
-        resources,
-        runtime,
-    )
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PostWaitSelection {
-    SendReady,
+pub(crate) enum PreWaitAdmission {
+    Proceed,
     Replan,
-    Finished,
-    TargetInvalidated,
+    Exit,
 }
 
-/// Evaluate current scheduler state against the authoritative observed wake QPC.
-/// Reuses the already-staged candidate bytes in `staged` without rebuilding when
-/// the packet and timing evidence are unchanged; otherwise rebuilds for newly
-/// due Ups or newly eligible work. Never sends a stale candidate if not eligible
-/// at wake.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn reselect_candidate_after_wait(
-    staged: &mut Option<StagedCandidate>,
-    observed_wake_qpc: sky_dispatch_win32::clock::QpcTicks,
-    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
-    capture_up_slot_timings: bool,
-    target: &SessionTarget,
-    resources: &mut super::WorkerResources,
-    runtime: &mut super::WorkerRuntime,
-) -> Result<PostWaitSelection, String> {
-    match evaluate_scheduler_action(&resources.scheduler, observed_wake_qpc, epoch_qpc)? {
-        sky_dispatch_core::executor::DispatchDecision::Finished => {
-            *staged = None;
-            Ok(PostWaitSelection::Finished)
-        }
-        sky_dispatch_core::executor::DispatchDecision::Wait { .. } => {
-            *staged = None;
-            Ok(PostWaitSelection::Replan)
-        }
-        sky_dispatch_core::executor::DispatchDecision::Send {
-            up_mask,
-            down_chord,
-            timing_window,
-            up_summary,
-        } => {
-            if let Some(existing) = staged.as_ref() {
-                let existing_packet = existing.packet_masks();
-                if existing_packet.up_mask == up_mask
-                    && existing_packet.down_mask == down_chord.map_or(0, |c| c.key_mask)
-                    && existing.down_chord.map(|c| c.chord_index)
-                        == down_chord.map(|c| c.chord_index)
-                    && existing.timing_window == timing_window
-                    && existing.up_slot_timing_summary == up_summary
-                {
-                    return Ok(PostWaitSelection::SendReady);
-                }
-            }
-            match stage_candidate(
-                up_mask,
-                down_chord,
-                timing_window,
-                up_summary,
-                capture_up_slot_timings,
-                target,
-                resources,
-                runtime,
-            )? {
-                Some(rebuilt) => {
-                    *staged = Some(rebuilt);
-                    Ok(PostWaitSelection::SendReady)
-                }
-                None => {
-                    *staged = None;
-                    Ok(PostWaitSelection::TargetInvalidated)
-                }
-            }
-        }
-    }
-}
-
-pub(crate) fn pre_wait_candidate_admission(
-    candidate: &StagedCandidate,
+pub(crate) fn pre_wait_admission(
     target: &SessionTarget,
     require_focus: bool,
     focus_active: &AtomicBool,
     control_signals: FinalControlSignals<'_>,
     runtime: &mut super::WorkerRuntime,
-) -> StagedDispatchOutcome {
-    let packet_masks = candidate.packet_masks();
-    if packet_masks.down_mask != 0 || packet_masks.up_mask != 0 {
-        let expected = candidate
-            .target_stamp
-            .expect("target stamp checked in staging");
-        if !target_stamp_still_current(target, expected)
-            || !focus_matches(require_focus, focus_active)
-        {
-            runtime.verified_target = None;
-            return StagedDispatchOutcome::Replan;
-        }
+) -> PreWaitAdmission {
+    let Some(expected) = load_target_stamp(target) else {
+        runtime.verified_target = None;
+        runtime.terminal_error.get_or_insert_with(|| {
+            if target.is_valid() {
+                "pre-wait admission rejected the immutable session target".to_string()
+            } else {
+                "immutable session target or owner identity was invalidated".to_string()
+            }
+        });
+        return PreWaitAdmission::Exit;
+    };
+    if !target_stamp_still_current(target, expected) {
+        runtime.verified_target = None;
+        runtime.terminal_error.get_or_insert_with(|| {
+            if target.is_valid() {
+                "target stamp no longer matches its immutable session binding".to_string()
+            } else {
+                "immutable session target or owner identity was invalidated".to_string()
+            }
+        });
+        return PreWaitAdmission::Exit;
+    }
+    if !focus_matches(require_focus, focus_active) {
+        runtime.verified_target = None;
+        return PreWaitAdmission::Replan;
     }
 
     match final_control_precheck(control_signals) {
-        FinalControlAdmission::Allowed => StagedDispatchOutcome::Dispatched,
-        FinalControlAdmission::PauseRequested => StagedDispatchOutcome::Replan,
+        FinalControlAdmission::Allowed => PreWaitAdmission::Proceed,
+        FinalControlAdmission::PauseRequested => PreWaitAdmission::Replan,
         FinalControlAdmission::SystemSuspendRequested => {
             runtime.terminal_trigger = Some(super::control::TerminalTrigger::SystemSuspend);
-            StagedDispatchOutcome::Exit
+            PreWaitAdmission::Exit
         }
         FinalControlAdmission::PanicRequested
         | FinalControlAdmission::QuitRequested
-        | FinalControlAdmission::SkipRequested => StagedDispatchOutcome::Exit,
+        | FinalControlAdmission::SkipRequested => PreWaitAdmission::Exit,
     }
 }
 
@@ -441,7 +337,7 @@ fn qpc_evidence(value: Option<sky_dispatch_win32::clock::QpcTicks>) -> String {
 mod scheduler_tests {
     use super::{
         ModifierWaitPurpose, ModifierWaitResult, account_modifier_wait_result,
-        attribute_modifier_up_deadline_wake, evaluate_scheduler_action_for_staging,
+        attribute_modifier_up_deadline_wake, evaluate_scheduler_action,
         modifier_replan_deadline, wait_after_modifier_held,
     };
     use sky_dispatch_core::executor::DispatchDecision;
@@ -664,13 +560,17 @@ mod scheduler_tests {
         let deadline = epoch
             .checked_add_duration(harness.resources.clock.duration_from_us(17_167).unwrap())
             .unwrap();
+        let up_offset = TimelineTicks::from_raw(
+            harness
+                .resources
+                .clock
+                .duration_from_us(17_167)
+                .unwrap()
+                .as_u64(),
+        );
         let candidate = harness
-            .stage_candidate_for_test(
-                1,
-                None,
-                TimelineTicks::from_raw(17_167),
-            )
-            .expect("stage release at its deadline")
+            .prepare_candidate_for_test(1, None, up_offset)
+            .expect("prepare release at its deadline")
             .expect("Up candidate");
         assert_eq!(candidate.timing_window.musical_up_not_before_qpc, deadline);
 
@@ -678,7 +578,12 @@ mod scheduler_tests {
             .checked_add_duration(harness.resources.clock.duration_from_us(17_177).unwrap())
             .unwrap();
         let mut runtime = WorkerRuntime::default();
-        attribute_modifier_up_deadline_wake(Some((deadline, wake)), Some(&candidate), &mut runtime);
+        attribute_modifier_up_deadline_wake(
+            Some((deadline, wake)),
+            candidate.packet_masks().up_mask,
+            candidate.timing_window.musical_up_not_before_qpc,
+            &mut runtime,
+        );
         assert_eq!(runtime.last_dispatch_deadline_target_qpc, Some(deadline));
         assert_eq!(runtime.last_dispatch_deadline_wake_qpc, Some(wake));
 
@@ -688,7 +593,8 @@ mod scheduler_tests {
             .unwrap();
         attribute_modifier_up_deadline_wake(
             Some((mismatched_deadline, wake)),
-            Some(&candidate),
+            candidate.packet_masks().up_mask,
+            candidate.timing_window.musical_up_not_before_qpc,
             &mut unrelated_runtime,
         );
         assert_eq!(unrelated_runtime.last_dispatch_deadline_target_qpc, None);
@@ -893,7 +799,7 @@ mod scheduler_tests {
     }
 
     #[test]
-    fn scheduler_deadline_reevaluation_carries_down_metadata_from_evaluation() {
+    fn direct_scheduler_evaluation_waits_before_deadline_and_sends_down_metadata_at_deadline() {
         let chords = [OnsetChordInput {
             source_action_index: 17,
             scheduled_us: 5_000,
@@ -901,12 +807,14 @@ mod scheduler_tests {
         }];
         let harness = ProductionDispatchTestHarness::create_harness(&chords);
         let epoch = harness.resources.playback.epoch;
-        let (initial, staging_target, staged) = evaluate_scheduler_action_for_staging(
-            &harness.resources.scheduler,
-            epoch,
-            epoch,
-        )
-        .expect("scheduler staging decision");
+        super::reset_scheduler_evaluation_count_for_test();
+        let initial = evaluate_scheduler_action(&harness.resources.scheduler, epoch, epoch)
+            .expect("initial direct scheduler decision");
+        assert_eq!(
+            super::scheduler_evaluation_count_for_test(),
+            1,
+            "direct wait decision performs one evaluation with no speculative future projection"
+        );
         let DispatchDecision::Wait { deadline_qpc } = initial else {
             panic!("expected a wait before the authored Down deadline");
         };
@@ -914,15 +822,18 @@ mod scheduler_tests {
             .current_executor_chord_for_test()
             .expect("authored Down metadata");
 
-        assert_eq!(staging_target, deadline_qpc);
-        let Some(DispatchDecision::Send { down_chord, .. }) = staged else {
-            panic!("deadline reevaluation must stage its Down");
+        let at_deadline =
+            evaluate_scheduler_action(&harness.resources.scheduler, deadline_qpc, epoch)
+                .expect("post-wake direct scheduler decision");
+        assert_eq!(super::scheduler_evaluation_count_for_test(), 2);
+        let DispatchDecision::Send { down_chord, .. } = at_deadline else {
+            panic!("post-wake evaluation at deadline must return Send");
         };
         assert_eq!(down_chord, Some(expected));
     }
 
     #[test]
-    fn staging_captures_up_slots_only_when_observer_is_enabled() {
+    fn prepare_candidate_captures_up_slots_only_when_observer_is_enabled() {
         let chords = [OnsetChordInput {
             source_action_index: 3,
             scheduled_us: 0,
@@ -932,28 +843,34 @@ mod scheduler_tests {
         harness.configure_mock_packet_sender_for_test(&[0]);
         harness.attach_executor_for_test().expect("attach executor");
         let down = harness
-            .stage_candidate_for_test(
+            .prepare_candidate_for_test(
                 0,
                 harness.current_executor_chord_for_test(),
                 TimelineTicks::ZERO,
             )
-            .expect("stage Down")
+            .expect("prepare Down")
             .expect("Down candidate");
         harness.set_mock_sender_start_qpc_for_test(
             harness.qpc_now_for_test().expect("Down sender QPC"),
         );
         assert!(matches!(
-            harness.dispatch_staged_candidate_for_test(down, false),
-            super::StagedDispatchOutcome::Dispatched
+            harness.dispatch_candidate_for_test(down, false),
+            super::DispatchOutcome::Dispatched
         ));
 
+        let up_offset = TimelineTicks::from_raw(
+            harness
+                .qpc_duration_from_us_for_test(17_167)
+                .expect("H ticks")
+                .as_u64(),
+        );
         let without_observer = harness
-            .stage_candidate_with_observer_for_test(1, None, TimelineTicks::ZERO, false)
-            .expect("stage Up without observer")
+            .prepare_candidate_with_observer_for_test(1, None, up_offset, false)
+            .expect("prepare Up without observer")
             .expect("Up candidate without observer");
         let with_observer = harness
-            .stage_candidate_with_observer_for_test(1, None, TimelineTicks::ZERO, true)
-            .expect("stage Up with observer")
+            .prepare_candidate_with_observer_for_test(1, None, up_offset, true)
+            .expect("prepare Up with observer")
             .expect("Up candidate with observer");
 
         assert!(without_observer.up_slot_timings.is_none());

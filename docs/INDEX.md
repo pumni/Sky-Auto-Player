@@ -7,7 +7,7 @@ changed behavior; follow its source/test references only as needed.
 | --- | --- |
 | Module ownership, IPC/native boundaries | [Architecture](architecture.md) |
 | Native scheduling, admission, timing, cleanup, retirement | [Playback engine](playback-engine.md) |
-| Windows tests, calibration, evidence and authorization | [Playback verification](playback-verification.md) |
+| Windows tests, timing evidence and authorization | [Playback verification](playback-verification.md) |
 | Desktop behavior, layout and preparation UI | [Workbench](desktop-workbench.md) |
 | Desktop frontend stack and type boundary | [Type boundary](desktop-type-boundary.md) |
 | App commands, browser runners and worktree isolation | [JavaScript tooling](desktop-tooling.md) |

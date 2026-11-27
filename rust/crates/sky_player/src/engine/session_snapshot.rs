@@ -186,29 +186,12 @@ impl NativeDispatchSession {
                 .effective_wait_policy
                 .lock()
                 .clone(),
-            startup_calibration_executed: local.startup_calibration_executed,
-            startup_calibration_sample_count: local.startup_calibration_sample_count,
-            startup_calibration_duration_us: local.startup_calibration_duration_us,
-            startup_calibration_result: crate::engine::config::StartupCalibrationResult::from_raw(
-                local.startup_calibration_result,
-            )
-            .label()
-            .to_string(),
-            startup_wake_error_p50_us: local.wake_error_p50_us,
-            startup_wake_error_p95_us: local.wake_error_p95_us,
-            startup_wake_error_p99_us: local.wake_error_p99_us,
-            startup_wake_error_max_us: local.wake_error_max_us,
-            startup_wake_error_robust_us: local.startup_wake_error_robust_us,
             effective_spin_threshold_us: local.effective_spin_threshold_us,
             spin_threshold_source: crate::engine::config::SpinThresholdSource::from_raw(
                 local.spin_threshold_source,
             )
             .label()
             .to_string(),
-            wake_error_p50_us: local.wake_error_p50_us,
-            wake_error_p95_us: local.wake_error_p95_us,
-            wake_error_p99_us: local.wake_error_p99_us,
-            wake_error_max_us: local.wake_error_max_us,
             spin_time_us: (local.idle_wake_count > 0).then_some(local.spin_time_us),
             spin_time_available: local.idle_wake_count > 0,
             spin_time_complete: local.spin_observation_expected_samples > 0

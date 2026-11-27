@@ -11,8 +11,6 @@
     [Parameter(Mandatory)]
     [ValidateScript({ $_ -ge 0 -and $_ -le 3000 -and $_ % 100 -eq 0 })]
     [int]$TimingMarginUs,
-    [ValidateSet('Baseline', 'Candidate')]
-    [string]$CalibrationPlacement = 'Baseline',
     [switch]$TimingObserverForQualification,
     [switch]$CpuContention,
     [switch]$HistoricalSourceAllowed,
@@ -60,10 +58,10 @@ if ($PreflightOnly -and $OwnerApprovedReceiveOnlyRun) {
 if ($isChordWidthPilotV1) {
     if ($Scenario -ne 'chord-width-pilot-v1' -or $Workload -ne 'chord-width-pilot-v1' -or
         $PilotChordWidth -notin @(1, 5, 15) -or $GameFps -ne 60 -or $TimingMarginUs -ne 500 -or
-        $SampleSeconds -ne 15 -or $CalibrationPlacement -ne 'Baseline' -or
+        $SampleSeconds -ne 15 -or
         -not $TimingObserverForQualification -or $AdmissionVariant -ne 'control-a' -or
         $CpuContention -or $HolStallUs -ne 0 -or $HolCycles -ne 0) {
-        throw 'ChordWidthPilotV1 requires scenario/workload chord-width-pilot-v1, PilotChordWidth in {1,5,15}, 60 FPS, 500 us margin (H=17167), 15s sample, Baseline calibration, TimingObserverForQualification, control-a, quiet-only, and no HOL overrides'
+        throw 'ChordWidthPilotV1 requires scenario/workload chord-width-pilot-v1, PilotChordWidth in {1,5,15}, 60 FPS, 500 us margin (H=17167), 15s sample, TimingObserverForQualification, control-a, quiet-only, and no HOL overrides'
     }
 } elseif ($PilotChordWidth -ne 0 -or $Scenario -eq 'chord-width-pilot-v1' -or $Workload -eq 'chord-width-pilot-v1' -or
     -not [string]::IsNullOrWhiteSpace($ApprovedPreflightPlanPath) -or
@@ -906,7 +904,6 @@ try {
         candidate_lineage_tip_revision = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'candidate_lineage_tip_revision' } else { $null }
         runner_script_provenance = if ($usesSessionQualificationContracts -and $harnessManifest) { @($harnessManifest.runner_script_provenance) } else { $null }
         scenario = $Scenario
-        calibration_placement = $CalibrationPlacement.ToLowerInvariant()
         cpu_contention = [bool]$CpuContention
         cpu_contention_processes = $contentionProcesses.Count
         cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers at BelowNormal priority' } else { $null }
@@ -992,7 +989,6 @@ try {
         '--sink-ready', $readyPath, '--sink-events', $eventsPath,
         '--target-hwnd', ([long]$sink.hwnd).ToString([System.Globalization.CultureInfo]::InvariantCulture),
         '--scenario', $Scenario, '--evidence', $reportPath,
-        '--calibration-placement', $CalibrationPlacement.ToLowerInvariant(),
         '--timing-margin-us', [string]$TimingMarginUs,
         '--game-fps', [string]$GameFps
     )
@@ -1097,7 +1093,7 @@ try {
     if ($report.admission_variant -ne $AdmissionVariant) {
         throw "native report admission_variant ($($report.admission_variant)) does not match invocation ($AdmissionVariant)"
     }
-    if ($report.status -eq 'PASS' -and ($report.details.calibration_placement -ne $CalibrationPlacement.ToLowerInvariant() -or [bool]$report.details.timing_observer_for_qualification -ne [bool]$TimingObserverForQualification)) {
+    if ($report.status -eq 'PASS' -and ([bool]$report.details.timing_observer_for_qualification -ne [bool]$TimingObserverForQualification)) {
         throw 'passing native report settings do not match this invocation'
     }
 
@@ -1216,7 +1212,6 @@ try {
         harness_source_changes_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'source_changes_sha256' } else { $null }
         harness_derived_source_inventory_sha256 = if ($harnessManifest) { Get-ManifestProperty $harnessManifest 'derived_source_inventory_sha256' } else { $null }
         scenario = $Scenario
-        calibration_placement = $CalibrationPlacement.ToLowerInvariant()
         cpu_contention = [bool]$CpuContention
         cpu_contention_processes = $contentionProcesses.Count
         cpu_contention_method = if ($CpuContention) { 'two hidden pwsh busy workers at BelowNormal priority' } else { $null }

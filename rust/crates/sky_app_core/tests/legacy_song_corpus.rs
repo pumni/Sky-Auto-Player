@@ -53,7 +53,10 @@ struct HistoricalScheduleProjection<'a> {
 /// Derive the historical paired-action JSON projection from the canonical
 /// onset-only schedule solely to verify exact equivalence against the
 /// immutable 106-song v2 fingerprint fixture.
-fn derive_historical_projection(schedule: &ScheduleMetadata) -> HistoricalScheduleProjection<'_> {
+fn derive_historical_projection(
+    schedule: &ScheduleMetadata,
+    frame_us: u64,
+) -> HistoricalScheduleProjection<'_> {
     let mut flat = Vec::new();
     for chord in &schedule.chords {
         for &scan in &chord.scan_codes {
@@ -62,8 +65,19 @@ fn derive_historical_projection(schedule: &ScheduleMetadata) -> HistoricalSchedu
     }
     let mut has_next = vec![false; flat.len()];
     let mut seen_later = HashMap::<u16, u64>::new();
+    let mut min_same_key_up_gap_us: Option<u64> = None;
+    let mut short_up_gap_repeat_count = 0usize;
     for (idx, &(at_us, scan)) in flat.iter().enumerate().rev() {
-        has_next[idx] = seen_later.contains_key(&scan);
+        if let Some(&next_at) = seen_later.get(&scan) {
+            has_next[idx] = true;
+            let interval = next_at.saturating_sub(at_us);
+            let gap = interval.saturating_sub(schedule.hold_us);
+            min_same_key_up_gap_us =
+                Some(min_same_key_up_gap_us.map_or(gap, |current| current.min(gap)));
+            if interval >= schedule.hold_us && interval - schedule.hold_us < frame_us {
+                short_up_gap_repeat_count += 1;
+            }
+        }
         seen_later.insert(scan, at_us);
     }
 
@@ -123,8 +137,8 @@ fn derive_historical_projection(schedule: &ScheduleMetadata) -> HistoricalSchedu
         impossible_same_key_repeats: schedule.impossible_same_key_repeats,
         max_polyphony: schedule.max_polyphony,
         shortest_same_key_interval_us: schedule.shortest_same_key_interval_us,
-        min_same_key_up_gap_us: schedule.min_same_key_up_gap_us,
-        short_up_gap_repeat_count: schedule.short_up_gap_repeat_count,
+        min_same_key_up_gap_us,
+        short_up_gap_repeat_count,
         recommended_hold_frames: schedule.recommended_hold_frames,
         recommended_tempo_scale: schedule.recommended_tempo_scale,
         warnings: &schedule.warnings,
@@ -180,7 +194,7 @@ fn historical_songs_match_the_pinned_current_schedule() {
             .unwrap_or_else(|error| panic!("legacy parse failed for {relative}: {error}"));
         let schedule = build_schedule_with_policy(&song, 1.0, &policy)
             .unwrap_or_else(|error| panic!("legacy schedule failed for {relative}: {error}"));
-        let projected = derive_historical_projection(&schedule);
+        let projected = derive_historical_projection(&schedule, policy.frame_us);
         assert_eq!(
             song.notes.len(),
             baseline.note_count,
@@ -235,7 +249,7 @@ fn wide_gap_schedule_projection_matches_the_legacy_release_schedule() {
     let policy = MaterializedTimingPolicy::from_user_margin(60, 1.0, 0)
         .expect("valid frozen compatibility timing policy");
     let schedule = build_schedule_with_policy(&song, 1.0, &policy).expect("wide-gap schedule");
-    let projected = derive_historical_projection(&schedule);
+    let projected = derive_historical_projection(&schedule, policy.frame_us);
     let projection = serde_json::json!({
         "actions": projected.actions.iter().map(|action| serde_json::json!({
             "at_us": action.at_us,

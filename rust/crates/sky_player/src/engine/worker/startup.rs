@@ -80,7 +80,7 @@ pub(super) fn initialize_startup(
 ) -> StartupResources {
     let production_wait = effective_policy.production_wait;
     let effective_wait_policy = if production_wait {
-        "production_calibrated"
+        "production_fixed"
     } else {
         "legacy_test_wide_spin"
     };

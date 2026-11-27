@@ -9,9 +9,9 @@ pub(super) use sky_dispatch_win32::input::{
 };
 pub(super) use std::sync::atomic::Ordering;
 
-pub(super) use super::super::StagedDispatchOutcome;
+pub(super) use super::super::DispatchOutcome;
 
-pub(super) fn staged_send_at(
+pub(super) fn send_decision_at(
     harness: &mut ProductionDispatchTestHarness,
     at: QpcTicks,
     epoch: QpcTicks,
@@ -44,11 +44,11 @@ pub(super) fn candidate_at(
     harness: &mut ProductionDispatchTestHarness,
     at: QpcTicks,
     epoch: QpcTicks,
-) -> crate::engine::worker::StagedCandidate {
-    let (up_mask, down_chord, timing_window) = staged_send_at(harness, at, epoch);
+) -> crate::engine::worker::DispatchCandidate {
+    let (up_mask, down_chord, timing_window) = send_decision_at(harness, at, epoch);
     harness
-        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
-        .expect("stage production candidate")
+        .prepare_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+        .expect("prepare production candidate")
         .expect("candidate is due")
 }
 

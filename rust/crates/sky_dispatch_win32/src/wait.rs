@@ -1,7 +1,6 @@
 //! Interruptible wait strategy with physical-deadline priority.
 
 pub mod adaptive;
-mod calibration;
 mod result;
 mod spin;
 pub use adaptive::WaitGuardMode;
@@ -23,25 +22,11 @@ pub enum WaitOutcome {
     Failed(WaitFailure),
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct WakeErrorStats {
-    pub p50_us: u64,
-    pub p95_us: u64,
-    pub p99_us: u64,
-    pub max_us: u64,
-    /// Robust periodic-reprobe estimate: median + 6 * MAD.
-    ///
-    /// This is separate from p95/p99 telemetry so a small periodic sample
-    /// cannot let one scheduler outlier expand the spin window to its cap.
-    pub robust_us: u64,
-}
-
 mod hybrid;
 pub use hybrid::HybridWaiter;
 
 #[cfg(test)]
 mod tests {
-    use super::calibration::robust_wake_error_us;
     use super::spin::{spin_duration_ticks, wait_result_with_spin};
     use super::{HybridWaiter, WaitOutcome};
     use crate::clock::{DurationTicks, QpcTicks, qpc_now_us};
@@ -63,19 +48,6 @@ mod tests {
     }
 
     #[test]
-    fn wake_probe_respects_a_deadline_before_arming_the_next_sample() {
-        let event = OwnedEvent::new_auto_reset().expect("event");
-        let waiter = HybridWaiter::new();
-        let qpc_clock = crate::clock::QpcClock::initialize().expect("QPC clock");
-        let now = qpc_clock.now().expect("QPC sample");
-
-        assert_eq!(
-            waiter.probe_wake_error_stats_until(qpc_clock, &event, 1, Some(now)),
-            None
-        );
-    }
-
-    #[test]
     fn already_due_target_beats_a_pending_interrupt() {
         let event = OwnedEvent::new_auto_reset().expect("event");
         assert!(event.signal());
@@ -90,14 +62,6 @@ mod tests {
     fn disabled_waitable_timer_reports_explicit_fallback() {
         let waiter = HybridWaiter::with_options(false, true);
         assert_eq!(waiter.mode(), "event+timer_resolution_fallback");
-    }
-
-    #[test]
-    fn robust_wake_error_ignores_one_periodic_outlier() {
-        let mut errors = vec![300; 7];
-        errors.push(1_500);
-        errors.sort_unstable();
-        assert_eq!(robust_wake_error_us(&errors), 300);
     }
 
     #[test]

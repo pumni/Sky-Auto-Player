@@ -7,29 +7,6 @@ use super::{
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum CalibrationPlacement {
-    Baseline,
-    Candidate,
-}
-
-impl CalibrationPlacement {
-    pub(super) fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "baseline" => Ok(Self::Baseline),
-            "candidate" => Ok(Self::Candidate),
-            _ => Err("--calibration-placement must be baseline or candidate".to_string()),
-        }
-    }
-
-    pub(super) const fn label(self) -> &'static str {
-        match self {
-            Self::Baseline => "baseline",
-            Self::Candidate => "candidate",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum AdmissionVariantChoice {
     ControlA,
 }
@@ -194,7 +171,6 @@ pub(super) struct RunArgs {
     pub(super) scenario: Scenario,
     pub(super) pilot_chord_width: Option<u8>,
     pub(super) admission_variant: AdmissionVariantChoice,
-    pub(super) calibration_placement: CalibrationPlacement,
     pub(super) timing_observer_for_qualification: bool,
     pub(super) evidence: PathBuf,
     pub(super) timing_margin_us: u64,
@@ -288,7 +264,6 @@ where
     let mut scenario = None;
     let mut pilot_chord_width = None;
     let mut admission_variant = None;
-    let mut calibration_placement = None;
     let mut timing_observer_for_qualification = false;
     let mut evidence = None;
     let mut timing_margin_us = None;
@@ -372,12 +347,6 @@ where
                 unique!(admission_variant, "--admission-variant");
                 admission_variant = Some(AdmissionVariantChoice::parse(&next_value!(
                     "--admission-variant"
-                ))?);
-            }
-            "--calibration-placement" => {
-                unique!(calibration_placement, "--calibration-placement");
-                calibration_placement = Some(CalibrationPlacement::parse(&next_value!(
-                    "--calibration-placement"
                 ))?);
             }
             "--evidence" => {
@@ -479,7 +448,6 @@ where
         scenario,
         pilot_chord_width,
         admission_variant: admission_variant.unwrap_or(AdmissionVariantChoice::ControlA),
-        calibration_placement: calibration_placement.unwrap_or(CalibrationPlacement::Baseline),
         timing_observer_for_qualification,
         evidence: evidence.ok_or_else(|| "--evidence is required".to_string())?,
         timing_margin_us: timing_margin_us.unwrap_or(ACCEPTANCE_TIMING_MARGIN_US),
@@ -539,11 +507,6 @@ where
         }
         if run.admission_variant != AdmissionVariantChoice::ControlA {
             return Err("chord-width-pilot-v1 requires --admission-variant control-a".to_string());
-        }
-        if run.calibration_placement != CalibrationPlacement::Baseline {
-            return Err(
-                "chord-width-pilot-v1 requires --calibration-placement baseline".to_string(),
-            );
         }
         if !run.timing_observer_for_qualification {
             return Err(
@@ -607,7 +570,6 @@ mod tests {
         fps: &str,
         margin: &str,
         sample_seconds: Option<&str>,
-        calibration_placement: &str,
         include_observer: bool,
     ) -> Vec<String> {
         let mut out = vec![
@@ -629,8 +591,6 @@ mod tests {
             fps,
             "--timing-margin-us",
             margin,
-            "--calibration-placement",
-            calibration_placement,
             "--evidence",
             "evidence.json",
         ]
@@ -651,7 +611,7 @@ mod tests {
     fn chord_width_pilot_v1_accepts_only_bounded_widths_and_fixed_settings() {
         for width in ["1", "5", "15"] {
             let ParsedCommand::Run(run) =
-                parse_args(pilot_args(width, "60", "500", Some("15"), "baseline", true))
+                parse_args(pilot_args(width, "60", "500", Some("15"), true))
                     .expect("valid pilot args")
             else {
                 panic!("expected run");
@@ -660,35 +620,22 @@ mod tests {
             assert_eq!(run.game_fps, 60);
             assert_eq!(run.timing_margin_us, 500);
             assert_eq!(run.sample_seconds, Some(15));
-            assert_eq!(
-                run.calibration_placement,
-                super::CalibrationPlacement::Baseline
-            );
             assert!(run.timing_observer_for_qualification);
         }
         for bad_width in ["0", "2", "3", "8", "16"] {
             assert!(
-                parse_args(pilot_args(
-                    bad_width,
-                    "60",
-                    "500",
-                    Some("15"),
-                    "baseline",
-                    true
-                ))
-                .is_err()
+                parse_args(pilot_args(bad_width, "60", "500", Some("15"), true)).is_err()
             );
         }
-        assert!(parse_args(pilot_args("5", "120", "500", Some("15"), "baseline", true)).is_err());
-        assert!(parse_args(pilot_args("5", "60", "0", Some("15"), "baseline", true)).is_err());
-        assert!(parse_args(pilot_args("5", "60", "1000", Some("15"), "baseline", true)).is_err());
-        assert!(parse_args(pilot_args("5", "60", "500", None, "baseline", true)).is_err());
-        assert!(parse_args(pilot_args("5", "60", "500", Some("15"), "candidate", true)).is_err());
-        assert!(parse_args(pilot_args("5", "60", "500", Some("15"), "baseline", false)).is_err());
-        let mut with_hol = pilot_args("5", "60", "500", Some("15"), "baseline", true);
+        assert!(parse_args(pilot_args("5", "120", "500", Some("15"), true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "0", Some("15"), true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "1000", Some("15"), true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "500", None, true)).is_err());
+        assert!(parse_args(pilot_args("5", "60", "500", Some("15"), false)).is_err());
+        let mut with_hol = pilot_args("5", "60", "500", Some("15"), true);
         with_hol.extend(["--hol-stall-us".to_string(), "1000".to_string()]);
         assert!(parse_args(with_hol).is_err());
-        let mut dup = pilot_args("5", "60", "500", Some("15"), "baseline", true);
+        let mut dup = pilot_args("5", "60", "500", Some("15"), true);
         dup.extend(["--pilot-chord-width".to_string(), "5".to_string()]);
         assert!(parse_args(dup).is_err());
         let mut wrong_scenario = args("frozen");

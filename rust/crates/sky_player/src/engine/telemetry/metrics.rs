@@ -176,19 +176,10 @@ pub struct WorkerMetricsLocal {
     pub recovered_zero_progress_retries: u64,
     pub recovered_partial_up_retries: u64,
     pub recovered_zero_progress_but_late: u64,
-    /// Startup-only calibration provenance. These scalar values are written
-    /// before dispatch and are never touched by the precision path.
-    pub startup_calibration_executed: bool,
-    pub startup_calibration_sample_count: u64,
-    pub startup_calibration_duration_us: u64,
-    pub startup_calibration_result: u8,
-    pub startup_wake_error_robust_us: u64,
+    /// Startup-only spin threshold provenance. These scalar values are
+    /// written once before dispatch and are never touched by the precision path.
     pub spin_threshold_source: u8,
     pub effective_spin_threshold_us: u64,
-    pub wake_error_p50_us: u64,
-    pub wake_error_p95_us: u64,
-    pub wake_error_p99_us: u64,
-    pub wake_error_max_us: u64,
     /// Wall span spent in the waiter's final spin window. This is not CPU time.
     pub spin_time_us: u64,
     /// Physical waits whose observation was queued for the diagnostic consumer.
@@ -505,6 +496,7 @@ impl WorkerMetricsLocal {
         self.physical_target_to_wake_max_ticks = self
             .physical_target_to_wake_max_ticks
             .max(observer.physical_target_to_wake_max_ticks);
+        self.wait_target_error_us = self.wait_target_error_us.max(observer.wait_target_error_us);
         self.dispatch_occupancy_max_us = self
             .dispatch_occupancy_max_us
             .max(observer.dispatch_occupancy_max_us);

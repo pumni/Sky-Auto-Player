@@ -436,7 +436,7 @@ fn release_owner_proof_is_retained_once_per_session_not_per_down_slot() {
             .expect("executor invariant");
         harness.set_mock_sender_start_qpc_for_test(epoch);
         let candidate = harness
-            .stage_candidate_for_test(
+            .prepare_candidate_for_test(
                 0,
                 harness.current_executor_chord_for_test(),
                 TimelineTicks::ZERO,
@@ -446,8 +446,8 @@ fn release_owner_proof_is_retained_once_per_session_not_per_down_slot() {
 
         sky_dispatch_win32::input::reset_release_owner_proof_arc_clone_count_for_test();
         assert_eq!(
-            harness.dispatch_staged_candidate_for_test(candidate, false),
-            crate::engine::worker::StagedDispatchOutcome::Dispatched
+            harness.dispatch_candidate_for_test(candidate, false),
+            crate::engine::worker::DispatchOutcome::Dispatched
         );
         let proof_arc_clones =
             sky_dispatch_win32::input::release_owner_proof_arc_clone_count_for_test();

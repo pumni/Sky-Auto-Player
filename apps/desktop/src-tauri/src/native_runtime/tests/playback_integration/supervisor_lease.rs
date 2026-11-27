@@ -48,9 +48,6 @@ fn native_monitor_runtime_stall_expires_lease_and_resumption_cannot_heal_it() {
             NativeSessionOptions {
                 schedule,
                 #[cfg(feature = "tauri-test")]
-                startup_calibration_placement:
-                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
-                #[cfg(feature = "tauri-test")]
                 timing_observer_for_qualification: false,
                 #[cfg(feature = "tauri-test")]
                 modifier_key_state_query_for_test: None,
@@ -648,9 +645,6 @@ fn native_monitor_real_unwind_drops_guard_and_signals_panic_release_once() {
             NativeSessionOptions {
                 schedule,
                 #[cfg(feature = "tauri-test")]
-                startup_calibration_placement:
-                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
-                #[cfg(feature = "tauri-test")]
                 timing_observer_for_qualification: false,
                 #[cfg(feature = "tauri-test")]
                 modifier_key_state_query_for_test: None,
@@ -829,9 +823,6 @@ fn native_monitor_intentional_stop_disarms_guard_without_unwind_signal() {
         NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
                 schedule,
-                #[cfg(feature = "tauri-test")]
-                startup_calibration_placement:
-                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
                 #[cfg(feature = "tauri-test")]
                 timing_observer_for_qualification: false,
                 #[cfg(feature = "tauri-test")]

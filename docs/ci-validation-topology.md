@@ -212,7 +212,7 @@ orchestration, Defender evidence capture, and the exact Defender artifact scan.
 | `rust/xtask/src/ci_classifier.rs` and unit tests | Classifies event base/head SHAs and manual full dispatch; unknown or invalid changes fail closed to full validation. | The `changes` job calls `cargo xtask ci classify`. |
 | `ci_candidate.rs` and shared `ci_artifacts.rs` | Candidate schema v3 binds only the installer, updater signature, and public key; the exact four-file inventory remains locked. | Candidate producer, packaged CI, and updater fixture call `cargo xtask ci candidate create/validate`. |
 | `ci_bridge.rs` and `ci_artifacts.rs` | Bridge schema v1 preserves its exact two-file inventory and detached source worktree. | `cargo xtask ci bridge build-fixture` builds and validates the bridge; updater consumers call Rust validation. |
-| `startup_calibration.rs` evidence projection | Canonicalizes startup wake-calibration evidence bytes and writes the SHA-256 sidecar. This is production playback qualification support, not the retired user calibration feature. | Startup qualification evidence scripts call `cargo xtask startup-calibration project-evidence`. |
+| `startup_calibration.rs` evidence projection | Canonicalizes historical startup wake-calibration evidence bytes and writes the SHA-256 sidecar. Production startup wake calibration has been removed in favor of the fixed `1000 us` spin threshold; this offline projection utility is retained solely for historical evidence reproducibility and its CI self-test. | Historical evidence export scripts and CI self-test call `cargo xtask startup-calibration project-evidence`. |
 | `ci.rs` and `updater_fixture.rs` | Verify exact-commit source identity and prepare detached fixture sources without rewriting the canonical Cargo manifest, lockfile, Tauri config, or catalog. | Updater fixture callers use the Rust-owned source preparation and validation. |
 
 `sky_windows_security::registry` and the `xtask` NSIS/updater owners enforce the
@@ -252,13 +252,17 @@ The documented GitHub Actions job default is described in the
 ## Deterministic evidence tools
 
 `rust/xtask/src/assembly_audit.rs` owns deterministic checks for the live
-`DispatchExecutor::dispatch_staged_candidate` boundary and the Win32 deferred
-sender. The `dispatch` audit checks final owner/modifier rechecks, exactly one
-deferred sender, then the scheduler completion and journal commits. The
-`modifier-guard` audit checks the fixed modifier order and the scoped Win32
-send path, including one `SendInput` between pre-call and completion QPC
-samples. It deliberately does not apply copy/division thresholds to the whole
-worker function.
+`sky_player::engine::worker::dispatch_loop::dispatch_candidate`,
+`sky_player::engine::worker::admission::verify_final_packet_admission`, and the
+Win32 deferred sender. Both `dispatch_candidate` and
+`verify_final_packet_admission` carry `#[inline(never)]`. The `dispatch` audit
+verifies unconditional CFG dominance (`entry -> verify_final_packet_admission -> deferred_sender -> on_send_completed_at -> commit_physical_packet`) with no
+jump-table bypass waivers, audits the final admission gate body for fixed
+modifier checks and fresh owner proof without physical sends, and checks the
+post-gate suffix before `deferred_sender`. The `modifier-guard` audit checks
+the fixed modifier order and the scoped Win32 send path, including one
+`SendInput` between pre-call and completion QPC samples. It deliberately does
+not apply copy/division thresholds to the whole worker function.
 
 `prepared-normal` is retained only as a command-line compatibility alias for
 the same live dispatch audit; it does not refer to the removed prepared-normal

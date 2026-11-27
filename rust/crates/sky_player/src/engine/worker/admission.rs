@@ -659,6 +659,7 @@ pub(crate) enum FinalDownAdmissionResult {
 /// Single typed entry point evaluating musical admission across Down-only,
 /// Up-only, and mixed packets. Eliminates redundant wrapper and repeated
 /// target validation layers.
+#[inline(never)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn verify_final_packet_admission(
     target: &SessionTarget,

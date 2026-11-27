@@ -1,5 +1,5 @@
 use super::replan_timing::timing_chord;
-use super::support::{ProductionDispatchTestHarness, StagedDispatchOutcome, TimelineTicks};
+use super::support::{DispatchOutcome, ProductionDispatchTestHarness};
 use std::sync::atomic::Ordering;
 #[test]
 fn due_candidate_rechecks_stop_skip_focus_and_owner_before_sender() {
@@ -36,20 +36,19 @@ fn due_candidate_rechecks_stop_skip_focus_and_owner_before_sender() {
         }
         let packets = harness.configure_mock_packet_sender_for_test(&[0]);
         harness.attach_executor_for_test().expect("attach executor");
-        let candidate = harness
-            .stage_candidate_for_test(
-                0,
-                harness.current_executor_chord_for_test(),
-                TimelineTicks::ZERO,
-            )
-            .expect("stage future final-gate candidate")
-            .expect("future Down candidate");
-        assert_eq!(candidate.source_action_index(), 6690);
+        let decision = harness
+            .evaluate_live_scheduler_for_test(epoch, epoch)
+            .expect("initial Wait before 50ms Down");
+        let sky_dispatch_core::executor::DispatchDecision::Wait {
+            deadline_qpc: target_qpc,
+        } = decision
+        else {
+            panic!("expected Wait before 50ms Down, got {decision:?}");
+        };
         assert_eq!(
-            harness.pre_wait_candidate_admission_for_test(&candidate),
-            StagedDispatchOutcome::Dispatched
+            harness.pre_wait_admission_for_test(),
+            super::super::PreWaitAdmission::Proceed
         );
-        let target_qpc = candidate.timing_window.packet_not_before_qpc;
         let wake_qpc = target_qpc
             .checked_add_duration(clock.duration_from_us(10_000).expect("late wake offset"))
             .expect("late wake QPC");
@@ -84,6 +83,12 @@ fn due_candidate_rechecks_stop_skip_focus_and_owner_before_sender() {
         assert!(matches!(boundary, super::super::WaitBoundary::Due { .. }));
         drop(_waiter_override);
 
+        let candidate = harness
+            .evaluate_and_prepare_at_wake_for_test(wake_qpc, false)
+            .expect("direct post-wake preparation")
+            .expect("due Down candidate");
+        assert_eq!(candidate.source_action_index(), 6690);
+
         match change {
             "stop" => harness.quit_requested.store(true, Ordering::Release),
             "skip" => harness.skip_requested.store(true, Ordering::Release),
@@ -96,8 +101,8 @@ fn due_candidate_rechecks_stop_skip_focus_and_owner_before_sender() {
         }
         harness.set_mock_sender_start_qpc_for_test(wake_qpc);
         assert_eq!(
-            harness.dispatch_staged_candidate_for_test(candidate, false),
-            StagedDispatchOutcome::Replan,
+            harness.dispatch_candidate_for_test(candidate, false),
+            DispatchOutcome::Replan,
             "{change} is rechecked after Due and before SendInput"
         );
         assert!(

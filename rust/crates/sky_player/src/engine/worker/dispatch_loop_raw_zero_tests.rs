@@ -1,6 +1,6 @@
 use super::support::wait_until_qpc;
 use crate::engine::test_support::ProductionDispatchTestHarness;
-use crate::engine::worker::StagedDispatchOutcome;
+use crate::engine::worker::DispatchOutcome;
 use sky_dispatch_core::executor::{DispatchDecision, PreparedChord};
 use sky_dispatch_core::model::OnsetChordInput;
 use sky_dispatch_core::time::{QpcTicks, TimelineTicks};
@@ -44,7 +44,7 @@ fn stage_at_qpc(
     harness: &mut ProductionDispatchTestHarness,
     at: QpcTicks,
     epoch: QpcTicks,
-) -> (u16, Option<PreparedChord>, crate::engine::StagedCandidate) {
+) -> (u16, Option<PreparedChord>, crate::engine::DispatchCandidate) {
     match harness
         .evaluate_live_scheduler_for_test(at, epoch)
         .expect("evaluate production scheduler")
@@ -56,12 +56,16 @@ fn stage_at_qpc(
             ..
         } => {
             let candidate = harness
-                .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+                .prepare_candidate_with_scheduler_window_for_test(
+                    up_mask,
+                    down_chord,
+                    timing_window,
+                )
                 .expect("stage production candidate")
                 .expect("candidate is available");
             (up_mask, down_chord, candidate)
         }
-        decision => panic!("expected staged send at {at:?}, got {decision:?}"),
+        decision => panic!("expected send at {at:?}, got {decision:?}"),
     }
 }
 
@@ -129,7 +133,7 @@ fn proven_raw_zero_down_only_clears_only_the_new_obligation_and_terminates() {
     harness.attach_executor_for_test().expect("attach executor");
 
     let first = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -138,8 +142,8 @@ fn proven_raw_zero_down_only_clears_only_the_new_obligation_and_terminates() {
         .expect("A Down candidate");
     assert_eq!(first.source_action_index(), 600);
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(first, false),
-        StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(first, false),
+        DispatchOutcome::Dispatched
     );
     assert_eq!(harness.resources.backend.active_mask, 0b0001);
 
@@ -150,8 +154,8 @@ fn proven_raw_zero_down_only_clears_only_the_new_obligation_and_terminates() {
     assert_eq!(b_down.map(|chord| chord.source_action_index), Some(601));
     assert_eq!(b.packet_masks(), PhysicalPacket::new(0, 0b0010));
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(b, false),
-        StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(b, false),
+        DispatchOutcome::Exit
     );
 
     let captured = packets.lock().expect("captured musical packets");
@@ -187,7 +191,7 @@ fn raw_zero_does_not_create_a_completion_floor_or_send_later_events() {
     harness.attach_executor_for_test().expect("attach executor");
 
     let first = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -196,8 +200,8 @@ fn raw_zero_does_not_create_a_completion_floor_or_send_later_events() {
         .expect("A Down candidate");
     assert_eq!(first.source_action_index(), 600);
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(first, false),
-        StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(first, false),
+        DispatchOutcome::Dispatched
     );
 
     let b_at = qpc_at_offset(&harness, epoch, 5_000);
@@ -206,8 +210,8 @@ fn raw_zero_does_not_create_a_completion_floor_or_send_later_events() {
     assert_eq!(b_down.map(|chord| chord.source_action_index), Some(601));
     assert_eq!(b.packet_masks(), PhysicalPacket::new(0, 0b0010));
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(b, false),
-        StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(b, false),
+        DispatchOutcome::Exit
     );
 
     let captured = packets.lock().expect("captured musical packets");
@@ -334,7 +338,7 @@ fn raw_zero_classifier_rejects_short_packet_and_contradictory_qpc() {
         });
 
         let first = harness
-            .stage_candidate_for_test(
+            .prepare_candidate_for_test(
                 0,
                 harness.current_executor_chord_for_test(),
                 TimelineTicks::ZERO,
@@ -342,16 +346,16 @@ fn raw_zero_classifier_rejects_short_packet_and_contradictory_qpc() {
             .expect("stage A Down")
             .expect("A Down candidate");
         assert_eq!(
-            harness.dispatch_staged_candidate_for_test(first, false),
-            StagedDispatchOutcome::Dispatched
+            harness.dispatch_candidate_for_test(first, false),
+            DispatchOutcome::Dispatched
         );
         let b_at = qpc_at_offset(&harness, epoch, 5_000);
         wait_until_qpc(&harness, b_at);
         let (_, _, b) = stage_at_qpc(&mut harness, b_at, epoch);
         assert_eq!(b.packet_masks().down_mask.count_ones(), 2);
         assert_eq!(
-            harness.dispatch_staged_candidate_for_test(b, false),
-            StagedDispatchOutcome::Exit
+            harness.dispatch_candidate_for_test(b, false),
+            DispatchOutcome::Exit
         );
 
         assert_eq!(calls.load(Ordering::Acquire), 2);
@@ -434,7 +438,7 @@ fn mixed_up_a_down_b_raw_zero_uses_conservative_reconciliation() {
     });
 
     let first = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -442,8 +446,8 @@ fn mixed_up_a_down_b_raw_zero_uses_conservative_reconciliation() {
         .expect("stage A Down")
         .expect("A Down candidate");
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(first, false),
-        StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(first, false),
+        DispatchOutcome::Dispatched
     );
     let mixed_at = qpc_at_offset(&harness, epoch, 20_000);
     wait_until_qpc(&harness, mixed_at);
@@ -452,8 +456,8 @@ fn mixed_up_a_down_b_raw_zero_uses_conservative_reconciliation() {
     assert_eq!(down.map(|chord| chord.source_action_index), Some(642));
     assert_eq!(mixed.packet_masks(), PhysicalPacket::new(0b0001, 0b0010));
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(mixed, false),
-        StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(mixed, false),
+        DispatchOutcome::Exit
     );
     assert_eq!(calls.load(Ordering::Acquire), 2);
     assert_eq!(harness.resources.backend.in_flight_mask, 0);
@@ -496,7 +500,7 @@ fn raw_zero_candidate_owner_drift_after_identity_query_fails_before_sender() {
         target.invalidate_for_test();
     });
     let candidate = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -504,12 +508,12 @@ fn raw_zero_candidate_owner_drift_after_identity_query_fails_before_sender() {
         .expect("stage Down candidate")
         .expect("Down candidate");
     assert_eq!(
-        harness.pre_wait_candidate_admission_for_test(&candidate),
-        StagedDispatchOutcome::Dispatched
+        harness.pre_wait_admission_for_test(),
+        super::super::PreWaitAdmission::Proceed
     );
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(candidate, false),
+        DispatchOutcome::Exit
     );
     assert!(packets.lock().expect("mock packet capture").is_empty());
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
@@ -591,7 +595,7 @@ fn raw_zero_with_concurrent_stop_skip_or_lease_expiry_cleans_up_and_does_not_con
         });
 
         let first = harness
-            .stage_candidate_for_test(
+            .prepare_candidate_for_test(
                 0,
                 harness.current_executor_chord_for_test(),
                 TimelineTicks::ZERO,
@@ -599,15 +603,15 @@ fn raw_zero_with_concurrent_stop_skip_or_lease_expiry_cleans_up_and_does_not_con
             .expect("stage A Down")
             .expect("A Down candidate");
         assert_eq!(
-            harness.dispatch_staged_candidate_for_test(first, false),
-            StagedDispatchOutcome::Dispatched
+            harness.dispatch_candidate_for_test(first, false),
+            DispatchOutcome::Dispatched
         );
         let b_at = qpc_at_offset(&harness, epoch, 5_000);
         wait_until_qpc(&harness, b_at);
         let (_, _, b) = stage_at_qpc(&mut harness, b_at, epoch);
         assert_eq!(
-            harness.dispatch_staged_candidate_for_test(b, false),
-            StagedDispatchOutcome::Exit
+            harness.dispatch_candidate_for_test(b, false),
+            DispatchOutcome::Exit
         );
         assert_eq!(packets.load(Ordering::Acquire), 2);
         assert_eq!(harness.resources.backend.in_flight_mask, 0);
@@ -628,7 +632,7 @@ fn raw_zero_with_concurrent_stop_skip_or_lease_expiry_cleans_up_and_does_not_con
 #[cfg(feature = "qpc-read-counting")]
 #[test]
 fn measured_final_admission_operations_for_healthy_packet_shapes() {
-    use super::support::{qpc_offset, staged_send_at};
+    use super::support::{qpc_offset, send_decision_at};
     use crate::engine::test_support::PacketCapture;
     use std::sync::atomic::AtomicBool;
 
@@ -725,7 +729,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     enable_fresh_lease(&mut down, epoch);
     reset_counts(&down);
     let candidate = down
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             down.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -733,12 +737,12 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        down.pre_wait_candidate_admission_for_test(&candidate),
-        StagedDispatchOutcome::Dispatched
+        down.pre_wait_admission_for_test(),
+        super::super::PreWaitAdmission::Proceed
     );
     assert_eq!(
-        down.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Dispatched
+        down.dispatch_candidate_for_test(candidate, false),
+        DispatchOutcome::Dispatched
     );
     report_counts("down-only", &down, &down_packets);
     let _ = down.finalize_for_test();
@@ -753,12 +757,12 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     up.attach_executor_for_test().unwrap();
     up.set_mock_sender_start_qpc_for_test(epoch);
     let first = up
-        .stage_candidate_for_test(0, up.current_executor_chord_for_test(), TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, up.current_executor_chord_for_test(), TimelineTicks::ZERO)
         .unwrap()
         .unwrap();
     assert_eq!(
-        up.dispatch_staged_candidate_for_test(first, false),
-        StagedDispatchOutcome::Dispatched
+        up.dispatch_candidate_for_test(first, false),
+        DispatchOutcome::Dispatched
     );
     let up_at = qpc_at_offset(&up, epoch, 20_000);
     wait_until_qpc(&up, up_at);
@@ -768,16 +772,16 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     enable_fresh_lease(&mut up, up_measurement_epoch);
     reset_counts(&up);
     let up_candidate = up
-        .stage_candidate_for_test(0b0001, None, qpc_offset(&up, 20_000))
+        .prepare_candidate_for_test(0b0001, None, qpc_offset(&up, 20_000))
         .unwrap()
         .unwrap();
     assert_eq!(
-        up.pre_wait_candidate_admission_for_test(&up_candidate),
-        StagedDispatchOutcome::Dispatched
+        up.pre_wait_admission_for_test(),
+        super::super::PreWaitAdmission::Proceed
     );
     assert_eq!(
-        up.dispatch_staged_candidate_for_test(up_candidate, false),
-        StagedDispatchOutcome::Dispatched
+        up.dispatch_candidate_for_test(up_candidate, false),
+        DispatchOutcome::Dispatched
     );
     report_counts("up-only", &up, &up_packets);
     let _ = up.finalize_for_test();
@@ -795,7 +799,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     mixed.attach_executor_for_test().unwrap();
     mixed.set_mock_sender_start_qpc_for_test(epoch);
     let first = mixed
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             mixed.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -803,8 +807,8 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        mixed.dispatch_staged_candidate_for_test(first, false),
-        StagedDispatchOutcome::Dispatched
+        mixed.dispatch_candidate_for_test(first, false),
+        DispatchOutcome::Dispatched
     );
     let mixed_at = qpc_at_offset(&mixed, epoch, 20_000);
     wait_until_qpc(&mixed, mixed_at);
@@ -813,18 +817,18 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     let mixed_measurement_epoch = mixed.qpc_now_for_test().unwrap();
     enable_fresh_lease(&mut mixed, mixed_measurement_epoch);
     reset_counts(&mixed);
-    let (up_mask, down_chord, timing_window) = staged_send_at(&mut mixed, mixed_at, epoch);
+    let (up_mask, down_chord, timing_window) = send_decision_at(&mut mixed, mixed_at, epoch);
     let mixed_candidate = mixed
-        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+        .prepare_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .unwrap()
         .unwrap();
     assert_eq!(
-        mixed.pre_wait_candidate_admission_for_test(&mixed_candidate),
-        StagedDispatchOutcome::Dispatched
+        mixed.pre_wait_admission_for_test(),
+        super::super::PreWaitAdmission::Proceed
     );
     assert_eq!(
-        mixed.dispatch_staged_candidate_for_test(mixed_candidate, false),
-        StagedDispatchOutcome::Dispatched
+        mixed.dispatch_candidate_for_test(mixed_candidate, false),
+        DispatchOutcome::Dispatched
     );
     report_counts("mixed", &mixed, &mixed_packets);
     let _ = mixed.finalize_for_test();
@@ -842,7 +846,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     fallback.attach_executor_for_test().unwrap();
     fallback.set_mock_sender_start_qpc_for_test(epoch);
     let first = fallback
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             fallback.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -850,8 +854,8 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        fallback.dispatch_staged_candidate_for_test(first, false),
-        StagedDispatchOutcome::Dispatched
+        fallback.dispatch_candidate_for_test(first, false),
+        DispatchOutcome::Dispatched
     );
     let fallback_at = qpc_at_offset(&fallback, epoch, 20_000);
     wait_until_qpc(&fallback, fallback_at);
@@ -876,18 +880,18 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     let fallback_measurement_epoch = fallback.qpc_now_for_test().unwrap();
     enable_fresh_lease(&mut fallback, fallback_measurement_epoch);
     reset_counts(&fallback);
-    let (up_mask, down_chord, timing_window) = staged_send_at(&mut fallback, fallback_at, epoch);
+    let (up_mask, down_chord, timing_window) = send_decision_at(&mut fallback, fallback_at, epoch);
     let candidate = fallback
-        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+        .prepare_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .unwrap()
         .unwrap();
     assert_eq!(
-        fallback.pre_wait_candidate_admission_for_test(&candidate),
-        StagedDispatchOutcome::Dispatched
+        fallback.pre_wait_admission_for_test(),
+        super::super::PreWaitAdmission::Proceed
     );
     assert_eq!(
-        fallback.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Dispatched
+        fallback.dispatch_candidate_for_test(candidate, false),
+        DispatchOutcome::Dispatched
     );
     let selected_packets = fallback_packets.lock().expect("selected packet capture");
     assert_eq!(selected_packets.len(), 1, "Up-prefix uses one sender call");
@@ -899,7 +903,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
             .current_executor_chord_for_test()
             .map(|chord| chord.key_mask),
         Some(2),
-        "Up-prefix must leave the staged Down onset pending"
+        "Up-prefix must leave the Down onset pending"
     );
     assert_eq!(fallback.release_obligation_mask_for_test(), 0);
     report_counts("mixed-to-up-only", &fallback, &fallback_packets);
@@ -922,7 +926,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
     enable_fresh_lease(&mut blocked, epoch);
     reset_counts(&blocked);
     let candidate = blocked
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             blocked.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -930,12 +934,12 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        blocked.pre_wait_candidate_admission_for_test(&candidate),
-        StagedDispatchOutcome::Dispatched
+        blocked.pre_wait_admission_for_test(),
+        super::super::PreWaitAdmission::Proceed
     );
     assert_eq!(
-        blocked.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Exit
+        blocked.dispatch_candidate_for_test(candidate, false),
+        DispatchOutcome::Exit
     );
     report_counts("blocked-generation-replan", &blocked, &blocked_packets);
     assert!(blocked_packets.lock().expect("packet capture").is_empty());
@@ -960,7 +964,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         .set_modifier_key_state_query_for_test(|_| i16::MIN);
     reset_counts(&modifier_blocked);
     let candidate = modifier_blocked
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             modifier_blocked.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -968,12 +972,12 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
         .unwrap()
         .unwrap();
     assert_eq!(
-        modifier_blocked.pre_wait_candidate_admission_for_test(&candidate),
-        StagedDispatchOutcome::Dispatched
+        modifier_blocked.pre_wait_admission_for_test(),
+        super::super::PreWaitAdmission::Proceed
     );
     assert_eq!(
-        modifier_blocked.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Replan
+        modifier_blocked.dispatch_candidate_for_test(candidate, false),
+        DispatchOutcome::Replan
     );
     report_counts(
         "blocked-modifier-replan",

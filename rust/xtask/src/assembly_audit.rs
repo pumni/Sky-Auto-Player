@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::Result;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -193,12 +193,498 @@ fn is_forbidden_suffix_effect(line: &str) -> bool {
         || (folded.starts_with("andq ") && folded.contains("%rsp"))
 }
 
-fn validate_scoped_send_suffix(
+struct BasicBlock {
+    start: usize,
+    end: usize,
+    succs: Vec<usize>,
+}
+
+fn parse_jump_tables(lines: &[String]) -> BTreeMap<String, Vec<String>> {
+    let mut tables: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    for line in lines {
+        let trimmed = line.trim();
+        if let Some(label) = trimmed.strip_suffix(':') {
+            if label.starts_with(".LJTI") {
+                current = Some(label.to_string());
+                tables.entry(label.to_string()).or_default();
+                continue;
+            }
+            if !label.starts_with(".L") || label.starts_with(".LBB") {
+                current = None;
+            }
+            continue;
+        }
+        if let Some(table_name) = current.as_ref() {
+            if let Some(rest) = trimmed.strip_prefix(".long") {
+                let expr = rest.trim();
+                if let Some(target) = expr.split('-').next().map(str::trim)
+                    && target.starts_with(".LBB")
+                {
+                    tables
+                        .entry(table_name.clone())
+                        .or_default()
+                        .push(target.to_string());
+                }
+            } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                current = None;
+            }
+        }
+    }
+    tables
+}
+
+fn is_branch_or_terminator(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some(op) = trimmed.split_whitespace().next() else {
+        return false;
+    };
+    let op_lower = op.to_ascii_lowercase();
+    op_lower == "jmp"
+        || op_lower == "jmpq"
+        || op_lower == "ret"
+        || op_lower == "retq"
+        || op_lower == "ud2"
+        || (op_lower.starts_with('j')
+            && trimmed
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|arg| arg.starts_with(".LBB")))
+}
+
+fn build_function_cfg(
     function: &[String],
-    final_owner: usize,
-    deferred_sender: usize,
+    jump_tables: &BTreeMap<String, Vec<String>>,
+) -> Result<(Vec<BasicBlock>, Vec<usize>, bool)> {
+    let mut block_starts = BTreeSet::new();
+    block_starts.insert(0usize);
+    let mut label_lines: Vec<(String, usize)> = Vec::new();
+    for (idx, line) in function.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(".LBB") && trimmed.ends_with(':') {
+            block_starts.insert(idx);
+            label_lines.push((trimmed.trim_end_matches(':').to_string(), idx));
+        } else if is_branch_or_terminator(trimmed) && idx + 1 < function.len() {
+            block_starts.insert(idx + 1);
+        }
+    }
+    let block_starts: Vec<usize> = block_starts.into_iter().collect();
+    let mut start_to_block: BTreeMap<usize, usize> = BTreeMap::new();
+    for (block_id, &start) in block_starts.iter().enumerate() {
+        start_to_block.insert(start, block_id);
+    }
+    let mut label_to_block: BTreeMap<String, usize> = BTreeMap::new();
+    for (label, idx) in label_lines {
+        if let Some(&block_id) = start_to_block.get(&idx) {
+            label_to_block.insert(label, block_id);
+        }
+    }
+
+    let mut line_to_block = vec![0usize; function.len()];
+    let mut blocks = Vec::with_capacity(block_starts.len());
+    for (block_id, &start) in block_starts.iter().enumerate() {
+        let end = block_starts
+            .get(block_id + 1)
+            .copied()
+            .unwrap_or(function.len());
+        for slot in &mut line_to_block[start..end] {
+            *slot = block_id;
+        }
+        blocks.push(BasicBlock {
+            start,
+            end,
+            succs: Vec::new(),
+        });
+    }
+
+    let block_count = blocks.len();
+    let mut has_jump_table_dispatch = false;
+    for (block_id, block) in blocks.iter_mut().enumerate() {
+        let start = block.start;
+        let end = block.end;
+        let mut last_jump_table: Option<String> = None;
+        let mut terminates = false;
+        let mut succs = Vec::new();
+        for (offset, line) in function[start..end].iter().enumerate() {
+            let line_no = start + offset + 1;
+            let trimmed = line.trim();
+            if let Some(pos) = trimmed.find(".LJTI") {
+                let tail = &trimmed[pos..];
+                let len = tail
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+                    .unwrap_or(tail.len());
+                last_jump_table = Some(tail[..len].to_string());
+            }
+            let mut parts = trimmed.split_whitespace();
+            let Some(op) = parts.next() else {
+                continue;
+            };
+            let op_lower = op.to_ascii_lowercase();
+            let arg = parts.next().unwrap_or("");
+            if op_lower == "jmp" || op_lower == "jmpq" {
+                terminates = true;
+                if arg.starts_with(".LBB") {
+                    let Some(&target) = label_to_block.get(arg) else {
+                        return Err(format!(
+                            "unresolved local jump target '{arg}' at function line {line_no}"
+                        )
+                        .into());
+                    };
+                    succs.push(target);
+                } else if arg.starts_with('*') {
+                    let Some(table_name) = last_jump_table.as_ref() else {
+                        return Err(format!(
+                            "unsupported/ambiguous indirect branch without jump table at function line {line_no}: {trimmed}"
+                        )
+                        .into());
+                    };
+                    let Some(targets) = jump_tables.get(table_name) else {
+                        return Err(format!(
+                            "unresolved jump table '{table_name}' at function line {line_no}"
+                        )
+                        .into());
+                    };
+                    if targets.is_empty() {
+                        return Err(format!(
+                            "empty jump table '{table_name}' at function line {line_no}"
+                        )
+                        .into());
+                    }
+                    has_jump_table_dispatch = true;
+                    for target_label in targets {
+                        let Some(&target) = label_to_block.get(target_label) else {
+                            return Err(format!(
+                                "jump table '{table_name}' references unresolved label '{target_label}'"
+                            )
+                            .into());
+                        };
+                        succs.push(target);
+                    }
+                } else if arg.starts_with(".L") {
+                    return Err(format!(
+                        "unresolved local jump target '{arg}' at function line {line_no}"
+                    )
+                    .into());
+                }
+            } else if op_lower.starts_with('j') && arg.starts_with(".LBB") {
+                let Some(&target) = label_to_block.get(arg) else {
+                    return Err(format!(
+                        "unresolved local branch target '{arg}' at function line {line_no}"
+                    )
+                    .into());
+                };
+                succs.push(target);
+            } else if op_lower == "ret" || op_lower == "retq" || op_lower == "ud2" {
+                terminates = true;
+            }
+        }
+        if !terminates && block_id + 1 < block_count {
+            succs.push(block_id + 1);
+        }
+        succs.sort_unstable();
+        succs.dedup();
+        block.succs = succs;
+    }
+
+    Ok((blocks, line_to_block, has_jump_table_dispatch))
+}
+
+fn cfg_reachable(blocks: &[BasicBlock], start: usize, stop_at: Option<usize>) -> BTreeSet<usize> {
+    let mut visited = BTreeSet::new();
+    let mut queue = VecDeque::new();
+    visited.insert(start);
+    queue.push_back(start);
+    while let Some(node) = queue.pop_front() {
+        if stop_at == Some(node) {
+            continue;
+        }
+        for &next in &blocks[node].succs {
+            if visited.insert(next) {
+                queue.push_back(next);
+            }
+        }
+    }
+    visited
+}
+
+/// Returns `true` if there is a CFG path from `entry_block` to `target_line`
+/// that avoids every instruction in `required_lines`. Respects intra-block
+/// instruction ordering: a required site inside `target_block` satisfies the
+/// requirement iff it precedes `target_line`.
+fn has_bypass_path(
+    blocks: &[BasicBlock],
+    line_to_block: &[usize],
+    entry_block: usize,
+    target_line: usize,
+    required_lines: &[usize],
+) -> bool {
+    let target_block = line_to_block[target_line];
+    let blocking_blocks: BTreeSet<usize> = required_lines
+        .iter()
+        .filter_map(|&req_line| {
+            let req_block = line_to_block[req_line];
+            if req_block == target_block {
+                (req_line < target_line).then_some(req_block)
+            } else {
+                Some(req_block)
+            }
+        })
+        .collect();
+    if blocking_blocks.contains(&entry_block) {
+        return false;
+    }
+    let mut visited = BTreeSet::new();
+    let mut queue = VecDeque::new();
+    visited.insert(entry_block);
+    queue.push_back(entry_block);
+    while let Some(node) = queue.pop_front() {
+        if node == target_block {
+            return true;
+        }
+        for &next in &blocks[node].succs {
+            if !blocking_blocks.contains(&next) && visited.insert(next) {
+                queue.push_back(next);
+            }
+        }
+    }
+    false
+}
+
+fn precedes_in_cfg(
+    blocks: &[BasicBlock],
+    line_to_block: &[usize],
+    from_line: usize,
+    to_line: usize,
+) -> bool {
+    let from_block = line_to_block[from_line];
+    let to_block = line_to_block[to_line];
+    if from_block == to_block {
+        from_line < to_line
+    } else {
+        cfg_reachable(blocks, from_block, None).contains(&to_block)
+    }
+}
+
+fn find_unique_function_or_leaf_body(
+    lines: &[String],
+    label_suffix: &str,
+    description: &str,
+) -> Result<(usize, usize)> {
+    let seh_starts = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let trimmed = line.trim();
+            (trimmed.starts_with(".seh_proc _")
+                && !trimmed.contains("?dtor$")
+                && trimmed.ends_with(label_suffix))
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if seh_starts.len() == 1 {
+        let start = seh_starts[0];
+        let Some(end_offset) = lines[start + 1..]
+            .iter()
+            .position(|line| line.trim() == ".seh_endproc")
+        else {
+            return Err(format!("assembly function for {description} has no .seh_endproc").into());
+        };
+        return Ok((start, start + 1 + end_offset));
+    }
+    if seh_starts.len() > 1 {
+        return Err(format!(
+            "expected one emitted assembly function for {description}, found {}",
+            seh_starts.len()
+        )
+        .into());
+    }
+
+    let leaf_starts = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let trimmed = line.trim();
+            trimmed
+                .strip_suffix(':')
+                .is_some_and(|label| {
+                    label.starts_with('_')
+                        && !label.contains("?dtor$")
+                        && label.ends_with(label_suffix)
+                })
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if leaf_starts.len() != 1 {
+        return Err(format!(
+            "expected one emitted assembly function for {description}, found {}",
+            leaf_starts.len()
+        )
+        .into());
+    }
+    let start = leaf_starts[0];
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with(".section")
+                || trimmed.starts_with(".def")
+                || trimmed.starts_with(".seh_proc")
+                || trimmed == ".seh_endproc"
+        })
+        .map_or(lines.len() - 1, |offset| start + offset);
+    Ok((start, end))
+}
+
+fn audit_helper_function_body(
+    all_lines: &[String],
+    label_suffix: &str,
+    description: &str,
+    allow_calls: bool,
 ) -> Result<()> {
-    for (index, line) in function.iter().enumerate() {
+    let range = find_unique_function_or_leaf_body(all_lines, label_suffix, description)?;
+    let helper = body(all_lines, range);
+    for (offset, line) in helper.iter().enumerate() {
+        if is_physical_send_reference(line) {
+            return Err(format!(
+                "{description} contains a physical-send reference at line {}: {}",
+                range.0 + offset + 1,
+                line.trim()
+            )
+            .into());
+        }
+        if is_forbidden_suffix_effect(line) {
+            return Err(format!(
+                "{description} contains allocation/copy/lock/packet-build work at line {}: {}",
+                range.0 + offset + 1,
+                line.trim()
+            )
+            .into());
+        }
+        if !allow_calls && is_call_instruction(line) {
+            return Err(format!(
+                "{description} contains an unexpected call at line {}: {}",
+                range.0 + offset + 1,
+                line.trim()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+struct CfgAuditContext<'a> {
+    function: &'a [String],
+    blocks: &'a [BasicBlock],
+    line_to_block: &'a [usize],
+    admission_sites: &'a [usize],
+}
+
+fn validate_cfg_segment(
+    ctx: &CfgAuditContext<'_>,
+    start_line: usize,
+    end_line: usize,
+) -> Result<usize> {
+    let start_block = ctx.line_to_block[start_line];
+    let end_block = ctx.line_to_block[end_line];
+    // For multi-gate functions (e.g., Mixed→Up fallback calling
+    // `verify_final_packet_admission` a second time), stop traversal at any
+    // *other* admission gate site so only the true post-final-gate suffix
+    // reaching `deferred_sender` is audited as the zero-effect suffix.
+    let other_gate_blocks: BTreeSet<usize> = ctx
+        .admission_sites
+        .iter()
+        .copied()
+        .filter(|&site| site != start_line)
+        .map(|site| ctx.line_to_block[site])
+        .filter(|&blk| blk != start_block && blk != end_block)
+        .collect();
+    let scoped_blocks: BTreeSet<usize> = if start_block == end_block {
+        BTreeSet::from([start_block])
+    } else {
+        let mut forward = BTreeSet::new();
+        let mut queue = VecDeque::new();
+        forward.insert(start_block);
+        queue.push_back(start_block);
+        while let Some(node) = queue.pop_front() {
+            if node == end_block {
+                continue;
+            }
+            for &next in &ctx.blocks[node].succs {
+                if !other_gate_blocks.contains(&next) && forward.insert(next) {
+                    queue.push_back(next);
+                }
+            }
+        }
+        if !forward.contains(&end_block) {
+            return Ok(0);
+        }
+        let mut preds: Vec<Vec<usize>> = vec![Vec::new(); ctx.blocks.len()];
+        for (id, block) in ctx.blocks.iter().enumerate() {
+            for &succ in &block.succs {
+                preds[succ].push(id);
+            }
+        }
+        let mut backward = BTreeSet::new();
+        let mut bqueue = VecDeque::new();
+        backward.insert(end_block);
+        bqueue.push_back(end_block);
+        while let Some(node) = bqueue.pop_front() {
+            if node == start_block {
+                continue;
+            }
+            for &prev in &preds[node] {
+                if !other_gate_blocks.contains(&prev) && backward.insert(prev) {
+                    bqueue.push_back(prev);
+                }
+            }
+        }
+        forward.intersection(&backward).copied().collect()
+    };
+
+    for &block_id in &scoped_blocks {
+        let start = if block_id == start_block {
+            start_line + 1
+        } else {
+            ctx.blocks[block_id].start
+        };
+        let end = if block_id == end_block {
+            end_line
+        } else {
+            ctx.blocks[block_id].end
+        };
+        if start >= end {
+            continue;
+        }
+        for (offset, line) in ctx.function[start..end].iter().enumerate() {
+            let function_index = start + offset;
+            if is_forbidden_suffix_effect(line) {
+                return Err(format!(
+                    "scoped final-admission→sender suffix contains allocation/copy/lock/packet-build work at line {}: {}",
+                    function_index + 1,
+                    line.trim()
+                )
+                .into());
+            }
+            if is_call_instruction(line) {
+                let folded = line.to_ascii_lowercase();
+                let allowed_same_owner = folded.contains("releaseownerproof10same_owner");
+                let allowed_observer_qpc = folded.contains("qpcclock3now");
+                if !(allowed_same_owner || allowed_observer_qpc) {
+                    return Err(format!(
+                        "scoped final-admission→sender suffix contains an unexpected call at line {}: {}",
+                        function_index + 1,
+                        line.trim()
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+    Ok(scoped_blocks.len())
+}
+
+fn validate_scoped_send_suffix(ctx: &CfgAuditContext<'_>, deferred_sender: usize) -> Result<usize> {
+    for (index, line) in ctx.function.iter().enumerate() {
         if index != deferred_sender && is_physical_send_reference(line) {
             return Err(format!(
                 "production dispatch boundary contains an additional physical-send reference at line {}: {}",
@@ -209,59 +695,146 @@ fn validate_scoped_send_suffix(
         }
     }
 
-    for (index, line) in function[final_owner..deferred_sender].iter().enumerate() {
-        let function_index = final_owner + index;
-        if is_forbidden_suffix_effect(line) {
-            return Err(format!(
-                "scoped final-admission→sender suffix contains allocation/copy/lock/packet-build work at line {}: {}",
-                function_index + 1,
-                line.trim()
-            )
-            .into());
-        }
-        if is_call_instruction(line)
-            && !(function_index == final_owner
-                && line
-                    .to_ascii_lowercase()
-                    .contains("foreground_window_owner_matches"))
-        {
-            return Err(format!(
-                "scoped final-admission→sender suffix contains an unexpected call at line {}: {}",
-                function_index + 1,
-                line.trim()
-            )
-            .into());
-        }
+    let mut total_blocks = 0usize;
+    for &admission_site in ctx.admission_sites {
+        total_blocks += validate_cfg_segment(ctx, admission_site, deferred_sender)?;
     }
-    Ok(())
+    if total_blocks == 0 {
+        return Err(
+            "no direct verify_final_packet_admission→deferred_sender suffix path found in dispatch CFG"
+                .into(),
+        );
+    }
+    Ok(total_blocks)
 }
 
 fn production_dispatch_range(lines: &[String]) -> Result<(usize, usize)> {
     find_unique_function_body(
         lines,
         |line| {
-            line.starts_with(".seh_proc _")
-                && line.contains("dispatch_staged_candidate")
-                && !line.contains("?dtor$")
+            let trimmed = line.trim();
+            trimmed.starts_with(".seh_proc _")
+                && !trimmed.contains("?dtor$")
+                && (trimmed.ends_with("13dispatch_loop18dispatch_candidate")
+                    || trimmed == ".seh_proc _fixture_dispatch_candidate")
         },
-        "DispatchExecutor production dispatch_staged_candidate boundary",
+        "sky_player production dispatch_candidate boundary",
     )
+}
+
+fn final_admission_gate_range(lines: &[String]) -> Result<(usize, usize)> {
+    find_unique_function_body(
+        lines,
+        |line| {
+            let trimmed = line.trim();
+            trimmed.starts_with(".seh_proc _")
+                && !trimmed.contains("?dtor$")
+                && (trimmed.ends_with("9admission29verify_final_packet_admission")
+                    || trimmed == ".seh_proc _fixture_verify_final_packet_admission")
+        },
+        "sky_player final admission boundary verify_final_packet_admission",
+    )
+}
+
+fn audit_final_admission_gate_assembly(lines: &[String]) -> Result<(usize, usize)> {
+    let gate_range = final_admission_gate_range(lines)?;
+    let gate_body = body(lines, gate_range);
+    for (offset, line) in gate_body.iter().enumerate() {
+        if is_physical_send_reference(line) {
+            return Err(format!(
+                "verify_final_packet_admission contains a physical-send reference at line {}: {}",
+                gate_range.0 + offset + 1,
+                line.trim()
+            )
+            .into());
+        }
+    }
+
+    let modifier_queries = call_indices(gate_body, "query_async_key_state").len();
+    if modifier_queries != 5 {
+        return Err(format!(
+            "verify_final_packet_admission must retain five fixed modifier queries, found {modifier_queries}"
+        )
+        .into());
+    }
+
+    let direct_owner_checks = call_indices(gate_body, "foreground_window_owner_matches");
+    let outlined_owner_checks = if direct_owner_checks.is_empty() {
+        let calls = call_indices(gate_body, "fresh_final_release_owner_proof");
+        if !calls.is_empty() {
+            let proof_range = find_unique_function_body(
+                lines,
+                |line| {
+                    let trimmed = line.trim();
+                    trimmed.starts_with(".seh_proc _")
+                        && !trimmed.contains("?dtor$")
+                        && (trimmed.ends_with("31fresh_final_release_owner_proof")
+                            || trimmed == ".seh_proc _fixture_fresh_final_release_owner_proof")
+                },
+                "admission::fresh_final_release_owner_proof",
+            )?;
+            let proof_body = body(lines, proof_range);
+            if call_indices(proof_body, "foreground_window_owner_matches").is_empty() {
+                return Err(
+                    "outlined fresh_final_release_owner_proof is missing foreground_window_owner_matches"
+                        .into(),
+                );
+            }
+            for (offset, line) in proof_body.iter().enumerate() {
+                if is_physical_send_reference(line) {
+                    return Err(format!(
+                        "outlined fresh_final_release_owner_proof contains a physical-send reference at line {}: {}",
+                        proof_range.0 + offset + 1,
+                        line.trim()
+                    )
+                    .into());
+                }
+            }
+        }
+        calls
+    } else {
+        Vec::new()
+    };
+    let owner_checks = if !direct_owner_checks.is_empty() {
+        direct_owner_checks.len()
+    } else {
+        outlined_owner_checks.len()
+    };
+    if owner_checks == 0 {
+        return Err("verify_final_packet_admission must retain a fresh owner proof check".into());
+    }
+
+    if !call_indices(gate_body, "22final_control_precheck").is_empty() {
+        audit_helper_function_body(
+            lines,
+            "22final_control_precheck",
+            "admission::final_control_precheck",
+            false,
+        )?;
+    }
+
+    Ok((owner_checks, modifier_queries))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DispatchAssemblyShape {
     dispatch_lines: (usize, usize),
+    admission_gate_calls: usize,
     final_owner_rechecks: usize,
     modifier_queries: usize,
     deferred_sender_calls: usize,
     executor_completion_commits: usize,
     journal_commits: usize,
     send_suffix_lines: (usize, usize),
+    scoped_suffix_blocks: usize,
 }
 
 fn validate_production_dispatch_assembly(lines: &[String]) -> Result<DispatchAssemblyShape> {
     let range = production_dispatch_range(lines)?;
     let function = body(lines, range);
+    let jump_tables = parse_jump_tables(lines);
+    let (blocks, line_to_block, _has_jump_table_dispatch) =
+        build_function_cfg(function, &jump_tables)?;
     let senders = call_indices(
         function,
         "send_prepared_physical_packet_at_final_boundary_deferred_commit",
@@ -274,26 +847,40 @@ fn validate_production_dispatch_assembly(lines: &[String]) -> Result<DispatchAss
         .into());
     }
     let sender = senders[0];
-    let owner_checks = call_indices(function, "foreground_window_owner_matches")
+
+    let admission_calls = call_indices(function, "verify_final_packet_admission")
         .into_iter()
-        .filter(|index| *index < sender)
-        .count();
-    let modifier_queries = call_indices(function, "query_async_key_state")
-        .into_iter()
-        .filter(|index| *index < sender)
-        .count();
-    if owner_checks == 0 || modifier_queries != 5 {
-        return Err(format!(
-            "final Down gate must retain a pre-send owner check and five fixed modifier queries, found owner={owner_checks} modifiers={modifier_queries}"
-        )
-        .into());
+        .filter(|&index| precedes_in_cfg(&blocks, &line_to_block, index, sender))
+        .collect::<Vec<_>>();
+    if admission_calls.is_empty() {
+        return Err(
+            "production dispatch boundary must call verify_final_packet_admission before deferred sender"
+                .into(),
+        );
     }
+
+    // Unconditional pre-send dominance (no jump-table waiver): every
+    // entry-reachable CFG path to deferred sender must pass through
+    // `verify_final_packet_admission`.
+    if has_bypass_path(&blocks, &line_to_block, 0, sender, &admission_calls) {
+        return Err(
+            "entry-reachable deferred sender bypasses verify_final_packet_admission".into(),
+        );
+    }
+
+    let (owner_checks, modifier_queries) = audit_final_admission_gate_assembly(lines)?;
 
     let executor_commits = call_indices(function, "DispatchExecutor20on_send_completed_at");
     let journal_commits = call_indices(function, "commit_physical_packet");
     if executor_commits.len() != 1
         || journal_commits.len() != 1
-        || !(sender < executor_commits[0] && executor_commits[0] < journal_commits[0])
+        || !(precedes_in_cfg(&blocks, &line_to_block, sender, executor_commits[0])
+            && precedes_in_cfg(
+                &blocks,
+                &line_to_block,
+                executor_commits[0],
+                journal_commits[0],
+            ))
     {
         return Err(format!(
             "deferred sender must precede one live scheduler completion commit and one journal commit; sender={}, scheduler={}, journal={}",
@@ -304,37 +891,105 @@ fn validate_production_dispatch_assembly(lines: &[String]) -> Result<DispatchAss
         .into());
     }
 
-    let final_owner = call_indices(function, "foreground_window_owner_matches")
-        .into_iter()
-        .filter(|index| *index < sender)
-        .max()
-        .expect("checked owner recheck");
-    validate_scoped_send_suffix(function, final_owner, sender)?;
+    // Unconditional post-send dominance: no entry-reachable path may reach
+    // scheduler completion commit without executing deferred sender, nor reach
+    // journal commit without executing both deferred sender and scheduler
+    // completion commit.
+    if has_bypass_path(&blocks, &line_to_block, 0, executor_commits[0], &[sender]) {
+        return Err("entry-reachable scheduler completion commit bypasses deferred sender".into());
+    }
+    if has_bypass_path(
+        &blocks,
+        &line_to_block,
+        0,
+        journal_commits[0],
+        &[executor_commits[0]],
+    ) || has_bypass_path(&blocks, &line_to_block, 0, journal_commits[0], &[sender])
+    {
+        return Err(
+            "entry-reachable journal commit bypasses deferred sender or scheduler completion commit"
+                .into(),
+        );
+    }
+
+    let final_gate = *admission_calls.last().expect("checked admission gate call");
+    let cfg_ctx = CfgAuditContext {
+        function,
+        blocks: &blocks,
+        line_to_block: &line_to_block,
+        admission_sites: &admission_calls,
+    };
+    let scoped_suffix_blocks = validate_scoped_send_suffix(&cfg_ctx, sender)?;
     Ok(DispatchAssemblyShape {
         dispatch_lines: (range.0 + 1, range.1 + 1),
+        admission_gate_calls: admission_calls.len(),
         final_owner_rechecks: owner_checks,
         modifier_queries,
         deferred_sender_calls: senders.len(),
         executor_completion_commits: executor_commits.len(),
         journal_commits: journal_commits.len(),
-        send_suffix_lines: (range.0 + final_owner + 1, range.0 + sender + 1),
+        send_suffix_lines: (range.0 + final_gate + 1, range.0 + sender + 1),
+        scoped_suffix_blocks,
     })
 }
 
-fn require_source_contract(root: &Path) -> Result<()> {
-    let dispatch_path = root.join("rust/crates/sky_player/src/engine/worker/dispatch_loop.rs");
-    let dispatch = fs::read_to_string(&dispatch_path)
-        .map_err(|error| format!("could not read production dispatch source: {error}"))?;
+fn strip_line_comments(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| line.split("//").next().unwrap_or(""))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn extract_brace_balanced_fn_body(source: &str, signature: &str) -> Result<String> {
+    let start = source
+        .find(signature)
+        .ok_or_else(|| format!("production source missing '{signature}'"))?;
+    let tail = &source[start..];
+    let Some(open_rel) = tail.find('{') else {
+        return Err(format!("function '{signature}' has no opening brace").into());
+    };
+    let mut depth = 0usize;
+    let mut end_rel = None;
+    for (idx, ch) in tail[open_rel..].char_indices() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    end_rel = Some(open_rel + idx + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(end_rel) = end_rel else {
+        return Err(format!("function '{signature}' has unbalanced braces").into());
+    };
+    Ok(strip_line_comments(&tail[..end_rel]))
+}
+
+fn validate_source_contract(dispatch: &str, admission: &str) -> Result<()> {
+    let dispatch_body =
+        extract_brace_balanced_fn_body(dispatch, "pub(crate) fn dispatch_candidate(")?;
+    if dispatch_body.contains("verify_final_down_admission(") {
+        return Err(
+            "production dispatch_candidate must not reference test-only verify_final_down_admission"
+                .into(),
+        );
+    }
+
     let ordered = [
-        "verify_final_down_admission(",
+        "verify_final_packet_admission(",
         ".send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target(",
         ".on_send_completed_at(",
         ".commit_physical_packet(",
     ];
     let mut previous = None;
     for required in ordered {
-        let Some(index) = dispatch.find(required) else {
-            return Err(format!("production dispatch source lost '{required}'").into());
+        let Some(index) = dispatch_body.find(required) else {
+            return Err(format!("production dispatch_candidate lost '{required}'").into());
         };
         if previous.is_some_and(|previous| index <= previous) {
             return Err("production source order must be final admission → deferred send → scheduler commit → journal commit".into());
@@ -342,25 +997,86 @@ fn require_source_contract(root: &Path) -> Result<()> {
         previous = Some(index);
     }
 
-    let admission_path = root.join("rust/crates/sky_player/src/engine/worker/admission.rs");
-    let admission = fs::read_to_string(&admission_path)
-        .map_err(|error| format!("could not read final admission source: {error}"))?;
+    // Exclude test-only module code and cfg(test)-gated function definitions so
+    // cfg(test) wrappers cannot satisfy the live admission contract.
+    let admission_prod = admission
+        .split("#[cfg(test)]\nmod ")
+        .next()
+        .and_then(|head| head.split("#[cfg(test)]\r\nmod ").next())
+        .unwrap_or(admission);
+    let has_cfg_test_attribute_before = |source: &str, item_start: usize| {
+        source[..item_start]
+            .lines()
+            .rev()
+            .take_while(|line| {
+                let t = line.trim();
+                t.is_empty() || t.starts_with("#[") || t.starts_with("//")
+            })
+            .any(|line| line.trim() == "#[cfg(test)]")
+    };
+    let gate_start = admission_prod
+        .find("pub(crate) fn verify_final_packet_admission(")
+        .ok_or(
+            "production admission source missing 'pub(crate) fn verify_final_packet_admission('",
+        )?;
+    if has_cfg_test_attribute_before(admission_prod, gate_start) {
+        return Err(
+            "production verify_final_packet_admission must not be gated by #[cfg(test)]".into(),
+        );
+    }
+    let gate_body = extract_brace_balanced_fn_body(
+        admission_prod,
+        "pub(crate) fn verify_final_packet_admission(",
+    )?;
     for required in [
-        "target_stamp_still_current",
-        "foreground_window_owner_matches",
-        "owner_identity_status",
-        "final_down_control_verdict",
-        "final_down_modifier_verdict",
-        "final_down_fresh_target_admission",
-        "final_down_post_modifier_verdict",
+        "final_down_control_verdict(",
+        "final_down_target_hint(",
+        "final_down_modifier_verdict(",
+        "final_packet_lease_age_proof(",
+        "fresh_final_release_owner_proof(",
+        "final_down_atomic_revalidation(",
         "lease_timeout_ticks",
         "system_power",
     ] {
-        if !admission.contains(required) {
-            return Err(format!("final Down admission source lost '{required}'").into());
+        if !gate_body.contains(required) {
+            return Err(
+                format!("production verify_final_packet_admission lost '{required}'").into(),
+            );
+        }
+    }
+
+    let owner_start = admission_prod
+        .find("fn fresh_final_release_owner_proof(")
+        .ok_or("production admission source missing 'fn fresh_final_release_owner_proof('")?;
+    if has_cfg_test_attribute_before(admission_prod, owner_start) {
+        return Err(
+            "production fresh_final_release_owner_proof must not be gated by #[cfg(test)]".into(),
+        );
+    }
+    let owner_body =
+        extract_brace_balanced_fn_body(admission_prod, "fn fresh_final_release_owner_proof(")?;
+    for required in [
+        "verify_final_process_identity(",
+        "foreground_window_owner_matches(",
+        "release_owner_proof_is_current(",
+    ] {
+        if !owner_body.contains(required) {
+            return Err(
+                format!("production fresh_final_release_owner_proof lost '{required}'").into(),
+            );
         }
     }
     Ok(())
+}
+
+fn require_source_contract(root: &Path) -> Result<()> {
+    let dispatch_path = root.join("rust/crates/sky_player/src/engine/worker/dispatch_loop.rs");
+    let dispatch = fs::read_to_string(&dispatch_path)
+        .map_err(|error| format!("could not read production dispatch source: {error}"))?;
+    let admission_path = root.join("rust/crates/sky_player/src/engine/worker/admission.rs");
+    let admission = fs::read_to_string(&admission_path)
+        .map_err(|error| format!("could not read final admission source: {error}"))?;
+    validate_source_contract(&dispatch, &admission)
 }
 
 fn report_dispatch_audit(root: &Path, assembly_argument: Option<&str>, alias: &str) -> Result<()> {
@@ -370,10 +1086,14 @@ fn report_dispatch_audit(root: &Path, assembly_argument: Option<&str>, alias: &s
     require_source_contract(root)?;
     println!("assembly={}", path.display());
     println!("audit={alias}");
-    println!("boundary=DispatchExecutor::dispatch_staged_candidate");
+    println!("boundary=sky_player::engine::worker::dispatch_loop::dispatch_candidate");
     println!(
         "dispatch_lines={}-{}",
         shape.dispatch_lines.0, shape.dispatch_lines.1
+    );
+    println!(
+        "pre_send_admission_gate_calls={}",
+        shape.admission_gate_calls
     );
     println!(
         "pre_send_target_owner_rechecks={}",
@@ -390,8 +1110,8 @@ fn report_dispatch_audit(root: &Path, assembly_argument: Option<&str>, alias: &s
         shape.journal_commits
     );
     println!(
-        "scoped_send_suffix_lines={}-{}; non_owner_calls=0; forbidden_effects=0; worker-wide copy/division thresholds=not applied",
-        shape.send_suffix_lines.0, shape.send_suffix_lines.1
+        "scoped_send_suffix_lines={}-{}; scoped_suffix_blocks={}; forbidden_effects=0; worker-wide copy/division thresholds=not applied",
+        shape.send_suffix_lines.0, shape.send_suffix_lines.1, shape.scoped_suffix_blocks
     );
     println!("production dispatch assembly audit: PASS");
     Ok(())
@@ -429,21 +1149,37 @@ fn validate_win32_sender_assembly(lines: &[String]) -> Result<(usize, usize, usi
         },
         "TrackedKeyState deferred-commit sender",
     )?;
-    let policy = find_unique_function_body(
-        lines,
-        |line| {
-            line.starts_with(".seh_proc _")
-                && line.contains("send_prepared_physical_packet_view_with_commit_policy")
-        },
-        "tracked packet send commit-policy boundary",
-    )?;
     let deferred_body = body(lines, deferred);
+    let (policy, callee_fragment) = if lines.iter().any(|line| {
+        line.starts_with(".seh_proc _")
+            && line.contains("send_prepared_physical_packet_view_with_commit_policy")
+    }) {
+        (
+            find_unique_function_body(
+                lines,
+                |line| {
+                    line.starts_with(".seh_proc _")
+                        && line.contains("send_prepared_physical_packet_view_with_commit_policy")
+                },
+                "tracked packet send commit-policy boundary",
+            )?,
+            "send_prepared_physical_packet_view_with_commit_policy",
+        )
+    } else {
+        (
+            find_unique_function_body(
+                lines,
+                |line| {
+                    line.starts_with(".seh_proc _")
+                        && line.contains("send_prepared_physical_packet_once_impl")
+                },
+                "tracked packet single-send implementation boundary",
+            )?,
+            "send_prepared_physical_packet_once_impl",
+        )
+    };
     let policy_body = body(lines, policy);
-    let deferred_calls = call_indices(
-        deferred_body,
-        "send_prepared_physical_packet_view_with_commit_policy",
-    )
-    .len();
+    let deferred_calls = call_indices(deferred_body, callee_fragment).len();
     let sendinput_indices = policy_body
         .iter()
         .enumerate()
@@ -598,21 +1334,29 @@ mod tests {
         text.lines().map(str::to_owned).collect()
     }
 
+    fn valid_gate_fixture() -> &'static str {
+        ".seh_proc _fixture_verify_final_packet_admission\n\
+         callq query_async_key_state\n\
+         callq query_async_key_state\n\
+         callq query_async_key_state\n\
+         callq query_async_key_state\n\
+         callq query_async_key_state\n\
+         callq foreground_window_owner_matches\n\
+         retq\n\
+         .seh_endproc\n"
+    }
+
     fn valid_dispatch() -> Vec<String> {
-        fixture(
-            ".seh_proc _fixture_dispatch_staged_candidate\n\
-             callq query_async_key_state\n\
-             callq query_async_key_state\n\
-             callq query_async_key_state\n\
-             callq query_async_key_state\n\
-             callq query_async_key_state\n\
+        fixture(&format!(
+            ".seh_proc _fixture_dispatch_candidate\n\
              callq record_sendinput_pre_call_lateness\n\
-             callq foreground_window_owner_matches\n\
+             callq verify_final_packet_admission\n\
              callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
              callq DispatchExecutor20on_send_completed_at\n\
              callq commit_physical_packet\n\
-             .seh_endproc",
-        )
+             .seh_endproc\n{}",
+            valid_gate_fixture()
+        ))
     }
 
     #[test]
@@ -649,29 +1393,25 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(validate_production_dispatch_assembly(&missing_owner).is_err());
 
-        let double_sender = fixture(
-            ".seh_proc _fixture_dispatch_staged_candidate\n\
-             callq query_async_key_state\ncallq query_async_key_state\n\
-             callq query_async_key_state\ncallq query_async_key_state\n\
-             callq query_async_key_state\n\
-             callq foreground_window_owner_matches\n\
+        let double_sender = fixture(&format!(
+            ".seh_proc _fixture_dispatch_candidate\n\
+             callq verify_final_packet_admission\n\
              callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
              callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
              callq DispatchExecutor20on_send_completed_at\n\
-             callq commit_physical_packet\n.seh_endproc",
-        );
+             callq commit_physical_packet\n.seh_endproc\n{}",
+            valid_gate_fixture()
+        ));
         assert!(validate_production_dispatch_assembly(&double_sender).is_err());
 
-        let wrong_commit_order = fixture(
-            ".seh_proc _fixture_dispatch_staged_candidate\n\
-             callq query_async_key_state\ncallq query_async_key_state\n\
-             callq query_async_key_state\ncallq query_async_key_state\n\
-             callq query_async_key_state\n\
-             callq foreground_window_owner_matches\n\
+        let wrong_commit_order = fixture(&format!(
+            ".seh_proc _fixture_dispatch_candidate\n\
+             callq verify_final_packet_admission\n\
              callq DispatchExecutor20on_send_completed_at\n\
              callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
-             callq commit_physical_packet\n.seh_endproc",
-        );
+             callq commit_physical_packet\n.seh_endproc\n{}",
+            valid_gate_fixture()
+        ));
         assert!(validate_production_dispatch_assembly(&wrong_commit_order).is_err());
 
         for unexpected_effect in [
@@ -693,17 +1433,7 @@ mod tests {
             );
         }
 
-        let diagnostic_only = fixture(
-            ".seh_proc _fixture_dispatch_staged_candidate\n\
-             callq query_async_key_state\ncallq query_async_key_state\n\
-             callq query_async_key_state\ncallq query_async_key_state\n\
-             callq query_async_key_state\n\
-             callq record_sendinput_pre_call_lateness\n\
-             callq foreground_window_owner_matches\n\
-             callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
-             callq DispatchExecutor20on_send_completed_at\n\
-             callq commit_physical_packet\n.seh_endproc",
-        );
+        let diagnostic_only = valid_dispatch();
         assert!(validate_production_dispatch_assembly(&diagnostic_only).is_ok());
     }
 
@@ -775,5 +1505,224 @@ mod tests {
              callq *__imp_SendInput\n.seh_endproc",
         );
         assert!(validate_win32_sender_assembly(&samples_before_send).is_err());
+    }
+
+    #[test]
+    fn source_contract_requires_live_production_admission_and_rejects_test_only_or_missing_proof() {
+        let valid_dispatch = "\
+            pub(crate) fn dispatch_candidate() {\n\
+                verify_final_packet_admission();\n\
+                backend.send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target();\n\
+                scheduler.on_send_completed_at();\n\
+                backend.commit_physical_packet();\n\
+            }\n\
+            pub(super) fn dispatch() {}\n";
+        let valid_admission = "\
+            fn fresh_final_release_owner_proof() {\n\
+                authority.verify_final_process_identity();\n\
+                foreground_window_owner_matches();\n\
+                target.release_owner_proof_is_current();\n\
+            }\n\
+            pub(crate) fn enter_focus_pause() {}\n\
+            pub(crate) fn verify_final_packet_admission(lease_timeout_ticks: u64, system_power: u64) {\n\
+                final_down_control_verdict();\n\
+                final_down_target_hint();\n\
+                final_down_modifier_verdict();\n\
+                final_packet_lease_age_proof();\n\
+                fresh_final_release_owner_proof();\n\
+                final_down_atomic_revalidation();\n\
+            }\n";
+        assert!(validate_source_contract(valid_dispatch, valid_admission).is_ok());
+
+        // Reject outdated test-only verify_final_down_admission in production dispatch_candidate.
+        let outdated_dispatch = valid_dispatch.replace(
+            "verify_final_packet_admission(",
+            "verify_final_down_admission(",
+        );
+        assert!(validate_source_contract(&outdated_dispatch, valid_admission).is_err());
+
+        // Reject reversed commit ordering.
+        let wrong_order = "\
+            pub(crate) fn dispatch_candidate() {\n\
+                verify_final_packet_admission();\n\
+                scheduler.on_send_completed_at();\n\
+                backend.send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target();\n\
+                backend.commit_physical_packet();\n\
+            }\n\
+            pub(super) fn dispatch() {}\n";
+        assert!(validate_source_contract(wrong_order, valid_admission).is_err());
+
+        // Reject missing live proof (or proof moved behind #[cfg(test)]).
+        let missing_owner_proof = valid_admission.replace("foreground_window_owner_matches();", "");
+        assert!(validate_source_contract(valid_dispatch, &missing_owner_proof).is_err());
+
+        let test_only_admission = format!("#[cfg(test)]\n{valid_admission}");
+        assert!(validate_source_contract(valid_dispatch, &test_only_admission).is_err());
+
+        // Reject comment-only tokens masquerading as live calls.
+        let commented_owner = valid_admission.replace(
+            "foreground_window_owner_matches();",
+            "// foreground_window_owner_matches();",
+        );
+        assert!(validate_source_contract(valid_dispatch, &commented_owner).is_err());
+    }
+
+    #[test]
+    fn cfg_oracle_rejects_bypass_jump_table_bypass_skipped_commit_forbidden_suffix_and_unresolved_jumps()
+     {
+        let lines = |text: &str| text.lines().map(str::to_owned).collect::<Vec<_>>();
+        let gate = valid_gate_fixture();
+
+        // 1. Negative: direct branch bypassing verify_final_packet_admission to reach deferred sender.
+        let gate_bypass = lines(&format!(
+            ".seh_proc _fixture_dispatch_candidate\n\
+             testb $1, %al\n\
+             jne .LBB0_send\n\
+             callq verify_final_packet_admission\n\
+             .LBB0_send:\n\
+             callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
+             callq DispatchExecutor20on_send_completed_at\n\
+             callq commit_physical_packet\n\
+             retq\n\
+             .seh_endproc\n{gate}"
+        ));
+        assert!(
+            validate_production_dispatch_assembly(&gate_bypass).is_err(),
+            "entry-reachable sender bypassing verify_final_packet_admission must fail"
+        );
+
+        // 2. Negative: jump-table CFG where one jump-table arm bypasses verify_final_packet_admission.
+        // Proves there is NO blanket jump-table waiver!
+        let jump_table_bypass = lines(&format!(
+            ".seh_proc _fixture_dispatch_candidate\n\
+             leaq .LJTI0_0(%rip), %rax\n\
+             jmpq *%rax\n\
+             .LBB0_gated:\n\
+             callq verify_final_packet_admission\n\
+             .LBB0_send:\n\
+             callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
+             callq DispatchExecutor20on_send_completed_at\n\
+             callq commit_physical_packet\n\
+             retq\n\
+             .seh_endproc\n\
+             .LJTI0_0:\n\
+             .long .LBB0_gated-.LJTI0_0\n\
+             .long .LBB0_send-.LJTI0_0\n{gate}"
+        ));
+        assert!(
+            validate_production_dispatch_assembly(&jump_table_bypass).is_err(),
+            "jump-table arm bypassing verify_final_packet_admission must fail unconditionally"
+        );
+
+        // 3. Negative: entry branch skipping scheduler completion commit to reach journal commit.
+        let skipped_commit = lines(&format!(
+            ".seh_proc _fixture_dispatch_candidate\n\
+             callq verify_final_packet_admission\n\
+             callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
+             testb $1, %al\n\
+             jne .LBB0_journal\n\
+             callq DispatchExecutor20on_send_completed_at\n\
+             .LBB0_journal:\n\
+             callq commit_physical_packet\n\
+             retq\n\
+             .seh_endproc\n{gate}"
+        ));
+        assert!(
+            validate_production_dispatch_assembly(&skipped_commit).is_err(),
+            "journal commit bypassing scheduler completion commit must fail"
+        );
+
+        // 4. Negative: forbidden memcpy on post-gate branch reaching sender (even with jump table).
+        let suffix_forbidden = lines(&format!(
+            ".seh_proc _fixture_dispatch_candidate\n\
+             callq verify_final_packet_admission\n\
+             leaq .LJTI0_0(%rip), %rax\n\
+             jmpq *%rax\n\
+             .LBB0_dirty:\n\
+             callq memcpy\n\
+             .LBB0_send:\n\
+             callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
+             callq DispatchExecutor20on_send_completed_at\n\
+             callq commit_physical_packet\n\
+             retq\n\
+             .LBB0_reject:\n\
+             retq\n\
+             .seh_endproc\n\
+             .LJTI0_0:\n\
+             .long .LBB0_dirty-.LJTI0_0\n\
+             .long .LBB0_reject-.LJTI0_0\n{gate}"
+        ));
+        assert!(
+            validate_production_dispatch_assembly(&suffix_forbidden).is_err(),
+            "post-gate branch with forbidden memcpy reaching sender must fail even with jump table"
+        );
+
+        // 5. Negative: unresolved indirect branch must fail closed.
+        let unresolved_indirect = lines(&format!(
+            ".seh_proc _fixture_dispatch_candidate\n\
+             callq verify_final_packet_admission\n\
+             jmpq *%rax\n\
+             callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
+             callq DispatchExecutor20on_send_completed_at\n\
+             callq commit_physical_packet\n\
+             .seh_endproc\n{gate}"
+        ));
+        assert!(
+            validate_production_dispatch_assembly(&unresolved_indirect).is_err(),
+            "unresolved indirect branch must fail closed"
+        );
+
+        // 6. Negative: physical send inside verify_final_packet_admission must fail.
+        let send_in_gate = lines(
+            ".seh_proc _fixture_dispatch_candidate\n\
+             callq verify_final_packet_admission\n\
+             callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
+             callq DispatchExecutor20on_send_completed_at\n\
+             callq commit_physical_packet\n\
+             retq\n\
+             .seh_endproc\n\
+             .seh_proc _fixture_verify_final_packet_admission\n\
+             callq query_async_key_state\n\
+             callq query_async_key_state\n\
+             callq query_async_key_state\n\
+             callq query_async_key_state\n\
+             callq query_async_key_state\n\
+             callq foreground_window_owner_matches\n\
+             callq *__imp_SendInput\n\
+             retq\n\
+             .seh_endproc",
+        );
+        assert!(
+            validate_production_dispatch_assembly(&send_in_gate).is_err(),
+            "physical send inside verify_final_packet_admission must fail"
+        );
+
+        // 7. Positive: reordered blocks + jump table on admission verdict + legitimate Up-only bypass inside gate.
+        let valid_reordered = lines(&format!(
+            ".seh_proc _fixture_dispatch_candidate\n\
+             callq verify_final_packet_admission\n\
+             leaq .LJTI0_0(%rip), %rax\n\
+             jmpq *%rax\n\
+             .LBB0_send:\n\
+             callq send_prepared_physical_packet_at_final_boundary_deferred_commit\n\
+             callq DispatchExecutor20on_send_completed_at\n\
+             callq commit_physical_packet\n\
+             retq\n\
+             .LBB0_allowed:\n\
+             callq ReleaseOwnerProof10same_owner\n\
+             jmp .LBB0_send\n\
+             .LBB0_reject:\n\
+             callq __rust_alloc\n\
+             retq\n\
+             .seh_endproc\n\
+             .LJTI0_0:\n\
+             .long .LBB0_allowed-.LJTI0_0\n\
+             .long .LBB0_reject-.LJTI0_0\n{gate}"
+        ));
+        let shape = validate_production_dispatch_assembly(&valid_reordered)
+            .expect("reordered blocks with jump table on gate verdict must pass");
+        assert_eq!(shape.admission_gate_calls, 1);
+        assert_eq!(shape.final_owner_rechecks, 1);
+        assert_eq!(shape.modifier_queries, 5);
     }
 }

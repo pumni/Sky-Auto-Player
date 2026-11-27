@@ -98,12 +98,15 @@ saturating time arithmetic for the new conversion path. The schedule stores
 strictly increasing onset chords plus one fixed pulse duration `hold_us = H`
 (no per-note authored Up stream); the runtime anchors each key's release to its
 successful Down completion (`release_not_before = completion_qpc + H_ticks`),
-while diagnostic nominal Up is derived on demand as `onset + H`. A same-key
-repeat interval shorter than `H` remains infeasible and is rejected during
-Prepare with its source chord positions. A physically feasible repeat whose
-nominal Up-to-Down gap (`next_onset - (prev_onset + H)`) is shorter than one
-configured frame is counted in the risk report and raises a medium risk, so the
-existing confirmation flow can show the sampling warning and offer Proceed.
+while the exact nominal Up tick offset is materialized once during native
+preparation from `onset + H`. A same-key repeat interval `I` shorter than `H`
+remains infeasible and is rejected during Prepare with its source chord
+positions. Feasible repeats report nominal scheduling slack `I - H`, the
+minimum slack (absent when there are no feasible repeats), and the repeat and
+zero-slack counts. `I == H` is valid; zero slack leaves no nominal budget for
+transport overhead but does not raise risk severity or add an admission gate.
+There is no frame-based release-gap warning or minimum release spacing.
+Other risk and conversion-consent rules remain in force.
 When a due release and a disjoint due onset coincide, Up is ordered before
 Down. Tempo advice for an infeasible repeat is computed from `H`, and Prepare
 rebuilds and revalidates any selected variant. These warnings do not rewrite

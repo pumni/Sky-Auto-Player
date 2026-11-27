@@ -609,7 +609,7 @@ pub(super) fn production_options_for_fps(
             #[cfg(feature = "test-support")]
             test_spin_threshold_us: None,
             #[cfg(feature = "test-support")]
-            test_wait_policy: sky_player::engine::TestWaitPolicy::ProductionCalibrated,
+            test_wait_policy: sky_player::engine::TestWaitPolicy::ProductionFixed,
         },
         telemetry: TelemetryOptions {
             mode: TelemetryMode::Ring,
@@ -619,9 +619,6 @@ pub(super) fn production_options_for_fps(
             mode: PriorityMode::Auto,
         },
         instrument_key_profile: profile,
-        #[cfg(feature = "test-support")]
-        startup_calibration_placement:
-            sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
         #[cfg(feature = "test-support")]
         timing_observer_for_qualification: false,
         #[cfg(feature = "test-support")]

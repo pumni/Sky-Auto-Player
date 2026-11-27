@@ -190,10 +190,14 @@ pub struct ScheduleMetadata {
     pub impossible_same_key_repeats: usize,
     pub max_polyphony: usize,
     pub shortest_same_key_interval_us: Option<u64>,
-    pub min_same_key_up_gap_us: Option<u64>,
-    /// Physically feasible repeats whose nominal Up-to-Down gap is shorter
-    /// than one configured frame.
-    pub short_up_gap_repeat_count: usize,
+    /// Minimum nominal same-key scheduling slack (`I - H`) in microseconds across
+    /// feasible same-key repeats (`I >= H`). `None` when there are no feasible
+    /// same-key repeats. Diagnostic only; imposes no runtime gate.
+    pub min_same_key_slack_us: Option<u64>,
+    /// Number of feasible same-key repeats (`I >= H`).
+    pub same_key_repeat_count: usize,
+    /// Number of feasible same-key repeats with zero nominal slack (`I == H`).
+    pub zero_slack_repeat_count: usize,
     pub recommended_hold_frames: Option<f64>,
     pub recommended_tempo_scale: Option<f64>,
     pub warnings: Vec<String>,
@@ -218,7 +222,9 @@ pub struct RiskReport {
     pub max_chord_size: usize,
     pub chords_count: usize,
     pub timing_stress_rate: f64,
-    pub short_up_gap_repeat_count: usize,
+    pub min_same_key_slack_us: Option<u64>,
+    pub same_key_repeat_count: usize,
+    pub zero_slack_repeat_count: usize,
     pub min_any_note_gap_us: Option<u64>,
     pub min_same_key_gap_us: Option<u64>,
     pub suggested_hold_frames: Option<f64>,
@@ -284,8 +290,8 @@ pub(crate) fn build_schedule_from_scaled_onsets(
     if !tempo_scale.is_finite() || tempo_scale <= 0.0 {
         return Err(SongError::InvalidTempo);
     }
-    // All onset chords share the materialized hold floor H; nominal Up-to-Down
-    // gaps and polyphony below are diagnostic only.
+    // All onset chords share the materialized hold floor H; nominal same-key
+    // scheduling slack (I - H) and polyphony below are diagnostic only.
     let hold_us = policy.min_hold_us;
     let raw_count = drafts.len();
     let mut seen = BTreeSet::new();
@@ -300,9 +306,10 @@ pub(crate) fn build_schedule_from_scaled_onsets(
 
     let mut chords_by_time = BTreeMap::<u64, Vec<u16>>::new();
     let mut impossible = 0;
-    let mut short_up_gap_repeat_count = 0;
+    let mut same_key_repeat_count = 0;
+    let mut zero_slack_repeat_count = 0;
     let mut shortest = None;
-    let mut min_up_gap = None;
+    let mut min_same_key_slack_us = None;
     for (at, scan, source_index) in &drafts {
         let next_at = next_by_source.get(source_index).copied().flatten();
         if let Some(next_at) = next_at {
@@ -310,11 +317,15 @@ pub(crate) fn build_schedule_from_scaled_onsets(
             shortest = Some(shortest.map_or(interval, |current: u64| current.min(interval)));
             if interval < hold_us {
                 impossible += 1;
-            } else if interval - hold_us < policy.frame_us {
-                short_up_gap_repeat_count += 1;
+            } else {
+                same_key_repeat_count += 1;
+                let slack = interval - hold_us;
+                if slack == 0 {
+                    zero_slack_repeat_count += 1;
+                }
+                min_same_key_slack_us =
+                    Some(min_same_key_slack_us.map_or(slack, |current: u64| current.min(slack)));
             }
-            let gap = interval.saturating_sub(hold_us);
-            min_up_gap = Some(min_up_gap.map_or(gap, |current: u64| current.min(gap)));
         }
         // Validate that every onset can accommodate the materialized pulse hold.
         at.checked_add(hold_us).ok_or(SongError::TimingOverflow)?;
@@ -378,8 +389,9 @@ pub(crate) fn build_schedule_from_scaled_onsets(
         impossible_same_key_repeats: impossible,
         max_polyphony,
         shortest_same_key_interval_us: shortest,
-        min_same_key_up_gap_us: min_up_gap,
-        short_up_gap_repeat_count,
+        min_same_key_slack_us,
+        same_key_repeat_count,
+        zero_slack_repeat_count,
         recommended_hold_frames,
         recommended_tempo_scale,
         warnings,
@@ -480,46 +492,28 @@ pub fn analyze_schedule_with_context(
             schedule.max_polyphony
         ));
     }
-    let severity_before_short_gap = severity;
-    if schedule.short_up_gap_repeat_count > 0 {
-        if severity == "low" {
-            severity = "medium";
-        }
-        reasons.push("short same-key Up gaps");
-        recommendations.push(format!(
-            "{} physically feasible same-key repeat(s) have an Up-to-Down gap shorter than one frame; the game may miss a short Up pulse.",
-            schedule.short_up_gap_repeat_count
-        ));
-    }
     if let Some(interval) = schedule.shortest_same_key_interval_us {
         recommendations.push(format!(
             "Shortest same-key repeat interval: {:.1}ms.",
             interval as f64 / 1_000.0
         ));
     }
-    let short_gap_only =
-        schedule.short_up_gap_repeat_count > 0 && severity_before_short_gap == "low";
-    let (suggested_hold_frames, suggested_tempo_scale) = if short_gap_only {
-        // A short authored Up gap requires user acknowledgement. Automatically
-        // changing hold or tempo would change the risk under review.
-        (None, None)
-    } else if schedule.impossible_same_key_repeats > 0 {
+    let (suggested_hold_frames, suggested_tempo_scale) = if schedule.impossible_same_key_repeats > 0
+    {
         (
             schedule.recommended_hold_frames,
             schedule.recommended_tempo_scale,
         )
-    } else if schedule.max_polyphony >= 5
-        || (!dense.is_empty() && severity_before_short_gap != "low")
-    {
+    } else if schedule.max_polyphony >= 5 || (!dense.is_empty() && severity != "low") {
         (
             Some(1.5),
-            Some(if severity_before_short_gap != "low" {
+            Some(if severity != "low" {
                 current_tempo_scale.min(0.95)
             } else {
                 current_tempo_scale
             }),
         )
-    } else if severity_before_short_gap == "medium" {
+    } else if severity == "medium" {
         (Some(1.25), Some(current_tempo_scale.min(0.95)))
     } else {
         (Some(current_hold_frames), Some(current_tempo_scale))
@@ -608,7 +602,9 @@ pub fn analyze_schedule_with_context(
         } else {
             schedule.impossible_same_key_repeats as f64 / schedule.note_count as f64 * 100.0
         },
-        short_up_gap_repeat_count: schedule.short_up_gap_repeat_count,
+        min_same_key_slack_us: schedule.min_same_key_slack_us,
+        same_key_repeat_count: schedule.same_key_repeat_count,
+        zero_slack_repeat_count: schedule.zero_slack_repeat_count,
         min_any_note_gap_us: min_any,
         min_same_key_gap_us: min_same,
         suggested_hold_frames,
@@ -722,9 +718,11 @@ mod tests {
         let policy = crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 0)
             .expect("valid policy");
         let h = policy.min_hold_us;
-        for (interval, conflicts, up_gap, short_gap_count) in
-            [(h - 1, 1, 0, 0), (h, 0, 0, 1), (h + 1, 0, 1, 1)]
-        {
+        for (interval, conflicts, min_slack, repeat_count, zero_slack_count) in [
+            (h - 1, 1, None, 0, 0),
+            (h, 0, Some(0), 1, 1),
+            (h + 1, 0, Some(1), 1, 0),
+        ] {
             let schedule = build_schedule_from_scaled_onsets(
                 vec![(0, SKY_SCAN_CODES[0], 0), (interval, SKY_SCAN_CODES[0], 1)],
                 1.0,
@@ -739,72 +737,65 @@ mod tests {
             assert_eq!(schedule.chords.len(), 2, "interval={interval}");
             assert_eq!(schedule.chords[0].at_us, 0, "interval={interval}");
             assert_eq!(schedule.chords[1].at_us, interval, "interval={interval}");
-            assert_eq!(schedule.min_same_key_up_gap_us, Some(up_gap));
-            assert_eq!(
-                schedule.short_up_gap_repeat_count, short_gap_count,
-                "interval={interval}"
-            );
+            assert_eq!(schedule.min_same_key_slack_us, min_slack);
+            assert_eq!(schedule.same_key_repeat_count, repeat_count);
+            assert_eq!(schedule.zero_slack_repeat_count, zero_slack_count);
             if interval == h {
                 assert_eq!(schedule.max_polyphony, 1);
                 let risk = analyze_schedule(&schedule);
-                assert_eq!(risk.severity, "medium");
-                assert_eq!(risk.short_up_gap_repeat_count, 1);
-                assert!(risk.recommendations.iter().any(|recommendation| {
-                    recommendation.contains("game may miss a short Up pulse")
-                }));
+                // Zero nominal slack is diagnostic only: Hold-only allows I == H
+                // without elevating severity or gating admission.
+                assert_eq!(risk.severity, "low");
+                assert_eq!(risk.min_same_key_slack_us, Some(0));
+                assert_eq!(risk.same_key_repeat_count, 1);
+                assert_eq!(risk.zero_slack_repeat_count, 1);
             }
         }
     }
 
     #[test]
-    fn short_gap_only_does_not_recommend_timing_changes_with_one_to_five_dense_clusters() {
+    fn nominal_same_key_slack_is_diagnostic_only_without_frame_threshold() {
         let policy = crate::timing::MaterializedTimingPolicy::from_user_margin(60, 1.0, 0)
             .expect("valid policy");
-        for cluster_count in 1usize..=5 {
-            let mut notes = Vec::new();
-            let mut source_index = 0;
-            for cluster in 0..cluster_count {
-                let cluster_start_ms = i64::try_from(cluster * 200).expect("test time range");
-                for (key_index, key) in KEY_NAMES.iter().take(7).enumerate() {
-                    notes.push(Note {
-                        time_ms: cluster_start_ms
-                            + i64::try_from(key_index * 10).expect("test time range"),
-                        key: (*key).into(),
-                        source_index,
-                    });
-                    source_index += 1;
-                }
-                notes.push(Note {
-                    time_ms: cluster_start_ms + 17,
-                    key: KEY_NAMES[0].into(),
-                    source_index,
-                });
-                source_index += 1;
-            }
-            let schedule = build_schedule_with_policy(
-                &Song {
-                    name: "Short Up gap with sparse dense clusters".into(),
-                    notes,
-                },
-                1.0,
-                &policy,
-            )
-            .expect("short-gap schedule");
-            assert_eq!(schedule.short_up_gap_repeat_count, cluster_count);
-            assert_eq!(schedule.impossible_same_key_repeats, 0);
-
-            let risk = analyze_schedule(&schedule);
-            assert_eq!(risk.dense_clusters.len(), cluster_count);
-            assert!(risk.max_polyphony <= 8);
-            assert_eq!(risk.severity, "medium");
-            assert!(
-                risk.recommendations
-                    .iter()
-                    .any(|reason| { reason.contains("game may miss a short Up pulse") })
-            );
-            assert_eq!(risk.suggested_hold_frames, None);
-            assert_eq!(risk.suggested_tempo_scale, None);
+        let mut notes = Vec::new();
+        let mut source_index = 0;
+        for cluster in 0..3usize {
+            let cluster_start_ms = i64::try_from(cluster * 200).expect("test time range");
+            notes.push(Note {
+                time_ms: cluster_start_ms,
+                key: KEY_NAMES[0].into(),
+                source_index,
+            });
+            source_index += 1;
+            notes.push(Note {
+                time_ms: cluster_start_ms + 17,
+                key: KEY_NAMES[0].into(),
+                source_index,
+            });
+            source_index += 1;
         }
+        let schedule = build_schedule_with_policy(
+            &Song {
+                name: "Small positive nominal slack".into(),
+                notes,
+            },
+            1.0,
+            &policy,
+        )
+        .expect("feasible schedule");
+        assert_eq!(schedule.impossible_same_key_repeats, 0);
+        assert_eq!(schedule.same_key_repeat_count, 5);
+        assert_eq!(schedule.zero_slack_repeat_count, 0);
+        assert_eq!(
+            schedule.min_same_key_slack_us,
+            Some(17_000 - policy.min_hold_us)
+        );
+
+        let risk = analyze_schedule(&schedule);
+        assert_eq!(risk.severity, "low");
+        assert_eq!(risk.min_same_key_slack_us, schedule.min_same_key_slack_us);
+        assert_eq!(risk.same_key_repeat_count, 5);
+        assert_eq!(risk.zero_slack_repeat_count, 0);
     }
 
     #[test]

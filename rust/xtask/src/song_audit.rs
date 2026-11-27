@@ -62,7 +62,9 @@ struct AuditMetrics {
     physical_risk_severity: Option<String>,
     physical_risk_reason: Option<String>,
     impossible_same_key_repeat_count: Option<usize>,
-    short_up_gap_repeat_count: Option<usize>,
+    min_same_key_slack_us: Option<u64>,
+    same_key_repeat_count: Option<usize>,
+    zero_slack_repeat_count: Option<usize>,
     output_physical_note_count: Option<usize>,
     output_action_count: Option<usize>,
     schedule_duration_us: Option<u64>,
@@ -283,7 +285,9 @@ fn analyze_sheet(bytes: &[u8], fallback_name: &str) -> Result<SheetAnalysis> {
     let mut schedule_note_count = None;
     let mut schedule_duration_us = None;
     let mut impossible_repeats = None;
-    let mut short_up_gap_repeats = None;
+    let mut min_same_key_slack_us = None;
+    let mut same_key_repeat_count = None;
+    let mut zero_slack_repeat_count = None;
     let mut risk_severity = None;
     let mut risk_reason = None;
     let mut max_polyphony = None;
@@ -305,7 +309,9 @@ fn analyze_sheet(bytes: &[u8], fallback_name: &str) -> Result<SheetAnalysis> {
             schedule_note_count = Some(legacy.schedule.note_count);
             schedule_duration_us = Some(legacy.schedule.duration_us);
             impossible_repeats = Some(legacy.schedule.impossible_same_key_repeats);
-            short_up_gap_repeats = Some(legacy.schedule.short_up_gap_repeat_count);
+            min_same_key_slack_us = legacy.schedule.min_same_key_slack_us;
+            same_key_repeat_count = Some(legacy.schedule.same_key_repeat_count);
+            zero_slack_repeat_count = Some(legacy.schedule.zero_slack_repeat_count);
             risk_severity = Some(legacy.physical_risk.severity.clone());
             risk_reason = Some(legacy.physical_risk.reason.clone());
             max_polyphony = Some(legacy.physical_risk.max_polyphony);
@@ -342,7 +348,9 @@ fn analyze_sheet(bytes: &[u8], fallback_name: &str) -> Result<SheetAnalysis> {
                 schedule_note_count = Some(schedule.note_count);
                 schedule_duration_us = Some(schedule.duration_us);
                 impossible_repeats = Some(schedule.impossible_same_key_repeats);
-                short_up_gap_repeats = Some(schedule.short_up_gap_repeat_count);
+                min_same_key_slack_us = schedule.min_same_key_slack_us;
+                same_key_repeat_count = Some(schedule.same_key_repeat_count);
+                zero_slack_repeat_count = Some(schedule.zero_slack_repeat_count);
                 schedule_warnings = schedule.warnings.clone();
             }
             if let Some(risk) = &piano.physical_risk {
@@ -475,7 +483,9 @@ fn analyze_sheet(bytes: &[u8], fallback_name: &str) -> Result<SheetAnalysis> {
         physical_risk_severity: risk_severity,
         physical_risk_reason: risk_reason,
         impossible_same_key_repeat_count: impossible_repeats,
-        short_up_gap_repeat_count: short_up_gap_repeats,
+        min_same_key_slack_us,
+        same_key_repeat_count,
+        zero_slack_repeat_count,
         output_physical_note_count: schedule_note_count,
         output_action_count: schedule_action_count,
         schedule_duration_us,
@@ -987,7 +997,9 @@ fn inventory_csv(songs: &[InventorySong]) -> String {
         "physical_risk_severity",
         "physical_risk_reason",
         "impossible_same_key_repeat_count",
-        "short_up_gap_repeat_count",
+        "min_same_key_slack_us",
+        "same_key_repeat_count",
+        "zero_slack_repeat_count",
         "output_physical_note_count",
         "output_action_count",
         "schedule_duration_us",
@@ -1047,7 +1059,9 @@ fn inventory_csv(songs: &[InventorySong]) -> String {
             display_option(m.physical_risk_severity.as_deref()),
             display_option(m.physical_risk_reason.as_deref()),
             display_option(m.impossible_same_key_repeat_count),
-            display_option(m.short_up_gap_repeat_count),
+            display_option(m.min_same_key_slack_us),
+            display_option(m.same_key_repeat_count),
+            display_option(m.zero_slack_repeat_count),
             display_option(m.output_physical_note_count),
             display_option(m.output_action_count),
             display_option(m.schedule_duration_us),

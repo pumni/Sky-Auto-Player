@@ -1,7 +1,7 @@
 #![cfg(any(test, feature = "test-support"))]
 
 //! Deterministic test harness for the production DispatchExecutor and worker
-//! staging/send path. It owns one compiled schedule and one live executor.
+//! direct-dispatch path. It owns one compiled schedule and one live executor.
 
 use crate::engine::SystemPowerState;
 use crate::engine::config::WorkerConfig;
@@ -10,11 +10,12 @@ use crate::engine::telemetry::{
     SharedMetrics, TelemetryCollector, TelemetryMode, WorkerMetricsLocal,
 };
 use crate::engine::worker::{
-    DispatchAttemptOutcome, FinalControlSignals, StagedCandidate, StagedControlSignals,
-    StagedDispatchContext, StagedDispatchOutcome, WorkerResources, WorkerRuntime,
-    WorkerSchedulingGuards, WorkerTimingState, dispatch_staged_candidate,
-    pre_wait_candidate_admission, stage_candidate,
+    DispatchAttemptContext, DispatchAttemptOutcome, DispatchCandidate, DispatchControlSignals,
+    DispatchOutcome, WorkerResources, WorkerRuntime, WorkerSchedulingGuards, WorkerTimingState,
+    dispatch_candidate, prepare_dispatch_candidate,
 };
+#[cfg(test)]
+use crate::engine::worker::{FinalControlSignals, PreWaitAdmission, pre_wait_admission};
 use sky_dispatch_core::accounting::GenerationAccounting;
 use sky_dispatch_core::clock::PlaybackClockState;
 use sky_dispatch_core::executor::{
@@ -262,39 +263,31 @@ impl ProductionDispatchTestHarness {
         self.resources.scheduler.current_chord()
     }
 
-    pub fn stage_candidate_for_test(
+    pub fn prepare_candidate_for_test(
         &mut self,
         up_mask: u16,
         down_chord: Option<PreparedChord>,
-        fallback_ticks: TimelineTicks,
-    ) -> Result<Option<StagedCandidate>, String> {
-        self.stage_candidate_with_observer_for_test(up_mask, down_chord, fallback_ticks, false)
+        at_offset_ticks: TimelineTicks,
+    ) -> Result<Option<DispatchCandidate>, String> {
+        self.prepare_candidate_with_observer_for_test(up_mask, down_chord, at_offset_ticks, false)
     }
 
-    pub fn stage_candidate_with_observer_for_test(
+    pub fn prepare_candidate_with_observer_for_test(
         &mut self,
         up_mask: u16,
         down_chord: Option<PreparedChord>,
-        fallback_ticks: TimelineTicks,
+        at_offset_ticks: TimelineTicks,
         capture_up_slot_timings: bool,
-    ) -> Result<Option<StagedCandidate>, String> {
+    ) -> Result<Option<DispatchCandidate>, String> {
         let epoch = self.resources.playback.epoch;
         let requested_qpc = epoch
-            .checked_add_duration(DurationTicks::from_raw(fallback_ticks.as_u64()))
-            .map_err(|error| format!("live staging target overflow: {error}"))?;
+            .checked_add_duration(DurationTicks::from_raw(at_offset_ticks.as_u64()))
+            .map_err(|error| format!("live dispatch target overflow: {error}"))?;
         let decision = self
             .resources
             .scheduler
             .evaluate_at(requested_qpc, epoch)
-            .map_err(|error| format!("live staging scheduler evaluation failed: {error}"))?;
-        let decision = match decision {
-            DispatchDecision::Wait { deadline_qpc } if deadline_qpc > requested_qpc => self
-                .resources
-                .scheduler
-                .evaluate_at(deadline_qpc, epoch)
-                .map_err(|error| format!("live staging deadline evaluation failed: {error}"))?,
-            decision => decision,
-        };
+            .map_err(|error| format!("live dispatch scheduler evaluation failed: {error}"))?;
         let (actual_up_mask, actual_chord, timing_window, up_summary) = match decision {
             DispatchDecision::Send {
                 up_mask,
@@ -304,7 +297,7 @@ impl ProductionDispatchTestHarness {
             } => (up_mask, down_chord, timing_window, up_summary),
             decision => {
                 return Err(format!(
-                    "production executor did not offer Send: {decision:?}"
+                    "production executor did not offer Send at {requested_qpc:?}: {decision:?}"
                 ));
             }
         };
@@ -312,12 +305,12 @@ impl ProductionDispatchTestHarness {
             || actual_chord.map(|chord| chord.key_mask) != down_chord.map(|chord| chord.key_mask)
         {
             return Err(format!(
-                "staged masks do not match the live executor decision: requested up={up_mask:#06x}, down={:?}; live up={actual_up_mask:#06x}, down={:?}",
+                "prepared masks do not match the live executor decision: requested up={up_mask:#06x}, down={:?}; live up={actual_up_mask:#06x}, down={:?}",
                 down_chord.map(|chord| chord.key_mask),
                 actual_chord.map(|chord| chord.key_mask),
             ));
         }
-        stage_candidate(
+        prepare_dispatch_candidate(
             actual_up_mask,
             actual_chord,
             timing_window,
@@ -329,13 +322,13 @@ impl ProductionDispatchTestHarness {
         )
     }
 
-    pub fn stage_candidate_with_scheduler_window_for_test(
+    pub fn prepare_candidate_with_scheduler_window_for_test(
         &mut self,
         up_mask: u16,
         down_chord: Option<PreparedChord>,
         timing_window: DispatchTimingWindow,
-    ) -> Result<Option<StagedCandidate>, String> {
-        self.stage_candidate_with_scheduler_window_and_observer_for_test(
+    ) -> Result<Option<DispatchCandidate>, String> {
+        self.prepare_candidate_with_scheduler_window_and_observer_for_test(
             up_mask,
             down_chord,
             timing_window,
@@ -343,13 +336,13 @@ impl ProductionDispatchTestHarness {
         )
     }
 
-    pub fn stage_candidate_with_scheduler_window_and_observer_for_test(
+    pub fn prepare_candidate_with_scheduler_window_and_observer_for_test(
         &mut self,
         up_mask: u16,
         down_chord: Option<PreparedChord>,
         timing_window: DispatchTimingWindow,
         capture_up_slot_timings: bool,
-    ) -> Result<Option<StagedCandidate>, String> {
+    ) -> Result<Option<DispatchCandidate>, String> {
         let up_summary = (up_mask != 0).then(|| {
             let timings = self.resources.scheduler.up_slot_timings(up_mask);
             let epoch = self.resources.playback.epoch;
@@ -380,7 +373,7 @@ impl ProductionDispatchTestHarness {
                 hold_floor_mask,
             }
         });
-        stage_candidate(
+        prepare_dispatch_candidate(
             up_mask,
             down_chord,
             timing_window,
@@ -392,54 +385,64 @@ impl ProductionDispatchTestHarness {
         )
     }
 
-    pub fn staged_candidate_timing_window_for_test(
+    pub fn candidate_timing_window_for_test(
         &self,
-        candidate: &StagedCandidate,
+        candidate: &DispatchCandidate,
     ) -> DispatchTimingWindow {
         candidate.timing_window
     }
 
-    pub fn reselect_candidate_after_wait_for_test(
+    /// Evaluate the live scheduler directly at `observed_wake_qpc` and prepare
+    /// the resulting immediate packet on the stack (no speculative staging).
+    pub fn evaluate_and_prepare_at_wake_for_test(
         &mut self,
-        mut staged: Option<StagedCandidate>,
         observed_wake_qpc: QpcTicks,
         capture_up_slot_timings: bool,
-    ) -> Result<Option<StagedCandidate>, String> {
-        match crate::engine::worker::reselect_candidate_after_wait(
-            &mut staged,
-            observed_wake_qpc,
-            self.resources.playback.epoch,
-            capture_up_slot_timings,
-            &self.target,
-            &mut self.resources,
-            &mut self.runtime,
-        )? {
-            crate::engine::worker::PostWaitSelection::SendReady => Ok(staged),
-            crate::engine::worker::PostWaitSelection::Replan
-            | crate::engine::worker::PostWaitSelection::Finished
-            | crate::engine::worker::PostWaitSelection::TargetInvalidated => Ok(None),
+    ) -> Result<Option<DispatchCandidate>, String> {
+        match self
+            .resources
+            .scheduler
+            .evaluate_at(observed_wake_qpc, self.resources.playback.epoch)
+            .map_err(|error| format!("post-wake scheduler evaluation failed: {error}"))?
+        {
+            DispatchDecision::Send {
+                up_mask,
+                down_chord,
+                timing_window,
+                up_summary,
+            } => prepare_dispatch_candidate(
+                up_mask,
+                down_chord,
+                timing_window,
+                up_summary,
+                capture_up_slot_timings,
+                &self.target,
+                &mut self.resources,
+                &mut self.runtime,
+            ),
+            DispatchDecision::Wait { .. } | DispatchDecision::Finished => Ok(None),
         }
     }
 
-    pub fn dispatch_staged_candidate_for_test(
+    pub fn dispatch_candidate_for_test(
         &mut self,
-        candidate: StagedCandidate,
+        candidate: DispatchCandidate,
         with_observer: bool,
-    ) -> StagedDispatchOutcome {
-        self.dispatch_staged_candidate_with_reason_for_test(candidate, with_observer)
+    ) -> DispatchOutcome {
+        self.dispatch_candidate_with_reason_for_test(candidate, with_observer)
             .public_outcome()
     }
 
-    pub(crate) fn dispatch_staged_candidate_with_reason_for_test(
+    pub(crate) fn dispatch_candidate_with_reason_for_test(
         &mut self,
-        candidate: StagedCandidate,
+        candidate: DispatchCandidate,
         with_observer: bool,
     ) -> DispatchAttemptOutcome {
         let qpc_clock = self.resources.clock;
-        let context = StagedDispatchContext {
+        let context = DispatchAttemptContext {
             target: &self.target,
             config: &self.config,
-            control: StagedControlSignals {
+            control: DispatchControlSignals {
                 focus_active: &self.focus_active,
                 quit_requested: &self.quit_requested,
                 skip_requested: &self.skip_requested,
@@ -453,7 +456,7 @@ impl ProductionDispatchTestHarness {
             progress_clock: &self.progress_clock,
             metrics: &self.metrics,
         };
-        dispatch_staged_candidate(
+        dispatch_candidate(
             candidate,
             context,
             &mut self.resources,
@@ -463,12 +466,9 @@ impl ProductionDispatchTestHarness {
         )
     }
 
-    pub fn pre_wait_candidate_admission_for_test(
-        &mut self,
-        candidate: &StagedCandidate,
-    ) -> StagedDispatchOutcome {
-        pre_wait_candidate_admission(
-            candidate,
+    #[cfg(test)]
+    pub(crate) fn pre_wait_admission_for_test(&mut self) -> PreWaitAdmission {
+        pre_wait_admission(
             &self.target,
             self.config.focus.require_focus,
             &self.focus_active,

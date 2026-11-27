@@ -5,11 +5,9 @@ use super::super::cleanup::CleanupTarget;
 use super::super::config::StartupCheckpoint;
 use super::super::shared::{StartupAbortReason, StartupPhase};
 use super::super::{
-    DurationTicks, OUTCOME_ERROR, OUTCOME_QUIT, OUTCOME_SKIPPED, QpcClock, QpcTicks, SharedMetrics,
-    TerminalTrigger, TrackedKeyState, WaitOptions, describe_release_outcome,
-    release_state_verified, wait_failure_message,
+    OUTCOME_ERROR, OUTCOME_QUIT, OUTCOME_SKIPPED, SharedMetrics, TerminalTrigger, TrackedKeyState,
+    WaitOptions, describe_release_outcome, release_state_verified, wait_failure_message,
 };
-use crate::engine::config::{CALIBRATION_MAX_STARTUP_BUDGET_US, CALIBRATION_SAMPLES};
 use sky_dispatch_win32::input::ReleaseAllOutcome;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::Ordering;
@@ -417,42 +415,4 @@ pub(super) fn validate_production_wait_backend(
         return Err(wait_failure_message(failure));
     }
     Ok(())
-}
-
-pub(super) fn startup_wake_probe(
-    waiter: &sky_dispatch_win32::wait::HybridWaiter,
-    qpc_clock: QpcClock,
-    interrupt: &sky_dispatch_win32::event::OwnedEvent,
-    initial_now_ticks: QpcTicks,
-    #[cfg(any(test, feature = "test-support"))] startup_hook: Option<
-        &super::super::config::StartupOrderingHook,
-    >,
-) -> Option<sky_dispatch_win32::wait::WakeErrorStats> {
-    #[cfg(any(test, feature = "test-support"))]
-    if let Some(hook) = startup_hook {
-        hook.visit_startup_checkpoint(StartupCheckpoint::WakeCalibration);
-        #[cfg(test)]
-        if hook.take_startup_calibration_completion() {
-            return Some(sky_dispatch_win32::wait::WakeErrorStats::default());
-        }
-    }
-    let budget_ticks = qpc_clock
-        .duration_from_us(CALIBRATION_MAX_STARTUP_BUDGET_US)
-        .ok()?;
-    let probe_deadline_ticks = startup_probe_deadline(initial_now_ticks, budget_ticks)?;
-    waiter.probe_wake_error_stats_until(
-        qpc_clock,
-        interrupt,
-        CALIBRATION_SAMPLES,
-        Some(probe_deadline_ticks),
-    )
-}
-
-pub(super) fn startup_probe_deadline(
-    initial_now_ticks: QpcTicks,
-    calibration_budget_ticks: DurationTicks,
-) -> Option<QpcTicks> {
-    initial_now_ticks
-        .checked_add_duration(calibration_budget_ticks)
-        .ok()
 }

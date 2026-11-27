@@ -14,8 +14,6 @@ mod worker;
 
 pub use config::DispatchProfile;
 #[cfg(any(test, feature = "test-support"))]
-pub use config::StartupCalibrationPlacement;
-#[cfg(any(test, feature = "test-support"))]
 pub use config::TestWaitPolicy;
 use config::WorkerConfig;
 pub use config::{
@@ -63,7 +61,7 @@ pub use test_support::{FaultInjectionScript, InjectedSendOutcome, MockSendInputC
 #[cfg(test)]
 pub(crate) use worker::*;
 #[cfg(any(test, feature = "test-support"))]
-pub use worker::{StagedCandidate, StagedDispatchOutcome};
+pub use worker::{DispatchCandidate, DispatchOutcome};
 #[cfg(any(test, feature = "test-support"))]
 pub mod dispatch_primitives {
     //! Queue primitive types exported for the §8.11 no-alloc integration test only.
@@ -86,19 +84,10 @@ pub mod dispatch_primitives {
     pub use super::worker::health::DispatchPath;
 
     /// Production timing policy constants shared by diagnostic benchmarks.
-    pub const PRODUCTION_MIN_SPIN_THRESHOLD_US: u64 = super::config::MIN_CALIBRATED_SPIN_US;
     pub const PRODUCTION_SPIN_THRESHOLD_US: u64 = super::config::DEFAULT_SPIN_THRESHOLD_US;
-    pub const PRODUCTION_CALIBRATION_SAMPLES: usize = super::config::CALIBRATION_SAMPLES;
-    pub const PRODUCTION_CALIBRATION_BUDGET_US: u64 =
-        super::config::CALIBRATION_MAX_STARTUP_BUDGET_US;
     pub const PRODUCTION_STARTUP_READINESS_RESERVE_US: u64 =
         super::config::STARTUP_READINESS_RESERVE_US;
     pub const PRODUCTION_MIN_PREROLL_US: u64 = super::config::MIN_PRODUCTION_PREROLL_US;
-
-    /// Apply the frozen production calibration policy to benchmark wake stats.
-    pub fn calibrated_spin_threshold_us(stats: sky_dispatch_win32::wait::WakeErrorStats) -> u64 {
-        super::worker::calibrated_spin_threshold_us(stats)
-    }
 }
 
 /// Narrow native surface needed by delivery adapters without bringing a

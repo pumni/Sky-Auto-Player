@@ -723,7 +723,6 @@ test('Settings Updates wraps long errors without horizontal overflow at compact 
   const dialog = page.getByRole('dialog', { name: 'Settings' });
   await dialog.getByRole('button', { name: 'Updates', exact: true }).click();
 
-  const content = dialog.locator('[data-settings-content]');
   const alert = dialog.getByRole('alert');
   const checkAgain = dialog.getByRole('button', { name: 'Check again', exact: true });
   const viewDetails = dialog.getByRole('button', { name: 'View details', exact: true });

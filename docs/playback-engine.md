@@ -30,18 +30,41 @@ on metrics locks. The guard is safely disarmed upon intentional termination
 (`quit`, `skip`, `panic_release`, and confirmed `join`).
 
 Preparation builds and validates the immutable onset-only dispatch plan
-(`OnsetPlan` -> `PreparedDispatchSchedule`) before a worker starts. The worker
-moves prepared storage into its executor; it does not compile or materialize
-the sheet. Healthy dispatch does not allocate.
+(`OnsetPlan` -> `PreparedDispatchSchedule`) before a worker starts,
+materializing each chord's exact onset ticks (`ceil(onset_us * f / 1e6)`) and
+exact nominal Up offset ticks (`ceil((onset_us + H) * f / 1e6)`) once at
+prepare time. The worker moves prepared storage into its executor; it does not
+compile, materialize, or reconvert microseconds on the hot path. Healthy
+dispatch does not allocate.
 
-Prepare reports two independent timing signals. The nominal Up-gap check counts
-feasible same-key repeats whose nominal Up-to-next-Down gap
-(`next_onset - (prev_onset + H)`) is shorter than one frame. A bounded offline
-estimate also advances the canonical onset plan through the production
-`DispatchExecutor` with explicit sender-cost assumptions and reports lateness,
-H-floor displacement, and head-of-line delay. The estimate is diagnostic only:
-it does not change admission, schedule timing, or playback, and does not
-predict whether the game observes an Up pulse.
+Prepare reports two independent diagnostic signals:
+
+- **Nominal same-key scheduling slack (`I - H`)**: reports `min_same_key_slack_us`
+  (`None` when there are no feasible same-key repeats), `same_key_repeat_count`,
+  and `zero_slack_repeat_count` (`I == H`). There is no frame-based release-gap
+  threshold, no gap-risk status, and no runtime gate; `I == H` is valid under
+  Hold-only and reported as zero nominal slack.
+- **Bounded offline executor scenarios**: sequentially advances the shared
+  immutable plan through the production `DispatchExecutor` under three
+  deterministic **illustrative modeled cost** assumptions (`ideal` 0 µs,
+  `reference` 10 µs + 3 µs/event + 5 µs, `stress` 100 µs + 10 µs/event + 50 µs)
+  within fixed generation, work, and memory bounds. Per-Down lateness is
+  decomposed without double counting into `modeled_key_readiness_displacement`,
+  `modeled_cursor_order_displacement`, and `worker_occupancy_residual`; musical
+  Up slots retain independent nominal-vs-H-floor and pre-call-vs-floor
+  attribution even inside mixed packets. Each reported component maximum is
+  independent across the schedule; the maxima need not occur in the same
+  chord and must not be summed as a worst-case Down delay. The model work
+  counter charges one unit per inspected generation, executor iteration, and
+  attributed Up slot, shared across all three scenarios. Preparation and
+  other bounded scans are not individual work units: the timestamp-group scan
+  is linear in the canonical chord count with cancellation checkpoints; after
+  the 50,000-generation admission limit, each scenario has at most `4N + 2`
+  executor iterations and at most `N` Down and Up slots each (`N` is the
+  generation count). The memory limit is checked separately. These scenarios
+  are diagnostic only:
+  they are not measured `SendInput` latency, do not change admission, schedule
+  timing, or playback, and do not predict game observation.
 
 ## Session authority and final admission
 
@@ -51,8 +74,16 @@ writer. Recovery may take the journal only after that worker has joined.
 
 Pure **Control A** dispatch is the authoritative path for all Down, Up, and
 mixed packets. `ProcessQosPolicy` is pinned to **Default**; experimental B/C
-process QoS bit toggling and adaptive pre-spin adjustments are not enabled in
-production. The pre-spin threshold is frozen.
+process QoS bit toggling, startup wake-error calibration, and adaptive pre-spin
+adjustments are not enabled in production. The production hybrid-waiter
+pre-spin threshold is fixed at `1000 us` (`DEFAULT_SPIN_THRESHOLD_US`,
+`spin_threshold_source = "production_fixed_1000us"`), materialized once at
+worker admission to checked QPC ticks with no startup timer probe. The
+`50 ms` production preroll (`MIN_PRODUCTION_PREROLL_US`) is unchanged.
+
+Both `dispatch_candidate` and `verify_final_packet_admission` retain
+`#[inline(never)]` so the final admission boundary before `SendInput` remains
+auditable in compiled x64 assembly.
 
 Every musical packet, including an Up-only packet, passes a fresh final check
 against the staged HWND and retained owner identity. A packet with Down also
@@ -91,10 +122,14 @@ exact current foreground owner.
 
 One fixed 15-slot executor (`DispatchExecutor`) owns musical Down and Up
 eligibility over a flat onset-only chord plan (`Vec<PreparedChord>`) and one
-fixed pulse hold `H`. A healthy chord uses one prepared packet and is never
-split across packets. When disjoint Up and Down obligations are due together,
-they may share a packet with every Up ordered before every Down. Authored Down
-order is retained, and each slot's eligible Up is tracked independently.
+fixed pulse hold `H`. Each active slot retains only a compact chord index into
+the immutable `PreparedChord` slice (no duplicated per-slot origin metadata),
+and canonical eligibility selection (`select_at`) is separated from diagnostic
+timing projection (`project_send_timing`). A healthy chord uses one prepared
+packet and is never split across packets. When disjoint Up and Down obligations
+are due together, they may share a packet with every Up ordered before every
+Down. Authored Down order is retained, and each slot's eligible Up is tracked
+independently.
 
 Let T be the ceiling of 1,000,000 divided by configured FPS, in microseconds.
 The sender timing policy is:
@@ -112,18 +147,19 @@ committed (bounded wait deadline `max(authored_onset, latest_blocking_release)`)
 After a successful Up commits, the next same-key Down can be sent at its
 authored onset time after a fresh scheduler evaluation.
 
-When the worker stages a candidate before waiting for a future deadline and
-wakes on `Due` with an authoritative observed QPC `dispatch_qpc`, it
-re-evaluates the scheduler at `dispatch_qpc` before final admission:
+When the worker evaluates the scheduler at the current QPC and receives
+`Wait { deadline_qpc }`, it performs pre-wait target, focus, and control
+admission and waits interruptibly on `deadline_qpc` without speculatively
+evaluating future deadlines or staging packet bytes across the wait:
 
-- If the packet masks, chord index, timing window, and Up summary match the
-  staged candidate, the worker reuses the staged packet bytes without
-  rebuilding or allocating.
-- If a late wake makes additional independent Up releases eligible alongside
-  a disjoint staged Down (or makes new work eligible), the worker rebuilds the
-  packet once with all due Ups before the intact Down, then runs fresh final
-  admission before `SendInput`.
-- Interrupted or early wakes never send stale staged bytes.
+- On `Due` with an authoritative observed wake QPC `dispatch_qpc`, the worker
+  evaluates the scheduler directly at `dispatch_qpc`, builds one current
+  `PreparedPhysicalPacket` on the stack from all due Ups before any eligible
+  intact Down chord, and runs fresh final admission before `SendInput`.
+- Interrupted or early wakes never send stale work; the worker processes
+  lifecycle/control transitions and recalculates on the next iteration.
+- Already-due work is prepared and dispatched immediately without arming a
+  waitable timer.
 
 Timing and telemetry use five distinct timestamp concepts:
 

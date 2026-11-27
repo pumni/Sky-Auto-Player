@@ -59,7 +59,11 @@ fn onset_executor_tracks_one_five_and_fifteen_key_chords() {
         let chord = executor.current_chord().expect("prepared onset chord");
         assert_eq!(chord.chord_index, 0);
         assert_eq!(chord.source_action_index, 0);
-        assert_eq!(chord.onset_us, 10_000);
+        assert_eq!(chord.onset_ticks, TimelineTicks::from_raw(10_000));
+        assert_eq!(
+            chord.nominal_up_offset_ticks,
+            TimelineTicks::from_raw(11_000)
+        );
         assert_eq!(chord.key_count(), key_count);
         assert_eq!(chord.key_mask.count_ones() as usize, key_count);
 

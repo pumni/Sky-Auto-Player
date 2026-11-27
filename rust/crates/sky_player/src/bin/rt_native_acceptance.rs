@@ -37,7 +37,7 @@ use generation_stress::{attach_sink_window_provenance, generation_stress_scenari
 use scenarios::{expected_physical_keys, onset, scenario_plan_for_settings_with_pilot};
 #[cfg(test)]
 use scenarios::{acceptance_min_hold_us, scenario_plan};
-use arguments::{CalibrationPlacement, ParsedCommand, RunArgs, Scenario, parse_args};
+use arguments::{ParsedCommand, RunArgs, Scenario, parse_args};
 #[cfg(test)]
 pub(crate) use arguments::AdmissionVariantChoice;
 #[cfg(test)]
@@ -238,7 +238,7 @@ struct AuthorizedTargets {
     probe: Option<ReadyRecord>,
 }
 fn usage() -> &'static str {
-    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--admission-variant <control-a|candidate-b-up-diagnostic>] [--calibration-placement <baseline|candidate>] [--timing-observer-for-qualification] [--timing-margin-us <0..3000, step 100>] [--sample-seconds 15] [--game-fps <60|120>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
+    "Usage: rt-native-acceptance run --allow-real-input --run-id <id> --sink-ready <path> --sink-events <path> --target-hwnd <decimal|0xhex> --scenario <name> --evidence <path> [--admission-variant <control-a|candidate-b-up-diagnostic>] [--timing-observer-for-qualification] [--timing-margin-us <0..3000, step 100>] [--sample-seconds 15] [--game-fps <60|120>] [--focus-probe-ready <path> --focus-probe-events <path> --focus-probe-hwnd <decimal|0xhex> --focus-restore-request <path>]"
 }
 fn protocol_expectation(role: &str) -> Result<(&'static str, &'static str, &'static str, &'static str), String> {
     match role {
@@ -603,10 +603,6 @@ fn run_windows(args: RunArgs) -> i32 {
                 return write_report(&args, Verdict::Inconclusive, &error, json!({}));
             }
         };
-    options.startup_calibration_placement = match args.calibration_placement {
-        CalibrationPlacement::Baseline => sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
-        CalibrationPlacement::Candidate => sky_player::engine::StartupCalibrationPlacement::AfterSchedulingGuards,
-    };
     options.timing_observer_for_qualification = args.timing_observer_for_qualification;
     let mut acceptance_hook = lifecycle_lease_qualification::hook_for_scenario(args.scenario);
     if args.hol_stall_us > 0 {
@@ -1037,7 +1033,6 @@ fn run_windows(args: RunArgs) -> i32 {
     let observed_telemetry_mixed_packet_count = count_telemetry_mixed_packets(&timing_telemetry);
     let mut details = snapshot_json(&snapshot); attach_sink_window_provenance(&mut details, &fresh_sink, sink_cursor, &sink_events, sink_expected_down.len() + sink_expected_up.len(), args.scenario);
     if let Value::Object(object) = &mut details {
-        object.insert("calibration_placement".to_string(), json!(args.calibration_placement.label()));
         object.insert("timing_observer_for_qualification".to_string(), json!(args.timing_observer_for_qualification));
         object.insert("qpc_read_count_available".to_string(), json!(qpc_read_count.is_some()));
         object.insert("qpc_read_count".to_string(), json!(qpc_read_count));

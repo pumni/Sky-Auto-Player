@@ -767,7 +767,6 @@ function Invoke-NativeCase {
         '-QualificationProfile', $QualificationProfile,
         '-Scenario', $Scenario,
         '-TimingMarginUs', [string]$Margin,
-        '-CalibrationPlacement', 'Baseline',
         '-TimingObserverForQualification',
         '-HarnessPath', $HarnessManifest.resolved_binary_path,
         '-HarnessManifestPath', $HarnessManifest.manifest_path,

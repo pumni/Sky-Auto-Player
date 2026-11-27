@@ -5,7 +5,7 @@ use sky_dispatch_core::executor::DispatchDecision;
 use sky_dispatch_core::time::QpcTicks;
 use sky_dispatch_win32::clock::{QpcClock, qpc_frequency_checked};
 use sky_dispatch_win32::input::PhysicalPacket;
-use sky_player::engine::StagedDispatchOutcome;
+use sky_player::engine::DispatchOutcome;
 use sky_player::engine::dispatch_primitives::{
     CleanupCapture, PacketCapture, ProductionDispatchTestHarness,
 };
@@ -139,21 +139,21 @@ fn dispatch_next(
             } => {
                 let down_mask = down_chord.as_ref().map_or(0, |chord| chord.key_mask);
                 let candidate = harness
-                    .stage_candidate_with_scheduler_window_for_test(
+                    .prepare_candidate_with_scheduler_window_for_test(
                         up_mask,
                         down_chord,
                         timing_window,
                     )?
-                    .ok_or("live scheduler Send decision did not stage a candidate")?;
+                    .ok_or("live scheduler Send decision did not prepare a candidate")?;
                 let sender_start = clock
                     .now()
                     .map_err(|error| format!("QPC read before mock transport: {error:?}"))?;
                 harness.set_mock_sender_start_qpc_for_test(sender_start);
                 if !matches!(
-                    harness.dispatch_staged_candidate_for_test(candidate, false),
-                    StagedDispatchOutcome::Dispatched
+                    harness.dispatch_candidate_for_test(candidate, false),
+                    DispatchOutcome::Dispatched
                 ) {
-                    return Err("production worker staging/send path did not dispatch".into());
+                    return Err("production worker dispatch path did not dispatch".into());
                 }
                 return Ok(Some(PhysicalPacket::new(up_mask, down_mask)));
             }
@@ -302,13 +302,13 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
         );
     }
     let candidate = harness
-        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)?
-        .ok_or("resumed Down did not stage after committed Resume")?;
-    let staged_window = harness.staged_candidate_timing_window_for_test(&candidate);
-    if staged_window.authored_target_qpc > resume_commit_qpc
-        || staged_window.packet_not_before_qpc > resume_commit_qpc
+        .prepare_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)?
+        .ok_or("resumed Down did not prepare after committed Resume")?;
+    let prepared_window = harness.candidate_timing_window_for_test(&candidate);
+    if prepared_window.authored_target_qpc > resume_commit_qpc
+        || prepared_window.packet_not_before_qpc > resume_commit_qpc
     {
-        return Err("staging changed the fresh authored Resume admission window".into());
+        return Err("preparation changed the fresh authored Resume admission window".into());
     }
     let sender_start = clock
         .now()
@@ -316,8 +316,8 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
     harness.set_mock_sender_start_qpc_for_test(sender_start);
     if sender_start < resume_commit_qpc
         || !matches!(
-            harness.dispatch_staged_candidate_for_test(candidate, false),
-            StagedDispatchOutcome::Dispatched
+            harness.dispatch_candidate_for_test(candidate, false),
+            DispatchOutcome::Dispatched
         )
     {
         return Err("resumed production packet did not dispatch after Resume committed".into());
@@ -376,8 +376,8 @@ fn run_pause_resume(clock: QpcClock, frequency_hz: u64) -> Result<Value, String>
         "resume_control_committed": true,
         "resume_commit_qpc_ticks": resume_commit_qpc.as_u64(),
         "resumed_epoch_qpc_ticks": resumed_epoch.as_u64(),
-        "resumed_authored_target_qpc_ticks": staged_window.authored_target_qpc.as_u64(),
-        "candidate_packet_not_before_qpc_ticks": staged_window.packet_not_before_qpc.as_u64(),
+        "resumed_authored_target_qpc_ticks": prepared_window.authored_target_qpc.as_u64(),
+        "candidate_packet_not_before_qpc_ticks": prepared_window.packet_not_before_qpc.as_u64(),
         "resumed_sender_start_qpc_ticks": resumed_sender_start,
         "final_release_obligation_mask": final_obligation,
         "passed": true,

@@ -1,7 +1,6 @@
 use super::support::{
-    PacketRetryReason, PreparedChord, ProductionDispatchTestHarness, SendEvidence,
-    SendTransactionOutcome, SendTransactionStatus, StagedDispatchOutcome, TimelineTicks,
-    test_chord,
+    DispatchOutcome, PacketRetryReason, PreparedChord, ProductionDispatchTestHarness, SendEvidence,
+    SendTransactionOutcome, SendTransactionStatus, TimelineTicks, test_chord,
 };
 
 fn sender_failure_record_for_test(
@@ -18,7 +17,7 @@ fn sender_failure_record_for_test(
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("Down candidate");
     let clock = harness.resources.clock;
@@ -56,8 +55,8 @@ fn sender_failure_record_for_test(
     });
 
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::super::StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(candidate, false),
+        super::super::DispatchOutcome::Exit
     ));
     let record = harness
         .runtime
@@ -101,7 +100,7 @@ fn pre_call_qpc_failure_records_zero_physical_attempts() {
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("Down candidate");
     harness
@@ -126,8 +125,8 @@ fn pre_call_qpc_failure_records_zero_physical_attempts() {
         });
 
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::super::StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(candidate, false),
+        super::super::DispatchOutcome::Exit
     ));
     assert_eq!(harness.local_metrics.precision_packet_attempts, 0);
     assert_eq!(harness.local_metrics.pre_call_qpc_unavailable_attempts, 0);
@@ -157,7 +156,7 @@ fn suspend_after_sender_return_keeps_musical_attempt_evidence() {
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("Down candidate");
     let clock = harness.resources.clock;
@@ -187,8 +186,8 @@ fn suspend_after_sender_return_keeps_musical_attempt_evidence() {
     });
 
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        super::super::StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(candidate, false),
+        super::super::DispatchOutcome::Exit
     ));
     assert_eq!(
         harness.runtime.terminal_trigger,
@@ -219,7 +218,7 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
             .expect("attach scheduler");
         let chord = harness.current_executor_chord_for_test();
         let candidate = harness
-            .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+            .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
             .expect("stage candidate")
             .expect("Down candidate");
         let packet_mask = candidate.packet_masks().down_mask;
@@ -247,8 +246,8 @@ fn inconsistent_complete_evidence_fails_closed_before_scheduler_commit() {
         });
 
         assert!(matches!(
-            harness.dispatch_staged_candidate_for_test(candidate, false),
-            super::super::StagedDispatchOutcome::Exit
+            harness.dispatch_candidate_for_test(candidate, false),
+            super::super::DispatchOutcome::Exit
         ));
         assert_ne!(harness.resources.scheduler.accounting(), accounting_before);
         assert_eq!(harness.resources.scheduler.accounting().activated, 0);
@@ -294,7 +293,7 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
         let epoch = harness.resources.playback.epoch;
         let first_now = harness.qpc_now_for_test().expect("first Down QPC");
         let first = harness
-            .stage_candidate_for_test(
+            .prepare_candidate_for_test(
                 0,
                 harness.current_executor_chord_for_test(),
                 TimelineTicks::ZERO,
@@ -303,8 +302,8 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
             .expect("first Down candidate");
         harness.set_mock_sender_start_qpc_for_test(first_now);
         assert!(matches!(
-            harness.dispatch_staged_candidate_for_test(first, false),
-            super::super::StagedDispatchOutcome::Dispatched
+            harness.dispatch_candidate_for_test(first, false),
+            super::super::DispatchOutcome::Dispatched
         ));
         assert_eq!(
             harness.generation_accounting_for_test().activated,
@@ -342,7 +341,7 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
         assert_eq!(up_mask, 0b01);
         assert_eq!(down_chord.as_ref().map(|chord| chord.key_mask), Some(0b10));
         let candidate = harness
-            .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+            .prepare_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
             .expect("stage production mixed packet")
             .expect("mixed packet candidate");
         assert_eq!(candidate.packet_masks().up_mask, 0b01);
@@ -381,8 +380,8 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
         let accounting_before = harness.generation_accounting_for_test();
         harness.set_mock_sender_start_qpc_for_test(mixed_target);
         assert!(matches!(
-            harness.dispatch_staged_candidate_for_test(candidate, false),
-            super::super::StagedDispatchOutcome::Exit
+            harness.dispatch_candidate_for_test(candidate, false),
+            super::super::DispatchOutcome::Exit
         ));
         assert_eq!(attempts.load(Ordering::Relaxed), 1);
         assert_eq!(harness.local_metrics.precision_packet_attempts, 2);
@@ -440,6 +439,17 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
 fn invalidated_session_target_does_not_send_origin_up() {
     use sky_dispatch_core::executor::DispatchDecision;
 
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+            sky_dispatch_win32::focus::set_window_live_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
     let chords = [test_chord(0, 0, 0x15), test_chord(1, 19_000, 0x16)];
     let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);
@@ -450,7 +460,7 @@ fn invalidated_session_target_does_not_send_origin_up() {
 
     let first_now = harness.qpc_now_for_test().expect("first Down QPC");
     let first = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -459,8 +469,8 @@ fn invalidated_session_target_does_not_send_origin_up() {
         .expect("first Down candidate");
     harness.set_mock_sender_start_qpc_for_test(first_now);
     assert!(matches!(
-        harness.dispatch_staged_candidate_for_test(first, false),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(first, false),
+        super::super::DispatchOutcome::Dispatched
     ));
 
     let mixed_target = epoch
@@ -491,7 +501,7 @@ fn invalidated_session_target_does_not_send_origin_up() {
     };
     assert_eq!(up_mask, 0b01);
     let mixed = harness
-        .stage_candidate_with_scheduler_window_and_observer_for_test(
+        .prepare_candidate_with_scheduler_window_and_observer_for_test(
             up_mask,
             down_chord,
             timing_window,
@@ -507,8 +517,8 @@ fn invalidated_session_target_does_not_send_origin_up() {
         harness.qpc_now_for_test().expect("fallback Up sender QPC"),
     );
     assert_ne!(
-        harness.dispatch_staged_candidate_for_test(mixed, true),
-        super::super::StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(mixed, true),
+        super::super::DispatchOutcome::Dispatched
     );
     assert!(
         harness.observer.pop_front().is_none(),
@@ -586,7 +596,7 @@ fn suspend_after_sender_return_up_only_commits_without_phantom_up() {
     let epoch = harness.resources.playback.epoch;
 
     let first = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -594,8 +604,8 @@ fn suspend_after_sender_return_up_only_commits_without_phantom_up() {
         .expect("stage first Down")
         .expect("Down candidate");
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(first, false),
-        StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(first, false),
+        DispatchOutcome::Dispatched
     );
     assert_eq!(harness.release_obligation_mask_for_test(), 1);
 
@@ -610,11 +620,11 @@ fn suspend_after_sender_return_up_only_commits_without_phantom_up() {
         std::thread::yield_now();
     }
     let (up_mask, down_chord, timing_window) =
-        super::support::staged_send_at(&mut harness, up_target, epoch);
+        super::support::send_decision_at(&mut harness, up_target, epoch);
     assert_eq!(up_mask, 1);
     assert!(down_chord.is_none());
     let up_candidate = harness
-        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+        .prepare_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage Up")
         .expect("Up candidate");
 
@@ -645,8 +655,8 @@ fn suspend_after_sender_return_up_only_commits_without_phantom_up() {
     });
 
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(up_candidate, false),
-        StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(up_candidate, false),
+        DispatchOutcome::Exit
     );
     assert_eq!(
         harness.runtime.terminal_trigger,
@@ -678,7 +688,7 @@ fn suspend_after_sender_return_mixed_commits_and_preserves_remaining_down_safety
     let epoch = harness.resources.playback.epoch;
 
     let first = harness
-        .stage_candidate_for_test(
+        .prepare_candidate_for_test(
             0,
             harness.current_executor_chord_for_test(),
             TimelineTicks::ZERO,
@@ -686,8 +696,8 @@ fn suspend_after_sender_return_mixed_commits_and_preserves_remaining_down_safety
         .expect("stage first Down")
         .expect("Down candidate");
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(first, false),
-        StagedDispatchOutcome::Dispatched
+        harness.dispatch_candidate_for_test(first, false),
+        DispatchOutcome::Dispatched
     );
     assert_eq!(harness.release_obligation_mask_for_test(), 0b01);
 
@@ -702,11 +712,11 @@ fn suspend_after_sender_return_mixed_commits_and_preserves_remaining_down_safety
         std::thread::yield_now();
     }
     let (up_mask, down_chord, timing_window) =
-        super::support::staged_send_at(&mut harness, mixed_target, epoch);
+        super::support::send_decision_at(&mut harness, mixed_target, epoch);
     assert_eq!(up_mask, 0b01);
     assert!(down_chord.is_some());
     let mixed_candidate = harness
-        .stage_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
+        .prepare_candidate_with_scheduler_window_for_test(up_mask, down_chord, timing_window)
         .expect("stage Mixed")
         .expect("Mixed candidate");
     assert_eq!(mixed_candidate.packet_masks().up_mask, 0b01);
@@ -739,8 +749,8 @@ fn suspend_after_sender_return_mixed_commits_and_preserves_remaining_down_safety
     });
 
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(mixed_candidate, false),
-        StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(mixed_candidate, false),
+        DispatchOutcome::Exit
     );
     assert_eq!(
         harness.runtime.terminal_trigger,
@@ -770,7 +780,7 @@ fn suspend_with_malformed_qpc_fails_closed_without_speculative_commit() {
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("Down candidate");
     let clock = harness.resources.clock;
@@ -799,8 +809,8 @@ fn suspend_with_malformed_qpc_fails_closed_without_speculative_commit() {
     });
 
     assert_eq!(
-        harness.dispatch_staged_candidate_for_test(candidate, false),
-        StagedDispatchOutcome::Exit
+        harness.dispatch_candidate_for_test(candidate, false),
+        DispatchOutcome::Exit
     );
     assert_eq!(harness.resources.scheduler.chord_cursor(), 1);
     assert_eq!(harness.generation_accounting_for_test().activated, 0);
@@ -849,7 +859,7 @@ fn terminal_budget_foreground_retry_exhaustion_capped_to_four_raw_calls() {
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("Down candidate");
 
@@ -879,8 +889,8 @@ fn terminal_budget_foreground_retry_exhaustion_capped_to_four_raw_calls() {
         }
     });
 
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-    assert_eq!(outcome, StagedDispatchOutcome::Exit);
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
+    assert_eq!(outcome, DispatchOutcome::Exit);
     assert_eq!(
         raw_up_calls.load(Ordering::Acquire),
         4,
@@ -914,7 +924,7 @@ fn terminal_budget_background_drain_capped_to_one_raw_call() {
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("Down candidate");
 
@@ -945,8 +955,8 @@ fn terminal_budget_background_drain_capped_to_one_raw_call() {
         }
     });
 
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-    assert_eq!(outcome, StagedDispatchOutcome::Exit);
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
+    assert_eq!(outcome, DispatchOutcome::Exit);
     assert_eq!(
         cleanup.lock().expect("cleanup lock").len(),
         1,
@@ -977,7 +987,7 @@ fn terminal_budget_successful_single_cleanup_matches_aggregate_raw_count() {
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("Down candidate");
 
@@ -1009,8 +1019,8 @@ fn terminal_budget_successful_single_cleanup_matches_aggregate_raw_count() {
         }
     });
 
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-    assert_eq!(outcome, StagedDispatchOutcome::Exit);
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
+    assert_eq!(outcome, DispatchOutcome::Exit);
     assert_eq!(cleanup.lock().expect("cleanup lock").len(), 1);
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
 
@@ -1028,7 +1038,7 @@ fn terminal_budget_proven_raw_zero_down_has_zero_terminal_raw_calls() {
     harness.attach_executor_for_test().expect("attach executor");
     let chord = harness.current_executor_chord_for_test();
     let candidate = harness
-        .stage_candidate_for_test(0, chord, TimelineTicks::ZERO)
+        .prepare_candidate_for_test(0, chord, TimelineTicks::ZERO)
         .expect("stage candidate")
         .expect("Down candidate");
 
@@ -1055,8 +1065,8 @@ fn terminal_budget_proven_raw_zero_down_has_zero_terminal_raw_calls() {
         }
     });
 
-    let outcome = harness.dispatch_staged_candidate_for_test(candidate, false);
-    assert_eq!(outcome, StagedDispatchOutcome::Exit);
+    let outcome = harness.dispatch_candidate_for_test(candidate, false);
+    assert_eq!(outcome, DispatchOutcome::Exit);
     assert_eq!(harness.release_obligation_mask_for_test(), 0);
 
     let mut observation = crate::engine::worker::FinalizeTestObservation::default();

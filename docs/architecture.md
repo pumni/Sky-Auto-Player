@@ -151,8 +151,10 @@ playback session and its frozen policy. The separate calibration UI, worker,
 cache reader, and recommendation path have been retired by product decision;
 this does not claim native parity or a timing improvement. Installer upgrade
 removes the obsolete executable from the install root and preserves app-data,
-including old cache bytes. Production startup wake calibration remains part of
-the playback timing path and its qualification evidence.
+including old cache bytes. Production playback now uses a fixed 1000 µs
+pre-spin threshold, materialized at startup without a wake-calibration probe.
+The historical calibration evidence tools remain offline-only; see
+[playback verification](playback-verification.md).
 
 The Rust UpdateService coordinates update state and invokes the Tauri updater.
 Release authority, signing, artifact integrity, and packaging requirements
