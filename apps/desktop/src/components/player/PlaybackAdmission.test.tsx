@@ -65,6 +65,9 @@ describe('PlaybackAdmission recovery actions', () => {
     expect(container.querySelector('[data-plan-fingerprint="mock-plan"]')).toHaveTextContent(
       'Bounds: 50000 generations, 3000000 work units, and 64 MiB working memory.',
     );
+    expect(container.querySelector('[data-plan-fingerprint="mock-plan"]')).toHaveTextContent(
+      'independent component maxima:',
+    );
     expect(screen.getAllByRole('button')).toHaveLength(3);
     const proceedButton = screen.getByRole('button', { name: 'Proceed with current settings' });
     const dryRunButton = screen.getByRole('button', { name: 'Test playback (no input)' });

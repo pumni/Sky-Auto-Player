@@ -1,5 +1,18 @@
 # Historical source snapshots
 
+## Hold-only dispatch simplification work order
+
+The PR #686 implementation work order is preserved at immutable reviewed W3 source
+[`886a7769b59eea656d0aa8bd035fedb26f7a750f`](https://github.com/pumni/Sky-Auto-Player/tree/886a7769b59eea656d0aa8bd035fedb26f7a750f).
+The active architecture contracts are [playback-engine.md](playback-engine.md),
+[song-planning.md](song-planning.md), and [playback-verification.md](playback-verification.md).
+The [archived work order](https://github.com/pumni/Sky-Auto-Player/blob/886a7769b59eea656d0aa8bd035fedb26f7a750f/docs/hold-only-dispatch-work-order.md)
+and [PR #686](https://github.com/pumni/Sky-Auto-Player/pull/686) retain the staged leader
+decisions, mock evidence and [W4-P integration requirements](https://github.com/pumni/Sky-Auto-Player/pull/686#issuecomment-7209243514).
+The W1–W3 architecture has been accepted; final Windows verification and native
+qualification remain outstanding. Archiving this implementation plan does not
+grant native execution, merge, or release approval.
+
 ## Completion-anchored pulse engine work order
 
 The completed PR #685 temporary branch work order was archived during final closeout of
