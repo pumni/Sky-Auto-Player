@@ -43,9 +43,9 @@ Run from the repository root. Record the exact command, exit code, test count,
 ignored or skipped tests, and any environmental limitation.
 
     node scripts/toolchain-pin.mjs exec -- cargo xtask check rust
-    node scripts/toolchain-pin.mjs exec -- cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc -- --test-threads=1
-    node scripts/toolchain-pin.mjs exec -- cargo test --locked --manifest-path rust/xtask/Cargo.toml audits::security::tests -- --test-threads=1
-    node scripts/toolchain-pin.mjs exec -- cargo check --locked --manifest-path rust/Cargo.toml -p sky_player -p sky_dispatch_win32 --all-targets --features sky_player/real-input-acceptance
+    node scripts/toolchain-pin.mjs exec -- cargo test --locked --manifest-path Cargo.toml -p sky_player --features test-support --test rt_dispatch_no_alloc -- --test-threads=1
+    node scripts/toolchain-pin.mjs exec -- cargo test --locked --manifest-path xtask/Cargo.toml audits::security::tests -- --test-threads=1
+    node scripts/toolchain-pin.mjs exec -- cargo check --locked --manifest-path Cargo.toml -p sky_player -p sky_dispatch_win32 --all-targets --features sky_player/real-input-acceptance
     cargo check --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p sky_desktop_shell --lib
     node scripts/toolchain-pin.mjs exec -- cargo test --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p sky_desktop_shell --lib --all-features -- --test-threads=1
     node scripts/toolchain-pin.mjs exec -- cargo clippy --locked --manifest-path apps/desktop/src-tauri/Cargo.toml -p sky_desktop_shell --lib --all-features -- -D warnings
@@ -356,7 +356,7 @@ RSS, and should not be described as the whole application's memory peak. The
 focused measurement command on the candidate is:
 
     $env:SKY_MEMORY_CHORD_COUNT = '10000'
-    cargo test --locked --manifest-path rust/Cargo.toml -p sky_dispatch_core executor_memory_scaling_100_1000_10000_and_budget_proof -- --nocapture
+    cargo test --locked --manifest-path Cargo.toml -p sky_dispatch_core executor_memory_scaling_100_1000_10000_and_budget_proof -- --nocapture
 
 To reproduce the baseline arm, use a separate clean worktree at
 `1d00c3b71fbf1f94003865bad6c4eba6d8dcd902`. Its checked-in memory fixture has
@@ -384,7 +384,7 @@ built pinned-baseline qualification harness and manifest untouched.
 ## Current offline lifecycle evidence
 
 The current `dispatch_lifecycle` evidence format is schema v4. The Rust example
-[`dispatch_lifecycle_evidence.rs`](../rust/crates/sky_player/examples/dispatch_lifecycle_evidence.rs)
+[`dispatch_lifecycle_evidence.rs`](../crates/sky_player/examples/dispatch_lifecycle_evidence.rs)
 uses the live scheduler with deterministic mock senders and records zero native
 SendInput calls. It checks that an Up transport commit permits the next
 same-key Down at its authored target, then checks that Pause completes verified
@@ -442,7 +442,7 @@ One object per paired workload, flat properties, all required:
 | `game_fps`, `timing_margin_us`, `configured_H_us`, `sample_seconds` | integers equal to `60`, `500`, `17167`, `15` |
 | `baseline_revision`, `candidate_revision` | 40 lowercase hex; must equal the commit the plan verified (profile baseline; clean pushed candidate tip) |
 | `baseline_tree`, `candidate_tree` | 40 lowercase hex; must equal the verified trees |
-| `baseline_lock_sha256`, `candidate_lock_sha256` | 64 lowercase hex; must equal the verified `rust/Cargo.lock` hashes |
+| `baseline_lock_sha256`, `candidate_lock_sha256` | 64 lowercase hex; must equal the verified Cargo.lock hashes |
 | `baseline_verified`, `candidate_verified` | boolean `true` (the authored-stream test passed in that tree) |
 | `<role>_event_count`, `<role>_group_count` | integers >= 1, group <= event |
 | `<role>_first_us`, `<role>_last_us` | integers >= 0, last >= first |
@@ -479,7 +479,8 @@ Each role's digest and geometry must also equal the immutable expected stream in
 
 Generate the evidence by running the existing no-send test in a clean checkout of each exact source tree, with the pinned toolchain:
 
-    node scripts/toolchain-pin.mjs exec -- cargo test --manifest-path rust/Cargo.toml -p sky_player --features real-input-acceptance --bin rt-native-acceptance paired_workloads_match_the_immutable_pr_base_authored_streams
+    $workspaceManifest = if (Test-Path Cargo.toml) { 'Cargo.toml' } else { 'rust/Cargo.toml' }
+    node scripts/toolchain-pin.mjs exec -- cargo test --manifest-path $workspaceManifest -p sky_player --features real-input-acceptance --bin rt-native-acceptance paired_workloads_match_the_immutable_pr_base_authored_streams
 
 The test asserts the expected digest and geometry itself and sends no input; record the command, exit code, revision, tree and lock hash per role, and write the object file outside tracked source. Use `ConvertFrom-Json` on that file as `$parityEvidence`. Any new commit invalidates the candidate record; rerun it before reusing the evidence.
 

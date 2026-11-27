@@ -1,5 +1,5 @@
 name: Set up source-pinned Rust toolchain
-description: Install and verify the Rust toolchain declared by rust/rust-toolchain.toml
+description: Install and verify the Rust toolchain declared by rust-toolchain.toml
 inputs:
   targets:
     description: Additional Rust targets required by this job, one per line

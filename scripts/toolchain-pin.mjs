@@ -6,7 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const exactVersion = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/;
-const rustToolchainPath = 'rust/rust-toolchain.toml';
+const rustToolchainPath = 'rust-toolchain.toml';
 const bunVersionPath = '.bun-version';
 const bunManifestPath = 'apps/website/package.json';
 
@@ -46,21 +46,21 @@ export function parseRustToolchain(source) {
     if (!line) continue;
     if (line.startsWith('[')) {
       if (line !== '[toolchain]') invalid(`Unsupported Rust toolchain table at line ${index + 1}`);
-      if (++toolchainTables !== 1) invalid('rust/rust-toolchain.toml has duplicate [toolchain] tables');
+      if (++toolchainTables !== 1) invalid('rust-toolchain.toml has duplicate [toolchain] tables');
       inToolchain = true;
       continue;
     }
     if (!inToolchain) invalid(`Rust toolchain setting appears outside [toolchain] at line ${index + 1}`);
     const key = /^([A-Za-z0-9_-]+)\s*=/.exec(line)?.[1];
     if (!key) invalid(`Unsupported Rust toolchain syntax at line ${index + 1}`);
-    if (settings.has(key)) invalid(`rust/rust-toolchain.toml has duplicate ${key} settings`);
+    if (settings.has(key)) invalid(`rust-toolchain.toml has duplicate ${key} settings`);
     if (!['channel', 'profile', 'targets', 'components'].includes(key)) {
       invalid(`Unsupported Rust toolchain setting: ${key}`);
     }
     settings.set(key, tomlValue(line, key));
   }
   if (toolchainTables !== 1 || settings.size !== 4) {
-    invalid('rust/rust-toolchain.toml must define one complete [toolchain] table');
+    invalid('rust-toolchain.toml must define one complete [toolchain] table');
   }
   const channel = quotedString(settings.get('channel'), 'channel');
   if (!exactVersion.test(channel)) invalid('[toolchain].channel must be an exact stable numeric version');
@@ -132,14 +132,15 @@ function assertNoConflictingOverrides(version, environment) {
 }
 
 export function readPins(root = repositoryRoot, environment = process.env) {
-  for (const path of ['rust-toolchain.toml', 'rust-toolchain']) {
+  for (const path of ['rust-toolchain']) {
     if (existsSync(resolve(root, path))) invalid(`Conflicting root Rust toolchain file: ${path}`);
   }
-  const legacyRustToolchainPath = 'rust/rust-toolchain';
-  if (existsSync(resolve(root, legacyRustToolchainPath))) {
-    invalid(
-      `Conflicting legacy Rust toolchain file can shadow ${rustToolchainPath}: ${legacyRustToolchainPath}`,
-    );
+  for (const legacyRustToolchainPath of ['rust/rust-toolchain.toml', 'rust/rust-toolchain']) {
+    if (existsSync(resolve(root, legacyRustToolchainPath))) {
+      invalid(
+        `Conflicting nested legacy Rust toolchain file can shadow ${rustToolchainPath}: ${legacyRustToolchainPath}`,
+      );
+    }
   }
   for (const configName of ['.cargo/config.toml', '.cargo/config']) {
     const cargoConfig = resolve(root, configName);

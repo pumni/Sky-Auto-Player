@@ -99,7 +99,7 @@ unselected proof job to report `skipped`.
 | `apps/desktop/package.json`, `bun.lock` | Desktop web/browser, Windows candidate/package, updater and dependency checks |
 | `apps/desktop/src-tauri/**` production source/config/hooks/resources | Windows native and package qualification; updater lane for updater identity/behavior changes |
 | NSIS hooks, installer format or packaged payload | Windows package qualification plus signing and malware proofs |
-| Shipping `rust/crates/**` source | Rust/native and Windows package qualification; manifest changes also run dependency checks |
+| Shipping `crates/**` source | Rust/native and Windows package qualification; manifest changes also run dependency checks |
 | Signing adapter, updater trust, Authenticode scripts/contracts | Signing proof plus related Rust, updater, package, and release lanes |
 | Malware scanner, policy, bootstrap, or policy tests | Malware proof and release/security contracts, without an unnecessary Windows NSIS candidate |
 | `.github/workflows/release-v4.yml` | Release contract plus independent signing and malware proofs |
@@ -209,7 +209,7 @@ orchestration, Defender evidence capture, and the exact Defender artifact scan.
 
 | Rust owner | Current contract | Active caller or adapter |
 | --- | --- | --- |
-| `rust/xtask/src/ci_classifier.rs` and unit tests | Classifies event base/head SHAs and manual full dispatch; unknown or invalid changes fail closed to full validation. | The `changes` job calls `cargo xtask ci classify`. |
+| `xtask/src/ci_classifier.rs` and unit tests | Classifies event base/head SHAs and manual full dispatch; unknown or invalid changes fail closed to full validation. | The `changes` job calls `cargo xtask ci classify`. |
 | `ci_candidate.rs` and shared `ci_artifacts.rs` | Candidate schema v3 binds only the installer, updater signature, and public key; the exact four-file inventory remains locked. | Candidate producer, packaged CI, and updater fixture call `cargo xtask ci candidate create/validate`. |
 | `ci_bridge.rs` and `ci_artifacts.rs` | Bridge schema v1 preserves its exact two-file inventory and detached source worktree. | `cargo xtask ci bridge build-fixture` builds and validates the bridge; updater consumers call Rust validation. |
 | `startup_calibration.rs` evidence projection | Canonicalizes historical startup wake-calibration evidence bytes and writes the SHA-256 sidecar. Production startup wake calibration has been removed in favor of the fixed `1000 us` spin threshold; this offline projection utility is retained solely for historical evidence reproducibility and its CI self-test. | Historical evidence export scripts and CI self-test call `cargo xtask startup-calibration project-evidence`. |
@@ -251,7 +251,7 @@ The documented GitHub Actions job default is described in the
 
 ## Deterministic evidence tools
 
-`rust/xtask/src/assembly_audit.rs` owns deterministic checks for the live
+`xtask/src/assembly_audit.rs` owns deterministic checks for the live
 `sky_player::engine::worker::dispatch_loop::dispatch_candidate`,
 `sky_player::engine::worker::admission::verify_final_packet_admission`, and the
 Win32 deferred sender. Both `dispatch_candidate` and

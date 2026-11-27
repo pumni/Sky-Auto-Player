@@ -24,7 +24,7 @@ Sky Auto Player **never**:
 - bypasses anti-cheat or interferes with anti-cheat operation.
 
 The only hook exception is the audited Win32 adapter at
-`rust/crates/sky_dispatch_win32/src/focus/foreground_watcher.rs`. It registers
+`crates/sky_dispatch_win32/src/focus/foreground_watcher.rs`. It registers
 exactly `EVENT_SYSTEM_FOREGROUND` with `WINEVENT_OUTOFCONTEXT`; its callback
 publishes a coalesced HWND hint only. The hint does not authorize input or
 change the immutable target. In-context hooks, keyboard hooks, and hooks that

@@ -173,12 +173,12 @@ and updater policy remain safe Rust.
 
 | Module                                                                                                                                                                | Unsafe operation                                                        | Safety invariant                                                                                                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `rust/crates/sky_dispatch_win32/src/{clock,cpu,event,focus,focus/foreground_watcher,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; the foreground callback is out-of-context and hint-only; owned handles are closed by their owner. |
-| `rust/crates/sky_native_adapters/src/lib.rs`                                                                                                                          | `MoveFileExW` atomic settings replacement                               | NUL-terminated source and destination buffers stay live through the synchronous replace call.                                     |
+| `crates/sky_dispatch_win32/src/{clock,cpu,event,focus,focus/foreground_watcher,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; the foreground callback is out-of-context and hint-only; owned handles are closed by their owner. |
+| `crates/sky_native_adapters/src/lib.rs`                                                                                                                          | `MoveFileExW` atomic settings replacement                               | NUL-terminated source and destination buffers stay live through the synchronous replace call.                                     |
 | `apps/desktop/src-tauri/src/{power_lifecycle,single_instance,windows_caption,windows_icon}.rs`                                                                             | Power registration, process/window APIs, and window callbacks/resources | Callback context lifetime, process access limits, UI-thread HWND lifetime, and owned handles are checked at these platform edges. |
 
 The scanner reports unsafe code under `cfg(test)` separately from production
-unsafe. `rust/crates/sky_native_adapters/src/paths.rs` uses unsafe environment
+unsafe. `crates/sky_native_adapters/src/paths.rs` uses unsafe environment
 mutation only in serialized resolver tests; no production path changes process
 environment state.
 

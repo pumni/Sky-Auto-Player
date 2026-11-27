@@ -309,7 +309,7 @@ the production workflow or change the protected environment secret boundary.
 
 ## 3. Rust Release Authority
 
-`rust/xtask/src/release_v4.rs` remains the only release transaction state machine. The workflow owns
+`xtask/src/release_v4.rs` remains the only release transaction state machine. The workflow owns
 runner selection, job dependencies, job-scoped GitHub permissions, artifact transfer, protected
 Environment access, and OIDC actions. Rust owns release identity, state transitions, artifact
 integrity, version/channel policy, GitHub API behavior, metadata generation, reconciliation, and

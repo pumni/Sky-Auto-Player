@@ -5,8 +5,8 @@ docs/evidence/wake-calibration-qualification-*.json text eol=lf
 docs/evidence/wake-calibration-qualification-*.json.sha256 text eol=lf
 songs/** text eol=lf
 builtin-songs/manifest.json text eol=lf
-rust/supply-chain/*.toml text eol=lf
-rust/supply-chain/*.lock text eol=lf
+supply-chain/*.toml text eol=lf
+supply-chain/*.lock text eol=lf
 **/Cargo.toml text eol=lf
 Cargo.toml text eol=lf
 # Keep Windows-generated lifecycle report line endings for its recorded SHA-256.

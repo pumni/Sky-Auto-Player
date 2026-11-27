@@ -11,8 +11,8 @@ if (-not [System.OperatingSystem]::IsWindows()) {
 }
 
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$ownerSource = Get-Content -LiteralPath (Join-Path $repoRoot "rust/crates/sky_windows_security/src/credential.rs") -Raw
-$nativeSource = Get-Content -LiteralPath (Join-Path $repoRoot "rust/crates/sky_windows_security/src/win32.rs") -Raw
+$ownerSource = Get-Content -LiteralPath (Join-Path $repoRoot "crates/sky_windows_security/src/credential.rs") -Raw
+$nativeSource = Get-Content -LiteralPath (Join-Path $repoRoot "crates/sky_windows_security/src/win32.rs") -Raw
 $provisionSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot "set_v4_updater_session_credential.ps1") -Raw
 $brokerAdapter = Get-Content -LiteralPath (Join-Path $PSScriptRoot "v4_updater_credential_broker.ps1") -Raw
 $removeAdapter = Get-Content -LiteralPath (Join-Path $PSScriptRoot "remove_v4_updater_session_credential.ps1") -Raw

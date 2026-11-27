@@ -51,7 +51,7 @@ if (installedBun.status !== 0 || installedBun.stdout.trim() !== bunVersion) {
 const options = Object.fromEntries(
   process.argv.slice(2).map((arg) => arg.replace(/^--/, '').split('=')),
 );
-const exe = resolve(options.exe ?? join(root, 'rust/target/debug/sky_desktop_shell.exe'));
+const exe = resolve(options.exe ?? join(root, 'target/debug/sky_desktop_shell.exe'));
 const output = resolve(options.output ?? join(tmpdir(), 'sky-builtin-library-profile.json'));
 if (!existsSync(exe)) throw new Error(`Tauri shell is missing: ${exe}`);
 if (existsSync(output)) throw new Error(`Refusing to overwrite existing evidence: ${output}`);

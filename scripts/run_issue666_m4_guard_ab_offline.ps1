@@ -35,16 +35,16 @@ if ($LASTEXITCODE -ne 0) { throw 'rustc --version failed.' }
 $rustcVerbose = (& rustc -vV) -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'rustc -vV failed.' }
 $hostTarget = [regex]::Match($rustcVerbose, '(?m)^host: (.+)$').Groups[1].Value
-$cargoLock = Join-Path $repositoryRoot 'rust/Cargo.lock'
+$cargoLock = Join-Path $repositoryRoot 'Cargo.lock'
 $lockHash = (Get-FileHash -LiteralPath $cargoLock -Algorithm SHA256).Hash.ToLowerInvariant()
-$benchmarkSource = Join-Path $repositoryRoot 'rust/crates/sky_player/src/engine/worker/timing_guard_ab_benchmark.rs'
+$benchmarkSource = Join-Path $repositoryRoot 'crates/sky_player/src/engine/worker/timing_guard_ab_benchmark.rs'
 $benchmarkHash = (Get-FileHash -LiteralPath $benchmarkSource -Algorithm SHA256).Hash.ToLowerInvariant()
 
 New-Item -ItemType Directory -Path $outputPath | Out-Null
 $testLog = Join-Path $outputPath 'cargo-test.log'
 $manifestPath = Join-Path $outputPath 'run-manifest.json'
 $priorOutputDir = [Environment]::GetEnvironmentVariable('ISSUE_666_M4_OUTPUT_DIR', 'Process')
-$command = 'cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib offline_waiter_guard_ab_benchmark -- --ignored --nocapture'
+$command = 'cargo test --locked --manifest-path Cargo.toml -p sky_player --features test-support --lib offline_waiter_guard_ab_benchmark -- --ignored --nocapture'
 $exitCode = $null
 $testSummary = $null
 $runnerBinary = $null
@@ -55,7 +55,7 @@ try {
     [Environment]::SetEnvironmentVariable('ISSUE_666_M4_OUTPUT_DIR', $outputPath, 'Process')
     Push-Location $repositoryRoot
     try {
-        & cargo test --locked --manifest-path rust/Cargo.toml -p sky_player --features test-support --lib offline_waiter_guard_ab_benchmark -- --ignored --nocapture *> $testLog
+        & cargo test --locked --manifest-path Cargo.toml -p sky_player --features test-support --lib offline_waiter_guard_ab_benchmark -- --ignored --nocapture *> $testLog
         $exitCode = $LASTEXITCODE
     }
     finally {

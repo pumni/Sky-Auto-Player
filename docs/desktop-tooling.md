@@ -63,7 +63,7 @@ Separate worktrees use independent ephemeral ports without polling, attaching to
 
 ### Worktree isolation boundaries and limitations
 - **Ephemeral network listeners:** Test servers bind OS-allocated IPv4 loopback ports (`127.0.0.1:0`), avoiding cross-worktree port collisions.
-- **Concurrent writes:** Concurrent execution within the *same* checkout is unsupported for fixed output paths, including generated IPC bindings (`rust/crates/sky_player/bindings`), staged native resources (`apps/desktop/src-tauri/resources/`), and build distribution outputs.
+- **Concurrent writes:** Concurrent execution within the *same* checkout is unsupported for fixed output paths, including generated IPC bindings (`apps/desktop/src/bridge/generated`), staged native resources (`apps/desktop/src-tauri/resources/`), and build distribution outputs.
 - **Environment inheritance:** Inherited environment variables (such as `CARGO_TARGET_DIR`, `TS_RS_EXPORT_DIR`, or `TAURI_CONFIG`) must remain checkout-relative; global overrides break worktree isolation.
 - **Native OS singletons:** Native Windows user application state (e.g. `%APPDATA%/com.pumni.sky-auto-player`) and physical Win32 input sinks (`SendInput`) are global to the user desktop session and are not worktree-isolated.
 - **Process containment & sandbox disposition:** Host sandbox, credential separation, and process containment are not guaranteed by repository tooling or scripts. Multi-tenant or adversarial isolation requires external platform boundaries (such as OS containers, virtual machines, or dedicated user accounts).

@@ -119,7 +119,7 @@ $summaryPath = Join-Path $qualificationRoot 'summary.json'
 $runOrderPath = Join-Path $qualificationRoot 'run-order.jsonl'
 $metadata = Get-Content -LiteralPath $metadataPath -Raw | ConvertFrom-Json
 $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
-$harnessPath = Join-Path $repositoryRoot 'rust\target\release\rt-native-acceptance.exe'
+$harnessPath = Join-Path $repositoryRoot 'target\release\rt-native-acceptance.exe'
 if (-not (Test-Path -LiteralPath $harnessPath -PathType Leaf)) {
     throw 'The measured Release acceptance binary is required to verify the recorded binary hash.'
 }

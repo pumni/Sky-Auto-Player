@@ -15,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const options = Object.fromEntries(
   process.argv.slice(2).map((arg) => arg.replace(/^--/, '').split('=')),
 );
-const exe = resolve(options.exe ?? join(root, 'rust/target/debug/sky_desktop_shell.exe'));
+const exe = resolve(options.exe ?? join(root, 'target/debug/sky_desktop_shell.exe'));
 const output = resolve(options.output ?? join(tmpdir(), 'sky-workbench-profile'));
 const label = options.label ?? 'measurement';
 const port = 9233;

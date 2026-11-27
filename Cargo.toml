@@ -1,0 +1,44 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/sky_dispatch_core",
+    "crates/sky_dispatch_win32",
+    "crates/sky_app_core",
+    "crates/sky_native_adapters",
+    "crates/sky_windows_security",
+    "crates/sky_player",
+    "xtask",
+    "apps/desktop/src-tauri",
+]
+
+[workspace.package]
+edition = "2024"
+# Main tracks the explicitly pinned production compiler; release branches may
+# freeze their own compiler and MSRV policy.
+rust-version = "1.99"
+authors = ["Sky Auto Player Team"]
+
+[profile.release]
+# Keep routine optimized engineering builds responsive. Shipped artifacts use
+# the explicit `dist` profile below, so this profile may trade some throughput
+# for shorter compile/link cycles.
+lto = false
+codegen-units = 16
+opt-level = 2
+panic = "unwind"
+strip = "symbols"
+overflow-checks = true
+
+# Engineering builds may use the faster `release` profile. Every shipped
+# native artifact must use this profile so distribution optimization remains
+# explicit and cannot drift when the engineering profile changes.
+[profile.dist]
+inherits = "release"
+# The shipped profile must compile as a production build. In particular,
+# Tauri selects devUrl under debug assertions, which would make a directly
+# Cargo-built packaged shell depend on a local frontend server.
+debug = false
+debug-assertions = false
+lto = "thin"
+codegen-units = 1
+opt-level = 3

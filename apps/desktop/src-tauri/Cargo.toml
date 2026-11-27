@@ -1,7 +1,7 @@
 [package]
 name = "sky_desktop_shell"
 version = "4.6.0"
-workspace = "../../../rust"
+workspace = "../../.."
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
@@ -43,12 +43,12 @@ tauri-plugin-opener = "=2.5.5"
 tauri-plugin-process = "=2.4.0"
 tauri-plugin-updater = { version = "=2.14.0", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tauri-plugin-window-state = "=2.5.0"
-sky_dispatch_win32 = { path = "../../../rust/crates/sky_dispatch_win32" }
-sky_player = { path = "../../../rust/crates/sky_player" }
+sky_dispatch_win32 = { path = "../../../crates/sky_dispatch_win32" }
+sky_player = { path = "../../../crates/sky_player" }
 sha2 = "0.11"
 smallvec = "1"
-sky_app_core = { path = "../../../rust/crates/sky_app_core" }
-sky_native_adapters = { path = "../../../rust/crates/sky_native_adapters" }
+sky_app_core = { path = "../../../crates/sky_app_core" }
+sky_native_adapters = { path = "../../../crates/sky_native_adapters" }
 ts-rs = { version = "=12.0.1", features = ["serde-json-impl"] }
 thiserror = "2"
 getrandom = "0.4"
