@@ -1,11 +1,11 @@
 {
-  "version": "4.5.0",
-  "notes": "# Sky Auto Player v4.5.0\n\n## What's New & Improved\n\n- **Refreshed interface:** New Sky Indigo styling, updated Graphite and Light themes, and redesigned titlebar icons.\n- **Flexible workspace:** Collapsible Inspector, smoother panel resizing, and improved layout controls.\n- **Easier playback settings:** Improved Playback Profile controls with timing hints and one-click application of available song recommendations.\n- **Clearer feedback:** Redesigned Settings, Calibration, and Update dialogs with better status and progress information.\n- **More reliable playback:** Improved playback preparation, key-release handling, and recovery from focus changes and interruptions.\n- **Smoother interactions:** Improved search, keyboard navigation, and accessibility across the desktop interface.",
-  "pub_date": "2026-11-22T14:13:44Z",
+  "version": "4.6.0",
+  "notes": "# Sky Auto Player v4.6.0\n\n## What's New & Improved\n\n- **Reworked playback engine:** More direct note scheduling, consistent key holds and removal of unnecessary release gaps, with improved handling of rapid repeated notes and pause/resume.\n- **Expanded song library:** 41 new curated piano arrangements, bringing the built-in collection to 153 songs across pop, anime, film and instrumental music.\n- **Graphite 2.0:** A cleaner Dark and Light desktop interface, with a unified workbench, refined player controls and redesigned Settings.\n- **Smoother interactions:** Refined global search with one clear button, improved keyboard navigation, compact layouts, focus indicators and reduced-motion support.\n- **Clearer playback guidance:** Improved note-registration warnings, timing feedback and runtime diagnostics.\n- **Easier updates:** Fresh update checks on every launch when automatic checking is enabled, with clearer update status and progress.",
+  "pub_date": "2026-11-27T17:43:19Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTTWdUaDRMcjJxR1FmN0VsYjZpSlVUTzlhYm5yRUNBcnNqMy9tQ3ZLM2xmQWxINjZLTWdTMjZ0em0yZ2g0RkFBTkVlY2FIVkhxcnZMZDl4SnVLTUl0QVFmWkhpbkpOakFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1MzU0NDc0CWZpbGU6U2t5IEF1dG8gUGxheWVyXzQuNS4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjo0LjUuMApKQXg5NW12ZGlORG9DNmplcFF5aWh1Y1NaanVJeUJqcjhhSU1VaXdlM0ZDUUpwM29na0k1ZkkvOGpKM3Y0bFpubEdHRXVTQTcwV3l5aG5YOXpLT2pEUT09Cg==",
-      "url": "https://github.com/pumni/Sky-Auto-Player/releases/download/v4.5.0/Sky.Auto.Player_4.5.0_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVTTWdUaDRMcjJxR1UyeVJtTXVoM2dQSkxRVnNRVnlvd2xXV1k3d3MrMnA0NGovU2FUcTQ0RC9rS0pOaXFpcUVuN0ZQcmNDRXN5NDdsQkxseFp1NHRyaHQxWkV0YU1qckFrPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzk1ODAwNTY1CWZpbGU6U2t5IEF1dG8gUGxheWVyXzQuNi4wX3g2NC1zZXR1cC5leGUJdmVyc2lvbjo0LjYuMAoraHZzS2dLbkFnOE01VC91NEJsb3NRY3ZQQk9PSUVCNVhBTTNZMjQ4RWoyTTdqNklSM0p6amEraTIwdWRWZTAreFFoa1RwK25PMDE2ZTJQNGZFKzdCUT09Cg==",
+      "url": "https://github.com/pumni/Sky-Auto-Player/releases/download/v4.6.0/Sky.Auto.Player_4.6.0_x64-setup.exe"
     }
   }
 }
