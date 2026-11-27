@@ -4,6 +4,17 @@ import type { DesktopStore, DesktopStoreHook } from '../../state/store';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 
+function searchScopeKey(
+  source: DesktopStore['library']['source'],
+  playlistAddMode: DesktopStore['library']['playlistAddMode'],
+) {
+  return playlistAddMode
+    ? `add:${playlistAddMode.playlistId}`
+    : source.kind === 'playlist'
+      ? `playlist:${source.id}`
+      : `smart:${source.id}`;
+}
+
 interface GlobalSearchProps {
   inputRef?: RefObject<HTMLInputElement | null>;
   useStore: DesktopStoreHook;
@@ -39,11 +50,7 @@ export function GlobalSearch({ inputRef, useStore }: GlobalSearchProps) {
         : source.id === 'builtin'
           ? 'Built-in'
           : 'Library';
-  const scopeKey = playlistAddMode
-    ? `add:${playlistAddMode.playlistId}`
-    : source.kind === 'playlist'
-      ? `playlist:${source.id}`
-      : `smart:${source.id}`;
+  const scopeKey = searchScopeKey(source, playlistAddMode);
   return (
     <SearchInput
       key={playlistAddMode?.playlistId ?? 'library'}
@@ -69,9 +76,7 @@ interface SearchInputProps extends GlobalSearchProps {
 interface SearchDraftState {
   baseQuery: string;
   draft: string;
-  revision: number;
   scopeKey: string;
-  ownedQueries: readonly string[];
 }
 
 function SearchInput({
@@ -83,29 +88,9 @@ function SearchInput({
   scopeText,
   placeholder,
 }: SearchInputProps) {
-  const search = useStore((store) => store.search);
   const [draftState, setDraftState] = useState<SearchDraftState | null>(null);
-  const draftStateRef = useRef<SearchDraftState | null>(null);
   const inputElementRef = useRef<HTMLInputElement | null>(null);
   const debounceTimerRef = useRef<number | null>(null);
-  const draftRevisionRef = useRef(0);
-  const searchRequestIdRef = useRef(0);
-  const pendingSearchesRef = useRef(new Map<number, string>());
-  const scopeKeyRef = useRef(scopeKey);
-  const observedQueryRef = useRef(query);
-  const expectedOwnQueryChangesRef = useRef(new Map<string, number>());
-  const mountedRef = useRef(true);
-
-  const commitDraftState = (nextState: SearchDraftState | null) => {
-    draftStateRef.current = nextState;
-    setDraftState(nextState);
-  };
-
-  const updateDraftState = (
-    update: (previous: SearchDraftState | null) => SearchDraftState | null,
-  ) => {
-    commitDraftState(update(draftStateRef.current));
-  };
 
   const setInputElement = useCallback(
     (element: HTMLInputElement | null) => {
@@ -115,169 +100,93 @@ function SearchInput({
     [inputRef],
   );
 
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (debounceTimerRef.current !== null) {
-        window.clearTimeout(debounceTimerRef.current);
-        debounceTimerRef.current = null;
-      }
-    };
+  const cancelQueuedSearch = useCallback(() => {
+    if (debounceTimerRef.current !== null) {
+      window.clearTimeout(debounceTimerRef.current);
+      debounceTimerRef.current = null;
+    }
   }, []);
 
   useEffect(() => {
-    if (scopeKeyRef.current === scopeKey) return;
-    scopeKeyRef.current = scopeKey;
-    draftRevisionRef.current += 1;
-    if (debounceTimerRef.current !== null) {
-      window.clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
-    }
-    draftStateRef.current = null;
-    setDraftState(null);
-    pendingSearchesRef.current.clear();
-    expectedOwnQueryChangesRef.current.clear();
-  }, [scopeKey]);
+    // The store publishes query/scope changes synchronously before awaiting the bridge.
+    // Cancel local typing on any new committed intent, including external navigation.
+    const unsubscribe = useStore.subscribe((state, previous) => {
+      const next = state.library;
+      const before = previous.library;
+      if (
+        next.query !== before.query ||
+        searchScopeKey(next.source, next.playlistAddMode) !==
+          searchScopeKey(before.source, before.playlistAddMode)
+      ) {
+        cancelQueuedSearch();
+        setDraftState(null);
+      }
+    });
+    return () => {
+      unsubscribe();
+      cancelQueuedSearch();
+    };
+  }, [useStore, cancelQueuedSearch]);
 
-  useEffect(() => {
-    const previousQuery = observedQueryRef.current;
-    observedQueryRef.current = query;
-    if (previousQuery === query || scopeKeyRef.current !== scopeKey) return;
-    const expectedChanges = expectedOwnQueryChangesRef.current;
-    const expectedCount = expectedChanges.get(query) ?? 0;
-    if (expectedCount > 0) {
-      if (expectedCount === 1) expectedChanges.delete(query);
-      else expectedChanges.set(query, expectedCount - 1);
-      return;
-    }
-    const current = draftStateRef.current;
-    if (!current) return;
-    draftRevisionRef.current += 1;
-    if (debounceTimerRef.current !== null) {
-      window.clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
-    }
-    draftStateRef.current = null;
-    setDraftState(null);
-    expectedChanges.clear();
-  }, [query, scopeKey]);
+  const inputValue =
+    draftState?.scopeKey === scopeKey && draftState.baseQuery === query
+      ? draftState.draft
+      : query;
 
-  const isOwnDraft =
-    draftState !== null &&
-    draftState.scopeKey === scopeKey &&
-    (draftState.baseQuery === query || draftState.ownedQueries.includes(query));
-  const inputValue = isOwnDraft ? draftState.draft : query;
-
-  const issueSearch = (nextQuery: string, revision: number) => {
-    const requestId = ++searchRequestIdRef.current;
-    updateDraftState((previous) =>
-      previous && previous.revision === revision
-        ? {
-            ...previous,
-            ownedQueries: previous.ownedQueries.includes(nextQuery)
-              ? previous.ownedQueries
-              : [...previous.ownedQueries, nextQuery],
-          }
-        : previous,
-    );
-    pendingSearchesRef.current.set(requestId, nextQuery);
-    const expectedChanges = expectedOwnQueryChangesRef.current;
-    expectedChanges.set(nextQuery, (expectedChanges.get(nextQuery) ?? 0) + 1);
-
-    void search(nextQuery)
-      .catch((error: unknown) => {
-        if (import.meta.env.DEV) {
-          console.error('Search request failed:', error);
-        }
-      })
-      .finally(() => {
-        if (!mountedRef.current) return;
-        pendingSearchesRef.current.delete(requestId);
-        updateDraftState((previous) => {
-          if (!previous) return null;
-          if (previous.revision === revision && previous.draft === nextQuery) {
-            expectedOwnQueryChangesRef.current.clear();
-            return null;
-          }
-          return previous;
-        });
-      });
-  };
-
-  const cancelQueuedSearch = () => {
-    if (debounceTimerRef.current !== null) {
-      window.clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
-    }
-  };
-
-  const getOwnedQueries = (currentQuery: string) => {
-    if (scopeKeyRef.current !== scopeKey) return [];
-    const current = draftStateRef.current;
-    return current &&
-      (current.baseQuery === currentQuery || current.ownedQueries.includes(currentQuery))
-      ? current.ownedQueries
-      : [];
+  const issueSearch = (nextQuery: string) => {
+    // Only the store owns committed query and request-generation fencing.
+    // Promise completion must never mutate the input draft.
+    void useStore.getState().search(nextQuery).catch((error: unknown) => {
+      if (import.meta.env.DEV) {
+        console.error('Search request failed:', error);
+      }
+    });
   };
 
   const handleChange = (nextDraft: string) => {
     cancelQueuedSearch();
-    const currentQuery = useStore.getState().library.query;
-    const ownedQueries = getOwnedQueries(currentQuery);
-    const revision = ++draftRevisionRef.current;
-    commitDraftState({
-      baseQuery: currentQuery,
-      draft: nextDraft,
-      revision,
-      scopeKey,
-      ownedQueries,
-    });
-
-    const pendingQueries = [...pendingSearchesRef.current.values()];
-    const alreadySearchingForDraft = pendingQueries.includes(nextDraft);
-    const hasOtherPendingSearch = pendingQueries.some((requestQuery) => requestQuery !== nextDraft);
-    if (nextDraft === currentQuery && (!hasOtherPendingSearch || alreadySearchingForDraft)) {
-      commitDraftState(null);
-      expectedOwnQueryChangesRef.current.clear();
+    const current = useStore.getState().library;
+    const baseQuery = current.query;
+    const baseScope = searchScopeKey(current.source, current.playlistAddMode);
+    if (nextDraft === baseQuery) {
+      setDraftState(null);
       return;
     }
-
+    setDraftState({ baseQuery, draft: nextDraft, scopeKey: baseScope });
     debounceTimerRef.current = window.setTimeout(() => {
       debounceTimerRef.current = null;
-      if (draftRevisionRef.current !== revision) return;
-      issueSearch(nextDraft, revision);
+      const latest = useStore.getState().library;
+      if (
+        latest.query !== baseQuery ||
+        searchScopeKey(latest.source, latest.playlistAddMode) !== baseScope
+      ) {
+        setDraftState(null);
+        return;
+      }
+      issueSearch(nextDraft);
+      setDraftState(null);
     }, 120);
   };
 
   const handleClear = () => {
     cancelQueuedSearch();
-    const currentQuery = useStore.getState().library.query;
-    const ownedQueries = getOwnedQueries(currentQuery);
-    const revision = ++draftRevisionRef.current;
-    inputElementRef.current?.focus();
-
-    const hasOlderPendingSearch = [...pendingSearchesRef.current.values()].some(
-      (requestQuery) => requestQuery !== '',
-    );
-    if (currentQuery === '' && !hasOlderPendingSearch) {
-      commitDraftState(null);
-      expectedOwnQueryChangesRef.current.clear();
-      return;
+    // An in-flight nonempty search already committed its query synchronously.
+    // Dispatching the empty intent fences its late result through the store.
+    if (useStore.getState().library.query !== '') {
+      issueSearch('');
     }
-
-    commitDraftState({ baseQuery: currentQuery, draft: '', revision, scopeKey, ownedQueries });
-    issueSearch('', revision);
+    setDraftState(null);
+    inputElementRef.current?.focus();
   };
 
   return (
     <div
       role="search"
       data-slot="global-search"
-      className="flex h-8 w-full min-w-0 items-center gap-2 rounded-control border border-chrome-input-border bg-surface px-[9px] text-muted-foreground focus-within:border-ring focus-within:outline focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-ring"
+      className="flex h-8 w-full min-w-0 items-center gap-2 rounded-control border border-border bg-surface px-[9px] text-muted-foreground hover:border-overlay-border focus-within:border-overlay-border focus-within:outline focus-within:outline-2 focus-within:outline-offset-1 focus-within:outline-ring"
       data-tauri-drag-region="false"
     >
-      <Search size={16} className="shrink-0" aria-hidden="true" />
+      <Search size={16} className="shrink-0 text-text-secondary" aria-hidden="true" />
       <span
         className="max-w-[72px] shrink-0 overflow-hidden text-ellipsis whitespace-nowrap border-r border-border pr-2 text-[11px] text-text-tertiary"
         aria-hidden="true"
