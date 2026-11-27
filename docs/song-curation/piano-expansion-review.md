@@ -36,7 +36,7 @@ All source paths are relative to [Ai-Vonie/Sky1984-Sheets-Collection at fdf69c6e
 
 ## Structural pre-screen (independent, not Rust audit output)
 
-Calculated from authoritative composed columns or recorded notes using the documented timing rules. All twenty-five have Sky/Piano metadata, pitch-inheriting tracks, valid key indices and layer masks in this screen, no duplicate physical onset/key pairs, and minimum same-key intervals above 16.67 ms. This is not proof of native playback compatibility or musical fidelity.
+Calculated from authoritative composed columns or recorded notes using the documented timing rules. All forty-one have Sky/Piano metadata, pitch-inheriting tracks, valid key indices and layer masks in this screen, no duplicate physical onset/key pairs, and minimum same-key intervals above 16.67 ms. This is not proof of native playback compatibility or musical fidelity.
 
 | Candidate | Schema | Pitch | Tracks | Events | Active s | Min repeat ms | Chord onset % | Max chord |
 | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -105,7 +105,7 @@ Calculated from authoritative composed columns or recorded notes using the docum
 ## Merge gates
 
 - [x] Source JSON and structural pre-screen; upstream Git blob identity verified.
-- [x] Register twenty-five new opaque IDs and actual SHA-256 values; preserve existing active/retired identities.
+- [x] Register forty-one new opaque IDs and actual SHA-256 values; preserve existing active/retired identities.
 - [ ] Run `cargo xtask builtin-catalog verify` and regenerate `cargo xtask song-audit inventory` (commit generated inventory.json, inventory.csv and inventory-summary.md). The committed inventory still reflects the original 112-entry catalog and remains a historical snapshot until regeneration for all 153 entries.
 - [ ] Inspect actual Rust planner diagnostics and runtime preparation at default timing and intended instrument pitch.
 - [ ] Listen to the complete arrangements on a Sky-compatible piano; compare alternatives, particularly multi-track works and works with unexplored variants. Verify sections, tempo, musical fidelity and endings; reject or replace any weak candidates.
