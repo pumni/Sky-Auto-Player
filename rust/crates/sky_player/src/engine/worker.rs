@@ -63,8 +63,6 @@ pub(crate) use health::{
 pub(crate) use startup::WorkerSchedulingGuards;
 use startup::{StartupResources, initialize_startup};
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) use timing::calibrated_spin_threshold_us;
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) use timing::signed_ticks_to_us;
 #[cfg(test)]
 pub(crate) use timing::{anchored_dispatch_target_ticks, deadline_target_ticks};
@@ -619,8 +617,6 @@ impl<'a> Worker<'a> {
                     telemetry,
                     priority,
                     #[cfg(any(test, feature = "test-support"))]
-                    startup_calibration_placement,
-                    #[cfg(any(test, feature = "test-support"))]
                     timing_observer_for_qualification,
                     #[cfg(any(test, feature = "test-support"))]
                     startup_ordering_hook,
@@ -657,8 +653,6 @@ impl<'a> Worker<'a> {
                 wait,
                 telemetry,
                 priority,
-                #[cfg(any(test, feature = "test-support"))]
-                startup_calibration_placement,
                 #[cfg(any(test, feature = "test-support"))]
                 timing_observer_for_qualification,
                 #[cfg(any(test, feature = "test-support"))]

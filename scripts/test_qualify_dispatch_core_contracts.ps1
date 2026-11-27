@@ -2239,7 +2239,7 @@ try {
             '-NoProfile', '-File', (Join-Path $pclV3RunnerRoot 'scripts\run_native_acceptance_case.ps1'),
             '-QualificationProfile', 'PlaybackCoreLifecycleV3',
             '-Scenario', $Scenario, '-Workload', $Workload,
-            '-TimingMarginUs', '500', '-CalibrationPlacement', 'Baseline',
+            '-TimingMarginUs', '500',
             '-TimingObserverForQualification',
             '-HarnessPath', $Artifact.Manifest.binary_path,
             '-HarnessManifestPath', $Artifact.ManifestPath,

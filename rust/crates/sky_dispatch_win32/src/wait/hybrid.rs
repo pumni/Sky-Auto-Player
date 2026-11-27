@@ -1,6 +1,5 @@
 use super::{
-    WaitFailure, WaitOutcome, WaitResult, WakeErrorStats,
-    calibration::robust_wake_error_us,
+    WaitFailure, WaitOutcome, WaitResult,
     spin::{deadline_wait_result, wait_result_with_spin},
 };
 use crate::clock::{DurationTicks, QpcClock, QpcTicks};
@@ -422,79 +421,6 @@ impl HybridWaiter {
             }
         }
     }
-
-    pub fn probe_wake_error_us(&self, interrupt: &OwnedEvent, samples: usize) -> Option<u64> {
-        let qpc_clock = QpcClock::initialize().ok()?;
-        self.probe_wake_error_stats(qpc_clock, interrupt, samples)
-            .map(|stats| stats.p95_us)
-    }
-
-    pub fn probe_wake_error_stats(
-        &self,
-        qpc_clock: QpcClock,
-        interrupt: &OwnedEvent,
-        samples: usize,
-    ) -> Option<WakeErrorStats> {
-        self.probe_wake_error_stats_until(qpc_clock, interrupt, samples, None)
-    }
-
-    /// Probe wake error while refusing to cross an optional startup deadline.
-    ///
-    /// The deadline is checked before arming every sample and after every
-    /// wake. This lets optional startup calibration yield to readiness work
-    /// instead of consuming the entire startup correctness budget.
-    pub fn probe_wake_error_stats_until(
-        &self,
-        qpc_clock: QpcClock,
-        interrupt: &OwnedEvent,
-        samples: usize,
-        deadline_ticks: Option<crate::clock::QpcTicks>,
-    ) -> Option<WakeErrorStats> {
-        if samples == 0 {
-            return None;
-        }
-        let mut errors = Vec::with_capacity(samples);
-        for _ in 0..samples {
-            let target_ticks = match qpc_clock.now() {
-                Ok(now) => now
-                    .checked_add_duration(qpc_clock.duration_from_us(2_000).ok()?)
-                    .ok()?,
-                Err(_) => return None,
-            };
-            if deadline_ticks.is_some_and(|deadline| target_ticks > deadline) {
-                return None;
-            }
-            match self
-                .wait_until_ticks_with_metrics_typed(
-                    qpc_clock,
-                    target_ticks,
-                    DurationTicks::ZERO,
-                    interrupt,
-                )
-                .outcome
-            {
-                WaitOutcome::Interrupted | WaitOutcome::Failed(_) => return None,
-                WaitOutcome::Deadline => {}
-            }
-            let now_ticks = match qpc_clock.now() {
-                Ok(ticks) => ticks,
-                Err(_) => return None,
-            };
-            if deadline_ticks.is_some_and(|deadline| now_ticks > deadline) {
-                return None;
-            }
-            let elapsed = now_ticks.checked_duration_since(target_ticks).ok()?;
-            errors.push(qpc_clock.duration_to_us(elapsed).ok()?);
-        }
-        errors.sort_unstable();
-        Some(WakeErrorStats {
-            p50_us: percentile_from_sorted(&errors, 50),
-            p95_us: percentile_from_sorted(&errors, 95),
-            p99_us: percentile_from_sorted(&errors, 99),
-            max_us: *errors.last().unwrap_or(&0),
-            robust_us: robust_wake_error_us(&errors),
-        })
-    }
 }
 
 fn classify_kernel_wait_100ns(
@@ -607,13 +533,6 @@ fn classify_wake(now_ticks: QpcTicks, target_ticks: QpcTicks) -> WaitOutcome {
     }
 }
 
-fn percentile_from_sorted(sorted: &[u64], numerator: usize) -> u64 {
-    let index = ((sorted.len() * numerator).saturating_add(99) / 100)
-        .saturating_sub(1)
-        .min(sorted.len() - 1);
-    sorted[index]
-}
-
 impl Default for HybridWaiter {
     fn default() -> Self {
         Self::new()
@@ -624,29 +543,11 @@ impl Default for HybridWaiter {
 mod tests {
     use super::{
         classify_interrupt_after_refresh, classify_kernel_wait_100ns, classify_kernel_wait_us,
-        classify_wake, percentile_from_sorted,
+        classify_wake,
     };
     use crate::clock::{DurationTicks, QpcClock, QpcTicks};
     use crate::wait::WaitOutcome;
     use std::num::NonZeroU64;
-
-    #[test]
-    fn thirty_two_sample_p95_does_not_promote_one_extreme_maximum() {
-        let mut samples = vec![300_u64; 31];
-        samples.push(50_000);
-        samples.sort_unstable();
-
-        assert_eq!(samples.len(), 32);
-        assert_eq!(percentile_from_sorted(&samples, 95), 300);
-        assert_eq!(*samples.last().unwrap(), 50_000);
-    }
-
-    #[test]
-    fn six_sample_p99_is_the_maximum_by_nearest_rank() {
-        let mut samples = [10_u64, 20, 30, 40, 50, 60];
-        samples.sort_unstable();
-        assert_eq!(percentile_from_sorted(&samples, 99), 60);
-    }
 
     #[test]
     fn interrupt_before_target_is_classified_as_interrupted() {

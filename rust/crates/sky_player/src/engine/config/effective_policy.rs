@@ -92,8 +92,8 @@ pub(super) fn observer_enabled_from_inputs(
 mod tests {
     use super::*;
     use crate::engine::{
-        BackendConfig, FaultInjectionScript, FocusOptions, PriorityOptions,
-        StartupCalibrationPlacement, TestWaitPolicy, TimingOptions,
+        BackendConfig, FaultInjectionScript, FocusOptions, PriorityOptions, TestWaitPolicy,
+        TimingOptions,
     };
     use sky_dispatch_win32::mmcss::PriorityMode;
 
@@ -191,7 +191,6 @@ mod tests {
             },
             instrument_key_profile: None,
             startup_ordering_hook: None,
-            startup_calibration_placement: StartupCalibrationPlacement::BeforeSchedulingGuards,
             timing_observer_for_qualification: qualification_observer,
             focus_pause_hook: None,
             timer_lifecycle_context: None,
@@ -278,7 +277,7 @@ mod tests {
         let cases = [
             (true, TestWaitPolicy::LegacyTestWideSpin, true),
             (false, TestWaitPolicy::LegacyTestWideSpin, false),
-            (false, TestWaitPolicy::ProductionCalibrated, true),
+            (false, TestWaitPolicy::ProductionFixed, true),
         ];
 
         for (backend_is_production, wait_policy, production_wait) in cases {
@@ -314,7 +313,7 @@ mod tests {
         for (profile, strict_timing) in rows {
             for (backend_is_production, wait_policy) in [
                 (true, TestWaitPolicy::LegacyTestWideSpin),
-                (false, TestWaitPolicy::ProductionCalibrated),
+                (false, TestWaitPolicy::ProductionFixed),
             ] {
                 let native = native_options(
                     profile,

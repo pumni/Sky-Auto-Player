@@ -15,56 +15,8 @@ pub(crate) use effective_policy::EffectiveRuntimePolicy;
 
 pub(crate) const STARTUP_READINESS_RESERVE_US: u64 = 2_000;
 pub(crate) const DEFAULT_SPIN_THRESHOLD_US: u64 = 1_000;
-pub(crate) const MIN_CALIBRATED_SPIN_US: u64 = 250;
-pub(crate) const CALIBRATION_SAFETY_MARGIN_US: u64 = 50;
-pub(crate) const CALIBRATION_SAMPLES: usize = 6;
-pub(crate) const CALIBRATION_MAX_STARTUP_BUDGET_US: u64 = 20_000;
 pub(crate) const MIN_PRODUCTION_PREROLL_US: u64 = 50_000;
 
-/// Experimental calibration placement exposed only by test-support builds.
-/// Normal application builds use the internal shipping selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StartupCalibrationPlacement {
-    BeforeSchedulingGuards,
-    AfterSchedulingGuards,
-    /// Test-only W2-E arm selector that bypasses the startup wake probe while
-    /// keeping the production waiter, scheduling guards, preroll, and all
-    /// lifecycle admission checkpoints intact.
-    #[cfg(any(test, feature = "test-support"))]
-    BypassedForFixedArm,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub(crate) enum StartupCalibrationResult {
-    NotRequested = 0,
-    Completed = 1,
-    BudgetExpired = 2,
-    Interrupted = 3,
-    Unavailable = 4,
-}
-
-impl StartupCalibrationResult {
-    pub(crate) const fn from_raw(value: u8) -> Self {
-        match value {
-            1 => Self::Completed,
-            2 => Self::BudgetExpired,
-            3 => Self::Interrupted,
-            4 => Self::Unavailable,
-            _ => Self::NotRequested,
-        }
-    }
-
-    pub(crate) const fn label(self) -> &'static str {
-        match self {
-            Self::NotRequested => "not_requested",
-            Self::Completed => "completed",
-            Self::BudgetExpired => "budget_expired",
-            Self::Interrupted => "interrupted",
-            Self::Unavailable => "unavailable",
-        }
-    }
-}
 /// Maximum interval for the non-realtime supervisor to prove it is still
 /// alive. The direct desktop adapter consumes this same qualified safety
 /// boundary.
@@ -78,9 +30,9 @@ pub enum TestWaitPolicy {
     /// Historical test-support behavior. Existing tests use the wide spin
     /// window to avoid making host timer jitter part of their assertions.
     LegacyTestWideSpin,
-    /// Test-only qualification policy that follows the shipping waiter and
-    /// one-shot startup calibration without enabling production transport.
-    ProductionCalibrated,
+    /// Test-only qualification policy that follows the shipping fixed-1000us
+    /// production waiter without enabling production transport.
+    ProductionFixed,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -88,15 +40,15 @@ impl TestWaitPolicy {
     pub fn parse(value: &str) -> Result<Self, &'static str> {
         match value {
             "legacy_test_wide_spin" => Ok(Self::LegacyTestWideSpin),
-            "production_calibrated" => Ok(Self::ProductionCalibrated),
-            _ => Err("wait_policy must be legacy_test_wide_spin or production_calibrated"),
+            "production_fixed" => Ok(Self::ProductionFixed),
+            _ => Err("wait_policy must be legacy_test_wide_spin or production_fixed"),
         }
     }
 
     pub const fn label(self) -> &'static str {
         match self {
             Self::LegacyTestWideSpin => "legacy_test_wide_spin",
-            Self::ProductionCalibrated => "production_calibrated",
+            Self::ProductionFixed => "production_fixed",
         }
     }
 }
@@ -105,19 +57,17 @@ impl TestWaitPolicy {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SpinThresholdSource {
     Unknown = 0,
-    ProductionStartupCalibration = 1,
+    ProductionFixed = 1,
     TestFixedOverride = 2,
     LegacyTestWideSpin = 3,
-    ProductionFallback = 4,
 }
 
 impl SpinThresholdSource {
     pub(crate) const fn from_raw(value: u8) -> Self {
         match value {
-            1 => Self::ProductionStartupCalibration,
+            1 => Self::ProductionFixed,
             2 => Self::TestFixedOverride,
             3 => Self::LegacyTestWideSpin,
-            4 => Self::ProductionFallback,
             _ => Self::Unknown,
         }
     }
@@ -125,10 +75,9 @@ impl SpinThresholdSource {
     pub(crate) const fn label(self) -> &'static str {
         match self {
             Self::Unknown => "unknown",
-            Self::ProductionStartupCalibration => "production_startup_calibration",
+            Self::ProductionFixed => "production_fixed_1000us",
             Self::TestFixedOverride => "test_fixed_override",
             Self::LegacyTestWideSpin => "legacy_test_wide_spin",
-            Self::ProductionFallback => "production_startup_fallback",
         }
     }
 }
@@ -227,9 +176,6 @@ pub struct NativeSessionOptions {
     pub instrument_key_profile: Option<InstrumentKeyProfileSpec>,
     #[cfg(any(test, feature = "test-support"))]
     pub startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
-    /// Paired benchmark selector; absent from production-facing options.
-    #[cfg(any(test, feature = "test-support"))]
-    pub startup_calibration_placement: StartupCalibrationPlacement,
     /// Enables existing QPC timing observation for qualification builds only.
     #[cfg(any(test, feature = "test-support"))]
     pub timing_observer_for_qualification: bool,
@@ -281,14 +227,11 @@ pub struct StartupOrderingHook {
     startup_checkpoint_cv: std::sync::Condvar,
     #[cfg(test)]
     final_gate_focus_rejection_count: AtomicU64,
-    #[cfg(test)]
-    complete_startup_calibration_after_checkpoint: AtomicBool,
     panic_startup_checkpoint: AtomicU8,
     fail_worker_spawn: AtomicBool,
     fail_watchdog_spawn: AtomicBool,
     fail_observer_spawn: AtomicBool,
     fail_startup_epoch_conversion: AtomicBool,
-    fail_guarded_calibration_origin: AtomicBool,
     pub(crate) hol: hol::HolStallController,
     scheduling_threads:
         std::sync::Mutex<(Option<std::thread::ThreadId>, Option<std::thread::ThreadId>)>,
@@ -329,8 +272,6 @@ pub enum StartupCheckpoint {
     FirstDownCommitted = 10,
     #[cfg(any(test, feature = "test-support"))]
     TerminalCleanup = 11,
-    #[cfg(any(test, feature = "test-support"))]
-    WakeCalibration = 12,
     #[cfg(any(test, feature = "test-support"))]
     WorkerCompletionPublished = 13,
     #[cfg(any(test, feature = "test-support"))]
@@ -391,18 +332,6 @@ impl StartupOrderingHook {
             .unwrap_or_default()
     }
 
-    #[cfg(test)]
-    pub(crate) fn complete_startup_calibration_after_checkpoint(&self) {
-        self.complete_startup_calibration_after_checkpoint
-            .store(true, Ordering::Release);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn take_startup_calibration_completion(&self) -> bool {
-        self.complete_startup_calibration_after_checkpoint
-            .swap(false, Ordering::AcqRel)
-    }
-
     pub fn fail_next_worker_spawn(&self) {
         self.fail_worker_spawn.store(true, Ordering::Release);
     }
@@ -434,16 +363,6 @@ impl StartupOrderingHook {
 
     pub(crate) fn take_startup_epoch_conversion_failure(&self) -> bool {
         self.fail_startup_epoch_conversion
-            .swap(false, Ordering::AcqRel)
-    }
-
-    pub fn fail_next_guarded_calibration_origin(&self) {
-        self.fail_guarded_calibration_origin
-            .store(true, Ordering::Release);
-    }
-
-    pub(crate) fn take_guarded_calibration_origin_failure(&self) -> bool {
-        self.fail_guarded_calibration_origin
             .swap(false, Ordering::AcqRel)
     }
 
@@ -690,8 +609,6 @@ pub(crate) struct WorkerConfig {
     pub(super) telemetry: TelemetryOptions,
     pub(super) priority: PriorityOptions,
     #[cfg(any(test, feature = "test-support"))]
-    pub(super) startup_calibration_placement: StartupCalibrationPlacement,
-    #[cfg(any(test, feature = "test-support"))]
     pub(super) timing_observer_for_qualification: bool,
     #[cfg(any(test, feature = "test-support"))]
     pub(super) prepared_packet_ambiguity_mask: Option<u16>,
@@ -747,7 +664,6 @@ impl Default for WorkerConfig {
             priority: PriorityOptions {
                 mode: PriorityMode::Off,
             },
-            startup_calibration_placement: StartupCalibrationPlacement::BeforeSchedulingGuards,
             timing_observer_for_qualification: false,
             prepared_packet_ambiguity_mask: None,
             preflight_user_held_mask: None,
@@ -810,7 +726,7 @@ impl WaitOptions {
         }
         #[cfg(any(test, feature = "test-support"))]
         {
-            matches!(self.test_wait_policy, TestWaitPolicy::ProductionCalibrated)
+            matches!(self.test_wait_policy, TestWaitPolicy::ProductionFixed)
         }
         #[cfg(not(any(test, feature = "test-support")))]
         {
@@ -820,7 +736,7 @@ impl WaitOptions {
 
     pub(crate) fn requested_wait_policy_label(&self, backend_is_production: bool) -> &'static str {
         if backend_is_production {
-            return "production_calibrated";
+            return "production_fixed";
         }
         #[cfg(any(test, feature = "test-support"))]
         {
@@ -828,7 +744,7 @@ impl WaitOptions {
         }
         #[cfg(not(any(test, feature = "test-support")))]
         {
-            "production_calibrated"
+            "production_fixed"
         }
     }
 }
@@ -845,14 +761,17 @@ pub struct PriorityOptions {
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_SPIN_THRESHOLD_US, DispatchProfile, MIN_CALIBRATED_SPIN_US, TestWaitPolicy,
+        DEFAULT_SPIN_THRESHOLD_US, DispatchProfile, SpinThresholdSource, TestWaitPolicy,
         WaitOptions, WorkerConfig,
     };
 
     #[test]
-    fn production_wait_policy_has_bounded_spin_threshold() {
+    fn production_wait_policy_has_fixed_1000us_spin_threshold() {
         assert_eq!(DEFAULT_SPIN_THRESHOLD_US, 1_000);
-        assert_eq!(MIN_CALIBRATED_SPIN_US, 250);
+        assert_eq!(
+            SpinThresholdSource::ProductionFixed.label(),
+            "production_fixed_1000us"
+        );
         assert!(super::validate_timing_constants().is_ok());
     }
 
@@ -873,17 +792,17 @@ mod tests {
     }
 
     #[test]
-    fn production_calibrated_test_policy_has_no_legacy_spin_override() {
+    fn production_fixed_test_policy_has_no_legacy_spin_override() {
         let options = WaitOptions {
             enable_waitable_timer: true,
             enable_event_wait: true,
             supervisor_lease_timeout_us: 0,
             modifier_hold_timeout_us: super::DEFAULT_MODIFIER_HOLD_TIMEOUT_US,
             test_spin_threshold_us: None,
-            test_wait_policy: TestWaitPolicy::ProductionCalibrated,
+            test_wait_policy: TestWaitPolicy::ProductionFixed,
         };
 
-        assert_eq!(options.test_wait_policy.label(), "production_calibrated");
+        assert_eq!(options.test_wait_policy.label(), "production_fixed");
         assert!(options.production_wait_policy(false));
         assert_eq!(options.test_spin_threshold_us, None);
     }

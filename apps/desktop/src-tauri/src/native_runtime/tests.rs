@@ -143,9 +143,6 @@ fn projection_session_with_down(
             NativeSessionOptions {
                 schedule,
                 #[cfg(feature = "tauri-test")]
-                startup_calibration_placement:
-                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
-                #[cfg(feature = "tauri-test")]
                 timing_observer_for_qualification: false,
                 #[cfg(feature = "tauri-test")]
                 modifier_key_state_query_for_test: None,
@@ -700,9 +697,6 @@ fn native_handoff_test_player_with_focus(
         NativeDispatchSession::new_with_power_endpoint(
             NativeSessionOptions {
                 schedule,
-                #[cfg(feature = "tauri-test")]
-                startup_calibration_placement:
-                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
                 #[cfg(feature = "tauri-test")]
                 timing_observer_for_qualification: false,
                 modifier_key_state_query_for_test: None,

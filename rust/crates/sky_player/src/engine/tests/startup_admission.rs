@@ -1759,7 +1759,7 @@ fn actual_b_worker_timestamp_hook_keeps_mixed_floor_held_down_targets_distinct()
         },
     );
     options.wait.test_spin_threshold_us = None;
-    options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+    options.wait.test_wait_policy = super::TestWaitPolicy::ProductionFixed;
     options.startup_ordering_hook = Some(Arc::clone(&hook));
     let session = NativeDispatchSession::new(options).expect("actual B worker session");
 
@@ -1808,7 +1808,7 @@ fn actual_b_worker_timestamp_hook_records_up_only_sender_provenance() {
         },
     );
     options.wait.test_spin_threshold_us = None;
-    options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
+    options.wait.test_wait_policy = super::TestWaitPolicy::ProductionFixed;
     options.startup_ordering_hook = Some(Arc::clone(&hook));
     let session = NativeDispatchSession::new(options).expect("actual B worker session");
 
@@ -1826,74 +1826,59 @@ fn actual_b_worker_timestamp_hook_records_up_only_sender_provenance() {
 }
 
 #[test]
-fn startup_calibration_placement_stays_before_ready_and_tracks_guard_context() {
-    for (placement, guards_precede_calibration) in [
-        (
-            super::config::StartupCalibrationPlacement::BeforeSchedulingGuards,
-            false,
-        ),
-        (
-            super::config::StartupCalibrationPlacement::AfterSchedulingGuards,
-            true,
-        ),
-    ] {
-        let hook = Arc::new(StartupOrderingHook::default());
-        hook.arm_startup_checkpoint(StartupCheckpoint::WakeCalibration, 1);
-        hook.complete_startup_calibration_after_checkpoint();
-        let mut options = test_session_options(
-            startup_boundary_schedule(),
-            1,
-            BackendConfig::Mock {
-                latency_base_us: 0,
-                latency_per_key_us: 0,
-                fault_script: FaultInjectionScript::none(),
-            },
-        );
-        options.profile = DispatchProfile::MockTest;
-        options.wait.test_spin_threshold_us = None;
-        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
-        options.startup_calibration_placement = placement;
-        options.startup_ordering_hook = Some(Arc::clone(&hook));
-        let session = NativeDispatchSession::new(options).expect("calibration placement session");
-        session.arm(100_000).expect("calibration placement arm");
+fn production_fixed_spin_threshold_initializes_before_ready_without_probe_and_honors_cancellation()
+{
+    // 1. ProductionFixed policy initializes 1000 us spin threshold before Ready without any wake probe.
+    let hook = Arc::new(StartupOrderingHook::default());
+    hook.arm_startup_checkpoint(StartupCheckpoint::BeforeReady, 1);
+    let mut options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.profile = DispatchProfile::Production;
+    options.wait.test_spin_threshold_us = None;
+    options.wait.test_wait_policy = super::TestWaitPolicy::ProductionFixed;
+    options.startup_ordering_hook = Some(Arc::clone(&hook));
+    let session = NativeDispatchSession::new(options).expect("fixed spin threshold session");
+    session.arm(50_000).expect("fixed spin threshold arm");
 
-        assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
-        assert!(!session.snapshot().startup_ready);
-        assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
-        assert_eq!(
-            hook.scheduling_guard_acquired_thread().is_some(),
-            guards_precede_calibration,
-            "placement {placement:?}"
-        );
-        hook.release_startup_checkpoint();
-        assert!(session.join(Duration::from_secs(5)).expect("worker join"));
+    assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
+    assert!(!session.snapshot().startup_ready);
+    assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
+    hook.release_startup_checkpoint();
+    assert!(session.join(Duration::from_secs(5)).expect("worker join"));
 
-        let snapshot = session.snapshot();
-        assert_eq!(snapshot.outcome.as_deref(), Some("finished"));
-        assert!(snapshot.startup_ready);
-        assert!(snapshot.startup_armed);
-        assert!(snapshot.startup_calibration_executed);
-        assert_eq!(snapshot.startup_calibration_sample_count, 6);
-        assert_eq!(snapshot.startup_calibration_result, "completed");
-        assert_eq!(snapshot.startup_priority_mode_acquired, "off");
-        let (acquired, dropped) = hook
-            .scheduling_guard_threads()
-            .expect("guard lifetime is observable");
-        assert_eq!(acquired, dropped);
-    }
-}
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.outcome.as_deref(), Some("finished"));
+    assert!(snapshot.startup_ready);
+    assert!(snapshot.startup_armed);
+    assert_eq!(
+        snapshot.wait_strategy_acquired,
+        "event+high_resolution_timer"
+    );
+    assert_eq!(snapshot.requested_wait_policy, "production_fixed");
+    assert_eq!(snapshot.effective_wait_policy, "production_fixed");
+    assert_eq!(snapshot.spin_threshold_source, "production_fixed_1000us");
+    assert_eq!(snapshot.effective_spin_threshold_us, 1_000);
+    assert_eq!(snapshot.startup_priority_mode_acquired, "off");
+    assert_eq!(snapshot.final_release_obligation_mask, 0);
+    let (acquired, dropped) = hook
+        .scheduling_guard_threads()
+        .expect("guard lifetime is observable");
+    assert_eq!(acquired, dropped);
 
-#[test]
-fn accepted_stop_or_skip_during_candidate_calibration_cannot_publish_armed() {
+    // 2. Accepted stop/skip before Ready cannot publish Armed or emit physical sends.
     for (skip, expected_status, expected_outcome) in [
         (false, EnginePollStatus::Quit, "quit"),
         (true, EnginePollStatus::Skipped, "skipped"),
     ] {
         let hook = Arc::new(StartupOrderingHook::default());
-        hook.arm_startup_checkpoint(StartupCheckpoint::WakeCalibration, 1);
-        // Complete the controlled probe successfully after the command races
-        // it. The post-probe startup gate must still give cancellation priority.
-        hook.complete_startup_calibration_after_checkpoint();
+        hook.arm_startup_checkpoint(StartupCheckpoint::BeforeReady, 1);
         let send_calls = Arc::new(AtomicU64::new(0));
         let mut fault_script = FaultInjectionScript::none();
         fault_script.send_call_count = Some(Arc::clone(&send_calls));
@@ -1906,23 +1891,20 @@ fn accepted_stop_or_skip_during_candidate_calibration_cannot_publish_armed() {
                 fault_script,
             },
         );
-        options.profile = DispatchProfile::MockTest;
+        options.profile = DispatchProfile::Production;
         options.wait.test_spin_threshold_us = None;
-        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionCalibrated;
-        options.startup_calibration_placement =
-            super::config::StartupCalibrationPlacement::AfterSchedulingGuards;
+        options.wait.test_wait_policy = super::TestWaitPolicy::ProductionFixed;
         options.startup_ordering_hook = Some(Arc::clone(&hook));
-        let session = NativeDispatchSession::new(options).expect("candidate calibration session");
-        session.arm(100_000).expect("candidate calibration arm");
+        let session = NativeDispatchSession::new(options).expect("fixed cancellation session");
+        session.arm(50_000).expect("fixed cancellation arm");
 
         assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
-        assert!(hook.scheduling_guard_acquired_thread().is_some());
         assert!(!session.snapshot().startup_ready);
         assert_eq!(session.epoch_qpc_for_test(), QpcTicks::ZERO);
         if skip {
-            session.skip().expect("accept skip during calibration");
+            session.skip().expect("accept skip before ready");
         } else {
-            session.quit().expect("accept stop during calibration");
+            session.quit().expect("accept stop before ready");
         }
         hook.release_startup_checkpoint();
         assert!(session.join(Duration::from_secs(5)).expect("worker join"));
@@ -2184,7 +2166,15 @@ fn skip_panic_suspend_target_owner_and_lease_stops_win_ready_to_armed() {
 
 #[test]
 fn focus_hint_invalidation_cancels_arming_before_epoch_visibility() {
+    struct ForegroundOverrideReset;
+    impl Drop for ForegroundOverrideReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+        }
+    }
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundOverrideReset;
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     let (session, hook, send_calls) = checkpointed_session(
         startup_boundary_schedule(),
@@ -2583,52 +2573,7 @@ fn focus_loss_during_post_wait_hook_never_sends_physical_down() {
 }
 
 #[test]
-fn guarded_calibration_qpc_origin_failure_fails_closed_without_reusing_stale_now() {
-    let hook = Arc::new(StartupOrderingHook::default());
-    hook.fail_next_guarded_calibration_origin();
-    let send_calls = Arc::new(AtomicU64::new(0));
-    let mut fault_script = FaultInjectionScript::none();
-    fault_script.send_call_count = Some(Arc::clone(&send_calls));
-    let mut options = test_session_options(
-        startup_boundary_schedule(),
-        1,
-        BackendConfig::Mock {
-            latency_base_us: 0,
-            latency_per_key_us: 0,
-            fault_script,
-        },
-    );
-    options.startup_calibration_placement =
-        crate::engine::StartupCalibrationPlacement::AfterSchedulingGuards;
-    options.wait.test_wait_policy = crate::engine::TestWaitPolicy::ProductionCalibrated;
-    options.startup_ordering_hook = Some(hook);
-    let session = NativeDispatchSession::new(options).expect("session admission");
-    session.arm(100_000).expect("worker startup request");
-    assert!(
-        session
-            .join(Duration::from_secs(5))
-            .expect("calibration failure join")
-    );
-
-    let snapshot = session.snapshot();
-    assert_eq!(snapshot.status, EnginePollStatus::Error.as_str());
-    assert_eq!(snapshot.outcome.as_deref(), Some("error"));
-    assert_eq!(
-        snapshot.terminal_trigger_reason.as_deref(),
-        Some("startup_failure")
-    );
-    assert!(
-        snapshot
-            .terminal_error
-            .as_ref()
-            .unwrap()
-            .contains("guarded calibration")
-    );
-    assert_eq!(send_calls.load(Ordering::Acquire), 0);
-}
-
-#[test]
-fn bypassed_fixed_arm_skips_startup_probe_and_preserves_production_waiter_and_controls() {
+fn test_fixed_spin_override_preserves_production_waiter_and_controls() {
     for threshold_us in [0_u64, 250, 500, 1_000] {
         let mut options = test_session_options(
             startup_boundary_schedule(),
@@ -2640,69 +2585,25 @@ fn bypassed_fixed_arm_skips_startup_probe_and_preserves_production_waiter_and_co
             },
         );
         options.profile = DispatchProfile::Production;
-        options.wait.test_wait_policy = crate::engine::TestWaitPolicy::ProductionCalibrated;
+        options.wait.test_wait_policy = crate::engine::TestWaitPolicy::ProductionFixed;
         options.wait.test_spin_threshold_us = Some(threshold_us);
-        options.startup_calibration_placement =
-            crate::engine::StartupCalibrationPlacement::BypassedForFixedArm;
-        let session = NativeDispatchSession::new(options).expect("fixed arm admission");
-        session.arm(50_000).expect("arm fixed arm");
+        let session = NativeDispatchSession::new(options).expect("fixed override admission");
+        session.arm(50_000).expect("arm fixed override");
         assert!(
             session
                 .join(Duration::from_secs(5))
-                .expect("join fixed arm"),
-            "fixed arm threshold={threshold_us} must finish"
+                .expect("join fixed override"),
+            "fixed override threshold={threshold_us} must finish"
         );
         let snap = session.snapshot();
         assert_eq!(snap.status, EnginePollStatus::Finished.as_str());
         assert_eq!(snap.wait_strategy_acquired, "event+high_resolution_timer");
-        assert!(!snap.startup_calibration_executed);
-        assert_eq!(snap.startup_calibration_sample_count, 0);
-        assert_eq!(snap.startup_calibration_duration_us, 0);
-        assert_eq!(snap.startup_calibration_result, "not_requested");
         assert_eq!(snap.spin_threshold_source, "test_fixed_override");
         assert_eq!(snap.effective_spin_threshold_us, threshold_us);
         assert_eq!(snap.final_release_obligation_mask, 0);
     }
 
-    // Calibrated reference (BeforeSchedulingGuards + no threshold override) executes real probe.
-    let mut cal_options = test_session_options(
-        startup_boundary_schedule(),
-        1,
-        BackendConfig::Mock {
-            latency_base_us: 0,
-            latency_per_key_us: 0,
-            fault_script: FaultInjectionScript::none(),
-        },
-    );
-    cal_options.profile = DispatchProfile::Production;
-    cal_options.wait.test_wait_policy = crate::engine::TestWaitPolicy::ProductionCalibrated;
-    cal_options.wait.test_spin_threshold_us = None;
-    cal_options.startup_calibration_placement =
-        crate::engine::StartupCalibrationPlacement::BeforeSchedulingGuards;
-    let cal_session = NativeDispatchSession::new(cal_options).expect("calibrated admission");
-    cal_session.arm(50_000).expect("arm calibrated");
-    assert!(
-        cal_session
-            .join(Duration::from_secs(5))
-            .expect("join calibrated")
-    );
-    let cal_snap = cal_session.snapshot();
-    assert_eq!(cal_snap.status, EnginePollStatus::Finished.as_str());
-    assert_eq!(
-        cal_snap.wait_strategy_acquired,
-        "event+high_resolution_timer"
-    );
-    assert!(cal_snap.startup_calibration_executed);
-    assert_eq!(cal_snap.startup_calibration_sample_count, 6);
-    assert_eq!(cal_snap.startup_calibration_result, "completed");
-    assert_eq!(
-        cal_snap.spin_threshold_source,
-        "production_startup_calibration"
-    );
-    assert!((250..=1_000).contains(&cal_snap.effective_spin_threshold_us));
-    assert_eq!(cal_snap.final_release_obligation_mask, 0);
-
-    // Pre-arm quit still aborts cleanly with zero physical send when probe is bypassed.
+    // Pre-arm quit still aborts cleanly with zero physical send under fixed 1000 us policy.
     let send_calls = Arc::new(AtomicU64::new(0));
     let mut fault_script = FaultInjectionScript::none();
     fault_script.send_call_count = Some(Arc::clone(&send_calls));
@@ -2716,10 +2617,8 @@ fn bypassed_fixed_arm_skips_startup_probe_and_preserves_production_waiter_and_co
         },
     );
     quit_opts.profile = DispatchProfile::Production;
-    quit_opts.wait.test_wait_policy = crate::engine::TestWaitPolicy::ProductionCalibrated;
-    quit_opts.wait.test_spin_threshold_us = Some(0);
-    quit_opts.startup_calibration_placement =
-        crate::engine::StartupCalibrationPlacement::BypassedForFixedArm;
+    quit_opts.wait.test_wait_policy = crate::engine::TestWaitPolicy::ProductionFixed;
+    quit_opts.wait.test_spin_threshold_us = None;
     let quit_session = NativeDispatchSession::new(quit_opts).expect("quit admission");
     quit_session.quit().expect("quit before arm");
     let _ = quit_session.arm(50_000);
@@ -2730,6 +2629,5 @@ fn bypassed_fixed_arm_skips_startup_probe_and_preserves_production_waiter_and_co
     );
     let quit_snap = quit_session.snapshot();
     assert_eq!(quit_snap.status, EnginePollStatus::Quit.as_str());
-    assert!(!quit_snap.startup_calibration_executed);
     assert_eq!(send_calls.load(Ordering::Acquire), 0);
 }

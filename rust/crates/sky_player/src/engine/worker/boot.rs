@@ -9,10 +9,11 @@ use startup_admission::{
     record_startup_abort_without_backend, record_startup_failure, startup_abort_trigger,
     startup_checkpoint, validate_production_wait_backend,
 };
-mod startup_calibration;
 mod telemetry_admission;
 mod timing_admission;
-use super::super::config::{EffectiveRuntimePolicy, StartupCheckpoint};
+use super::super::config::{
+    DEFAULT_SPIN_THRESHOLD_US, EffectiveRuntimePolicy, SpinThresholdSource, StartupCheckpoint,
+};
 use super::super::shared::StartupAbortReason;
 use super::super::{
     BackendConfig, DurationTicks, QpcClock, QpcTicks, SharedMetrics, TrackedKeyState,
@@ -23,14 +24,46 @@ use super::{
     DispatchHealthOptions, StartupResources, Worker, WorkerResources, WorkerSchedulingGuards,
     ensure_preflight_for_target, initialize_startup, load_target_stamp,
 };
-use crate::engine::config::StartupCalibrationPlacement;
 use epoch::compute_playback_epoch;
-use startup_calibration::{
-    StartupCalibrationMeasurement, apply_startup_calibration_result, measure_startup_calibration,
-};
 use std::sync::atomic::Ordering;
 use telemetry_admission::try_new_worker_telemetry;
 use timing_admission::{ConvertedTiming, convert as convert_timing};
+
+fn select_fixed_spin_threshold(
+    config: &super::super::WorkerConfig,
+    metrics: &mut crate::engine::telemetry::WorkerMetricsLocal,
+    qpc_clock: QpcClock,
+) -> Result<DurationTicks, String> {
+    let (effective_spin_threshold_us, spin_threshold_source) = {
+        #[cfg(any(test, feature = "test-support"))]
+        if let Some(threshold_us) = config.wait.test_spin_threshold_us {
+            let source = if threshold_us == 20_000 {
+                SpinThresholdSource::LegacyTestWideSpin
+            } else {
+                SpinThresholdSource::TestFixedOverride
+            };
+            (threshold_us, source)
+        } else {
+            (
+                DEFAULT_SPIN_THRESHOLD_US,
+                SpinThresholdSource::ProductionFixed,
+            )
+        }
+        #[cfg(not(any(test, feature = "test-support")))]
+        {
+            let _ = config;
+            (
+                DEFAULT_SPIN_THRESHOLD_US,
+                SpinThresholdSource::ProductionFixed,
+            )
+        }
+    };
+    metrics.spin_threshold_source = spin_threshold_source as u8;
+    metrics.effective_spin_threshold_us = effective_spin_threshold_us;
+    qpc_clock
+        .duration_from_us(effective_spin_threshold_us)
+        .map_err(|error| format!("spin threshold conversion failed: {error:?}"))
+}
 
 /// Assembles the worker's admission state: backend, coordinator,
 /// timing frame, health window, startup anchor, and resource bundle.
@@ -77,10 +110,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     let requested_wait_policy = config
         .wait
         .requested_wait_policy_label(matches!(&config.backend, &BackendConfig::Production));
-    #[cfg(any(test, feature = "test-support"))]
-    let calibration_placement = config.startup_calibration_placement;
-    #[cfg(not(any(test, feature = "test-support")))]
-    let calibration_placement = StartupCalibrationPlacement::BeforeSchedulingGuards;
 
     let qpc_clock = match QpcClock::initialize() {
         Ok(clock) => clock,
@@ -354,39 +383,11 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
     ) {
         return admission_failure(&mut backend, metrics, error);
     }
-    let mut calibration = StartupCalibrationMeasurement::not_requested();
-    if production_wait
-        && calibration_placement == StartupCalibrationPlacement::BeforeSchedulingGuards
-    {
-        calibration = measure_startup_calibration(
-            shared,
-            config.focus.require_focus && schedule_has_down,
-            &waiter,
-            qpc_clock,
-            interrupt,
-            initial_now_ticks,
-            #[cfg(any(test, feature = "test-support"))]
-            startup_hook,
-        );
-    }
-    if let Err(error) = startup_checkpoint(
-        shared,
-        config.focus.require_focus && schedule_has_down,
-        StartupCheckpoint::StreamBuild,
-        #[cfg(any(test, feature = "test-support"))]
-        startup_hook,
-    ) {
-        return admission_failure(&mut backend, metrics, error);
-    }
-    let mut effective_spin_threshold_ticks = match apply_startup_calibration_result(
-        config,
-        &calibration,
-        &mut core.metrics,
-        qpc_clock,
-    ) {
-        Ok(ticks) => ticks,
-        Err(error) => return admission_failure(&mut backend, metrics, error),
-    };
+    let effective_spin_threshold_ticks =
+        match select_fixed_spin_threshold(config, &mut core.metrics, qpc_clock) {
+            Ok(ticks) => ticks,
+            Err(error) => return admission_failure(&mut backend, metrics, error),
+        };
     worker_timing.effective_spin_threshold_ticks = effective_spin_threshold_ticks;
 
     let health_options = DispatchHealthOptions {
@@ -490,38 +491,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
             std::thread::sleep(std::time::Duration::from_micros(delay_us));
         }
     }
-    if production_wait
-        && calibration_placement == StartupCalibrationPlacement::AfterSchedulingGuards
-    {
-        #[cfg(any(test, feature = "test-support"))]
-        if startup_hook.is_some_and(|hook| hook.take_guarded_calibration_origin_failure()) {
-            return admission_failure(
-                &mut backend,
-                metrics,
-                "QPC counter unavailable before guarded calibration: InjectedFailure".to_string(),
-            );
-        }
-        let calibration_origin_ticks = match qpc_clock.now() {
-            Ok(ticks) => ticks,
-            Err(error) => {
-                return admission_failure(
-                    &mut backend,
-                    metrics,
-                    format!("QPC counter unavailable before guarded calibration: {error:?}"),
-                );
-            }
-        };
-        calibration = measure_startup_calibration(
-            shared,
-            config.focus.require_focus && schedule_has_down,
-            &waiter,
-            qpc_clock,
-            interrupt,
-            calibration_origin_ticks,
-            #[cfg(any(test, feature = "test-support"))]
-            startup_hook,
-        );
-    }
     if let Err(error) = startup_checkpoint(
         shared,
         config.focus.require_focus && schedule_has_down,
@@ -530,32 +499,6 @@ pub(super) fn initialize(worker: &mut Worker<'_>, wait_fault: bool) -> u8 {
         startup_hook,
     ) {
         return admission_failure(&mut backend, metrics, error);
-    }
-    if production_wait
-        && calibration_placement == StartupCalibrationPlacement::AfterSchedulingGuards
-    {
-        effective_spin_threshold_ticks = match apply_startup_calibration_result(
-            config,
-            &calibration,
-            &mut core.metrics,
-            qpc_clock,
-        ) {
-            Ok(ticks) => ticks,
-            Err(error) => return admission_failure(&mut backend, metrics, error),
-        };
-        if let Some(timing) = core.timing.as_mut() {
-            timing.effective_spin_threshold_ticks = effective_spin_threshold_ticks;
-            let post_cal_thread_cpu_us = current_thread_cpu_time_us();
-            let post_cal_process_cpu_us = current_process_cpu_time_us();
-            timing.start_thread_cpu_us = post_cal_thread_cpu_us;
-            timing.start_process_cpu_us = post_cal_process_cpu_us;
-            if let Ok(now) = qpc_clock.now()
-                && let Ok(now_us) = qpc_clock.duration_to_us(DurationTicks::from_raw(now.as_u64()))
-            {
-                timing.start_wall_time_us = now_us;
-                timing.last_cpu_metrics_sample_ticks = now.as_u64();
-            }
-        }
     }
     if let Err(error) = startup_checkpoint(
         shared,

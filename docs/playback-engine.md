@@ -51,8 +51,16 @@ writer. Recovery may take the journal only after that worker has joined.
 
 Pure **Control A** dispatch is the authoritative path for all Down, Up, and
 mixed packets. `ProcessQosPolicy` is pinned to **Default**; experimental B/C
-process QoS bit toggling and adaptive pre-spin adjustments are not enabled in
-production. The pre-spin threshold is frozen.
+process QoS bit toggling, startup wake-error calibration, and adaptive pre-spin
+adjustments are not enabled in production. The production hybrid-waiter
+pre-spin threshold is fixed at `1000 us` (`DEFAULT_SPIN_THRESHOLD_US`,
+`spin_threshold_source = "production_fixed_1000us"`), materialized once at
+worker admission to checked QPC ticks with no startup timer probe. The
+`50 ms` production preroll (`MIN_PRODUCTION_PREROLL_US`) is unchanged.
+
+Both `dispatch_candidate` and `verify_final_packet_admission` retain
+`#[inline(never)]` so the final admission boundary before `SendInput` remains
+auditable in compiled x64 assembly.
 
 Every musical packet, including an Up-only packet, passes a fresh final check
 against the staged HWND and retained owner identity. A packet with Down also

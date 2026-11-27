@@ -5,7 +5,7 @@ use sky_dispatch_win32::clock::QpcClock;
 use sky_dispatch_win32::clock::QpcError;
 #[cfg(test)]
 use sky_dispatch_win32::clock::qpc_us_to_ticks;
-use sky_dispatch_win32::wait::{WaitFailure, WakeErrorStats};
+use sky_dispatch_win32::wait::WaitFailure;
 
 pub(crate) fn supervisor_lease_expired(
     now_ticks: QpcTicks,
@@ -137,107 +137,3 @@ pub(crate) fn wait_failure_message(failure: WaitFailure) -> String {
         WaitFailure::Clock => "QPC failed during real-time wait".to_string(),
     }
 }
-
-/// Choose the one precision-spin threshold for a production session.
-///
-/// The threshold is derived once from the startup probe.  The cap preserves
-/// the conservative fixed-spin fallback, while the floor is the lowest
-/// candidate retained by the fixed-spin acceptance matrix.
-pub(crate) fn calibrated_spin_threshold_us(stats: WakeErrorStats) -> u64 {
-    stats
-        .p99_us
-        .max(stats.robust_us)
-        .saturating_add(super::super::config::CALIBRATION_SAFETY_MARGIN_US)
-        .clamp(
-            super::super::config::MIN_CALIBRATED_SPIN_US,
-            super::super::config::DEFAULT_SPIN_THRESHOLD_US,
-        )
-}
-
-pub(crate) fn select_spin_threshold_us(stats: Option<WakeErrorStats>) -> u64 {
-    stats
-        .map(calibrated_spin_threshold_us)
-        .unwrap_or(super::super::config::DEFAULT_SPIN_THRESHOLD_US)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{calibrated_spin_threshold_us, select_spin_threshold_us};
-    use crate::engine::config::{DEFAULT_SPIN_THRESHOLD_US, MIN_CALIBRATED_SPIN_US};
-    use sky_dispatch_win32::wait::WakeErrorStats;
-
-    #[test]
-    fn low_wake_error_selects_the_floor() {
-        assert_eq!(
-            calibrated_spin_threshold_us(WakeErrorStats {
-                p99_us: 80,
-                robust_us: 120,
-                ..WakeErrorStats::default()
-            }),
-            MIN_CALIBRATED_SPIN_US
-        );
-    }
-
-    #[test]
-    fn high_wake_error_saturates_at_the_fallback() {
-        assert_eq!(
-            calibrated_spin_threshold_us(WakeErrorStats {
-                p99_us: 900,
-                robust_us: 1_500,
-                ..WakeErrorStats::default()
-            }),
-            DEFAULT_SPIN_THRESHOLD_US
-        );
-    }
-
-    #[test]
-    fn six_sample_p99_outlier_can_reach_the_existing_spin_cap() {
-        let mut six_samples = [50_u64, 50, 50, 50, 50, 50_000];
-        six_samples.sort_unstable();
-        let p99 = six_samples[((six_samples.len() * 99).saturating_add(99) / 100) - 1];
-        assert_eq!(p99, six_samples[5]);
-        assert_eq!(
-            calibrated_spin_threshold_us(WakeErrorStats {
-                p99_us: p99,
-                robust_us: 50,
-                ..WakeErrorStats::default()
-            }),
-            DEFAULT_SPIN_THRESHOLD_US,
-            "the production cap remains reachable when the six-sample p99 is an outlier"
-        );
-    }
-
-    #[test]
-    fn failed_calibration_uses_the_fallback() {
-        assert_eq!(select_spin_threshold_us(None), DEFAULT_SPIN_THRESHOLD_US);
-    }
-
-    #[test]
-    fn calibration_stays_within_the_policy_bounds_and_is_frozen_for_same_stats() {
-        for stats in [
-            WakeErrorStats::default(),
-            WakeErrorStats {
-                p99_us: 250,
-                robust_us: 400,
-                ..WakeErrorStats::default()
-            },
-            WakeErrorStats {
-                p99_us: 10_000,
-                robust_us: 20_000,
-                ..WakeErrorStats::default()
-            },
-        ] {
-            let first = select_spin_threshold_us(Some(stats));
-            let second = select_spin_threshold_us(Some(stats));
-            assert_eq!(first, second);
-            assert!((MIN_CALIBRATED_SPIN_US..=DEFAULT_SPIN_THRESHOLD_US).contains(&first));
-        }
-    }
-}
-
-// This opt-in experiment uses the shipping Windows waiter and startup
-// calibration selector, but deliberately stops before worker admission or
-// SendInput. It is not run as part of ordinary unit suites.
-#[cfg(all(test, windows))]
-#[path = "timing_guard_ab_benchmark.rs"]
-mod guard_ab_benchmark;

@@ -439,6 +439,17 @@ fn mixed_post_call_qpc_failure_consumes_attempt_after_verified_cleanup_without_r
 fn invalidated_session_target_does_not_send_origin_up() {
     use sky_dispatch_core::executor::DispatchDecision;
 
+    struct ForegroundReset;
+    impl Drop for ForegroundReset {
+        fn drop(&mut self) {
+            sky_dispatch_win32::focus::set_foreground_window_for_test(None);
+            sky_dispatch_win32::focus::set_foreground_owner_for_test(None);
+            sky_dispatch_win32::focus::set_window_live_for_test(None);
+        }
+    }
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundReset;
+
     let chords = [test_chord(0, 0, 0x15), test_chord(1, 19_000, 0x16)];
     let mut harness = ProductionDispatchTestHarness::create_harness(&chords);
     let packets = harness.configure_mock_packet_sender_for_test(&[0, 0]);

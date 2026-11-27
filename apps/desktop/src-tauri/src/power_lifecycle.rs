@@ -756,9 +756,6 @@ mod tests {
             NativeSessionOptions {
                 schedule,
                 #[cfg(feature = "tauri-test")]
-                startup_calibration_placement:
-                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
-                #[cfg(feature = "tauri-test")]
                 timing_observer_for_qualification: false,
                 backend: BackendConfig::Production,
                 profile: DispatchProfile::Production,

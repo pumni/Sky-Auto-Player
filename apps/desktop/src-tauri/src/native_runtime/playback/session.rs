@@ -1633,9 +1633,6 @@ impl NativePlaybackService {
                 NativeSessionOptions {
                     schedule: prepared_schedule,
                     #[cfg(feature = "tauri-test")]
-                    startup_calibration_placement:
-                        sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
-                    #[cfg(feature = "tauri-test")]
                     timing_observer_for_qualification: false,
                     #[cfg(feature = "tauri-test")]
                     modifier_key_state_query_for_test: None,
@@ -3623,9 +3620,6 @@ mod preparation_cancellation_tests {
             fault_script.send_call_count = Some(Arc::clone(&send_calls));
             let options = NativeSessionOptions {
                 schedule: prepared_schedule,
-                #[cfg(feature = "tauri-test")]
-                startup_calibration_placement:
-                    sky_player::engine::StartupCalibrationPlacement::BeforeSchedulingGuards,
                 #[cfg(feature = "tauri-test")]
                 timing_observer_for_qualification: false,
                 #[cfg(feature = "tauri-test")]

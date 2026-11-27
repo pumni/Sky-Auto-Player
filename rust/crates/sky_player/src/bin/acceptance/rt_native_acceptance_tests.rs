@@ -1,5 +1,5 @@
 use super::{
-    ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US, AdmissionVariantChoice, CalibrationPlacement,
+    ACCEPTANCE_FRAME_US, ACCEPTANCE_TIMING_MARGIN_US, AdmissionVariantChoice,
     active_cleanup_resume_evidence_is_ordered, active_cleanup_resumed_down_identity,
     active_cleanup_resumed_down_sender_qpc_ticks,
     DRAIN_DEADLINE_MS, DrainClock, DrainMode, DrainResult, EVENT_SCHEMA_VERSION, EventRecord,
@@ -881,44 +881,23 @@ fn timing_margin_override_accepts_only_bounded_hundred_microsecond_values() {
 }
 
 #[test]
-fn calibration_placement_is_an_explicit_paired_run_setting() {
+fn removed_calibration_placement_flag_is_rejected() {
     let ParsedCommand::Run(defaults) = parse_args(base_arguments("canonical-single"))
-        .expect("baseline placement defaults")
+        .expect("canonical-single defaults")
     else {
         panic!("expected run command")
     };
-    assert_eq!(defaults.calibration_placement, CalibrationPlacement::Baseline);
     assert!(!defaults.timing_observer_for_qualification);
 
-    let mut candidate_args = base_arguments("canonical-single");
-    candidate_args.extend(
-        ["--calibration-placement", "candidate"]
-            .into_iter()
-            .map(str::to_owned),
-    );
-    let ParsedCommand::Run(candidate) = parse_args(candidate_args)
-        .expect("candidate placement is accepted")
-    else {
-        panic!("expected run command")
-    };
-    assert_eq!(candidate.calibration_placement, CalibrationPlacement::Candidate);
-
-    for placement in ["baseline", "candidate"] {
+    for placement in ["baseline", "candidate", "after-ready"] {
         let mut args = base_arguments("canonical-single");
         args.extend(
             ["--calibration-placement", placement]
                 .into_iter()
                 .map(str::to_owned),
         );
-        assert!(parse_args(args).is_ok(), "placement {placement}");
+        assert!(parse_args(args).is_err(), "removed placement {placement} must be rejected");
     }
-    let mut invalid = base_arguments("canonical-single");
-    invalid.extend(
-        ["--calibration-placement", "after-ready"]
-            .into_iter()
-            .map(str::to_owned),
-    );
-    assert!(parse_args(invalid).is_err());
 }
 
 #[test]

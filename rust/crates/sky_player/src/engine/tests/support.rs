@@ -60,8 +60,6 @@ pub(super) fn test_session_options_with_timing_margin(
             mode: sky_dispatch_win32::mmcss::PriorityMode::Off,
         },
         instrument_key_profile: None,
-        startup_calibration_placement:
-            super::config::StartupCalibrationPlacement::BeforeSchedulingGuards,
         timing_observer_for_qualification: false,
         startup_ordering_hook: None,
         focus_pause_hook: None,
