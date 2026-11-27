@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 
 use crate::Result;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -193,12 +193,426 @@ fn is_forbidden_suffix_effect(line: &str) -> bool {
         || (folded.starts_with("andq ") && folded.contains("%rsp"))
 }
 
-fn validate_scoped_send_suffix(
+struct BasicBlock {
+    start: usize,
+    end: usize,
+    succs: Vec<usize>,
+}
+
+fn parse_jump_tables(lines: &[String]) -> BTreeMap<String, Vec<String>> {
+    let mut tables: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut current: Option<String> = None;
+    for line in lines {
+        let trimmed = line.trim();
+        if let Some(label) = trimmed.strip_suffix(':') {
+            if label.starts_with(".LJTI") {
+                current = Some(label.to_string());
+                tables.entry(label.to_string()).or_default();
+                continue;
+            }
+            if !label.starts_with(".L") || label.starts_with(".LBB") {
+                current = None;
+            }
+            continue;
+        }
+        if let Some(table_name) = current.as_ref() {
+            if let Some(rest) = trimmed.strip_prefix(".long") {
+                let expr = rest.trim();
+                if let Some(target) = expr.split('-').next().map(str::trim)
+                    && target.starts_with(".LBB")
+                {
+                    tables
+                        .entry(table_name.clone())
+                        .or_default()
+                        .push(target.to_string());
+                }
+            } else if !trimmed.is_empty() && !trimmed.starts_with('#') {
+                current = None;
+            }
+        }
+    }
+    tables
+}
+
+fn is_branch_or_terminator(line: &str) -> bool {
+    let trimmed = line.trim();
+    let Some(op) = trimmed.split_whitespace().next() else {
+        return false;
+    };
+    let op_lower = op.to_ascii_lowercase();
+    op_lower == "jmp"
+        || op_lower == "jmpq"
+        || op_lower == "ret"
+        || op_lower == "retq"
+        || op_lower == "ud2"
+        || (op_lower.starts_with('j')
+            && trimmed
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|arg| arg.starts_with(".LBB")))
+}
+
+fn build_function_cfg(
     function: &[String],
-    final_owner: usize,
-    deferred_sender: usize,
+    jump_tables: &BTreeMap<String, Vec<String>>,
+) -> (Vec<BasicBlock>, Vec<usize>) {
+    let mut block_starts = BTreeSet::new();
+    block_starts.insert(0usize);
+    let mut label_lines: Vec<(String, usize)> = Vec::new();
+    for (idx, line) in function.iter().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with(".LBB") && trimmed.ends_with(':') {
+            block_starts.insert(idx);
+            label_lines.push((trimmed.trim_end_matches(':').to_string(), idx));
+        } else if is_branch_or_terminator(trimmed) && idx + 1 < function.len() {
+            block_starts.insert(idx + 1);
+        }
+    }
+    let block_starts: Vec<usize> = block_starts.into_iter().collect();
+    let mut start_to_block: BTreeMap<usize, usize> = BTreeMap::new();
+    for (block_id, &start) in block_starts.iter().enumerate() {
+        start_to_block.insert(start, block_id);
+    }
+    let mut label_to_block: BTreeMap<String, usize> = BTreeMap::new();
+    for (label, idx) in label_lines {
+        if let Some(&block_id) = start_to_block.get(&idx) {
+            label_to_block.insert(label, block_id);
+        }
+    }
+
+    let mut line_to_block = vec![0usize; function.len()];
+    let mut blocks = Vec::with_capacity(block_starts.len());
+    for (block_id, &start) in block_starts.iter().enumerate() {
+        let end = block_starts
+            .get(block_id + 1)
+            .copied()
+            .unwrap_or(function.len());
+        for slot in &mut line_to_block[start..end] {
+            *slot = block_id;
+        }
+        blocks.push(BasicBlock {
+            start,
+            end,
+            succs: Vec::new(),
+        });
+    }
+
+    let block_count = blocks.len();
+    for (block_id, block) in blocks.iter_mut().enumerate() {
+        let start = block.start;
+        let end = block.end;
+        let mut last_jump_table: Option<String> = None;
+        let mut terminates = false;
+        let mut succs = Vec::new();
+        for line in &function[start..end] {
+            let trimmed = line.trim();
+            if let Some(pos) = trimmed.find(".LJTI") {
+                let tail = &trimmed[pos..];
+                let len = tail
+                    .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '.'))
+                    .unwrap_or(tail.len());
+                last_jump_table = Some(tail[..len].to_string());
+            }
+            let mut parts = trimmed.split_whitespace();
+            let Some(op) = parts.next() else {
+                continue;
+            };
+            let op_lower = op.to_ascii_lowercase();
+            let arg = parts.next().unwrap_or("");
+            if op_lower == "jmp" || op_lower == "jmpq" {
+                terminates = true;
+                if arg.starts_with(".LBB") {
+                    if let Some(&target) = label_to_block.get(arg) {
+                        succs.push(target);
+                    }
+                } else if arg.starts_with('*')
+                    && let Some(table_name) = last_jump_table.as_ref()
+                    && let Some(targets) = jump_tables.get(table_name)
+                {
+                    for target_label in targets {
+                        if let Some(&target) = label_to_block.get(target_label) {
+                            succs.push(target);
+                        }
+                    }
+                }
+            } else if op_lower.starts_with('j') && arg.starts_with(".LBB") {
+                if let Some(&target) = label_to_block.get(arg) {
+                    succs.push(target);
+                }
+            } else if op_lower == "ret" || op_lower == "retq" || op_lower == "ud2" {
+                terminates = true;
+            }
+        }
+        if !terminates && block_id + 1 < block_count {
+            succs.push(block_id + 1);
+        }
+        succs.sort_unstable();
+        succs.dedup();
+        block.succs = succs;
+    }
+
+    (blocks, line_to_block)
+}
+
+fn cfg_reachable(blocks: &[BasicBlock], start: usize, stop_at: Option<usize>) -> BTreeSet<usize> {
+    let mut visited = BTreeSet::new();
+    let mut queue = VecDeque::new();
+    visited.insert(start);
+    queue.push_back(start);
+    while let Some(node) = queue.pop_front() {
+        if stop_at == Some(node) {
+            continue;
+        }
+        for &next in &blocks[node].succs {
+            if visited.insert(next) {
+                queue.push_back(next);
+            }
+        }
+    }
+    visited
+}
+
+fn cfg_reachable_backward(
+    blocks: &[BasicBlock],
+    target: usize,
+    stop_at: Option<usize>,
+) -> BTreeSet<usize> {
+    let mut preds: Vec<Vec<usize>> = vec![Vec::new(); blocks.len()];
+    for (id, block) in blocks.iter().enumerate() {
+        for &succ in &block.succs {
+            preds[succ].push(id);
+        }
+    }
+    let mut visited = BTreeSet::new();
+    let mut queue = VecDeque::new();
+    visited.insert(target);
+    queue.push_back(target);
+    while let Some(node) = queue.pop_front() {
+        if stop_at == Some(node) {
+            continue;
+        }
+        for &prev in &preds[node] {
+            if visited.insert(prev) {
+                queue.push_back(prev);
+            }
+        }
+    }
+    visited
+}
+
+fn precedes_in_cfg(
+    blocks: &[BasicBlock],
+    line_to_block: &[usize],
+    from_line: usize,
+    to_line: usize,
+) -> bool {
+    let from_block = line_to_block[from_line];
+    let to_block = line_to_block[to_line];
+    if from_block == to_block {
+        from_line < to_line
+    } else {
+        cfg_reachable(blocks, from_block, None).contains(&to_block)
+    }
+}
+
+fn find_unique_function_or_leaf_body(
+    lines: &[String],
+    label_suffix: &str,
+    description: &str,
+) -> Result<(usize, usize)> {
+    let seh_starts = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let trimmed = line.trim();
+            (trimmed.starts_with(".seh_proc _")
+                && !trimmed.contains("?dtor$")
+                && trimmed.ends_with(label_suffix))
+            .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if seh_starts.len() == 1 {
+        let start = seh_starts[0];
+        let Some(end_offset) = lines[start + 1..]
+            .iter()
+            .position(|line| line.trim() == ".seh_endproc")
+        else {
+            return Err(format!("assembly function for {description} has no .seh_endproc").into());
+        };
+        return Ok((start, start + 1 + end_offset));
+    }
+    if seh_starts.len() > 1 {
+        return Err(format!(
+            "expected one emitted assembly function for {description}, found {}",
+            seh_starts.len()
+        )
+        .into());
+    }
+
+    let leaf_starts = lines
+        .iter()
+        .enumerate()
+        .filter_map(|(index, line)| {
+            let trimmed = line.trim();
+            trimmed
+                .strip_suffix(':')
+                .is_some_and(|label| {
+                    label.starts_with('_')
+                        && !label.contains("?dtor$")
+                        && label.ends_with(label_suffix)
+                })
+                .then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if leaf_starts.len() != 1 {
+        return Err(format!(
+            "expected one emitted assembly function for {description}, found {}",
+            leaf_starts.len()
+        )
+        .into());
+    }
+    let start = leaf_starts[0];
+    let end = lines[start + 1..]
+        .iter()
+        .position(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with(".section")
+                || trimmed.starts_with(".def")
+                || trimmed.starts_with(".seh_proc")
+                || trimmed == ".seh_endproc"
+        })
+        .map_or(lines.len() - 1, |offset| start + offset);
+    Ok((start, end))
+}
+
+fn audit_helper_function_body(
+    all_lines: &[String],
+    label_suffix: &str,
+    description: &str,
+    allow_calls: bool,
 ) -> Result<()> {
-    for (index, line) in function.iter().enumerate() {
+    let range = find_unique_function_or_leaf_body(all_lines, label_suffix, description)?;
+    let helper = body(all_lines, range);
+    for (offset, line) in helper.iter().enumerate() {
+        if is_physical_send_reference(line) {
+            return Err(format!(
+                "{description} contains a physical-send reference at line {}: {}",
+                range.0 + offset + 1,
+                line.trim()
+            )
+            .into());
+        }
+        if is_forbidden_suffix_effect(line) {
+            return Err(format!(
+                "{description} contains allocation/copy/lock/packet-build work at line {}: {}",
+                range.0 + offset + 1,
+                line.trim()
+            )
+            .into());
+        }
+        if !allow_calls && is_call_instruction(line) {
+            return Err(format!(
+                "{description} contains an unexpected call at line {}: {}",
+                range.0 + offset + 1,
+                line.trim()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+struct CfgAuditContext<'a> {
+    all_lines: &'a [String],
+    function: &'a [String],
+    blocks: &'a [BasicBlock],
+    line_to_block: &'a [usize],
+    final_owner: usize,
+}
+
+fn validate_cfg_segment(
+    ctx: &CfgAuditContext<'_>,
+    start_line: usize,
+    end_line: usize,
+    audited_final_control_precheck: &mut bool,
+) -> Result<usize> {
+    let start_block = ctx.line_to_block[start_line];
+    let end_block = ctx.line_to_block[end_line];
+    let scoped_blocks: BTreeSet<usize> = if start_block == end_block {
+        BTreeSet::from([start_block])
+    } else {
+        let forward = cfg_reachable(ctx.blocks, start_block, Some(end_block));
+        if !forward.contains(&end_block) {
+            return Err(
+                "scoped final-admission→sender segment target is not reachable in dispatch CFG"
+                    .into(),
+            );
+        }
+        let backward = cfg_reachable_backward(ctx.blocks, end_block, Some(start_block));
+        forward.intersection(&backward).copied().collect()
+    };
+
+    for &block_id in &scoped_blocks {
+        let start = if block_id == start_block {
+            start_line
+        } else {
+            ctx.blocks[block_id].start
+        };
+        let end = if block_id == end_block {
+            end_line
+        } else {
+            ctx.blocks[block_id].end
+        };
+        if start >= end {
+            continue;
+        }
+        for (offset, line) in ctx.function[start..end].iter().enumerate() {
+            let function_index = start + offset;
+            if is_forbidden_suffix_effect(line) {
+                return Err(format!(
+                    "scoped final-admission→sender suffix contains allocation/copy/lock/packet-build work at line {}: {}",
+                    function_index + 1,
+                    line.trim()
+                )
+                .into());
+            }
+            if is_call_instruction(line) {
+                let folded = line.to_ascii_lowercase();
+                let allowed_owner_call = function_index == ctx.final_owner
+                    && (folded.contains("foreground_window_owner_matches")
+                        || folded.contains("fresh_final_release_owner_proof"));
+                let allowed_control_precheck = folded.contains("22final_control_precheck");
+                let allowed_same_owner = folded.contains("releaseownerproof10same_owner");
+                let allowed_observer_qpc = folded.contains("qpcclock3now");
+                if allowed_control_precheck && !*audited_final_control_precheck {
+                    audit_helper_function_body(
+                        ctx.all_lines,
+                        "22final_control_precheck",
+                        "admission::final_control_precheck",
+                        false,
+                    )?;
+                    *audited_final_control_precheck = true;
+                }
+                if !(allowed_owner_call
+                    || allowed_control_precheck
+                    || allowed_same_owner
+                    || allowed_observer_qpc)
+                {
+                    return Err(format!(
+                        "scoped final-admission→sender suffix contains an unexpected call at line {}: {}",
+                        function_index + 1,
+                        line.trim()
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+    Ok(scoped_blocks.len())
+}
+
+fn validate_scoped_send_suffix(ctx: &CfgAuditContext<'_>, deferred_sender: usize) -> Result<usize> {
+    for (index, line) in ctx.function.iter().enumerate() {
         if index != deferred_sender && is_physical_send_reference(line) {
             return Err(format!(
                 "production dispatch boundary contains an additional physical-send reference at line {}: {}",
@@ -209,42 +623,49 @@ fn validate_scoped_send_suffix(
         }
     }
 
-    for (index, line) in function[final_owner..deferred_sender].iter().enumerate() {
-        let function_index = final_owner + index;
-        if is_forbidden_suffix_effect(line) {
-            return Err(format!(
-                "scoped final-admission→sender suffix contains allocation/copy/lock/packet-build work at line {}: {}",
-                function_index + 1,
-                line.trim()
-            )
-            .into());
-        }
-        if is_call_instruction(line)
-            && !(function_index == final_owner
-                && line
-                    .to_ascii_lowercase()
-                    .contains("foreground_window_owner_matches"))
-        {
-            return Err(format!(
-                "scoped final-admission→sender suffix contains an unexpected call at line {}: {}",
-                function_index + 1,
-                line.trim()
-            )
-            .into());
-        }
+    let mut audited_final_control_precheck = false;
+    let intermediate_control = call_indices(ctx.function, "22final_control_precheck")
+        .into_iter()
+        .find(|&index| {
+            precedes_in_cfg(ctx.blocks, ctx.line_to_block, ctx.final_owner, index)
+                && precedes_in_cfg(ctx.blocks, ctx.line_to_block, index, deferred_sender)
+        });
+
+    if let Some(control_line) = intermediate_control {
+        let first = validate_cfg_segment(
+            ctx,
+            ctx.final_owner,
+            control_line,
+            &mut audited_final_control_precheck,
+        )?;
+        let second = validate_cfg_segment(
+            ctx,
+            control_line,
+            deferred_sender,
+            &mut audited_final_control_precheck,
+        )?;
+        Ok(first + second)
+    } else {
+        validate_cfg_segment(
+            ctx,
+            ctx.final_owner,
+            deferred_sender,
+            &mut audited_final_control_precheck,
+        )
     }
-    Ok(())
 }
 
 fn production_dispatch_range(lines: &[String]) -> Result<(usize, usize)> {
     find_unique_function_body(
         lines,
         |line| {
-            line.starts_with(".seh_proc _")
-                && line.contains("dispatch_candidate")
-                && !line.contains("?dtor$")
+            let trimmed = line.trim();
+            trimmed.starts_with(".seh_proc _")
+                && !trimmed.contains("?dtor$")
+                && (trimmed.ends_with("13dispatch_loop18dispatch_candidate")
+                    || trimmed == ".seh_proc _fixture_dispatch_candidate")
         },
-        "DispatchExecutor production dispatch_candidate boundary",
+        "sky_player production dispatch_candidate boundary",
     )
 }
 
@@ -257,11 +678,14 @@ struct DispatchAssemblyShape {
     executor_completion_commits: usize,
     journal_commits: usize,
     send_suffix_lines: (usize, usize),
+    scoped_suffix_blocks: usize,
 }
 
 fn validate_production_dispatch_assembly(lines: &[String]) -> Result<DispatchAssemblyShape> {
     let range = production_dispatch_range(lines)?;
     let function = body(lines, range);
+    let jump_tables = parse_jump_tables(lines);
+    let (blocks, line_to_block) = build_function_cfg(function, &jump_tables);
     let senders = call_indices(
         function,
         "send_prepared_physical_packet_at_final_boundary_deferred_commit",
@@ -274,13 +698,57 @@ fn validate_production_dispatch_assembly(lines: &[String]) -> Result<DispatchAss
         .into());
     }
     let sender = senders[0];
-    let owner_checks = call_indices(function, "foreground_window_owner_matches")
+    let direct_owner_checks = call_indices(function, "foreground_window_owner_matches")
         .into_iter()
-        .filter(|index| *index < sender)
-        .count();
+        .filter(|&index| precedes_in_cfg(&blocks, &line_to_block, index, sender))
+        .collect::<Vec<_>>();
+    let outlined_owner_checks = if direct_owner_checks.is_empty() {
+        let calls = call_indices(function, "fresh_final_release_owner_proof")
+            .into_iter()
+            .filter(|&index| precedes_in_cfg(&blocks, &line_to_block, index, sender))
+            .collect::<Vec<_>>();
+        if !calls.is_empty() {
+            let proof_range = find_unique_function_body(
+                lines,
+                |line| {
+                    let trimmed = line.trim();
+                    trimmed.starts_with(".seh_proc _")
+                        && !trimmed.contains("?dtor$")
+                        && trimmed.ends_with("31fresh_final_release_owner_proof")
+                },
+                "admission::fresh_final_release_owner_proof",
+            )?;
+            let proof_body = body(lines, proof_range);
+            if call_indices(proof_body, "foreground_window_owner_matches").is_empty() {
+                return Err(
+                    "outlined fresh_final_release_owner_proof is missing foreground_window_owner_matches"
+                        .into(),
+                );
+            }
+            for (offset, line) in proof_body.iter().enumerate() {
+                if is_physical_send_reference(line) {
+                    return Err(format!(
+                        "outlined fresh_final_release_owner_proof contains a physical-send reference at line {}: {}",
+                        proof_range.0 + offset + 1,
+                        line.trim()
+                    )
+                    .into());
+                }
+            }
+        }
+        calls
+    } else {
+        Vec::new()
+    };
+    let owner_check_indices = if !direct_owner_checks.is_empty() {
+        direct_owner_checks
+    } else {
+        outlined_owner_checks
+    };
+    let owner_checks = owner_check_indices.len();
     let modifier_queries = call_indices(function, "query_async_key_state")
         .into_iter()
-        .filter(|index| *index < sender)
+        .filter(|&index| precedes_in_cfg(&blocks, &line_to_block, index, sender))
         .count();
     if owner_checks == 0 || modifier_queries != 5 {
         return Err(format!(
@@ -293,7 +761,13 @@ fn validate_production_dispatch_assembly(lines: &[String]) -> Result<DispatchAss
     let journal_commits = call_indices(function, "commit_physical_packet");
     if executor_commits.len() != 1
         || journal_commits.len() != 1
-        || !(sender < executor_commits[0] && executor_commits[0] < journal_commits[0])
+        || !(precedes_in_cfg(&blocks, &line_to_block, sender, executor_commits[0])
+            && precedes_in_cfg(
+                &blocks,
+                &line_to_block,
+                executor_commits[0],
+                journal_commits[0],
+            ))
     {
         return Err(format!(
             "deferred sender must precede one live scheduler completion commit and one journal commit; sender={}, scheduler={}, journal={}",
@@ -304,12 +778,15 @@ fn validate_production_dispatch_assembly(lines: &[String]) -> Result<DispatchAss
         .into());
     }
 
-    let final_owner = call_indices(function, "foreground_window_owner_matches")
-        .into_iter()
-        .filter(|index| *index < sender)
-        .max()
-        .expect("checked owner recheck");
-    validate_scoped_send_suffix(function, final_owner, sender)?;
+    let final_owner = *owner_check_indices.last().expect("checked owner recheck");
+    let cfg_ctx = CfgAuditContext {
+        all_lines: lines,
+        function,
+        blocks: &blocks,
+        line_to_block: &line_to_block,
+        final_owner,
+    };
+    let scoped_suffix_blocks = validate_scoped_send_suffix(&cfg_ctx, sender)?;
     Ok(DispatchAssemblyShape {
         dispatch_lines: (range.0 + 1, range.1 + 1),
         final_owner_rechecks: owner_checks,
@@ -318,23 +795,36 @@ fn validate_production_dispatch_assembly(lines: &[String]) -> Result<DispatchAss
         executor_completion_commits: executor_commits.len(),
         journal_commits: journal_commits.len(),
         send_suffix_lines: (range.0 + final_owner + 1, range.0 + sender + 1),
+        scoped_suffix_blocks,
     })
 }
 
-fn require_source_contract(root: &Path) -> Result<()> {
-    let dispatch_path = root.join("rust/crates/sky_player/src/engine/worker/dispatch_loop.rs");
-    let dispatch = fs::read_to_string(&dispatch_path)
-        .map_err(|error| format!("could not read production dispatch source: {error}"))?;
+fn validate_source_contract(dispatch: &str, admission: &str) -> Result<()> {
+    let dispatch_start = dispatch
+        .find("pub(crate) fn dispatch_candidate(")
+        .ok_or("production dispatch source missing 'pub(crate) fn dispatch_candidate('")?;
+    let dispatch_tail = &dispatch[dispatch_start..];
+    let dispatch_end = dispatch_tail
+        .find("pub(super) fn dispatch(")
+        .ok_or("production dispatch source missing 'pub(super) fn dispatch(' boundary")?;
+    let dispatch_body = &dispatch_tail[..dispatch_end];
+    if dispatch_body.contains("verify_final_down_admission(") {
+        return Err(
+            "production dispatch_candidate must not reference test-only verify_final_down_admission"
+                .into(),
+        );
+    }
+
     let ordered = [
-        "verify_final_down_admission(",
+        "verify_final_packet_admission(",
         ".send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target(",
         ".on_send_completed_at(",
         ".commit_physical_packet(",
     ];
     let mut previous = None;
     for required in ordered {
-        let Some(index) = dispatch.find(required) else {
-            return Err(format!("production dispatch source lost '{required}'").into());
+        let Some(index) = dispatch_body.find(required) else {
+            return Err(format!("production dispatch_candidate lost '{required}'").into());
         };
         if previous.is_some_and(|previous| index <= previous) {
             return Err("production source order must be final admission → deferred send → scheduler commit → journal commit".into());
@@ -342,25 +832,86 @@ fn require_source_contract(root: &Path) -> Result<()> {
         previous = Some(index);
     }
 
-    let admission_path = root.join("rust/crates/sky_player/src/engine/worker/admission.rs");
-    let admission = fs::read_to_string(&admission_path)
-        .map_err(|error| format!("could not read final admission source: {error}"))?;
+    // Exclude test-only module code and cfg(test)-gated function definitions so
+    // cfg(test) wrappers cannot satisfy the live admission contract.
+    let admission_prod = admission
+        .split("#[cfg(test)]\nmod ")
+        .next()
+        .and_then(|head| head.split("#[cfg(test)]\r\nmod ").next())
+        .unwrap_or(admission);
+    let gate_start = admission_prod
+        .find("pub(crate) fn verify_final_packet_admission(")
+        .ok_or(
+            "production admission source missing 'pub(crate) fn verify_final_packet_admission('",
+        )?;
+    let has_cfg_test_attribute_before = |source: &str, item_start: usize| {
+        source[..item_start]
+            .lines()
+            .rev()
+            .take_while(|line| {
+                let t = line.trim();
+                t.is_empty() || t.starts_with("#[") || t.starts_with("//")
+            })
+            .any(|line| line.trim() == "#[cfg(test)]")
+    };
+    if has_cfg_test_attribute_before(admission_prod, gate_start) {
+        return Err(
+            "production verify_final_packet_admission must not be gated by #[cfg(test)]".into(),
+        );
+    }
+    let gate_body = &admission_prod[gate_start..];
     for required in [
-        "target_stamp_still_current",
-        "foreground_window_owner_matches",
-        "owner_identity_status",
-        "final_down_control_verdict",
-        "final_down_modifier_verdict",
-        "final_down_fresh_target_admission",
-        "final_down_post_modifier_verdict",
+        "final_down_control_verdict(",
+        "final_down_target_hint(",
+        "final_down_modifier_verdict(",
+        "final_packet_lease_age_proof(",
+        "fresh_final_release_owner_proof(",
+        "final_down_atomic_revalidation(",
         "lease_timeout_ticks",
         "system_power",
     ] {
-        if !admission.contains(required) {
-            return Err(format!("final Down admission source lost '{required}'").into());
+        if !gate_body.contains(required) {
+            return Err(
+                format!("production verify_final_packet_admission lost '{required}'").into(),
+            );
+        }
+    }
+
+    let owner_start = admission_prod
+        .find("fn fresh_final_release_owner_proof(")
+        .ok_or("production admission source missing 'fn fresh_final_release_owner_proof('")?;
+    if has_cfg_test_attribute_before(admission_prod, owner_start) {
+        return Err(
+            "production fresh_final_release_owner_proof must not be gated by #[cfg(test)]".into(),
+        );
+    }
+    let owner_tail = &admission_prod[owner_start..];
+    let owner_end = owner_tail
+        .find("pub(crate) fn enter_focus_pause(")
+        .unwrap_or(owner_tail.len());
+    let owner_body = &owner_tail[..owner_end];
+    for required in [
+        "verify_final_process_identity(",
+        "foreground_window_owner_matches(",
+        "release_owner_proof_is_current(",
+    ] {
+        if !owner_body.contains(required) {
+            return Err(
+                format!("production fresh_final_release_owner_proof lost '{required}'").into(),
+            );
         }
     }
     Ok(())
+}
+
+fn require_source_contract(root: &Path) -> Result<()> {
+    let dispatch_path = root.join("rust/crates/sky_player/src/engine/worker/dispatch_loop.rs");
+    let dispatch = fs::read_to_string(&dispatch_path)
+        .map_err(|error| format!("could not read production dispatch source: {error}"))?;
+    let admission_path = root.join("rust/crates/sky_player/src/engine/worker/admission.rs");
+    let admission = fs::read_to_string(&admission_path)
+        .map_err(|error| format!("could not read final admission source: {error}"))?;
+    validate_source_contract(&dispatch, &admission)
 }
 
 fn report_dispatch_audit(root: &Path, assembly_argument: Option<&str>, alias: &str) -> Result<()> {
@@ -370,7 +921,7 @@ fn report_dispatch_audit(root: &Path, assembly_argument: Option<&str>, alias: &s
     require_source_contract(root)?;
     println!("assembly={}", path.display());
     println!("audit={alias}");
-    println!("boundary=DispatchExecutor::dispatch_candidate");
+    println!("boundary=sky_player::engine::worker::dispatch_loop::dispatch_candidate");
     println!(
         "dispatch_lines={}-{}",
         shape.dispatch_lines.0, shape.dispatch_lines.1
@@ -390,8 +941,8 @@ fn report_dispatch_audit(root: &Path, assembly_argument: Option<&str>, alias: &s
         shape.journal_commits
     );
     println!(
-        "scoped_send_suffix_lines={}-{}; non_owner_calls=0; forbidden_effects=0; worker-wide copy/division thresholds=not applied",
-        shape.send_suffix_lines.0, shape.send_suffix_lines.1
+        "scoped_send_suffix_lines={}-{}; scoped_suffix_blocks={}; forbidden_effects=0; worker-wide copy/division thresholds=not applied",
+        shape.send_suffix_lines.0, shape.send_suffix_lines.1, shape.scoped_suffix_blocks
     );
     println!("production dispatch assembly audit: PASS");
     Ok(())
@@ -429,21 +980,37 @@ fn validate_win32_sender_assembly(lines: &[String]) -> Result<(usize, usize, usi
         },
         "TrackedKeyState deferred-commit sender",
     )?;
-    let policy = find_unique_function_body(
-        lines,
-        |line| {
-            line.starts_with(".seh_proc _")
-                && line.contains("send_prepared_physical_packet_view_with_commit_policy")
-        },
-        "tracked packet send commit-policy boundary",
-    )?;
     let deferred_body = body(lines, deferred);
+    let (policy, callee_fragment) = if lines.iter().any(|line| {
+        line.starts_with(".seh_proc _")
+            && line.contains("send_prepared_physical_packet_view_with_commit_policy")
+    }) {
+        (
+            find_unique_function_body(
+                lines,
+                |line| {
+                    line.starts_with(".seh_proc _")
+                        && line.contains("send_prepared_physical_packet_view_with_commit_policy")
+                },
+                "tracked packet send commit-policy boundary",
+            )?,
+            "send_prepared_physical_packet_view_with_commit_policy",
+        )
+    } else {
+        (
+            find_unique_function_body(
+                lines,
+                |line| {
+                    line.starts_with(".seh_proc _")
+                        && line.contains("send_prepared_physical_packet_once_impl")
+                },
+                "tracked packet single-send implementation boundary",
+            )?,
+            "send_prepared_physical_packet_once_impl",
+        )
+    };
     let policy_body = body(lines, policy);
-    let deferred_calls = call_indices(
-        deferred_body,
-        "send_prepared_physical_packet_view_with_commit_policy",
-    )
-    .len();
+    let deferred_calls = call_indices(deferred_body, callee_fragment).len();
     let sendinput_indices = policy_body
         .iter()
         .enumerate()
@@ -775,5 +1342,58 @@ mod tests {
              callq *__imp_SendInput\n.seh_endproc",
         );
         assert!(validate_win32_sender_assembly(&samples_before_send).is_err());
+    }
+
+    #[test]
+    fn source_contract_requires_live_production_admission_and_rejects_test_only_or_missing_proof() {
+        let valid_dispatch = "\
+            pub(crate) fn dispatch_candidate() {\n\
+                verify_final_packet_admission();\n\
+                backend.send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target();\n\
+                scheduler.on_send_completed_at();\n\
+                backend.commit_physical_packet();\n\
+            }\n\
+            pub(super) fn dispatch() {}\n";
+        let valid_admission = "\
+            fn fresh_final_release_owner_proof() {\n\
+                authority.verify_final_process_identity();\n\
+                foreground_window_owner_matches();\n\
+                target.release_owner_proof_is_current();\n\
+            }\n\
+            pub(crate) fn enter_focus_pause() {}\n\
+            pub(crate) fn verify_final_packet_admission(lease_timeout_ticks: u64, system_power: u64) {\n\
+                final_down_control_verdict();\n\
+                final_down_target_hint();\n\
+                final_down_modifier_verdict();\n\
+                final_packet_lease_age_proof();\n\
+                fresh_final_release_owner_proof();\n\
+                final_down_atomic_revalidation();\n\
+            }\n";
+        assert!(validate_source_contract(valid_dispatch, valid_admission).is_ok());
+
+        // Reject outdated test-only verify_final_down_admission in production dispatch_candidate.
+        let outdated_dispatch = valid_dispatch.replace(
+            "verify_final_packet_admission(",
+            "verify_final_down_admission(",
+        );
+        assert!(validate_source_contract(&outdated_dispatch, valid_admission).is_err());
+
+        // Reject reversed commit ordering.
+        let wrong_order = "\
+            pub(crate) fn dispatch_candidate() {\n\
+                verify_final_packet_admission();\n\
+                scheduler.on_send_completed_at();\n\
+                backend.send_prepared_physical_packet_at_final_boundary_deferred_commit_for_target();\n\
+                backend.commit_physical_packet();\n\
+            }\n\
+            pub(super) fn dispatch() {}\n";
+        assert!(validate_source_contract(wrong_order, valid_admission).is_err());
+
+        // Reject missing live proof (or proof moved behind #[cfg(test)]).
+        let missing_owner_proof = valid_admission.replace("foreground_window_owner_matches();", "");
+        assert!(validate_source_contract(valid_dispatch, &missing_owner_proof).is_err());
+
+        let test_only_admission = format!("#[cfg(test)]\n{valid_admission}");
+        assert!(validate_source_contract(valid_dispatch, &test_only_admission).is_err());
     }
 }

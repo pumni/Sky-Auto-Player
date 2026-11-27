@@ -876,6 +876,10 @@ pub(crate) fn prepare_dispatch_candidate(
     }))
 }
 
+// Keep the live final-admission → deferred-send → scheduler-commit → journal-commit
+// boundary emitted as a standalone symbol in `dist` builds so the assembly audit
+// inspects it directly without ambiguity.
+#[inline(never)]
 pub(crate) fn dispatch_candidate(
     candidate: DispatchCandidate,
     ctx: DispatchAttemptContext<'_>,
@@ -897,8 +901,8 @@ pub(crate) fn dispatch_candidate(
     let qpc_clock = ctx.qpc_clock;
     let progress_clock = ctx.progress_clock;
     let metrics = ctx.metrics;
-    let staged_candidate = candidate;
-    let mut candidate = effective_packet(&staged_candidate);
+    let prepared_candidate = candidate;
+    let mut candidate = effective_packet(&prepared_candidate);
 
     #[cfg(any(test, feature = "test-support"))]
     if candidate.kind().has_down()
@@ -917,19 +921,19 @@ pub(crate) fn dispatch_candidate(
         hook.maybe_inject_hol_stall(candidate.packet().down_mask, source_idx, qpc_clock);
     }
 
-    if staged_candidate.packet_masks().up_mask != 0
-        && staged_candidate.up_slot_timing_summary.is_none()
+    if prepared_candidate.packet_masks().up_mask != 0
+        && prepared_candidate.up_slot_timing_summary.is_none()
     {
         runtime.terminal_error =
-            Some("missing Up slot timing summary in staged candidate".to_string());
+            Some("missing Up slot timing summary in prepared candidate".to_string());
         return DispatchAttemptOutcome::Exit;
     }
     if observer.is_some()
-        && staged_candidate.packet_masks().up_mask != 0
-        && staged_candidate.up_slot_timings.is_none()
+        && prepared_candidate.packet_masks().up_mask != 0
+        && prepared_candidate.up_slot_timings.is_none()
     {
         runtime.terminal_error =
-            Some("observer Up-slot attribution missing from staged candidate".to_string());
+            Some("observer Up-slot attribution missing from prepared candidate".to_string());
         return DispatchAttemptOutcome::Exit;
     }
 
@@ -943,7 +947,7 @@ pub(crate) fn dispatch_candidate(
     };
     let expected_target = candidate
         .target_stamp
-        .expect("musical packet target stamp is captured during staging");
+        .expect("musical packet target stamp is captured during preparation");
     let up_origin = if candidate.packet().up_mask != 0 {
         match resources
             .backend
@@ -1023,10 +1027,11 @@ pub(crate) fn dispatch_candidate(
         );
         match admission {
             FinalDownAdmissionResult::ModifierHeld if packet_kind == MusicalPacketKind::Mixed => {
-                // The modifier blocks only the Down half. Reuse the staged
+                // The modifier blocks only the Down half. Reuse the prepared
                 // packet's initialized Up prefix, then run the complete fresh
                 // Up-only admission contract before any sender effects.
-                candidate = match effective_up_prefix(&staged_candidate, resources.playback.epoch) {
+                candidate = match effective_up_prefix(&prepared_candidate, resources.playback.epoch)
+                {
                     Ok(candidate) => candidate,
                     Err(error) => {
                         runtime.terminal_error = Some(error);
@@ -2087,17 +2092,28 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                                 )
                             && authored_down_qpc == deadline_qpc
                         {
+                            hook.record_down_window(
+                                authored_down_qpc.as_u64(),
+                                deadline_qpc.as_u64(),
+                            );
                             hook.visit_startup_checkpoint(
                                 super::super::config::StartupCheckpoint::PhysicalWait,
                             );
                         }
                     }
 
-                    let authored_target_ticks = TimelineTicks::from_raw(
-                        deadline_qpc
-                            .as_u64()
-                            .saturating_sub(resources.playback.epoch.as_u64()),
-                    );
+                    let authored_target_ticks = match wait_authored_target_ticks_for_observation(
+                        core.observer.pending.is_some(),
+                        &resources.scheduler,
+                        deadline_qpc,
+                        resources.playback.epoch,
+                    ) {
+                        Ok(ticks) => ticks,
+                        Err(error) => {
+                            core.runtime.terminal_error = Some(error);
+                            break;
+                        }
+                    };
                     let spin_threshold_ticks = if resources.scheduler.has_physical_work() {
                         timing.effective_spin_threshold_ticks
                     } else {

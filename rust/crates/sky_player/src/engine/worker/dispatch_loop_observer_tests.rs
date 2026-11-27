@@ -564,7 +564,7 @@ fn interrupted_wait_is_not_attributed_to_later_dispatch() {
     assert_eq!(harness.local_metrics.spin_observation_dropped_samples, 0);
 }
 #[test]
-fn final_control_rejects_staged_down_and_up_before_send() {
+fn final_control_rejects_prepared_down_and_up_before_send() {
     let mut down = ProductionDispatchTestHarness::new_down_only();
     let down_packets = down.configure_mock_packet_sender_for_test(&[0, 0]);
     down.attach_executor_for_test().expect("attach executor");

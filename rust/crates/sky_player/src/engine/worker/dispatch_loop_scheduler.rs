@@ -244,6 +244,22 @@ fn evaluate_scheduler_action(
         .map_err(|error| format!("scheduler eligibility arithmetic failure: {error}"))
 }
 
+fn wait_authored_target_ticks_for_observation(
+    observer_enabled: bool,
+    executor: &sky_dispatch_core::executor::DispatchExecutor,
+    deadline_qpc: sky_dispatch_win32::clock::QpcTicks,
+    epoch_qpc: sky_dispatch_win32::clock::QpcTicks,
+) -> Result<TimelineTicks, String> {
+    if !observer_enabled {
+        return Ok(TimelineTicks::from_raw(
+            deadline_qpc.as_u64().saturating_sub(epoch_qpc.as_u64()),
+        ));
+    }
+    executor
+        .wait_authored_target_ticks(deadline_qpc, epoch_qpc)
+        .map_err(|error| format!("wait authored-target attribution arithmetic failure: {error}"))
+}
+
 fn up_only_timing_window(
     summary: sky_dispatch_core::executor::UpSlotTimingSummary,
 ) -> sky_dispatch_core::executor::DispatchTimingWindow {

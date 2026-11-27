@@ -972,6 +972,8 @@ fn lifecycle_precision_fixture_lease_config_materializes_qpc_timeout() {
 
 #[test]
 fn admissible_down_fences_when_focus_lost_or_stale_preflight() {
+    let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let _foreground_reset = ForegroundTestReset;
     let mut harness = ProductionDispatchTestHarness::new_down_only();
     harness.configure_focus_owner_for_test(1, 77);
     let packets = harness.configure_mock_packet_sender_for_test(&[0]);
@@ -981,7 +983,7 @@ fn admissible_down_fences_when_focus_lost_or_stale_preflight() {
         .expect("stage Down candidate")
         .expect("Down candidate exists");
 
-    // Focus is dropped between staging (preflight) and final admission
+    // Focus is dropped between preparation (preflight) and final admission
     harness.focus_active.store(false, Ordering::Release);
     let outcome = harness.dispatch_candidate_for_test(candidate, false);
 

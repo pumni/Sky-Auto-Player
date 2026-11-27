@@ -505,6 +505,7 @@ impl WorkerMetricsLocal {
         self.physical_target_to_wake_max_ticks = self
             .physical_target_to_wake_max_ticks
             .max(observer.physical_target_to_wake_max_ticks);
+        self.wait_target_error_us = self.wait_target_error_us.max(observer.wait_target_error_us);
         self.dispatch_occupancy_max_us = self
             .dispatch_occupancy_max_us
             .max(observer.dispatch_occupancy_max_us);

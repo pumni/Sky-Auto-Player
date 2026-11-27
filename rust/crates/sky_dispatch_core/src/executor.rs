@@ -645,6 +645,50 @@ impl DispatchExecutor {
         self.chords.get(self.cursor).copied()
     }
 
+    /// Read-only diagnostic projection of the authored timeline offset for a
+    /// physical wait targeting `deadline_qpc`.
+    ///
+    /// Preserves the distinction between completion-anchored physical release
+    /// eligibility (`release_not_before_qpc`) and diagnostic nominal release
+    /// (`nominal_up_offset_ticks`) for observer wait-target error accounting.
+    /// Does not affect scheduling eligibility, does not increment scheduler
+    /// evaluation counters, and performs no heap allocation.
+    pub fn wait_authored_target_ticks(
+        &self,
+        deadline_qpc: QpcTicks,
+        epoch_qpc: QpcTicks,
+    ) -> Result<TimelineTicks, TimeArithmeticError> {
+        let mut authored_offset: Option<TimelineTicks> = None;
+
+        let mut active = self.active_mask;
+        while active != 0 {
+            let slot_idx = active.trailing_zeros() as usize;
+            let slot_bit = 1u16 << slot_idx;
+            active &= !slot_bit;
+
+            if self.release_not_before_qpc[slot_idx] <= deadline_qpc {
+                let nominal = self.active_slot_origin[slot_idx].nominal_up_offset_ticks;
+                authored_offset = Some(authored_offset.map_or(nominal, |cur| cur.min(nominal)));
+            }
+        }
+
+        if let Some(chord) = self.current_chord()
+            && (chord.key_mask & self.active_mask) == 0
+        {
+            let authored_down_qpc = epoch_qpc
+                .checked_add_duration(DurationTicks::from_raw(chord.onset_ticks.as_u64()))?;
+            if authored_down_qpc <= deadline_qpc {
+                authored_offset = Some(
+                    authored_offset.map_or(chord.onset_ticks, |cur| cur.min(chord.onset_ticks)),
+                );
+            }
+        }
+
+        Ok(authored_offset.unwrap_or_else(|| {
+            TimelineTicks::from_raw(deadline_qpc.as_u64().saturating_sub(epoch_qpc.as_u64()))
+        }))
+    }
+
     /// Evaluate the current state at an absolute QPC time and decide the next action.
     ///
     /// - Musical Downs are eligible at `epoch_qpc + onset_ticks` only when ALL

@@ -1,7 +1,7 @@
 #![cfg(any(test, feature = "test-support"))]
 
 //! Deterministic test harness for the production DispatchExecutor and worker
-//! staging/send path. It owns one compiled schedule and one live executor.
+//! direct-dispatch path. It owns one compiled schedule and one live executor.
 
 use crate::engine::SystemPowerState;
 use crate::engine::config::WorkerConfig;

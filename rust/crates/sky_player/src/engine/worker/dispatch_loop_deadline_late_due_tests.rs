@@ -18,7 +18,7 @@ fn late_due_evaluates_newly_due_up_with_disjoint_down_directly() {
     // Slot ordering (sorted scan codes): 0x15 -> bit 1 (A), 0x16 -> bit 2 (B), 0x17 -> bit 4 (C).
     // B1 goes Down at 0 and is released at +25ms (after H=17.167ms).
     // A goes Down at +35ms so its fixed-pulse Up floor is +52.167ms.
-    // B2 is staged for +42.5ms while A is still held.
+    // B2 is scheduled for +42.5ms while A is still held.
     // A simulated late Due wake at +60ms overshoots both A's Up (+52.167ms) and C's Down (+55ms).
     let chords = [
         chord(6680, 0, &[0x16]),
@@ -330,13 +330,13 @@ fn late_due_evaluates_newly_due_up_with_disjoint_down_directly() {
             .filter(|(packet, _)| packet.down_mask & 2 != 0)
             .count(),
         1,
-        "the staged B2 onset crosses its sender boundary at most once"
+        "the B2 onset crosses its sender boundary at most once"
     );
     assert_eq!(harness.local_metrics.precision_packet_attempts, 5);
     assert!(harness.runtime.terminal_error.is_none());
 
     println!(
-        "late-Due trace: H=+{}us B1_Up=+{}us B2_authored=+{}us Due_wake=+{}us A_Up_floor=+{}us staged_down=0x0002 reselected_packet=(up:0x0001,down:0x0002) next_iteration=(up:0x0000,down:0x0004) cursor=4 masks=(active:0x0006,possible:0,inflight:0,release:0x0006) attempts(B2)=1",
+        "late-Due trace: H=+{}us B1_Up=+{}us B2_authored=+{}us Due_wake=+{}us A_Up_floor=+{}us direct_packet=(up:0x0001,down:0x0002) next_iteration=(up:0x0000,down:0x0004) cursor=4 masks=(active:0x0006,possible:0,inflight:0,release:0x0006) attempts(B2)=1",
         elapsed_us(clock, epoch, b_h_floor),
         elapsed_us(clock, epoch, b1_up_eval),
         elapsed_us(clock, epoch, b2_authored),
@@ -346,8 +346,7 @@ fn late_due_evaluates_newly_due_up_with_disjoint_down_directly() {
 }
 
 #[test]
-fn timely_due_reuses_staged_candidate_and_late_due_handles_multiple_ups_blocked_repeat_and_modifier_prefix()
- {
+fn direct_post_wake_evaluation_handles_multiple_ups_timely_wake_early_wake_and_modifier_prefix() {
     fn chord(index: u32, scheduled_us: u64, scans: &[u16]) -> OnsetChordInput {
         OnsetChordInput {
             source_action_index: index,
@@ -480,7 +479,7 @@ fn timely_due_reuses_staged_candidate_and_late_due_handles_multiple_ups_blocked_
     );
 
     // Verify focus, manual pause, quit, skip, panic, lease expiry, system suspend,
-    // and target invalidation after post-wake reselection all fail closed / replan
+    // and target invalidation after post-wake evaluation all fail closed / replan
     // without sending a new Down.
     let (u3, d3, w3) = send_decision_at(&mut harness, t35, epoch);
     let stage_c3 = |h: &mut ProductionDispatchTestHarness| {
@@ -611,7 +610,7 @@ fn timely_due_reuses_staged_candidate_and_late_due_handles_multiple_ups_blocked_
 }
 
 #[test]
-fn post_wake_reselect_with_observer_preserves_original_wait_and_fresh_dispatch_evidence() {
+fn direct_post_wake_with_observer_preserves_original_wait_and_fresh_dispatch_evidence() {
     use crate::engine::worker::dispatch::observation::DispatchObservation;
     use sky_dispatch_win32::wait::{WaitOutcome, WaitResult};
 

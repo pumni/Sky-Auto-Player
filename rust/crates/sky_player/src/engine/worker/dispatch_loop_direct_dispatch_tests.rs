@@ -279,3 +279,185 @@ fn direct_dispatch_pre_wait_admission_rejects_controls_focus_and_invalid_target_
     assert_eq!(result, PreWaitAdmission::Exit);
     assert!(inv.runtime.terminal_error.is_some());
 }
+
+#[test]
+fn wait_authored_target_preserves_h_displacement_nonintegral_qpc_and_drain_wait_error() {
+    use crate::engine::telemetry::WorkerMetricsLocal;
+    use crate::engine::worker::WorkerHealthState;
+    use crate::engine::worker::dispatch::observation::drain_wait_observation;
+    use crate::engine::worker::dispatch::observer::PendingObservationQueue;
+    use crate::engine::worker::dispatch::record_wait_attempt;
+    use crate::engine::worker::health::DispatchHealthOptions;
+    use sky_dispatch_core::executor::{
+        DispatchDecision, DispatchExecutor, PreparedDispatchSchedule,
+        reset_scheduler_evaluation_count_for_test, scheduler_evaluation_count_for_test,
+        us_to_timeline_ticks_ceil,
+    };
+    use sky_dispatch_core::time::{DurationTicks, QpcTicks, TimelineTicks};
+    use sky_dispatch_win32::clock::QpcClock;
+    use sky_dispatch_win32::wait::{WaitOutcome, WaitResult};
+    use std::num::NonZeroU64;
+
+    // Nonintegral PM-timer QPC frequency (3,579,545 Hz) to exercise exact ceil rounding.
+    let freq = NonZeroU64::new(3_579_545).unwrap();
+    let clock = QpcClock::from_frequency_hz(freq);
+    let hold_us = 17_167;
+    let chords = [
+        OnsetChordInput {
+            source_action_index: 0,
+            scheduled_us: 0,
+            scan_codes: smallvec::smallvec![0x15],
+        },
+        OnsetChordInput {
+            source_action_index: 1,
+            scheduled_us: 5_000,
+            scan_codes: smallvec::smallvec![0x16],
+        },
+    ];
+    let plan = build_onset_plan(&chords, &[0x15, 0x16], hold_us).expect("valid onset plan");
+    let prepared = PreparedDispatchSchedule::prepare(&plan, freq, 0).expect("prepare");
+    let mut executor = DispatchExecutor::from_prepared_schedule(prepared);
+    let epoch = QpcTicks::from_raw(1_000_000);
+
+    // 1. Complete Chord 0 Down late by +25,000 us so completion + H > nominal Up.
+    let late_down_completion = epoch
+        .checked_add_duration(clock.duration_from_us(25_000).unwrap())
+        .unwrap();
+    executor
+        .on_send_completed_at(0, 0b01, late_down_completion)
+        .expect("commit late Down 0");
+    // Complete Chord 1 Down at +26,000 us.
+    let late_down1_completion = epoch
+        .checked_add_duration(clock.duration_from_us(26_000).unwrap())
+        .unwrap();
+    executor
+        .on_send_completed_at(0, 0b10, late_down1_completion)
+        .expect("commit late Down 1");
+
+    let eval_now = late_down1_completion;
+    let DispatchDecision::Wait { deadline_qpc } = executor
+        .evaluate_at(eval_now, epoch)
+        .expect("wait for displaced Up 0")
+    else {
+        panic!("expected Wait before displaced Up 0");
+    };
+    let expected_physical_up0 = late_down_completion
+        .checked_add_duration(executor.hold_ticks())
+        .unwrap();
+    assert_eq!(deadline_qpc, expected_physical_up0);
+
+    // Projection must NOT increment scheduler evaluation counter and must return
+    // exact diagnostic nominal Up offset `ceil((0 + 17_167) * f / 1e6)`.
+    reset_scheduler_evaluation_count_for_test();
+    let authored_ticks = super::super::wait_authored_target_ticks_for_observation(
+        true,
+        &executor,
+        deadline_qpc,
+        epoch,
+    )
+    .expect("authored target ticks");
+    assert_eq!(
+        scheduler_evaluation_count_for_test(),
+        0,
+        "diagnostic wait attribution must not perform speculative scheduler evaluations"
+    );
+    let expected_nominal_up0 = us_to_timeline_ticks_ceil(hold_us, freq).unwrap();
+    assert_eq!(authored_ticks, expected_nominal_up0);
+    let physical_offset = TimelineTicks::from_raw(deadline_qpc.as_u64() - epoch.as_u64());
+    assert!(
+        physical_offset > authored_ticks,
+        "H displacement separates physical wait target from authored nominal target"
+    );
+
+    // Feed through record_wait_attempt + drain_wait_observation and verify
+    // wait_target_error_us reflects the ~25,000 us H displacement, while
+    // physical_target_to_wake_max_ticks reflects only the 10-tick wake overshoot.
+    let wake_qpc = deadline_qpc
+        .checked_add_duration(DurationTicks::from_raw(10))
+        .unwrap();
+    let queue = PendingObservationQueue::default();
+    let mut metrics = WorkerMetricsLocal::default();
+    let obs = record_wait_attempt(
+        Some(&queue),
+        Some(WaitResult {
+            outcome: WaitOutcome::Deadline,
+            wake_qpc: Some(wake_qpc),
+            spin_ticks: DurationTicks::ZERO,
+            timer_return_qpc: Some(wake_qpc),
+            timer_arm_target_qpc: Some(deadline_qpc),
+            timer_arm_qpc: None,
+            timer_arm_generation: None,
+            timer_return_generation: None,
+        }),
+        deadline_qpc,
+        DurationTicks::from_raw(100),
+        authored_ticks,
+        epoch,
+        None,
+        &mut metrics,
+    )
+    .expect("wait observation");
+    let mut health = WorkerHealthState::new(DispatchHealthOptions::default());
+    drain_wait_observation(&obs, &mut health, &mut metrics, clock).expect("drain wait");
+    assert_eq!(metrics.physical_target_to_wake_max_ticks, 10);
+    assert!(
+        metrics.wait_target_error_us >= 25_000,
+        "wait_target_error_us must preserve H displacement (~25ms), got {} us",
+        metrics.wait_target_error_us
+    );
+    assert!(
+        metrics.wait_window_bad_count >= 1,
+        "wait observation drain must classify the ~25ms H-displaced wait in wait health window"
+    );
+
+    // 2. Release both keys and check tail-only wait uses physical target.
+    executor
+        .on_send_completed_at(0b11, 0, wake_qpc)
+        .expect("release both keys");
+    let tail_qpc = epoch
+        .checked_add_duration(DurationTicks::from_raw(
+            executor.schedule_end_offset_ticks().as_u64(),
+        ))
+        .unwrap();
+    let tail_authored =
+        super::super::wait_authored_target_ticks_for_observation(true, &executor, tail_qpc, epoch)
+            .expect("tail authored ticks");
+    assert_eq!(tail_authored, executor.schedule_end_offset_ticks());
+}
+
+#[test]
+fn live_worker_observer_preserves_h_displacement_in_wait_target_error_us() {
+    let hold_us = 17_167;
+    let chords = [OnsetChordInput {
+        source_action_index: 0,
+        scheduled_us: 0,
+        scan_codes: smallvec::smallvec![0x15],
+    }];
+    // 30 ms mock transport latency on Down displaces Up's physical deadline by +30 ms
+    // relative to its diagnostic nominal release (0 + H). Use default test profile
+    // (not MockTest, which forces latency_base_us = 0) with qualification observer enabled.
+    let plan = build_onset_plan(&chords, &[0x15], hold_us).expect("valid onset plan");
+    let mut options = crate::engine::tests::support::test_session_options(
+        plan,
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 30_000,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    options.timing_observer_for_qualification = true;
+    let session = NativeDispatchSession::new(options).expect("mock session admission");
+    session.arm(0).expect("arm worker");
+    assert!(
+        session.join(Duration::from_secs(5)).expect("worker join"),
+        "worker must complete within timeout"
+    );
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.status, "finished");
+    assert!(
+        snapshot.wait_target_error_us >= 25_000,
+        "live production worker wait observation must preserve H displacement in wait_target_error_us; got {} us",
+        snapshot.wait_target_error_us
+    );
+}

@@ -65,7 +65,7 @@ fn stage_at_qpc(
                 .expect("candidate is available");
             (up_mask, down_chord, candidate)
         }
-        decision => panic!("expected staged send at {at:?}, got {decision:?}"),
+        decision => panic!("expected send at {at:?}, got {decision:?}"),
     }
 }
 
@@ -903,7 +903,7 @@ fn measured_final_admission_operations_for_healthy_packet_shapes() {
             .current_executor_chord_for_test()
             .map(|chord| chord.key_mask),
         Some(2),
-        "Up-prefix must leave the staged Down onset pending"
+        "Up-prefix must leave the Down onset pending"
     );
     assert_eq!(fallback.release_obligation_mask_for_test(), 0);
     report_counts("mixed-to-up-only", &fallback, &fallback_packets);

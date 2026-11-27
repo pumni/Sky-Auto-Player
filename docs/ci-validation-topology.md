@@ -258,7 +258,7 @@ The documented GitHub Actions job default is described in the
 ## Deterministic evidence tools
 
 `rust/xtask/src/assembly_audit.rs` owns deterministic checks for the live
-`DispatchExecutor::dispatch_candidate` boundary and the Win32 deferred
+`sky_player::engine::worker::dispatch_loop::dispatch_candidate` boundary and the Win32 deferred
 sender. The `dispatch` audit checks final owner/modifier rechecks, exactly one
 deferred sender, then the scheduler completion and journal commits. The
 `modifier-guard` audit checks the fixed modifier order and the scoped Win32

@@ -948,7 +948,7 @@ fn same_hwnd_owner_aba_is_terminal_and_never_sends_origin_up_to_replacement() {
 
 #[cfg(feature = "test-support")]
 #[test]
-fn target_invalidated_before_scheduler_staging_finishes_without_input() {
+fn target_invalidated_before_scheduler_evaluation_finishes_without_input() {
     struct ForegroundReset;
     impl Drop for ForegroundReset {
         fn drop(&mut self) {
@@ -995,7 +995,7 @@ fn target_invalidated_before_scheduler_staging_finishes_without_input() {
 
 #[cfg(feature = "test-support")]
 #[test]
-fn stop_skip_panic_and_suspend_interrupt_staged_long_wait_before_input() {
+fn stop_skip_panic_and_suspend_interrupt_long_wait_before_input() {
     let cases = [
         ("stop", EnginePollStatus::Quit),
         ("skip", EnginePollStatus::Skipped),
@@ -1642,14 +1642,14 @@ fn actual_b_worker_publishes_interrupted_wait_before_resumed_packet_dispatch() {
 
     session.arm(0).expect("worker arm");
     assert!(hook.wait_for_startup_checkpoint(Duration::from_secs(5)));
-    let (staged_sequence, staged_authored_target, staged_not_before) =
+    let (pre_wait_sequence, pre_wait_authored_target, pre_wait_not_before) =
         hook.last_down_window_snapshot();
     assert!(
-        staged_sequence > 0,
-        "B worker staged a Down window before its physical wait"
+        pre_wait_sequence > 0,
+        "B worker recorded a Down window before its physical wait"
     );
-    assert!(staged_authored_target > 0);
-    assert!(staged_not_before >= staged_authored_target);
+    assert!(pre_wait_authored_target > 0);
+    assert!(pre_wait_not_before >= pre_wait_authored_target);
     session.pause().expect("interrupt physical wait with pause");
     hook.release_startup_checkpoint();
     let pause_deadline = Instant::now() + Duration::from_secs(2);
@@ -1696,7 +1696,7 @@ fn actual_b_worker_publishes_interrupted_wait_before_resumed_packet_dispatch() {
     let snapshot = session.snapshot();
     let (resumed_sequence, resumed_authored_target, resumed_not_before) =
         hook.last_down_window_snapshot();
-    assert!(resumed_sequence > staged_sequence);
+    assert!(resumed_sequence > pre_wait_sequence);
     assert!(resumed_authored_target > 0);
     assert!(resumed_not_before >= resumed_authored_target);
     assert!(snapshot.wait_interrupted_count >= 1);
