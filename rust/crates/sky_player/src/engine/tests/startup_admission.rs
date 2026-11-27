@@ -2626,3 +2626,110 @@ fn guarded_calibration_qpc_origin_failure_fails_closed_without_reusing_stale_now
     );
     assert_eq!(send_calls.load(Ordering::Acquire), 0);
 }
+
+#[test]
+fn bypassed_fixed_arm_skips_startup_probe_and_preserves_production_waiter_and_controls() {
+    for threshold_us in [0_u64, 250, 500, 1_000] {
+        let mut options = test_session_options(
+            startup_boundary_schedule(),
+            1,
+            BackendConfig::Mock {
+                latency_base_us: 0,
+                latency_per_key_us: 0,
+                fault_script: FaultInjectionScript::none(),
+            },
+        );
+        options.profile = DispatchProfile::Production;
+        options.wait.test_wait_policy = crate::engine::TestWaitPolicy::ProductionCalibrated;
+        options.wait.test_spin_threshold_us = Some(threshold_us);
+        options.startup_calibration_placement =
+            crate::engine::StartupCalibrationPlacement::BypassedForFixedArm;
+        let session = NativeDispatchSession::new(options).expect("fixed arm admission");
+        session.arm(50_000).expect("arm fixed arm");
+        assert!(
+            session
+                .join(Duration::from_secs(5))
+                .expect("join fixed arm"),
+            "fixed arm threshold={threshold_us} must finish"
+        );
+        let snap = session.snapshot();
+        assert_eq!(snap.status, EnginePollStatus::Finished.as_str());
+        assert_eq!(snap.wait_strategy_acquired, "event+high_resolution_timer");
+        assert!(!snap.startup_calibration_executed);
+        assert_eq!(snap.startup_calibration_sample_count, 0);
+        assert_eq!(snap.startup_calibration_duration_us, 0);
+        assert_eq!(snap.startup_calibration_result, "not_requested");
+        assert_eq!(snap.spin_threshold_source, "test_fixed_override");
+        assert_eq!(snap.effective_spin_threshold_us, threshold_us);
+        assert_eq!(snap.final_release_obligation_mask, 0);
+    }
+
+    // Calibrated reference (BeforeSchedulingGuards + no threshold override) executes real probe.
+    let mut cal_options = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script: FaultInjectionScript::none(),
+        },
+    );
+    cal_options.profile = DispatchProfile::Production;
+    cal_options.wait.test_wait_policy = crate::engine::TestWaitPolicy::ProductionCalibrated;
+    cal_options.wait.test_spin_threshold_us = None;
+    cal_options.startup_calibration_placement =
+        crate::engine::StartupCalibrationPlacement::BeforeSchedulingGuards;
+    let cal_session = NativeDispatchSession::new(cal_options).expect("calibrated admission");
+    cal_session.arm(50_000).expect("arm calibrated");
+    assert!(
+        cal_session
+            .join(Duration::from_secs(5))
+            .expect("join calibrated")
+    );
+    let cal_snap = cal_session.snapshot();
+    assert_eq!(cal_snap.status, EnginePollStatus::Finished.as_str());
+    assert_eq!(
+        cal_snap.wait_strategy_acquired,
+        "event+high_resolution_timer"
+    );
+    assert!(cal_snap.startup_calibration_executed);
+    assert_eq!(cal_snap.startup_calibration_sample_count, 6);
+    assert_eq!(cal_snap.startup_calibration_result, "completed");
+    assert_eq!(
+        cal_snap.spin_threshold_source,
+        "production_startup_calibration"
+    );
+    assert!((250..=1_000).contains(&cal_snap.effective_spin_threshold_us));
+    assert_eq!(cal_snap.final_release_obligation_mask, 0);
+
+    // Pre-arm quit still aborts cleanly with zero physical send when probe is bypassed.
+    let send_calls = Arc::new(AtomicU64::new(0));
+    let mut fault_script = FaultInjectionScript::none();
+    fault_script.send_call_count = Some(Arc::clone(&send_calls));
+    let mut quit_opts = test_session_options(
+        startup_boundary_schedule(),
+        1,
+        BackendConfig::Mock {
+            latency_base_us: 0,
+            latency_per_key_us: 0,
+            fault_script,
+        },
+    );
+    quit_opts.profile = DispatchProfile::Production;
+    quit_opts.wait.test_wait_policy = crate::engine::TestWaitPolicy::ProductionCalibrated;
+    quit_opts.wait.test_spin_threshold_us = Some(0);
+    quit_opts.startup_calibration_placement =
+        crate::engine::StartupCalibrationPlacement::BypassedForFixedArm;
+    let quit_session = NativeDispatchSession::new(quit_opts).expect("quit admission");
+    quit_session.quit().expect("quit before arm");
+    let _ = quit_session.arm(50_000);
+    assert!(
+        quit_session
+            .join(Duration::from_secs(5))
+            .expect("join quit")
+    );
+    let quit_snap = quit_session.snapshot();
+    assert_eq!(quit_snap.status, EnginePollStatus::Quit.as_str());
+    assert!(!quit_snap.startup_calibration_executed);
+    assert_eq!(send_calls.load(Ordering::Acquire), 0);
+}

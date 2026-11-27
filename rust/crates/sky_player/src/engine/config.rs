@@ -27,6 +27,11 @@ pub(crate) const MIN_PRODUCTION_PREROLL_US: u64 = 50_000;
 pub enum StartupCalibrationPlacement {
     BeforeSchedulingGuards,
     AfterSchedulingGuards,
+    /// Test-only W2-E arm selector that bypasses the startup wake probe while
+    /// keeping the production waiter, scheduling guards, preroll, and all
+    /// lifecycle admission checkpoints intact.
+    #[cfg(any(test, feature = "test-support"))]
+    BypassedForFixedArm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
