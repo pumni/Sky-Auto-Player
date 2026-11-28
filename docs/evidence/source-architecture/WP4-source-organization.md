@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | `crates/sky_app_core/src/catalog.rs` | `catalog/identity.rs`, `catalog/ranking.rs` | Catalog index, state, search, public API and compatibility paths stay in `catalog.rs`; existing `search_order.rs` is reused. |
 | `crates/sky_app_core/src/song.rs` | `song/legacy.rs`, `song/schedule.rs`, `song/risk.rs`, `song/tests.rs` | Shared song types and stable public paths remain at the facade; decode/planner/numeric modules stay in place. |
-| `crates/sky_native_adapters/src/lib.rs` | `atomic_file.rs`, `settings_store.rs`, `library_store.rs`, `catalog/{builtin_source.rs,file_source.rs,composer.rs,tests.rs}` | Adapter traits, catalog cache and public exports remain owned by the existing crate/facades. Existing atomic replace semantics are in one shared implementation. |
+| `crates/sky_native_adapters/src/lib.rs` | `atomic_file.rs`, `settings_store.rs`, `settings_store_tests.rs`, `library_store.rs`, `catalog.rs`, `catalog/{builtin_source.rs,file_source.rs,composer.rs}`, `catalog_tests.rs`, `tests.rs` | Adapter traits, catalog cache and public exports remain owned by the existing crate/facades. Existing atomic replace semantics are in one shared implementation. |
 | `apps/desktop/src-tauri/src/commands.rs` | `commands/dto/{bootstrap,catalog,diagnostics,library,playback,settings,update}.rs`, `commands/tests.rs` | Tauri command functions, dispatch helpers, ownership matrix and handler macro remain in `commands.rs`; DTOs preserve explicit `commands::Type` re-exports. |
 | `apps/desktop/src-tauri/src/lib.rs` | `lib_tests/{ipc,update_smoke}.rs`, `selftest.rs` | Entrypoint, startup composition, plugins, invoke-handler registry, window and shutdown order remain in `lib.rs`. Existing selftest entry points are re-exported. |
 | `apps/desktop/src-tauri/src/native_runtime.rs` | `native_runtime/{bootstrap,settings,update,events}.rs` | Runtime struct/state/locks/reservation, dispatch match and runtime lifecycle authority remain in the facade; event hub ownership and synchronization stay cohesive in `events.rs`. |
@@ -26,17 +26,17 @@ Actual functions and impl blocks were physically moved to these owners. Tauri `#
 
 ### Informational LOC before/after
 
-Counts use the same source grouping before and after; grouped totals include the listed extracted owners and tests. Formatting and explicit imports may change totals and are not a complexity target.
+Counts are `physical lines / nonblank lines`, measured from the WP4 starting source (`f89baf8`) and accepted implementation source (`03e85b1`). The before group is the monolithic source owner; the after group is its facade plus extracted implementation and test owners. Existing sibling modules that were not part of those moved owners are excluded consistently. Physical lines include blank lines; nonblank lines exclude lines containing only whitespace. Formatting, imports and test ownership can change counts, so LOC is informational rather than a complexity target.
 
-| Owner group | Before | After | Final grouping |
+| Owner group | Before physical/nonblank | After physical/nonblank | Final grouping (nonblank LOC) |
 | --- | ---: | ---: | --- |
-| App core catalog | 764 | 778 | catalog facade 498; identity 73; ranking 207 |
-| App core song | 818 | 843 | facade 88; legacy 89; schedule 211; risk 235; tests 220 |
-| Native adapters | 1,982 | 1,620 | crate facade 29; atomic 47; library 50; settings 577 + tests 19; built-in 127; file 162; composer 319; catalog tests 290 |
-| Desktop commands | 1,391 | 1,413 | facade 392; tests 279; DTO modules: bootstrap 39, catalog 239, diagnostics 14, library 53, playback 259, settings 106, update 32 |
-| Desktop lib and extracted tests | 1,400 | 1,400 | facade 421; IPC tests 574; update smoke tests 89; selftest 316 |
-| Native runtime | 1,746 | 1,816 | facade 789; bootstrap 239; settings 154; update 103; events 531 |
-| Native runtime catalog | 1,557 | 1,598 | facade 687; library 257; viewport 333; analysis 321 |
+| App core catalog | 826/764 | 841/778 | catalog facade 498; identity 73; ranking 207 |
+| App core song | 857/818 | 882/843 | facade 88; legacy 89; schedule 211; risk 235; tests 220 |
+| Native adapters | 2,111/1,982 | 2,162/2,036 | crate facade 29; atomic 47; library 50; settings 577; settings-store tests 19; catalog facade 9; built-in 127; file 162; composer 319; catalog tests 290; adapter tests 407 |
+| Desktop commands | 1,513/1,391 | 1,531/1,413 | facade 392; tests 279; DTO modules: bootstrap 39, catalog 239, diagnostics 14, library 53, playback 259, settings 106, update 32 |
+| Desktop lib and extracted tests | 1,474/1,400 | 1,472/1,400 | facade 421; IPC tests 574; update smoke tests 89; selftest 316 |
+| Native runtime | 1,833/1,746 | 1,903/1,816 | facade 789; bootstrap 239; settings 154; update 103; events 531 |
+| Native runtime catalog | 1,605/1,557 | 1,642/1,598 | facade 687; library 257; viewport 333; analysis 321 |
 
 ## Regression coverage and selector mapping
 
