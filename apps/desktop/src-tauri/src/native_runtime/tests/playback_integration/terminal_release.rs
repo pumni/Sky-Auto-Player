@@ -125,7 +125,7 @@ fn shutdown_timeout_keeps_the_physical_reservation_and_omits_release_proof() {
 
 #[test]
 fn pre_exit_release_marker_requires_verified_shutdown_result() {
-    let source = include_str!("../../../native_runtime.rs");
+    let source = include_str!("../../../native_runtime/bootstrap.rs");
     let shutdown_gate = source
         .find("if safety_playback.shutdown(safety_events.clone()) {")
         .expect("verified shutdown gate");

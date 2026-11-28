@@ -61,8 +61,8 @@ WinEvent hint source; it never grants sender admission.
 
 Each state has one owner and each module has a focused invariant:
 
-- `sky_app_core` owns pure application and domain policy (parsing, validation, sheet models).
-- `sky_native_adapters` encapsulates concrete filesystem, process, and Win32 host adapters.
+- `sky_app_core` owns pure application and domain policy (parsing, validation, sheet models). Catalog identity/path normalization and WRatio ranking live in `catalog/identity.rs` and `catalog/ranking.rs`; the legacy song parser, schedule, and risk analysis live in `song/legacy.rs`, `song/schedule.rs`, and `song/risk.rs` behind the existing facades.
+- `sky_native_adapters` encapsulates concrete filesystem, process, and Win32 host adapters. Settings and library persistence live in `settings_store.rs` and `library_store.rs`; the catalog source/composition modules live under `catalog/`; settings and catalog-cache writes share the platform-aware `atomic_file.rs` replacement implementation.
 - **sky_player** owns the playback worker, target authority, admission/control, QPC timing, telemetry, and worker cleanup. **sky_desktop_shell** owns playback-service orchestration, ordered worker join and retirement, post-join recovery coordination, and UI publication.
 - `sky_dispatch_core` owns pure onset-plan validation and completion-anchored pulse scheduling policy.
 - `sky_dispatch_win32` owns Windows wait, focus, priority, and `SendInput` boundaries.
@@ -77,20 +77,30 @@ router has no auxiliary process or automatic fallback. `core.ready` remains a
 compatibility wire event name and is produced by the native runtime where the
 frontend contract requires it.
 
-`NativeDesktopRuntime` in `apps/desktop/src-tauri/src/native_runtime.rs` remains the
-composition and ownership root for settings, command routing, app coordination,
-the shared `NativeEventHub`, and shutdown. Its child modules own focused
-control-plane work while using the same runtime state:
+`NativeDesktopRuntime` in `apps/desktop/src-tauri/src/native_runtime.rs` remains
+the state, coordination, and dispatch ownership root. Its `bootstrap.rs`,
+`settings.rs`, and `update.rs` children physically own construction/bootstrap,
+settings coordination, and update coordination against that same runtime
+state. `NativeEventHub` is implemented in `native_runtime/events.rs`; its
+subscription, queue, publisher, and fail-closed behavior are unchanged.
 
 - `native_runtime/catalog.rs` owns catalog and library operations, including
-  generation-fenced loading, reconciliation, cache handling, imports, search,
-  and detail projection.
+  generation-fenced loading, reconciliation, cache handling, and composition.
+  Its `catalog/library.rs`, `catalog/viewport.rs`, and `catalog/analysis.rs`
+  children own playlist transactions, viewport/liked coordination, and sheet
+  detail/analysis respectively.
 - `native_runtime/playback/` owns playback planning and control through
   `NativePlaybackService`; the qualified worker and sender boundaries are
   unchanged.
-- `NativeEventHub` stays in `native_runtime.rs` and owns shared catalog and
-  playback event delivery. Its subscription, queue,
-  publisher, and fail-closed behavior are unchanged.
+- `commands.rs` retains the actual Tauri command handlers and shared dispatch
+  helpers. Capability DTOs live under `commands/` and are explicitly re-exported
+  through their existing `commands::Type` paths. The production
+  `generate_handler!` registry remains in `lib.rs`, and the runtime dispatch
+  match remains in `native_runtime.rs`.
+- `lib.rs` retains startup composition, the production handler registry, and
+  shutdown ordering. Its IPC and updater smoke tests live in `lib_tests/`, while
+  packaged selftest helpers live in `selftest.rs` with the existing public entry
+  points re-exported at the crate root.
 
 V4 update operations remain owned by the Rust `UpdateService`, which invokes
 the official Tauri updater. Native runtime tests cover catalog and library
@@ -179,7 +189,7 @@ and updater policy remain safe Rust.
 | Module                                                                                                                                                                | Unsafe operation                                                        | Safety invariant                                                                                                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | `crates/sky_dispatch_win32/src/{clock,cpu,event,focus,focus/foreground_watcher,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; the foreground callback is out-of-context and hint-only; owned handles are closed by their owner. |
-| `crates/sky_native_adapters/src/lib.rs`                                                                                                                          | `MoveFileExW` atomic settings replacement                               | NUL-terminated source and destination buffers stay live through the synchronous replace call.                                     |
+| `crates/sky_native_adapters/src/atomic_file.rs`                                                                                                                  | `MoveFileExW` atomic settings and catalog-cache replacement              | NUL-terminated source and destination buffers stay live through the synchronous replace call.                                     |
 | `apps/desktop/src-tauri/src/{power_lifecycle,single_instance,windows_caption,windows_icon}.rs`                                                                             | Power registration, process/window APIs, and window callbacks/resources | Callback context lifetime, process access limits, UI-thread HWND lifetime, and owned handles are checked at these platform edges. |
 
 The scanner reports unsafe code under `cfg(test)` separately from production
