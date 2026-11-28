@@ -1,0 +1,805 @@
+use crate::{Result, tauri_bundle};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use minisign_verify::PublicKey;
+use serde_json::Value;
+use std::fs;
+use std::path::Path;
+use walkdir::WalkDir;
+
+fn v4_calibration_retirement_contract(harness: &str, hook: &str) -> Result<()> {
+    let normalized_harness = super::normalize_source_line_endings(harness);
+    let harness = normalized_harness.as_str();
+    let qualification = harness
+        .split_once("fn qualify_package(")
+        .map(|(_, body)| body)
+        .ok_or("Rust NSIS owner is missing its package qualification function")?;
+    let qualification = qualification
+        .split_once("\nfn verify_retired_calibration_upgrade(")
+        .map(|(body, _)| body)
+        .ok_or("Rust package qualification body is not bounded")?;
+    let compact_qualification = qualification.split_whitespace().collect::<String>();
+    let seeded_payload = compact_qualification
+        .find("std::fs::write(install_root.join(\"native_calibration.exe\"),b\"retired-payload\",)")
+        .ok_or("NSIS harness must seed the prior install-only calibration payload")?;
+    let seeded_cache = compact_qualification
+        .find("app_data.join(\"cache/input_latency.json\")")
+        .ok_or("NSIS harness must seed the legacy app-data cache")?;
+    let install_position = compact_qualification
+        .find("run_installer(installer,")
+        .ok_or("Rust NSIS owner must install the exact candidate")?;
+    let migration_check = compact_qualification
+        .find("verify_retired_calibration_upgrade(&install_root,&app_data)?")
+        .ok_or("Rust NSIS owner must check retired payload removal and cache preservation")?;
+    let catalog = compact_qualification
+        .find("crate::builtin_catalog::run(")
+        .ok_or("Rust NSIS owner must retain installed catalog verification")?;
+    let launch_position = compact_qualification
+        .find("launch_smoke(scope,&app")
+        .ok_or("Rust NSIS owner must launch the installed application")?;
+    if seeded_payload >= install_position
+        || seeded_cache >= install_position
+        || install_position >= migration_check
+        || migration_check >= catalog
+        || catalog >= launch_position
+    {
+        return Err("retirement qualification must seed legacy state, install, verify install-only removal and cache preservation, then launch".into());
+    }
+
+    let verifier = harness
+        .split_once("fn verify_retired_calibration_upgrade(")
+        .map(|(_, remainder)| remainder)
+        .ok_or("Rust NSIS owner is missing its retirement verifier")?;
+    let verifier = verifier
+        .split_once("\n#[cfg(windows)]\nfn assert_user_songs_empty(")
+        .map(|(function, _)| function)
+        .ok_or("Rust retirement verifier must be bounded")?;
+    for marker in [
+        "install_root.join(\"native_calibration.exe\").exists()",
+        "app_data.join(\"cache/input_latency.json\")",
+        "RETIRED_CACHE_SENTINEL",
+        "bytes != RETIRED_CACHE_SENTINEL",
+    ] {
+        if !verifier.contains(marker) {
+            return Err(format!(
+                "Rust calibration retirement verifier is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let hook = super::normalize_source_line_endings(hook);
+    let preinstall = hook
+        .split_once("!macro NSIS_HOOK_PREINSTALL")
+        .and_then(|(_, body)| body.split_once("!macroend"))
+        .map(|(body, _)| body)
+        .ok_or("NSIS PREINSTALL hook is missing")?;
+    if !preinstall.contains("SetFileAttributes \"$INSTDIR\\native_calibration.exe\" NORMAL")
+        || !preinstall.contains("Delete \"$INSTDIR\\native_calibration.exe\"")
+        || !preinstall.contains(
+            "IfFileExists \"$INSTDIR\\native_calibration.exe\" sap_retired_calibration_present 0",
+        )
+        || !preinstall.contains(
+            "IfFileExists \"$INSTDIR\\native_calibration.exe\" sap_retired_calibration_failed 0",
+        )
+        || !preinstall.contains("Abort \"The retired calibration payload could not be removed")
+        || preinstall.contains("$APPDATA")
+        || preinstall.contains("input_latency.json")
+        || preinstall.contains("SKY_APP_DATA_ROOT")
+    {
+        return Err("NSIS PREINSTALL must remove only the retired install-root executable and fail closed without touching app-data".into());
+    }
+
+    Ok(())
+}
+
+fn fixture_new_root_runtime_contract(native: &str, tests: &str) -> Result<()> {
+    for marker in [
+        "#[cfg(feature = \"tauri-update-fixture\")]",
+        "FIXTURE_NEW_ONLY_ARG",
+        "FIXTURE_PORT_ARG",
+        "FIXTURE_PUBLIC_KEY_ARG",
+        "fixture_runtime_config_from_args",
+        "read_fixture_public_key",
+        "fixture_public_keys",
+        ".last()",
+    ] {
+        if !native.contains(marker) {
+            return Err(format!(
+                "fixture-only updater new-root runtime seam is missing production marker: {marker}"
+            )
+            .into());
+        }
+    }
+    if !tests.contains("fixture_new_only_mode_selects_only_the_last_supplied_root") {
+        return Err("fixture-only updater new-root selection regression is missing from native_update/tests.rs".into());
+    }
+    Ok(())
+}
+
+fn updater_http_contract(http: &str) -> Result<()> {
+    for marker in [
+        "127.0.0.1",
+        "loopback fixture returned",
+        "Content-Length",
+        "content_length",
+        "application/octet-stream",
+        "body_sha256",
+        "MAX_HTTP_HEADER_BYTES",
+        "MAX_HTTP_BODY_BYTES",
+        "MAX_HTTP_REQUESTS",
+        "MAX_HTTP_REQUEST_DURATION",
+        "MAX_HTTP_RESPONSE_DURATION",
+        "pub(super) fn write_all_before_deadline",
+        "pub(super) fn http_get_loopback",
+    ] {
+        if !http.contains(marker) {
+            return Err(format!(
+                "updater loopback HTTP implementation is missing production marker: {marker}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
+    let config_path = root.join("apps/desktop/src-tauri/tauri.conf.json");
+    let config = fs::read_to_string(&config_path)?;
+    for marker in ["sign_v4_authenticode.ps1", "plugins", "updater", "pubkey"] {
+        if !config.contains(marker) {
+            return Err(
+                format!("v4 Tauri trust config is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    if config.contains("release-2026") || config.contains("PRIVATE KEY") {
+        return Err("v4 Tauri config contains legacy or private key material".into());
+    }
+
+    let config_json: Value = serde_json::from_str(&config)?;
+    let config_key = config_json
+        .get("plugins")
+        .and_then(Value::as_object)
+        .and_then(|plugins| plugins.get("updater"))
+        .and_then(Value::as_object)
+        .and_then(|updater| updater.get("pubkey"))
+        .and_then(Value::as_str)
+        .ok_or("v4 Tauri config public trust root is not a string")?;
+    let native_path = root.join("apps/desktop/src-tauri/src/native_update.rs");
+    let native = fs::read_to_string(&native_path)?;
+    let native_tests =
+        fs::read_to_string(root.join("apps/desktop/src-tauri/src/native_update/tests.rs"))?;
+    let native_key = extract_rust_string_constant(&native, "V4_TAURI_UPDATER_PUBLIC_KEY")?;
+    if config_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
+        || native_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
+        || !native.contains(
+            "const V4_TAURI_UPDATER_PUBLIC_KEYS: &[&str] = &[V4_TAURI_UPDATER_PUBLIC_KEY];",
+        )
+    {
+        return Err("v4 production updater public-root copies do not match byte-for-byte".into());
+    }
+    let decoded = STANDARD.decode(config_key)?;
+    let decoded = String::from_utf8(decoded)?;
+    PublicKey::decode(&decoded)?;
+    crate::updater_trust::inventory_public_trust_roots(root)?;
+
+    fixture_new_root_runtime_contract(&native, &native_tests)?;
+
+    let ci_path = root.join(".github/workflows/ci.yml");
+    let ci = fs::read_to_string(&ci_path)?.replace("\r\n", "\n");
+    for marker in [
+        "scripts/setup_v4_test_signing.ps1",
+        "cargo xtask authenticode verify",
+        "scripts/test_v4_authenticode_integrity.ps1",
+        "scripts/cleanup_v4_test_signing.ps1",
+        "scripts/test_v4_updater_key_rotation.ps1",
+        "cargo xtask ci updater-fixture run",
+        "cargo xtask ci nsis smoke",
+        "--allow-hosted-disposable-runner",
+        "cargo xtask ci bridge validate",
+        "scripts/ci_require_windows_tools.ps1",
+        "TimeoutSeconds 30",
+        "qualify packaged Tauri updater rotation",
+        "cargo xtask ci candidate validate",
+        "--candidate-root",
+        "--bridge-root",
+        "--source-sha",
+        "--fixture-root",
+        "--allow-hosted-disposable-runner",
+        "cargo xtask sbom generate",
+        "cargo xtask sbom verify",
+        "workflow_dispatch:",
+    ] {
+        if !ci.contains(marker) {
+            return Err(format!("v4 trust CI is missing its required marker: {marker}").into());
+        }
+    }
+    let ordinary_ci = ci.split("  deploy_pages:").next().unwrap_or(ci.as_str());
+    if ordinary_ci.contains("actions/attest@")
+        || ordinary_ci.contains("id-token: write")
+        || ordinary_ci.contains("attestations: write")
+    {
+        return Err(
+            "ordinary CI must not retain artifact attestation creation or permissions".into(),
+        );
+    }
+    let updater_fixture = fs::read_to_string(root.join("xtask/src/updater_fixture.rs"))?;
+    for marker in [
+        "validate_manifest_bytes",
+        "response_bytes_are_exact_source_bytes",
+        "updater-preserved-user.json",
+        "user_song_sha256_unchanged",
+        "built_in_manifest_sha256_before",
+        "built_in_manifest_sha256_after",
+        "selected_builtin_id_before",
+        "selected_builtin_id_after",
+        "selected_builtin_content_sha256_before",
+        "selected_builtin_content_sha256_after",
+        "source_tree_restore",
+        "crate::builtin_catalog::run",
+        "candidate.installer_sha256",
+        "old-root detached-signature operation changed candidate installer bytes",
+        "git",
+        "worktree",
+        "--detach",
+        "preserved_bridge_root",
+        "n_to_n_plus_1_installer_sha256",
+        "old_root_rejection",
+        "assert_migration_registry_roots_absent",
+        "--selftest-update-fixture-new-only",
+        "--selftest-update-fixture-port",
+        "--selftest-update-fixture-public-key",
+        "write_http_evidence",
+        "source SHA must match the checked-out Git HEAD",
+    ] {
+        if !updater_fixture.contains(marker) {
+            return Err(format!(
+                "updater fixture is missing its required preservation marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let updater_http = fs::read_to_string(root.join("xtask/src/updater_fixture/http.rs"))?;
+    updater_http_contract(&updater_http)?;
+    if native.contains("option_env!(\"SKY_TAURI_UPDATE_FIXTURE")
+        || updater_fixture.contains("SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS")
+        || updater_fixture.contains("SKY_TAURI_UPDATE_FIXTURE_PORT")
+    {
+        return Err(
+            "fixture updater must not use compile-time roots or port environment inputs".into(),
+        );
+    }
+    if ci.matches("cargo install cargo-vet").count() != 1 {
+        return Err("CI must install cargo-vet exactly once in the supply-chain job".into());
+    }
+    if ci
+        .matches("google/osv-scanner-action/osv-scanner-action@")
+        .count()
+        != 1
+    {
+        return Err("CI must run exactly one pinned OSV-Scanner action".into());
+    }
+    if !ci.contains("--lockfile=./apps/desktop/bun.lock") {
+        return Err("CI OSV-Scanner must audit the desktop Bun lockfile".into());
+    }
+
+    let verifier = fs::read_to_string(root.join("scripts/verify_v4_authenticode.ps1"))?;
+    for marker in [
+        "authenticode-windows-inspection",
+        "Get-AuthenticodeSignature",
+        "ExpectedThumbprint",
+        "v4_authenticode_crypto.ps1",
+        "Get-AuthenticodeIntegrityProof",
+        "ArtifactManifest",
+        "maximumArtifactCount",
+        "maximumManifestBytes",
+        "Authenticode artifact manifest contains a malformed entry",
+        "inspection file does not match its manifest SHA-256",
+        "platform_status",
+        "signed_digest_algorithm",
+        "computed_digest",
+    ] {
+        if !verifier.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode verifier is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let rust_policy = fs::read_to_string(root.join("xtask/src/authenticode.rs"))?;
+    for marker in [
+        "unsigned-zero-budget",
+        "validate_thumbprint",
+        "validate_test_pfx",
+        "validate_test_pfx_password",
+        "validate_production_provider",
+        "accepted_status",
+        "test Authenticode PFX passwords are forbidden because signtool exposes argv",
+        "authenticode-verification",
+        "unsigned-zero-budget accepts only a real NotSigned PE with no signer",
+        "Authenticode signed CMS digest does not match the computed PE image digest",
+        "MAX_AUTHENTICODE_ARTIFACTS",
+        "MAX_ARTIFACT_MANIFEST_BYTES",
+        "artifact_manifest_bytes",
+        "adapter_evidence_must_cover_every_requested_file_and_exact_hash",
+        "artifact_manifest_is_bounded_and_preserves_exact_unicode_inventory",
+        "write_evidence",
+    ] {
+        if !rust_policy.contains(marker) {
+            return Err(format!(
+                "Rust Authenticode policy is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let crypto = fs::read_to_string(root.join("scripts/v4_authenticode_crypto.ps1"))?;
+    for marker in [
+        "Get-AuthenticodePeLayout",
+        "Get-AuthenticodeImageDigest",
+        "Get-AuthenticodeSpcDigest",
+        "SizeOfHeaders",
+        "sumOfBytesHashed",
+        "Sort-Object PointerToRawData",
+        "SignedCms",
+        "CheckSignature($true)",
+        "signature-valid-independent-cryptographic-integrity",
+        "signedcms-spc-indirect-data-authenticode-hash",
+    ] {
+        if !crypto.contains(marker) {
+            return Err(format!(
+                "v4 independent Authenticode verifier is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let setup = fs::read_to_string(root.join("scripts/setup_v4_test_signing.ps1"))?;
+    for marker in [
+        "CertificateRequest",
+        "X509ContentType]::Pfx",
+        "EphemeralKeySet",
+        "Passwordless ephemeral PFX",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD=",
+        "RUNNER_TEMP",
+    ] {
+        if !setup.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode test PFX setup is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    if setup.contains("::add-mask::")
+        || setup.contains("SKY_AUTHENTICODE_TEST_PFX_PASSWORD=$pfxPassword")
+    {
+        return Err(
+            "ephemeral Authenticode PFX passwords must not be generated or published".into(),
+        );
+    }
+    for forbidden in [
+        "New-SelfSignedCertificate",
+        "certutil.exe",
+        "Cert:\\CurrentUser",
+        "TrustedPublisher",
+        "CurrentUser/${store}",
+    ] {
+        if setup.contains(forbidden) {
+            return Err(format!(
+                "v4 Authenticode test PFX setup must not depend on certificate stores: {forbidden}"
+            )
+            .into());
+        }
+    }
+    let cleanup = fs::read_to_string(root.join("scripts/cleanup_v4_test_signing.ps1"))?;
+    for marker in [
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "RUNNER_TEMP",
+        "sky-v4-test-signing-[0-9a-fA-F]{32}\\.pfx",
+        "Clear-TestSigningEnvironment",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
+    ] {
+        if !cleanup.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode test PFX cleanup is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    for forbidden in [
+        "Cert:\\CurrentUser",
+        "TrustedPublisher",
+        "CurrentUser/${store}",
+    ] {
+        if cleanup.contains(forbidden) {
+            return Err(format!(
+                "v4 Authenticode test PFX cleanup must not depend on certificate stores: {forbidden}"
+            )
+            .into());
+        }
+    }
+    let signer = fs::read_to_string(root.join("scripts/sign_v4_authenticode.ps1"))?;
+    for marker in [
+        "unsigned-zero-budget",
+        "no signing performed",
+        "SKY_AUTHENTICODE_TEST_PFX_PATH",
+        "SKY_AUTHENTICODE_TEST_PFX_PASSWORD",
+        "/f $pfxPath",
+        "test Authenticode signing rejects PFX passwords because signtool exposes argv",
+        "sign /fd SHA256 /f $pfxPath $Path",
+        "EphemeralKeySet",
+        "SKY_AUTHENTICODE_APPROVED_SIGNER_THUMBPRINT",
+        "SKY_AUTHENTICODE_PROVIDER",
+        "SKY_AUTHENTICODE_PROVIDER_COMMAND",
+    ] {
+        if !signer.contains(marker) {
+            return Err(
+                format!("v4 Authenticode signer is missing its required marker: {marker}").into(),
+            );
+        }
+    }
+    if signer.contains(" /p ") {
+        return Err("signtool must never receive a PFX password on its command line".into());
+    }
+    let tamper = fs::read_to_string(root.join("scripts/test_v4_authenticode_integrity.ps1"))?;
+    for marker in [
+        "sign_v4_authenticode.ps1",
+        "Get-AuthenticodeSignature",
+        "clean signed PE PASS",
+        "Tampered signed PE unexpectedly passed independent Authenticode verification",
+        "Get-AuthenticodePeLayout",
+        "WriteAllBytes",
+        "cargo xtask authenticode verify",
+    ] {
+        if !tamper.contains(marker) {
+            return Err(format!(
+                "v4 Authenticode tamper regression is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let contract_test =
+        fs::read_to_string(root.join("scripts/test_v4_production_signing_contract.ps1"))?;
+    for marker in [
+        "unsigned-zero-budget mode succeeds without a provider",
+        "Production signing rejects test credentials",
+        "Production verification rejects CI test certificate",
+        "unsigned-zero-budget verification rejects signed binary",
+        "Production verification rejects test thumbprint",
+        "Contract Test 3b: Rust CLI passes two signed synthetic PE files through the manifest adapter",
+        "Contract Test 3c: missing artifact fails closed",
+        "Contract Test 3d: tampered signed PE fails closed through the manifest adapter",
+        "v4_authenticode_crypto.ps1",
+        "Get-AuthenticodePeLayout",
+        "cargo @cargoArguments",
+        r#"@("xtask", "authenticode", "verify", "--mode", $Mode)"#,
+        "CI test certificate cannot satisfy production mode or zero-budget unsigned state",
+    ] {
+        if !contract_test.contains(marker) {
+            return Err(format!(
+                "v4 production signing contract test is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let key_verifier = fs::read_to_string(root.join("scripts/verify_v4_updater_private_key.ps1"))?;
+    if !key_verifier.contains("updater-trust verify-private-key") {
+        return Err(
+            "v4 updater key verification script must delegate to updater-trust verify-private-key"
+                .into(),
+        );
+    }
+    for forbidden in ["::add-mask::", "19AABD2E7838818C"] {
+        if key_verifier.contains(forbidden) {
+            return Err(format!(
+                "v4 updater key verification script must not emit or hard-code production secret/output data: {forbidden}"
+            )
+            .into());
+        }
+    }
+    let key_verifier_test =
+        fs::read_to_string(root.join("scripts/test_v4_updater_private_key.ps1"))?;
+    for marker in [
+        "V4_TEST_ONLY_PASS_PHRASE_MARKER",
+        "verify_v4_updater_private_key.ps1",
+        "Assert-NoPasswordMarker",
+        "Verifier mismatch path",
+        "Verifier success path",
+        "throwaway.key",
+    ] {
+        if !key_verifier_test.contains(marker) {
+            return Err(format!(
+                "v4 updater key verifier regression is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    let release_owner = fs::read_to_string(root.join("xtask/src/release_v4.rs"))?;
+    for marker in [
+        "fn build_unsigned",
+        "fn sign_candidate",
+        "fn qualify_candidate",
+        "fn candidate_record",
+        "fn write_release_evidence",
+        "fn validate_candidate_evidence",
+        "fn validate_qualification_evidence",
+        "fn publish_release",
+        "fn promote_metadata",
+        "fn final_verify",
+        "fn doctor_report",
+        "capture_owned_timeout_to_file_filtered",
+        "GITHUB_RETRY_ATTEMPTS",
+    ] {
+        if !release_owner.contains(marker) {
+            return Err(format!(
+                "Rust v4 release owner is missing its required boundary: {marker}"
+            )
+            .into());
+        }
+    }
+    let nsis_harness = fs::read_to_string(root.join("xtask/src/nsis_harness.rs"))?;
+    let nsis_hook = fs::read_to_string(root.join("apps/desktop/src-tauri/nsis-hooks.nsh"))?;
+    v4_calibration_retirement_contract(&nsis_harness, &nsis_hook)?;
+    let retired_release_scripts = [
+        "scripts/v4_release_pipeline.ps1",
+        "scripts/release_doctor.ps1",
+        "scripts/orchestrate_v4_production_release.ps1",
+        "scripts/promote_v4_metadata.ps1",
+        "scripts/v4_release_asset_upload.ps1",
+        "scripts/v4_release_draft_lookup.ps1",
+        "scripts/v4_release_latest_policy.ps1",
+        "scripts/ci_v4_release_latest_guard.ps1",
+        "scripts/probe_v4_metadata_app_access.ps1",
+        "scripts/cleanup_v4_release_state.ps1",
+        "scripts/v4_qualification_evidence.ps1",
+        "scripts/test_v4_release_pipeline.ps1",
+        "scripts/test_v4_post_publication_transaction.ps1",
+        "scripts/test_ci_v4_release_latest_guard.ps1",
+        "scripts/test_v4_production_orchestrator.ps1",
+    ];
+    for relative in retired_release_scripts {
+        if root.join(relative).exists() {
+            return Err(format!("retired PowerShell release authority remains: {relative}").into());
+        }
+    }
+    let topology_doc = fs::read_to_string(root.join("docs/v4-release-execution-topology.md"))?;
+    for marker in [
+        "Build Once, Qualify Exact Bytes",
+        "Runner Trust Boundaries and Key Custody",
+        "V4_QUALIFICATION_EVIDENCE.json",
+        "V4_PRODUCTION_RELEASE_EVIDENCE.json",
+    ] {
+        if !topology_doc.contains(marker) {
+            return Err(format!(
+                "v4 release execution topology documentation is missing required marker: {marker}"
+            )
+            .into());
+        }
+    }
+
+    let private_begin = ["BEGIN", "PRIVATE", "KEY"].join(" ");
+    let rsa_private_begin = ["BEGIN", "RSA", "PRIVATE", "KEY"].join(" ");
+    let ec_private_begin = ["BEGIN", "EC", "PRIVATE", "KEY"].join(" ");
+    for entry in WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|entry| {
+            !entry.path().components().any(|component| {
+                matches!(
+                    component.as_os_str().to_str(),
+                    Some(".git" | "target" | "node_modules" | "dist")
+                )
+            })
+        })
+    {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path();
+        let filename = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        if [".key", ".pem", ".pfx", ".p12"]
+            .iter()
+            .any(|suffix| filename.ends_with(suffix))
+        {
+            return Err(format!(
+                "private signing material file is present in the repository tree: {}",
+                path.display()
+            )
+            .into());
+        }
+        let bytes = fs::read(path)?;
+        if is_tauri_minisign_private_key(&bytes) {
+            return Err(format!(
+                "Tauri/minisign private key material found at {}",
+                path.display()
+            )
+            .into());
+        }
+        let Ok(content) = String::from_utf8(bytes) else {
+            continue;
+        };
+        for (line_number, line) in content.lines().enumerate() {
+            if line.contains(&private_begin)
+                || line.contains(&rsa_private_begin)
+                || line.contains(&ec_private_begin)
+            {
+                return Err(format!(
+                    "private key material marker found at {}:{}",
+                    path.display(),
+                    line_number + 1
+                )
+                .into());
+            }
+            let secret_name = ["TAURI_SIGNING_PRIVATE", "_KEY"].concat();
+            if line.contains(&secret_name)
+                && ["Write-Host", "Write-Output", "echo", "Add-Content"]
+                    .iter()
+                    .any(|sink| line.contains(sink))
+            {
+                return Err(format!(
+                    "signing secret is sent to a logging/output sink at {}:{}",
+                    path.display(),
+                    line_number + 1
+                )
+                .into());
+            }
+        }
+    }
+    println!("[xtask] v4 trust-material and secret-output guards: PASS");
+    Ok(())
+}
+
+fn extract_rust_string_constant(source: &str, name: &str) -> Result<String> {
+    let marker = format!("const {name}: &str = \"");
+    let values = source
+        .lines()
+        .filter_map(|line| {
+            let start = line.find(&marker)? + marker.len();
+            let value = line.get(start..)?.split_once('"')?.0;
+            Some(value.to_owned())
+        })
+        .collect::<Vec<_>>();
+    match values.as_slice() {
+        [value] => Ok(value.clone()),
+        _ => Err(format!("Rust source must contain exactly one {name} string constant").into()),
+    }
+}
+
+fn is_tauri_minisign_private_key(bytes: &[u8]) -> bool {
+    let mut candidate = bytes.to_vec();
+    for _ in 0..3 {
+        if is_minisign_secret_text(&candidate) {
+            return true;
+        }
+        let Ok(text) = std::str::from_utf8(&candidate) else {
+            return false;
+        };
+        let Ok(decoded) = STANDARD.decode(text.trim()) else {
+            return false;
+        };
+        candidate = decoded;
+    }
+    false
+}
+
+fn is_minisign_secret_text(bytes: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(bytes) else {
+        return false;
+    };
+    let lines = text.lines().collect::<Vec<_>>();
+    if lines.len() != 2 {
+        return false;
+    }
+    let comment = lines[0].to_ascii_lowercase();
+    if !comment.starts_with("untrusted comment:")
+        || (!comment.contains("secret key") && !comment.contains("private key"))
+    {
+        return false;
+    }
+    STANDARD
+        .decode(lines[1])
+        .map(|payload| (64..=1024).contains(&payload.len()))
+        .unwrap_or(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fixture_new_root_guard_reads_runtime_and_test_owners_separately() {
+        let root = crate::repo::root();
+        let native = fs::read_to_string(root.join("apps/desktop/src-tauri/src/native_update.rs"))
+            .expect("native updater implementation");
+        let tests =
+            fs::read_to_string(root.join("apps/desktop/src-tauri/src/native_update/tests.rs"))
+                .expect("native updater test owner");
+        fixture_new_root_runtime_contract(&native, &tests)
+            .expect("runtime seam and moved regression must be present in their owners");
+
+        let missing_runtime =
+            native.replace("fixture_public_keys", "retired_runtime_key_selection");
+        assert!(fixture_new_root_runtime_contract(&missing_runtime, &tests).is_err());
+        assert!(
+            tests.contains("fixture_new_only_mode_selects_only_the_last_supplied_root"),
+            "the moved test marker must not satisfy a missing production implementation"
+        );
+
+        let missing_test = tests.replace(
+            "fixture_new_only_mode_selects_only_the_last_supplied_root",
+            "retired_fixture_new_root_test",
+        );
+        assert!(fixture_new_root_runtime_contract(&native, &missing_test).is_err());
+    }
+
+    #[test]
+    fn updater_http_guard_reads_the_extracted_http_implementation() {
+        let root = crate::repo::root();
+        let http = fs::read_to_string(root.join("xtask/src/updater_fixture/http.rs"))
+            .expect("updater HTTP implementation");
+        let tests = fs::read_to_string(root.join("xtask/src/updater_fixture/tests.rs"))
+            .expect("updater HTTP tests");
+        updater_http_contract(&http).expect("HTTP limits and loopback owner must be present");
+
+        let missing_limit = http.replace("MAX_HTTP_REQUESTS", "RETIRED_HTTP_REQUEST_LIMIT");
+        assert!(updater_http_contract(&missing_limit).is_err());
+        assert!(
+            tests.contains("fixture_server_teardown_is_bounded_for_a_stalled_partial_request"),
+            "test source remains separate from the required HTTP implementation markers"
+        );
+    }
+
+    #[test]
+    fn package_retirement_contract_removes_only_install_payload_and_preserves_cache() {
+        let source =
+            super::super::normalize_source_line_endings(include_str!("../nsis_harness.rs"));
+        let hook = include_str!("../../../apps/desktop/src-tauri/nsis-hooks.nsh");
+        v4_calibration_retirement_contract(&source, hook)
+            .expect("installer removes the old install payload and preserves user cache bytes");
+
+        let missing_cache_guard =
+            source.replace("    if bytes != RETIRED_CACHE_SENTINEL {", "    if false {");
+        assert!(
+            v4_calibration_retirement_contract(&missing_cache_guard, hook).is_err(),
+            "contract must reject removal of the app-data byte-preservation check"
+        );
+        let missing_cleanup = hook.replace("  Delete \"$INSTDIR\\native_calibration.exe\"", "");
+        assert!(
+            v4_calibration_retirement_contract(&source, &missing_cleanup).is_err(),
+            "contract must reject removal of installer cleanup"
+        );
+    }
+    #[test]
+    fn trust_guard_rejects_renamed_and_encoded_minisign_secret_keys() {
+        let secret_payload = STANDARD.encode([0_u8; 158]);
+        let secret_text =
+            format!("untrusted comment: minisign encrypted secret key\n{secret_payload}");
+        assert!(is_tauri_minisign_private_key(secret_text.as_bytes()));
+        assert!(is_tauri_minisign_private_key(
+            STANDARD.encode(&secret_text).as_bytes()
+        ));
+
+        let public_text = format!(
+            "untrusted comment: minisign public key: fixture\n{}",
+            STANDARD.encode([0_u8; 32])
+        );
+        assert!(!is_tauri_minisign_private_key(
+            STANDARD.encode(public_text).as_bytes()
+        ));
+
+        let fixture = std::env::temp_dir().join(format!(
+            "sky-xtask-renamed-secret-{}-{:?}.txt",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::write(&fixture, STANDARD.encode(secret_text)).unwrap();
+        let renamed_fixture = fs::read(&fixture).unwrap();
+        assert!(is_tauri_minisign_private_key(&renamed_fixture));
+        fs::remove_file(fixture).unwrap();
+    }
+}

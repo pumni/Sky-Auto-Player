@@ -26,6 +26,7 @@ changed behavior; follow its source/test references only as needed.
 | CI lanes, local impact preview, verification evidence | [CI topology](ci-validation-topology.md) |
 | Compiler pin, MSRV, production lint | [Rust toolchain policy](rust-toolchain-policy.md) |
 | Contribution and review practice | [Contributing](../CONTRIBUTING.md) |
+| Active test reliability program (temporary work order) | [SPEC](test-verification-spec.md), [Implementation plan](test-verification-implementation-plan.md) |
 
 [HISTORY.md](HISTORY.md) links revision-bound decisions and evidence, not live
 work orders or current qualification. Published user-facing notes live in

@@ -133,20 +133,20 @@ rounded to hundredths with nearest-even ties, then bounded to 0.1–1.0 where
 that recommendation applies. Nonfinite or unrepresentable advice is omitted
 with a diagnostic.
 
-`rust/crates/sky_app_core/src/song.rs::tests::legacy_timestamp_coercion_preserves_documented_json_values`
-covers legacy timestamp forms. `rust/crates/sky_app_core/src/song/numeric.rs`
+`crates/sky_app_core/src/song/tests.rs::legacy_timestamp_coercion_preserves_documented_json_values`
+covers legacy timestamp forms. `crates/sky_app_core/src/song/numeric.rs`
 tests `checked_nearest_even_timestamp_rounding_covers_ties_edges_and_u64_bound`,
 `legacy_schedule_rejects_invalid_source_and_release_time_overflow`,
 `risk_gap_overflow_is_omitted_and_nonfinite_suggestions_are_diagnosed`, and
 `unrepresentable_tempo_advice_is_omitted_with_a_schedule_warning`. In
-`rust/crates/sky_app_core/tests/piano_planner.rs`,
+`crates/sky_app_core/tests/piano_planner.rs`,
 `tiny_positive_tempo_scale_rejects_out_of_range_scaled_onset` and
 `scaled_onset_must_leave_room_for_the_minimum_physical_hold` cover planner
 boundaries.
 
 ## Regression evidence
 
-rust/crates/sky_app_core/tests/piano_planner.rs covers C and D target pitch,
+crates/sky_app_core/tests/piano_planner.rs covers C and D target pitch,
 v4 nominal versus v5 absolute notes, all fifteen simultaneous keys, merged
 provenance, duplicate instrument names with explicit track selection, loss
 reconciliation, unplayable and unpitched notes, sustain degradation, repeated

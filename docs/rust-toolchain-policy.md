@@ -1,16 +1,16 @@
 # Rust toolchain policy
 
-`rust/rust-toolchain.toml` is the single production Rust toolchain source. Historical
+`rust-toolchain.toml` is the single production Rust toolchain source. Historical
 migration notes and release acceptance records preserve the versions they used; they do
 not define the current build contract.
 
 ## Current contract
 
-- Production compiler: the exact stable patch in `rust/rust-toolchain.toml`.
-- Workspace MSRV: Rust `1.99`, declared independently by `rust/Cargo.toml`.
+- Production compiler: the exact stable patch in `rust-toolchain.toml`.
+- Workspace MSRV: Rust `1.99`, declared independently by `Cargo.toml`.
 - Edition: Rust `2024`.
 - Target: `x86_64-pc-windows-msvc`.
-- Dependency resolution: `rust/Cargo.lock` is committed and native product builds use
+- Dependency resolution: `Cargo.lock` is committed and native product builds use
   Cargo's locked mode.
 - Root-level Cargo commands use
   `node scripts/toolchain-pin.mjs exec -- cargo ...`; `read rust` prints the canonical
@@ -19,13 +19,19 @@ not define the current build contract.
   with the actual compiler used by the source-bound build.
 
 Rustup searches for a toolchain file from the process's current directory upward through
-its parents. It does not search child directories. Commands started inside `rust/` find
-`rust/rust-toolchain.toml`; commands started at the repository root, `apps/desktop/`, or
-`apps/website/` do not. The repository resolver reads the nested pin and supplies the corresponding
-`RUSTUP_TOOLCHAIN` for root-level Cargo commands. The `setup-rust-pinned` composite action
-uses the same source for CI installation and exports that value to later steps.
+its parents. The root pin therefore applies to commands started at the repository root,
+`apps/desktop/`, and `apps/website/`. The repository resolver reads the same pin and supplies
+the corresponding `RUSTUP_TOOLCHAIN` for Cargo commands. The `setup-rust-pinned` composite
+action uses this source for CI installation and exports that value to later steps.
 
 ## Rust lint policy
+
+The root `rustfmt.toml` fixes the 2024 language/style editions and LF output
+on the stable pin. The root `clippy.toml` records test assertion allowances
+for future restriction lint adoption; it does not enable unwrap/expect lints.
+All eight workspace members inherit the root workspace lint policy. Do not
+add blanket lint suppressions or unstable formatter options to normalize code.
+
 
 The required Rust validation has two complementary lanes. The existing
 workspace Clippy pass uses all targets and all features with `-D warnings`.
@@ -50,10 +56,28 @@ lint exceptions must be reviewed in context; a green gate is not evidence
 that every suppression is justified. Architecture audit advisories are a
 separate policy and are not compiler warnings.
 
+## Dependency governance
+
+- RustSec advisory policy lives in `.cargo/audit.toml`. Audit the whole locked
+  graph, including non-Windows build tooling. No advisory IDs are ignored;
+  informational warnings remain visible under the existing severity policy.
+- Install the pinned Cargo Audit 0.22.2 and Cargo Vet 0.10.2 with locked installs
+  for local `cargo xtask check all`; local Rust dependency validation runs both.
+  Hosted CI uses the same Rust tools and also scans both Bun lockfiles with OSV.
+- The root `deny.toml` is a feasibility configuration for source and bans checks,
+  not an active required gate. Evaluate `cargo deny --locked check sources bans`
+  using a reviewed tool pin; do not treat this as license clearance or a second
+  RustSec authority. License and target/feature coverage require separate review.
+- Retain Cargo Vet and existing exemptions until a replacement policy and its
+  evidence are reviewed. Do not add exemptions merely to make CI green.
+- Review advisory reachability for Windows product and Linux tooling separately.
+  Dependency updates, stricter advisory severity, and changes to release trust
+  require their own verification; this configuration change authorizes none.
+
 ## Upgrade policy
 
 1. Start from the current `origin/main` and record the exact base commit.
-2. Change the compiler only in `rust/rust-toolchain.toml`; do not run `cargo update`.
+2. Change the compiler only in `rust-toolchain.toml`; do not run `cargo update`.
 3. Run the complete pinned `cargo xtask check all` gate, including production
    lint, all-target/all-feature Clippy with `-D warnings`, and locked tests.
 4. Review Windows-specific runtime changes, especially TLS destructor behavior for the

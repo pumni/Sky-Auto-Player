@@ -24,7 +24,7 @@ Sky Auto Player **never**:
 - bypasses anti-cheat or interferes with anti-cheat operation.
 
 The only hook exception is the audited Win32 adapter at
-`rust/crates/sky_dispatch_win32/src/focus/foreground_watcher.rs`. It registers
+`crates/sky_dispatch_win32/src/focus/foreground_watcher.rs`. It registers
 exactly `EVENT_SYSTEM_FOREGROUND` with `WINEVENT_OUTOFCONTEXT`; its callback
 publishes a coalesced HWND hint only. The hint does not authorize input or
 change the immutable target. In-context hooks, keyboard hooks, and hooks that
@@ -84,8 +84,11 @@ The Rust-owned `UpdateService` selects the fixed v4 authority and the official T
 verifies the detached Ed25519 signature over the exact NSIS update artifact before installation.
 V4 has no bundled custom updater executable, portable ZIP updater contract, or `MANIFEST.json.sig`
 protocol. It must also preserve its HTTPS allow-list, exact artifact SHA-256, bounded provenance,
-and user-triggered execution model. The current normative contract is
-[`docs/distribution-and-update.md`](docs/distribution-and-update.md).
+and user-triggered execution model. Release artifacts retain integrity, Ed25519
+updater signatures, OIDC provenance, and SPDX SBOM verification, but are not
+antivirus-scanned by project CI/CD (Owner Decision D23; rationale and risk
+acceptance in [`docs/v4-release-authority.md`](docs/v4-release-authority.md)).
+The current normative contract is [`docs/distribution-and-update.md`](docs/distribution-and-update.md).
 
 Changes to updater trust, release provenance, allowed download origins, preserved user data, or
 transaction integrity are security-sensitive and require direct tests/evidence for that boundary.

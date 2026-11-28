@@ -1,5 +1,50 @@
 use super::*;
 
+struct RecoveryPollHookReset;
+
+type RecoveryPollObservation = (String, RecoveryForegroundPoll, bool);
+
+impl Drop for RecoveryPollHookReset {
+    fn drop(&mut self) {
+        set_recovery_test_poll_hook(None);
+    }
+}
+
+fn install_recovery_poll_hook() -> (
+    RecoveryPollHookReset,
+    mpsc::Receiver<RecoveryPollObservation>,
+) {
+    let (sender, receiver) = mpsc::channel();
+    set_recovery_test_poll_hook(Some(Arc::new(
+        move |session_id, poll, recovery_attempted| {
+            let _ = sender.send((session_id, poll, recovery_attempted));
+        },
+    )));
+    (RecoveryPollHookReset, receiver)
+}
+
+fn wait_for_recovery_poll(
+    receiver: &mpsc::Receiver<RecoveryPollObservation>,
+    session_id: &str,
+    expected: RecoveryForegroundPoll,
+) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let observation = receiver.recv_timeout(remaining).unwrap_or_else(|error| {
+            panic!("timed out waiting for recovery poll {expected:?}: {error}")
+        });
+        let (observed_session_id, poll, recovery_attempted) = observation;
+        if observed_session_id == session_id && poll == expected {
+            return recovery_attempted;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "recovery polls for session {session_id} did not reach {expected:?}; last observed session {observed_session_id} poll {poll:?}"
+        );
+    }
+}
+
 #[cfg(feature = "tauri-test")]
 #[test]
 fn panic_release_before_armed_has_no_physical_release_obligation() {
@@ -125,7 +170,7 @@ fn shutdown_timeout_keeps_the_physical_reservation_and_omits_release_proof() {
 
 #[test]
 fn pre_exit_release_marker_requires_verified_shutdown_result() {
-    let source = include_str!("../../../native_runtime.rs");
+    let source = include_str!("../../../native_runtime/bootstrap.rs");
     let shutdown_gate = source
         .find("if safety_playback.shutdown(safety_events.clone()) {")
         .expect("verified shutdown gate");
@@ -965,8 +1010,10 @@ fn quarantined_recovery_fixture(
 fn post_join_recovery_observes_focus_return_after_terminal_publication_without_winevent() {
     let _send_lock = recovery_test_send_lock();
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let (_poll_hook_reset, poll_receiver) = install_recovery_poll_hook();
     let session_id = "a".repeat(32);
     let (service, active, _authority) = quarantined_recovery_fixture(&session_id, false, 0x0001, 0);
+    set_recovery_test_probe_result(None);
     let events = Arc::new(Mutex::new(NativeEventHub::default()));
     let terminal_publication = PlaybackTerminalPublication::Failed {
         code: "terminal_release_unverified".into(),
@@ -985,24 +1032,38 @@ fn post_join_recovery_observes_focus_return_after_terminal_publication_without_w
         .post_join_recovery
         .start_without_winevent_for_test(active.clone(), service.last_terminal.clone())
         .expect("start persistent polling recovery owner");
-    std::thread::sleep(Duration::from_millis(80));
+    assert!(!wait_for_recovery_poll(
+        &poll_receiver,
+        &session_id,
+        RecoveryForegroundPoll::NotForeground
+    ));
     assert_eq!(recovery_test_raw_sends(), 0, "background must not send Up");
 
     // This fixture deliberately disables WinEvent. The exact foreground poll
     // must discover the return and trigger one bounded attempt.
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x1199)));
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while recovery_test_raw_sends() == 0 && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    assert!(wait_for_recovery_poll(
+        &poll_receiver,
+        &session_id,
+        RecoveryForegroundPoll::ForegroundMatch
+    ));
     assert_eq!(recovery_test_raw_sends(), 1, "focus return gets one raw Up");
 
     // Repeated polls/duplicate hints while the original target stays
     // foreground are the same transition, not new recovery attempts.
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
-    std::thread::sleep(Duration::from_millis(150));
+    assert!(!wait_for_recovery_poll(
+        &poll_receiver,
+        &session_id,
+        RecoveryForegroundPoll::ForegroundMatch
+    ));
     assert_eq!(recovery_test_raw_sends(), 1);
+    assert_eq!(
+        recovery_test_probe_calls(),
+        1,
+        "duplicate exact-foreground polls must not repeat recovery"
+    );
     assert!(service.activity.physical_release_is_quarantined());
     assert!(matches!(
         service
@@ -1023,6 +1084,7 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
 
     let _send_lock = recovery_test_send_lock();
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let (_poll_hook_reset, poll_receiver) = install_recovery_poll_hook();
     set_recovery_test_probe_result(None);
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
@@ -1146,6 +1208,11 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
             .terminal_release_verified,
         Some(false)
     );
+    assert!(!wait_for_recovery_poll(
+        &poll_receiver,
+        &active.session_id,
+        RecoveryForegroundPoll::NotForeground
+    ));
     assert_eq!(
         recovery_test_raw_sends(),
         0,
@@ -1160,17 +1227,17 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
     ));
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while recovery_test_raw_sends() == 0 && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
-    }
+    assert!(wait_for_recovery_poll(
+        &poll_receiver,
+        &active.session_id,
+        RecoveryForegroundPoll::ForegroundMatch
+    ));
     assert_eq!(recovery_test_raw_sends(), 1);
     assert_eq!(
         recovery_test_probe_calls(),
         1,
         "one admitted Up is probed once"
     );
-    thread::sleep(Duration::from_millis(150));
     assert_eq!(
         recovery_test_raw_sends(),
         1,
@@ -1203,6 +1270,7 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
 fn post_join_recovery_rejects_foreign_foreground_owner_drift_and_prejoin_start() {
     let _send_lock = recovery_test_send_lock();
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let (_poll_hook_reset, poll_receiver) = install_recovery_poll_hook();
     let (service, active, authority) =
         quarantined_recovery_fixture("post-join-origin-reject", false, 0x0001, 0);
     reset_recovery_test_raw_sends();
@@ -1226,14 +1294,22 @@ fn post_join_recovery_rejects_foreign_foreground_owner_drift_and_prejoin_start()
         .post_join_recovery
         .start_without_winevent_for_test(active.clone(), service.last_terminal.clone())
         .expect("start recovery owner against original authority");
-    std::thread::sleep(Duration::from_millis(80));
+    assert!(!wait_for_recovery_poll(
+        &poll_receiver,
+        &active.session_id,
+        RecoveryForegroundPoll::NotForeground
+    ));
     assert_eq!(recovery_test_raw_sends(), 0);
 
     // Reusing the original HWND with a different PID is invalid origin, not a
     // foreground return. The recovery owner tears down and keeps quarantine.
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x2222)));
-    std::thread::sleep(Duration::from_millis(80));
+    assert!(!wait_for_recovery_poll(
+        &poll_receiver,
+        &active.session_id,
+        RecoveryForegroundPoll::OwnerMismatch
+    ));
     assert_eq!(recovery_test_raw_sends(), 0);
     assert!(service.activity.physical_release_is_quarantined());
     authority.set_process_identity_status_for_test(

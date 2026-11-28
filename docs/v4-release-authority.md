@@ -137,16 +137,17 @@ The ordering is security-critical:
    verification, SPDX SBOM, exact bundle verification, updater fixture, and
    Windows NSIS install/launch/uninstall qualification. It freezes `candidate-manifest.json` with
    SHA-256 digests and file sizes.
-5. **VerifyCandidate / MalwareScan / VerifyAttestations**: `verify-candidate` revalidates
-   the exact signed candidate in `attest`. The Ubuntu 24.04-hosted step installs ClamAV,
-   refreshes official virus definitions, **detects an EICAR control**, and scans the identical
-   signed installer with no signing secrets or ability to mutate it. `verify-malware-scan`
-   checks the typed run/attempt and exact artifact digest, size and source identity before
-   separate OIDC attestation of the scan evidence. `probe-verify-candidate` runs only in
-   `metadata_probe` through separate job authorization. Publication downloads the
-   malware evidence, revalidates it and verifies its OIDC attestation alongside the installer,
-   updater signature and SPDX SBOM. A skipped/stale/unavailable scanner cannot produce
-   an accepted release.
+5. **VerifyCandidate / VerifyAttestations**: `verify-candidate` revalidates
+   the exact signed candidate in `attest`. `attest` runs on `ubuntu-latest` with
+   no signing secrets or ability to mutate the candidate, and publishes OIDC
+   attestations for the exact installer, updater signature, and SPDX SBOM.
+   `probe-verify-candidate` runs only in `metadata_probe` through separate job
+   authorization. Publication verifies the OIDC attestations for the installer,
+   updater signature, and SPDX SBOM against the exact source SHA and candidate
+   bytes. Per Owner Decision D23, release artifacts are **not** antivirus-scanned
+   in CI/CD (rationale and accepted risk: project-operated malware scanning was
+   retired without replacement; integrity, signatures, provenance, SBOM, and
+   supply-chain audits remain binding).
 6. **PublishRelease**: Executes a single cohesive publication transaction boundary:
    - Reconciles and deletes only a matching unpublished stale draft immediately before creating the
      new draft; mismatched or published releases fail closed.
@@ -404,8 +405,8 @@ React          = presentation
 | Layer | Component / Tooling | Canonical Ownership | Non-Goals / Excluded Roles |
 |---|---|---|---|
 | **GitHub Actions** | `.github/workflows/release-v4.yml`, `ci.yml` | Hosted job lifecycle, exact source checkout, scoped permissions, protected environment references, artifact handoff, and OIDC attestations. | Does not define SemVer, artifact identity, release policy, metadata schemas, or transaction state transitions. |
-| **cargo xtask (Rust)** | `rust/xtask/src/release_v4.rs`, `release_handoff.rs`, `release_signing.rs`, and related release modules | Single transaction authority for Preflight, BuildUnsigned, SignCandidate, QualifyCandidate, VerifyCandidate, VerifyAttestations, PublishRelease, PromoteMetadata, FinalVerify, and read-only release-doctor. Owns deterministic release policy, evidence, artifact schemas, exact-byte checks, API reconciliation, and fake-transport regressions. | Uses constrained platform adapters; does not mint GitHub workflow tokens or select the release runner. |
-| **PowerShell / Python** | Windows Authenticode scripts, `scripts/scan_v4_malware_exact.py` (Ubuntu-hosted ClamAV only), local Credential Manager helpers | Narrow Windows Authenticode / independent exact-byte malware-scanner adapters with real EICAR-positive proof. Previous `scan_v4_defender_exact.ps1` is retained for standalone self-hosted compatibility, **not accepted as hosted-release evidence**. | Neither adapter owns release policy, publication, metadata state transitions or SemVer; Rust validates evidence and OIDC attestation. |
+| **cargo xtask (Rust)** | `xtask/src/release_v4.rs`, `release_handoff.rs`, `release_signing.rs`, and related release modules | Single transaction authority for Preflight, BuildUnsigned, SignCandidate, QualifyCandidate, VerifyCandidate, VerifyAttestations, PublishRelease, PromoteMetadata, FinalVerify, and read-only release-doctor. Owns deterministic release policy, evidence, artifact schemas, exact-byte checks, API reconciliation, and fake-transport regressions. | Uses constrained platform adapters; does not mint GitHub workflow tokens or select the release runner. |
+| **PowerShell** | Windows Authenticode scripts, local Credential Manager helpers | Narrow Windows Authenticode and Credential Manager helpers. | Does not own release policy, publication, metadata state transitions, or SemVer. |
 | **Tauri Rust** | `apps/desktop/src-tauri/` (`UpdateService`, `tauri-plugin-updater`) | Runtime updater state machine; minisign signature verification against compiled-in public keys; update discovery via persisted channel endpoints; safe application quiescence, note release, and restart. | Does not manage distribution metadata creation or remote releases. |
 | **React / TypeScript** | `apps/desktop/src/` (`UpdateModal`, `UpdateBanner`, `SettingsView`) | Presentation of update status, download progress, release notes, and channel selector options. | Strictly unprivileged; cannot supply custom endpoints, override public keys, bypass signatures, or initiate downgrade installations. |
 

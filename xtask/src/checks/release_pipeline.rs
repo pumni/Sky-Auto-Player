@@ -1,0 +1,1678 @@
+use super::recovery_auth::metadata_recovery_auth_contract;
+use super::workflow::{workflow_declares_only_dispatch, workflow_job_blocks, workflow_step_blocks};
+mod linux_process;
+use crate::Result;
+use std::fs;
+use std::path::Path;
+
+fn source(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn has_permission(job: &str, permission: &str) -> bool {
+    job.lines().any(|line| line.trim() == permission)
+}
+
+fn metadata_recovery_rust_contract(recovery: &str) -> std::result::Result<(), String> {
+    let recovery = source(recovery);
+    for marker in [
+        "struct Plan",
+        "struct PlanRun",
+        "fn validate_runtime",
+        "fn parse_marker",
+        "fn validate_run",
+        "fn validate_release_run_with_page_size(",
+        "fn validate_recovery_plan_run(",
+        "fn list_run_attempt_jobs(",
+        "RELEASE_PREPUBLISH_JOB_NAMES",
+        "RECOVERY_PLAN_JOB_CONCLUSIONS",
+        "RELEASE_METADATA_PROMOTE_JOB",
+        "fn build_plan(",
+        "exact_job_map(&jobs, &expected_names, None)?",
+        "recovery_plan_run_requires_the_exact_three_job_attempt_inventory",
+        "verify_updater_signature_for_version",
+        "gh",
+        "--source-digest",
+        "--signer-workflow",
+        "https://spdx.dev/Document/v2.3",
+        "fn read_metadata(",
+        "raw.githubusercontent.com",
+        "fn apply(",
+        "super::reconcile_metadata_put(",
+        "metadata recovery plan is stale or differs from operator-reviewed bytes",
+        "metadata branch, public endpoint, or beta pointer changed after the reviewed plan",
+        "stable metadata changed at the final Contents API write boundary",
+        "postpublication_workflow_failure_after_publish_allows_metadata_only_recovery",
+        "recovery_rejects_failed_cancelled_or_unverifiable_publish_attempts",
+        "release_attempt_job_discovery_paginates_and_binds_each_job_identity",
+        "recovery_revalidates_the_successful_cross_run_plan_artifact_before_writing",
+        "reviewed_plan_artifact_binds_exact_run_name_tag_and_digest",
+        "metadata_recovery_noop_is_idempotent_and_stale_plan_fails_before_write",
+        "latest_conflict_duplicate_assets_wrong_tag_and_tampered_bytes_fail_closed",
+    ] {
+        if !recovery.contains(marker) {
+            return Err(format!(
+                "Rust metadata-only recovery is missing invariant `{marker}`"
+            ));
+        }
+    }
+    let planner = recovery
+        .split_once("fn build_plan(")
+        .and_then(|(_, body)| body.split_once("\nfn encode_plan("))
+        .map(|(body, _)| body)
+        .ok_or("Rust metadata recovery planner is not bounded")?;
+    if planner.contains("transport.request(\"PUT\"")
+        || planner.contains("transport.request(\"POST\"")
+        || planner.contains("transport.request(\"DELETE\"")
+        || planner.contains("transport.upload(")
+    {
+        return Err("metadata recovery plan must not contain GitHub mutations".into());
+    }
+    let apply = recovery
+        .split_once("fn apply(")
+        .and_then(|(_, body)| body.split_once("\n#[cfg(test)]\nmod tests"))
+        .map(|(body, _)| body)
+        .ok_or("Rust metadata recovery apply path is not bounded")?;
+    if apply.matches("transport.request(\"PUT\"").count() != 1
+        || apply.contains("transport.request(\"POST\"")
+        || apply.contains("transport.request(\"DELETE\"")
+        || apply.contains("transport.upload(")
+        || !apply.contains("channels/stable/latest.json")
+        || apply.contains("channels/beta/latest.json\"")
+    {
+        return Err("metadata recovery may issue one stable Contents PUT and must preserve every immutable or beta asset".into());
+    }
+    Ok(())
+}
+
+fn nsis_installed_catalog_contract(
+    harness: &str,
+    installer_hook: &str,
+) -> std::result::Result<(), String> {
+    let harness = source(harness);
+    for marker in [
+        "fn assert_user_songs_empty",
+        "verify_retired_calibration_upgrade",
+        "RETIRED_CACHE_SENTINEL",
+        "cache/input_latency.json",
+        "SKY_BUILTIN_CATALOG_FRESH_SELFTEST",
+        "fn launch_smoke",
+        "--selftest-update-active-playback",
+        "assert_uninstall_registration_absent()",
+        "fn uninstaller_working_directory(",
+        "fn finish_uninstall(",
+        "wait_tree_timeout(std::time::Duration::from_secs(30))",
+        "active_processes()",
+        "uninstaller exit status:",
+        "uninstall registration:",
+        "bounded_install_root_inventory(",
+        "owned_root_cleanup_requires_exact_sentinel_and_direct_runner_temp_scope",
+        "incomplete_root_rollback_accepts_only_a_prefix_of_the_created_sentinel",
+        "install_root_absence_polling_has_a_deadline",
+        "cleanup_attempts_every_stage_and_preserves_original_failure",
+    ] {
+        if !harness.contains(marker) {
+            return Err(format!("Rust NSIS owner is missing regression `{marker}`"));
+        }
+    }
+    let qualification = harness
+        .split_once("fn qualify_package(")
+        .map(|(_, body)| body)
+        .ok_or("Rust NSIS owner is missing its package qualification function")?;
+    let qualification = qualification
+        .split_once("\nfn verify_retired_calibration_upgrade(")
+        .map(|(body, _)| body)
+        .ok_or("Rust NSIS package qualification body is not bounded")?;
+    let install = qualification
+        .find("run_installer(\n        installer,")
+        .ok_or("Rust NSIS package qualification does not install the validated candidate")?;
+    let catalog = qualification
+        .find("crate::builtin_catalog::run(")
+        .ok_or("Rust NSIS package qualification does not verify the installed built-in catalog")?;
+    let retirement = qualification
+        .find("verify_retired_calibration_upgrade(&install_root, &app_data)?")
+        .ok_or("Rust NSIS package qualification must verify retired executable removal and cache preservation")?;
+    let songs_guard = qualification
+        .find("assert_user_songs_empty(&app_data.join(\"songs\"))")
+        .ok_or("Rust NSIS fresh-install qualification does not assert empty user songs")?;
+    let launch = qualification
+        .find("launch_smoke(scope, &app")
+        .ok_or("Rust NSIS package qualification does not launch the installed application")?;
+    let uninstall = qualification
+        .find("run_uninstaller(&uninstaller, &install_root, &shell_env)?")
+        .ok_or("Rust NSIS qualification does not run the installed uninstaller")?;
+    let finish_uninstall = qualification
+        .find("finish_uninstall(&install_root, &mut uninstaller)?")
+        .ok_or("Rust NSIS qualification does not await uninstall tree and root cleanup")?;
+    let registry_cleanup = qualification
+        .find("assert_uninstall_registration_absent()?")
+        .ok_or("Rust NSIS qualification must verify uninstall registration removal")?;
+    if qualification.contains("remove_dir_all(&install_root)")
+        || qualification.contains("remove_dir(&install_root)")
+    {
+        return Err("NSIS qualification must not manually delete the install root to claim uninstall success".into());
+    }
+    if install >= retirement
+        || retirement >= catalog
+        || catalog >= launch
+        || songs_guard >= launch
+        || launch >= uninstall
+        || uninstall >= finish_uninstall
+        || finish_uninstall >= registry_cleanup
+        || !qualification[catalog..launch].contains("verify-installed")
+    {
+        return Err(
+            "installed catalog and empty user-song checks must follow install and precede app launch"
+                .into(),
+        );
+    }
+    let hook = source(installer_hook);
+    let preinstall = hook
+        .split_once("!macro NSIS_HOOK_PREINSTALL")
+        .and_then(|(_, body)| body.split_once("!macroend"))
+        .map(|(body, _)| body)
+        .ok_or("NSIS preinstall migration hook is missing")?;
+    if !preinstall.contains("Delete \"$INSTDIR\\native_calibration.exe\"")
+        || !preinstall.contains(
+            "IfFileExists \"$INSTDIR\\native_calibration.exe\" sap_retired_calibration_present 0",
+        )
+        || !preinstall.contains(
+            "IfFileExists \"$INSTDIR\\native_calibration.exe\" sap_retired_calibration_failed 0",
+        )
+        || !preinstall.contains("Abort \"The retired calibration payload could not be removed")
+        || preinstall.contains("$APPDATA")
+        || preinstall.contains("input_latency.json")
+        || preinstall.contains("SKY_APP_DATA_ROOT")
+    {
+        return Err("NSIS migration must fail closed when removing the retired executable and must not touch app-data/cache".into());
+    }
+    let working_directory = harness
+        .split_once("fn uninstaller_working_directory(")
+        .and_then(|(_, body)| body.split_once("\n#[cfg(windows)]\npub(crate) fn finish_uninstall("))
+        .map(|(body, _)| body)
+        .ok_or("NSIS uninstaller working-directory guard is not bounded")?;
+    if !working_directory.contains("let cwd = install_root")
+        || !working_directory.contains(".parent()")
+        || !working_directory.contains("cwd.starts_with(&install_root)")
+    {
+        return Err(
+            "NSIS uninstaller working directory must remain outside its install root".into(),
+        );
+    }
+    let completion = harness
+        .split_once("pub(crate) fn finish_uninstall(")
+        .and_then(|(_, body)| {
+            body.split_once("\n#[cfg(windows)]\nfn uninstall_registration_diagnostic(")
+        })
+        .map(|(body, _)| body)
+        .ok_or("NSIS uninstall completion guard is not bounded")?;
+    let tree_wait = completion
+        .find("wait_tree_timeout(")
+        .ok_or("NSIS uninstall must wait for the owned process tree")?;
+    let root_wait = completion
+        .find("wait_path_absent(")
+        .ok_or("NSIS uninstall must wait for install-root removal")?;
+    if tree_wait >= root_wait {
+        return Err(
+            "NSIS uninstall must drain its owned process tree before confirming root removal"
+                .into(),
+        );
+    }
+    if completion.contains("remove_dir") {
+        return Err("NSIS qualification must not manually remove the install root to claim uninstall success".into());
+    }
+    Ok(())
+}
+
+fn updater_fixture_contract(
+    fixture: &str,
+    http: &str,
+    tests: &str,
+) -> std::result::Result<(), String> {
+    let fixture = source(fixture);
+    let http = source(http);
+    let tests = source(tests);
+    for marker in [
+        "mod http;",
+        "use http::{FixtureServer, RequestEvidence};",
+        "failure_rollback",
+        "n_to_n_plus_1_installer_sha256",
+        "old_root_rejection",
+        "assert_migration_registry_roots_absent",
+        "user_song_sha256_after_uninstall",
+        "run_uninstaller(&uninstaller, &install_root, &env)",
+        "crate::nsis_harness::finish_uninstall",
+        "verify_exact_http_source(server",
+    ] {
+        if !fixture.contains(marker) {
+            return Err(format!(
+                "Rust updater qualification owner is missing `{marker}`"
+            ));
+        }
+    }
+    for marker in [
+        "pub(super) struct FixtureServer",
+        "fn handle_fixture_connection(",
+        "MAX_HTTP_HEADER_BYTES",
+        "MAX_HTTP_BODY_BYTES",
+        "MAX_HTTP_REQUESTS",
+        "MAX_HTTP_REQUEST_DURATION",
+        "MAX_HTTP_RESPONSE_DURATION",
+        "pub(super) fn write_all_before_deadline",
+        "pub(super) fn verify_exact_http_source",
+        "pub(super) fn http_get_loopback",
+        "IpAddr::V4(Ipv4Addr::LOCALHOST)",
+    ] {
+        if !http.contains(marker) {
+            return Err(format!(
+                "Rust updater HTTP implementation is missing `{marker}`"
+            ));
+        }
+    }
+    for marker in [
+        "loopback_client_rejects_truncated_response_bodies",
+        "fixture_server_teardown_is_bounded_for_a_stalled_partial_request",
+        "fixture_response_writer_observes_an_absolute_deadline",
+        "fixture_server_shutdown_interrupts_a_slow_response_reader_and_reaps_thread",
+        "bridge_build_cleanup_requires_direct_runner_temp_and_exact_owner_sentinel",
+        "bridge_build_entry_rollback_accepts_only_a_partial_created_sentinel",
+        "git_worktree_add_and_remove_accepts_verified_ordinary_windows_paths",
+    ] {
+        if !tests.contains(marker) {
+            return Err(format!(
+                "Rust updater fixture regression suite is missing `{marker}`"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn release_selftest_contract(
+    release: &str,
+    selftest: &str,
+    ci: &str,
+) -> std::result::Result<(), String> {
+    let release = source(release);
+    let selftest = source(selftest);
+    let ci = source(ci);
+    if !release.contains("mod selftest;")
+        || !release.contains("use selftest::self_test;")
+        || !release.contains("if command == \"self-test\" {\n        return self_test();")
+        || release.contains("#[cfg(test)]\nmod selftest;")
+        || !ci.contains("run: cargo xtask release-v4 self-test")
+    {
+        return Err(
+            "runnable release self-test must remain wired to the production CLI and CI".into(),
+        );
+    }
+    let outcomes = selftest
+        .split_once("let outcomes = [")
+        .and_then(|(_, tail)| tail.split_once("\n    ];"))
+        .map(|(outcomes, _)| outcomes)
+        .ok_or("release self-test scenario inventory is not bounded")?;
+    let scenario_count = outcomes.matches("(),").count();
+    if scenario_count != 34 {
+        return Err(format!(
+            "runnable release self-test must retain all 34 scenarios; found {scenario_count}"
+        ));
+    }
+    for scenario in [
+        "mock_pre_token_latest_guard_stable_and_beta",
+        "mock_pre_token_latest_guard_rejects_invalid_state_and_identity",
+        "mock_pre_token_read_only_transport_rejects_mutations",
+        "mock_pre_token_latest_guard_job_authorization",
+        "mock_publish_succeeds",
+        "mock_draft_readback_failures_never_patch",
+        "mock_non_monotonic_candidate_never_mutates",
+        "mock_draft_post_timeout_reconciles_exact_marker",
+        "mock_upload_timeout_reconciles_exact_asset",
+        "mock_complete_transaction_and_raw_metadata",
+        "mock_metadata_promotion_is_idempotent_after_committed_timeout",
+        "mock_metadata_promotion_rejects_changed_latest",
+        "mock_publication_identity_and_asset_inventory_fail_closed",
+        "mock_pr_merge_sha_does_not_break_release_or_owned_cleanup",
+        "mock_conflicting_draft_is_not_deleted",
+        "mock_digest_mismatch_cleans_owned_draft",
+        "mock_partial_upload_cleans_owned_draft",
+        "mock_cleanup_failure_preserves_original_error",
+        "mock_patch_timeout_reconciles_exact_release_id",
+        "mock_unknown_publication_never_cleans_up",
+        "mock_latest_policy_failure_is_post_publication",
+        "metadata_token_probe_rejects_wrong_repository_state",
+        "mock_stale_evidence_identity_fails_closed",
+        "mock_manifest_path_traversal_fails_closed",
+        "mock_release_doctor_detects_metadata_endpoint_divergence",
+        "doctor_state_input_rejects_malformed_and_oversized_files",
+        "retry_policy_retries_only_transient_responses",
+        "marker_parser_rejects_duplicates_and_multiple_markers",
+        "mutation_adapter_is_at_most_once",
+        "raw_metadata_retry_converges_after_cache_lag",
+        "raw_metadata_retry_fails_with_bounded_diagnostics",
+        "runtime_identity_fails_closed_without_exact_workflow_context",
+        "workflow_run_identity_fails_closed",
+        "timestamp_normalization_is_utc_and_strict",
+    ] {
+        if !outcomes.contains(scenario) {
+            return Err(format!(
+                "release self-test scenario is missing `{scenario}`"
+            ));
+        }
+    }
+    if !selftest.contains("let scenario_count = outcomes.len();")
+        || !selftest.contains("V4 Rust release state-machine mock self-test: PASS ({} scenarios)")
+    {
+        return Err("release self-test must report its executed scenario count".into());
+    }
+    Ok(())
+}
+
+fn metadata_recovery_test_contract(tests: &str) -> std::result::Result<(), String> {
+    for marker in [
+        "synthetic-read-only-token",
+        "synthetic-metadata-write-token",
+        "metadata_recovery_auth_routes_reads_and_one_stable_put_to_separate_tokens",
+    ] {
+        if !tests.contains(marker) {
+            return Err(format!(
+                "metadata recovery regression suite is missing `{marker}`"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn rust_release_state_machine_contract(
+    workflow: &str,
+    rehearsal: &str,
+    rust: &str,
+    main: &str,
+    ci: &str,
+) -> std::result::Result<(), String> {
+    let workflow = source(workflow);
+    let rust = source(rust);
+    let main = source(main);
+    let ci = source(ci);
+    if !workflow_declares_only_dispatch(&workflow) {
+        return Err(
+            "production release workflow must expose workflow_dispatch as its only trigger".into(),
+        );
+    }
+    if !rehearsal.trim().is_empty() {
+        return Err("the duplicate production rehearsal workflow must be retired".into());
+    }
+    for marker in [
+        "name: V4 Release Pipeline",
+        "workflow_dispatch:",
+        "runs-on: ubuntu-latest",
+        "runs-on: windows-latest",
+        "environment: v4-production-release",
+        "contents: read",
+        "contents: write",
+        "id-token: write",
+        "attestations: read",
+        "attestations: write",
+        "ref: ${{ github.sha }}",
+        "persist-credentials: false",
+        "GITHUB_RUN_ATTEMPT",
+        "workflow_dispatch",
+        "EXPECTED_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}",
+        "test \"$GITHUB_EVENT_NAME\" = \"workflow_dispatch\"",
+        "test \"$GITHUB_REPOSITORY\" = \"$EXPECTED_REPOSITORY\"",
+        "test \"$GITHUB_REF\" = \"refs/heads/main\"",
+        "test \"$EXPECTED_DEFAULT_BRANCH\" = \"main\"",
+        ".event == \"push\"",
+        ".head_branch == \"main\"",
+        ".head_sha == env.GITHUB_SHA",
+        "workflows/ci.yml/runs?head_sha=$GITHUB_SHA&per_page=100",
+        "max_by(.run_number)",
+        "if [[ \"$status\" != \"completed\" || \"$conclusion\" != \"success\" ]]; then",
+        "v4-context-${{ github.run_id }}-${{ github.run_attempt }}",
+        "v4-unsigned-${{ github.run_id }}-${{ github.run_attempt }}",
+        "v4-qualified-${{ github.run_id }}-${{ github.run_attempt }}",
+        "v4-published-${{ github.run_id }}-${{ github.run_attempt }}",
+        "v4-promoted-${{ github.run_id }}-${{ github.run_attempt }}",
+        "V4_TAURI_UPDATER_PRIVATE_KEY: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}",
+        "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD: ${{ secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD }}",
+        "actions/attest@",
+        "actions/upload-artifact@",
+        "actions/download-artifact@",
+        "Mint write-capable metadata App token before publication",
+        "Mint contents-scoped metadata App token",
+        "Verify published Latest policy with read-only token",
+        "GH_TOKEN: ${{ github.token }}",
+        "release-v4 verify-latest-before-metadata-token --state-root",
+        "Probe release-metadata App write capability without mutation",
+        "V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: write",
+        "permission-contents: write",
+        "if: always()",
+    ] {
+        if !workflow.contains(marker) {
+            return Err(format!("production release workflow is missing `{marker}`"));
+        }
+    }
+    if workflow.contains("inputs:")
+        || workflow.contains("inputs.")
+        || workflow.contains("self-hosted")
+        || workflow.contains("rehearse-v4")
+        || workflow.contains("V4_UPDATER_PRIVATE_KEY_PATH")
+        || workflow.contains("build-candidate")
+    {
+        return Err(
+            "production workflow contains a retired dispatch, self-hosted, or combined-build path"
+                .into(),
+        );
+    }
+
+    let jobs = workflow_job_blocks(&workflow);
+    let observed = jobs.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>();
+    let expected = [
+        "prepare",
+        "build_unsigned",
+        "sign_qualify",
+        "attest",
+        "metadata_probe",
+        "publish",
+        "metadata_promote",
+        "final_verify",
+    ];
+    if observed != expected {
+        return Err(format!(
+            "production release jobs must preserve the eight bounded stages, got {observed:?}"
+        ));
+    }
+    let job = |id: &str| {
+        jobs.iter()
+            .find(|(job_id, _)| job_id == id)
+            .map(|(_, block)| block.as_str())
+            .ok_or_else(|| format!("production release workflow is missing job {id}"))
+    };
+    for (id, needs) in [
+        ("build_unsigned", "needs: prepare"),
+        ("sign_qualify", "needs: [prepare, build_unsigned]"),
+        ("attest", "needs: [prepare, sign_qualify]"),
+        ("metadata_probe", "needs: [prepare, attest]"),
+        ("publish", "needs: [prepare, attest, metadata_probe]"),
+        ("metadata_promote", "needs: [prepare, publish]"),
+        ("final_verify", "needs: [prepare, metadata_promote]"),
+    ] {
+        if !job(id)?.lines().any(|line| line.trim() == needs) {
+            return Err(format!("release job {id} must remain behind `{needs}`"));
+        }
+    }
+    for (id, expected_runner) in [
+        ("prepare", "runs-on: ubuntu-latest"),
+        ("build_unsigned", "runs-on: windows-latest"),
+        ("sign_qualify", "runs-on: windows-latest"),
+        ("attest", "runs-on: ubuntu-latest"),
+        ("metadata_probe", "runs-on: ubuntu-latest"),
+        ("publish", "runs-on: ubuntu-latest"),
+        ("metadata_promote", "runs-on: ubuntu-latest"),
+        ("final_verify", "runs-on: ubuntu-latest"),
+    ] {
+        if !job(id)?.lines().any(|line| line.trim() == expected_runner) {
+            return Err(format!("release job {id} must use {expected_runner}"));
+        }
+        if !job(id)?.contains("ref: ${{ github.sha }}")
+            || !job(id)?.contains("persist-credentials: false")
+        {
+            return Err(format!(
+                "release job {id} must check out the exact SHA without persisted credentials"
+            ));
+        }
+    }
+    let attest_workflow = job("attest")?;
+    let metadata_probe_workflow = job("metadata_probe")?;
+    let attest_steps = workflow_step_blocks(attest_workflow);
+    let candidate_attest_step = attest_steps
+        .iter()
+        .find(|(name, _)| name == "Attest exact installer and updater signature")
+        .map(|(_, block)| block.as_str())
+        .ok_or("attest job is missing the installer/signature attestation step")?;
+    if candidate_attest_step.contains("if: false")
+        || candidate_attest_step.contains("continue-on-error: true")
+        || !candidate_attest_step.contains("actions/attest@")
+        || !candidate_attest_step.contains("${{ steps.state.outputs.path }}/candidate-bundle/*.exe")
+        || !candidate_attest_step.contains("${{ steps.state.outputs.path }}/candidate-bundle/*.sig")
+    {
+        return Err("hosted release must actively attest the exact signed installer and updater signature before publication".into());
+    }
+    let sbom_attest_step = attest_steps
+        .iter()
+        .find(|(name, _)| name == "Attest SPDX SBOM for exact installer")
+        .map(|(_, block)| block.as_str())
+        .ok_or("attest job is missing the SPDX SBOM attestation step")?;
+    if sbom_attest_step.contains("if: false")
+        || sbom_attest_step.contains("continue-on-error: true")
+        || !sbom_attest_step.contains("actions/attest@")
+        || !sbom_attest_step.contains("${{ steps.state.outputs.path }}/candidate-bundle/*.exe")
+        || !sbom_attest_step
+            .contains("${{ steps.state.outputs.path }}/candidate-evidence/SBOM.spdx.json")
+    {
+        return Err(
+            "hosted release must actively attest the exact installer SPDX SBOM before publication"
+                .into(),
+        );
+    }
+    if !attest_workflow.contains("release-v4 verify-candidate --state-root")
+        || !metadata_probe_workflow.contains("release-v4 probe-verify-candidate --state-root")
+        || metadata_probe_workflow.contains("release-v4 verify-candidate --state-root")
+    {
+        return Err("qualified candidate verification must use the exact attestation and metadata_probe dispatcher entrypoints".into());
+    }
+    let unsigned = job("build_unsigned")?;
+    if unsigned.contains("secrets.")
+        || unsigned.contains("environment:")
+        || has_permission(unsigned, "contents: write")
+        || has_permission(unsigned, "id-token: write")
+        || has_permission(unsigned, "attestations: write")
+        || !unsigned.contains("release-v4 build-unsigned")
+    {
+        return Err("unsigned build must be hosted, credential-free, and read-only".into());
+    }
+    let unsigned_artifact = workflow_step_blocks(unsigned)
+        .into_iter()
+        .find(|(name, _)| name == "Upload immutable unsigned installer and typed manifest")
+        .map(|(_, block)| block)
+        .ok_or("unsigned Windows build must upload its typed cross-runner handoff")?;
+    if !unsigned_artifact.contains("unsigned-handoff/manifest.json")
+        || !unsigned_artifact.contains("unsigned-handoff/*.exe")
+    {
+        return Err(
+            "unsigned run artifact must transfer the typed manifest and exact installer".into(),
+        );
+    }
+    let qualification = rust
+        .split_once("fn qualify_candidate(")
+        .and_then(|(_, body)| body.split_once("\nfn verify_candidate_handoff("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing candidate qualification")?;
+    let qualification_compact = qualification.split_whitespace().collect::<String>();
+    if qualification_compact.contains("calibration_binary")
+        || qualification_compact.contains("native_calibration.exe")
+    {
+        return Err(
+            "release candidate contract must not depend on the retired calibration executable"
+                .into(),
+        );
+    }
+    let signer = job("sign_qualify")?;
+    let sign_steps = workflow_step_blocks(signer);
+    let secret_step = sign_steps
+        .iter()
+        .find(|(name, _)| name == "Sign the independently verified exact candidate")
+        .map(|(_, block)| block.as_str())
+        .ok_or("protected signing job is missing its narrow Rust signing step")?;
+    let control_build = sign_steps
+        .iter()
+        .find(|(name, _)| name == "Build the pinned Rust release control executable before secrets")
+        .map(|(_, block)| block.as_str())
+        .ok_or("protected signing job must build its Rust control executable before secrets")?;
+    let control_verify = sign_steps
+        .iter()
+        .find(|(name, _)| name == "Verify prebuilt control executable identity before secrets")
+        .map(|(_, block)| block.as_str())
+        .ok_or("protected signing job must verify its Rust control executable before secrets")?;
+    let build_index = sign_steps
+        .iter()
+        .position(|(name, _)| {
+            name == "Build the pinned Rust release control executable before secrets"
+        })
+        .ok_or("protected signing job lost the Rust control build step")?;
+    let verify_index = sign_steps
+        .iter()
+        .position(|(name, _)| name == "Verify prebuilt control executable identity before secrets")
+        .ok_or("protected signing job lost the pre-secret executable verification step")?;
+    let signing_index = sign_steps
+        .iter()
+        .position(|(name, _)| name == "Sign the independently verified exact candidate")
+        .ok_or("protected signing job lost its secret-bearing signing step")?;
+    if build_index >= verify_index
+        || verify_index >= signing_index
+        || !control_build
+            .contains("cargo build --locked --manifest-path xtask/Cargo.toml --release")
+        || !control_build.contains("Get-FileHash -LiteralPath $controlPath -Algorithm SHA256")
+        || !control_build.contains("source_sha=$sourceSha")
+        || !control_build.contains("sha256=$controlSha")
+        || control_verify.contains("secrets.")
+        || !control_verify.contains("EXPECTED_RELEASE_CONTROL_SOURCE_SHA")
+        || !control_verify.contains("EXPECTED_RELEASE_CONTROL_SHA256")
+        || !control_verify.contains("GITHUB_SHA")
+        || !control_verify.contains("Get-FileHash -LiteralPath $controlPath -Algorithm SHA256")
+    {
+        return Err("protected signing must compile and verify the exact Rust control executable before secrets are mapped".into());
+    }
+    if !signer.contains("environment: v4-production-release")
+        || !has_permission(signer, "contents: read")
+        || has_permission(signer, "contents: write")
+        || has_permission(signer, "id-token: write")
+        || has_permission(signer, "attestations: write")
+        || secret_step
+            .matches("secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}")
+            .count()
+            != 1
+        || secret_step
+            .matches("secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD }}")
+            .count()
+            != 1
+        || !secret_step.contains("target/release/xtask.exe")
+        || !secret_step.contains("Get-FileHash -LiteralPath $controlPath -Algorithm SHA256")
+        || secret_step.to_ascii_lowercase().contains("cargo")
+        || !signer.contains("release-v4 qualify-candidate")
+    {
+        return Err("production signing must be environment-protected, read-only, and scoped to the Rust signing step".into());
+    }
+    for (name, block) in &sign_steps {
+        if name != "Sign the independently verified exact candidate"
+            && (block.contains("secrets.V4_TAURI_UPDATER_PRIVATE_KEY")
+                || block.contains("secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD"))
+        {
+            return Err(format!(
+                "production updater secrets escaped the dedicated signing step: {name}"
+            ));
+        }
+    }
+    for (id, marker) in [
+        ("attest", "id-token: write"),
+        ("attest", "attestations: write"),
+        ("publish", "contents: write"),
+        ("publish", "attestations: read"),
+    ] {
+        if !job(id)?.contains(marker) {
+            return Err(format!("release job {id} is missing permission {marker}"));
+        }
+    }
+    for id in [
+        "prepare",
+        "build_unsigned",
+        "sign_qualify",
+        "attest",
+        "metadata_probe",
+        "publish",
+        "metadata_promote",
+        "final_verify",
+    ] {
+        let block = job(id)?;
+        if block.contains("V4_RELEASE_METADATA_APP_PRIVATE_KEY")
+            && id != "metadata_probe"
+            && id != "metadata_promote"
+        {
+            return Err(format!(
+                "metadata App private key escaped its protected job: {id}"
+            ));
+        }
+        if block.contains("V4_TAURI_UPDATER_PRIVATE_KEY") && id != "sign_qualify" {
+            return Err(format!(
+                "production updater key escaped the protected signing job: {id}"
+            ));
+        }
+    }
+    if !job("metadata_probe")?.contains("permission-contents: write")
+        || !job("metadata_probe")?
+            .contains("V4_RELEASE_METADATA_TOKEN_REQUESTED_CONTENTS_PERMISSION: write")
+        || has_permission(job("metadata_probe")?, "contents: write")
+        || !job("metadata_promote")?.contains("permission-contents: write")
+        || has_permission(job("metadata_promote")?, "contents: write")
+    {
+        return Err("metadata App tokens must be explicitly write-scoped for the pre-publication probe and separately minted for Rust promotion, while Actions permissions stay read-only".into());
+    }
+    let metadata_promote = job("metadata_promote")?;
+    if !has_permission(metadata_promote, "contents: read")
+        || has_permission(metadata_promote, "contents: write")
+    {
+        return Err("metadata promotion must retain only read-scoped Actions permissions".into());
+    }
+    let metadata_steps = workflow_step_blocks(metadata_promote);
+    let step_position = |name: &str| {
+        let matches = metadata_steps
+            .iter()
+            .enumerate()
+            .filter(|(_, (candidate, _))| candidate == name)
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        if matches.len() == 1 {
+            Ok(matches[0])
+        } else {
+            Err(format!(
+                "metadata_promote must contain exactly one `{name}` step"
+            ))
+        }
+    };
+    let download_position = step_position("Download exact-run published release state")?;
+    let setup_position = step_position("Set up canonical Rust toolchain")?;
+    let guard_position = step_position("Verify published Latest policy with read-only token")?;
+    let token_position = step_position("Mint contents-scoped metadata App token")?;
+    let promote_position =
+        step_position("Promote channel metadata after immutable release publication")?;
+    if !(download_position < setup_position
+        && setup_position < guard_position
+        && guard_position < token_position
+        && token_position < promote_position)
+    {
+        return Err("read-only published Latest guard must run after exact state/toolchain setup and before the metadata App token is minted".into());
+    }
+    let guard_step = metadata_steps
+        .iter()
+        .find(|(name, _)| name == "Verify published Latest policy with read-only token")
+        .map(|(_, block)| block.as_str())
+        .ok_or("metadata_promote is missing the read-only published Latest guard")?;
+    if guard_step.matches("GH_TOKEN: ${{ github.token }}").count() != 1
+        || !guard_step
+            .contains("cargo xtask release-v4 verify-latest-before-metadata-token --state-root")
+        || guard_step.contains("steps.metadata-app-token.outputs.token")
+        || guard_step.contains("V4_RELEASE_METADATA_APP_PRIVATE_KEY")
+    {
+        return Err(
+            "pre-token Latest guard must use only the ordinary read-scoped GitHub token".into(),
+        );
+    }
+    for marker in [
+        "verify-latest-before-metadata-token",
+        "\"verify-latest-before-metadata-token\" | \"promote-metadata\" => Some(\"metadata_promote\")",
+        "struct ReadOnlyTransport<'a>",
+        "fn verify_latest_before_metadata_token_with_state(",
+    ] {
+        if !rust.contains(marker) {
+            return Err(format!(
+                "Rust release pipeline is missing pre-token guard contract `{marker}`"
+            ));
+        }
+    }
+    let promotion = rust
+        .split_once("fn promote_metadata(")
+        .and_then(|(_, body)| body.split_once("\nfn validate_latest_for_metadata_promotion("))
+        .map(|(body, _)| body)
+        .ok_or("Rust metadata promotion function is not bounded")?;
+    let latest_recheck = promotion
+        .find("validate_latest_for_metadata_promotion(")
+        .ok_or("metadata promotion lost its write-boundary Latest recheck")?;
+    let metadata_put = promotion
+        .find("transport.request(\"PUT\"")
+        .ok_or("metadata promotion lost its Contents API write")?;
+    if latest_recheck >= metadata_put
+        || promotion
+            .matches("validate_latest_for_metadata_promotion(")
+            .count()
+            != 1
+    {
+        return Err(
+            "metadata promotion must retain one Latest recheck before the Contents API PUT".into(),
+        );
+    }
+    if job("publish")?.contains("V4_RELEASE_METADATA_APP_PRIVATE_KEY")
+        || job("publish")?.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
+        || job("metadata_promote")?.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
+        || workflow
+            .matches("secrets.V4_TAURI_UPDATER_PRIVATE_KEY }}")
+            .count()
+            != 1
+        || workflow
+            .matches("secrets.V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD }}")
+            .count()
+            != 1
+    {
+        return Err(
+            "updater production secrets must be available only to the protected signer".into(),
+        );
+    }
+    let workflow_root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../.github/workflows");
+    let relative = "ci.yml";
+    let ci_workflow =
+        fs::read_to_string(workflow_root.join(relative)).map_err(|error| error.to_string())?;
+    if ci_workflow.contains("V4_TAURI_UPDATER_PRIVATE_KEY")
+        || ci_workflow.contains("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD")
+    {
+        return Err(format!(
+            "production updater secrets must never enter PR/general CI: {relative}"
+        ));
+    }
+    for old in [
+        "scripts/v4_release_pipeline.ps1",
+        "scripts/release_doctor.ps1",
+        "scripts/probe_v4_metadata_app_access.ps1",
+        "scripts/cleanup_v4_release_state.ps1",
+        "-State Preflight",
+        "-State BuildCandidate",
+        "-State PublishRelease",
+        "-State PromoteMetadata",
+        "-State FinalVerify",
+    ] {
+        if workflow.contains(old) {
+            return Err(format!(
+                "legacy PowerShell release authority is still called: {old}"
+            ));
+        }
+    }
+    for marker in [
+        "trait Transport",
+        "struct GhTransport",
+        "fn publish_release",
+        "prepublication_metadata_qualification",
+        "same_github_latest",
+        "validate_monotonic",
+        "fn delete_owned_draft",
+        "current[\"draft\"] != true",
+        "MutationOutcomeUnknown",
+        "fn request_with_retry_policy",
+        "await_raw_metadata_convergence",
+        "RuntimeIdentity::from_environment",
+        "GITHUB_WORKFLOW_REF",
+        "--workflow-sha is required for Preflight",
+        "require_runtime_context(root, &options, command)?",
+        "fn build_unsigned",
+        "fn sign_candidate",
+        "fn qualify_candidate",
+        "fn verify_candidate_handoff",
+        "run_attempt",
+        "unsigned_handoff",
+        "channels/{channel}/latest.json?ref=release-metadata",
+        "fn promote_metadata",
+        "fn final_verify",
+        "fn doctor",
+        "fn verify_attestations",
+        "delete_owned_draft",
+        "POST_PUBLICATION_INCIDENT",
+        "release_id",
+        "sha256:",
+        "raw.githubusercontent.com",
+        "canonical_upload_url",
+        "RELEASE_BUILD_STEP_TIMEOUT",
+        "ATTESTATION_VERIFY_TIMEOUT",
+        "env::current_exe()?",
+    ] {
+        if !rust.contains(marker) {
+            return Err(format!(
+                "Rust release authority is missing invariant `{marker}`"
+            ));
+        }
+    }
+    let attestation_verifier = rust
+        .split_once("fn verify_attestations(")
+        .and_then(|(_, body)| body.split_once("\nimpl CandidateManifest"))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing verify_attestations implementation")?;
+    for required in [
+        "state.phase != Phase::Ready",
+        "\"installer\"",
+        "\"updater-signature\"",
+        "\"--source-digest\"",
+        "context.source_sha.clone()",
+        "\"--signer-workflow\"",
+        "\"--predicate-type\"",
+        "\"https://spdx.dev/Document/v2.3\"",
+        "if !output.status.success()",
+    ] {
+        if !attestation_verifier.contains(required) {
+            return Err(format!(
+                "verify_attestations is missing required invariant `{required}`"
+            ));
+        }
+    }
+    let (before_attested, _) = attestation_verifier
+        .split_once("state.attested = true;")
+        .ok_or("verify_attestations must only mark state.attested = true after verification")?;
+    if !before_attested.contains("https://spdx.dev/Document/v2.3")
+        || before_attested
+            .matches("if !output.status.success()")
+            .count()
+            < 2
+    {
+        return Err(
+            "verify_attestations must not mark state.attested = true before all attestation and SBOM checks succeed"
+                .into(),
+        );
+    }
+    let context_validation = rust
+        .split_once("fn validate_context(")
+        .and_then(|(_, body)| body.split_once("\nfn preflight("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing pure transaction-context validation")?;
+    if context_validation.contains("env::var(") || context_validation.contains("GITHUB_") {
+        return Err(
+            "transaction-context validation must not depend on ambient GitHub Actions variables"
+                .into(),
+        );
+    }
+    let release_cli = rust
+        .split_once("pub(crate) fn run(")
+        .and_then(|(_, body)| body.split_once("\nfn require_runtime_context("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release CLI is missing its production runtime guard")?;
+    let runtime_guard = release_cli
+        .find("require_runtime_context(root, &options, command)?")
+        .ok_or("release side-effect phases must require exact runtime identity")?;
+    let command_dispatch = release_cli[runtime_guard..]
+        .find("match command")
+        .map(|offset| runtime_guard + offset)
+        .ok_or("release CLI phase dispatch is missing")?;
+    if runtime_guard >= command_dispatch {
+        return Err("release phases must validate runtime identity before dispatch".into());
+    }
+    let publish = rust
+        .split_once("fn publish_release(")
+        .and_then(|(_, body)| body.split_once("\nfn prepublication_metadata_qualification("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing bounded publication qualification")?;
+    let gate_positions = publish
+        .match_indices("prepublication_metadata_qualification(")
+        .map(|(position, _)| position)
+        .collect::<Vec<_>>();
+    let post = publish
+        .find("\"POST\"")
+        .ok_or("Rust release authority is missing draft creation boundary")?;
+    let patch = publish
+        .find("\"PATCH\"")
+        .ok_or("Rust release authority is missing immutable publication boundary")?;
+    if gate_positions.len() != 2
+        || gate_positions[0] >= post
+        || post >= gate_positions[1]
+        || gate_positions[1] >= patch
+    {
+        return Err(
+            "metadata monotonicity and Latest checks must run before draft creation and again before publication"
+                .into(),
+        );
+    }
+    let mutation_policy = rust
+        .split_once("fn request_with_retry_policy")
+        .and_then(|(_, body)| body.split_once("\npub(crate) fn run("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing mutation retry policy")?;
+    let read_retry = mutation_policy
+        .find("method.eq_ignore_ascii_case(\"GET\")")
+        .ok_or("GitHub retry policy does not restrict retries to GET")?;
+    let retry = mutation_policy
+        .find("retry_github(operation, sleep)")
+        .ok_or("GitHub GET retry path is missing")?;
+    let mutation = mutation_policy
+        .find("operation().map_err")
+        .ok_or("GitHub mutation path must return an uncertain outcome without retry")?;
+    if read_retry >= retry || retry >= mutation {
+        return Err("GitHub mutation retries must remain disabled".into());
+    }
+    let delete = rust
+        .split_once("fn delete_owned_draft(")
+        .and_then(|(_, body)| body.split_once("\nfn verify_public_assets("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing owned draft deletion")?;
+    let delete_get = delete
+        .find("transport.request(\"GET\"")
+        .ok_or("owned draft deletion must re-fetch the exact release id")?;
+    let delete_mutation = delete
+        .find("transport.request(\"DELETE\"")
+        .ok_or("owned draft deletion mutation is missing")?;
+    if delete_get >= delete_mutation {
+        return Err("owned draft state must be verified immediately before deletion".into());
+    }
+    let identity = rust
+        .split_once("fn identity(")
+        .and_then(|(_, body)| body.split_once("\nfn git_text("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing exact runtime identity validation")?;
+    if !identity
+        .contains("workflow_sha\n        .ok_or(\"--workflow-sha is required for Preflight\")")
+        || !identity.contains("GITHUB_WORKFLOW_REF")
+        || !identity.contains("RELEASE_WORKFLOW_REF")
+    {
+        return Err(
+            "Preflight must require the explicit workflow SHA and an exact canonical workflow ref"
+                .into(),
+        );
+    }
+    let git_identity = rust
+        .split_once("fn git_text(")
+        .and_then(|(_, body)| body.split_once("\nfn validate_release_notes("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing its Git identity adapter")?;
+    if !git_identity.contains("capture_text_runtime_only")
+        || git_identity.contains("process::capture(\"git\"")
+    {
+        return Err(
+            "release Git identity queries must use the bounded runtime-only child environment"
+                .into(),
+        );
+    }
+    let metadata_probe = rust
+        .split_once("fn probe_metadata_token(")
+        .and_then(|(_, body)| body.split_once("\nfn cleanup_local_state("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing metadata token probe")?;
+    if !metadata_probe.contains("for channel in [\"stable\", \"beta\"]")
+        || !metadata_probe.contains("doctor_validate_metadata")
+        || !metadata_probe.contains("contents_permission != \"write\"")
+        || !metadata_probe.contains("repos/{REPOSITORY}")
+        || metadata_probe.contains("transport.request(\"PUT\"")
+        || metadata_probe.contains("transport.request(\"POST\"")
+    {
+        return Err(
+            "metadata token probe must require contents:write, verify the canonical repository identity, validate both channels, and use GET only".into(),
+        );
+    }
+    if rust.contains("process::capture(\"cargo\"") || rust.contains("Command::new(\"cargo\"") {
+        return Err(
+            "release build adapters must invoke the current xtask binary without recursive Cargo"
+                .into(),
+        );
+    }
+    if !main.contains("\"release-v4\" => release_v4::run")
+        || !main.contains("release_v4::usage()")
+        || main.contains("build-candidate")
+        || !main.contains("\"release-doctor\" =>")
+        || !main.contains("release_v4::run(&repo::root(), &doctor_args)")
+        || main.contains("scripts/release_doctor.ps1")
+    {
+        return Err(
+            "xtask CLI must route release-v4 and release-doctor to the native Rust owner".into(),
+        );
+    }
+    let release_help = rust
+        .split_once("pub(crate) fn usage()")
+        .and_then(|(_, body)| body.split_once("\nfn expected_job_for_command("))
+        .map(|(body, _)| body)
+        .ok_or("Rust release-v4 CLI help is missing")?;
+    for command in [
+        "build-unsigned",
+        "sign-candidate",
+        "qualify-candidate",
+        "probe-verify-candidate",
+        "metadata-recovery-plan",
+        "metadata-recovery-apply",
+        "--plan-run-id",
+        "--confirm-metadata-only-recovery",
+    ] {
+        if !release_help.contains(command) {
+            return Err(format!(
+                "release-v4 CLI help omits current command syntax: {command}"
+            ));
+        }
+    }
+    if release_help.contains("build-candidate") {
+        return Err("release-v4 CLI help advertises a retired command".into());
+    }
+    for marker in [
+        "cargo xtask release-v4 self-test",
+        "cargo test --locked --manifest-path xtask/Cargo.toml",
+        "go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12",
+        "actionlint\" -color",
+    ] {
+        if !ci.contains(marker) {
+            return Err(format!(
+                "CI release_contract must execute Rust release regressions: {marker}"
+            ));
+        }
+    }
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let handoff = source(
+        &fs::read_to_string(manifest_dir.join("src/release_handoff.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    let signing = source(
+        &fs::read_to_string(manifest_dir.join("src/release_signing.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    for marker in [
+        "struct UnsignedArtifactManifest",
+        "deny_unknown_fields",
+        "MAX_HANDOFF_MANIFEST_BYTES",
+        "MAX_INSTALLER_BYTES",
+        "validate_unsigned_handoff",
+        "validate_handoff_directory",
+        "artifact_name",
+        "run_attempt",
+        "installer_sha256",
+        "producer_job",
+        "schema_version: 3",
+        "unsigned handoff must contain exactly a manifest and installer",
+    ] {
+        if !handoff.contains(marker) {
+            return Err(format!("Rust unsigned handoff is missing bound `{marker}`"));
+        }
+    }
+    for marker in [
+        "V4_TAURI_UPDATER_PRIVATE_KEY",
+        "V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD",
+        "Zeroizing",
+        "MAX_PRIVATE_KEY_BYTES",
+        "MAX_PASSPHRASE_BYTES",
+        "RUNNER_TEMP",
+        "create_new(true)",
+        "verify_local_private_key",
+        "verify_updater_signature_for_version",
+        "19AABD2E7838818C",
+        "cleanup_run_material",
+        "capture_owned_timeout_runtime_only",
+    ] {
+        if !signing.contains(marker) {
+            return Err(format!(
+                "Rust production signing adapter is missing boundary `{marker}`"
+            ));
+        }
+    }
+    let updater_trust = source(
+        &fs::read_to_string(manifest_dir.join("src/updater_trust.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    let process = source(
+        &fs::read_to_string(manifest_dir.join("src/process.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    let repo = source(
+        &fs::read_to_string(manifest_dir.join("src/repo.rs")).map_err(|error| error.to_string())?,
+    );
+    validate_signing_child_environment(&signing, &updater_trust, &process, &repo)?;
+    let recovery = source(
+        &fs::read_to_string(manifest_dir.join("src/release_v4/recovery.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    metadata_recovery_rust_contract(&recovery)?;
+    let credentials = source(
+        &fs::read_to_string(manifest_dir.join("src/credential_cli.rs"))
+            .map_err(|error| error.to_string())?,
+    );
+    for marker in [
+        "BUN_INSTALL_TIMEOUT",
+        "BUILD_CANDIDATE_TIMEOUT",
+        "actual_child_launcher_kills_timed_out_process_tree",
+    ] {
+        if !credentials.contains(marker) {
+            return Err(format!(
+                "Rust candidate builder is missing bounded-process contract `{marker}`"
+            ));
+        }
+    }
+    if !rust.contains("createUpdaterArtifacts\":false")
+        || !workflow.contains("release-v4 build-unsigned")
+        || !workflow.contains("release-v4 sign-candidate")
+        || !workflow.contains("release-v4 qualify-candidate")
+        || workflow.matches("release-v4 build-unsigned").count() != 1
+        || !workflow.contains("unsigned-handoff/*.exe")
+        || !workflow.contains("release-v4 probe-verify-candidate")
+    {
+        return Err("release pipeline must disable build-time updater sidecars and keep build/sign as separate Rust phases".into());
+    }
+    for obsolete in [
+        "scripts/test_v4_release_pipeline.ps1",
+        "scripts/test_v4_post_publication_transaction.ps1",
+        "scripts/test_ci_v4_release_latest_guard.ps1",
+        "scripts/test_ci_v4_release_latest_guard.ps1",
+    ] {
+        if ci.contains(obsolete) {
+            return Err(format!(
+                "CI still executes retired PowerShell release tests: {obsolete}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_signing_child_environment(
+    signing: &str,
+    updater_trust: &str,
+    process: &str,
+    repo: &str,
+) -> std::result::Result<(), String> {
+    let signing_phase = signing
+        .split_once("pub(crate) fn sign_installer(")
+        .and_then(|(_, body)| body.split_once("\nfn verify_tauri_cli("))
+        .map(|(body, _)| body)
+        .ok_or("protected signer is missing sign_installer")?;
+    let version_probe = signing
+        .split_once("fn verify_tauri_cli(")
+        .and_then(|(_, body)| body.split_once("\nfn materialize_key("))
+        .map(|(body, _)| body)
+        .ok_or("protected signer is missing its Tauri CLI version probe")?;
+    let key_probe = updater_trust
+        .split_once("pub fn verify_local_private_key(")
+        .and_then(|(_, body)| body.split_once("\n/// Verify a Tauri updater signature"))
+        .map(|(body, _)| body)
+        .ok_or("updater trust is missing its local private-key challenge")?;
+    let actual_child_test = process
+        .split_once("fn runtime_child_environment_is_captured_after_secret_isolation(")
+        .and_then(|(_, body)| body.split_once("\n    #[test]"))
+        .map(|(body, _)| body)
+        .ok_or("process policy is missing its spawned-child secret isolation regression")?;
+    if !version_probe.contains("capture_owned_timeout_runtime_only")
+        || !signing_phase.contains("capture_owned_timeout_runtime_only")
+        || !key_probe.contains("capture_owned_timeout_runtime_only")
+        || signing
+            .matches("capture_owned_timeout_runtime_only")
+            .count()
+            != 2
+        || repo.matches("capture_text_runtime_only").count() < 3
+        || repo.contains("capture_text(\"git\"")
+        || !process.contains("RUNTIME_CHILD_ENV_ALLOWLIST")
+        || !process.contains("runtime_environment_from(env::vars_os(), explicit_env)")
+        || !process.contains("command.env_clear();")
+        || !actual_child_test.contains("capture_owned_timeout_isolated")
+        || !actual_child_test.contains("synthetic-workflow-passphrase")
+        || !actual_child_test.contains("GITHUB_TOKEN")
+        || !actual_child_test.contains("TAURI_SIGNING_PRIVATE_KEY_PASSWORD")
+    {
+        return Err("all signing-phase subprocesses must use the bounded runtime-only environment, and the spawned-child regression must verify actual secret isolation".into());
+    }
+    Ok(())
+}
+
+pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
+    let read = |path: &str| -> Result<String> { Ok(fs::read_to_string(root.join(path))?) };
+    nsis_installed_catalog_contract(
+        &read("xtask/src/nsis_harness.rs")?,
+        &read("apps/desktop/src-tauri/nsis-hooks.nsh")?,
+    )
+    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    updater_fixture_contract(
+        &read("xtask/src/updater_fixture.rs")?,
+        &read("xtask/src/updater_fixture/http.rs")?,
+        &read("xtask/src/updater_fixture/tests.rs")?,
+    )
+    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    let recovery_workflow = read(".github/workflows/v4-metadata-recovery.yml")?;
+    let release = read("xtask/src/release_v4.rs")?;
+    let release_tests = read("xtask/src/release_v4/tests.rs")?;
+    let recovery = read("xtask/src/release_v4/recovery.rs")?;
+    let process = read("xtask/src/process.rs")?;
+    linux_process::validate(root)?;
+    metadata_recovery_test_contract(&release_tests)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    metadata_recovery_auth_contract(&recovery_workflow, &release, &recovery, &process)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    rust_release_state_machine_contract(
+        &read(".github/workflows/release-v4.yml")?,
+        "",
+        &read("xtask/src/release_v4.rs")?,
+        &read("xtask/src/main.rs")?,
+        &read(".github/workflows/ci.yml")?,
+    )
+    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    release_selftest_contract(
+        &read("xtask/src/release_v4.rs")?,
+        &read("xtask/src/release_v4/selftest.rs")?,
+        &read(".github/workflows/ci.yml")?,
+    )
+    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    println!("[xtask] Rust v4 release authority contract: PASS");
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn normalize_fixture(text: &str) -> String {
+        source(text)
+    }
+
+    fn replace_fixture(text: &str, expected: &str, replacement: &str) -> String {
+        let original = normalize_fixture(text);
+        assert!(
+            original.contains(expected),
+            "negative test mutation target must exist: {expected}"
+        );
+        let mutated = original.replace(expected, replacement);
+        assert_ne!(
+            mutated, original,
+            "negative test mutation must change fixture"
+        );
+        mutated
+    }
+
+    fn replace_fixture_once(text: &str, expected: &str, replacement: &str) -> String {
+        let original = normalize_fixture(text);
+        assert!(
+            original.contains(expected),
+            "negative test mutation target must exist: {expected}"
+        );
+        let mutated = original.replacen(expected, replacement, 1);
+        assert_ne!(
+            mutated, original,
+            "negative test mutation must change fixture"
+        );
+        mutated
+    }
+
+    fn current_sources() -> (String, String, String, String) {
+        let root = crate::repo::root();
+        (
+            fs::read_to_string(root.join(".github/workflows/release-v4.yml")).expect("workflow"),
+            fs::read_to_string(root.join("xtask/src/release_v4.rs")).expect("Rust release owner"),
+            fs::read_to_string(root.join("xtask/src/main.rs")).expect("xtask entrypoint"),
+            fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("CI workflow"),
+        )
+    }
+
+    #[test]
+    fn release_selftest_guard_reads_the_runnable_owner_and_rejects_a_missing_scenario() {
+        let root = crate::repo::root();
+        let release = fs::read_to_string(root.join("xtask/src/release_v4.rs"))
+            .expect("production release owner");
+        let selftest = fs::read_to_string(root.join("xtask/src/release_v4/selftest.rs"))
+            .expect("runnable self-test owner");
+        let ci = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("CI workflow");
+        release_selftest_contract(&release, &selftest, &ci)
+            .expect("production CLI self-test must retain its complete scenario inventory");
+
+        let missing_scenario = replace_fixture(&selftest, "mock_publish_succeeds(),", "");
+        assert!(release_selftest_contract(&release, &missing_scenario, &ci).is_err());
+        assert!(
+            fs::read_to_string(root.join("xtask/src/release_v4/tests.rs"))
+                .expect("Rust release tests")
+                .contains("mock_publish_succeeds"),
+            "the moved test source retains the same marker but must not satisfy the self-test guard"
+        );
+    }
+
+    #[test]
+    fn updater_fixture_guard_reads_production_http_and_test_owners_separately() {
+        let root = crate::repo::root();
+        let fixture = fs::read_to_string(root.join("xtask/src/updater_fixture.rs"))
+            .expect("updater qualification owner");
+        let http = fs::read_to_string(root.join("xtask/src/updater_fixture/http.rs"))
+            .expect("updater HTTP owner");
+        let tests = fs::read_to_string(root.join("xtask/src/updater_fixture/tests.rs"))
+            .expect("updater fixture tests");
+        updater_fixture_contract(&fixture, &http, &tests)
+            .expect("updater fixture contract must inspect its actual owners");
+
+        let missing_http_owner = replace_fixture(
+            &http,
+            "pub(super) fn write_all_before_deadline",
+            "pub(super) fn obsolete_write_all_before_deadline",
+        );
+        assert!(updater_fixture_contract(&fixture, &missing_http_owner, &tests).is_err());
+        assert!(
+            tests.contains("write_all_before_deadline"),
+            "test source retains the marker but must not satisfy the HTTP implementation guard"
+        );
+
+        let missing_test = replace_fixture(
+            &tests,
+            "loopback_client_rejects_truncated_response_bodies",
+            "retired_loopback_client_case",
+        );
+        assert!(updater_fixture_contract(&fixture, &http, &missing_test).is_err());
+    }
+
+    #[test]
+    fn metadata_recovery_guard_reads_the_moved_release_test_owner() {
+        let root = crate::repo::root();
+        let tests = fs::read_to_string(root.join("xtask/src/release_v4/tests.rs"))
+            .expect("release regression suite");
+        let release = fs::read_to_string(root.join("xtask/src/release_v4.rs"))
+            .expect("production release owner");
+        metadata_recovery_test_contract(&tests)
+            .expect("recovery auth mocks must remain in the release test owner");
+        assert!(
+            !release.contains("synthetic-read-only-token"),
+            "test tokens must not be copied into the production release implementation"
+        );
+        assert!(metadata_recovery_test_contract(&release).is_err());
+        let missing_test = replace_fixture(
+            &tests,
+            "synthetic-read-only-token",
+            "retired-read-only-token",
+        );
+        assert!(metadata_recovery_test_contract(&missing_test).is_err());
+    }
+
+    #[test]
+    fn hosted_release_contract_accepts_the_current_rust_pipeline() {
+        let (workflow, rust, main, ci) = current_sources();
+        rust_release_state_machine_contract(&workflow, "", &rust, &main, &ci)
+            .expect("current hosted release pipeline must satisfy its contracts");
+    }
+
+    #[test]
+    fn hosted_release_contract_rejects_stale_sha_and_duplicate_build_paths() {
+        let (workflow, rust, main, ci) = current_sources();
+        let stale_gate = replace_fixture(&workflow, "head_sha=$GITHUB_SHA", "head_branch=main");
+        assert!(rust_release_state_machine_contract(&stale_gate, "", &rust, &main, &ci).is_err());
+        let shared_probe_entrypoint = replace_fixture(
+            &workflow,
+            "release-v4 probe-verify-candidate --state-root",
+            "release-v4 verify-candidate --state-root",
+        );
+        assert!(
+            rust_release_state_machine_contract(&shared_probe_entrypoint, "", &rust, &main, &ci)
+                .is_err()
+        );
+        let handoff_without_executables = replace_fixture(
+            &workflow,
+            "unsigned-handoff/*.exe",
+            "unsigned-handoff/manifest.json",
+        );
+        assert!(
+            rust_release_state_machine_contract(
+                &handoff_without_executables,
+                "",
+                &rust,
+                &main,
+                &ci
+            )
+            .is_err()
+        );
+        assert!(
+            rust_release_state_machine_contract(&workflow, "retired rehearsal", &rust, &main, &ci)
+                .is_err()
+        );
+        let legacy = replace_fixture(
+            &workflow,
+            "release-v4 sign-candidate",
+            "release-v4 build-candidate",
+        );
+        assert!(rust_release_state_machine_contract(&legacy, "", &rust, &main, &ci).is_err());
+        let stale_help = replace_fixture(
+            &rust,
+            "build-unsigned|sign-candidate",
+            "build-candidate|sign-candidate",
+        );
+        assert!(
+            rust_release_state_machine_contract(&workflow, "", &stale_help, &main, &ci).is_err()
+        );
+    }
+
+    #[test]
+    fn metadata_latest_guard_must_be_read_only_and_before_token_mint() {
+        let (workflow, rust, main, ci) = current_sources();
+        let swapped_names = replace_fixture_once(
+            &workflow,
+            "Verify published Latest policy with read-only token",
+            "TEMPORARY METADATA TOKEN STEP NAME",
+        );
+        let swapped_names = replace_fixture_once(
+            &swapped_names,
+            "Mint contents-scoped metadata App token",
+            "Verify published Latest policy with read-only token",
+        );
+        let swapped_names = replace_fixture_once(
+            &swapped_names,
+            "TEMPORARY METADATA TOKEN STEP NAME",
+            "Mint contents-scoped metadata App token",
+        );
+        assert!(
+            rust_release_state_machine_contract(&swapped_names, "", &rust, &main, &ci).is_err()
+        );
+
+        let metadata_suffix = workflow
+            .split_once("  metadata_promote:")
+            .expect("metadata promotion job")
+            .1;
+        let bad_permissions = replace_fixture_once(
+            metadata_suffix,
+            "      contents: read",
+            "      contents: write",
+        );
+        let bad_permissions = format!(
+            "{}  metadata_promote:{}",
+            workflow.split_once("  metadata_promote:").unwrap().0,
+            bad_permissions
+        );
+        assert!(
+            rust_release_state_machine_contract(&bad_permissions, "", &rust, &main, &ci).is_err()
+        );
+
+        let wrong_token = replace_fixture_once(
+            &workflow,
+            "Verify published Latest policy with read-only token\n        env:\n          GH_TOKEN: ${{ github.token }}",
+            "Verify published Latest policy with read-only token\n        env:\n          GH_TOKEN: ${{ steps.metadata-app-token.outputs.token }}",
+        );
+        assert!(rust_release_state_machine_contract(&wrong_token, "", &rust, &main, &ci).is_err());
+
+        let missing_write_boundary_recheck = replace_fixture_once(
+            &rust,
+            "validate_latest_for_metadata_promotion(options, &context, &state, &published, transport)?;",
+            "Ok(())",
+        );
+        assert!(
+            rust_release_state_machine_contract(
+                &workflow,
+                "",
+                &missing_write_boundary_recheck,
+                &main,
+                &ci
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn production_signing_secrets_cannot_enter_pr_ci() {
+        let root = crate::repo::root();
+        let ci = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("CI workflow");
+        assert!(!ci.contains("V4_TAURI_UPDATER_PRIVATE_KEY"));
+        assert!(!ci.contains("V4_TAURI_UPDATER_PRIVATE_KEY_PASSWORD"));
+    }
+
+    #[test]
+    fn signing_subprocess_contract_rejects_any_unfiltered_child_path() {
+        let root = crate::repo::root().join("xtask/src");
+        let signing = fs::read_to_string(root.join("release_signing.rs")).expect("signing");
+        let updater_trust = fs::read_to_string(root.join("updater_trust.rs")).expect("trust");
+        let process = fs::read_to_string(root.join("process.rs")).expect("process");
+        let repo = fs::read_to_string(root.join("repo.rs")).expect("repo");
+        validate_signing_child_environment(&signing, &updater_trust, &process, &repo)
+            .expect("all signing subprocesses must be isolated");
+
+        let unfiltered_signing = replace_fixture(
+            &signing,
+            "capture_owned_timeout_runtime_only(",
+            "capture_owned_timeout_filtered(",
+        );
+        assert!(
+            validate_signing_child_environment(
+                &unfiltered_signing,
+                &updater_trust,
+                &process,
+                &repo
+            )
+            .is_err()
+        );
+
+        let unfiltered_key_probe = replace_fixture(
+            &updater_trust,
+            "capture_owned_timeout_runtime_only(",
+            "capture_owned_timeout_filtered(",
+        );
+        assert!(
+            validate_signing_child_environment(&signing, &unfiltered_key_probe, &process, &repo)
+                .is_err()
+        );
+
+        let inherited_process_environment = replace_fixture(&process, "command.env_clear();", "");
+        assert!(
+            validate_signing_child_environment(
+                &signing,
+                &updater_trust,
+                &inherited_process_environment,
+                &repo
+            )
+            .is_err()
+        );
+
+        let inherited_git_environment =
+            replace_fixture(&repo, "capture_text_runtime_only", "capture_text");
+        assert!(
+            validate_signing_child_environment(
+                &signing,
+                &updater_trust,
+                &process,
+                &inherited_git_environment
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn metadata_recovery_static_contract_rejects_mutation_scope_expansion() {
+        let path = crate::repo::root().join("xtask/src/release_v4/recovery.rs");
+        let recovery = fs::read_to_string(path).expect("metadata recovery implementation");
+        metadata_recovery_rust_contract(&recovery).expect("recovery scope must be bounded");
+        let extra_mutation = replace_fixture(
+            &recovery,
+            "transport.request(\"PUT\", &put_endpoint, Some(&payload))",
+            "transport.request(\"POST\", &put_endpoint, Some(&payload))",
+        );
+        assert!(metadata_recovery_rust_contract(&extra_mutation).is_err());
+        let planner_write = replace_fixture_once(
+            &recovery,
+            "fn build_plan(",
+            "fn build_plan(\n    // transport.request(\"PUT\") is forbidden here",
+        );
+        assert!(metadata_recovery_rust_contract(&planner_write).is_err());
+    }
+
+    #[test]
+    fn hosted_release_contract_rejects_missing_attestation_or_sbom() {
+        let (workflow, rust, main, ci) = current_sources();
+        for missing_marker in [
+            "candidate-bundle/*.exe",
+            "candidate-bundle/*.sig",
+            "candidate-evidence/SBOM.spdx.json",
+            "- name: Attest exact installer and updater signature",
+            "- name: Attest SPDX SBOM for exact installer",
+        ] {
+            let mutated = replace_fixture(&workflow, missing_marker, "omitted-subject");
+            assert!(
+                rust_release_state_machine_contract(&mutated, "", &rust, &main, &ci).is_err(),
+                "missing attestation subject `{missing_marker}` must be rejected"
+            );
+        }
+        let inactive_candidate_attest = replace_fixture(
+            &workflow,
+            "- name: Attest exact installer and updater signature\n        uses:",
+            "- name: Attest exact installer and updater signature\n        if: false\n        uses:",
+        );
+        assert!(
+            rust_release_state_machine_contract(&inactive_candidate_attest, "", &rust, &main, &ci)
+                .is_err()
+        );
+        let inactive_sbom_attest = replace_fixture(
+            &workflow,
+            "- name: Attest SPDX SBOM for exact installer\n        uses:",
+            "- name: Attest SPDX SBOM for exact installer\n        continue-on-error: true\n        uses:",
+        );
+        assert!(
+            rust_release_state_machine_contract(&inactive_sbom_attest, "", &rust, &main, &ci)
+                .is_err()
+        );
+        for broken_rust in [
+            replace_fixture(&rust, "fn verify_attestations", "fn skip_attestations"),
+            replace_fixture(&rust, "\"--source-digest\"", "\"--source-ref\""),
+            replace_fixture(&rust, "\"--signer-workflow\"", "\"--signer-repo\""),
+            replace_fixture(
+                &rust,
+                "\"https://spdx.dev/Document/v2.3\"",
+                "\"https://spdx.dev/Document/v0.0\"",
+            ),
+            replace_fixture(&rust, "state.attested = true;", "state.attested = false;"),
+            replace_fixture(
+                &rust,
+                "    let args = vec![\n        \"attestation\".to_owned(),\n        \"verify\".to_owned(),\n        installer",
+                "    state.attested = true;\n    let args = vec![\n        \"attestation\".to_owned(),\n        \"verify\".to_owned(),\n        installer",
+            ),
+        ] {
+            assert!(
+                rust_release_state_machine_contract(&workflow, "", &broken_rust, &main, &ci)
+                    .is_err()
+            );
+        }
+    }
+}

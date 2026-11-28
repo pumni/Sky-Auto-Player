@@ -1,0 +1,32 @@
+group	leaf	implementation_or_command	cwd	environment_output_and_features	skip_or_reuse	summary_behavior
+static	app-boundaries	audits::app_boundaries::run; source and manifests	repo root	no additional env or target	none	ordered leaf; failure stops group
+static	docs-integrity	audits::docs_integrity::run; Markdown/link scan	repo root	no additional env or target	none	ordered leaf; failure stops group
+static	architecture	audits::architecture::run; Rust/Cargo boundary scan	repo root	no additional env or target	none	ordered leaf; failure stops group
+static	security	audits::security::run; Rust source security scan	repo root	no additional env or target	none	ordered leaf; failure stops group
+static	tauri-feature-contract	tauri_metadata::tauri_feature_contract	repo root	reads Cargo/Tauri feature config	none	ordered leaf; failure stops group
+static	tauri-locked-build-contract	tauri_metadata::tauri_locked_build_contract	repo root	reads build source/config	none	ordered leaf; failure stops group
+static	supply-chain	supply_chain::run(None): cargo audit --file Cargo.lock; cargo vet --manifest-path Cargo.toml --locked	repo root	pinned cargo-audit 0.22.2 and cargo-vet 0.10.2; Cargo.lock	skip flag --skip-supply-chain or SKY_CHECK_SKIP_SUPPLY_CHAIN exactly 1 only	all runs in one leaf; audit/vet failure stops
+static	branding	branding::validate	repo root	reads branding assets	none	ordered leaf; failure stops group
+static	tauri-config	tauri_bundle::validate_config	repo root	reads Tauri config/manifests	none	ordered leaf; failure stops group
+static	tauri-build-freshness	tauri_metadata::tauri_build_freshness_contract	repo root	reads build scripts/config	none	ordered leaf; failure stops group
+static	builtin-catalog	builtin_catalog::run(root, verify)	repo root	reads committed catalog and song inputs	verified once per CheckSession	Rust group reuses result after static group
+static	trust-material	trust::v4_trust_material_contract	repo root	reads trust, package, runtime and test-owner files	none	ordered leaf; failure stops group
+static	bun-pin	bun_pin::bun_pin_contract	repo root	reads .bun-version, app package/lock files and workflow actions	none	ordered leaf; failure stops group
+static	rust-toolchain	rust_toolchain::rust_toolchain_contract	repo root	reads toolchain pin, setup action and active workflow consumers	none	ordered leaf; failure stops group
+static	ci-control-plane	ci_contracts::ci_control_plane_contract	repo root	reads ci.yml, pages workflow/action and Rust CI owners	none	ordered leaf; failure stops group
+static	release-metadata	tauri_metadata::release_metadata_contract	repo root	reads release metadata source and docs	none	ordered leaf; failure stops group
+static	release-runner	release_runner::release_runner_contract	repo root	reads release workflows and docs	none	ordered leaf; failure stops group
+static	hosted-signing	hosted_signing::hosted_v4_signing_workflow_contract	repo root	reads signing proof workflow	none	ordered leaf; failure stops group
+static	release-pipeline	release_pipeline::v4_release_pipeline_contract	repo root	reads release pipeline, tests, workflow and docs	none	ordered leaf; failure stops group
+static	packaged-ci	ci_contracts::packaged_ci_contract	repo root	reads CI package job and setup contracts	none	ordered leaf; failure stops group
+static	legacy-updater-retirement	tauri_metadata::v4_legacy_updater_retirement	repo root	reads shipping/runtime source and owner declarations	none	ordered leaf; failure stops group
+rust	builtin-catalog	reuse prior static verification	repo root	no additional target	CheckSession reuse	records reused-prior-step
+rust	binding-prep	bindings::prepare_binding_export_dir	repo root	clears/creates ignored target/xtask-bindings	none	failure stops rust group
+rust	rust-fmt	cargo fmt --manifest-path Cargo.toml --all -- --check	repo root	no extra env; pinned rustfmt 1.10.0	none	process::run captures and suppresses successful stdout
+rust	rust-clippy	production libs sky_app_core, sky_dispatch_core, sky_dispatch_win32, sky_native_adapters, sky_player, sky_windows_security and xtask no-default dist checks; then cargo clippy --manifest-path Cargo.toml --workspace --all-targets --all-features --locked -- -D warnings	repo root	pinned clippy; no test target override	none	any compiler/lint failure stops
+rust	rust-tests	cargo test --manifest-path Cargo.toml --workspace --all-features --locked	repo root	CARGO_TARGET_DIR=target/check-all-rust-tests; RUST_TEST_THREADS=1; TS_RS_EXPORT_DIR=target/xtask-bindings	ignored tests listed in baseline are not auto-run unless command requests them	runs normal workspace tests and doctest harnesses; failure stops
+desktop	desktop-install	bun install --frozen-lockfile	apps/desktop	root Bun pin and app bun.lock	none	failure stops desktop group
+desktop	desktop-check	bun run check	apps/desktop	desktop scripts and installed frozen deps	none	failure stops desktop group
+desktop	desktop-e2e	bun run test:e2e	apps/desktop	Playwright pinned dev-server config	skipped if SKY_DESKTOP_SKIP_BROWSER exists, even empty; no value-based comparison	failure stops desktop group
+desktop	desktop-native	check_desktop_native; cargo clippy desktop-runtime, cargo clippy desktop-runtime+packaged-assets dist, cargo check --all-features; then bindings check cargo test -p sky_desktop_shell --lib --no-default-features --features tauri-test --locked	repo root	TAURI_CONFIG={\"build\":{\"frontendDist\":null}}; bindings export TS_RS_EXPORT_DIR=target/xtask-bindings; compares tracked bindings read-only	none	native compile configurations plus export/drift check
+desktop-native	desktop-native	check_desktop_native; cargo clippy desktop-runtime, cargo clippy desktop-runtime+packaged-assets dist, cargo check --all-features; then bindings check cargo test -p sky_desktop_shell --lib --no-default-features --features tauri-test --locked	repo root	TAURI_CONFIG={"build":{"frontendDist":null}}; bindings export TS_RS_EXPORT_DIR=target/xtask-bindings; compares tracked bindings read-only	none	native compile configurations plus export/drift check

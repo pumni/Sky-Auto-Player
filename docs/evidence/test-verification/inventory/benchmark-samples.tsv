@@ -1,0 +1,26 @@
+benchmark	sample	source_sha	configuration	exit	tests_or_result	outer_ms	harness_ms	notes
+sky_player engine lib	1	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	all features; test-threads=1	0	370 passed	60980	not captured separately	Cold first sample; no competing browser job
+sky_player engine lib	2	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	all features; test-threads=1	0	370 passed	30199	not captured separately	Warm
+sky_player engine lib	3	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	all features; test-threads=1	0	370 passed	30058	not captured separately	Warm
+sky_player engine lib	4	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	all features; test-threads=1	0	370 passed	30001	not captured separately	Warm
+sky_player engine lib	5	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	all features; test-threads=1	0	370 passed	30037	not captured separately	Warm
+desktop shell lib	1	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	all features; test-threads=1	0	342 passed; 4 ignored	259916	26570	Cold build/run
+desktop shell lib	2	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	all features; test-threads=1	0	342 passed; 4 ignored	56427	28700	Warm run
+desktop shell lib	3	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	all features; test-threads=1	101	341 passed; 1 failed; 4 ignored	25783	24730	First failure preserved; rapid_playback_sessions_queue_terminal_before_successor_starting missed Finished event
+desktop shell lib	1	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	default-features + tauri-test; test-threads=1	0	341 passed; 4 ignored	105752	38900	Cold feature build
+desktop shell lib	1	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	no-default-features + tauri-test; test-threads=1	0	349 passed; 4 ignored	152517	27240	Cold feature build
+xtask unit plus credential integration	1	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	workspace all features; test-threads=1	0	357 unit + 2 integration passed	not-recovered	not separately captured	First of original repetitions; raw log exists but duration was not retained
+xtask unit plus credential integration	2	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	workspace all features; test-threads=1	0	357 unit + 2 integration passed	53409	not separately captured	Timed repetitions 2-6; first sample duration unavailable
+xtask unit plus credential integration	3	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	workspace all features; test-threads=1	0	357 unit + 2 integration passed	52816	not separately captured	Timed repetitions 2-6
+xtask unit plus credential integration	4	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	workspace all features; test-threads=1	0	357 unit + 2 integration passed	52547	not separately captured	Timed repetitions 2-6
+xtask unit plus credential integration	5	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	workspace all features; test-threads=1	0	357 unit + 2 integration passed	55537	not separately captured	Timed repetitions 2-6
+xtask unit plus credential integration	6	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	workspace all features; test-threads=1	0	357 unit + 2 integration passed	53911	unit harness 51860; integration 750	Timed repetitions 2-6
+bindings drift check	1	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	cargo xtask bindings check	0	93 files and command names match	45316	not separately captured	Cold
+bindings drift check	2	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	cargo xtask bindings check	0	93 files and command names match	13388	not separately captured	Warm
+bindings drift check	3	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	cargo xtask bindings check	0	93 files and command names match	8935	not separately captured	Warm
+bindings drift check	4	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	cargo xtask bindings check	0	93 files and command names match	7105	not separately captured	Warm
+bindings drift check	5	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	cargo xtask bindings check	0	93 files and command names match	6848	not separately captured	Warm
+F03 viewport repetition	1	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	five viewport cases x10; 1649x927 focused workers=1	0	50 passed	203523	not captured separately	Assertion unchanged
+F03 viewport repetition	2	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	five viewport cases x10; 1649x927 focused workers=2	0	50 passed	118649	not captured separately	Assertion unchanged
+desktop full E2E	1	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	Playwright development server; workers=2	0	174 passed; 1 skipped	618728	Playwright reported 10m18s	Full 175 selector set
+F03 focused viewport	1	bffefa92e33b5cf9a3fcb914682bc5e407e970f7	player dock compact 1649x927; workers=1	0	1 passed	19880	15400	No trace because no failure

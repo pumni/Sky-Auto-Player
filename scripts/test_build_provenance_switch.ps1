@@ -32,7 +32,7 @@ if ($commitA -ieq $commitB) {
 
 $acceptanceRoot = Join-Path ([IO.Path]::GetTempPath()) ("sky-build-provenance-" + [guid]::NewGuid().ToString("N"))
 $worktreePath = Join-Path $acceptanceRoot "worktree"
-$targetPath = Join-Path $worktreePath "rust/target"
+$targetPath = Join-Path $acceptanceRoot "target"
 $trackedEnvironment = @(
     "CARGO_TARGET_DIR",
     "TAURI_CONFIG",
@@ -54,8 +54,12 @@ function Invoke-NativeBuild([string]$Commit, [string]$Label) {
 
     [Environment]::SetEnvironmentVariable("CARGO_TARGET_DIR", $targetPath, "Process")
     [Environment]::SetEnvironmentVariable("TAURI_CONFIG", '{"build":{"frontendDist":null}}', "Process")
+    $manifestPath = Join-Path $worktreePath 'Cargo.toml'
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        throw "$Label checkout has no root Cargo workspace manifest"
+    }
     & cargo build `
-        --manifest-path (Join-Path $worktreePath "rust/Cargo.toml") `
+        --manifest-path $manifestPath `
         -p sky_desktop_shell `
         --bin sky_desktop_shell `
         --no-default-features `

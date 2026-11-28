@@ -27,7 +27,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'git rev-parse HEAD^{tree} failed' }
 
     $cargoArguments = @(
-        'run', '--quiet', '--locked', '--manifest-path', 'rust/Cargo.toml',
+        'run', '--quiet', '--locked', '--manifest-path', 'Cargo.toml',
         '-p', 'sky_player', '--features', 'test-support',
         '--example', 'dispatch_lifecycle_evidence', '--',
         '--source-sha', $sourceSha, '--source-tree', $sourceTree

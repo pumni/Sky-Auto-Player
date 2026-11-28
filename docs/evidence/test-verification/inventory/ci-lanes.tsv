@@ -1,0 +1,11 @@
+classifier_output	meaning	workflow_jobs	selection_and_required_behavior
+rust_required	Rust workspace correctness and platform compatibility	validate; static via derived static_required; supply_chain when selected	unknown/malformed/empty diff and toolchain/classifier changes fail closed to full
+desktop_required	Desktop web and browser validation	desktop_web; static via static_required; desktop E2E step is conditional on desktop_e2e_required	desktop lane is selected by classifier; browser CLI and dev-server E2E conditional on desktop_e2e_required
+desktop_e2e_required	Desktop Playwright development-server E2E selector	desktop_web steps	does not replace desktop_required; desktop_web validates web checks whether or not E2E selector is true
+desktop_native_required	Windows native Tauri runtime validation	validate	separate from desktop web; validate runs when rust_required OR desktop_native_required
+package_required	Windows candidate build and package qualification	candidate; packaged; signing_proof as separate signing_proof_required projection	candidate and package gates remain separate; packaged depends on changes, static, candidate
+updater_required	Updater bridge, contract and E2E qualification	updater_bridge; updater_contract; updater_e2e; candidate	updater_e2e needs changes, static, candidate and updater_bridge; artifact validation checks source SHA
+release_required	Release contract and Linux process runtime checks	release_contract; linux_process_runtime; static via static_required	both release jobs selected together; status requires both
+signing_proof_required	Independent unsigned-before-test-key signing proof	signing_proof	independent job; candidate artifact is not a substitute
+supply_chain_required	Rust and JS dependency advisory/policy checks	supply_chain; static supply-chain leaf when not skipped by classifier-controlled dedicated gate	root lock/policy checks plus pinned cargo-audit/vet and OSV scan of two Bun lockfiles
+site_required	Website test/build/SEO/functional validation and Pages artifact	site; deploy_pages only on qualifying main push after status	site action is sequential; deployment is a separate main-push path

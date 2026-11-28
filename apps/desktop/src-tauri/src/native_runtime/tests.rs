@@ -29,7 +29,8 @@ use super::{
 };
 #[cfg(feature = "tauri-test")]
 use super::{
-    recovery_test_probe_calls, set_recovery_test_probe_hook, set_recovery_test_probe_result,
+    RecoveryForegroundPoll, recovery_test_probe_calls, set_recovery_test_poll_hook,
+    set_recovery_test_probe_hook, set_recovery_test_probe_result,
 };
 use crate::app_state::ActivityCoordinator;
 use crate::commands::{PlaybackConfigDto, PlaybackSessionState, PlaybackStartRequest};
@@ -174,7 +175,6 @@ fn projection_session_with_down(
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook,
-                focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
                 preflight_user_held_mask: None,
@@ -728,7 +728,6 @@ fn native_handoff_test_player_with_focus(
                 },
                 instrument_key_profile: None,
                 startup_ordering_hook: Some(Arc::clone(&hook)),
-                focus_pause_hook: None,
                 timer_lifecycle_context: None,
                 prepared_packet_ambiguity_mask: None,
                 preflight_user_held_mask: None,

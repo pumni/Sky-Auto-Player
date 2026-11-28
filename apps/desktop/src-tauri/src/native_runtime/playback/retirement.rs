@@ -19,6 +19,23 @@ static RECOVERY_TEST_PROBE_CALLS: std::sync::atomic::AtomicU64 =
 #[cfg(feature = "tauri-test")]
 static RECOVERY_TEST_PROBE_HOOK: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
 
+#[cfg(all(test, feature = "tauri-test"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::native_runtime) enum RecoveryForegroundPoll {
+    ForegroundMatch,
+    NotForeground,
+    OwnerMismatch,
+    OwnerQueryUnavailable,
+    OwnerIdentityInvalidated,
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+pub(in crate::native_runtime) type RecoveryPollTestHook =
+    Arc<dyn Fn(String, RecoveryForegroundPoll, bool) + Send + Sync>;
+
+#[cfg(all(test, feature = "tauri-test"))]
+static RECOVERY_TEST_POLL_HOOK: Mutex<Option<RecoveryPollTestHook>> = Mutex::new(None);
+
 #[cfg(test)]
 pub(in crate::native_runtime) fn reset_recovery_test_raw_sends() {
     RECOVERY_TEST_RAW_SENDS.store(0, Ordering::Release);
@@ -58,6 +75,28 @@ pub(in crate::native_runtime) fn set_recovery_test_probe_hook(
     *RECOVERY_TEST_PROBE_HOOK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+pub(in crate::native_runtime) fn set_recovery_test_poll_hook(hook: Option<RecoveryPollTestHook>) {
+    *RECOVERY_TEST_POLL_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+fn acknowledge_recovery_test_poll(
+    session_id: &str,
+    poll: RecoveryForegroundPoll,
+    recovery_attempted: bool,
+) {
+    let hook = RECOVERY_TEST_POLL_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(hook) = hook {
+        hook(session_id.to_string(), poll, recovery_attempted);
+    }
 }
 
 #[derive(Default)]
@@ -255,6 +294,12 @@ fn post_join_recovery_loop(
             || authority.continuity()
                 != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
         {
+            #[cfg(all(test, feature = "tauri-test"))]
+            acknowledge_recovery_test_poll(
+                &active.session_id,
+                RecoveryForegroundPoll::OwnerIdentityInvalidated,
+                false,
+            );
             break;
         }
         let foreground = match sky_dispatch_win32::focus::foreground_window_owner_matches(
@@ -263,20 +308,39 @@ fn post_join_recovery_loop(
         ) {
             sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => Some(true),
             sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => Some(false),
-            sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => break,
+            sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
+                #[cfg(all(test, feature = "tauri-test"))]
+                acknowledge_recovery_test_poll(
+                    &active.session_id,
+                    RecoveryForegroundPoll::OwnerMismatch,
+                    false,
+                );
+                break;
+            }
             sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => None,
         };
-        if transition.observe(foreground) {
+        let recovery_attempted = transition.observe(foreground);
+        if recovery_attempted {
             // The edge is consumed before attempting recovery. Duplicate or
             // reordered callbacks/polls while still foreground cannot repeat
             // this transition's single bounded attempt.
             let _ = recover_quarantined_release_once(&active, &last_terminal);
-            if !active
-                .activity
-                .quarantined_session_is_current(&active.session_id)
-            {
-                break;
-            }
+        }
+        #[cfg(all(test, feature = "tauri-test"))]
+        acknowledge_recovery_test_poll(
+            &active.session_id,
+            match foreground {
+                Some(true) => RecoveryForegroundPoll::ForegroundMatch,
+                Some(false) => RecoveryForegroundPoll::NotForeground,
+                None => RecoveryForegroundPoll::OwnerQueryUnavailable,
+            },
+            recovery_attempted,
+        );
+        if !active
+            .activity
+            .quarantined_session_is_current(&active.session_id)
+        {
+            break;
         }
         if watcher.is_none() || message_loop_failed {
             // The hook is unavailable or failed. Preserve the same bounded

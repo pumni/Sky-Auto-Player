@@ -40,7 +40,6 @@ jobs:
       updater_required: ${{ steps.classify.outputs.updater_required }}
       release_required: ${{ steps.classify.outputs.release_required }}
       signing_proof_required: ${{ steps.classify.outputs.signing_proof_required }}
-      malware_proof_required: ${{ steps.classify.outputs.malware_proof_required }}
       supply_chain_required: ${{ steps.classify.outputs.supply_chain_required }}
       site_required: ${{ steps.classify.outputs.site_required }}
       classification_reason: ${{ steps.classify.outputs.classification_reason }}
@@ -64,7 +63,7 @@ jobs:
       - name: Rust cache for path classifier
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
-          workspaces: "rust -> target"
+          workspaces: ". -> target"
           cache-targets: true
           cache-on-failure: true
           save-if: ${{ github.event_name != 'pull_request' }}
@@ -252,7 +251,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Test Tauri signer key pair interoperability
-        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml updater_fixture::tests::tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair -- --ignored --exact
+        run: cargo test --locked --manifest-path xtask/Cargo.toml updater_fixture::tests::tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair -- --ignored --exact
 
       - name: Exercise non-production updater key rotation fixture
         run: pwsh scripts/test_v4_updater_key_rotation.ps1
@@ -313,12 +312,8 @@ jobs:
       - name: Test process session lifecycle (Linux)
         run: node --test scripts/process-session.test.mjs
 
-      - name: Test fail-closed ClamAV bootstrap
-        shell: bash
-        run: bash scripts/test_ci_bootstrap_clamav.sh
-
       - name: Run Rust-native CI, candidate, bridge, and calibration self-tests
-        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml
+        run: cargo test --locked --manifest-path xtask/Cargo.toml
 
       - name: Repository verification — static
         run: cargo xtask check static --skip-supply-chain
@@ -380,19 +375,19 @@ jobs:
         run: cargo xtask release-v4 self-test
 
       - name: V4 Rust release state-machine regression tests
-        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests
+        run: cargo test --locked --manifest-path xtask/Cargo.toml release_v4::tests
 
       - name: Run V4 updater private-key verifier secret-output regression
         run: pwsh -NoProfile -NonInteractive -ExecutionPolicy Bypass -File scripts/test_v4_updater_private_key.ps1
 
       - name: Run Rust NSIS and registry owner regression tests
         run: |
-          cargo test --locked --manifest-path rust/xtask/Cargo.toml || {
+          cargo test --locked --manifest-path xtask/Cargo.toml || {
             exit_code=$?
             echo "Rust NSIS/updater harness tests failed with exit code ${exit_code}" >&2
             exit "$exit_code"
           }
-          cargo test --locked --manifest-path rust/Cargo.toml -p sky_windows_security || {
+          cargo test --locked --manifest-path Cargo.toml -p sky_windows_security || {
             exit_code=$?
             echo "Rust Windows registry/process ownership tests failed with exit code ${exit_code}" >&2
             exit "$exit_code"
@@ -508,13 +503,13 @@ jobs:
           save-if: ${{ github.event_name != 'pull_request' }}
 
       - name: Run Rust tests on Linux
-        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml
+        run: cargo test --locked --manifest-path xtask/Cargo.toml
 
       - name: Build non-test Linux release binary
-        run: cargo build --locked --manifest-path rust/xtask/Cargo.toml --release
+        run: cargo build --locked --manifest-path xtask/Cargo.toml --release
 
       - name: Exercise production subprocess and recovery transports with fake CLIs
-        run: timeout --signal=TERM --kill-after=10s 5m rust/target/release/xtask ci linux-process-smoke
+        run: timeout --signal=TERM --kill-after=10s 5m target/release/xtask ci linux-process-smoke
 
   supply_chain:
     name: Supply-chain and advisory security
@@ -545,14 +540,14 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-audit
-          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-${{ hashFiles('rust/rust-toolchain.toml') }}
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-${{ hashFiles('rust-toolchain.toml') }}
 
       - name: Restore pinned cargo-vet tool
         id: cargo-vet-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
-          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-${{ hashFiles('rust/rust-toolchain.toml') }}
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-${{ hashFiles('rust-toolchain.toml') }}
 
       - name: RustSec dependency audit
         env:
@@ -566,20 +561,22 @@ jobs:
           echo "$tool_root/bin" >> "$GITHUB_PATH"
           version="$("$tool_root/bin/cargo-audit" --version)"
           [[ "$version" == "cargo-audit $CARGO_AUDIT_VERSION" ]]
-          cargo audit --file rust/Cargo.lock
+          test -f .cargo/audit.toml
+          cargo audit --file Cargo.lock
 
       - name: Save pinned cargo-audit tool
         if: github.event_name != 'pull_request' && steps.cargo-audit-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-audit
-          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-${{ hashFiles('rust/rust-toolchain.toml') }}
+          key: cargo-audit-${{ runner.os }}-${{ runner.arch }}-0.22.2-${{ hashFiles('rust-toolchain.toml') }}
 
       - name: JavaScript dependency advisory scan
         uses: google/osv-scanner-action/osv-scanner-action@9a96bc4d2b09685b6142bcfe25a3dc17cb2d7347 # v2.7.0
         with:
           scan-args: |-
             --lockfile=./apps/desktop/bun.lock
+            --lockfile=./apps/website/bun.lock
 
       - name: Cargo-vet dependency policy
         env:
@@ -593,14 +590,14 @@ jobs:
           echo "$tool_root/bin" >> "$GITHUB_PATH"
           version="$("$tool_root/bin/cargo-vet" --version)"
           [[ "$version" == "cargo-vet $CARGO_VET_VERSION" ]]
-          cargo vet --manifest-path rust/Cargo.toml --locked
+          cargo vet --manifest-path Cargo.toml --locked
 
       - name: Save pinned cargo-vet tool
         if: github.event_name != 'pull_request' && steps.cargo-vet-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/cargo-vet
-          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-${{ hashFiles('rust/rust-toolchain.toml') }}
+          key: cargo-vet-${{ runner.os }}-${{ runner.arch }}-0.10.2-${{ hashFiles('rust-toolchain.toml') }}
 
       - name: Report CI timing
         if: always()
@@ -675,12 +672,12 @@ jobs:
         if: needs.changes.outputs.rust_required == 'true'
         run: |
           $ErrorActionPreference = "Stop"
-          cargo build --manifest-path rust/Cargo.toml --locked -p sky_xtask --bin xtask
+          cargo build --manifest-path Cargo.toml --locked -p sky_xtask --bin xtask
           if ($LASTEXITCODE -ne 0) {
             throw "Locked xtask build failed with exit code $LASTEXITCODE"
           }
           $isolatedXtask = Join-Path $env:RUNNER_TEMP ("xtask-rust-check-" + [guid]::NewGuid().ToString("N") + ".exe")
-          Copy-Item -LiteralPath "rust/target/debug/xtask.exe" -Destination $isolatedXtask
+          Copy-Item -LiteralPath "target/debug/xtask.exe" -Destination $isolatedXtask
           try {
             & $isolatedXtask check rust
             if ($LASTEXITCODE -ne 0) {
@@ -829,7 +826,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run ignored draft readback publication proof
-        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_v4::tests::test_key_signature_is_verified_after_draft_readback_before_patch -- --ignored --exact --test-threads=1
+        run: cargo test --locked --manifest-path xtask/Cargo.toml release_v4::tests::test_key_signature_is_verified_after_draft_readback_before_patch -- --ignored --exact --test-threads=1
 
       - name: Verify source identity and pinned Tauri CLI
         run: |
@@ -852,10 +849,10 @@ jobs:
           "SKY_PROOF_VERSION=$version" | Add-Content $env:GITHUB_ENV -Encoding UTF8
 
       - name: Prove production Rust key adapter with a disposable Tauri private key
-        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml release_signing::hosted_proof::hosted_disposable_tauri_private_key_roundtrip_through_adapter -- --ignored --exact --test-threads=1
+        run: cargo test --locked --manifest-path xtask/Cargo.toml release_signing::hosted_proof::hosted_disposable_tauri_private_key_roundtrip_through_adapter -- --ignored --exact --test-threads=1
 
       - name: Run Tauri signature proof positive and negative tests
-        run: cargo test --locked --manifest-path rust/xtask/Cargo.toml updater_trust::tests::hosted_signature_proof -- --test-threads=1
+        run: cargo test --locked --manifest-path xtask/Cargo.toml updater_trust::tests::hosted_signature_proof -- --test-threads=1
 
       - name: Build one unsigned NSIS installer without signing credentials
         working-directory: apps/desktop
@@ -865,7 +862,7 @@ jobs:
           }
           $configPath = Join-Path $env:SKY_HOSTED_PROOF_ROOT "unsigned-build-config.json"
           [System.IO.File]::WriteAllText($configPath, '{"bundle":{"createUpdaterArtifacts":false}}', [System.Text.UTF8Encoding]::new($false))
-          bun run tauri build --ci --bundles nsis --config $configPath -- --profile dist
+          bun run tauri build --ci --bundles nsis --config $configPath -- --locked --profile dist
           if ($LASTEXITCODE -ne 0) { throw "Unsigned hosted NSIS build failed with exit code $LASTEXITCODE" }
           $bundleDir = Join-Path $env:CARGO_TARGET_DIR "dist\bundle\nsis"
           $files = @(Get-ChildItem -LiteralPath $bundleDir -File)
@@ -1017,7 +1014,7 @@ jobs:
           $keyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate.key"
           $publicKeyPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate.pub"
           $configPath = Join-Path $env:RUNNER_TEMP "sky-auto-player-current-candidate-updater.json"
-          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "rust/target/dist/bundle/nsis"
+          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "target/dist/bundle/nsis"
           if (Test-Path -LiteralPath $bundleDir) {
             Remove-Item -LiteralPath $bundleDir -Recurse -Force
           }
@@ -1040,7 +1037,7 @@ jobs:
               $env:TAURI_SIGNING_PRIVATE_KEY = $privateKey
               $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = ""
               $env:SKY_AUTHENTICODE_MODE = "unsigned-zero-budget"
-              bun run tauri build --ci --config $configPath -- --profile dist
+              bun run tauri build --ci --config $configPath -- --locked --profile dist
               if ($LASTEXITCODE -ne 0) { throw "Current Tauri candidate build failed with exit code $LASTEXITCODE" }
             } finally {
               Pop-Location
@@ -1056,7 +1053,7 @@ jobs:
 
       - name: Verify current native build provenance
         working-directory: apps/desktop
-        run: bun run dev:build-info -- --exe ..\..\rust\target\dist\sky_desktop_shell.exe
+        run: bun run dev:build-info -- --exe ..\..\target\dist\sky_desktop_shell.exe
 
       - name: Create exact current-candidate contract
         run: |
@@ -1310,7 +1307,7 @@ jobs:
 
       - name: Stage and re-hash exact current candidate after Rust cache restore
         run: |
-          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "rust/target/dist/bundle/nsis"
+          $bundleDir = Join-Path $env:GITHUB_WORKSPACE "target/dist/bundle/nsis"
           if (Test-Path -LiteralPath $bundleDir) {
             Remove-Item -LiteralPath $bundleDir -Recurse -Force
           }
@@ -1341,35 +1338,35 @@ jobs:
           cargo xtask authenticode verify `
             --mode unsigned-zero-budget `
             --artifact $installer `
-            --evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
+            --evidence target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
           if ($LASTEXITCODE -ne 0) { throw "Authenticode verification failed with exit code $LASTEXITCODE" }
 
       - name: Generate Tauri SPDX SBOM
         run: |
           cargo xtask sbom generate `
             --artifact-dir $env:SKY_TAURI_BUNDLE `
-            --output rust/target/dist/SBOM.spdx.json
+            --output target/dist/SBOM.spdx.json
           if ($LASTEXITCODE -ne 0) { throw "SBOM generation failed with exit code $LASTEXITCODE" }
 
       - name: Verify Tauri SPDX SBOM
         run: |
           cargo xtask sbom verify `
             --artifact-dir $env:SKY_TAURI_BUNDLE `
-            --sbom rust/target/dist/SBOM.spdx.json
+            --sbom target/dist/SBOM.spdx.json
           if ($LASTEXITCODE -ne 0) { throw "SBOM verification failed with exit code $LASTEXITCODE" }
 
       - name: Verify exact Tauri NSIS bundle
         run: |
           cargo xtask verify-tauri-bundle `
             --bundle-dir $env:SKY_TAURI_BUNDLE `
-            --summary rust/target/dist/TAURI_ARTIFACT_SUMMARY.json `
-            --authenticode-evidence rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json `
-            --sbom rust/target/dist/SBOM.spdx.json
+            --summary target/dist/TAURI_ARTIFACT_SUMMARY.json `
+            --authenticode-evidence target/dist/TAURI_AUTHENTICODE_EVIDENCE.json `
+            --sbom target/dist/SBOM.spdx.json
           if ($LASTEXITCODE -ne 0) { throw "Tauri bundle verification failed with exit code $LASTEXITCODE" }
 
       - name: Report exact Tauri NSIS artifact identity
         run: |
-          $summary = Get-Content rust/target/dist/TAURI_ARTIFACT_SUMMARY.json -Raw | ConvertFrom-Json
+          $summary = Get-Content target/dist/TAURI_ARTIFACT_SUMMARY.json -Raw | ConvertFrom-Json
           @"
           ## Tauri NSIS artifact
           - identifier: ``$($summary.identifier)``
@@ -1396,7 +1393,7 @@ jobs:
 
       - name: Emit exact Tauri qualification evidence
         run: |
-          $summary = Get-Content rust/target/dist/TAURI_ARTIFACT_SUMMARY.json -Raw | ConvertFrom-Json
+          $summary = Get-Content target/dist/TAURI_ARTIFACT_SUMMARY.json -Raw | ConvertFrom-Json
           foreach ($field in @("installer_sha256", "updater_signature_sha256", "installer", "updater_signature", "version")) {
             if ([string]::IsNullOrWhiteSpace([string]$summary.$field)) {
               throw "Tauri artifact summary is missing qualification field: $field"
@@ -1423,23 +1420,23 @@ jobs:
             updater_public_key_sha256 = (Get-FileHash -LiteralPath $env:SKY_CANDIDATE_PUBLIC_KEY -Algorithm SHA256).Hash.ToLowerInvariant()
             authenticode_mode = "unsigned-zero-budget"
             authenticode_evidence = "TAURI_AUTHENTICODE_EVIDENCE.json"
-            authenticode_evidence_sha256 = (Get-FileHash -LiteralPath rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json -Algorithm SHA256).Hash.ToLowerInvariant()
+            authenticode_evidence_sha256 = (Get-FileHash -LiteralPath target/dist/TAURI_AUTHENTICODE_EVIDENCE.json -Algorithm SHA256).Hash.ToLowerInvariant()
             sbom = "SBOM.spdx.json"
-            sbom_sha256 = (Get-FileHash -LiteralPath rust/target/dist/SBOM.spdx.json -Algorithm SHA256).Hash.ToLowerInvariant()
+            sbom_sha256 = (Get-FileHash -LiteralPath target/dist/SBOM.spdx.json -Algorithm SHA256).Hash.ToLowerInvariant()
           }
-          $evidence | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath rust/target/dist/V4_QUALIFICATION_EVIDENCE.json -Encoding utf8
+          $evidence | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath target/dist/V4_QUALIFICATION_EVIDENCE.json -Encoding utf8
 
       - name: Upload exact Tauri NSIS release candidate
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: sky-auto-player-tauri-nsis-${{ github.event.pull_request.head.sha || github.sha }}
           path: |
-            rust/target/dist/bundle/nsis
-            rust/target/dist/TAURI_ARTIFACT_SUMMARY.json
-            rust/target/dist/V4_QUALIFICATION_EVIDENCE.json
-            rust/target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
-            rust/target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
-            rust/target/dist/SBOM.spdx.json
+            target/dist/bundle/nsis
+            target/dist/TAURI_ARTIFACT_SUMMARY.json
+            target/dist/V4_QUALIFICATION_EVIDENCE.json
+            target/dist/TAURI_AUTHENTICODE_EVIDENCE.json
+            target/dist/INSTALLED_AUTHENTICODE_EVIDENCE.json
+            target/dist/SBOM.spdx.json
           if-no-files-found: error
           retention-days: 14
 
@@ -1450,161 +1447,6 @@ jobs:
       - name: Report CI timing
         if: always()
         run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job packaged -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
-
-  malware_proof:
-    needs: changes
-    if: needs.changes.outputs.malware_proof_required == 'true'
-    name: Prove real NSIS-format ClamAV scanner on GitHub-hosted Ubuntu
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    env:
-      SKY_MALWARE_PROOF_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-    steps:
-      - name: Check out exact disposable proof source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Install ClamAV and NSIS builder; refresh official signatures
-        shell: bash
-        run: |
-          bash scripts/ci_bootstrap_clamav.sh --with-nsis
-      - name: Build a real NSIS PE without any release credentials or external artifact upload
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/sky-v4-malware-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          test ! -e "$root"
-          mkdir -p "$root/candidate-bundle"
-          echo "SKY_MALWARE_PROOF_ROOT=$root" >> "$GITHUB_ENV"
-          head -c 2097152 /dev/urandom > "$root/disposable-payload.dat"
-          cat > "$root/disposable.nsi" <<'NSI'
-          Name "Sky Auto Player Disposable NSIS Scanner Proof"
-          OutFile "candidate-bundle/Sky Auto Player_4.3.0_x64-setup.exe"
-          RequestExecutionLevel user
-          Section
-            SetOutPath "$TEMP"
-            File "disposable-payload.dat"
-          SectionEnd
-          NSI
-          (cd "$root" && makensis -V2 disposable.nsi)
-          installer="$root/candidate-bundle/Sky Auto Player_4.3.0_x64-setup.exe"
-          test -f "$installer"
-          test "$(stat -c '%s' "$installer")" -gt 1048576
-          file -b "$installer" | grep -q 'PE32'
-          echo "GitHub-hosted real NSIS PE scanner fixture: PASS"
-
-      - name: Prove ClamAV detects harmless EICAR hidden inside an actual compressed NSIS
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="$SKY_MALWARE_PROOF_ROOT"
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
-          root = Path(os.environ["SKY_MALWARE_PROOF_ROOT"])
-          eicar = b"X5O!P%@AP[4" + bytes([92]) + b"PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
-          (root / "nsis-eicar-positive-control.txt").write_bytes(eicar)
-          (root / "nsis-eicar-positive-control.nsi").write_text(
-              'Name "Sky Auto Player NSIS Scanner Positive Control"\n'
-              'OutFile "nsis-eicar-positive-control.exe"\n'
-              'RequestExecutionLevel user\n'
-              'SetCompress force\n'
-              'Section\n'
-              '  SetOutPath "$TEMP"\n'
-              '  File "nsis-eicar-positive-control.txt"\n'
-              'SectionEnd\n',
-              encoding="utf-8",
-          )
-          PY
-          (cd "$root" && makensis -V2 nsis-eicar-positive-control.nsi)
-          set +e
-          scan_output="$(clamscan --stdout --no-summary --scan-archive=yes \
-            --alert-exceeds-max=yes --max-filesize=300M --max-scansize=1024M \
-            --max-recursion=30 "$root/nsis-eicar-positive-control.exe" 2>&1)"
-          scanner_status=$?
-          set -e
-          if [ "$scanner_status" -ne 1 ] || ! grep -q ' FOUND' <<<"$scan_output" || \
-             ! grep -qi 'EICAR' <<<"$scan_output"; then
-            echo "Hosted scanner did not detect EICAR inside a compressed NSIS archive" >&2
-            exit 1
-          fi
-          rm -f "$root/nsis-eicar-positive-control.exe" "$root/nsis-eicar-positive-control.nsi" "$root/nsis-eicar-positive-control.txt"
-          echo "Nested EICAR detection inside actual NSIS archive: PASS"
-
-      - name: Bind the real disposable NSIS to an isolated exact-byte release manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib, json, os
-          root = Path(os.environ["RUNNER_TEMP"]) / f"sky-v4-malware-proof-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
-          name = "Sky Auto Player_4.3.0_x64-setup.exe"
-          fixture = root / "candidate-bundle" / name
-          if not fixture.is_file() or fixture.stat().st_size < 1024 * 1024:
-              raise RuntimeError("real NSIS proof is missing or suspiciously small")
-          with fixture.open("rb") as handle:
-              actual_hash = hashlib.file_digest(handle, "sha256").hexdigest()
-          record = {
-              "role": "installer", "source_name": name,
-              "state_path": "candidate-bundle/" + name, "size": fixture.stat().st_size,
-              "sha256": actual_hash
-          }
-          signature = {"role": "updater-signature", "source_name": name + ".sig"}
-          context = {
-              "repository": os.environ["GITHUB_REPOSITORY"],
-              "source_sha": os.environ["SKY_MALWARE_PROOF_SOURCE_SHA"],
-              "workflow_sha": os.environ["GITHUB_SHA"],
-              "run_id": os.environ["GITHUB_RUN_ID"],
-              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-              "version": "4.3.0",
-          }
-          (root / "release-context.json").write_text(json.dumps(context))
-          (root / "candidate-manifest.json").write_text(json.dumps({**context, "public_assets": [record, signature]}))
-          PY
-
-      - name: Prove real NSIS PE is clean and EICAR is positively detected
-        shell: bash
-        run: |
-          set -euo pipefail
-          GITHUB_SHA="$SKY_MALWARE_PROOF_SOURCE_SHA" python3 scripts/scan_v4_malware_exact.py --state-root "$SKY_MALWARE_PROOF_ROOT"
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          root = Path(os.environ["SKY_MALWARE_PROOF_ROOT"])
-          v = json.loads((root / "malware-evidence.json").read_text())
-          assert v["positive_control_detected"] is True
-          assert v["nsis_archive_control_detected"] is True
-          assert v["detection_result"] == "none"
-          assert v["artifact_sha256"] == json.loads((root / "candidate-manifest.json").read_text())["public_assets"][0]["sha256"]
-          print("Hosted real NSIS malware scan evidence exact-byte binding: PASS")
-          PY
-
-      - name: Prove an altered NSIS SHA is rejected without rescanning as clean
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "tamper" >> "$SKY_MALWARE_PROOF_ROOT/candidate-bundle/Sky Auto Player_4.3.0_x64-setup.exe"
-          if GITHUB_SHA="$SKY_MALWARE_PROOF_SOURCE_SHA" python3 scripts/scan_v4_malware_exact.py --state-root "$SKY_MALWARE_PROOF_ROOT"; then
-            echo "tampered exact candidate was accepted" >&2
-            exit 1
-          fi
-          echo "Tampered candidate rejected: PASS"
-
-      - name: Clean disposable proof workspace
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/sky-v4-malware-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          if [ -d "$root" ] && [ "$(dirname "$root")" = "$RUNNER_TEMP" ]; then
-            rm -rf -- "$root"
-          fi
 
   site:
     name: Website validation
@@ -1634,7 +1476,7 @@ jobs:
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof, malware_proof]
+    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -1655,7 +1497,6 @@ jobs:
           UPDATER_REQUIRED: ${{ needs.changes.outputs.updater_required }}
           RELEASE_REQUIRED: ${{ needs.changes.outputs.release_required }}
           SIGNING_PROOF_REQUIRED: ${{ needs.changes.outputs.signing_proof_required }}
-          MALWARE_PROOF_REQUIRED: ${{ needs.changes.outputs.malware_proof_required }}
           SUPPLY_CHAIN_REQUIRED: ${{ needs.changes.outputs.supply_chain_required }}
           SITE_REQUIRED: ${{ needs.changes.outputs.site_required }}
           STATIC_REQUIRED: ${{ needs.changes.outputs.static_required }}
@@ -1676,7 +1517,6 @@ jobs:
           DESKTOP_WEB_RESULT: ${{ needs.desktop_web.result }}
           SITE_RESULT: ${{ needs.site.result }}
           SIGNING_PROOF_RESULT: ${{ needs.signing_proof.result }}
-          MALWARE_PROOF_RESULT: ${{ needs.malware_proof.result }}
         run: |
           set -euo pipefail
           [[ "$CHANGES_RESULT" == "success" ]]
@@ -1710,7 +1550,6 @@ jobs:
           fi
           if [[ "$SITE_REQUIRED" == "true" ]]; then [[ "$SITE_RESULT" == "success" ]]; else [[ "$SITE_RESULT" == "skipped" ]]; fi
           if [[ "$SIGNING_PROOF_REQUIRED" == "true" ]]; then [[ "$SIGNING_PROOF_RESULT" == "success" ]]; else [[ "$SIGNING_PROOF_RESULT" == "skipped" ]]; fi
-          if [[ "$MALWARE_PROOF_REQUIRED" == "true" ]]; then [[ "$MALWARE_PROOF_RESULT" == "success" ]]; else [[ "$MALWARE_PROOF_RESULT" == "skipped" ]]; fi
           echo "CI status is green."
 
       - name: Report CI timing

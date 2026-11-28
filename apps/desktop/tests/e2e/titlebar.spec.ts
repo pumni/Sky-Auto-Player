@@ -84,6 +84,8 @@ test('Global Search keeps one clear affordance, focus, and current results throu
   });
 
   await search.fill('Blue');
+  // Cross the 120 ms debounce so clear interrupts an in-flight delayed bridge
+  // request instead of only cancelling an uncommitted draft.
   await page.waitForTimeout(150);
   await expect(clear).toBeVisible();
   await expect(globalSearch.getByRole('button', { name: 'Clear search' })).toHaveCount(1);
@@ -96,12 +98,15 @@ test('Global Search keeps one clear affordance, focus, and current results throu
   await expect(clear).toHaveCount(0);
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
   await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
+  // The configured bridge delay is 700 ms; this observation spans the query
+  // debounce and response so a stale result cannot reapply after clear.
   await page.waitForTimeout(600);
   await expect(search).toHaveValue('');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
   await expect(page.getByText('500 songs', { exact: true })).toBeVisible();
 
   await search.fill('Blue');
+  // Exercise the committed-query path before keyboard clear.
   await page.waitForTimeout(150);
   await page.keyboard.press('Tab');
   await expect(clear).toBeFocused();
@@ -110,6 +115,7 @@ test('Global Search keeps one clear affordance, focus, and current results throu
   await expect(search).toBeFocused();
   await expect(clear).toHaveCount(0);
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
+  // This spans the 120 ms debounce and 700 ms delayed mock response.
   await page.waitForTimeout(600);
   await expect(search).toHaveValue('');
   await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();
@@ -141,6 +147,7 @@ test('Global Search keeps one clear affordance, focus, and current results throu
     expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.clientWidth + 1);
 
     await search.fill('Blue');
+    // Cross the debounce before measuring the rendered clear affordance.
     await page.waitForTimeout(150);
     await expect(clear).toBeVisible();
     await expect(globalSearch.getByRole('button', { name: 'Clear search' })).toHaveCount(1);
@@ -157,6 +164,7 @@ test('Global Search keeps one clear affordance, focus, and current results throu
     await page.keyboard.press('Enter');
     await expect(search).toHaveValue('');
     await expect(search).toBeFocused();
+    // Keep this integration check beyond the debounce and mock response.
     await page.waitForTimeout(750);
     await expect(search).toHaveValue('');
     await expect(page.getByRole('row', { name: /Aurora Landing/ })).toBeVisible();

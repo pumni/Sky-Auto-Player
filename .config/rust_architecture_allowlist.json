@@ -1,7 +1,7 @@
 {
   "entries": [
     {
-      "path": "rust/crates/sky_player/src/engine/worker/dispatch/observer.rs",
+      "path": "crates/sky_player/src/engine/worker/dispatch/observer.rs",
       "rule": "dispatch_function_lines",
       "reason": "observer health and recovery accounting expanded drain_down_send_outcome; split only with timing proof",
       "review_trigger": "review before the next real-time path expansion",
@@ -9,91 +9,91 @@
       "subject": "drain_down_send_outcome"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/clock.rs",
+      "path": "crates/sky_dispatch_win32/src/clock.rs",
       "rule": "unsafe_boundary",
       "reason": "existing QPC Win32 seam; retain only in platform crate",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/cpu.rs",
+      "path": "crates/sky_dispatch_win32/src/cpu.rs",
       "rule": "unsafe_boundary",
       "reason": "existing CPU accounting Win32 seam",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/event.rs",
+      "path": "crates/sky_dispatch_win32/src/event.rs",
       "rule": "unsafe_boundary",
       "reason": "existing event Win32 seam",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/focus.rs",
+      "path": "crates/sky_dispatch_win32/src/focus.rs",
       "rule": "unsafe_boundary",
       "reason": "window focus, owner identity, and limited process liveness Win32 seam",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/focus/foreground_watcher.rs",
+      "path": "crates/sky_dispatch_win32/src/focus/foreground_watcher.rs",
       "rule": "unsafe_boundary",
       "reason": "single foreground-only out-of-context WinEvent callback, scoped to a joined message-loop owner",
       "review_trigger": "review before changing foreground event range, callback behavior, or hook teardown"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/focus/window_identity.rs",
+      "path": "crates/sky_dispatch_win32/src/focus/window_identity.rs",
       "rule": "unsafe_boundary",
       "reason": "retained playback target identity and liveness queries with PROCESS_QUERY_LIMITED_INFORMATION | SYNCHRONIZE in the Win32 focus boundary",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/input/physical.rs",
+      "path": "crates/sky_dispatch_win32/src/input/physical.rs",
       "rule": "unsafe_boundary",
       "reason": "existing physical keyboard Win32 seam",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/input/packet.rs",
+      "path": "crates/sky_dispatch_win32/src/input/packet.rs",
       "rule": "unsafe_boundary",
       "reason": "SendInput packet construction and syscall boundary remains isolated in the Win32 input module",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/input/raw.rs",
+      "path": "crates/sky_dispatch_win32/src/input/raw.rs",
       "rule": "unsafe_boundary",
       "reason": "raw SendInput buffers are built and passed only within the physical-input adapter",
       "review_trigger": "review before changing raw SendInput packet construction"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/mmcss.rs",
+      "path": "crates/sky_dispatch_win32/src/mmcss.rs",
       "rule": "unsafe_boundary",
       "reason": "existing MMCSS Win32 seam",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/power.rs",
+      "path": "crates/sky_dispatch_win32/src/power.rs",
       "rule": "unsafe_boundary",
       "reason": "existing power Win32 seam",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/timer.rs",
+      "path": "crates/sky_dispatch_win32/src/timer.rs",
       "rule": "unsafe_boundary",
       "reason": "existing timer Win32 seam",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_dispatch_win32/src/wait/hybrid.rs",
+      "path": "crates/sky_dispatch_win32/src/wait/hybrid.rs",
       "rule": "unsafe_boundary",
       "reason": "existing waitable-timer and multi-wait Win32 seam moved from wait facade",
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "rust/crates/sky_native_adapters/src/lib.rs",
+      "path": "crates/sky_native_adapters/src/atomic_file.rs",
       "rule": "unsafe_boundary",
       "reason": "MoveFileExW replacement uses live NUL-terminated path buffers and owned filesystem paths",
       "review_trigger": "review before changing persisted-file replacement semantics"
     },
     {
-      "path": "rust/crates/sky_windows_security/src/win32.rs",
+      "path": "crates/sky_windows_security/src/win32.rs",
       "rule": "unsafe_boundary",
       "reason": "isolated Credential Manager, exact HKCU registry snapshot/restore, and kill-on-close Job Object FFI; pointers and handles are locally audited",
       "review_trigger": "review before expanding credential, registry, or process-tree Win32 calls"
@@ -123,14 +123,14 @@
       "review_trigger": "review before changing icon ownership or subclass lifecycle"
     },
     {
-      "path": "rust/crates/sky_player/src/engine/worker.rs",
+      "path": "crates/sky_player/src/engine/worker.rs",
       "rule": "production_glob_import",
       "reason": "make worker dependencies explicit",
       "review_trigger": "review before adding new production imports",
       "baseline": 1
     },
     {
-      "path": "rust/crates/sky_player/src/engine/session.rs",
+      "path": "crates/sky_player/src/engine/session.rs",
       "rule": "production_glob_import",
       "reason": "pre-existing engine session import surface; preserve qualified session lifecycle while explicit dependency refactor awaits a separately reviewed architecture change",
       "review_trigger": "review before adding session dependencies or changing session ownership; remove when explicit imports are qualified",

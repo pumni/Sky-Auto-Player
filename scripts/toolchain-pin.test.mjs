@@ -21,13 +21,13 @@ function fixtureRoot() {
   mkdirSync(join(root, 'rust'));
   mkdirSync(join(root, 'apps/desktop'), { recursive: true });
   mkdirSync(join(root, 'apps/website'), { recursive: true });
-  writeFileSync(join(root, 'rust/rust-toolchain.toml'), validRust);
+  writeFileSync(join(root, 'rust-toolchain.toml'), validRust);
   writeFileSync(join(root, '.bun-version'), '7.8.9\n');
   writeFileSync(join(root, 'apps/website/package.json'), validBun);
   return root;
 }
 
-test('reads only exact nested Rust and Bun package-manager pins', () => {
+test('reads only exact root Rust and Bun package-manager pins', () => {
   assert.equal(parseRustToolchain(validRust).channel, '7.8.9');
   assert.equal(parseBunVersionFile('7.8.9\n'), '7.8.9');
   assert.equal(parseBunVersionFile('7.8.9'), '7.8.9');
@@ -77,19 +77,22 @@ test('rejects malformed, duplicate, floating, and conflicting Rust pin sources',
     assert.equal(readPins(root, { RUSTUP_TOOLCHAIN: '7.8.9' }).rust.channel, '7.8.9');
     assert.throws(() => readPins(root, { RUSTC: 'rustc.exe' }), /RUSTC overrides/);
     assert.throws(() => readPins(root, { CARGO_BUILD_RUSTC: 'rustc.exe' }), /CARGO_BUILD_RUSTC/);
-    writeFileSync(join(root, 'rust-toolchain.toml'), validRust);
+    writeFileSync(join(root, 'rust-toolchain'), '7.8.10\n');
     assert.throws(() => readPins(root, {}), /Conflicting root Rust toolchain file/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('rejects a contradictory sibling legacy Rustup file beside the canonical TOML pin', () => {
+test('rejects nested legacy Rustup files that could shadow the canonical root pin', () => {
   const root = fixtureRoot();
   try {
     assert.equal(readPins(root, {}).rust.channel, '7.8.9');
-    writeFileSync(join(root, 'rust/rust-toolchain'), '7.8.10\n');
-    assert.throws(() => readPins(root, {}), /legacy Rust toolchain file can shadow/);
+    for (const path of ['rust/rust-toolchain.toml', 'rust/rust-toolchain']) {
+      writeFileSync(join(root, path), '7.8.10\n');
+      assert.throws(() => readPins(root, {}), /nested legacy Rust toolchain file can shadow/);
+      rmSync(join(root, path));
+    }
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

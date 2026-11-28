@@ -4,11 +4,24 @@ use super::*;
 fn debug_install_root_is_repository_root_not_cwd() {
     if cfg!(debug_assertions) {
         let root = resolve_install_root().expect("root");
-        assert!(root.join("rust").is_dir());
+        let resolved_root = root.canonicalize().expect("canonical repository root");
+        let expected_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../..")
+            .canonicalize()
+            .expect("canonical root derived from the desktop manifest");
+        assert_eq!(
+            resolved_root, expected_root,
+            "debug install root must resolve from the repository manifest, not the process CWD"
+        );
+        assert!(resolved_root.join("Cargo.toml").is_file());
+        assert!(resolved_root.join("crates").is_dir());
+        assert!(resolved_root.join("xtask/Cargo.toml").is_file());
         assert!(
-            root.join("apps/desktop").is_dir(),
+            resolved_root
+                .join("apps/desktop/src-tauri/Cargo.toml")
+                .is_file(),
             "resolved debug repository root: {}",
-            root.display()
+            resolved_root.display()
         );
     }
 }

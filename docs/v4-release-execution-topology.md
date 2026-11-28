@@ -133,30 +133,14 @@ Authenticode verification, updater signature/version verification, SBOM generati
 Tauri bundle checks, the updater fixture, and Windows NSIS install/launch/uninstall
 qualification. No production key is supplied during qualification.
 
-**Hosted-only malware gate:** GitHub-hosted Windows images disable Defender real-time protection
-and originally excluded entire C:/D: drives. The upstream runner-image policy and an actual
-Windows 2022/2025 EICAR experiment demonstrate that invoking `Start-MpScan` successfully
-does **not** establish any detection. The former self-hosted-only Defender requirement cannot
-produce honest evidence on hosted Windows. The independent GitHub-hosted Ubuntu 24.04
-`attest` job instead requires refreshed ClamAV official malware signatures, a **detected EICAR
-positive control**, and an exact scan of the unchanged production-signed NSIS installer,
-with bounded freshness and file size. The scanner must prove **both plain EICAR
-and EICAR embedded inside compressed NSIS** on the same runner; its attested
-evidence records these two controls independently. Rust verifies a separate JSON record against the
-signed immutable manifest's exact SHA/size, run ID/attempt, version and source. GitHub OIDC
-attests that evidence alongside `.exe`, `.sig` and SPDX SBOM; `publish` downloads and
-independently verifies the exact-run scanner evidence and OIDC attestation **before any release mutation**.
-The scanner receives **no production private key**. ClamAV is a distinct signature-based engine;
-it is **not equivalent to Defender cloud/behavioral protection**. This change of malware scanner
-policy needs explicit owner security acceptance, even when all CI tests pass.
-
-The production `attest` job and conditional PR `malware_proof` job share
-`scripts/ci_bootstrap_clamav.sh`. Its apt update/install retries and command
-timeouts are bounded, apt update rejects partial repository failures, and
-`freshclam` failure stops the job. The helper uses the runner's configured
-authenticated Ubuntu repositories and does not download binaries or replace
-`clamscan`; `scripts/test_ci_bootstrap_clamav.sh` injects apt and freshness
-failures to verify this behavior.
+**No project-operated artifact antivirus scanning (Decision D23):** Release
+artifacts retain exact-byte SHA-256 binding, Ed25519 updater signatures, GitHub
+OIDC provenance attestations, SPDX SBOM attestation, and Rust/Bun supply-chain
+audits, but are **not** antivirus-scanned by project CI/CD. The project owner
+explicitly retired ClamAV and standalone Defender scanning utilities without
+replacement and accepted the residual risk of no pre-publication artifact
+malware scanning. The `attest` job runs on `ubuntu-latest` with no signing
+secrets and attests the exact `.exe`, `.sig`, and `SBOM.spdx.json`.
 
 The `publish` job verifies all attestations against the exact source SHA and candidate bytes
 before Rust creates or publishes an immutable release. Rust checks
@@ -309,7 +293,7 @@ the production workflow or change the protected environment secret boundary.
 
 ## 3. Rust Release Authority
 
-`rust/xtask/src/release_v4.rs` remains the only release transaction state machine. The workflow owns
+`xtask/src/release_v4.rs` remains the only release transaction state machine. The workflow owns
 runner selection, job dependencies, job-scoped GitHub permissions, artifact transfer, protected
 Environment access, and OIDC actions. Rust owns release identity, state transitions, artifact
 integrity, version/channel policy, GitHub API behavior, metadata generation, reconciliation, and
@@ -379,15 +363,13 @@ does not match its ownership boundary. Candidate files are never written into th
   SPDX SBOM, validates the Tauri bundle, runs the updater fixture, and performs Windows
   NSIS install/launch/uninstall qualification. It writes a candidate manifest whose records
   include exact sizes and SHA-256 values.
-- **VerifyCandidate / VerifyMalwareScan** run under separately enforced `attest` job identity.
-  `verify-candidate` proves the exact signed artifact, followed by the real Linux ClamAV scanner
-  that must detect EICAR and cleanly scan the same SHA-bound installer. The Rust
-  `verify-malware-scan` gate checks the scan evidence and immutable manifest before OIDC attests it.
-  `probe-verify-candidate` runs in `metadata_probe` with a distinct exact `GITHUB_JOB` authorization.
-- **VerifyAttestations** runs before publication. It rechecks the distinct scan evidence,
-  verifies GitHub OIDC attestation signer workflow, source identity, subject digests of
-  installer/signature/**malware evidence** and SPDX SBOM. The publish job downloads the
-  evidence by exact run ID and attempt. Failure cannot proceed to release mutation.
+- **VerifyCandidate** runs under separately enforced `attest` job identity to prove
+  the exact signed artifact before OIDC attests the installer, updater signature, and
+  SPDX SBOM. `probe-verify-candidate` runs in `metadata_probe` with a distinct exact
+  `GITHUB_JOB` authorization.
+- **VerifyAttestations** runs before publication. It verifies GitHub OIDC attestation
+  signer workflow, source identity, and subject digests of the installer, updater
+  signature, and SPDX SBOM. Failure cannot proceed to release mutation.
 - **PublishRelease** is the only release mutation phase. It verifies candidate bytes and current
   metadata/Latest state again, reconciles only an exactly owned unpublished draft, refuses existing
   tags, and uploads exactly the manifest's `.exe` and `.sig`. Before the irreversible release PATCH,

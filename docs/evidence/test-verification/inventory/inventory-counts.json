@@ -1,0 +1,11 @@
+{
+  "rust_selectors": 2567,
+  "rust_ignored": 23,
+  "rust_exports": 356,
+  "rust_targets": 28,
+  "js_selectors": 786,
+  "test_source_files": 330,
+  "timing_candidates": 2281,
+  "binding_files": 93,
+  "protected_content_files": 165
+}

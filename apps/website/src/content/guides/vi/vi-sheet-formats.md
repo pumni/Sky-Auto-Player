@@ -24,7 +24,7 @@ evidence:
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/README.md
   - category: architecture
     label: Domain models — schedule và timing frame
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/rust/crates/sky_app_core/src/song.rs
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/crates/sky_app_core/src/song.rs
 ---
 
 ## Tổng quan

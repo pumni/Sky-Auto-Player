@@ -46,7 +46,7 @@ try {
         throw 'native_acceptance_sink.ps1 Compat3 serializer fixture lost schema, provenance, VK, scan, or WM metadata'
     }
     $env:SKY_NATIVE_V3_COMPAT3_FIXTURE_ROOT = $fixtureRoot
-    & cargo test --locked --manifest-path (Join-Path $repositoryRoot 'rust\Cargo.toml') -p sky_player --bin rt-native-acceptance --features real-input-acceptance $fixtureTestName
+    & cargo test --locked --manifest-path (Join-Path $repositoryRoot 'Cargo.toml') -p sky_player --bin rt-native-acceptance --features real-input-acceptance $fixtureTestName
     $crossLanguageExit = $LASTEXITCODE
     if ($crossLanguageExit -ne 0) { throw "Rust V3 Compat3 cross-language fixture test failed with exit $crossLanguageExit" }
 } finally {
@@ -1296,8 +1296,8 @@ try {
 
 # M3 timing floors mirror acceptance/scenarios.rs: the ordinary acceptance
 # hold uses one configured frame; HolInterleaved alone holds for two frames.
-$acceptanceLimitsSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'rust\crates\sky_player\src\bin\acceptance\acceptance_limits.rs') -Raw
-$acceptanceScenariosSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'rust\crates\sky_player\src\bin\acceptance\scenarios.rs') -Raw
+$acceptanceLimitsSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'crates\sky_player\src\bin\acceptance\acceptance_limits.rs') -Raw
+$acceptanceScenariosSource = Get-Content -LiteralPath (Join-Path $repositoryRoot 'crates\sky_player\src\bin\acceptance\scenarios.rs') -Raw
 if ($acceptanceLimitsSource -notmatch 'ACCEPTANCE_HOLD_FRAMES:\s*u64\s*=\s*1\s*;' -or
     $acceptanceScenariosSource -notmatch 'Scenario::HolInterleaved\s*\{\s*2\s*\}\s*else\s*\{\s*ACCEPTANCE_HOLD_FRAMES') {
     throw 'native acceptance hold-frame source contract changed; M3 timing expectations need review'
@@ -1755,7 +1755,7 @@ $playbackCoreManifestSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 
 $playbackCoreRunnerSource = Get-Content -LiteralPath $runnerPath -Raw
 $playbackCoreCollectorSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'lib/playback_core_lifecycle_collector.psm1') -Raw
 $playbackCoreCaseRunnerSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'run_native_acceptance_case.ps1') -Raw
-$playbackCoreNativeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\bin\rt_native_acceptance.rs') -Raw
+$playbackCoreNativeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\crates\sky_player\src\bin\rt_native_acceptance.rs') -Raw
 $playbackCoreRepoRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $caseRunnerPreflightIndex = $playbackCoreCaseRunnerSource.IndexOf("Write-Output ('CASE_PREFLIGHT_ONLY PASS", [System.StringComparison]::Ordinal)
 $caseRunnerSinkStartIndex = $playbackCoreCaseRunnerSource.IndexOf('$sinkProcess = Start-Process', [System.StringComparison]::Ordinal)
@@ -1794,8 +1794,8 @@ if (-not $pclV3ZeroMarginRejected -or
 }
 $playbackCoreBaselineNativeSource = (& git -C $playbackCoreRepoRoot show '2544daa13eb23fdf03bd922e65b96fcffaba421c:rust/crates/sky_player/src/bin/rt_native_acceptance.rs') -join [Environment]::NewLine
 if ($LASTEXITCODE -ne 0) { throw 'could not read the frozen PlaybackCoreLifecycle baseline native acceptance source' }
-$playbackCoreWorkerBootSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\boot.rs') -Raw
-$playbackCoreWorkerFinalizeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\rust\crates\sky_player\src\engine\worker\cleanup\finalize.rs') -Raw
+$playbackCoreWorkerBootSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\crates\sky_player\src\engine\worker\boot.rs') -Raw
+$playbackCoreWorkerFinalizeSource = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\crates\sky_player\src\engine\worker\cleanup\finalize.rs') -Raw
 if (-not $playbackCoreProfileSource.Contains("Name = switch (`$Version)") -or
     -not $playbackCoreProfileSource.Contains("BaselineRevision = switch (`$Version)") -or
     -not $playbackCoreProfileSource.Contains("BaselineTree = switch (`$Version)") -or

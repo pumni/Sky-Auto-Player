@@ -23,7 +23,7 @@ evidence:
     url: https://github.com/pumni/Sky-Auto-Player/blob/main/SECURITY.md
   - category: security
     label: Static security audit
-    url: https://github.com/pumni/Sky-Auto-Player/blob/main/rust/xtask/src/audits/security.rs
+    url: https://github.com/pumni/Sky-Auto-Player/blob/main/xtask/src/audits/security.rs
 ---
 
 ## At a glance

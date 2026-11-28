@@ -279,9 +279,9 @@ missed events; session IDs fence old results from a newer playback.
 ## Source map
 
 - Shell ownership, retirement, and recovery: **apps/desktop/src-tauri/src/native_runtime/playback/**.
-- Worker authority and cleanup: **rust/crates/sky_player/src/engine/**.
-- Executor: [executor.rs](../rust/crates/sky_dispatch_core/src/executor.rs).
+- Worker authority and cleanup: **crates/sky_player/src/engine/**.
+- Executor: [executor.rs](../crates/sky_dispatch_core/src/executor.rs).
 - Windows target, packet, journal, and watcher:
-  **rust/crates/sky_dispatch_win32/src/**.
+  **crates/sky_dispatch_win32/src/**.
 - No-allocation evidence:
-  [rt_dispatch_no_alloc.rs](../rust/crates/sky_player/tests/rt_dispatch_no_alloc.rs).
+  [rt_dispatch_no_alloc.rs](../crates/sky_player/tests/rt_dispatch_no_alloc.rs).

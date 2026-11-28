@@ -1,2 +1,3 @@
-//! Shell DTOs are declared in `commands.rs` and exported by `ts-rs` during
-//! `cargo test`. The generated files live in `apps/desktop/src/bridge/generated/`.
+//! Shell DTOs are declared in `commands/dto/`, re-exported by `commands.rs`,
+//! and exported by `ts-rs` during `cargo test`. The generated files live in
+//! `apps/desktop/src/bridge/generated/`.

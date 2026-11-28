@@ -18,7 +18,7 @@ $secondTargetExe = Join-Path $fixtureRoot 'target-second.exe'
 $tamperedTargetExe = Join-Path $fixtureRoot 'target-tampered.exe'
 
 # Find a valid PE file to use as target
-$sourcePe = Get-ChildItem -LiteralPath (Join-Path $repoRoot 'rust\target') -Filter '*.exe' -Recurse -File -ErrorAction SilentlyContinue |
+$sourcePe = Get-ChildItem -LiteralPath (Join-Path $repoRoot 'target') -Filter '*.exe' -Recurse -File -ErrorAction SilentlyContinue |
     Where-Object { $_.FullName -notmatch '\\deps\\' } |
     Select-Object -First 1
 

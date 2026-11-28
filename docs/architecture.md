@@ -9,20 +9,25 @@ no separate scripting runtime in the packaged application.
 ```text
 apps/desktop/       React + Vite frontend and Tauri shell
 apps/website/       independent static Astro site for GitHub Pages
-rust/               Cargo workspace: domain, native adapters, desktop shell, xtask
+crates/             Rust libraries: domain, dispatch, player, adapters, security
+xtask/              Rust repository checks, audits and release tooling
+build_support/      shared Rust build-time support
+supply-chain/       Cargo Vet policy and review data
 songs/              built-in sheet files packaged by the desktop app
 builtin-songs/      immutable built-in catalog manifest and metadata
 scripts/            repository and release qualification helpers
+Cargo.toml          root Cargo workspace manifest
+Cargo.lock          root workspace dependency lock
+rust-toolchain.toml pinned Rust compiler and components
 ```
 
-The Rust workspace remains under `rust/` because its Cargo config, lockfile,
-target directory, and workspace membership define one shared native build
-boundary. The Tauri crate joins that workspace through its path at
-`apps/desktop/src-tauri`; package names such as `sky_desktop_shell` and
-`sky_app_core` remain stable responsibility names used by Cargo commands and
-CI. Desktop and website keep their own `package.json` and `bun.lock` so each
-app has a frozen, independently validated dependency graph. There is no root
-Bun workspace or duplicate root JavaScript manifest.
+The root Cargo manifest defines the single Rust workspace, including the
+libraries, repository tooling, and Tauri shell at `apps/desktop/src-tauri`.
+Package names such as `sky_desktop_shell` and `sky_app_core` remain stable
+responsibility names used by Cargo commands and CI. Desktop and website keep
+their own `package.json` and `bun.lock` so each app has a frozen, independently
+validated dependency graph. There is no root Bun workspace or duplicate root
+JavaScript manifest.
 
 The website builds static Pages output without invoking Cargo or Tauri. The
 desktop Vite bundle is consumed by the Tauri shell, which packages the Rust
@@ -56,12 +61,48 @@ WinEvent hint source; it never grants sender admission.
 
 Each state has one owner and each module has a focused invariant:
 
-- `sky_app_core` owns pure application and domain policy (parsing, validation, sheet models).
-- `sky_native_adapters` encapsulates concrete filesystem, process, and Win32 host adapters.
+- `sky_app_core` owns pure application and domain policy (parsing, validation, sheet models). Catalog identity/path normalization and WRatio ranking live in `catalog/identity.rs` and `catalog/ranking.rs`; the legacy song parser, schedule, and risk analysis live in `song/legacy.rs`, `song/schedule.rs`, and `song/risk.rs` behind the existing facades.
+- `sky_native_adapters` encapsulates concrete filesystem and process adapters. Settings and library persistence live in `settings_store.rs` and `library_store.rs`; the catalog source/composition modules live under `catalog/`; settings and catalog-cache writes share the platform-aware `atomic_file.rs` replacement implementation. Direct Win32 waiting, focus, priority, power and input effects remain in `sky_dispatch_win32`.
 - **sky_player** owns the playback worker, target authority, admission/control, QPC timing, telemetry, and worker cleanup. **sky_desktop_shell** owns playback-service orchestration, ordered worker join and retirement, post-join recovery coordination, and UI publication.
 - `sky_dispatch_core` owns pure onset-plan validation and completion-anchored pulse scheduling policy.
 - `sky_dispatch_win32` owns Windows wait, focus, priority, and `SendInput` boundaries.
 - `sky_desktop_shell` (`apps/desktop/src-tauri`) owns Tauri command decoding, delivery DTO translation, and the Rust-owned `UpdateService` policy boundary. It contains no song scheduling, risk analysis, persisted-settings migration, or realtime dispatch algorithms.
+
+### Source organization conventions
+
+Keep package roots and executable entry points focused on composition and
+routing. Give each policy, state owner, and platform effect one implementation
+owner; retain existing public paths with explicit re-exports instead of a
+second implementation. Migrate callers with an extraction and remove the old
+private implementation and unused wrappers.
+
+Place tests beside their implementation or in a dedicated test owner guarded by
+`cfg(test)`. Production source guards must inspect the physical production
+owner separately from its test owner. Keep runnable commands such as the
+release CLI self-test in production-compiled modules when the CLI exposes them;
+keep their regression suites under `cfg(test)`. The 500-line module target and
+800-line review threshold are guidance for cohesion, not enforced limits.
+
+Workspace dependency inheritance must preserve each dependency's package,
+source, version, optionality, default-feature setting, enabled features, kind,
+and target condition. Verify effective locked metadata and relevant feature
+projections after manifest changes. Keep the existing IPC binding generator and
+check as the source for generated TypeScript contracts. Safety boundaries,
+dependency direction, production features, and package/release checks remain
+enforced contracts.
+
+### Repository tooling owners
+
+- `xtask/src/ci_classifier.rs` owns conservative changed-path lane selection;
+  classifier fixtures live in `ci_classifier/tests.rs` under `cfg(test)`.
+- `xtask/src/release_v4.rs` owns release transaction authority. Its
+  `release_v4/selftest.rs` module is production-compiled so
+  `cargo xtask release-v4 self-test` remains runnable; scenario regression
+  tests live in `release_v4/tests.rs` under `cfg(test)`.
+- `xtask/src/updater_fixture.rs` owns the isolated updater fixture build and
+  source identity; `updater_fixture/http.rs` owns the loopback protocol and
+  `updater_fixture/tests.rs` owns its regressions. The source guards inspect
+  each production and test owner separately.
 
 ## Native desktop ownership
 
@@ -72,20 +113,30 @@ router has no auxiliary process or automatic fallback. `core.ready` remains a
 compatibility wire event name and is produced by the native runtime where the
 frontend contract requires it.
 
-`NativeDesktopRuntime` in `apps/desktop/src-tauri/src/native_runtime.rs` remains the
-composition and ownership root for settings, command routing, app coordination,
-the shared `NativeEventHub`, and shutdown. Its child modules own focused
-control-plane work while using the same runtime state:
+`NativeDesktopRuntime` in `apps/desktop/src-tauri/src/native_runtime.rs` remains
+the state, coordination, and dispatch ownership root. Its `bootstrap.rs`,
+`settings.rs`, and `update.rs` children physically own construction/bootstrap,
+settings coordination, and update coordination against that same runtime
+state. `NativeEventHub` is implemented in `native_runtime/events.rs`; its
+subscription, queue, publisher, and fail-closed behavior are unchanged.
 
 - `native_runtime/catalog.rs` owns catalog and library operations, including
-  generation-fenced loading, reconciliation, cache handling, imports, search,
-  and detail projection.
+  generation-fenced loading, reconciliation, cache handling, and composition.
+  Its `catalog/library.rs`, `catalog/viewport.rs`, and `catalog/analysis.rs`
+  children own playlist transactions, viewport/liked coordination, and sheet
+  detail/analysis respectively.
 - `native_runtime/playback/` owns playback planning and control through
   `NativePlaybackService`; the qualified worker and sender boundaries are
   unchanged.
-- `NativeEventHub` stays in `native_runtime.rs` and owns shared catalog and
-  playback event delivery. Its subscription, queue,
-  publisher, and fail-closed behavior are unchanged.
+- `commands.rs` retains the actual Tauri command handlers and shared dispatch
+  helpers. Capability DTOs live under `commands/` and are explicitly re-exported
+  through their existing `commands::Type` paths. The production
+  `generate_handler!` registry remains in `lib.rs`, and the runtime dispatch
+  match remains in `native_runtime.rs`.
+- `lib.rs` retains startup composition, the production handler registry, and
+  shutdown ordering. Its IPC and updater smoke tests live in `lib_tests/`, while
+  packaged selftest helpers live in `selftest.rs` with the existing public entry
+  points re-exported at the crate root.
 
 V4 update operations remain owned by the Rust `UpdateService`, which invokes
 the official Tauri updater. Native runtime tests cover catalog and library
@@ -173,12 +224,12 @@ and updater policy remain safe Rust.
 
 | Module                                                                                                                                                                | Unsafe operation                                                        | Safety invariant                                                                                                                  |
 | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `rust/crates/sky_dispatch_win32/src/{clock,cpu,event,focus,focus/foreground_watcher,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; the foreground callback is out-of-context and hint-only; owned handles are closed by their owner. |
-| `rust/crates/sky_native_adapters/src/lib.rs`                                                                                                                          | `MoveFileExW` atomic settings replacement                               | NUL-terminated source and destination buffers stay live through the synchronous replace call.                                     |
+| `crates/sky_dispatch_win32/src/{clock,cpu,event,focus,focus/foreground_watcher,focus/window_identity,input/packet,input/physical,input/raw,mmcss,power,timer,wait/hybrid}.rs` | Win32 handles, callbacks, timing, packet construction, and `SendInput`  | Platform calls stay in the Windows adapter; the foreground callback is out-of-context and hint-only; owned handles are closed by their owner. |
+| `crates/sky_native_adapters/src/atomic_file.rs`                                                                                                                  | `MoveFileExW` atomic settings and catalog-cache replacement              | NUL-terminated source and destination buffers stay live through the synchronous replace call.                                     |
 | `apps/desktop/src-tauri/src/{power_lifecycle,single_instance,windows_caption,windows_icon}.rs`                                                                             | Power registration, process/window APIs, and window callbacks/resources | Callback context lifetime, process access limits, UI-thread HWND lifetime, and owned handles are checked at these platform edges. |
 
 The scanner reports unsafe code under `cfg(test)` separately from production
-unsafe. `rust/crates/sky_native_adapters/src/paths.rs` uses unsafe environment
+unsafe. `crates/sky_native_adapters/src/paths.rs` uses unsafe environment
 mutation only in serialized resolver tests; no production path changes process
 environment state.
 

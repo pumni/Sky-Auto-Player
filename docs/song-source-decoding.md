@@ -75,8 +75,8 @@ positive-value `round()`; unrepresentable results are rejected. Recorded
 songs do not get an additional BPM conversion, and recorded onset-plus-duration
 is checked for overflow.
 
-`rust/crates/sky_app_core/src/song/decode.rs` owns the checked unit conversion
-and composed boundaries. `rust/crates/sky_app_core/tests/song_source_decoding.rs`
+`crates/sky_app_core/src/song/decode.rs` owns the checked unit conversion
+and composed boundaries. `crates/sky_app_core/tests/song_source_decoding.rs`
 covers `recorded_v1_through_v4_keep_their_layer_time_pitch_and_duration_semantics`
 and `composed_timing_rounds_millisecond_boundaries_with_long_compositions`.
 
@@ -111,14 +111,14 @@ instrument.
 
 ## Regression evidence
 
-`rust/crates/sky_app_core/tests/song_source_decoding.rs` uses small, inspectable
+`crates/sky_app_core/tests/song_source_decoding.rs` uses small, inspectable
 fixtures for flat legacy and composed/recorded versions 1 through 5/4. The two
 historical-header fixtures are synthetic and preserve the official historical
 field shapes without importing full third-party song assets. Coverage includes
 layer expansion, absent-roster defaults, source-game conversion, nominal versus
 absolute notes, one-shot spans, composed timing, and fail-closed cases.
 
-`rust/crates/sky_app_core/tests/legacy_song_corpus.rs` pins all 106 checked-in
+`crates/sky_app_core/tests/legacy_song_corpus.rs` pins all 106 checked-in
 song assets by input SHA-256 and freezes the existing `parse_song_json` plus
 schedule output under 60 FPS, one hold frame, zero user margin, and no tempo
 scaling. This guards the prior catalog API while the new decoder is introduced

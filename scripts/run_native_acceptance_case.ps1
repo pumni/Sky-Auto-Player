@@ -1,4 +1,4 @@
-﻿param(
+param(
     [ValidateSet('DispatchCore', 'Scheduler', 'FrameSnapshot', 'DispatchCleanupM3', 'DispatchSessionRedesignM3', 'PlaybackCoreLifecycle', 'PlaybackCoreLifecycleV2', 'PlaybackCoreLifecycleV3', 'ChordWidthPilotV1')]
     [string]$QualificationProfile = 'DispatchCore',
     [Parameter(Mandatory)]
@@ -136,7 +136,7 @@ $focusRestoreRequestPath = Join-Path $runDir 'focus-restore.request'
 $harness = if ($HarnessPath) {
     [System.IO.Path]::GetFullPath($HarnessPath)
 } else {
-    Join-Path $root 'rust\target\release\rt-native-acceptance.exe'
+    Join-Path $root 'target\release\rt-native-acceptance.exe'
 }
 $harnessManifest = $null
 $harnessManifestHash = $null

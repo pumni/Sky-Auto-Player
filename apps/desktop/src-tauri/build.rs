@@ -1,4 +1,4 @@
-#[path = "../../../rust/build_support/git_metadata.rs"]
+#[path = "../../../build_support/git_metadata.rs"]
 mod git_metadata;
 
 #[allow(dead_code)]
@@ -19,7 +19,7 @@ fn dirty_worktree() -> bool {
 fn main() {
     println!("cargo:rerun-if-changed=src/ipc_contract.rs");
     println!("cargo:rerun-if-changed=windows-app.manifest");
-    git_metadata::emit_git_metadata_rerun_if_changed("../../../rust/build_support/git_metadata.rs");
+    git_metadata::emit_git_metadata_rerun_if_changed("../../../build_support/git_metadata.rs");
     println!("cargo:rerun-if-env-changed=SKY_CI_SOURCE_SHA");
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
     println!("cargo:rerun-if-env-changed=SKY_NATIVE_BUILD_COMMIT");

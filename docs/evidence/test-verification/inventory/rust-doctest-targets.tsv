@@ -1,0 +1,8 @@
+"package"	"target_name"	"target_kind"	"source_path"	"required_features"	"doctest"
+"sky_app_core"	"sky_app_core"	"lib"	"crates/sky_app_core/src/lib.rs"	""	"true"
+"sky_desktop_shell"	"sky_desktop_shell_lib"	"lib,cdylib,staticlib"	"apps/desktop/src-tauri/src/lib.rs"	""	"true"
+"sky_dispatch_core"	"sky_dispatch_core"	"lib"	"crates/sky_dispatch_core/src/lib.rs"	""	"true"
+"sky_dispatch_win32"	"sky_dispatch_win32"	"lib"	"crates/sky_dispatch_win32/src/lib.rs"	""	"true"
+"sky_native_adapters"	"sky_native_adapters"	"lib"	"crates/sky_native_adapters/src/lib.rs"	""	"true"
+"sky_player"	"sky_player"	"lib"	"crates/sky_player/src/lib.rs"	""	"true"
+"sky_windows_security"	"sky_windows_security"	"lib"	"crates/sky_windows_security/src/lib.rs"	""	"true"

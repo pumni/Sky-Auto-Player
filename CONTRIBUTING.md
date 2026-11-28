@@ -39,12 +39,15 @@ locked dependencies and production lint rules. At the repository root use:
 node scripts/toolchain-pin.mjs exec -- cargo xtask check all
 ```
 
+For local dependency checks install Cargo Audit 0.22.2 and Cargo Vet 0.10.2
+with locked installs (see the Rust toolchain policy). Do not automatically
+ignore advisory warnings or add vet exemptions to pass validation.
+
 The root `.bun-version` is the Bun pin. Desktop and site retain independent
 manifests and lockfiles; install from the matching app with
 `bun install --frozen-lockfile`. See [desktop tooling](docs/desktop-tooling.md)
 for app checks and the blocking ESLint policy. Rust and Bun are the canonical
-product/development toolchains; the hosted Python ClamAV release adapter is the
-narrow exception described in [release authority](docs/v4-release-authority.md).
+product/development toolchains.
 
 ## Review and evidence
 

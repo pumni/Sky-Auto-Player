@@ -1,5 +1,39 @@
 # Historical source snapshots
 
+## Source architecture consolidation records
+
+The leader-led source architecture program's temporary SPEC, implementation
+plan, and WP1–WP5 reports are preserved at their immutable source commits
+below. The final WP5 correction and WP6 dispatch is Section 17 of the plan at
+[`a2a0dd39a560e8f54b34981ec17c7f6d2b9d4eb0`](https://github.com/pumni/Sky-Auto-Player/blob/a2a0dd39a560e8f54b34981ec17c7f6d2b9d4eb0/docs/source-architecture-implementation-plan.md#17-leader-review-of-wp5-and-final-correction--wp6-dispatch),
+authorized by [issue #689, comment 7236865015](https://github.com/pumni/Sky-Auto-Player/issues/689#issuecomment-7236865015).
+The cumulative review surface is [PR #690](https://github.com/pumni/Sky-Auto-Player/pull/690).
+
+The active architecture and source-organization conventions live in
+[architecture.md](architecture.md); current validation responsibilities live
+in [CI validation topology](ci-validation-topology.md) and
+[Rust toolchain policy](rust-toolchain-policy.md). These archived plans and
+reports are revision-bound provenance, not current contracts or final
+qualification. Current WP5 correction results, WP6 gate evidence, and remaining
+proof status are recorded in [WP6 final acceptance](evidence/source-architecture/WP6-final-acceptance.md);
+antivirus retirement under Owner Decision D23 is recorded in
+[Antivirus retirement acceptance](evidence/source-architecture/antivirus-retirement-acceptance.md)
+(superseding the antivirus-specific gates of the archived SPEC, plan, and WP6 matrix,
+and archiving the temporary [Antivirus retirement work order](https://github.com/pumni/Sky-Auto-Player/blob/ebbbe22ee620e00edb60a86ce7ae3cf2322c4787/docs/antivirus-retirement-work-order.md)
+at immutable commit `ebbbe22ee620e00edb60a86ce7ae3cf2322c4787`).
+Leader and Owner acceptance remain pending.
+
+| Archived file at immutable source | Bytes | SHA-256 |
+| --- | ---: | --- |
+| [Source architecture SPEC v0.2](https://github.com/pumni/Sky-Auto-Player/blob/bf3a95b0ac69729b9698c4044203c1db032c9216/docs/source-architecture-spec.md) | 43,525 | `DD267DB28E7F996EAF37DC5B295DA61C7A668C793065C275562A71592EE737FF` |
+| [Implementation plan, including binding Section 17](https://github.com/pumni/Sky-Auto-Player/blob/a2a0dd39a560e8f54b34981ec17c7f6d2b9d4eb0/docs/source-architecture-implementation-plan.md) | 89,284 | `2477A3BB70CF436FFFCC53B0604E224A82AED207A498BF13362D9DD0589C46B5` |
+| [WP1 baseline evidence](https://github.com/pumni/Sky-Auto-Player/blob/8a4eb58e253ab9249c9abab902385c81567fb694/docs/evidence/source-architecture/WP1-baseline.md) | 34,463 | `5CB100982EE4F87AA750286F83E28C409A035E498C0440098040E1EE639B290C` |
+| [WP2 correction evidence](https://github.com/pumni/Sky-Auto-Player/blob/a559a21b1af4c798df1de033f9f26125875e1635/docs/evidence/source-architecture/WP2-correction.md) | 6,497 | `FF3E046AAE08227E4A5C1BDDA4B151948488320A74CCFDB9B1EDEF5C389D1BAC` |
+| [WP2 workspace cutover evidence](https://github.com/pumni/Sky-Auto-Player/blob/5ab946ddffd101fc6f8ea5a9fa2127118a40f57f/docs/evidence/source-architecture/WP2-workspace-cutover.md) | 14,094 | `473D9E53B67F96286E0213409BA0E4D3AEFF5A281EB65694C9B5DC416EDE38F5` |
+| [WP3 manifest consolidation evidence](https://github.com/pumni/Sky-Auto-Player/blob/a559a21b1af4c798df1de033f9f26125875e1635/docs/evidence/source-architecture/WP3-manifest-consolidation.md) | 10,276 | `045E054571F5B523BEA43A7D00625C1F3B9939FE4617D03AEC5B33E28878DB6C` |
+| [WP4 source organization evidence](https://github.com/pumni/Sky-Auto-Player/blob/eef1024493ee23b5ca420d5b981edb354ea4b9ef/docs/evidence/source-architecture/WP4-source-organization.md) | 12,913 | `881673002B92C65FE5E4E37B070E89AA3776809A07C60B3CAE52787F6E6DAF67` |
+| [WP5 targeted consolidation evidence](https://github.com/pumni/Sky-Auto-Player/blob/4b1d4dd2e10b7dda6ab3d54ca2a7fe4e5156b471/docs/evidence/source-architecture/WP5-targeted-consolidation.md) | 15,080 | `AF4AF731908FFBF689BBBD6749154489798E7D5A63976A3571AC740D8D8EF515` |
+
 ## Hold-only dispatch simplification work order
 
 The PR #686 implementation work order is preserved at immutable reviewed W3 source

@@ -1,0 +1,4 @@
+# Keep test assertions ergonomic when these restriction lints are enabled.
+# The MSRV is inherited from Cargo.toml; do not duplicate it here.
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true

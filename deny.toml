@@ -1,0 +1,16 @@
+# Initial source/bans policy for feasibility testing, not a required CI gate.
+# Cargo Audit remains the advisory authority; no license allowlist is implied.
+[bans]
+multiple-versions = "warn"
+wildcards = "warn"
+allow-wildcard-paths = true
+
+[bans.workspace-dependencies]
+duplicates = "warn"
+unused = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

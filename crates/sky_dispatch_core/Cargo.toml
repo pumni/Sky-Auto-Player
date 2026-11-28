@@ -1,0 +1,41 @@
+[package]
+name = "sky_dispatch_core"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+test-support = []
+
+[dependencies]
+thiserror.workspace = true
+smallvec = { workspace = true, features = ["union"] }
+serde = { workspace = true, features = ["derive"] }
+
+[dev-dependencies]
+proptest = "1"
+serde_json.workspace = true
+
+[[bench]]
+name = "soak_benchmark"
+harness = false
+required-features = ["test-support"]
+
+[[test]]
+name = "golden"
+path = "tests/golden.rs"
+required-features = ["test-support"]
+
+[[test]]
+name = "executor_properties"
+path = "tests/executor_properties.rs"
+required-features = ["test-support"]
+
+[[bench]]
+name = "commit_scaling"
+harness = false
+required-features = ["test-support"]
+
+[lints]
+workspace = true

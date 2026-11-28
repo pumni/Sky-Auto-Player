@@ -133,7 +133,7 @@ $testPublicKey = (Get-Content "$keyPath.pub" -Raw).Trim()
 } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 $testConfigPath
 
 Push-Location apps/desktop
-bun run tauri build --ci --config $testConfigPath -- --profile dist
+bun run tauri build --ci --config $testConfigPath -- --locked --profile dist
 Pop-Location
 if ($LASTEXITCODE -ne 0) { throw "Tauri test package build failed with exit code $LASTEXITCODE" }
 
@@ -226,7 +226,7 @@ the bundle verifier separately binds the final installer evidence to the exact
 NSIS candidate. The SPDX generator
 records SHA-256 for the exact two-file NSIS artifact set and binds it to the
 current commit. The SBOM covers the reachable Rust production graph from
-`rust/Cargo.lock` and the frontend production graph from `apps/desktop/bun.lock`,
+`Cargo.lock` and the frontend production graph from `apps/desktop/bun.lock`,
 and binds both lockfile hashes to the same artifact set. After the
 install/launch/uninstall smoke, the packaged
 qualification path emits `V4_QUALIFICATION_EVIDENCE.json` with artifact,
