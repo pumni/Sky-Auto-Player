@@ -1,3 +1,6 @@
+use super::dependencies::{
+    adapter_dependency_boundary, app_core_dependency_boundary, resolve_manifest_dependencies,
+};
 use super::*;
 use crate::repo;
 use std::path::{Path, PathBuf};
@@ -271,43 +274,236 @@ fn category_advisory_scans_cover_new_native_engine_and_xtask_files() {
     assert!(xtask[0].contains("advisory threshold 2100"));
 }
 #[test]
-fn adapter_dependency_boundary_rejects_player_and_non_windows_dispatch_edges() {
+fn dependency_identity_resolver_tracks_direct_renamed_inherited_and_target_edges() {
+    let workspace: toml::Value = toml::from_str(
+        r#"
+            [workspace.dependencies]
+            inherited_player = { package = "sky_player", path = "../sky_player" }
+            windows_dispatch = { package = "sky_dispatch_win32", path = "../sky_dispatch_win32" }
+        "#,
+    )
+    .expect("workspace manifest");
+    let manifest: toml::Value = toml::from_str(
+        r#"
+            [dependencies]
+            core_alias = { package = "sky_app_core", path = "../sky_app_core" }
+
+            [build-dependencies]
+            inherited_player = { workspace = true }
+
+            [dev-dependencies]
+            sky_dispatch_core = "0.1"
+
+            [target.'cfg(windows)'.dependencies]
+            windows_dispatch = { workspace = true, features = ["qpc-read-counting"] }
+        "#,
+    )
+    .expect("member manifest");
+
+    let dependencies =
+        resolve_manifest_dependencies(&manifest, &workspace, "fixture_member").unwrap();
+    assert_eq!(dependencies.len(), 4);
+    assert!(dependencies.iter().any(|dependency| {
+        dependency.key == "core_alias"
+            && dependency.package == "sky_app_core"
+            && dependency.kind == "dependencies"
+            && dependency.target.is_none()
+    }));
+    assert!(dependencies.iter().any(|dependency| {
+        dependency.key == "inherited_player"
+            && dependency.package == "sky_player"
+            && dependency.kind == "build-dependencies"
+            && dependency.target.is_none()
+    }));
+    assert!(dependencies.iter().any(|dependency| {
+        dependency.package == "sky_dispatch_core"
+            && dependency.kind == "dev-dependencies"
+            && dependency.target.is_none()
+    }));
+    assert!(dependencies.iter().any(|dependency| {
+        dependency.key == "windows_dispatch"
+            && dependency.package == "sky_dispatch_win32"
+            && dependency.kind == "dependencies"
+            && dependency.target.as_deref() == Some("cfg(windows)")
+    }));
+}
+
+#[test]
+fn app_core_rejects_forbidden_direct_renamed_kind_and_target_dependencies() {
+    let workspace: toml::Value = toml::from_str("[workspace.dependencies]\n").unwrap();
     let fixtures = [
-        r#"
-                [dependencies]
-                sky_app_core = { path = "../sky_app_core" }
-                sky_player = { path = "../sky_player" }
-                [target.'cfg(windows)'.dependencies]
-                sky_dispatch_win32 = { path = "../sky_dispatch_win32" }
-            "#,
-        r#"
-                [dependencies]
-                sky_app_core = { path = "../sky_app_core" }
-                [target.'cfg(windows)'.dependencies]
-                sky_dispatch_win32 = { path = "../sky_dispatch_win32" }
-                [target.'cfg(unix)'.dev-dependencies]
-                sky_player = { path = "../sky_player" }
-            "#,
-        r#"
-                [dependencies]
-                sky_app_core = { path = "../sky_app_core" }
-                sky_dispatch_win32 = { path = "../sky_dispatch_win32" }
-                [target.'cfg(windows)'.dependencies]
-                sky_dispatch_win32 = { path = "../sky_dispatch_win32" }
-            "#,
-        r#"
-                [dependencies]
-                sky_app_core = { path = "../sky_app_core" }
-                [target.'cfg(windows)'.dependencies]
-                sky_dispatch_win32 = { path = "../sky_dispatch_win32" }
-                [target.'cfg(unix)'.dependencies]
-                sky_dispatch_win32 = { path = "../sky_dispatch_win32" }
-            "#,
+        "[dependencies]\nsky_player = \"0.1\"\n",
+        "[dependencies]\nplayer_alias = { package = \"sky_player\", version = \"0.1\" }\n",
+        "[build-dependencies]\nwin_api = { package = \"windows-sys\", version = \"0.61\" }\n",
+        "[dev-dependencies]\nshell_alias = { package = \"sky_desktop_shell\", version = \"4.6\" }\n",
+        "[target.'cfg(windows)'.dependencies]\nadapter = { package = \"sky_native_adapters\", path = \"../adapter\" }\n",
+        "[target.'cfg(unix)'.dev-dependencies]\nplayer_alias = { package = \"sky_player\", version = \"0.1\" }\n",
     ];
     for fixture in fixtures {
-        let manifest: toml::Value = toml::from_str(fixture).expect("fixture manifest");
-        assert!(adapter_dependency_boundary(&manifest).is_err());
+        let manifest: toml::Value = toml::from_str(fixture).expect("member manifest");
+        assert!(
+            app_core_dependency_boundary(&manifest, &workspace).is_err(),
+            "forbidden app-core declaration was accepted: {fixture}"
+        );
     }
+}
+
+#[test]
+fn app_core_rejects_workspace_inherited_and_workspace_alias_dependencies() {
+    let fixtures = [
+        (
+            "[dependencies]\nsky_player = { workspace = true }\n",
+            "[workspace.dependencies]\nsky_player = { path = \"../sky_player\" }\n",
+        ),
+        (
+            "[build-dependencies]\nplayer_alias = { workspace = true }\n",
+            "[workspace.dependencies]\nplayer_alias = { package = \"sky_player\", path = \"../sky_player\" }\n",
+        ),
+        (
+            "[target.'cfg(windows)'.dev-dependencies]\napi = { workspace = true }\n",
+            "[workspace.dependencies]\napi = { package = \"windows-sys\", version = \"0.61\" }\n",
+        ),
+    ];
+    for (member_source, workspace_source) in fixtures {
+        let manifest: toml::Value = toml::from_str(member_source).expect("member manifest");
+        let workspace: toml::Value = toml::from_str(workspace_source).expect("workspace manifest");
+        assert!(
+            app_core_dependency_boundary(&manifest, &workspace).is_err(),
+            "forbidden inherited app-core declaration was accepted: {member_source}"
+        );
+    }
+}
+
+#[test]
+fn inherited_dependency_identity_fails_closed_when_missing_or_malformed() {
+    let fixtures = [
+        (
+            "[dependencies]\nmissing = { workspace = true }\n",
+            "[workspace]\n",
+        ),
+        (
+            "[dependencies]\nmissing = { workspace = true }\n",
+            "[workspace.dependencies]\n",
+        ),
+        (
+            "[dependencies]\nmissing = { workspace = true }\n",
+            "[workspace.dependencies]\nmissing = 7\n",
+        ),
+        (
+            "[dependencies]\nmissing = { workspace = \"true\" }\n",
+            "[workspace.dependencies]\nmissing = \"1\"\n",
+        ),
+        (
+            "[dependencies]\nmissing = { workspace = true, features = \"not-an-array\" }\n",
+            "[workspace.dependencies]\nmissing = \"1\"\n",
+        ),
+        (
+            "[dependencies]\nrenamed = { package = 3, version = \"1\" }\n",
+            "[workspace.dependencies]\n",
+        ),
+    ];
+    for (member_source, workspace_source) in fixtures {
+        let manifest: toml::Value = toml::from_str(member_source).expect("member manifest");
+        let workspace: toml::Value = toml::from_str(workspace_source).expect("workspace manifest");
+        assert!(
+            resolve_manifest_dependencies(&manifest, &workspace, "fixture_member").is_err(),
+            "malformed dependency identity was accepted: {member_source}"
+        );
+    }
+}
+
+#[test]
+fn adapter_accepts_windows_dispatch_direct_or_inherited_and_unrelated_dev_dependencies() {
+    let direct_workspace: toml::Value = toml::from_str("[workspace.dependencies]\n").unwrap();
+    let direct: toml::Value = toml::from_str(
+        r#"
+            [dev-dependencies]
+            serde = "1"
+
+            [target.'cfg(windows)'.dependencies]
+            dispatch_alias = { package = "sky_dispatch_win32", path = "../sky_dispatch_win32" }
+        "#,
+    )
+    .unwrap();
+    adapter_dependency_boundary(&direct, &direct_workspace)
+        .expect("a Windows-only normal dispatch edge and unrelated dev dependency are valid");
+
+    let inherited_workspace: toml::Value = toml::from_str(
+        "[workspace.dependencies]\nplatform_dispatch = { package = \"sky_dispatch_win32\", path = \"crates/sky_dispatch_win32\" }\n",
+    )
+    .unwrap();
+    let inherited: toml::Value = toml::from_str(
+        "[target.'cfg(windows)'.dependencies]\nplatform_dispatch = { workspace = true }\n",
+    )
+    .unwrap();
+    adapter_dependency_boundary(&inherited, &inherited_workspace)
+        .expect("inherited package alias resolves to the allowed Windows dispatch edge");
+}
+
+#[test]
+fn adapter_rejects_player_in_every_kind_and_target_and_rejects_misplaced_dispatch() {
+    let empty_workspace: toml::Value = toml::from_str("[workspace.dependencies]\n").unwrap();
+    let player_fixtures = [
+        "[dependencies]\nsky_player = \"0.1\"\n",
+        "[build-dependencies]\nplayer_alias = { package = \"sky_player\", version = \"0.1\" }\n",
+        "[dev-dependencies]\nplayer_alias = { package = \"sky_player\", version = \"0.1\" }\n",
+        "[target.'cfg(unix)'.dependencies]\nplayer_alias = { package = \"sky_player\", version = \"0.1\" }\n",
+        "[target.'cfg(windows)'.build-dependencies]\nsky_player = \"0.1\"\n",
+        "[target.'cfg(windows)'.dev-dependencies]\nplayer_alias = { package = \"sky_player\", version = \"0.1\" }\n",
+    ];
+    for fixture in player_fixtures {
+        let manifest: toml::Value = toml::from_str(fixture).expect("member manifest");
+        assert!(adapter_dependency_boundary(&manifest, &empty_workspace).is_err());
+    }
+
+    let inherited_player_workspace: toml::Value = toml::from_str(
+        "[workspace.dependencies]\nplayer = { package = \"sky_player\", path = \"../sky_player\" }\n",
+    )
+    .unwrap();
+    let inherited_player: toml::Value =
+        toml::from_str("[target.'cfg(windows)'.dev-dependencies]\nplayer = { workspace = true }\n")
+            .unwrap();
+    assert!(adapter_dependency_boundary(&inherited_player, &inherited_player_workspace).is_err());
+
+    let misplaced_dispatch = [
+        "[dependencies]\nsky_dispatch_win32 = { path = \"../sky_dispatch_win32\" }\n[target.'cfg(windows)'.dependencies]\nwin32 = { package = \"sky_dispatch_win32\", path = \"../sky_dispatch_win32\" }\n",
+        "[build-dependencies]\ndispatch = { package = \"sky_dispatch_win32\", path = \"../sky_dispatch_win32\" }\n[target.'cfg(windows)'.dependencies]\nwin32 = { package = \"sky_dispatch_win32\", path = \"../sky_dispatch_win32\" }\n",
+        "[target.'cfg(unix)'.dependencies]\ndispatch = { package = \"sky_dispatch_win32\", path = \"../sky_dispatch_win32\" }\n[target.'cfg(windows)'.dependencies]\nwin32 = { package = \"sky_dispatch_win32\", path = \"../sky_dispatch_win32\" }\n",
+        "[target.'cfg(windows)'.dev-dependencies]\ndispatch = { package = \"sky_dispatch_win32\", path = \"../sky_dispatch_win32\" }\n[target.'cfg(windows)'.dependencies]\nwin32 = { package = \"sky_dispatch_win32\", path = \"../sky_dispatch_win32\" }\n",
+        "[target.'cfg(windows)'.build-dependencies]\ndispatch = { package = \"sky_dispatch_win32\", path = \"../sky_dispatch_win32\" }\n[target.'cfg(windows)'.dependencies]\nwin32 = { package = \"sky_dispatch_win32\", path = \"../sky_dispatch_win32\" }\n",
+        "[dependencies]\nserde = \"1\"\n",
+    ];
+    for fixture in misplaced_dispatch {
+        let manifest: toml::Value = toml::from_str(fixture).expect("member manifest");
+        assert!(adapter_dependency_boundary(&manifest, &empty_workspace).is_err());
+    }
+}
+
+#[test]
+fn app_core_source_token_and_unsafe_guards_remain_hard_failures() {
+    let root = ArchitectureTempRoot::new();
+    root.write("Cargo.toml", "[workspace]\n[workspace.dependencies]\n");
+    root.write(
+        "crates/sky_app_core/Cargo.toml",
+        "[package]\nname = \"sky_app_core\"\n",
+    );
+    root.write(
+        "crates/sky_app_core/src/lib.rs",
+        "use sky_native_adapters::paths::AppPaths;\n",
+    );
+    let token_error = app_core_boundary(root.path()).expect_err("forbidden source token");
+    assert!(
+        token_error
+            .to_string()
+            .contains("forbidden boundary reference")
+    );
+
+    root.write(
+        "crates/sky_app_core/src/lib.rs",
+        "pub fn fixture() { unsafe {} }\n",
+    );
+    let unsafe_error = app_core_boundary(root.path()).expect_err("unsafe source");
+    assert!(unsafe_error.to_string().contains("unsafe code"));
 }
 
 #[test]
@@ -348,7 +544,7 @@ fn architecture_allowlist_is_loaded_and_current_tree_passes() {
                 baseline: Some(1),
             })
         );
-    architecture(&root).expect("current full architecture policy passes");
+    run(&root).expect("current full architecture policy passes");
 }
 
 #[test]

@@ -10,10 +10,10 @@ test-support = []
 qpc-read-counting = []
 
 [dependencies]
-sky_dispatch_core = { path = "../sky_dispatch_core" }
-thiserror = "2"
-smallvec = { version = "1", features = ["union"] }
-serde = { version = "1", features = ["derive"] }
+sky_dispatch_core.workspace = true
+thiserror.workspace = true
+smallvec = { workspace = true, features = ["union"] }
+serde = { workspace = true, features = ["derive"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "=0.61.2", features = [

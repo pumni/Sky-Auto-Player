@@ -9,13 +9,13 @@ default = []
 test-support = []
 
 [dependencies]
-thiserror = "2"
-smallvec = { version = "1", features = ["union"] }
-serde = { version = "1", features = ["derive"] }
+thiserror.workspace = true
+smallvec = { workspace = true, features = ["union"] }
+serde = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 proptest = "1"
-serde_json = "1"
+serde_json.workspace = true
 
 [[bench]]
 name = "soak_benchmark"

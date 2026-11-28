@@ -1,6 +1,8 @@
 use super::source::strip_rust_comments;
 #[path = "architecture/allowlist.rs"]
 mod allowlist;
+#[path = "architecture/dependencies.rs"]
+mod dependencies;
 use crate::Result;
 use allowlist::{
     ArchitectureAllowlist, ArchitectureMetric, architecture_metric_record, architecture_record,
@@ -13,15 +15,6 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-const FORBIDDEN_APP_CORE_DEPENDENCIES: &[&str] = &[
-    "tauri",
-    "windows-sys",
-    "sky_desktop_shell",
-    "sky_player",
-    "sky_native_adapters",
-];
-const ADAPTER_DEPENDENCY_KINDS: &[&str] =
-    &["dependencies", "build-dependencies", "dev-dependencies"];
 const NATIVE_RUNTIME_MODULE_ADVISORY_THRESHOLDS: &[(&str, usize)] = &[
     ("apps/desktop/src-tauri/src/native_runtime.rs", 2_000),
     (
@@ -198,60 +191,10 @@ fn xtask_module_advisory_warnings(root: &Path) -> Result<Vec<String>> {
         XTASK_MODULE_ADVISORY_THRESHOLDS,
     )
 }
-fn dependency_table_contains(table: Option<&toml::Value>, dependency: &str) -> bool {
-    table
-        .and_then(toml::Value::as_table)
-        .is_some_and(|entries| {
-            entries.iter().any(|(name, value)| {
-                name == dependency
-                    || value.get("package").and_then(toml::Value::as_str) == Some(dependency)
-            })
-        })
-}
-
-fn adapter_dependency_boundary(manifest: &toml::Value) -> Result<()> {
-    for kind in ADAPTER_DEPENDENCY_KINDS {
-        if dependency_table_contains(manifest.get(kind), "sky_player") {
-            return Err("sky_native_adapters must not depend on sky_player".into());
-        }
-        if dependency_table_contains(manifest.get(kind), "sky_dispatch_win32") {
-            return Err(
-                "sky_native_adapters may depend on sky_dispatch_win32 only for Windows".into(),
-            );
-        }
-    }
-
-    let mut has_windows_dispatch_dependency = false;
-    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
-        for (target, config) in targets {
-            for kind in ADAPTER_DEPENDENCY_KINDS {
-                if dependency_table_contains(config.get(kind), "sky_player") {
-                    return Err("sky_native_adapters must not depend on sky_player".into());
-                }
-                if dependency_table_contains(config.get(kind), "sky_dispatch_win32") {
-                    if target != "cfg(windows)" || *kind != "dependencies" {
-                        return Err(
-                            "sky_native_adapters may depend on sky_dispatch_win32 only for Windows"
-                                .into(),
-                        );
-                    }
-                    has_windows_dispatch_dependency = true;
-                }
-            }
-        }
-    }
-    if !has_windows_dispatch_dependency {
-        return Err(
-            "sky_native_adapters must declare its sky_dispatch_win32 dependency for Windows".into(),
-        );
-    }
-    Ok(())
-}
-
 fn adapter_boundary(root: &Path) -> Result<()> {
-    let manifest_path = root.join("crates/sky_native_adapters/Cargo.toml");
-    let manifest: toml::Value = toml::from_str(&fs::read_to_string(manifest_path)?)?;
-    adapter_dependency_boundary(&manifest)
+    let workspace = dependencies::manifest_at(root, "Cargo.toml")?;
+    let manifest = dependencies::manifest_at(root, "crates/sky_native_adapters/Cargo.toml")?;
+    dependencies::adapter_dependency_boundary(&manifest, &workspace)
 }
 
 fn required_source_directory(root: &Path, relative: &str) -> Result<PathBuf> {
@@ -273,15 +216,9 @@ fn required_source_directory(root: &Path, relative: &str) -> Result<PathBuf> {
 }
 
 fn app_core_boundary(root: &Path) -> Result<()> {
-    let manifest_path = root.join("crates/sky_app_core/Cargo.toml");
-    let manifest: toml::Value = toml::from_str(&fs::read_to_string(&manifest_path)?)?;
-    if let Some(dependencies) = manifest.get("dependencies").and_then(toml::Value::as_table)
-        && let Some(dependency) = FORBIDDEN_APP_CORE_DEPENDENCIES
-            .iter()
-            .find(|name| dependencies.contains_key(**name))
-    {
-        return Err(format!("sky_app_core must not depend directly on {dependency}").into());
-    }
+    let workspace = dependencies::manifest_at(root, "Cargo.toml")?;
+    let manifest = dependencies::manifest_at(root, "crates/sky_app_core/Cargo.toml")?;
+    dependencies::app_core_dependency_boundary(&manifest, &workspace)?;
     let source_root = required_source_directory(root, "crates/sky_app_core/src")?;
     for entry in WalkDir::new(source_root).follow_links(false) {
         let entry = entry?;
@@ -629,66 +566,6 @@ pub(crate) fn architecture(root: &Path) -> Result<()> {
     warnings.extend(engine_test_advisory_warnings(root)?);
     warnings.extend(xtask_module_advisory_warnings(root)?);
     let mut used_metric_allowlist = BTreeSet::new();
-    let app_core_manifest = root.join("crates/sky_app_core/Cargo.toml");
-    let app_core: toml::Value = toml::from_str(&fs::read_to_string(&app_core_manifest)?)?;
-    if let Some(dependencies) = app_core.get("dependencies").and_then(toml::Value::as_table) {
-        for forbidden in [
-            "tauri",
-            "windows-sys",
-            "sky_desktop_shell",
-            "sky_player",
-            "sky_native_adapters",
-        ] {
-            if dependencies.contains_key(forbidden) {
-                architecture_record(
-                    &mut errors,
-                    &mut warnings,
-                    &allowlist,
-                    "crates/sky_app_core/Cargo.toml",
-                    "app_core_dependency",
-                    format!("sky_app_core must not depend directly on {forbidden}"),
-                );
-            }
-        }
-    }
-    let app_core_source = required_source_directory(root, "crates/sky_app_core/src")?;
-    for path in WalkDir::new(&app_core_source).follow_links(false) {
-        let path = path?;
-        if !path.file_type().is_file()
-            || path
-                .path()
-                .extension()
-                .and_then(|extension| extension.to_str())
-                != Some("rs")
-        {
-            continue;
-        }
-        let relative = path
-            .path()
-            .strip_prefix(root)?
-            .to_string_lossy()
-            .replace('\\', "/");
-        let joined = clean_lines(&fs::read_to_string(path.path())?).join("");
-        if [
-            "tauri",
-            "windows-sys",
-            "windows_sys",
-            "sky_desktop_shell",
-            "sky_player",
-        ]
-        .iter()
-        .any(|marker| joined.contains(marker))
-        {
-            architecture_record(
-                &mut errors,
-                &mut warnings,
-                &allowlist,
-                &relative,
-                "app_core_dependency",
-                "sky_app_core source references a forbidden delivery/platform/player dependency",
-            );
-        }
-    }
     let dispatch_dir =
         required_source_directory(root, "crates/sky_player/src/engine/worker/dispatch")?;
     let mut actual = BTreeSet::new();
