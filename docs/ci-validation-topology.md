@@ -96,7 +96,10 @@ unselected proof job to report `skipped`.
 | Any `apps/desktop/**` change on a `main` push | Desktop web/browser and E2E plus Windows candidate/package qualification |
 | `apps/desktop/package.json`, `bun.lock` | Desktop web/browser, Windows candidate/package, updater and dependency checks |
 | `apps/desktop/src-tauri/**` production source/config/hooks/resources | Windows native and package qualification; updater lane for updater identity/behavior changes |
-| `supply-chain/**` policy or audit data | Full validation, including static/security and supply-chain policy checks |
+| `supply-chain/**` policy or audit data; `rustfmt.toml`, `clippy.toml`, `deny.toml` | Full validation, including static/security and supply-chain policy checks |
+| `.cargo/**` configuration | Existing Rust, desktop, package, updater and release lanes plus supply-chain checks |
+| `apps/website/package.json`, `apps/website/bun.lock` | Site validation and supply-chain checks |
+| `xtask/Cargo.toml` | Rust validation and supply-chain checks |
 | NSIS hooks, installer format or packaged payload | Windows package qualification plus signing proof |
 | Shipping `crates/**` source | Rust/native and Windows package qualification; manifest changes also run dependency checks |
 | Signing adapter, updater trust, Authenticode scripts/contracts | Signing proof plus related Rust, updater, package, and release lanes |

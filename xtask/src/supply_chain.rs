@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::env;
 use std::path::Path;
 
+const CARGO_AUDIT_VERSION: &str = "0.22.2";
 const CARGO_VET_VERSION: &str = "0.10.2";
 const POLICY_FILES: &[&str] = &[
     "supply-chain/audits.toml",
@@ -31,6 +32,18 @@ struct DependencyAttestation {
 
 pub fn run(attestation_path: Option<&Path>) -> Result<()> {
     let root = repo::root();
+    if !root.join(".cargo/audit.toml").is_file() {
+        return Err("missing repository RustSec policy: .cargo/audit.toml".into());
+    }
+    let audit_version = process::capture_text("cargo", &["audit", "--version"], &root, &[])?;
+    if audit_version != format!("cargo-audit {CARGO_AUDIT_VERSION}") {
+        return Err(format!(
+            "cargo-audit version mismatch: expected cargo-audit {CARGO_AUDIT_VERSION}, got {audit_version}"
+        )
+        .into());
+    }
+    process::run("cargo", &["audit", "--file", "Cargo.lock"], &root, &[])?;
+    println!("[xtask] cargo-audit supply-chain: PASS");
     let version = process::capture_text("cargo", &["vet", "--version"], &root, &[])?;
     if version != format!("cargo-vet {CARGO_VET_VERSION}") {
         return Err(format!(

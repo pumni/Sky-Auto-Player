@@ -42,3 +42,6 @@ required-features = ["real-input-acceptance"]
 name = "dispatch_lifecycle_evidence"
 path = "examples/dispatch_lifecycle_evidence.rs"
 required-features = ["test-support"]
+
+[lints]
+workspace = true

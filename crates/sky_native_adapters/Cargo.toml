@@ -15,3 +15,6 @@ sky_dispatch_win32.workspace = true
 windows-sys = { version = "=0.61.2", features = [
     "Win32_Storage_FileSystem",
 ] }
+
+[lints]
+workspace = true

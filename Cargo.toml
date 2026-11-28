@@ -33,6 +33,12 @@ smallvec = "1"
 getrandom = "0.4"
 zeroize = "=1.9.1"
 
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+await_holding_lock = "deny"
+
 [profile.release]
 # Keep routine optimized engineering builds responsive. Shipped artifacts use
 # the explicit `dist` profile below, so this profile may trade some throughput

@@ -1,0 +1,11 @@
+# RustSec policy: audit the entire committed lockfile, including build tools.
+# Do not suppress advisories without an explicit, reviewed justification.
+[advisories]
+ignore = []
+
+[database]
+fetch = true
+stale = false
+
+[output]
+show_tree = true

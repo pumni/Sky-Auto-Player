@@ -656,7 +656,7 @@ fn run_static_group(skip_supply_chain: bool, session: &mut CheckSession) -> Resu
             "skipped",
             Some("verified by dedicated supply-chain gate or explicit skip".to_owned()),
         );
-        println!("[xtask] cargo-vet supply-chain: SKIP (verified by dedicated supply-chain gate)");
+        println!("[xtask] Rust dependency checks: SKIP (dedicated hosted gate or explicit skip)");
     }
     record_step(session, "branding", || branding::validate(&root))?;
     record_step(session, "tauri-config", || {

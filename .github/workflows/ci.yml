@@ -561,6 +561,7 @@ jobs:
           echo "$tool_root/bin" >> "$GITHUB_PATH"
           version="$("$tool_root/bin/cargo-audit" --version)"
           [[ "$version" == "cargo-audit $CARGO_AUDIT_VERSION" ]]
+          test -f .cargo/audit.toml
           cargo audit --file Cargo.lock
 
       - name: Save pinned cargo-audit tool
@@ -575,6 +576,7 @@ jobs:
         with:
           scan-args: |-
             --lockfile=./apps/desktop/bun.lock
+            --lockfile=./apps/website/bun.lock
 
       - name: Cargo-vet dependency policy
         env:

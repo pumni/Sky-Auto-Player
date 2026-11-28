@@ -179,6 +179,10 @@ fn classify_path(
         return;
     }
 
+    if ["apps/website/package.json", "apps/website/bun.lock"].contains(&path) {
+        classification.add_many(&["site_required", "supply_chain_required"]);
+        return;
+    }
     if path.starts_with("apps/website/")
         || path.starts_with(".github/actions/site-validate/")
         || path == ".github/workflows/pages.yml"
@@ -355,6 +359,9 @@ fn classify_path(
     }
 
     if ["Cargo.toml", "Cargo.lock"].contains(&path) {
+        if path == "Cargo.toml" {
+            classification.add("desktop_native_required");
+        }
         classification.add_many(&[
             "rust_required",
             "package_required",
@@ -380,6 +387,9 @@ fn classify_path(
         return;
     }
     if path == "rust-toolchain.toml" || path.starts_with(".cargo/") {
+        if path.starts_with(".cargo/") {
+            classification.add("supply_chain_required");
+        }
         classification.add_many(&[
             "rust_required",
             "desktop_required",
@@ -457,6 +467,10 @@ fn classify_path(
     }
     if path.starts_with("xtask/src/release_v4/") {
         unknown.push(path.to_owned());
+        return;
+    }
+    if path == "xtask/Cargo.toml" {
+        classification.add_many(&["rust_required", "supply_chain_required"]);
         return;
     }
     if path.starts_with("xtask/") {

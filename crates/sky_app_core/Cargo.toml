@@ -14,3 +14,6 @@ serde_json.workspace = true
 thiserror.workspace = true
 unicode-casefold = "0.2"
 unicode-normalization = "0.1.25"
+
+[lints]
+workspace = true

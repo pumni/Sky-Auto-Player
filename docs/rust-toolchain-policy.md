@@ -26,6 +26,13 @@ action uses this source for CI installation and exports that value to later step
 
 ## Rust lint policy
 
+The root `rustfmt.toml` fixes the 2024 language/style editions and LF output
+on the stable pin. The root `clippy.toml` records test assertion allowances
+for future restriction lint adoption; it does not enable unwrap/expect lints.
+All eight workspace members inherit the root workspace lint policy. Do not
+add blanket lint suppressions or unstable formatter options to normalize code.
+
+
 The required Rust validation has two complementary lanes. The existing
 workspace Clippy pass uses all targets and all features with `-D warnings`.
 It protects test and qualification code but does not establish production
@@ -48,6 +55,24 @@ or warning-level compiler flags simply to pass a gate. Existing justified
 lint exceptions must be reviewed in context; a green gate is not evidence
 that every suppression is justified. Architecture audit advisories are a
 separate policy and are not compiler warnings.
+
+## Dependency governance
+
+- RustSec advisory policy lives in `.cargo/audit.toml`. Audit the whole locked
+  graph, including non-Windows build tooling. No advisory IDs are ignored;
+  informational warnings remain visible under the existing severity policy.
+- Install the pinned Cargo Audit 0.22.2 and Cargo Vet 0.10.2 with locked installs
+  for local `cargo xtask check all`; local Rust dependency validation runs both.
+  Hosted CI uses the same Rust tools and also scans both Bun lockfiles with OSV.
+- The root `deny.toml` is a feasibility configuration for source and bans checks,
+  not an active required gate. Evaluate `cargo deny --locked check sources bans`
+  using a reviewed tool pin; do not treat this as license clearance or a second
+  RustSec authority. License and target/feature coverage require separate review.
+- Retain Cargo Vet and existing exemptions until a replacement policy and its
+  evidence are reviewed. Do not add exemptions merely to make CI green.
+- Review advisory reachability for Windows product and Linux tooling separately.
+  Dependency updates, stricter advisory severity, and changes to release trust
+  require their own verification; this configuration change authorizes none.
 
 ## Upgrade policy
 

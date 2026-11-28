@@ -359,7 +359,7 @@ fn matches_positive_and_union_classifier_matrix() {
     assert_lanes(&classify_paths(["docs/releases/v4.0.2.md".to_owned()]), &[]);
     assert_lanes(
         &classify_paths(["apps/website/package.json".to_owned()]),
-        &["site_required"],
+        &["supply_chain_required", "site_required"],
     );
     assert_lanes(
         &classify_paths(["apps/website/src/pages/index.astro".to_owned()]),
@@ -470,7 +470,14 @@ fn preserves_current_positive_path_matrix_and_script_categories() {
     let cases: &[(&str, &[&str])] = &[
         ("README.md", &[]),
         ("docs/releases/v4.0.2.md", &[]),
-        ("apps/website/package.json", &["site_required"]),
+        (
+            "apps/website/package.json",
+            &["supply_chain_required", "site_required"],
+        ),
+        (
+            "apps/website/bun.lock",
+            &["supply_chain_required", "site_required"],
+        ),
         (".github/workflows/pages.yml", &["site_required"]),
         (".bun-version", &LANES),
         (
@@ -558,6 +565,7 @@ fn preserves_current_positive_path_matrix_and_script_categories() {
             "Cargo.toml",
             &[
                 "rust_required",
+                "desktop_native_required",
                 "package_required",
                 "updater_required",
                 "release_required",
@@ -667,7 +675,7 @@ fn preserves_current_positive_path_matrix_and_script_categories() {
     );
     let main_site =
         classify_normalized_paths(vec!["apps/website/package.json".to_owned()], DiffMode::Push);
-    assert_lanes(&main_site, &["site_required"]);
+    assert_lanes(&main_site, &["supply_chain_required", "site_required"]);
 }
 #[test]
 fn rust_toolchain_resolver_and_setup_action_select_all_validation_lanes() {
@@ -1483,4 +1491,29 @@ fn retired_release_and_script_paths_fail_closed_on_real_git_deletions_and_rename
 
         fs::remove_dir_all(root).unwrap();
     }
+}
+
+#[test]
+fn rust_configuration_and_dependency_policies_select_required_lanes() {
+    for path in [".cargo/audit.toml", ".cargo/config.toml"] {
+        assert_lanes(
+            &classify_paths([path.to_owned()]),
+            &[
+                "rust_required",
+                "desktop_required",
+                "desktop_native_required",
+                "package_required",
+                "updater_required",
+                "release_required",
+                "supply_chain_required",
+            ],
+        );
+    }
+    for path in ["rustfmt.toml", "clippy.toml", "deny.toml"] {
+        assert_lanes(&classify_paths([path.to_owned()]), &LANES);
+    }
+    assert_lanes(
+        &classify_paths(["xtask/Cargo.toml".to_owned()]),
+        &["rust_required", "supply_chain_required"],
+    );
 }
