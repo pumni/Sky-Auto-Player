@@ -224,8 +224,8 @@ mod tests {
         validate_workflow_source(&source).unwrap();
 
         let unrelated_permissions = source.replace(
-            "  malware_proof:\n",
-            "  unrelated_fixture:\n    permissions:\n      contents: write\n    run: echo secrets.in.other.job\n\n  malware_proof:\n",
+            "  site:\n",
+            "  unrelated_fixture:\n    permissions:\n      contents: write\n    run: echo secrets.in.other.job\n\n  site:\n",
         );
         assert!(validate_workflow_source(&unrelated_permissions).is_ok());
 

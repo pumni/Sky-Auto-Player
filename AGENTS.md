@@ -34,7 +34,7 @@ Windows 11 Tauri 2/React desktop with Rust-native sheet playback for Sky.
   `node scripts/toolchain-pin.mjs exec -- cargo ...` (see [Rust pin](docs/rust-toolchain-policy.md)).
   Desktop and website have independent Bun manifests/locks; use the owning
   app directory and the root `.bun-version`. No Python product runtime or
-  general-purpose repo toolchain; the hosted ClamAV adapter is release-only.
+  general-purpose repo toolchain.
 
 ## Deliver and verify
 

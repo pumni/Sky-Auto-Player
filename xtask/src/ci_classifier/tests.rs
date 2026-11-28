@@ -347,7 +347,7 @@ fn preserves_exact_lane_output_shape_and_reason_golden() {
     let classification = classify_paths(["apps/desktop/src/App.tsx".to_owned()]);
     assert_eq!(
         classification.render(),
-        "rust_required=false\ndesktop_required=true\ndesktop_native_required=false\ndesktop_e2e_required=true\npackage_required=false\nupdater_required=false\nrelease_required=false\nsigning_proof_required=false\nmalware_proof_required=false\nsupply_chain_required=false\nsite_required=false\nclassification_reason=required lanes (desktop_required, desktop_e2e_required): apps/desktop/src/App.tsx"
+        "rust_required=false\ndesktop_required=true\ndesktop_native_required=false\ndesktop_e2e_required=true\npackage_required=false\nupdater_required=false\nrelease_required=false\nsigning_proof_required=false\nsupply_chain_required=false\nsite_required=false\nclassification_reason=required lanes (desktop_required, desktop_e2e_required): apps/desktop/src/App.tsx"
     );
 }
 
@@ -408,7 +408,6 @@ fn matches_positive_and_union_classifier_matrix() {
             "package_required",
             "updater_required",
             "signing_proof_required",
-            "malware_proof_required",
         ],
     );
     assert_lanes(
@@ -476,11 +475,7 @@ fn preserves_current_positive_path_matrix_and_script_categories() {
         (".bun-version", &LANES),
         (
             ".github/workflows/release-v4.yml",
-            &[
-                "release_required",
-                "signing_proof_required",
-                "malware_proof_required",
-            ],
+            &["release_required", "signing_proof_required"],
         ),
         (".github/workflows/ci.yml", &LANES),
         (
@@ -537,7 +532,6 @@ fn preserves_current_positive_path_matrix_and_script_categories() {
                 "package_required",
                 "updater_required",
                 "signing_proof_required",
-                "malware_proof_required",
             ],
         ),
         (
@@ -546,7 +540,6 @@ fn preserves_current_positive_path_matrix_and_script_categories() {
                 "desktop_native_required",
                 "package_required",
                 "signing_proof_required",
-                "malware_proof_required",
             ],
         ),
         (
@@ -619,14 +612,6 @@ fn preserves_current_positive_path_matrix_and_script_categories() {
                 "signing_proof_required",
             ],
         ),
-        (
-            "xtask/src/release_v4/malware.rs",
-            &[
-                "rust_required",
-                "release_required",
-                "malware_proof_required",
-            ],
-        ),
         ("xtask/src/checks/hosted_signing.rs", &LANES),
         ("scripts/ci_build_updater_bridge.ps1", &["updater_required"]),
         (
@@ -651,16 +636,7 @@ fn preserves_current_positive_path_matrix_and_script_categories() {
                 "release_required",
                 "package_required",
                 "signing_proof_required",
-                "malware_proof_required",
             ],
-        ),
-        (
-            "scripts/scan_v4_malware_exact.py",
-            &["release_required", "malware_proof_required"],
-        ),
-        (
-            "scripts/ci_bootstrap_clamav.sh",
-            &["release_required", "malware_proof_required"],
         ),
         ("scripts/v4_release_pipeline.ps1", &["release_required"]),
         (
@@ -860,11 +836,7 @@ fn preserves_legacy_reason_and_mixed_path_regressions() {
         let classification =
             classify_paths(["docs/releases/v4.0.2.md".to_owned(), path.to_owned()]);
         let expected = if path == ".github/workflows/release-v4.yml" {
-            &[
-                "release_required",
-                "signing_proof_required",
-                "malware_proof_required",
-            ][..]
+            &["release_required", "signing_proof_required"][..]
         } else {
             &["release_required"][..]
         };

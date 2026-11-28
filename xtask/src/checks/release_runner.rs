@@ -98,11 +98,6 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
         "{{ needs.signing_proof.result }}",
     ]
     .concat();
-    let malware_result_marker = [
-        "MALWARE_PROOF_RESULT: $",
-        "{{ needs.malware_proof.result }}",
-    ]
-    .concat();
     for marker in [
         "cargo xtask release-v4 self-test",
         "cargo test --locked --manifest-path xtask/Cargo.toml release_v4::tests",
@@ -110,7 +105,6 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
         release_result_marker.as_str(),
         linux_result_marker.as_str(),
         signing_result_marker.as_str(),
-        malware_result_marker.as_str(),
         r#"if [[ "$STATIC_REQUIRED" == "true" ]]; then"#,
         r#"[[ "$STATIC_RESULT" == "success" ]]"#,
         r#"if [[ "$RELEASE_REQUIRED" == "true" ]]; then"#,
@@ -118,7 +112,6 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
         r#"[[ "$LINUX_PROCESS_RESULT" == "success" ]]"#,
         r#"[[ "$LINUX_PROCESS_RESULT" == "skipped" ]]"#,
         r#"if [[ "$SIGNING_PROOF_REQUIRED" == "true" ]]; then"#,
-        r#"if [[ "$MALWARE_PROOF_REQUIRED" == "true" ]]; then"#,
     ] {
         if !source.contains(marker) {
             return Err(format!(
@@ -126,7 +119,7 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
             ));
         }
     }
-    let marker = "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof, malware_proof]";
+    let marker = "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof]";
     if !status.contains(marker) {
         return Err(format!(
             "status gate is missing independent assertion: {marker}"
@@ -156,29 +149,25 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
             "required status gate must require Linux runtime success for release changes and skipped otherwise".into(),
         );
     }
-    for (required, result) in [
-        ("SIGNING_PROOF_REQUIRED", "SIGNING_PROOF_RESULT"),
-        ("MALWARE_PROOF_REQUIRED", "MALWARE_PROOF_RESULT"),
-    ] {
-        let marker = format!(r#"if [[ "${required}" == "true" ]]; then"#);
-        let gate = status
-            .split_once(&marker)
-            .map(|(_, body)| body)
-            .ok_or_else(|| format!("required status gate is missing {required} branching"))?;
-        let (required_branch, skipped_branch) = gate
-            .split_once("else")
-            .ok_or_else(|| format!("required status gate is missing {required}=false branch"))?;
-        let skipped_branch = skipped_branch
-            .split_once("fi")
-            .map(|(branch, _)| branch)
-            .ok_or_else(|| format!("required status gate has an unterminated {required} branch"))?;
-        let success = format!(r#"[[ "${result}" == "success" ]]"#);
-        let skipped = format!(r#"[[ "${result}" == "skipped" ]]"#);
-        if !required_branch.contains(&success) || !skipped_branch.contains(&skipped) {
-            return Err(format!(
-                "required status gate must require {result} success or an explicit skipped result"
-            ));
-        }
+    let (required, result) = ("SIGNING_PROOF_REQUIRED", "SIGNING_PROOF_RESULT");
+    let marker = format!(r#"if [[ "${required}" == "true" ]]; then"#);
+    let gate = status
+        .split_once(&marker)
+        .map(|(_, body)| body)
+        .ok_or_else(|| format!("required status gate is missing {required} branching"))?;
+    let (required_branch, skipped_branch) = gate
+        .split_once("else")
+        .ok_or_else(|| format!("required status gate is missing {required}=false branch"))?;
+    let skipped_branch = skipped_branch
+        .split_once("fi")
+        .map(|(branch, _)| branch)
+        .ok_or_else(|| format!("required status gate has an unterminated {required} branch"))?;
+    let success = format!(r#"[[ "${result}" == "success" ]]"#);
+    let skipped = format!(r#"[[ "${result}" == "skipped" ]]"#);
+    if !required_branch.contains(&success) || !skipped_branch.contains(&skipped) {
+        return Err(format!(
+            "required status gate must require {result} success or an explicit skipped result"
+        ));
     }
     for forbidden in [
         "GH_TOKEN:",
@@ -1190,13 +1179,12 @@ jobs:
           }
   status:
     if: always()
-    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof, malware_proof]
+    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof]
     env:
       STATIC_RESULT: ${{ needs.static.result }}
       RELEASE_CONTRACT_RESULT: ${{ needs.release_contract.result }}
       LINUX_PROCESS_RESULT: ${{ needs.linux_process_runtime.result }}
       SIGNING_PROOF_RESULT: ${{ needs.signing_proof.result }}
-      MALWARE_PROOF_RESULT: ${{ needs.malware_proof.result }}
     run: |
       if [[ "$STATIC_REQUIRED" == "true" ]]; then
         [[ "$STATIC_RESULT" == "success" ]]
@@ -1212,11 +1200,6 @@ jobs:
         [[ "$SIGNING_PROOF_RESULT" == "success" ]]
       else
         [[ "$SIGNING_PROOF_RESULT" == "skipped" ]]
-      fi
-      if [[ "$MALWARE_PROOF_REQUIRED" == "true" ]]; then
-        [[ "$MALWARE_PROOF_RESULT" == "success" ]]
-      else
-        [[ "$MALWARE_PROOF_RESULT" == "skipped" ]]
       fi
 "#.to_owned();
         v4_release_contract_ci_wiring(&source)
@@ -1236,11 +1219,8 @@ jobs:
             "cargo xtask check static",
         );
         assert!(v4_release_contract_ci_wiring(&no_static).is_err());
-        let missing_linux_dependency = replace_all_fixture(
-            &source,
-            ", linux_process_runtime, signing_proof, malware_proof]",
-            "]",
-        );
+        let missing_linux_dependency =
+            replace_all_fixture(&source, ", linux_process_runtime, signing_proof]", "]");
         assert!(v4_release_contract_ci_wiring(&missing_linux_dependency).is_err());
         let missing_linux_result = replace_all_fixture(
             &source,
@@ -1266,12 +1246,12 @@ jobs:
             "[[ \"$SIGNING_PROOF_RESULT\" == \"skipped\" ]]",
         );
         assert!(v4_release_contract_ci_wiring(&signing_skip_accepted_when_required).is_err());
-        let malware_skip_accepted_when_required = replace_all_fixture(
+        let missing_signing_dependency = replace_all_fixture(
             &source,
-            "[[ \"$MALWARE_PROOF_RESULT\" == \"success\" ]]",
-            "[[ \"$MALWARE_PROOF_RESULT\" == \"skipped\" ]]",
+            ", linux_process_runtime, signing_proof]",
+            ", linux_process_runtime]",
         );
-        assert!(v4_release_contract_ci_wiring(&malware_skip_accepted_when_required).is_err());
+        assert!(v4_release_contract_ci_wiring(&missing_signing_dependency).is_err());
         let status_not_always = replace_all_fixture(&source, "if: always()", "if: true");
         assert!(v4_release_contract_ci_wiring(&status_not_always).is_err());
         let production_api = replace_all_fixture(

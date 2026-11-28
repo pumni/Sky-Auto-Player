@@ -41,7 +41,6 @@ const XTASK_MODULE_ADVISORY_THRESHOLDS: &[(&str, usize)] = &[
     ("xtask/src/checks/bindings.rs", 700),
     ("xtask/src/checks/bun_pin.rs", 600),
     ("xtask/src/checks/ci_contracts.rs", 2_100),
-    ("xtask/src/checks/hosted_malware.rs", 350),
     ("xtask/src/checks/hosted_signing.rs", 300),
     ("xtask/src/checks/recovery_auth.rs", 350),
     ("xtask/src/checks/release_pipeline.rs", 1_200),

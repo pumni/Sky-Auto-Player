@@ -38,8 +38,6 @@ The `changes` job projects these classifier outputs:
 - `release_required`: the Windows release-contract lane is required.
 - `signing_proof_required`: the independent unsigned-before-sign test-key proof
   is required.
-- `malware_proof_required`: the hosted ClamAV and real NSIS positive-control
-  proof is required.
 - `supply_chain_required`: advisory and dependency-policy checks are required.
 - `site_required`: website validation and Pages artifact packaging are
   required.
@@ -99,11 +97,10 @@ unselected proof job to report `skipped`.
 | `apps/desktop/package.json`, `bun.lock` | Desktop web/browser, Windows candidate/package, updater and dependency checks |
 | `apps/desktop/src-tauri/**` production source/config/hooks/resources | Windows native and package qualification; updater lane for updater identity/behavior changes |
 | `supply-chain/**` policy or audit data | Full validation, including static/security and supply-chain policy checks |
-| NSIS hooks, installer format or packaged payload | Windows package qualification plus signing and malware proofs |
+| NSIS hooks, installer format or packaged payload | Windows package qualification plus signing proof |
 | Shipping `crates/**` source | Rust/native and Windows package qualification; manifest changes also run dependency checks |
 | Signing adapter, updater trust, Authenticode scripts/contracts | Signing proof plus related Rust, updater, package, and release lanes |
-| Malware scanner, policy, bootstrap, or policy tests | Malware proof and release/security contracts, without an unnecessary Windows NSIS candidate |
-| `.github/workflows/release-v4.yml` | Release contract plus independent signing and malware proofs |
+| `.github/workflows/release-v4.yml` | Release contract plus independent signing proof |
 | `ci.yml`, classifier, Rust toolchain pin, unknown path | Full validation across all lanes |
 | Retired root `desktop/**` or `site/**` | Unknown path; fail-closed full validation |
 | Release executable or policy script | Release contract and its selected Windows/security lanes |
@@ -205,8 +202,8 @@ for representative multi-path and unknown-path inputs.
 Rust owns deterministic CI classification, candidate and bridge schemas,
 artifact inventory and digest checks, PE inspection, and the isolated
 NSIS/updater fixture lifecycle. PowerShell remains for Windows
-tool installation, Authenticode provider/tool invocation, release transaction
-orchestration, Defender evidence capture, and the exact Defender artifact scan.
+tool installation, Authenticode provider/tool invocation, and release transaction
+orchestration.
 
 | Rust owner | Current contract | Active caller or adapter |
 | --- | --- | --- |

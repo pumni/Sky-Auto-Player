@@ -40,7 +40,6 @@ jobs:
       updater_required: ${{ steps.classify.outputs.updater_required }}
       release_required: ${{ steps.classify.outputs.release_required }}
       signing_proof_required: ${{ steps.classify.outputs.signing_proof_required }}
-      malware_proof_required: ${{ steps.classify.outputs.malware_proof_required }}
       supply_chain_required: ${{ steps.classify.outputs.supply_chain_required }}
       site_required: ${{ steps.classify.outputs.site_required }}
       classification_reason: ${{ steps.classify.outputs.classification_reason }}
@@ -312,10 +311,6 @@ jobs:
 
       - name: Test process session lifecycle (Linux)
         run: node --test scripts/process-session.test.mjs
-
-      - name: Test fail-closed ClamAV bootstrap
-        shell: bash
-        run: bash scripts/test_ci_bootstrap_clamav.sh
 
       - name: Run Rust-native CI, candidate, bridge, and calibration self-tests
         run: cargo test --locked --manifest-path xtask/Cargo.toml
@@ -1451,161 +1446,6 @@ jobs:
         if: always()
         run: pwsh scripts/ci_job_timing.ps1 -Mode finish -Job packaged -CacheHit "${{ steps.rust-cache.outputs.cache-hit }}"
 
-  malware_proof:
-    needs: changes
-    if: needs.changes.outputs.malware_proof_required == 'true'
-    name: Prove real NSIS-format ClamAV scanner on GitHub-hosted Ubuntu
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    env:
-      SKY_MALWARE_PROOF_SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
-    steps:
-      - name: Check out exact disposable proof source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
-
-      - name: Install ClamAV and NSIS builder; refresh official signatures
-        shell: bash
-        run: |
-          bash scripts/ci_bootstrap_clamav.sh --with-nsis
-      - name: Build a real NSIS PE without any release credentials or external artifact upload
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/sky-v4-malware-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          test ! -e "$root"
-          mkdir -p "$root/candidate-bundle"
-          echo "SKY_MALWARE_PROOF_ROOT=$root" >> "$GITHUB_ENV"
-          head -c 2097152 /dev/urandom > "$root/disposable-payload.dat"
-          cat > "$root/disposable.nsi" <<'NSI'
-          Name "Sky Auto Player Disposable NSIS Scanner Proof"
-          OutFile "candidate-bundle/Sky Auto Player_4.3.0_x64-setup.exe"
-          RequestExecutionLevel user
-          Section
-            SetOutPath "$TEMP"
-            File "disposable-payload.dat"
-          SectionEnd
-          NSI
-          (cd "$root" && makensis -V2 disposable.nsi)
-          installer="$root/candidate-bundle/Sky Auto Player_4.3.0_x64-setup.exe"
-          test -f "$installer"
-          test "$(stat -c '%s' "$installer")" -gt 1048576
-          file -b "$installer" | grep -q 'PE32'
-          echo "GitHub-hosted real NSIS PE scanner fixture: PASS"
-
-      - name: Prove ClamAV detects harmless EICAR hidden inside an actual compressed NSIS
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="$SKY_MALWARE_PROOF_ROOT"
-          python3 - <<'PY'
-          from pathlib import Path
-          import os
-          root = Path(os.environ["SKY_MALWARE_PROOF_ROOT"])
-          eicar = b"X5O!P%@AP[4" + bytes([92]) + b"PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*"
-          (root / "nsis-eicar-positive-control.txt").write_bytes(eicar)
-          (root / "nsis-eicar-positive-control.nsi").write_text(
-              'Name "Sky Auto Player NSIS Scanner Positive Control"\n'
-              'OutFile "nsis-eicar-positive-control.exe"\n'
-              'RequestExecutionLevel user\n'
-              'SetCompress force\n'
-              'Section\n'
-              '  SetOutPath "$TEMP"\n'
-              '  File "nsis-eicar-positive-control.txt"\n'
-              'SectionEnd\n',
-              encoding="utf-8",
-          )
-          PY
-          (cd "$root" && makensis -V2 nsis-eicar-positive-control.nsi)
-          set +e
-          scan_output="$(clamscan --stdout --no-summary --scan-archive=yes \
-            --alert-exceeds-max=yes --max-filesize=300M --max-scansize=1024M \
-            --max-recursion=30 "$root/nsis-eicar-positive-control.exe" 2>&1)"
-          scanner_status=$?
-          set -e
-          if [ "$scanner_status" -ne 1 ] || ! grep -q ' FOUND' <<<"$scan_output" || \
-             ! grep -qi 'EICAR' <<<"$scan_output"; then
-            echo "Hosted scanner did not detect EICAR inside a compressed NSIS archive" >&2
-            exit 1
-          fi
-          rm -f "$root/nsis-eicar-positive-control.exe" "$root/nsis-eicar-positive-control.nsi" "$root/nsis-eicar-positive-control.txt"
-          echo "Nested EICAR detection inside actual NSIS archive: PASS"
-
-      - name: Bind the real disposable NSIS to an isolated exact-byte release manifest
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          from pathlib import Path
-          import hashlib, json, os
-          root = Path(os.environ["RUNNER_TEMP"]) / f"sky-v4-malware-proof-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
-          name = "Sky Auto Player_4.3.0_x64-setup.exe"
-          fixture = root / "candidate-bundle" / name
-          if not fixture.is_file() or fixture.stat().st_size < 1024 * 1024:
-              raise RuntimeError("real NSIS proof is missing or suspiciously small")
-          with fixture.open("rb") as handle:
-              actual_hash = hashlib.file_digest(handle, "sha256").hexdigest()
-          record = {
-              "role": "installer", "source_name": name,
-              "state_path": "candidate-bundle/" + name, "size": fixture.stat().st_size,
-              "sha256": actual_hash
-          }
-          signature = {"role": "updater-signature", "source_name": name + ".sig"}
-          context = {
-              "repository": os.environ["GITHUB_REPOSITORY"],
-              "source_sha": os.environ["SKY_MALWARE_PROOF_SOURCE_SHA"],
-              "workflow_sha": os.environ["GITHUB_SHA"],
-              "run_id": os.environ["GITHUB_RUN_ID"],
-              "run_attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
-              "version": "4.3.0",
-          }
-          (root / "release-context.json").write_text(json.dumps(context))
-          (root / "candidate-manifest.json").write_text(json.dumps({**context, "public_assets": [record, signature]}))
-          PY
-
-      - name: Prove real NSIS PE is clean and EICAR is positively detected
-        shell: bash
-        run: |
-          set -euo pipefail
-          GITHUB_SHA="$SKY_MALWARE_PROOF_SOURCE_SHA" python3 scripts/scan_v4_malware_exact.py --state-root "$SKY_MALWARE_PROOF_ROOT"
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          root = Path(os.environ["SKY_MALWARE_PROOF_ROOT"])
-          v = json.loads((root / "malware-evidence.json").read_text())
-          assert v["positive_control_detected"] is True
-          assert v["nsis_archive_control_detected"] is True
-          assert v["detection_result"] == "none"
-          assert v["artifact_sha256"] == json.loads((root / "candidate-manifest.json").read_text())["public_assets"][0]["sha256"]
-          print("Hosted real NSIS malware scan evidence exact-byte binding: PASS")
-          PY
-
-      - name: Prove an altered NSIS SHA is rejected without rescanning as clean
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "tamper" >> "$SKY_MALWARE_PROOF_ROOT/candidate-bundle/Sky Auto Player_4.3.0_x64-setup.exe"
-          if GITHUB_SHA="$SKY_MALWARE_PROOF_SOURCE_SHA" python3 scripts/scan_v4_malware_exact.py --state-root "$SKY_MALWARE_PROOF_ROOT"; then
-            echo "tampered exact candidate was accepted" >&2
-            exit 1
-          fi
-          echo "Tampered candidate rejected: PASS"
-
-      - name: Clean disposable proof workspace
-        if: always()
-        shell: bash
-        run: |
-          set -euo pipefail
-          root="$RUNNER_TEMP/sky-v4-malware-proof-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
-          if [ -d "$root" ] && [ "$(dirname "$root")" = "$RUNNER_TEMP" ]; then
-            rm -rf -- "$root"
-          fi
-
   site:
     name: Website validation
     needs: changes
@@ -1634,7 +1474,7 @@ jobs:
   status:
     name: Sky Auto Player — required CI gate
     if: always()
-    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof, malware_proof]
+    needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     defaults:
@@ -1655,7 +1495,6 @@ jobs:
           UPDATER_REQUIRED: ${{ needs.changes.outputs.updater_required }}
           RELEASE_REQUIRED: ${{ needs.changes.outputs.release_required }}
           SIGNING_PROOF_REQUIRED: ${{ needs.changes.outputs.signing_proof_required }}
-          MALWARE_PROOF_REQUIRED: ${{ needs.changes.outputs.malware_proof_required }}
           SUPPLY_CHAIN_REQUIRED: ${{ needs.changes.outputs.supply_chain_required }}
           SITE_REQUIRED: ${{ needs.changes.outputs.site_required }}
           STATIC_REQUIRED: ${{ needs.changes.outputs.static_required }}
@@ -1676,7 +1515,6 @@ jobs:
           DESKTOP_WEB_RESULT: ${{ needs.desktop_web.result }}
           SITE_RESULT: ${{ needs.site.result }}
           SIGNING_PROOF_RESULT: ${{ needs.signing_proof.result }}
-          MALWARE_PROOF_RESULT: ${{ needs.malware_proof.result }}
         run: |
           set -euo pipefail
           [[ "$CHANGES_RESULT" == "success" ]]
@@ -1710,7 +1548,6 @@ jobs:
           fi
           if [[ "$SITE_REQUIRED" == "true" ]]; then [[ "$SITE_RESULT" == "success" ]]; else [[ "$SITE_RESULT" == "skipped" ]]; fi
           if [[ "$SIGNING_PROOF_REQUIRED" == "true" ]]; then [[ "$SIGNING_PROOF_RESULT" == "success" ]]; else [[ "$SIGNING_PROOF_RESULT" == "skipped" ]]; fi
-          if [[ "$MALWARE_PROOF_REQUIRED" == "true" ]]; then [[ "$MALWARE_PROOF_RESULT" == "success" ]]; else [[ "$MALWARE_PROOF_RESULT" == "skipped" ]]; fi
           echo "CI status is green."
 
       - name: Report CI timing

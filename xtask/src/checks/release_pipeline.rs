@@ -503,7 +503,7 @@ fn rust_release_state_machine_contract(
         ("prepare", "runs-on: ubuntu-latest"),
         ("build_unsigned", "runs-on: windows-latest"),
         ("sign_qualify", "runs-on: windows-latest"),
-        ("attest", "runs-on: ubuntu-24.04"),
+        ("attest", "runs-on: ubuntu-latest"),
         ("metadata_probe", "runs-on: ubuntu-latest"),
         ("publish", "runs-on: ubuntu-latest"),
         ("metadata_promote", "runs-on: ubuntu-latest"),
@@ -522,20 +522,11 @@ fn rust_release_state_machine_contract(
     }
     let attest_workflow = job("attest")?;
     let metadata_probe_workflow = job("metadata_probe")?;
-    // Malware scanning is mandatory on a working hosted Linux engine before
-    // OIDC and irreversible publication; the Windows-hosted image cannot
-    // satisfy the retired self-hosted Defender real-time policy.
-    if !attest_workflow.contains("scan_v4_malware_exact.py")
-        || !attest_workflow.contains("release-v4 verify-malware-scan --state-root")
-        || !attest_workflow
-            .contains("Attest separately verified exact-installer malware scan evidence")
-        || !attest_workflow
-            .contains("v4-malware-scan-${{ github.run_id }}-${{ github.run_attempt }}")
-        || !job("publish")?.contains("Download exact-run independent malware scan evidence")
-        || !job("publish")?
-            .contains("v4-malware-scan-${{ github.run_id }}-${{ github.run_attempt }}")
+    if !attest_workflow.contains("candidate-bundle/*.exe")
+        || !attest_workflow.contains("candidate-bundle/*.sig")
+        || !attest_workflow.contains("candidate-evidence/SBOM.spdx.json")
     {
-        return Err("hosted release must scan and attest the exact signed candidate with real EICAR proof before publication".into());
+        return Err("hosted release must attest the exact signed installer, updater signature, and SPDX SBOM before publication".into());
     }
     if !attest_workflow.contains("release-v4 verify-candidate --state-root")
         || !metadata_probe_workflow.contains("release-v4 probe-verify-candidate --state-root")
@@ -860,7 +851,6 @@ fn rust_release_state_machine_contract(
         "raw.githubusercontent.com",
         "canonical_upload_url",
         "RELEASE_BUILD_STEP_TIMEOUT",
-        "malware::verify_scan(root, options)?",
         "ATTESTATION_VERIFY_TIMEOUT",
         "env::current_exe()?",
     ] {
@@ -1566,5 +1556,33 @@ mod tests {
             "fn build_plan(\n    // transport.request(\"PUT\") is forbidden here",
         );
         assert!(metadata_recovery_rust_contract(&planner_write).is_err());
+    }
+
+    #[test]
+    fn hosted_release_contract_rejects_missing_attestation_or_sbom() {
+        let (workflow, rust, main, ci) = current_sources();
+        for missing_marker in [
+            "candidate-bundle/*.exe",
+            "candidate-bundle/*.sig",
+            "candidate-evidence/SBOM.spdx.json",
+        ] {
+            let mutated = replace_fixture(&workflow, missing_marker, "omitted-subject");
+            assert!(
+                rust_release_state_machine_contract(&mutated, "", &rust, &main, &ci).is_err(),
+                "missing attestation subject `{missing_marker}` must be rejected"
+            );
+        }
+        let wrong_attestation_verifier =
+            replace_fixture(&rust, "fn verify_attestations", "fn skip_attestations");
+        assert!(
+            rust_release_state_machine_contract(
+                &workflow,
+                "",
+                &wrong_attestation_verifier,
+                &main,
+                &ci
+            )
+            .is_err()
+        );
     }
 }

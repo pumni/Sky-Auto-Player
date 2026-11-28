@@ -1,7 +1,6 @@
 mod bindings;
 mod bun_pin;
 mod ci_contracts;
-mod hosted_malware;
 mod hosted_signing;
 mod recovery_auth;
 mod release_pipeline;
@@ -44,7 +43,6 @@ pub(crate) const STATIC_LEAF_CHECKS: &[&str] = &[
     "release-metadata",
     "release-runner",
     "hosted-signing",
-    "hosted-malware",
     "release-pipeline",
     "packaged-ci",
     "legacy-updater-retirement",
@@ -87,7 +85,6 @@ fn contract_pointer(check_name: &str) -> Option<&'static str> {
         "release-metadata" => Some("docs/distribution-and-update.md"),
         "release-runner" => Some("docs/v4-release-authority.md"),
         "hosted-signing" => Some("docs/v4-release-authority.md"),
-        "hosted-malware" => Some("docs/distribution-and-update.md"),
         "release-pipeline" => Some("docs/v4-release-authority.md"),
         "packaged-ci" => Some("docs/ci-validation-topology.md"),
         "legacy-updater-retirement" => Some("docs/distribution-and-update.md"),
@@ -687,9 +684,6 @@ fn run_static_group(skip_supply_chain: bool, session: &mut CheckSession) -> Resu
     })?;
     record_step(session, "hosted-signing", || {
         hosted_signing::hosted_v4_signing_workflow_contract(&root)
-    })?;
-    record_step(session, "hosted-malware", || {
-        hosted_malware::hosted_malware_proof_contract(&root)
     })?;
     record_step(session, "release-pipeline", || {
         release_pipeline::v4_release_pipeline_contract(&root)

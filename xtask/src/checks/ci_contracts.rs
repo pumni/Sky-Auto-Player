@@ -415,7 +415,7 @@ fn packaged_ci_build_once_contract_source(source: &str) -> Result<()> {
         "scripts/setup_v4_test_signing.ps1",
         "scripts/cleanup_v4_test_signing.ps1",
         "linux_process_runtime:",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof, malware_proof]",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof]",
         "LINUX_PROCESS_RESULT: ${{ needs.linux_process_runtime.result }}",
         "[[ \"$LINUX_PROCESS_RESULT\" == \"success\" ]]",
         "[[ \"$LINUX_PROCESS_RESULT\" == \"skipped\" ]]",
@@ -870,27 +870,15 @@ const ACTIVE_CI_WORKFLOW_FILES: &[&str] = &[
     ".github/workflows/v4-metadata-recovery.yml",
 ];
 
-fn validate_active_github_hosted_ubuntu_labels(relative: &str, source: &str) -> Result<()> {
-    let dedicated_malware_scanner = match relative {
-        ".github/workflows/release-v4.yml" => Some("  attest:"),
-        ".github/workflows/ci.yml" => Some("  malware_proof:"),
-        _ => None,
-    };
-    let mut job = "";
+fn validate_active_github_hosted_ubuntu_labels(_relative: &str, source: &str) -> Result<()> {
     for line in source.lines() {
-        if line.starts_with("  ") && !line.starts_with("   ") && line.trim_end().ends_with(':') {
-            job = line.trim();
-        }
         let trimmed = line.trim_start();
         if !trimmed.starts_with("runs-on:") || !trimmed.contains("ubuntu-") {
             continue;
         }
-        let designated = dedicated_malware_scanner.is_some_and(|expected| job == expected.trim());
-        if trimmed != "runs-on: ubuntu-latest"
-            && !(designated && trimmed == "runs-on: ubuntu-24.04")
-        {
+        if trimmed != "runs-on: ubuntu-latest" {
             return Err(format!(
-                "active GitHub-hosted Linux job must use ubuntu-latest, except its explicitly pinned Ubuntu 24.04 malware scanner: {trimmed}"
+                "active GitHub-hosted Linux job must use ubuntu-latest: {trimmed}"
             )
             .into());
         }
@@ -938,8 +926,6 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
             .map_err(|error| format!("{relative}: {error}"))?;
     }
 
-    super::hosted_malware::hosted_release_scanner_contract(root)?;
-
     let ci = fs::read_to_string(root.join(".github/workflows/ci.yml"))?.replace("\r\n", "\n");
     for output in [
         "rust_required",
@@ -950,7 +936,6 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "updater_required",
         "release_required",
         "signing_proof_required",
-        "malware_proof_required",
         "supply_chain_required",
         "site_required",
         "classification_reason",
@@ -981,9 +966,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "name: Website validation",
         "if: needs.changes.outputs.site_required == 'true'",
         "if: needs.changes.outputs.signing_proof_required == 'true'",
-        "if: needs.changes.outputs.malware_proof_required == 'true'",
         "name: Sky Auto Player — required CI gate",
-        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof, malware_proof]",
+        "needs: [changes, static, release_contract, supply_chain, validate, desktop_web, candidate, updater_bridge, updater_contract, updater_e2e, packaged, site, linux_process_runtime, signing_proof]",
     ] {
         if !ci.contains(marker) {
             return Err(
@@ -1031,16 +1015,12 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
             return Err(format!("updater_bridge producer is missing its marker: {marker}").into());
         }
     }
-    for marker in [
-        "bash scripts/test_ci_bootstrap_clamav.sh",
-        "cargo xtask check static --skip-supply-chain",
-    ] {
-        if !ci.contains(marker) {
-            return Err(format!(
-                "CI static gate is missing its failure-injection/security check: {marker}"
-            )
-            .into());
-        }
+    let static_gate_marker = "cargo xtask check static --skip-supply-chain";
+    if !ci.contains(static_gate_marker) {
+        return Err(format!(
+            "CI static gate is missing its failure-injection/security check: {static_gate_marker}"
+        )
+        .into());
     }
     if bridge.matches("bun run tauri build").count() != 0 {
         return Err(
@@ -1279,9 +1259,6 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "SIGNING_PROOF_REQUIRED",
         "SIGNING_PROOF_RESULT",
         "needs.signing_proof.result",
-        "MALWARE_PROOF_REQUIRED",
-        "MALWARE_PROOF_RESULT",
-        "needs.malware_proof.result",
         "UPDATER_CONTRACT_REQUIRED",
         "UPDATER_CONTRACT_RESULT",
         "DESKTOP_WEB_REQUIRED",
@@ -1290,13 +1267,10 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         "if [[ \"$UPDATER_CONTRACT_REQUIRED\" == \"true\" ]]",
         "if [[ \"$DESKTOP_WEB_REQUIRED\" == \"true\" ]]",
         "if [[ \"$SIGNING_PROOF_REQUIRED\" == \"true\" ]]",
-        "if [[ \"$MALWARE_PROOF_REQUIRED\" == \"true\" ]]",
         "[[ \"$LINUX_PROCESS_RESULT\" == \"success\" ]]",
         "[[ \"$LINUX_PROCESS_RESULT\" == \"skipped\" ]]",
         "[[ \"$SIGNING_PROOF_RESULT\" == \"success\" ]]",
         "[[ \"$SIGNING_PROOF_RESULT\" == \"skipped\" ]]",
-        "[[ \"$MALWARE_PROOF_RESULT\" == \"success\" ]]",
-        "[[ \"$MALWARE_PROOF_RESULT\" == \"skipped\" ]]",
         "Sky Auto Player — required CI gate",
     ] {
         if !status.contains(marker) {
@@ -1893,24 +1867,16 @@ mod tests {
 
     #[test]
     fn active_github_hosted_ubuntu_contract_rejects_numbered_labels() {
-        let error = validate_active_github_hosted_ubuntu_labels(
-            ".github/workflows/ci.yml",
-            "jobs:\n  build:\n    runs-on: ubuntu-24.04\n",
-        )
-        .expect_err("numbered GitHub-hosted Ubuntu labels must be rejected");
-        assert!(error.to_string().contains("ubuntu-latest"));
-    }
-
-    #[test]
-    fn pinned_ubuntu_2404_is_allowed_only_for_malware_scanner_jobs() {
         for (path, job) in [
+            (".github/workflows/ci.yml", "build"),
             (".github/workflows/release-v4.yml", "attest"),
-            (".github/workflows/ci.yml", "malware_proof"),
         ] {
-            let valid = format!("jobs:\n  {job}:\n    runs-on: ubuntu-24.04\n");
-            assert!(validate_active_github_hosted_ubuntu_labels(path, &valid).is_ok());
-            let wrong = "jobs:\n  publish:\n    runs-on: ubuntu-24.04\n";
-            assert!(validate_active_github_hosted_ubuntu_labels(path, wrong).is_err());
+            let error = validate_active_github_hosted_ubuntu_labels(
+                path,
+                &format!("jobs:\n  {job}:\n    runs-on: ubuntu-24.04\n"),
+            )
+            .expect_err("numbered GitHub-hosted Ubuntu labels must be rejected");
+            assert!(error.to_string().contains("ubuntu-latest"));
         }
     }
 

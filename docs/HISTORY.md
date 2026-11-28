@@ -16,6 +16,11 @@ in [CI validation topology](ci-validation-topology.md) and
 reports are revision-bound provenance, not current contracts or final
 qualification. Current WP5 correction results, WP6 gate evidence, and remaining
 proof status are recorded in [WP6 final acceptance](evidence/source-architecture/WP6-final-acceptance.md);
+antivirus retirement under Owner Decision D23 is recorded in
+[Antivirus retirement acceptance](evidence/source-architecture/antivirus-retirement-acceptance.md)
+(superseding the antivirus-specific gates of the archived SPEC, plan, and WP6 matrix,
+and archiving the temporary [Antivirus retirement work order](https://github.com/pumni/Sky-Auto-Player/blob/ebbbe22ee620e00edb60a86ce7ae3cf2322c4787/docs/antivirus-retirement-work-order.md)
+at immutable commit `ebbbe22ee620e00edb60a86ce7ae3cf2322c4787`).
 Leader and Owner acceptance remain pending.
 
 | Archived file at immutable source | Bytes | SHA-256 |

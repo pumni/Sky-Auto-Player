@@ -43,8 +43,7 @@ The root `.bun-version` is the Bun pin. Desktop and site retain independent
 manifests and lockfiles; install from the matching app with
 `bun install --frozen-lockfile`. See [desktop tooling](docs/desktop-tooling.md)
 for app checks and the blocking ESLint policy. Rust and Bun are the canonical
-product/development toolchains; the hosted Python ClamAV release adapter is the
-narrow exception described in [release authority](docs/v4-release-authority.md).
+product/development toolchains.
 
 ## Review and evidence
 

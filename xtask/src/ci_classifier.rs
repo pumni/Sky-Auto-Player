@@ -7,7 +7,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub(crate) const LANES: [&str; 11] = [
+pub(crate) const LANES: [&str; 10] = [
     "rust_required",
     "desktop_required",
     "desktop_native_required",
@@ -16,7 +16,6 @@ pub(crate) const LANES: [&str; 11] = [
     "updater_required",
     "release_required",
     "signing_proof_required",
-    "malware_proof_required",
     "supply_chain_required",
     "site_required",
 ];
@@ -203,11 +202,7 @@ fn classify_path(
     }
 
     if path == ".github/workflows/release-v4.yml" {
-        classification.add_many(&[
-            "release_required",
-            "signing_proof_required",
-            "malware_proof_required",
-        ]);
+        classification.add_many(&["release_required", "signing_proof_required"]);
         return;
     }
 
@@ -220,22 +215,6 @@ fn classify_path(
         return;
     }
 
-    if path == "xtask/src/release_v4/malware.rs" {
-        classification.add_many(&[
-            "rust_required",
-            "release_required",
-            "malware_proof_required",
-        ]);
-        return;
-    }
-    if path == "scripts/scan_v4_malware_exact.py"
-        || path.starts_with("scripts/test_v4_malware_")
-        || path == "scripts/ci_bootstrap_clamav.sh"
-        || path == "scripts/test_ci_bootstrap_clamav.sh"
-    {
-        classification.add_many(&["release_required", "malware_proof_required"]);
-        return;
-    }
     if [
         "xtask/src/release_signing.rs",
         "xtask/src/authenticode.rs",
@@ -312,7 +291,6 @@ fn classify_path(
             "package_required",
             "updater_required",
             "signing_proof_required",
-            "malware_proof_required",
         ]);
         return;
     }
@@ -325,7 +303,6 @@ fn classify_path(
             "desktop_native_required",
             "package_required",
             "signing_proof_required",
-            "malware_proof_required",
         ]);
         return;
     }
@@ -526,7 +503,6 @@ fn classify_path(
             "release_required",
             "package_required",
             "signing_proof_required",
-            "malware_proof_required",
         ]);
         return;
     }
