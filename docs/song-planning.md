@@ -133,7 +133,7 @@ rounded to hundredths with nearest-even ties, then bounded to 0.1–1.0 where
 that recommendation applies. Nonfinite or unrepresentable advice is omitted
 with a diagnostic.
 
-`crates/sky_app_core/src/song.rs::tests::legacy_timestamp_coercion_preserves_documented_json_values`
+`crates/sky_app_core/src/song/tests.rs::legacy_timestamp_coercion_preserves_documented_json_values`
 covers legacy timestamp forms. `crates/sky_app_core/src/song/numeric.rs`
 tests `checked_nearest_even_timestamp_rounding_covers_ties_edges_and_u64_bound`,
 `legacy_schedule_rejects_invalid_source_and_release_time_overflow`,

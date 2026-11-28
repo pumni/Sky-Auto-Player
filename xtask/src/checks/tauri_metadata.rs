@@ -595,6 +595,78 @@ fn v4_legacy_updater_source_contract(source: &str, surface: &str) -> Result<()> 
     Ok(())
 }
 
+fn v4_native_adapter_source_contract(source: &str, surface: &str) -> Result<()> {
+    for forbidden in [
+        "sky_updater",
+        "Sky-Auto-Player-Updater.exe",
+        "ActiveUpdateState",
+        "active_update_for_install",
+        "pep440_rs",
+    ] {
+        if source.contains(forbidden) {
+            return Err(format!(
+                "retired v3 updater marker `{forbidden}` remains in sky_native_adapters surface {surface}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn v4_native_adapter_required_drop_source_contract(source: &str) -> Result<()> {
+    for required_drop in [
+        "last_notified_version",
+        "legacy_old_dir_sweep_pending",
+        "pending_update_version",
+        "auto_apply",
+    ] {
+        if !source.contains(required_drop) {
+            return Err(format!(
+                "sky_native_adapters settings migration must explicitly drop retired update key `{required_drop}` on save/migrate"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn v4_native_adapter_retirement(root: &Path) -> Result<()> {
+    const SOURCE_ROOT: &str = "crates/sky_native_adapters/src";
+    let settings_store_path = "crates/sky_native_adapters/src/settings_store.rs";
+    let mut settings_store_found = false;
+
+    for source_path in walk_source(root, SOURCE_ROOT)? {
+        let file_name = source_path.file_name().and_then(|name| name.to_str());
+        if file_name == Some("tests.rs")
+            || file_name.is_some_and(|name| name.ends_with("_tests.rs"))
+        {
+            continue;
+        }
+        let relative = source_path
+            .strip_prefix(root)?
+            .to_string_lossy()
+            .replace('\\', "/");
+        let source = fs::read_to_string(&source_path)?;
+        let production = source
+            .split_once("\n#[cfg(test)]")
+            .map(|(production, _)| production)
+            .unwrap_or(&source);
+        v4_native_adapter_source_contract(production, &relative)?;
+        if relative == settings_store_path {
+            v4_native_adapter_required_drop_source_contract(production)?;
+            settings_store_found = true;
+        }
+    }
+
+    if !settings_store_found {
+        return Err(format!(
+            "sky_native_adapters settings store source is missing: {settings_store_path}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn is_xtask_contract_source(root: &Path, source_path: &Path) -> bool {
     source_path.file_name().and_then(|name| name.to_str()) == Some("checks.rs")
         || source_path.starts_with(root.join("xtask/src/checks"))
@@ -671,35 +743,7 @@ pub(super) fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
         }
     }
 
-    let native_adapters_source =
-        fs::read_to_string(root.join("crates/sky_native_adapters/src/lib.rs"))?;
-    for forbidden in [
-        "sky_updater",
-        "Sky-Auto-Player-Updater.exe",
-        "ActiveUpdateState",
-        "active_update_for_install",
-        "pep440_rs",
-    ] {
-        if native_adapters_source.contains(forbidden) {
-            return Err(format!(
-                "retired v3 updater marker `{forbidden}` remains in sky_native_adapters"
-            )
-            .into());
-        }
-    }
-    for required_drop in [
-        "last_notified_version",
-        "legacy_old_dir_sweep_pending",
-        "pending_update_version",
-        "auto_apply",
-    ] {
-        if !native_adapters_source.contains(required_drop) {
-            return Err(format!(
-                "sky_native_adapters must explicitly drop retired update key `{required_drop}` on save/migrate"
-            )
-            .into());
-        }
-    }
+    v4_native_adapter_retirement(root)?;
 
     println!("[xtask] v4 legacy updater retirement guards: PASS");
     Ok(())
@@ -929,6 +973,38 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
             assert!(
                 v4_legacy_updater_source_contract(marker, "fixture").is_err(),
                 "{marker}"
+            );
+        }
+    }
+
+    #[test]
+    fn v4_native_adapter_retirement_guards_scan_extracted_owners_and_required_drops() {
+        let root = repo::root();
+        v4_native_adapter_retirement(&root)
+            .expect("all moved native-adapter production owners retain retirement guards");
+
+        for marker in [
+            "sky_updater",
+            "Sky-Auto-Player-Updater.exe",
+            "ActiveUpdateState",
+            "active_update_for_install",
+            "pep440_rs",
+        ] {
+            assert!(
+                v4_native_adapter_source_contract(marker, "fixture").is_err(),
+                "{marker}"
+            );
+        }
+
+        for required_drop in [
+            "last_notified_version",
+            "legacy_old_dir_sweep_pending",
+            "pending_update_version",
+            "auto_apply",
+        ] {
+            assert!(
+                v4_native_adapter_required_drop_source_contract(required_drop).is_err(),
+                "missing migration key {required_drop} must fail closed"
             );
         }
     }

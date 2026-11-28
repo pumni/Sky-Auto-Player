@@ -87,7 +87,7 @@
       "review_trigger": "review before the next Win32 boundary expansion"
     },
     {
-      "path": "crates/sky_native_adapters/src/lib.rs",
+      "path": "crates/sky_native_adapters/src/atomic_file.rs",
       "rule": "unsafe_boundary",
       "reason": "MoveFileExW replacement uses live NUL-terminated path buffers and owned filesystem paths",
       "review_trigger": "review before changing persisted-file replacement semantics"

@@ -202,7 +202,7 @@ impl CatalogCacheStore {
         }
         let temp = self.path.with_extension("json.tmp");
         fs::write(&temp, encoded).map_err(|error| error.to_string())?;
-        super::replace_file(&temp, &self.path).inspect_err(|_| {
+        super::atomic_file::replace_file(&temp, &self.path).inspect_err(|_| {
             let _ = fs::remove_file(&temp);
         })
     }
