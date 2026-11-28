@@ -481,11 +481,12 @@ const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     "apps/desktop/src-tauri/Cargo.toml",
 ];
 
-fn active_release_surface_source<'a>(path: &Path, source: &'a str) -> &'a str {
+fn active_release_surface_source(path: &Path, source: &str) -> String {
+    let source = super::normalize_source_line_endings(source);
     if path.extension().and_then(|extension| extension.to_str()) == Some("rs") {
         source
             .split_once("\n#[cfg(test)]")
-            .map_or(source, |(production, _)| production)
+            .map_or(source.clone(), |(production, _)| production.to_owned())
     } else {
         source
     }
@@ -552,7 +553,8 @@ pub(super) fn release_metadata_contract(root: &Path) -> Result<()> {
     for relative in ACTIVE_RELEASE_SURFACES {
         let path = root.join(relative);
         let content = fs::read_to_string(&path)?;
-        validate_active_release_surface(relative, active_release_surface_source(&path, &content))?;
+        let production = active_release_surface_source(&path, &content);
+        validate_active_release_surface(relative, &production)?;
     }
     let bundle = fs::read_to_string(root.join("xtask/src/tauri_bundle.rs"))?;
     for marker in [
@@ -600,6 +602,7 @@ fn v4_legacy_updater_source_contract(source: &str, surface: &str) -> Result<()> 
 }
 
 fn v4_native_adapter_source_contract(source: &str, surface: &str) -> Result<()> {
+    let source = super::normalize_source_line_endings(source);
     for forbidden in [
         "sky_updater",
         "Sky-Auto-Player-Updater.exe",
@@ -618,6 +621,7 @@ fn v4_native_adapter_source_contract(source: &str, surface: &str) -> Result<()> 
 }
 
 fn v4_native_adapter_required_drop_source_contract(source: &str) -> Result<()> {
+    let source = super::normalize_source_line_endings(source);
     for required_drop in [
         "last_notified_version",
         "legacy_old_dir_sweep_pending",
@@ -634,30 +638,60 @@ fn v4_native_adapter_required_drop_source_contract(source: &str) -> Result<()> {
     Ok(())
 }
 
+const NATIVE_ADAPTER_TEST_OWNERS: &[&str] = &[
+    "crates/sky_native_adapters/src/tests.rs",
+    "crates/sky_native_adapters/src/catalog_tests.rs",
+    "crates/sky_native_adapters/src/settings_store_tests.rs",
+];
+
+fn is_native_adapter_test_owner(relative: &str) -> bool {
+    NATIVE_ADAPTER_TEST_OWNERS.contains(&relative)
+}
+
+fn validate_native_adapter_test_owner_declaration(root: &Path, relative: &str) -> Result<()> {
+    let (owner, source_path) = match relative {
+        "crates/sky_native_adapters/src/tests.rs" => {
+            ("tests.rs", "crates/sky_native_adapters/src/lib.rs")
+        }
+        "crates/sky_native_adapters/src/catalog_tests.rs" => {
+            ("catalog_tests.rs", "crates/sky_native_adapters/src/lib.rs")
+        }
+        "crates/sky_native_adapters/src/settings_store_tests.rs" => (
+            "settings_store_tests.rs",
+            "crates/sky_native_adapters/src/settings_store.rs",
+        ),
+        _ => return Err(format!("unknown sky_native_adapters test owner: {relative}").into()),
+    };
+    let declarations =
+        super::normalize_source_line_endings(&fs::read_to_string(root.join(source_path))?);
+    let marker = format!("#[cfg(test)]\n#[path = \"{owner}\"]");
+    if !declarations.contains(&marker) {
+        return Err(format!(
+            "sky_native_adapters source owner must declare {owner} only under cfg(test)"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn v4_native_adapter_retirement(root: &Path) -> Result<()> {
     const SOURCE_ROOT: &str = "crates/sky_native_adapters/src";
     let settings_store_path = "crates/sky_native_adapters/src/settings_store.rs";
     let mut settings_store_found = false;
 
     for source_path in walk_source(root, SOURCE_ROOT)? {
-        let file_name = source_path.file_name().and_then(|name| name.to_str());
-        if file_name == Some("tests.rs")
-            || file_name.is_some_and(|name| name.ends_with("_tests.rs"))
-        {
-            continue;
-        }
         let relative = source_path
             .strip_prefix(root)?
             .to_string_lossy()
             .replace('\\', "/");
+        if is_native_adapter_test_owner(&relative) {
+            validate_native_adapter_test_owner_declaration(root, &relative)?;
+            continue;
+        }
         let source = fs::read_to_string(&source_path)?;
-        let production = source
-            .split_once("\n#[cfg(test)]")
-            .map(|(production, _)| production)
-            .unwrap_or(&source);
-        v4_native_adapter_source_contract(production, &relative)?;
+        v4_native_adapter_source_contract(&source, &relative)?;
         if relative == settings_store_path {
-            v4_native_adapter_required_drop_source_contract(production)?;
+            v4_native_adapter_required_drop_source_contract(&source)?;
             settings_store_found = true;
         }
     }
@@ -732,6 +766,7 @@ pub(super) fn v4_legacy_updater_retirement(root: &Path) -> Result<()> {
                     continue;
                 }
                 let source = fs::read_to_string(&source_path)?;
+                let source = super::normalize_source_line_endings(&source);
                 let source = if relative == "xtask/src" {
                     source
                         .split_once("\n#[cfg(test)]")
@@ -1014,6 +1049,43 @@ packaged-assets = ["tauri/custom-protocol", "tauri/compression"]
     }
 
     #[test]
+    fn native_adapter_retirement_excludes_only_declared_test_owners_and_scans_full_production_sources()
+     {
+        for owner in NATIVE_ADAPTER_TEST_OWNERS {
+            assert!(is_native_adapter_test_owner(owner), "{owner}");
+        }
+
+        let test_like_production_module = "crates/sky_native_adapters/src/new_adapter_tests.rs";
+        assert!(!is_native_adapter_test_owner(test_like_production_module));
+        let forbidden_marker = "pub const RETIRED_ADAPTER: &str = \"sky_updater\";";
+        assert!(
+            v4_native_adapter_source_contract(forbidden_marker, test_like_production_module)
+                .is_err(),
+            "a production module with a test-like filename must still be scanned"
+        );
+
+        let production_after_test_declaration =
+            format!("#[cfg(test)]\nmod test_support {{}}\n{forbidden_marker}");
+        assert!(
+            v4_native_adapter_source_contract(
+                &production_after_test_declaration.replace('\n', "\r\n"),
+                "crates/sky_native_adapters/src/adapter.rs",
+            )
+            .is_err(),
+            "a production marker after a CRLF test declaration must remain covered"
+        );
+    }
+
+    #[test]
+    fn active_release_surface_source_normalizes_crlf_before_separating_tests() {
+        let source = "fn production() {}\n#[cfg(test)]\nmod tests { const RETIRED: &str = \"sky_updater\"; }\n";
+        let source = source.replace('\n', "\r\n");
+        let production = active_release_surface_source(Path::new("release.rs"), &source);
+        assert!(validate_active_release_surface("release.rs", &production).is_ok());
+        assert!(!production.contains("sky_updater"));
+    }
+
+    #[test]
     fn v4_legacy_retirement_skips_only_the_xtask_contract_owners() {
         let root = repo::root();
         assert!(is_xtask_contract_source(
@@ -1113,7 +1185,7 @@ releases/latest
         ] {
             let path = root.join(surface);
             let owner = fs::read_to_string(&path).expect("moved updater implementation owner");
-            validate_active_release_surface(surface, active_release_surface_source(&path, &owner))
+            validate_active_release_surface(surface, &active_release_surface_source(&path, &owner))
                 .expect("moved updater implementation must remain a scanned release surface");
             let error = validate_active_release_surface(surface, "V4_RELEASE_AUTHORITY_REPOSITORY")
                 .expect_err("moved updater production owners must reject retired release markers");

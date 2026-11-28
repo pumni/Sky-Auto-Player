@@ -1551,6 +1551,10 @@ fn updater_bridge_configuration_contract(source: &str) -> Result<()> {
 }
 
 fn updater_bridge_source_contract(fixture: &str, tests: &str) -> Result<()> {
+    let normalized_fixture = super::normalize_source_line_endings(fixture);
+    let fixture = normalized_fixture.as_str();
+    let normalized_tests = super::normalize_source_line_endings(tests);
+    let tests = normalized_tests.as_str();
     updater_bridge_feature_contract(fixture)?;
     updater_bridge_configuration_contract(fixture)?;
     for marker in [
@@ -1668,26 +1672,76 @@ mod tests {
             .expect("updater fixture implementation must exist");
         let tests = fs::read_to_string(root.join("xtask/src/updater_fixture/tests.rs"))
             .expect("updater fixture test owner must exist");
-        updater_bridge_source_contract(&fixture, &tests)
-            .expect("implementation and moved regression selectors must satisfy their own checks");
-        assert!(
-            !fixture.contains(
-                "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair"
-            ),
-            "test selector must not be copied into the production implementation"
-        );
+        let as_line_ending = |source: &str, crlf: bool| {
+            let normalized = super::super::normalize_source_line_endings(source);
+            if crlf {
+                normalized.replace('\n', "\r\n")
+            } else {
+                normalized
+            }
+        };
 
-        let missing_implementation = fixture.replace(
-            "fn build_bridge_internal(",
-            "fn retired_build_bridge_internal(",
-        );
-        assert!(updater_bridge_source_contract(&missing_implementation, &tests).is_err());
+        for fixture_crlf in [false, true] {
+            for tests_crlf in [false, true] {
+                let fixture = as_line_ending(&fixture, fixture_crlf);
+                let tests = as_line_ending(&tests, tests_crlf);
+                updater_bridge_source_contract(&fixture, &tests)
+                    .expect("LF and CRLF implementation and moved regression owners must pass");
+                assert!(
+                    !fixture.contains(
+                        "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair"
+                    ),
+                    "test selector must not be copied into the production implementation"
+                );
 
-        let missing_test = tests.replace(
-            "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair",
-            "retired_tauri_signer_pair_regression",
-        );
-        assert!(updater_bridge_source_contract(&fixture, &missing_test).is_err());
+                let fixture_lf = super::super::normalize_source_line_endings(&fixture);
+                let tests_lf = super::super::normalize_source_line_endings(&tests);
+                let missing_implementation = fixture_lf.replace(
+                    "fn build_bridge_internal(",
+                    "fn retired_build_bridge_internal(",
+                );
+                assert!(
+                    updater_bridge_source_contract(
+                        &as_line_ending(&missing_implementation, fixture_crlf),
+                        &tests,
+                    )
+                    .is_err()
+                );
+
+                let missing_test = tests_lf.replace(
+                    "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair",
+                    "retired_tauri_signer_pair_regression",
+                );
+                assert!(
+                    updater_bridge_source_contract(
+                        &fixture,
+                        &as_line_ending(&missing_test, tests_crlf),
+                    )
+                    .is_err()
+                );
+
+                let required_build = "\"tauri\".to_owned(),\n            \"build\".to_owned()";
+                let misplaced_build = fixture_lf.replace(required_build, "\"tauri\".to_owned(),\n            \"version\".to_owned(),\n            \"build\".to_owned()");
+                assert_ne!(misplaced_build, fixture_lf);
+                assert!(
+                    updater_bridge_source_contract(
+                        &as_line_ending(&misplaced_build, fixture_crlf),
+                        &tests,
+                    )
+                    .is_err()
+                );
+
+                let missing_build = fixture_lf.replace(required_build, "");
+                let tests_with_build = format!("{tests_lf}\n{required_build}");
+                assert!(
+                    updater_bridge_source_contract(
+                        &as_line_ending(&missing_build, fixture_crlf),
+                        &as_line_ending(&tests_with_build, tests_crlf),
+                    )
+                    .is_err()
+                );
+            }
+        }
     }
 
     #[test]

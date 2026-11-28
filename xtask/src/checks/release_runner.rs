@@ -197,6 +197,8 @@ pub(super) fn v4_release_contract_ci_wiring(source: &str) -> std::result::Result
     Ok(())
 }
 pub(super) fn validate_metadata_app_token_scope(workflow: &str) -> Result<()> {
+    let normalized_workflow = super::normalize_source_line_endings(workflow);
+    let workflow = normalized_workflow.as_str();
     const PROBE_MINT_STEP: &str = "Mint write-capable metadata App token before publication";
     const PROMOTE_MINT_STEP: &str = "Mint contents-scoped metadata App token";
     const PROBE_STEP: &str = "Probe release-metadata App write capability without mutation";
@@ -1103,6 +1105,8 @@ mod tests {
     fn metadata_app_tokens_are_separate_and_only_reach_probe_or_promotion() {
         let workflow = current_workflow();
         assert!(validate_metadata_app_token_scope(&workflow).is_ok());
+        let crlf_workflow = normalize_fixture(&workflow).replace('\n', "\r\n");
+        assert!(validate_metadata_app_token_scope(&crlf_workflow).is_ok());
 
         let stale_pin = replace_all_fixture(
             &workflow,
@@ -1145,6 +1149,8 @@ mod tests {
             "        env:\n          client-id:",
         );
         assert!(validate_metadata_app_token_scope(&private_key_in_env).is_err());
+        let private_key_in_env_crlf = normalize_fixture(&private_key_in_env).replace('\n', "\r\n");
+        assert!(validate_metadata_app_token_scope(&private_key_in_env_crlf).is_err());
     }
 
     #[test]
