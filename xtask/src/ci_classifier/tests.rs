@@ -1436,3 +1436,51 @@ fn empty_paths_are_static_and_path_normalization_matches_powershell_inputs() {
             .ends_with("apps/desktop/src/App.tsx")
     );
 }
+
+#[test]
+fn retired_release_and_script_paths_fail_closed_on_real_git_deletions_and_renames() {
+    for retired_path in [
+        "xtask/src/release_v4/malware.rs",
+        "xtask/src/checks/hosted_malware.rs",
+        "scripts/ci_bootstrap_clamav.sh",
+        "scripts/test_ci_bootstrap_clamav.sh",
+        "scripts/scan_v4_malware_exact.py",
+    ] {
+        let root = temp_dir("sky-xtask-classifier-retired-git");
+        git(&root, &["init", "--quiet"]);
+        git(&root, &["config", "user.name", "Classifier Test"]);
+        git(
+            &root,
+            &["config", "user.email", "classifier@example.invalid"],
+        );
+        let full_path = root.join(retired_path);
+        fs::create_dir_all(full_path.parent().unwrap()).unwrap();
+        fs::write(&full_path, "// retired fixture\n").unwrap();
+        git(&root, &["add", "--all"]);
+        git(
+            &root,
+            &["commit", "--quiet", "-m", "base with retired file"],
+        );
+        let base = git_sha(&root);
+
+        git(&root, &["rm", "--quiet", retired_path]);
+        git(&root, &["commit", "--quiet", "-m", "delete retired file"]);
+        let deleted_head = git_sha(&root);
+        let deleted =
+            classify_git_range_with_refs(&root, DiffMode::Push, &base, &deleted_head, None);
+        assert_lanes(&deleted, &LANES);
+        assert!(deleted.lane("release_required"));
+
+        git(&root, &["checkout", "--quiet", &base]);
+        let renamed_target = "README.md";
+        git(&root, &["mv", retired_path, renamed_target]);
+        git(&root, &["commit", "--quiet", "-m", "rename retired file"]);
+        let renamed_head = git_sha(&root);
+        let renamed =
+            classify_git_range_with_refs(&root, DiffMode::Push, &base, &renamed_head, None);
+        assert_lanes(&renamed, &LANES);
+        assert!(renamed.lane("release_required"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+}

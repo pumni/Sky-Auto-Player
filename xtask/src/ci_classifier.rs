@@ -455,6 +455,10 @@ fn classify_path(
         ]);
         return;
     }
+    if path.starts_with("xtask/src/release_v4/") {
+        unknown.push(path.to_owned());
+        return;
+    }
     if path.starts_with("xtask/") {
         if [
             "xtask/src/tauri_bundle.rs",
@@ -514,7 +518,13 @@ fn classify_path(
         unknown.push(path.to_owned());
         return;
     }
-    if path.starts_with("scripts/") {
+    if path.starts_with("scripts/")
+        && (path.ends_with(".ps1")
+            || path.ends_with(".psm1")
+            || path.ends_with(".mjs")
+            || path.starts_with("scripts/fixtures/")
+            || path.starts_with("scripts/lib/"))
+    {
         classification.add_many(&[
             "rust_required",
             "desktop_required",

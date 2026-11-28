@@ -1310,3 +1310,180 @@ fn doctor_and_timestamp_negative_contracts() {
     workflow_run_identity_fails_closed().unwrap();
     timestamp_normalization_is_utc_and_strict().unwrap();
 }
+
+#[test]
+fn verify_attestations_enforces_installer_signature_sbom_and_fails_closed_before_state_transition()
+{
+    const CHILD_MODE: &str = "SKY_XTASK_VERIFY_ATTESTATIONS_CHILD";
+    const STATE_ROOT_ENV: &str = "SKY_XTASK_VERIFY_ATTESTATIONS_STATE_ROOT";
+    const SOURCE_SHA_ENV: &str = "SKY_XTASK_VERIFY_ATTESTATIONS_SOURCE_SHA";
+
+    if env::var_os(CHILD_MODE).is_some() {
+        let root = repo::root();
+        let state_root = PathBuf::from(env::var_os(STATE_ROOT_ENV).expect("state root"));
+        let source_sha = env::var(SOURCE_SHA_ENV).expect("source sha");
+        let options = Options {
+            state_root,
+            workflow_sha: Some(source_sha),
+        };
+        let result = verify_attestations(&root, &options);
+        if let Err(error) = result {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+        return;
+    }
+
+    let test_root = env::temp_dir().join(format!(
+        "sky-verify-attestations-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    fs::create_dir_all(&test_root).expect("create test root");
+    struct RemoveTestRoot(PathBuf);
+    impl Drop for RemoveTestRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _remove_root = RemoveTestRoot(test_root.clone());
+
+    let fake_bin = test_root.join("fake-bin");
+    fs::create_dir_all(&fake_bin).expect("create fake bin");
+    let (_root, fixture_options, context, manifest) = fixture().expect("build release fixture");
+    let state_root = fixture_options.state_root.clone();
+    struct RemoveStateRoot(PathBuf);
+    impl Drop for RemoveStateRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+    let _remove_state = RemoveStateRoot(state_root.clone());
+    let expected_sha = context.source_sha.clone();
+    let expected_signer = format!("{REPOSITORY}/.github/workflows/release-v4.yml");
+    let fake_gh_rs = test_root.join("fake-gh.rs");
+    fs::write(
+        &fake_gh_rs,
+        format!(
+            r#"
+use std::{{env, fs::OpenOptions, io::Write}};
+fn main() {{
+    let args: Vec<String> = env::args().skip(1).collect();
+    if let Ok(log) = env::var("FAKE_GH_LOG") {{
+        let mut f = OpenOptions::new().create(true).append(true).open(log).unwrap();
+        writeln!(f, "{{}}", args.join(" ")).unwrap();
+    }}
+    let joined = args.join(" ");
+    if !joined.contains("--source-digest {expected_sha}")
+        || !joined.contains("--signer-workflow {expected_signer}")
+        || !joined.contains("-R {REPOSITORY}")
+    {{
+        eprintln!("wrong source digest or signer workflow: {{joined}}");
+        std::process::exit(1);
+    }}
+    let mode = env::var("FAKE_GH_FAIL_ON").unwrap_or_default();
+    let is_sbom = joined.contains("--predicate-type https://spdx.dev/Document/v2.3");
+    let is_sig = joined.contains(".exe.sig");
+    let is_exe = joined.contains(".exe") && !is_sig && !is_sbom;
+    if (mode == "installer" && is_exe)
+        || (mode == "signature" && is_sig)
+        || (mode == "sbom" && is_sbom)
+    {{
+        eprintln!("simulated attestation failure for {{mode}}");
+        std::process::exit(1);
+    }}
+}}
+"#
+        ),
+    )
+    .expect("write fake gh");
+    let fake_gh_exe = fake_bin.join(if cfg!(windows) { "gh.exe" } else { "gh" });
+    let compile = Command::new("rustc")
+        .arg("--edition=2021")
+        .arg(&fake_gh_rs)
+        .arg("-o")
+        .arg(&fake_gh_exe)
+        .output()
+        .expect("compile fake gh");
+    assert!(
+        compile.status.success(),
+        "fake gh compilation failed: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    write_json_atomic(&state_root.join("release-context.json"), &context).expect("write context");
+    write_json_atomic(&state_root.join("candidate-manifest.json"), &manifest)
+        .expect("write manifest");
+
+    let reset_state = |phase: Phase| {
+        let mut state = selftest::fixture_state(&context);
+        state.phase = phase;
+        state.attested = false;
+        write_json_atomic(&state_root.join("release-state.json"), &state).expect("write state");
+    };
+
+    let current_exe = env::current_exe().expect("current test exe");
+    let orig_path = env::var_os("PATH").unwrap_or_default();
+    let mut path_entries = vec![fake_bin.clone()];
+    path_entries.extend(env::split_paths(&orig_path));
+    let child_path = env::join_paths(path_entries).expect("join PATH");
+    let gh_log = test_root.join("gh-calls.log");
+
+    let run_child = |fail_on: &str| -> std::process::Output {
+        Command::new(&current_exe)
+            .arg("--exact")
+            .arg("release_v4::tests::verify_attestations_enforces_installer_signature_sbom_and_fails_closed_before_state_transition")
+            .arg("--nocapture")
+            .env("PATH", &child_path)
+            .env(CHILD_MODE, "1")
+            .env(STATE_ROOT_ENV, &state_root)
+            .env(SOURCE_SHA_ENV, &expected_sha)
+            .env("FAKE_GH_FAIL_ON", fail_on)
+            .env("FAKE_GH_LOG", &gh_log)
+            .output()
+            .expect("spawn verify_attestations child")
+    };
+
+    for fail_mode in ["installer", "signature", "sbom"] {
+        reset_state(Phase::Ready);
+        let out = run_child(fail_mode);
+        assert!(
+            !out.status.success(),
+            "verify_attestations must fail when `{fail_mode}` attestation fails"
+        );
+        let state_after: ReleaseState =
+            read_json(&state_root.join("release-state.json")).expect("read state");
+        assert!(
+            !state_after.attested,
+            "state.attested must remain false when `{fail_mode}` fails"
+        );
+    }
+
+    reset_state(Phase::Complete);
+    let non_ready = run_child("");
+    assert!(!non_ready.status.success());
+    assert!(
+        String::from_utf8_lossy(&non_ready.stderr)
+            .contains("attestation verification requires a READY candidate"),
+        "unexpected non-ready stderr: {}",
+        String::from_utf8_lossy(&non_ready.stderr)
+    );
+
+    let _ = fs::remove_file(&gh_log);
+    reset_state(Phase::Ready);
+    let success = run_child("");
+    assert!(
+        success.status.success(),
+        "verify_attestations must succeed when installer, signature, and SBOM pass: {}",
+        String::from_utf8_lossy(&success.stderr)
+    );
+    let state_after: ReleaseState =
+        read_json(&state_root.join("release-state.json")).expect("read state");
+    assert!(state_after.attested);
+    let logged = fs::read_to_string(&gh_log).expect("read gh log");
+    assert_eq!(logged.lines().count(), 3);
+    assert!(logged.contains("--predicate-type https://spdx.dev/Document/v2.3"));
+}

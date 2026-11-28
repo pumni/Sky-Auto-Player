@@ -522,11 +522,36 @@ fn rust_release_state_machine_contract(
     }
     let attest_workflow = job("attest")?;
     let metadata_probe_workflow = job("metadata_probe")?;
-    if !attest_workflow.contains("candidate-bundle/*.exe")
-        || !attest_workflow.contains("candidate-bundle/*.sig")
-        || !attest_workflow.contains("candidate-evidence/SBOM.spdx.json")
+    let attest_steps = workflow_step_blocks(attest_workflow);
+    let candidate_attest_step = attest_steps
+        .iter()
+        .find(|(name, _)| name == "Attest exact installer and updater signature")
+        .map(|(_, block)| block.as_str())
+        .ok_or("attest job is missing the installer/signature attestation step")?;
+    if candidate_attest_step.contains("if: false")
+        || candidate_attest_step.contains("continue-on-error: true")
+        || !candidate_attest_step.contains("actions/attest@")
+        || !candidate_attest_step.contains("${{ steps.state.outputs.path }}/candidate-bundle/*.exe")
+        || !candidate_attest_step.contains("${{ steps.state.outputs.path }}/candidate-bundle/*.sig")
     {
-        return Err("hosted release must attest the exact signed installer, updater signature, and SPDX SBOM before publication".into());
+        return Err("hosted release must actively attest the exact signed installer and updater signature before publication".into());
+    }
+    let sbom_attest_step = attest_steps
+        .iter()
+        .find(|(name, _)| name == "Attest SPDX SBOM for exact installer")
+        .map(|(_, block)| block.as_str())
+        .ok_or("attest job is missing the SPDX SBOM attestation step")?;
+    if sbom_attest_step.contains("if: false")
+        || sbom_attest_step.contains("continue-on-error: true")
+        || !sbom_attest_step.contains("actions/attest@")
+        || !sbom_attest_step.contains("${{ steps.state.outputs.path }}/candidate-bundle/*.exe")
+        || !sbom_attest_step
+            .contains("${{ steps.state.outputs.path }}/candidate-evidence/SBOM.spdx.json")
+    {
+        return Err(
+            "hosted release must actively attest the exact installer SPDX SBOM before publication"
+                .into(),
+        );
     }
     if !attest_workflow.contains("release-v4 verify-candidate --state-root")
         || !metadata_probe_workflow.contains("release-v4 probe-verify-candidate --state-root")
@@ -859,6 +884,42 @@ fn rust_release_state_machine_contract(
                 "Rust release authority is missing invariant `{marker}`"
             ));
         }
+    }
+    let attestation_verifier = rust
+        .split_once("fn verify_attestations(")
+        .and_then(|(_, body)| body.split_once("\nimpl CandidateManifest"))
+        .map(|(body, _)| body)
+        .ok_or("Rust release authority is missing verify_attestations implementation")?;
+    for required in [
+        "state.phase != Phase::Ready",
+        "\"installer\"",
+        "\"updater-signature\"",
+        "\"--source-digest\"",
+        "context.source_sha.clone()",
+        "\"--signer-workflow\"",
+        "\"--predicate-type\"",
+        "\"https://spdx.dev/Document/v2.3\"",
+        "if !output.status.success()",
+    ] {
+        if !attestation_verifier.contains(required) {
+            return Err(format!(
+                "verify_attestations is missing required invariant `{required}`"
+            ));
+        }
+    }
+    let (before_attested, _) = attestation_verifier
+        .split_once("state.attested = true;")
+        .ok_or("verify_attestations must only mark state.attested = true after verification")?;
+    if !before_attested.contains("https://spdx.dev/Document/v2.3")
+        || before_attested
+            .matches("if !output.status.success()")
+            .count()
+            < 2
+    {
+        return Err(
+            "verify_attestations must not mark state.attested = true before all attestation and SBOM checks succeed"
+                .into(),
+        );
     }
     let context_validation = rust
         .split_once("fn validate_context(")
@@ -1565,6 +1626,8 @@ mod tests {
             "candidate-bundle/*.exe",
             "candidate-bundle/*.sig",
             "candidate-evidence/SBOM.spdx.json",
+            "- name: Attest exact installer and updater signature",
+            "- name: Attest SPDX SBOM for exact installer",
         ] {
             let mutated = replace_fixture(&workflow, missing_marker, "omitted-subject");
             assert!(
@@ -1572,17 +1635,44 @@ mod tests {
                 "missing attestation subject `{missing_marker}` must be rejected"
             );
         }
-        let wrong_attestation_verifier =
-            replace_fixture(&rust, "fn verify_attestations", "fn skip_attestations");
-        assert!(
-            rust_release_state_machine_contract(
-                &workflow,
-                "",
-                &wrong_attestation_verifier,
-                &main,
-                &ci
-            )
-            .is_err()
+        let inactive_candidate_attest = replace_fixture(
+            &workflow,
+            "- name: Attest exact installer and updater signature\n        uses:",
+            "- name: Attest exact installer and updater signature\n        if: false\n        uses:",
         );
+        assert!(
+            rust_release_state_machine_contract(&inactive_candidate_attest, "", &rust, &main, &ci)
+                .is_err()
+        );
+        let inactive_sbom_attest = replace_fixture(
+            &workflow,
+            "- name: Attest SPDX SBOM for exact installer\n        uses:",
+            "- name: Attest SPDX SBOM for exact installer\n        continue-on-error: true\n        uses:",
+        );
+        assert!(
+            rust_release_state_machine_contract(&inactive_sbom_attest, "", &rust, &main, &ci)
+                .is_err()
+        );
+        for broken_rust in [
+            replace_fixture(&rust, "fn verify_attestations", "fn skip_attestations"),
+            replace_fixture(&rust, "\"--source-digest\"", "\"--source-ref\""),
+            replace_fixture(&rust, "\"--signer-workflow\"", "\"--signer-repo\""),
+            replace_fixture(
+                &rust,
+                "\"https://spdx.dev/Document/v2.3\"",
+                "\"https://spdx.dev/Document/v0.0\"",
+            ),
+            replace_fixture(&rust, "state.attested = true;", "state.attested = false;"),
+            replace_fixture(
+                &rust,
+                "    let args = vec![\n        \"attestation\".to_owned(),\n        \"verify\".to_owned(),\n        installer",
+                "    state.attested = true;\n    let args = vec![\n        \"attestation\".to_owned(),\n        \"verify\".to_owned(),\n        installer",
+            ),
+        ] {
+            assert!(
+                rust_release_state_machine_contract(&workflow, "", &broken_rust, &main, &ci)
+                    .is_err()
+            );
+        }
     }
 }

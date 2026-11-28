@@ -1984,7 +1984,7 @@ pub(super) fn fixture() -> Result<(PathBuf, Options, Context, CandidateManifest)
     ))
 }
 
-fn fixture_state(context: &Context) -> ReleaseState {
+pub(super) fn fixture_state(context: &Context) -> ReleaseState {
     ReleaseState {
         schema_version: 2,
         repository: context.repository.clone(),
