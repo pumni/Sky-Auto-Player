@@ -224,25 +224,157 @@ fn nsis_installed_catalog_contract(
     Ok(())
 }
 
-fn updater_fixture_contract(fixture: &str) -> std::result::Result<(), String> {
+fn updater_fixture_contract(
+    fixture: &str,
+    http: &str,
+    tests: &str,
+) -> std::result::Result<(), String> {
     let fixture = source(fixture);
+    let http = source(http);
+    let tests = source(tests);
     for marker in [
+        "mod http;",
+        "use http::{FixtureServer, RequestEvidence};",
         "failure_rollback",
         "n_to_n_plus_1_installer_sha256",
         "old_root_rejection",
         "assert_migration_registry_roots_absent",
         "user_song_sha256_after_uninstall",
-        "loopback_client_rejects_truncated_response_bodies",
-        "fixture_server_teardown_is_bounded_for_a_stalled_partial_request",
-        "bridge_build_cleanup_requires_direct_runner_temp_and_exact_owner_sentinel",
-        "bridge_build_entry_rollback_accepts_only_a_partial_created_sentinel",
-        "git_worktree_add_and_remove_accepts_verified_ordinary_windows_paths",
         "run_uninstaller(&uninstaller, &install_root, &env)",
         "crate::nsis_harness::finish_uninstall",
+        "verify_exact_http_source(server",
     ] {
         if !fixture.contains(marker) {
             return Err(format!(
-                "Rust updater fixture is missing regression `{marker}`"
+                "Rust updater qualification owner is missing `{marker}`"
+            ));
+        }
+    }
+    for marker in [
+        "pub(super) struct FixtureServer",
+        "fn handle_fixture_connection(",
+        "MAX_HTTP_HEADER_BYTES",
+        "MAX_HTTP_BODY_BYTES",
+        "MAX_HTTP_REQUESTS",
+        "MAX_HTTP_REQUEST_DURATION",
+        "MAX_HTTP_RESPONSE_DURATION",
+        "pub(super) fn write_all_before_deadline",
+        "pub(super) fn verify_exact_http_source",
+        "pub(super) fn http_get_loopback",
+        "IpAddr::V4(Ipv4Addr::LOCALHOST)",
+    ] {
+        if !http.contains(marker) {
+            return Err(format!(
+                "Rust updater HTTP implementation is missing `{marker}`"
+            ));
+        }
+    }
+    for marker in [
+        "loopback_client_rejects_truncated_response_bodies",
+        "fixture_server_teardown_is_bounded_for_a_stalled_partial_request",
+        "fixture_response_writer_observes_an_absolute_deadline",
+        "fixture_server_shutdown_interrupts_a_slow_response_reader_and_reaps_thread",
+        "bridge_build_cleanup_requires_direct_runner_temp_and_exact_owner_sentinel",
+        "bridge_build_entry_rollback_accepts_only_a_partial_created_sentinel",
+        "git_worktree_add_and_remove_accepts_verified_ordinary_windows_paths",
+    ] {
+        if !tests.contains(marker) {
+            return Err(format!(
+                "Rust updater fixture regression suite is missing `{marker}`"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn release_selftest_contract(
+    release: &str,
+    selftest: &str,
+    ci: &str,
+) -> std::result::Result<(), String> {
+    let release = source(release);
+    let selftest = source(selftest);
+    let ci = source(ci);
+    if !release.contains("mod selftest;")
+        || !release.contains("use selftest::self_test;")
+        || !release.contains("if command == \"self-test\" {\n        return self_test();")
+        || release.contains("#[cfg(test)]\nmod selftest;")
+        || !ci.contains("run: cargo xtask release-v4 self-test")
+    {
+        return Err(
+            "runnable release self-test must remain wired to the production CLI and CI".into(),
+        );
+    }
+    let outcomes = selftest
+        .split_once("let outcomes = [")
+        .and_then(|(_, tail)| tail.split_once("\n    ];"))
+        .map(|(outcomes, _)| outcomes)
+        .ok_or("release self-test scenario inventory is not bounded")?;
+    let scenario_count = outcomes.matches("(),").count();
+    if scenario_count != 34 {
+        return Err(format!(
+            "runnable release self-test must retain all 34 scenarios; found {scenario_count}"
+        ));
+    }
+    for scenario in [
+        "mock_pre_token_latest_guard_stable_and_beta",
+        "mock_pre_token_latest_guard_rejects_invalid_state_and_identity",
+        "mock_pre_token_read_only_transport_rejects_mutations",
+        "mock_pre_token_latest_guard_job_authorization",
+        "mock_publish_succeeds",
+        "mock_draft_readback_failures_never_patch",
+        "mock_non_monotonic_candidate_never_mutates",
+        "mock_draft_post_timeout_reconciles_exact_marker",
+        "mock_upload_timeout_reconciles_exact_asset",
+        "mock_complete_transaction_and_raw_metadata",
+        "mock_metadata_promotion_is_idempotent_after_committed_timeout",
+        "mock_metadata_promotion_rejects_changed_latest",
+        "mock_publication_identity_and_asset_inventory_fail_closed",
+        "mock_pr_merge_sha_does_not_break_release_or_owned_cleanup",
+        "mock_conflicting_draft_is_not_deleted",
+        "mock_digest_mismatch_cleans_owned_draft",
+        "mock_partial_upload_cleans_owned_draft",
+        "mock_cleanup_failure_preserves_original_error",
+        "mock_patch_timeout_reconciles_exact_release_id",
+        "mock_unknown_publication_never_cleans_up",
+        "mock_latest_policy_failure_is_post_publication",
+        "metadata_token_probe_rejects_wrong_repository_state",
+        "mock_stale_evidence_identity_fails_closed",
+        "mock_manifest_path_traversal_fails_closed",
+        "mock_release_doctor_detects_metadata_endpoint_divergence",
+        "doctor_state_input_rejects_malformed_and_oversized_files",
+        "retry_policy_retries_only_transient_responses",
+        "marker_parser_rejects_duplicates_and_multiple_markers",
+        "mutation_adapter_is_at_most_once",
+        "raw_metadata_retry_converges_after_cache_lag",
+        "raw_metadata_retry_fails_with_bounded_diagnostics",
+        "runtime_identity_fails_closed_without_exact_workflow_context",
+        "workflow_run_identity_fails_closed",
+        "timestamp_normalization_is_utc_and_strict",
+    ] {
+        if !outcomes.contains(scenario) {
+            return Err(format!(
+                "release self-test scenario is missing `{scenario}`"
+            ));
+        }
+    }
+    if !selftest.contains("let scenario_count = outcomes.len();")
+        || !selftest.contains("V4 Rust release state-machine mock self-test: PASS ({} scenarios)")
+    {
+        return Err("release self-test must report its executed scenario count".into());
+    }
+    Ok(())
+}
+
+fn metadata_recovery_test_contract(tests: &str) -> std::result::Result<(), String> {
+    for marker in [
+        "synthetic-read-only-token",
+        "synthetic-metadata-write-token",
+        "metadata_recovery_auth_routes_reads_and_one_stable_put_to_separate_tokens",
+    ] {
+        if !tests.contains(marker) {
+            return Err(format!(
+                "metadata recovery regression suite is missing `{marker}`"
             ));
         }
     }
@@ -622,9 +754,6 @@ fn rust_release_state_machine_contract(
         "\"verify-latest-before-metadata-token\" | \"promote-metadata\" => Some(\"metadata_promote\")",
         "struct ReadOnlyTransport<'a>",
         "fn verify_latest_before_metadata_token_with_state(",
-        "mock_pre_token_latest_guard_stable_and_beta",
-        "mock_pre_token_latest_guard_rejects_invalid_state_and_identity",
-        "mock_pre_token_read_only_transport_rejects_mutations",
     ] {
         if !rust.contains(marker) {
             return Err(format!(
@@ -701,25 +830,17 @@ fn rust_release_state_machine_contract(
         "trait Transport",
         "struct GhTransport",
         "fn publish_release",
-        "mock_non_monotonic_candidate_never_mutates",
         "prepublication_metadata_qualification",
         "same_github_latest",
         "validate_monotonic",
         "fn delete_owned_draft",
-        "mock_conflicting_draft_is_not_deleted",
-        "mock_pr_merge_sha_does_not_break_release_or_owned_cleanup",
         "current[\"draft\"] != true",
-        "mock_upload_timeout_reconciles_exact_asset",
-        "mutation_adapter_is_at_most_once",
         "MutationOutcomeUnknown",
         "fn request_with_retry_policy",
         "await_raw_metadata_convergence",
-        "raw_metadata_retry_converges_after_cache_lag",
-        "raw_metadata_retry_fails_with_bounded_diagnostics",
         "RuntimeIdentity::from_environment",
         "GITHUB_WORKFLOW_REF",
         "--workflow-sha is required for Preflight",
-        "runtime_identity_fails_closed_without_exact_workflow_context",
         "require_runtime_context(root, &options, command)?",
         "fn build_unsigned",
         "fn sign_candidate",
@@ -728,7 +849,6 @@ fn rust_release_state_machine_contract(
         "run_attempt",
         "unsigned_handoff",
         "channels/{channel}/latest.json?ref=release-metadata",
-        "metadata_token_probe_rejects_wrong_repository_state",
         "fn promote_metadata",
         "fn final_verify",
         "fn doctor",
@@ -738,22 +858,10 @@ fn rust_release_state_machine_contract(
         "release_id",
         "sha256:",
         "raw.githubusercontent.com",
-        "mock_publish_succeeds",
-        "mock_draft_post_timeout_reconciles_exact_marker",
-        "mock_digest_mismatch_cleans_owned_draft",
-        "mock_patch_timeout_reconciles_exact_release_id",
-        "mock_unknown_publication_never_cleans_up",
         "canonical_upload_url",
         "RELEASE_BUILD_STEP_TIMEOUT",
         "malware::verify_scan(root, options)?",
         "ATTESTATION_VERIFY_TIMEOUT",
-        "mock_release_doctor_detects_metadata_endpoint_divergence",
-        "mock_metadata_promotion_is_idempotent_after_committed_timeout",
-        "mock_publication_identity_and_asset_inventory_fail_closed",
-        "metadata_token_probe_rejects_wrong_repository_state",
-        "doctor_state_input_rejects_malformed_and_oversized_files",
-        "malformed_github_api_json_fails_closed_with_endpoint_context",
-        "retry_policy_retries_only_transient_responses",
         "env::current_exe()?",
     ] {
         if !rust.contains(marker) {
@@ -1100,13 +1208,20 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         &read("apps/desktop/src-tauri/nsis-hooks.nsh")?,
     )
     .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
-    updater_fixture_contract(&read("xtask/src/updater_fixture.rs")?)
-        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    updater_fixture_contract(
+        &read("xtask/src/updater_fixture.rs")?,
+        &read("xtask/src/updater_fixture/http.rs")?,
+        &read("xtask/src/updater_fixture/tests.rs")?,
+    )
+    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     let recovery_workflow = read(".github/workflows/v4-metadata-recovery.yml")?;
     let release = read("xtask/src/release_v4.rs")?;
+    let release_tests = read("xtask/src/release_v4/tests.rs")?;
     let recovery = read("xtask/src/release_v4/recovery.rs")?;
     let process = read("xtask/src/process.rs")?;
     linux_process::validate(root)?;
+    metadata_recovery_test_contract(&release_tests)
+        .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     metadata_recovery_auth_contract(&recovery_workflow, &release, &recovery, &process)
         .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
     rust_release_state_machine_contract(
@@ -1114,6 +1229,12 @@ pub(super) fn v4_release_pipeline_contract(root: &Path) -> Result<()> {
         "",
         &read("xtask/src/release_v4.rs")?,
         &read("xtask/src/main.rs")?,
+        &read(".github/workflows/ci.yml")?,
+    )
+    .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
+    release_selftest_contract(
+        &read("xtask/src/release_v4.rs")?,
+        &read("xtask/src/release_v4/selftest.rs")?,
         &read(".github/workflows/ci.yml")?,
     )
     .map_err(|error| -> Box<dyn std::error::Error + Send + Sync> { error.into() })?;
@@ -1165,6 +1286,80 @@ mod tests {
             fs::read_to_string(root.join("xtask/src/main.rs")).expect("xtask entrypoint"),
             fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("CI workflow"),
         )
+    }
+
+    #[test]
+    fn release_selftest_guard_reads_the_runnable_owner_and_rejects_a_missing_scenario() {
+        let root = crate::repo::root();
+        let release = fs::read_to_string(root.join("xtask/src/release_v4.rs"))
+            .expect("production release owner");
+        let selftest = fs::read_to_string(root.join("xtask/src/release_v4/selftest.rs"))
+            .expect("runnable self-test owner");
+        let ci = fs::read_to_string(root.join(".github/workflows/ci.yml")).expect("CI workflow");
+        release_selftest_contract(&release, &selftest, &ci)
+            .expect("production CLI self-test must retain its complete scenario inventory");
+
+        let missing_scenario = replace_fixture(&selftest, "mock_publish_succeeds(),", "");
+        assert!(release_selftest_contract(&release, &missing_scenario, &ci).is_err());
+        assert!(
+            fs::read_to_string(root.join("xtask/src/release_v4/tests.rs"))
+                .expect("Rust release tests")
+                .contains("mock_publish_succeeds"),
+            "the moved test source retains the same marker but must not satisfy the self-test guard"
+        );
+    }
+
+    #[test]
+    fn updater_fixture_guard_reads_production_http_and_test_owners_separately() {
+        let root = crate::repo::root();
+        let fixture = fs::read_to_string(root.join("xtask/src/updater_fixture.rs"))
+            .expect("updater qualification owner");
+        let http = fs::read_to_string(root.join("xtask/src/updater_fixture/http.rs"))
+            .expect("updater HTTP owner");
+        let tests = fs::read_to_string(root.join("xtask/src/updater_fixture/tests.rs"))
+            .expect("updater fixture tests");
+        updater_fixture_contract(&fixture, &http, &tests)
+            .expect("updater fixture contract must inspect its actual owners");
+
+        let missing_http_owner = replace_fixture(
+            &http,
+            "pub(super) fn write_all_before_deadline",
+            "pub(super) fn obsolete_write_all_before_deadline",
+        );
+        assert!(updater_fixture_contract(&fixture, &missing_http_owner, &tests).is_err());
+        assert!(
+            tests.contains("write_all_before_deadline"),
+            "test source retains the marker but must not satisfy the HTTP implementation guard"
+        );
+
+        let missing_test = replace_fixture(
+            &tests,
+            "loopback_client_rejects_truncated_response_bodies",
+            "retired_loopback_client_case",
+        );
+        assert!(updater_fixture_contract(&fixture, &http, &missing_test).is_err());
+    }
+
+    #[test]
+    fn metadata_recovery_guard_reads_the_moved_release_test_owner() {
+        let root = crate::repo::root();
+        let tests = fs::read_to_string(root.join("xtask/src/release_v4/tests.rs"))
+            .expect("release regression suite");
+        let release = fs::read_to_string(root.join("xtask/src/release_v4.rs"))
+            .expect("production release owner");
+        metadata_recovery_test_contract(&tests)
+            .expect("recovery auth mocks must remain in the release test owner");
+        assert!(
+            !release.contains("synthetic-read-only-token"),
+            "test tokens must not be copied into the production release implementation"
+        );
+        assert!(metadata_recovery_test_contract(&release).is_err());
+        let missing_test = replace_fixture(
+            &tests,
+            "synthetic-read-only-token",
+            "retired-read-only-token",
+        );
+        assert!(metadata_recovery_test_contract(&missing_test).is_err());
     }
 
     #[test]

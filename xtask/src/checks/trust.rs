@@ -92,6 +92,56 @@ fn v4_calibration_retirement_contract(harness: &str, hook: &str) -> Result<()> {
     Ok(())
 }
 
+fn fixture_new_root_runtime_contract(native: &str, tests: &str) -> Result<()> {
+    for marker in [
+        "#[cfg(feature = \"tauri-update-fixture\")]",
+        "FIXTURE_NEW_ONLY_ARG",
+        "FIXTURE_PORT_ARG",
+        "FIXTURE_PUBLIC_KEY_ARG",
+        "fixture_runtime_config_from_args",
+        "read_fixture_public_key",
+        "fixture_public_keys",
+        ".last()",
+    ] {
+        if !native.contains(marker) {
+            return Err(format!(
+                "fixture-only updater new-root runtime seam is missing production marker: {marker}"
+            )
+            .into());
+        }
+    }
+    if !tests.contains("fixture_new_only_mode_selects_only_the_last_supplied_root") {
+        return Err("fixture-only updater new-root selection regression is missing from native_update/tests.rs".into());
+    }
+    Ok(())
+}
+
+fn updater_http_contract(http: &str) -> Result<()> {
+    for marker in [
+        "127.0.0.1",
+        "loopback fixture returned",
+        "Content-Length",
+        "content_length",
+        "application/octet-stream",
+        "body_sha256",
+        "MAX_HTTP_HEADER_BYTES",
+        "MAX_HTTP_BODY_BYTES",
+        "MAX_HTTP_REQUESTS",
+        "MAX_HTTP_REQUEST_DURATION",
+        "MAX_HTTP_RESPONSE_DURATION",
+        "pub(super) fn write_all_before_deadline",
+        "pub(super) fn http_get_loopback",
+    ] {
+        if !http.contains(marker) {
+            return Err(format!(
+                "updater loopback HTTP implementation is missing production marker: {marker}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let config_path = root.join("apps/desktop/src-tauri/tauri.conf.json");
     let config = fs::read_to_string(&config_path)?;
@@ -117,6 +167,8 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         .ok_or("v4 Tauri config public trust root is not a string")?;
     let native_path = root.join("apps/desktop/src-tauri/src/native_update.rs");
     let native = fs::read_to_string(&native_path)?;
+    let native_tests =
+        fs::read_to_string(root.join("apps/desktop/src-tauri/src/native_update/tests.rs"))?;
     let native_key = extract_rust_string_constant(&native, "V4_TAURI_UPDATER_PUBLIC_KEY")?;
     if config_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
         || native_key != tauri_bundle::V4_TAURI_UPDATER_PUBLIC_KEY
@@ -130,6 +182,8 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
     let decoded = String::from_utf8(decoded)?;
     PublicKey::decode(&decoded)?;
     crate::updater_trust::inventory_public_trust_roots(root)?;
+
+    fixture_new_root_runtime_contract(&native, &native_tests)?;
 
     let ci_path = root.join(".github/workflows/ci.yml");
     let ci = fs::read_to_string(&ci_path)?.replace("\r\n", "\n");
@@ -169,33 +223,10 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             "ordinary CI must not retain artifact attestation creation or permissions".into(),
         );
     }
-    for marker in [
-        "#[cfg(feature = \"tauri-update-fixture\")]",
-        "FIXTURE_NEW_ONLY_ARG",
-        "FIXTURE_PORT_ARG",
-        "FIXTURE_PUBLIC_KEY_ARG",
-        "fixture_runtime_config_from_args",
-        "read_fixture_public_key",
-        "fixture_public_keys",
-        ".last()",
-        "fixture_new_only_mode_selects_only_the_last_supplied_root",
-    ] {
-        if !native.contains(marker) {
-            return Err(format!(
-                "fixture-only updater new-root runtime seam is missing its required marker: {marker}"
-            )
-            .into());
-        }
-    }
     let updater_fixture = fs::read_to_string(root.join("xtask/src/updater_fixture.rs"))?;
     for marker in [
-        "127.0.0.1",
-        "loopback fixture returned",
         "validate_manifest_bytes",
         "response_bytes_are_exact_source_bytes",
-        "body_sha256",
-        "content_length",
-        "application/octet-stream",
         "updater-preserved-user.json",
         "user_song_sha256_unchanged",
         "built_in_manifest_sha256_before",
@@ -219,7 +250,6 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
         "--selftest-update-fixture-port",
         "--selftest-update-fixture-public-key",
         "write_http_evidence",
-        "MAX_HTTP_REQUESTS",
         "source SHA must match the checked-out Git HEAD",
     ] {
         if !updater_fixture.contains(marker) {
@@ -229,6 +259,8 @@ pub(super) fn v4_trust_material_contract(root: &Path) -> Result<()> {
             .into());
         }
     }
+    let updater_http = fs::read_to_string(root.join("xtask/src/updater_fixture/http.rs"))?;
+    updater_http_contract(&updater_http)?;
     if native.contains("option_env!(\"SKY_TAURI_UPDATE_FIXTURE")
         || updater_fixture.contains("SKY_TAURI_UPDATE_FIXTURE_PUBLIC_KEYS")
         || updater_fixture.contains("SKY_TAURI_UPDATE_FIXTURE_PORT")
@@ -678,6 +710,49 @@ fn is_minisign_secret_text(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixture_new_root_guard_reads_runtime_and_test_owners_separately() {
+        let root = crate::repo::root();
+        let native = fs::read_to_string(root.join("apps/desktop/src-tauri/src/native_update.rs"))
+            .expect("native updater implementation");
+        let tests =
+            fs::read_to_string(root.join("apps/desktop/src-tauri/src/native_update/tests.rs"))
+                .expect("native updater test owner");
+        fixture_new_root_runtime_contract(&native, &tests)
+            .expect("runtime seam and moved regression must be present in their owners");
+
+        let missing_runtime =
+            native.replace("fixture_public_keys", "retired_runtime_key_selection");
+        assert!(fixture_new_root_runtime_contract(&missing_runtime, &tests).is_err());
+        assert!(
+            tests.contains("fixture_new_only_mode_selects_only_the_last_supplied_root"),
+            "the moved test marker must not satisfy a missing production implementation"
+        );
+
+        let missing_test = tests.replace(
+            "fixture_new_only_mode_selects_only_the_last_supplied_root",
+            "retired_fixture_new_root_test",
+        );
+        assert!(fixture_new_root_runtime_contract(&native, &missing_test).is_err());
+    }
+
+    #[test]
+    fn updater_http_guard_reads_the_extracted_http_implementation() {
+        let root = crate::repo::root();
+        let http = fs::read_to_string(root.join("xtask/src/updater_fixture/http.rs"))
+            .expect("updater HTTP implementation");
+        let tests = fs::read_to_string(root.join("xtask/src/updater_fixture/tests.rs"))
+            .expect("updater HTTP tests");
+        updater_http_contract(&http).expect("HTTP limits and loopback owner must be present");
+
+        let missing_limit = http.replace("MAX_HTTP_REQUESTS", "RETIRED_HTTP_REQUEST_LIMIT");
+        assert!(updater_http_contract(&missing_limit).is_err());
+        assert!(
+            tests.contains("fixture_server_teardown_is_bounded_for_a_stalled_partial_request"),
+            "test source remains separate from the required HTTP implementation markers"
+        );
+    }
 
     #[test]
     fn package_retirement_contract_removes_only_install_payload_and_preserves_cache() {

@@ -87,9 +87,6 @@ pub(super) fn metadata_recovery_auth_contract(
         "fn select(&self, method: &str, endpoint: &str)",
         "RecoveryTokenClass::ReadOnly",
         "RecoveryTokenClass::MetadataWrite",
-        "synthetic-read-only-token",
-        "synthetic-metadata-write-token",
-        "metadata_recovery_auth_routes_reads_and_one_stable_put_to_separate_tokens",
         "capture_owned_timeout_runtime_only",
         "capture_owned_timeout_to_file_runtime_only",
     ] {
@@ -238,10 +235,9 @@ mod tests {
             .expect("child process environment policy");
         metadata_recovery_auth_contract(&workflow, &release, &recovery, &process)
             .expect("metadata recovery tokens must remain separately scoped");
-
         let missing_plan_actions = replace_fixture_once(&workflow, "      actions: read\n", "");
         assert!(
-            metadata_recovery_auth_contract(&missing_plan_actions, &release, &recovery, &process)
+            metadata_recovery_auth_contract(&missing_plan_actions, &release, &recovery, &process,)
                 .is_err()
         );
 
@@ -251,7 +247,7 @@ mod tests {
             "    environment: v4-production-release\n    permissions:\n      actions: read\n      attestations: read\n      contents: read\n      checks: write\n    steps:",
         );
         assert!(
-            metadata_recovery_auth_contract(&apply_has_write_scope, &release, &recovery, &process)
+            metadata_recovery_auth_contract(&apply_has_write_scope, &release, &recovery, &process,)
                 .is_err()
         );
 

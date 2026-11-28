@@ -828,40 +828,8 @@ pub(super) fn packaged_ci_contract(root: &Path) -> Result<()> {
         }
     }
     let classifier = fs::read_to_string(root.join("xtask/src/ci_classifier.rs"))?;
-    for marker in [
-        "rust_required",
-        "desktop_e2e_required",
-        "classification_reason",
-        "changed_paths_from_git",
-        "classify_git_paths",
-        "decode_git_paths",
-        "git_paths_are_exact_and_malformed_names_fail_closed",
-        "git_path_decoding_preserves_trailing_space_and_rejects_invalid_utf8",
-        "--depth=1",
-        "DiffMode",
-        "merge-base",
-        "SHALLOW_DEEPEN_STEPS",
-        "source_head_matches",
-        "preserves_exact_lane_output_shape_and_reason_golden",
-        "matches_positive_and_union_classifier_matrix",
-        "windows_tauri_integration_frontend_paths_select_package_qualification",
-        "production_tauri_runtime_imports_are_windows_package_qualified",
-        "unknown_or_malformed_paths_fail_closed_and_workflow_dispatch_is_full",
-        "pr_uses_merge_base_when_base_advances_and_diff_keeps_both_rename_paths",
-        "fork_head_uses_bounded_pull_request_ref_and_keeps_frontend_pr_narrow",
-        "shallow_history_without_a_merge_base_fails_closed_after_bounded_fetches",
-        "refs/pull/",
-        "--pr-number",
-        "--base-ref",
-        "empty changed-path diff requires full validation",
-    ] {
-        if !classifier.contains(marker) {
-            return Err(format!(
-                "Rust CI classifier is missing its compatibility marker: {marker}"
-            )
-            .into());
-        }
-    }
+    let classifier_tests = fs::read_to_string(root.join("xtask/src/ci_classifier/tests.rs"))?;
+    ci_classifier_source_contract(&classifier, &classifier_tests)?;
     let process_tree =
         fs::read_to_string(root.join("crates/sky_windows_security/src/process_tree.rs"))?;
     process_tree_boundary_contract(&process_tree)?;
@@ -1080,53 +1048,8 @@ pub(super) fn ci_control_plane_contract(root: &Path) -> Result<()> {
         );
     }
     let updater_fixture = fs::read_to_string(root.join("xtask/src/updater_fixture.rs"))?;
-    updater_bridge_feature_contract(&updater_fixture)?;
-    updater_bridge_configuration_contract(&updater_fixture)?;
-    for marker in [
-        "fn build_bridge_internal(",
-        "git",
-        "worktree",
-        "--detach",
-        "RUNNER_TEMP",
-        "tauri-update-fixture",
-        "run_bun(",
-        "crate::ci_bridge::create_bridge",
-        "crate::ci_bridge::read_bridge",
-        "source SHA must match the checked-out Git HEAD",
-        "BRIDGE_SIGNER_CHALLENGE",
-        "verify_signature_text_with_public_key",
-        "bridge Tauri signer key pair failed Rust Minisign verification",
-        "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair",
-        "prepare_bridge_tauri_config",
-        "persist_bridge_tauri_config",
-        "bridge_tauri_config_persists_historical_identity_and_removes_nested_migration_hook",
-        "bridge_tauri_config_preserves_current_candidate_migration_hook",
-        "bridge_tauri_config_rejects_wrong_hook_path_and_mismatched_manifest_identity",
-        "validate_historical_bridge_manifest_identity",
-        "parse_windows_install_location",
-        "validate_registry_install_location",
-        "windows_install_location_parser_accepts_absolute_nsis_paths_with_optional_quotes",
-        "windows_install_location_parser_rejects_relative_or_malformed_paths",
-        "registry_install_location_quotes_resolve_only_to_managed_fixture_root",
-    ] {
-        if !updater_fixture.contains(marker) {
-            return Err(format!(
-                "Rust updater bridge owner is missing its required marker: {marker}"
-            )
-            .into());
-        }
-    }
-    if updater_fixture.contains("!private_key.contains(\"PRIVATE KEY\")") {
-        return Err(
-            "Rust updater bridge must validate the generated Tauri key through signing, not a PEM marker"
-                .into(),
-        );
-    }
-    if updater_fixture.matches("bun run tauri build").count() != 0
-        || !updater_fixture.contains("\"tauri\".to_owned(),\n            \"build\".to_owned()")
-    {
-        return Err("Rust updater bridge producer must own one isolated tauri-update-fixture build and typed contract validation".into());
-    }
+    let updater_tests = fs::read_to_string(root.join("xtask/src/updater_fixture/tests.rs"))?;
+    updater_bridge_source_contract(&updater_fixture, &updater_tests)?;
     let updater_contract = &ci[updater_contract_start..static_start];
     for marker in [
         "name: Updater key-rotation contract",
@@ -1627,9 +1550,171 @@ fn updater_bridge_configuration_contract(source: &str) -> Result<()> {
     Ok(())
 }
 
+fn updater_bridge_source_contract(fixture: &str, tests: &str) -> Result<()> {
+    updater_bridge_feature_contract(fixture)?;
+    updater_bridge_configuration_contract(fixture)?;
+    for marker in [
+        "fn build_bridge_internal(",
+        "git",
+        "worktree",
+        "--detach",
+        "RUNNER_TEMP",
+        "tauri-update-fixture",
+        "run_bun(",
+        "crate::ci_bridge::create_bridge",
+        "crate::ci_bridge::read_bridge",
+        "source SHA must match the checked-out Git HEAD",
+        "BRIDGE_SIGNER_CHALLENGE",
+        "verify_signature_text_with_public_key",
+        "bridge Tauri signer key pair failed Rust Minisign verification",
+        "prepare_bridge_tauri_config",
+        "persist_bridge_tauri_config",
+        "validate_historical_bridge_manifest_identity",
+        "parse_windows_install_location",
+        "validate_registry_install_location",
+    ] {
+        if !fixture.contains(marker) {
+            return Err(format!(
+                "Rust updater bridge implementation is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for marker in [
+        "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair",
+        "bridge_tauri_config_persists_historical_identity_and_removes_nested_migration_hook",
+        "bridge_tauri_config_preserves_current_candidate_migration_hook",
+        "bridge_tauri_config_rejects_wrong_hook_path_and_mismatched_manifest_identity",
+        "windows_install_location_parser_accepts_absolute_nsis_paths_with_optional_quotes",
+        "windows_install_location_parser_rejects_relative_or_malformed_paths",
+        "registry_install_location_quotes_resolve_only_to_managed_fixture_root",
+    ] {
+        if !tests.contains(marker) {
+            return Err(format!(
+                "Rust updater bridge regression suite is missing selector: {marker}"
+            )
+            .into());
+        }
+    }
+    if fixture.contains("!private_key.contains(\"PRIVATE KEY\")") {
+        return Err(
+            "Rust updater bridge must validate the generated Tauri key through signing, not a PEM marker"
+                .into(),
+        );
+    }
+    if fixture.matches("bun run tauri build").count() != 0
+        || !fixture.contains("\"tauri\".to_owned(),\n            \"build\".to_owned()")
+    {
+        return Err("Rust updater bridge producer must own one isolated tauri-update-fixture build and typed contract validation".into());
+    }
+    Ok(())
+}
+
+fn ci_classifier_source_contract(classifier: &str, tests: &str) -> Result<()> {
+    for marker in [
+        "rust_required",
+        "desktop_e2e_required",
+        "classification_reason",
+        "fn changed_paths_from_git(",
+        "fn classify_git_paths(",
+        "fn decode_git_paths(",
+        "--depth=1",
+        "DiffMode",
+        "merge-base",
+        "SHALLOW_DEEPEN_STEPS",
+        "fn source_head_matches(",
+        "refs/pull/",
+        "--pr-number",
+        "--base-ref",
+        "empty changed-path diff requires full validation",
+    ] {
+        if !classifier.contains(marker) {
+            return Err(format!(
+                "Rust CI classifier implementation is missing its required marker: {marker}"
+            )
+            .into());
+        }
+    }
+    for marker in [
+        "git_paths_are_exact_and_malformed_names_fail_closed",
+        "git_path_decoding_preserves_trailing_space_and_rejects_invalid_utf8",
+        "preserves_exact_lane_output_shape_and_reason_golden",
+        "matches_positive_and_union_classifier_matrix",
+        "windows_tauri_integration_frontend_paths_select_package_qualification",
+        "production_tauri_runtime_imports_are_windows_package_qualified",
+        "unknown_or_malformed_paths_fail_closed_and_workflow_dispatch_is_full",
+        "pr_uses_merge_base_when_base_advances_and_diff_keeps_both_rename_paths",
+        "fork_head_uses_bounded_pull_request_ref_and_keeps_frontend_pr_narrow",
+        "shallow_history_without_a_merge_base_fails_closed_after_bounded_fetches",
+    ] {
+        if !tests.contains(marker) {
+            return Err(format!(
+                "Rust CI classifier regression suite is missing selector: {marker}"
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updater_bridge_source_contract_reads_implementation_and_test_owners_separately() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let fixture = fs::read_to_string(root.join("xtask/src/updater_fixture.rs"))
+            .expect("updater fixture implementation must exist");
+        let tests = fs::read_to_string(root.join("xtask/src/updater_fixture/tests.rs"))
+            .expect("updater fixture test owner must exist");
+        updater_bridge_source_contract(&fixture, &tests)
+            .expect("implementation and moved regression selectors must satisfy their own checks");
+        assert!(
+            !fixture.contains(
+                "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair"
+            ),
+            "test selector must not be copied into the production implementation"
+        );
+
+        let missing_implementation = fixture.replace(
+            "fn build_bridge_internal(",
+            "fn retired_build_bridge_internal(",
+        );
+        assert!(updater_bridge_source_contract(&missing_implementation, &tests).is_err());
+
+        let missing_test = tests.replace(
+            "tauri_signer_pair_is_verified_by_rust_and_rejects_malformed_or_wrong_pair",
+            "retired_tauri_signer_pair_regression",
+        );
+        assert!(updater_bridge_source_contract(&fixture, &missing_test).is_err());
+    }
+
+    #[test]
+    fn classifier_source_contract_reads_implementation_and_test_owners_separately() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+        let classifier = fs::read_to_string(root.join("xtask/src/ci_classifier.rs"))
+            .expect("CI classifier implementation must exist");
+        let tests = fs::read_to_string(root.join("xtask/src/ci_classifier/tests.rs"))
+            .expect("CI classifier test owner must exist");
+        ci_classifier_source_contract(&classifier, &tests)
+            .expect("implementation and moved classifier tests must satisfy their own checks");
+        assert!(
+            !classifier.contains("git_paths_are_exact_and_malformed_names_fail_closed"),
+            "test selectors must remain in the test owner"
+        );
+
+        let missing_implementation =
+            classifier.replace("fn classify_git_paths(", "fn retired_classify_git_paths(");
+        assert!(ci_classifier_source_contract(&missing_implementation, &tests).is_err());
+        assert!(tests.contains("classify_git_paths"));
+
+        let missing_test = tests.replace(
+            "git_paths_are_exact_and_malformed_names_fail_closed",
+            "retired_git_paths_case",
+        );
+        assert!(ci_classifier_source_contract(&classifier, &missing_test).is_err());
+    }
 
     #[test]
     fn updater_bridge_feature_contract_requires_candidate_feature_set() {
