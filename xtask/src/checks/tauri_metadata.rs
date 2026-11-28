@@ -473,6 +473,8 @@ const ACTIVE_RELEASE_SURFACES: &[&str] = &[
     ".github/workflows/release-v4.yml",
     ".github/workflows/v4-metadata-recovery.yml",
     "apps/desktop/src-tauri/src/native_update.rs",
+    "apps/desktop/src-tauri/src/native_update/state.rs",
+    "apps/desktop/src-tauri/src/native_update/progress.rs",
     "apps/desktop/src-tauri/tauri.conf.json",
     "apps/desktop/src-tauri/Cargo.toml",
 ];
@@ -1086,6 +1088,8 @@ releases/latest
     fn release_metadata_negative_guard_covers_runtime_and_release_surfaces() {
         for surface in [
             "apps/desktop/src-tauri/src/native_update.rs",
+            "apps/desktop/src-tauri/src/native_update/state.rs",
+            "apps/desktop/src-tauri/src/native_update/progress.rs",
             "apps/desktop/src-tauri/tauri.conf.json",
             ".github/workflows/ci.yml",
             ".github/workflows/release-v4.yml",
@@ -1099,6 +1103,20 @@ releases/latest
         )
         .expect_err("legacy repository marker must be rejected in the updater runtime surface");
         assert!(runtime_error.to_string().contains("native_update.rs"));
+
+        let root = repo::root();
+        for surface in [
+            "apps/desktop/src-tauri/src/native_update/state.rs",
+            "apps/desktop/src-tauri/src/native_update/progress.rs",
+        ] {
+            let path = root.join(surface);
+            let owner = fs::read_to_string(&path).expect("moved updater implementation owner");
+            validate_active_release_surface(surface, active_release_surface_source(&path, &owner))
+                .expect("moved updater implementation must remain a scanned release surface");
+            let error = validate_active_release_surface(surface, "V4_RELEASE_AUTHORITY_REPOSITORY")
+                .expect_err("moved updater production owners must reject retired release markers");
+            assert!(error.to_string().contains(surface));
+        }
 
         let config_error = validate_active_release_surface(
             "apps/desktop/src-tauri/tauri.conf.json",
