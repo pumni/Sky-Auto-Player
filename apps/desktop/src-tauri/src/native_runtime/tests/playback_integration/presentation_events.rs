@@ -366,6 +366,8 @@ fn rapid_playback_sessions_queue_terminal_before_successor_starting() {
             )
             .expect("start rapid dry-run session");
         session_ids.push(session.session_id);
+        // Lifecycle status releases successor admission. It is not a UI
+        // publication acknowledgement; keep admitting the next session here.
         let deadline = Instant::now() + Duration::from_secs(3);
         while service
             .status()
@@ -386,7 +388,35 @@ fn rapid_playback_sessions_queue_terminal_before_successor_starting() {
         );
     }
 
-    let buffered = events.lock().expect("event hub").buffered_for_test();
+    let event_deadline = Instant::now() + Duration::from_secs(3);
+    let buffered = loop {
+        let buffered = events.lock().expect("event hub").buffered_for_test();
+        let all_session_events_published = session_ids.iter().all(|session_id| {
+            let has_starting = buffered.iter().any(|event| {
+                matches!(event, UiEvent::PlaybackStateChanged { payload, .. }
+                    if &payload.session_id == session_id
+                        && payload.state == PlaybackEventState::Starting)
+            });
+            let has_finished = buffered.iter().any(|event| {
+                matches!(event, UiEvent::PlaybackStateChanged { payload, .. }
+                    if &payload.session_id == session_id
+                        && payload.state == PlaybackEventState::Finished)
+            });
+            let has_terminal = buffered.iter().any(|event| {
+                matches!(event, UiEvent::PlaybackFinished { payload, .. }
+                    if &payload.session_id == session_id)
+            });
+            has_starting && has_finished && has_terminal
+        });
+        if all_session_events_published {
+            break buffered;
+        }
+        assert!(
+            Instant::now() < event_deadline,
+            "timed out waiting for final lifecycle publication for session IDs {session_ids:?}; buffered events: {buffered:?}"
+        );
+        thread::sleep(Duration::from_millis(1));
+    };
     let first_terminal = buffered
         .iter()
         .position(|event| {

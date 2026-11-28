@@ -1596,6 +1596,8 @@ test('rapid A-B-A search keeps the newest query results visible', async ({ page 
   await search.fill('Aurora');
   await expect(page.locator('[data-slot="library-empty-state"][aria-busy="true"]')).toBeVisible();
   await search.fill('Moonlit');
+  // Let the 120 ms search debounce commit B so A and B are both in flight
+  // before the final A query supersedes them.
   await page.waitForTimeout(150);
   await search.fill('Aurora');
 

@@ -592,6 +592,7 @@ describe('desktop application shell', () => {
   it.each(['event', 'global', 'event-and-global'] as const)(
     'ordinary App ignores a forged %s smoke trigger',
     async (mode) => {
+      const addEventListener = vi.spyOn(window, 'addEventListener');
       if (mode !== 'event') {
         (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ =
           true;
@@ -604,9 +605,12 @@ describe('desktop application shell', () => {
           window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
           window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
         }
-        await new Promise((resolve) => window.setTimeout(resolve, 250));
       });
 
+      expect(addEventListener).not.toHaveBeenCalledWith(
+        'sky-desktop-gui-smoke',
+        expect.any(Function),
+      );
       expect(patchSettings).not.toHaveBeenCalled();
       expect(setDiagnosticsEnabled).not.toHaveBeenCalled();
       expect(shutdown).not.toHaveBeenCalled();
@@ -614,20 +618,22 @@ describe('desktop application shell', () => {
   );
 
   it('ordinary App ignores a smoke event dispatched before React mounts', async () => {
+    const addEventListener = vi.spyOn(window, 'addEventListener');
     window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
     const { patchSettings, setDiagnosticsEnabled, shutdown } =
       await renderOrdinaryAppWithSmokeSpies();
 
-    await act(async () => {
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
-    });
-
+    expect(addEventListener).not.toHaveBeenCalledWith(
+      'sky-desktop-gui-smoke',
+      expect.any(Function),
+    );
     expect(patchSettings).not.toHaveBeenCalled();
     expect(setDiagnosticsEnabled).not.toHaveBeenCalled();
     expect(shutdown).not.toHaveBeenCalled();
   });
 
   it('ordinary App fails closed when bootstrap omits gui_smoke', async () => {
+    const addEventListener = vi.spyOn(window, 'addEventListener');
     const bridge = createMockBridge();
     const originalBootstrap = bridge.bootstrap.bind(bridge);
     bridge.bootstrap = vi.fn(async () => {
@@ -644,15 +650,19 @@ describe('desktop application shell', () => {
     await screen.findByRole('grid', { name: 'Built-in Songs, page 1' });
     await act(async () => {
       window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
     });
 
+    expect(addEventListener).not.toHaveBeenCalledWith(
+      'sky-desktop-gui-smoke',
+      expect.any(Function),
+    );
     expect(patchSettings).not.toHaveBeenCalled();
     expect(setDiagnosticsEnabled).not.toHaveBeenCalled();
     expect(shutdown).not.toHaveBeenCalled();
   });
 
   it('ordinary App fails closed when bootstrap is unavailable', async () => {
+    const addEventListener = vi.spyOn(window, 'addEventListener');
     const bridge = createMockBridge();
     bridge.subscribeUiEvents = vi.fn(async () => {
       throw new Error('Native application is unavailable');
@@ -664,22 +674,29 @@ describe('desktop application shell', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Native application is unavailable');
     await act(async () => {
       window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
     });
 
+    expect(addEventListener).not.toHaveBeenCalledWith(
+      'sky-desktop-gui-smoke',
+      expect.any(Function),
+    );
     expect(shutdown).not.toHaveBeenCalled();
   });
 
   it('isolated smoke hook ignores triggers when authorized is false', async () => {
+    const addEventListener = vi.spyOn(window, 'addEventListener');
     const fixture = await createPackagedSmokeFixture(false);
     (window as Window & { __SKY_DESKTOP_GUI_SMOKE__?: boolean }).__SKY_DESKTOP_GUI_SMOKE__ = true;
 
     await act(async () => {
       window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
       window.dispatchEvent(new Event('sky-desktop-gui-smoke'));
-      await new Promise((resolve) => window.setTimeout(resolve, 250));
     });
 
+    expect(addEventListener).not.toHaveBeenCalledWith(
+      'sky-desktop-gui-smoke',
+      expect.any(Function),
+    );
     expect(fixture.patchSettings).not.toHaveBeenCalled();
     expect(fixture.setDiagnosticsEnabled).not.toHaveBeenCalled();
     expect(fixture.shutdown).not.toHaveBeenCalled();

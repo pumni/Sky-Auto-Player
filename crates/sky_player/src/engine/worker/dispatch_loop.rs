@@ -1522,6 +1522,19 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             // the post-send precision path and before this iteration can
             // admit another physical packet.
             core.runtime.drain_production_forensics(&mut core.metrics);
+            #[cfg(any(test, feature = "test-support"))]
+            if let Some(hook) = core.runtime.startup_ordering_hook.as_ref()
+                && let Some(hold_started) = core.runtime.modifier_hold_started_ticks
+                && let Ok(timeout_deadline) =
+                    hold_started.checked_add_duration(timing.modifier_hold_timeout_ticks)
+                && qpc_clock
+                    .now()
+                    .is_ok_and(|now_qpc| now_qpc >= timeout_deadline)
+            {
+                hook.visit_startup_checkpoint(
+                    super::super::config::StartupCheckpoint::ModifierTimeoutBoundary,
+                );
+            }
             // A deadline-wake sample belongs to exactly one physical send.
             // Re-entering the non-precision loop clears any stale sample
             // after interrupts, replans, command transitions, or failures.
@@ -1580,6 +1593,10 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
             }
 
             if !focus_ok {
+                #[cfg(any(test, feature = "test-support"))]
+                if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                    hook.record_focus_gate_rejected();
+                }
                 let entered_focus_pause = match enter_focus_pause(
                     &mut resources.playback,
                     &mut core.runtime,
@@ -1598,10 +1615,6 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                         Ordering::Release,
                     );
                     *core.errors.abort_counts.entry("focus_lost").or_insert(0) += 1;
-                    #[cfg(any(test, feature = "test-support"))]
-                    if let Some(hook) = core.runtime.focus_pause_hook.as_ref() {
-                        hook();
-                    }
                     publish_backend_metrics(
                         &resources.backend,
                         &mut core.metrics,
@@ -1611,10 +1624,17 @@ pub(super) fn dispatch(worker: &mut Worker<'_>) -> Result<(), Box<dyn Any + Send
                     publish_lifecycle_metrics(&core.metrics, metrics, qpc_ticks_or_terminal!());
                 }
             } else if resources.playback.has_pause_reason(PauseReason::Focus) {
-                let restored_at = *core
-                    .runtime
-                    .focus_restore_started_ticks
-                    .get_or_insert(now_ticks);
+                let restored_at = match core.runtime.focus_restore_started_ticks {
+                    Some(restored_at) => restored_at,
+                    None => {
+                        core.runtime.focus_restore_started_ticks = Some(now_ticks);
+                        #[cfg(any(test, feature = "test-support"))]
+                        if let Some(hook) = core.runtime.startup_ordering_hook.as_ref() {
+                            hook.record_focus_restore_observed();
+                        }
+                        now_ticks
+                    }
+                };
                 let focus_grace_elapsed = match now_ticks.checked_duration_since(restored_at) {
                     Ok(elapsed) => elapsed,
                     Err(error) => {

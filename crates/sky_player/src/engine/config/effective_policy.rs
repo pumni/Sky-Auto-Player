@@ -192,7 +192,6 @@ mod tests {
             instrument_key_profile: None,
             startup_ordering_hook: None,
             timing_observer_for_qualification: qualification_observer,
-            focus_pause_hook: None,
             timer_lifecycle_context: None,
             prepared_packet_ambiguity_mask: None,
             preflight_user_held_mask: None,

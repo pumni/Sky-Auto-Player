@@ -7,6 +7,9 @@ static RECOVERY_TEST_RAW_SENDS: std::sync::atomic::AtomicU64 = std::sync::atomic
 #[cfg(test)]
 static RECOVERY_TEST_SEND_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+#[cfg(all(test, feature = "tauri-test"))]
+static RECOVERY_TEST_ATTEMPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 #[cfg(feature = "tauri-test")]
 static RECOVERY_TEST_PROBE_RESULT: Mutex<
     Option<sky_dispatch_win32::input::InstrumentPhysicalState>,
@@ -18,6 +21,20 @@ static RECOVERY_TEST_PROBE_CALLS: std::sync::atomic::AtomicU64 =
 
 #[cfg(feature = "tauri-test")]
 static RECOVERY_TEST_PROBE_HOOK: Mutex<Option<Arc<dyn Fn() + Send + Sync>>> = Mutex::new(None);
+
+#[cfg(all(test, feature = "tauri-test"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::native_runtime) enum RecoveryForegroundPoll {
+    ForegroundMatch,
+    NotForeground,
+    OwnerMismatch,
+    OwnerQueryUnavailable,
+    OwnerIdentityInvalidated,
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+static RECOVERY_TEST_POLL_HOOK: Mutex<Option<Arc<dyn Fn(RecoveryForegroundPoll) + Send + Sync>>> =
+    Mutex::new(None);
 
 #[cfg(test)]
 pub(in crate::native_runtime) fn reset_recovery_test_raw_sends() {
@@ -52,12 +69,42 @@ pub(in crate::native_runtime) fn recovery_test_probe_calls() -> u64 {
 }
 
 #[cfg(all(test, feature = "tauri-test"))]
+pub(in crate::native_runtime) fn reset_recovery_test_attempts() {
+    RECOVERY_TEST_ATTEMPTS.store(0, Ordering::Release);
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+pub(in crate::native_runtime) fn recovery_test_attempts() -> u64 {
+    RECOVERY_TEST_ATTEMPTS.load(Ordering::Acquire)
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
 pub(in crate::native_runtime) fn set_recovery_test_probe_hook(
     hook: Option<Arc<dyn Fn() + Send + Sync>>,
 ) {
     *RECOVERY_TEST_PROBE_HOOK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+pub(in crate::native_runtime) fn set_recovery_test_poll_hook(
+    hook: Option<Arc<dyn Fn(RecoveryForegroundPoll) + Send + Sync>>,
+) {
+    *RECOVERY_TEST_POLL_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
+}
+
+#[cfg(all(test, feature = "tauri-test"))]
+fn acknowledge_recovery_test_poll(poll: RecoveryForegroundPoll) {
+    let hook = RECOVERY_TEST_POLL_HOOK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(hook) = hook {
+        hook(poll);
+    }
 }
 
 #[derive(Default)]
@@ -255,6 +302,8 @@ fn post_join_recovery_loop(
             || authority.continuity()
                 != sky_dispatch_win32::focus::WindowIdentityContinuity::Continuous
         {
+            #[cfg(all(test, feature = "tauri-test"))]
+            acknowledge_recovery_test_poll(RecoveryForegroundPoll::OwnerIdentityInvalidated);
             break;
         }
         let foreground = match sky_dispatch_win32::focus::foreground_window_owner_matches(
@@ -263,7 +312,11 @@ fn post_join_recovery_loop(
         ) {
             sky_dispatch_win32::focus::ForegroundOwnerMatch::Match => Some(true),
             sky_dispatch_win32::focus::ForegroundOwnerMatch::NotForeground => Some(false),
-            sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => break,
+            sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerMismatch => {
+                #[cfg(all(test, feature = "tauri-test"))]
+                acknowledge_recovery_test_poll(RecoveryForegroundPoll::OwnerMismatch);
+                break;
+            }
             sky_dispatch_win32::focus::ForegroundOwnerMatch::OwnerQueryUnavailable => None,
         };
         if transition.observe(foreground) {
@@ -271,12 +324,18 @@ fn post_join_recovery_loop(
             // reordered callbacks/polls while still foreground cannot repeat
             // this transition's single bounded attempt.
             let _ = recover_quarantined_release_once(&active, &last_terminal);
-            if !active
-                .activity
-                .quarantined_session_is_current(&active.session_id)
-            {
-                break;
-            }
+        }
+        #[cfg(all(test, feature = "tauri-test"))]
+        acknowledge_recovery_test_poll(match foreground {
+            Some(true) => RecoveryForegroundPoll::ForegroundMatch,
+            Some(false) => RecoveryForegroundPoll::NotForeground,
+            None => RecoveryForegroundPoll::OwnerQueryUnavailable,
+        });
+        if !active
+            .activity
+            .quarantined_session_is_current(&active.session_id)
+        {
+            break;
         }
         if watcher.is_none() || message_loop_failed {
             // The hook is unavailable or failed. Preserve the same bounded
@@ -853,6 +912,9 @@ pub(in crate::native_runtime) fn recover_quarantined_release_once(
     active: &NativeActivePlayback,
     last_terminal: &Arc<Mutex<Option<PlaybackTerminalStatusDto>>>,
 ) -> Result<(), String> {
+    #[cfg(all(test, feature = "tauri-test"))]
+    RECOVERY_TEST_ATTEMPTS.fetch_add(1, Ordering::AcqRel);
+
     if !active.worker_quiescent.load(Ordering::Acquire) {
         return Err("release recovery requires a joined worker".into());
     }

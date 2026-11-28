@@ -4,6 +4,7 @@ use crate::engine::snapshot::WorkerProgressState;
 use sky_dispatch_win32::focus::WindowIdentityContinuity;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
 const TARGET_HWND: isize = 0x1234;
@@ -30,6 +31,63 @@ fn wait_until(timeout: Duration, condition: impl Fn() -> bool, description: &'st
             panic!("timed out waiting for {description}");
         }
         std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+struct TerminalReasonLockBlocker {
+    acquired: Receiver<()>,
+    release: Option<SyncSender<()>>,
+    worker: Option<std::thread::JoinHandle<()>>,
+}
+
+impl TerminalReasonLockBlocker {
+    fn start(shared: Arc<crate::engine::shared::SessionShared>) -> Self {
+        let (acquired_sender, acquired) = sync_channel(0);
+        let (release, release_receiver) = sync_channel(1);
+        let worker = std::thread::spawn(move || {
+            let _guard = shared.publication.metrics.terminal_trigger_reason.lock();
+            let _ = acquired_sender.send(());
+            let _ = release_receiver.recv_timeout(Duration::from_secs(10));
+        });
+        Self {
+            acquired,
+            release: Some(release),
+            worker: Some(worker),
+        }
+    }
+
+    fn wait_until_held(&self, shared: &crate::engine::shared::SessionShared) {
+        self.acquired
+            .recv_timeout(Duration::from_secs(2))
+            .expect("terminal reason lock acquisition signal");
+        assert!(
+            self.remains_held(shared),
+            "signaled terminal reason mutex remains held"
+        );
+    }
+
+    fn remains_held(&self, shared: &crate::engine::shared::SessionShared) -> bool {
+        shared
+            .publication
+            .metrics
+            .terminal_trigger_reason
+            .try_lock()
+            .is_none()
+    }
+
+    fn release_and_join(&mut self) {
+        if let Some(release) = self.release.take() {
+            let _ = release.send(());
+        }
+        if let Some(worker) = self.worker.take() {
+            worker.join().expect("terminal reason lock blocker join");
+        }
+    }
+}
+
+impl Drop for TerminalReasonLockBlocker {
+    fn drop(&mut self) {
+        self.release_and_join();
     }
 }
 
@@ -649,29 +707,35 @@ fn signal_supervisor_expiry_prompt_without_locks_under_contention() {
     let session = NativeDispatchSession::new(options).expect("session admission");
     let shared = session.shared_arc_for_test();
 
-    // Contention scenario: simulate another thread holding metrics.terminal_trigger_reason mutex
-    let mutex_held = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let mutex_held_clone = Arc::clone(&mutex_held);
-    let shared_clone = Arc::clone(&shared);
-    let blocker_thread = std::thread::spawn(move || {
-        let _guard = shared_clone
-            .publication
-            .metrics
-            .terminal_trigger_reason
-            .lock();
-        while mutex_held_clone.load(Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+    let mut blocker = TerminalReasonLockBlocker::start(Arc::clone(&shared));
+    blocker.wait_until_held(&shared);
+
+    // Run the candidate call on a joined thread so the watchdog can release
+    // the contended lock before reporting a blocking regression.
+    let (started_sender, started_receiver) = sync_channel(0);
+    let (result_sender, result_receiver) = sync_channel(1);
+    let signal_shared = Arc::clone(&shared);
+    let signal_worker = std::thread::spawn(move || {
+        let start = Instant::now();
+        started_sender.send(()).expect("signal start receiver");
+        let signaled =
+            signal_supervisor_expiry_with_reason(&signal_shared, "supervisor_unwind_or_exit");
+        let _ = result_sender.send((signaled, start.elapsed()));
     });
+    started_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("signal worker started");
+    let result = result_receiver.recv_timeout(Duration::from_secs(2));
+    let lock_held_at_completion = blocker.remains_held(&shared);
 
-    // Give blocker thread time to acquire mutex:
-    std::thread::sleep(Duration::from_millis(20));
+    blocker.release_and_join();
+    signal_worker.join().expect("bounded signal worker join");
 
-    // Calling signal_supervisor_expiry_with_reason must NOT block on the held mutex!
-    let start = Instant::now();
-    let signaled = signal_supervisor_expiry_with_reason(&shared, "supervisor_unwind_or_exit");
-    let duration = start.elapsed();
-
+    assert!(
+        lock_held_at_completion,
+        "completion must precede lock release"
+    );
+    let (signaled, duration) = result.expect("signal completes while metrics mutex is held");
     assert!(signaled, "first signal must win CAS");
     assert!(
         duration < Duration::from_millis(50),
@@ -686,10 +750,6 @@ fn signal_supervisor_expiry_prompt_without_locks_under_contention() {
         shared.commands.panic_requested.load(Ordering::Acquire),
         "panic release must be requested immediately"
     );
-
-    // Release the blocker thread's lock:
-    mutex_held.store(false, Ordering::Release);
-    blocker_thread.join().expect("blocker thread join");
 
     // The snapshot must still accurately report the atomic reason code:
     let snapshot = session.snapshot();
@@ -968,39 +1028,38 @@ fn active_worker_contested_reason_lock_preserves_supervisor_unwind_reason_after_
 
     let shared = session.shared_arc_for_test();
 
-    // Contention scenario: simulate another thread holding metrics.terminal_trigger_reason mutex
-    let mutex_held = Arc::new(std::sync::atomic::AtomicBool::new(true));
-    let mutex_held_clone = Arc::clone(&mutex_held);
-    let shared_clone = Arc::clone(&shared);
-    let blocker_thread = std::thread::spawn(move || {
-        let _guard = shared_clone
-            .publication
-            .metrics
-            .terminal_trigger_reason
-            .lock();
-        while mutex_held_clone.load(Ordering::Acquire) {
-            std::thread::sleep(Duration::from_millis(5));
-        }
+    let mut blocker = TerminalReasonLockBlocker::start(Arc::clone(&shared));
+    blocker.wait_until_held(&shared);
+
+    // Drop the real guard on a joined thread. A blocking regression is bounded
+    // by the receiver timeout, then the held mutex is released before joining.
+    let (started_sender, started_receiver) = sync_channel(0);
+    let (result_sender, result_receiver) = sync_channel(1);
+    let drop_worker = std::thread::spawn(move || {
+        let start = Instant::now();
+        started_sender.send(()).expect("guard drop start receiver");
+        drop(guard);
+        let _ = result_sender.send(start.elapsed());
     });
+    started_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("guard drop worker started");
+    let result = result_receiver.recv_timeout(Duration::from_secs(2));
+    let lock_held_at_completion = blocker.remains_held(&shared);
 
-    // Wait until blocker thread acquires mutex:
-    std::thread::sleep(Duration::from_millis(20));
+    blocker.release_and_join();
+    drop_worker.join().expect("bounded guard drop worker join");
 
-    // Drop supervisor guard (simulate supervisor unwind while mutex is contested):
-    // This MUST succeed without blocking, record reason code atomically, and interrupt worker:
-    let start = Instant::now();
-    drop(guard);
-    let duration = start.elapsed();
-
+    assert!(
+        lock_held_at_completion,
+        "guard drop must complete before lock release"
+    );
+    let duration = result.expect("guard drop completes while metrics mutex is held");
     assert!(
         duration < Duration::from_millis(50),
         "supervisor guard drop must not block on held metrics lock; took {:?}",
         duration
     );
-
-    // Release the blocker thread's lock so worker finalization can proceed:
-    mutex_held.store(false, Ordering::Release);
-    blocker_thread.join().expect("blocker thread join");
 
     // Join the worker thread to wait for completed finalization:
     assert!(
@@ -1104,6 +1163,8 @@ fn overlapping_focus_and_manual_pause_focus_restored_first_remains_paused() {
         },
     );
     options.focus.require_focus = true;
+    let focus_hook = Arc::new(StartupOrderingHook::default());
+    options.startup_ordering_hook = Some(Arc::clone(&focus_hook));
 
     let session = NativeDispatchSession::new(options).expect("session admission");
     session.bind_initial_target_for_test(TARGET_HWND);
@@ -1135,15 +1196,25 @@ fn overlapping_focus_and_manual_pause_focus_restored_first_remains_paused() {
     );
 
     // 2. Also lose focus while paused:
+    let rejected_before_loss = focus_hook.focus_gate_rejected_count();
     session.set_focus_hint(false);
-    std::thread::sleep(Duration::from_millis(50));
+    wait_until(
+        Duration::from_secs(2),
+        || focus_hook.focus_gate_rejected_count() > rejected_before_loss,
+        "worker processed focus loss while manual pause remained active",
+    );
     assert_eq!(session.worker_progress(), WorkerProgressState::Paused);
 
     // 3. Restore focus FIRST:
+    let restored_before = focus_hook.focus_restore_observed_count();
     session.set_focus_hint(true);
     // Worker loop processes focus restoration, but manual pause is still active!
     // Worker progress MUST remain Paused, NOT Active!
-    std::thread::sleep(Duration::from_millis(50));
+    wait_until(
+        Duration::from_secs(2),
+        || focus_hook.focus_restore_observed_count() > restored_before,
+        "worker processed focus restoration while manual pause remained active",
+    );
     assert_eq!(
         session.worker_progress(),
         WorkerProgressState::Paused,
@@ -1182,6 +1253,8 @@ fn overlapping_focus_and_manual_pause_manual_resumed_first_remains_paused() {
         },
     );
     options.focus.require_focus = true;
+    let focus_hook = Arc::new(StartupOrderingHook::default());
+    options.startup_ordering_hook = Some(Arc::clone(&focus_hook));
 
     let session = NativeDispatchSession::new(options).expect("session admission");
     session.bind_initial_target_for_test(TARGET_HWND);
@@ -1205,23 +1278,37 @@ fn overlapping_focus_and_manual_pause_manual_resumed_first_remains_paused() {
     );
 
     // 1. Lose focus:
+    let rejected_before_loss = focus_hook.focus_gate_rejected_count();
     session.set_focus_hint(false);
     wait_until(
         Duration::from_secs(3),
-        || session.worker_progress() == WorkerProgressState::Paused,
+        || {
+            session.worker_progress() == WorkerProgressState::Paused
+                && focus_hook.focus_gate_rejected_count() > rejected_before_loss
+        },
         "transition to Paused on focus lost",
     );
 
     // 2. Also enter manual pause:
+    let rejected_before_pause = focus_hook.focus_gate_rejected_count();
     session.pause().expect("manual pause");
-    std::thread::sleep(Duration::from_millis(50));
+    wait_until(
+        Duration::from_secs(2),
+        || focus_hook.focus_gate_rejected_count() > rejected_before_pause,
+        "worker processed focus gate after manual pause was requested",
+    );
     assert_eq!(session.worker_progress(), WorkerProgressState::Paused);
 
     // 3. Resume manual pause FIRST:
+    let rejected_before_resume = focus_hook.focus_gate_rejected_count();
     session.resume().expect("manual resume");
     // Worker loop processes manual resume, but focus is still lost!
     // Worker progress MUST remain Paused, NOT Active!
-    std::thread::sleep(Duration::from_millis(50));
+    wait_until(
+        Duration::from_secs(2),
+        || focus_hook.focus_gate_rejected_count() > rejected_before_resume,
+        "worker processed focus gate after manual resume while focus remained lost",
+    );
     assert_eq!(
         session.worker_progress(),
         WorkerProgressState::Paused,

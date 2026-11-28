@@ -29,16 +29,18 @@ pub(super) use retirement::{
     release_terminal_ownership, terminal_presentation_completion,
     terminal_retirement_commit_failure,
 };
+#[cfg(all(test, feature = "tauri-test"))]
+pub(super) use retirement::{
+    RecoveryForegroundPoll, recovery_test_attempts, recovery_test_probe_calls,
+    reset_recovery_test_attempts, set_recovery_test_poll_hook, set_recovery_test_probe_hook,
+    set_recovery_test_probe_result,
+};
 #[cfg(test)]
 pub(super) use retirement::{
     decide_playback_handoff, publish_retirement_barrier, publish_terminal_poll_result,
     recover_quarantined_release_once, recovery_test_raw_sends, recovery_test_send_lock,
     reset_recovery_test_raw_sends, terminal_publication_after_worker, terminal_release_evidence,
     terminal_release_evidence_after_startup,
-};
-#[cfg(all(test, feature = "tauri-test"))]
-pub(super) use retirement::{
-    recovery_test_probe_calls, set_recovery_test_probe_hook, set_recovery_test_probe_result,
 };
 pub(super) use session::{
     cleanup_failed_event_delivery, is_failure_status, opaque_native_id, playback_event_state,

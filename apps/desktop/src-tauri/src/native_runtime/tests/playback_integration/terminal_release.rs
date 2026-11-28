@@ -1,5 +1,44 @@
 use super::*;
 
+struct RecoveryPollHookReset;
+
+impl Drop for RecoveryPollHookReset {
+    fn drop(&mut self) {
+        set_recovery_test_poll_hook(None);
+    }
+}
+
+fn install_recovery_poll_hook() -> (
+    RecoveryPollHookReset,
+    mpsc::Receiver<RecoveryForegroundPoll>,
+) {
+    let (sender, receiver) = mpsc::channel();
+    set_recovery_test_poll_hook(Some(Arc::new(move |poll| {
+        let _ = sender.send(poll);
+    })));
+    (RecoveryPollHookReset, receiver)
+}
+
+fn wait_for_recovery_poll(
+    receiver: &mpsc::Receiver<RecoveryForegroundPoll>,
+    expected: RecoveryForegroundPoll,
+) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let poll = receiver.recv_timeout(remaining).unwrap_or_else(|error| {
+            panic!("timed out waiting for recovery poll {expected:?}: {error}")
+        });
+        if poll == expected {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "recovery polls did not reach {expected:?}; last observed {poll:?}"
+        );
+    }
+}
+
 #[cfg(feature = "tauri-test")]
 #[test]
 fn panic_release_before_armed_has_no_physical_release_obligation() {
@@ -965,8 +1004,11 @@ fn quarantined_recovery_fixture(
 fn post_join_recovery_observes_focus_return_after_terminal_publication_without_winevent() {
     let _send_lock = recovery_test_send_lock();
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let (_poll_hook_reset, poll_receiver) = install_recovery_poll_hook();
     let session_id = "a".repeat(32);
     let (service, active, _authority) = quarantined_recovery_fixture(&session_id, false, 0x0001, 0);
+    set_recovery_test_probe_result(None);
+    reset_recovery_test_attempts();
     let events = Arc::new(Mutex::new(NativeEventHub::default()));
     let terminal_publication = PlaybackTerminalPublication::Failed {
         code: "terminal_release_unverified".into(),
@@ -985,24 +1027,37 @@ fn post_join_recovery_observes_focus_return_after_terminal_publication_without_w
         .post_join_recovery
         .start_without_winevent_for_test(active.clone(), service.last_terminal.clone())
         .expect("start persistent polling recovery owner");
-    std::thread::sleep(Duration::from_millis(80));
+    wait_for_recovery_poll(&poll_receiver, RecoveryForegroundPoll::NotForeground);
     assert_eq!(recovery_test_raw_sends(), 0, "background must not send Up");
+    assert_eq!(
+        recovery_test_attempts(),
+        0,
+        "background must not attempt recovery"
+    );
 
     // This fixture deliberately disables WinEvent. The exact foreground poll
     // must discover the return and trigger one bounded attempt.
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x1199)));
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while recovery_test_raw_sends() == 0 && Instant::now() < deadline {
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_recovery_poll(&poll_receiver, RecoveryForegroundPoll::ForegroundMatch);
     assert_eq!(recovery_test_raw_sends(), 1, "focus return gets one raw Up");
+    assert_eq!(recovery_test_attempts(), 1);
 
     // Repeated polls/duplicate hints while the original target stays
     // foreground are the same transition, not new recovery attempts.
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
-    std::thread::sleep(Duration::from_millis(150));
+    wait_for_recovery_poll(&poll_receiver, RecoveryForegroundPoll::ForegroundMatch);
     assert_eq!(recovery_test_raw_sends(), 1);
+    assert_eq!(
+        recovery_test_attempts(),
+        1,
+        "duplicate polls must not replay recovery"
+    );
+    assert_eq!(
+        recovery_test_probe_calls(),
+        1,
+        "duplicate exact-foreground polls must not repeat recovery"
+    );
     assert!(service.activity.physical_release_is_quarantined());
     assert!(matches!(
         service
@@ -1023,7 +1078,9 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
 
     let _send_lock = recovery_test_send_lock();
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let (_poll_hook_reset, poll_receiver) = install_recovery_poll_hook();
     set_recovery_test_probe_result(None);
+    reset_recovery_test_attempts();
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
 
@@ -1146,11 +1203,13 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
             .terminal_release_verified,
         Some(false)
     );
+    wait_for_recovery_poll(&poll_receiver, RecoveryForegroundPoll::NotForeground);
     assert_eq!(
         recovery_test_raw_sends(),
         0,
         "post-join recovery must wait for exact foreground return"
     );
+    assert_eq!(recovery_test_attempts(), 0);
 
     // The monitor must have transferred recovery ownership before it returned.
     // A later exact foreground poll should trigger one attempt even though the
@@ -1160,17 +1219,14 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
     ));
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(77)));
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while recovery_test_raw_sends() == 0 && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
-    }
+    wait_for_recovery_poll(&poll_receiver, RecoveryForegroundPoll::ForegroundMatch);
     assert_eq!(recovery_test_raw_sends(), 1);
+    assert_eq!(recovery_test_attempts(), 1);
     assert_eq!(
         recovery_test_probe_calls(),
         1,
         "one admitted Up is probed once"
     );
-    thread::sleep(Duration::from_millis(150));
     assert_eq!(
         recovery_test_raw_sends(),
         1,
@@ -1203,8 +1259,10 @@ fn monitor_starts_post_join_recovery_after_stop_retirement_and_later_focus_retur
 fn post_join_recovery_rejects_foreign_foreground_owner_drift_and_prejoin_start() {
     let _send_lock = recovery_test_send_lock();
     let _foreground_lock = sky_dispatch_win32::focus::lock_foreground_window_for_test();
+    let (_poll_hook_reset, poll_receiver) = install_recovery_poll_hook();
     let (service, active, authority) =
         quarantined_recovery_fixture("post-join-origin-reject", false, 0x0001, 0);
+    reset_recovery_test_attempts();
     reset_recovery_test_raw_sends();
 
     active.worker_quiescent.store(false, Ordering::Release);
@@ -1226,15 +1284,21 @@ fn post_join_recovery_rejects_foreign_foreground_owner_drift_and_prejoin_start()
         .post_join_recovery
         .start_without_winevent_for_test(active.clone(), service.last_terminal.clone())
         .expect("start recovery owner against original authority");
-    std::thread::sleep(Duration::from_millis(80));
+    wait_for_recovery_poll(&poll_receiver, RecoveryForegroundPoll::NotForeground);
     assert_eq!(recovery_test_raw_sends(), 0);
+    assert_eq!(recovery_test_attempts(), 0);
 
     // Reusing the original HWND with a different PID is invalid origin, not a
     // foreground return. The recovery owner tears down and keeps quarantine.
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(0x7788));
     sky_dispatch_win32::focus::set_foreground_owner_for_test(Some(Some(0x2222)));
-    std::thread::sleep(Duration::from_millis(80));
+    wait_for_recovery_poll(&poll_receiver, RecoveryForegroundPoll::OwnerMismatch);
     assert_eq!(recovery_test_raw_sends(), 0);
+    assert_eq!(
+        recovery_test_attempts(),
+        0,
+        "foreign owner must not attempt recovery"
+    );
     assert!(service.activity.physical_release_is_quarantined());
     authority.set_process_identity_status_for_test(
         sky_dispatch_win32::focus::WindowIdentityContinuity::ProcessTerminated,

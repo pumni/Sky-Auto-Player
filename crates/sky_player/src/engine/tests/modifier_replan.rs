@@ -8,6 +8,14 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 const TARGET_HWND: isize = 123;
 const TARGET_PID: u32 = 77;
 
+struct StartupCheckpointReleaseGuard(Arc<StartupOrderingHook>);
+
+impl Drop for StartupCheckpointReleaseGuard {
+    fn drop(&mut self) {
+        self.0.release_startup_checkpoint();
+    }
+}
+
 struct ForegroundOverrideReset;
 
 impl Drop for ForegroundOverrideReset {
@@ -28,6 +36,7 @@ fn mock_session(
     admission_checks: &Arc<AtomicUsize>,
     captures: &Arc<Mutex<Vec<MockSendInputCapture>>>,
     send_calls: &Arc<AtomicU64>,
+    startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
 ) -> NativeDispatchSession {
     let mut fault_script = FaultInjectionScript::none();
     fault_script.send_call_count = Some(Arc::clone(send_calls));
@@ -43,6 +52,7 @@ fn mock_session(
     );
     options.profile = DispatchProfile::MockTest;
     options.focus.require_focus = true;
+    options.startup_ordering_hook = startup_ordering_hook;
     let held = Arc::clone(held);
     let checks = Arc::clone(admission_checks);
     options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
@@ -131,6 +141,7 @@ fn production_worker_modifier_replan_backoff_preserves_due_up_and_fresh_chord_ga
         &admission_checks,
         &captures,
         &send_calls,
+        None,
     );
     session.arm(0).expect("arm production worker loop");
 
@@ -163,6 +174,7 @@ fn production_worker_modifier_replan_backoff_preserves_due_up_and_fresh_chord_ga
     );
 
     let checks_before_hold = admission_checks.load(Ordering::Acquire);
+    // Measure the production modifier backoff cadence during sustained hold.
     std::thread::sleep(Duration::from_millis(120));
     let held_admission_iterations = admission_checks
         .load(Ordering::Acquire)
@@ -204,7 +216,6 @@ fn production_worker_modifier_replan_backoff_preserves_due_up_and_fresh_chord_ga
     );
     let checks_at_modifier_release = admission_checks.load(Ordering::Acquire);
     held.store(false, Ordering::Release);
-    std::thread::sleep(Duration::from_millis(30));
     assert_eq!(
         captured_packets(&captures).len(),
         2,
@@ -303,6 +314,7 @@ fn owner_invalidation_interrupts_modifier_backoff_and_retains_origin_obligation(
         &admission_checks,
         &captures,
         &send_calls,
+        None,
     );
     session.arm(0).expect("arm production worker loop");
     wait_until(
@@ -314,10 +326,9 @@ fn owner_invalidation_interrupts_modifier_backoff_and_retains_origin_obligation(
     held.store(true, Ordering::Release);
     wait_until(
         Duration::from_secs(3),
-        || admission_checks.load(Ordering::Acquire) > prior_checks,
-        "modifier-held final admission",
+        || admission_checks.load(Ordering::Acquire) >= prior_checks + 2,
+        "repeated modifier-held final admission",
     );
-    std::thread::sleep(Duration::from_millis(20));
 
     let invalidated_at = Instant::now();
     session.invalidate_window_identity_authority_for_test();
@@ -376,7 +387,14 @@ fn terminal_controls_interrupt_modifier_replan_without_attempting_blocked_down()
             &[0x15, 0x16],
             1_000_000,
         );
-        let session = mock_session(schedule, &held, &admission_checks, &captures, &send_calls);
+        let session = mock_session(
+            schedule,
+            &held,
+            &admission_checks,
+            &captures,
+            &send_calls,
+            None,
+        );
         session.arm(0).expect("arm production worker loop");
         wait_until(
             Duration::from_secs(3),
@@ -387,10 +405,9 @@ fn terminal_controls_interrupt_modifier_replan_without_attempting_blocked_down()
         held.store(true, Ordering::Release);
         wait_until(
             Duration::from_secs(3),
-            || admission_checks.load(Ordering::Acquire) > prior_checks,
-            "modifier-held worker replan",
+            || admission_checks.load(Ordering::Acquire) >= prior_checks + 2,
+            "repeated modifier-held worker replan",
         );
-        std::thread::sleep(Duration::from_millis(20));
 
         match control {
             "quit" => session.quit().expect("Stop/quit request"),
@@ -664,7 +681,15 @@ fn overlapping_manual_pause_and_focus_loss_resumes_cleanly() {
         150_000,
     );
 
-    let session = mock_session(sched, &held, &admission_checks, &captures, &send_calls);
+    let startup_hook = Arc::new(StartupOrderingHook::default());
+    let session = mock_session(
+        sched,
+        &held,
+        &admission_checks,
+        &captures,
+        &send_calls,
+        Some(Arc::clone(&startup_hook)),
+    );
     session.arm(0).expect("arm worker loop");
 
     wait_until(
@@ -689,7 +714,11 @@ fn overlapping_manual_pause_and_focus_loss_resumes_cleanly() {
     // 3. Restore focus while manual pause is still active
     install_foreground(TARGET_HWND, TARGET_PID);
     session.set_focus_hint(true);
-    std::thread::sleep(Duration::from_millis(50));
+    wait_until(
+        Duration::from_secs(2),
+        || startup_hook.focus_restore_observed_count() > 0,
+        "worker observed focus restoration while manual pause remained active",
+    );
 
     // Session must remain paused because manual pause is still active!
     assert!(
@@ -756,7 +785,14 @@ fn simultaneous_stop_and_skip_during_modifier_wait() {
         1_000_000,
     );
 
-    let session = mock_session(sched, &held, &admission_checks, &captures, &send_calls);
+    let session = mock_session(
+        sched,
+        &held,
+        &admission_checks,
+        &captures,
+        &send_calls,
+        None,
+    );
     session.arm(0).expect("arm worker loop");
 
     wait_until(
@@ -1099,6 +1135,8 @@ fn modifier_hold_rearms_after_pause_resume() {
         "paused",
     );
 
+    // This pause spans the modifier timeout budget, proving paused time does
+    // not consume the active modifier hold deadline.
     std::thread::sleep(Duration::from_millis(150));
 
     held.store(false, Ordering::Release);
@@ -1124,7 +1162,9 @@ fn quit_concurrent_with_modifier_timeout_honors_quit() {
     let _foreground_reset = ForegroundOverrideReset;
     install_foreground(TARGET_HWND, TARGET_PID);
 
-    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let startup_hook = Arc::new(StartupOrderingHook::default());
+    startup_hook.arm_startup_checkpoint(StartupCheckpoint::ModifierTimeoutBoundary, 1);
+    let _checkpoint_release = StartupCheckpointReleaseGuard(Arc::clone(&startup_hook));
     let sched = schedule(
         &[OnsetChordInput {
             source_action_index: 0,
@@ -1147,14 +1187,14 @@ fn quit_concurrent_with_modifier_timeout_honors_quit() {
     options.profile = DispatchProfile::MockTest;
     options.focus.require_focus = true;
     options.wait.modifier_hold_timeout_us = 30_000;
+    options.startup_ordering_hook = Some(Arc::clone(&startup_hook));
 
-    let checks = Arc::clone(&admission_checks);
-    options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
-        if virtual_key == 0x5b {
-            checks.fetch_add(1, Ordering::AcqRel);
-        }
-        if virtual_key == 0x11 { i16::MIN } else { 0 }
-    }));
+    options.modifier_key_state_query_for_test =
+        Some(Arc::new(
+            move |virtual_key| {
+                if virtual_key == 0x11 { i16::MIN } else { 0 }
+            },
+        ));
 
     let session = NativeDispatchSession::new(options).expect("session admission");
     session.bind_initial_target_for_test(TARGET_HWND);
@@ -1171,11 +1211,13 @@ fn quit_concurrent_with_modifier_timeout_honors_quit() {
 
     session.arm(0).expect("arm worker loop");
 
-    // Allow modifier timeout budget to expire while modifier is held
-    std::thread::sleep(Duration::from_millis(45));
+    assert!(
+        startup_hook.wait_for_startup_checkpoint(Duration::from_secs(2)),
+        "worker did not reach the real modifier timeout boundary"
+    );
 
-    // Request Quit concurrently with expired modifier hold
     session.quit().expect("quit requested");
+    startup_hook.release_startup_checkpoint();
 
     assert!(
         session
@@ -1207,7 +1249,9 @@ fn skip_concurrent_with_modifier_timeout_honors_skip() {
     let _foreground_reset = ForegroundOverrideReset;
     install_foreground(TARGET_HWND, TARGET_PID);
 
-    let admission_checks = Arc::new(AtomicUsize::new(0));
+    let startup_hook = Arc::new(StartupOrderingHook::default());
+    startup_hook.arm_startup_checkpoint(StartupCheckpoint::ModifierTimeoutBoundary, 1);
+    let _checkpoint_release = StartupCheckpointReleaseGuard(Arc::clone(&startup_hook));
     let sched = schedule(
         &[OnsetChordInput {
             source_action_index: 0,
@@ -1230,14 +1274,14 @@ fn skip_concurrent_with_modifier_timeout_honors_skip() {
     options.profile = DispatchProfile::MockTest;
     options.focus.require_focus = true;
     options.wait.modifier_hold_timeout_us = 30_000;
+    options.startup_ordering_hook = Some(Arc::clone(&startup_hook));
 
-    let checks = Arc::clone(&admission_checks);
-    options.modifier_key_state_query_for_test = Some(Arc::new(move |virtual_key| {
-        if virtual_key == 0x5b {
-            checks.fetch_add(1, Ordering::AcqRel);
-        }
-        if virtual_key == 0x11 { i16::MIN } else { 0 }
-    }));
+    options.modifier_key_state_query_for_test =
+        Some(Arc::new(
+            move |virtual_key| {
+                if virtual_key == 0x11 { i16::MIN } else { 0 }
+            },
+        ));
 
     let session = NativeDispatchSession::new(options).expect("session admission");
     session.bind_initial_target_for_test(TARGET_HWND);
@@ -1254,11 +1298,13 @@ fn skip_concurrent_with_modifier_timeout_honors_skip() {
 
     session.arm(0).expect("arm worker loop");
 
-    // Allow modifier timeout budget to expire while modifier is held
-    std::thread::sleep(Duration::from_millis(45));
+    assert!(
+        startup_hook.wait_for_startup_checkpoint(Duration::from_secs(2)),
+        "worker did not reach the real modifier timeout boundary"
+    );
 
-    // Request Skip concurrently with expired modifier hold
     session.skip().expect("skip requested");
+    startup_hook.release_startup_checkpoint();
 
     assert!(
         session

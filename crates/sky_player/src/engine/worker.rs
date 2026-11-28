@@ -298,9 +298,6 @@ pub(crate) struct WorkerRuntime {
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) startup_ordering_hook: Option<Arc<StartupOrderingHook>>,
     #[cfg(any(test, feature = "test-support"))]
-    #[cfg(any(test, feature = "test-support"))]
-    pub(crate) focus_pause_hook: Option<super::config::FocusPauseHook>,
-    #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_post_focus_race_hook: Option<super::config::FinalGateRaceHook>,
     #[cfg(any(test, feature = "test-support"))]
     pub(crate) final_gate_post_lease_race_hook: Option<super::config::FinalGateRaceHook>,
@@ -621,9 +618,6 @@ impl<'a> Worker<'a> {
                     #[cfg(any(test, feature = "test-support"))]
                     startup_ordering_hook,
                     #[cfg(any(test, feature = "test-support"))]
-                    #[cfg(any(test, feature = "test-support"))]
-                    focus_pause_hook,
-                    #[cfg(any(test, feature = "test-support"))]
                         timer_lifecycle_context: _,
                     #[cfg(any(test, feature = "test-support"))]
                     prepared_packet_ambiguity_mask,
@@ -638,7 +632,6 @@ impl<'a> Worker<'a> {
         #[cfg(any(test, feature = "test-support"))]
         let runtime = WorkerRuntime {
             startup_ordering_hook,
-            focus_pause_hook,
             ..WorkerRuntime::default()
         };
         #[cfg(not(any(test, feature = "test-support")))]

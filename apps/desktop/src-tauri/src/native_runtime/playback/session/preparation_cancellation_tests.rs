@@ -364,7 +364,6 @@ fn prepared_mock_player_factory(
             },
             instrument_key_profile: None,
             startup_ordering_hook: Some(Arc::clone(&hook)),
-            focus_pause_hook: None,
             timer_lifecycle_context: None,
             prepared_packet_ambiguity_mask: None,
             preflight_user_held_mask: None,

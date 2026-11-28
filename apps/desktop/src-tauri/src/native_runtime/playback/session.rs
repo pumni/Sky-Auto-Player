@@ -959,8 +959,6 @@ impl NativePlaybackService {
                     #[cfg(feature = "tauri-test")]
                     startup_ordering_hook: None,
                     #[cfg(feature = "tauri-test")]
-                    focus_pause_hook: None,
-                    #[cfg(feature = "tauri-test")]
                     timer_lifecycle_context: None,
                     #[cfg(feature = "tauri-test")]
                     prepared_packet_ambiguity_mask: None,

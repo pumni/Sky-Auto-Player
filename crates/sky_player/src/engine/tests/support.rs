@@ -62,7 +62,6 @@ pub(super) fn test_session_options_with_timing_margin(
         instrument_key_profile: None,
         timing_observer_for_qualification: false,
         startup_ordering_hook: None,
-        focus_pause_hook: None,
         timer_lifecycle_context: None,
         prepared_packet_ambiguity_mask: None,
         preflight_user_held_mask: None,

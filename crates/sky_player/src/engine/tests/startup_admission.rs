@@ -1290,7 +1290,6 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
         pause_observed,
         "manual pause was not observed while focus was lost"
     );
-    std::thread::sleep(Duration::from_millis(40));
     assert_eq!(
         send_call_count.load(Ordering::Acquire),
         1,
@@ -1300,6 +1299,19 @@ fn production_worker_focus_restore_resumes_after_grace_with_mock_sender() {
     force_inconclusive_probe.store(false, Ordering::Release);
     sky_dispatch_win32::focus::set_foreground_window_for_test(Some(123));
     session.set_focus_hint(true);
+
+    let focus_restore_deadline = Instant::now() + Duration::from_secs(2);
+    while startup_hook.focus_restore_observed_count() == 0
+        && Instant::now() < focus_restore_deadline
+    {
+        session
+            .publish_supervisor_progress()
+            .expect("heartbeat while focus restoration is observed");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(startup_hook.focus_restore_observed_count(), 1);
+    // This real-duration observation stays inside the configured 120 ms focus
+    // restore grace; policy deadline arithmetic is covered with controlled QPC.
     std::thread::sleep(Duration::from_millis(30));
     assert!(
         session.snapshot_lite().is_paused,
@@ -1940,7 +1952,6 @@ fn arm_epoch_is_immutable_across_worker_boot_delay() {
     assert_eq!(session.pre_roll_us_for_test(), 0);
     assert_eq!(session.poll_state().status, EnginePollStatus::Preparing);
     assert!(!session.snapshot().startup_ready);
-    std::thread::sleep(Duration::from_millis(60));
     hook.release_startup_checkpoint();
     let ready_deadline = Instant::now() + Duration::from_secs(2);
     while session.epoch_qpc_for_test() == QpcTicks::ZERO {

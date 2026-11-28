@@ -36,9 +36,9 @@ pub fn run(attestation_path: Option<&Path>) -> Result<()> {
         return Err("missing repository RustSec policy: .cargo/audit.toml".into());
     }
     let audit_version = process::capture_text("cargo", &["audit", "--version"], &root, &[])?;
-    if audit_version != format!("cargo-audit {CARGO_AUDIT_VERSION}") {
+    if !is_supported_cargo_audit_version(&audit_version) {
         return Err(format!(
-            "cargo-audit version mismatch: expected cargo-audit {CARGO_AUDIT_VERSION}, got {audit_version}"
+            "cargo-audit version mismatch: expected cargo-audit {CARGO_AUDIT_VERSION} or cargo-audit-audit {CARGO_AUDIT_VERSION}, got {audit_version}"
         )
         .into());
     }
@@ -67,6 +67,10 @@ pub fn run(attestation_path: Option<&Path>) -> Result<()> {
     }
     println!("[xtask] cargo-vet supply-chain: PASS");
     Ok(())
+}
+
+fn is_supported_cargo_audit_version(version: &str) -> bool {
+    matches!(version, "cargo-audit 0.22.2" | "cargo-audit-audit 0.22.2")
 }
 
 fn evidence(root: &Path, relative: &str) -> Result<FileEvidence> {
@@ -118,5 +122,28 @@ mod tests {
         assert_eq!(POLICY_FILES[0], "supply-chain/audits.toml");
         assert_eq!(POLICY_FILES[1], "supply-chain/config.toml");
         assert_eq!(POLICY_FILES[2], "supply-chain/imports.lock");
+    }
+
+    #[test]
+    fn cargo_audit_accepts_only_the_two_pinned_complete_banners() {
+        assert!(is_supported_cargo_audit_version("cargo-audit 0.22.2"));
+        assert!(is_supported_cargo_audit_version("cargo-audit-audit 0.22.2"));
+
+        for unsupported in [
+            "",
+            "cargo-audit 0.22.1",
+            "cargo-audit-audit 0.22.1",
+            "cargo-audit-other 0.22.2",
+            "other-cargo-audit 0.22.2",
+            "cargo-audit 0.22.2 extra",
+            "cargo-audit-audit 0.22.2 extra",
+            "cargo-audit 0.22.2\nnoise",
+            "cargo-audit-audit 0.22.2\nnoise",
+        ] {
+            assert!(
+                !is_supported_cargo_audit_version(unsupported),
+                "unexpectedly accepted cargo-audit banner {unsupported:?}"
+            );
+        }
     }
 }

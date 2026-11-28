@@ -624,8 +624,6 @@ pub(super) fn production_options_for_fps(
         #[cfg(feature = "test-support")]
         startup_ordering_hook: None,
         #[cfg(feature = "test-support")]
-        focus_pause_hook: None,
-        #[cfg(feature = "test-support")]
         timer_lifecycle_context: None,
         #[cfg(feature = "test-support")]
         prepared_packet_ambiguity_mask: (scenario == Scenario::AmbiguousPacket).then_some(0b11),

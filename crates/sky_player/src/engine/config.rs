@@ -97,9 +97,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 #[cfg(any(test, feature = "test-support"))]
-pub(crate) type FocusPauseHook = Arc<dyn Fn() + Send + Sync>;
-
-#[cfg(any(test, feature = "test-support"))]
 pub(crate) type FinalGateRaceHook = Arc<
     dyn Fn(
             &AtomicBool,
@@ -180,8 +177,6 @@ pub struct NativeSessionOptions {
     #[cfg(any(test, feature = "test-support"))]
     pub timing_observer_for_qualification: bool,
     #[cfg(any(test, feature = "test-support"))]
-    pub focus_pause_hook: Option<FocusPauseHook>,
-    #[cfg(any(test, feature = "test-support"))]
     pub timer_lifecycle_context:
         Option<sky_dispatch_win32::timer::test_support::TimerLifecycleContext>,
     #[cfg(any(test, feature = "test-support"))]
@@ -214,6 +209,8 @@ pub struct StartupOrderingHook {
     pub(crate) up_only_sender_attempt_qpc_ticks: std::sync::Mutex<Option<(Option<u64>, u64, u64)>>,
     down_sender_wake_qpc_ticks: AtomicU64,
     down_sender_attempt_count: AtomicU64,
+    focus_restore_observed_count: AtomicU64,
+    focus_gate_rejected_count: AtomicU64,
     interrupted_wait_count: AtomicU64,
     interrupted_wait_evidence: std::sync::Mutex<Option<InterruptedWaitEvidence>>,
     prepared_schedule_executor_consumption_count: AtomicU64,
@@ -278,6 +275,8 @@ pub enum StartupCheckpoint {
     PhysicalWait = 16,
     #[cfg(any(test, feature = "test-support"))]
     DispatchWait = 17,
+    #[cfg(any(test, feature = "test-support"))]
+    ModifierTimeoutBoundary = 18,
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -523,6 +522,26 @@ impl StartupOrderingHook {
 
     pub fn down_sender_attempt_count(&self) -> u64 {
         self.down_sender_attempt_count.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn record_focus_restore_observed(&self) {
+        self.focus_restore_observed_count
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    pub(crate) fn record_focus_gate_rejected(&self) {
+        self.focus_gate_rejected_count
+            .fetch_add(1, Ordering::AcqRel);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn focus_restore_observed_count(&self) -> u64 {
+        self.focus_restore_observed_count.load(Ordering::Acquire)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn focus_gate_rejected_count(&self) -> u64 {
+        self.focus_gate_rejected_count.load(Ordering::Acquire)
     }
 
     /// Hold the real watchdog before its first age check for the delayed-watchdog
