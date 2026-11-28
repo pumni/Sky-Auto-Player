@@ -237,14 +237,15 @@ The remaining groups were then run on the clean implementation commit:
 | `P cargo fmt --all -- --check` | exit 0 | 2.659 s | Implementation checkout after F11 |
 | qualification-only `cargo test -p sky_player --bin rt-native-acceptance --features real-input-acceptance --locked -- --test-threads=1` via P | exit 0; 60 passed, 0 failed/ignored | 15.661 s outer | Test harness only; no physical-input entrypoint |
 
-Website CI steps ran sequentially in `apps/website`: frozen install 0.462 s;
-`bun run test:unit` 0.340 s (10 passed/93 expectations); `bun run check`
-18.081 s (51 files, 0 errors, 0 warnings, 1 hint); lint 3.481 s; format check
-2.671 s; build 5.187 s; dist verification 0.128 s (18 routes/17 static
-files); SEO verification 0.116 s (0 errors/warnings); `CI=true bun run
-test:functional` 30.532 s (115 passed, Playwright 26.7 s). The pinned Chromium
-was already installed on Windows; the Linux-only `playwright install --with-deps`
-step was not run.
+Website CI steps ran sequentially from `apps/website` in PowerShell:
+`bun install --frozen-lockfile` 0.462 s; `bun run test:unit` 0.340 s (10
+passed/93 expectations); `bun run check` 18.081 s (51 files, 0 errors, 0
+warnings, 1 hint); `bun run lint` 3.481 s; `bun run format:check` 2.671 s;
+`bun run build` 5.187 s; `bun run verify:dist` 0.128 s (18 routes/17 static
+files); `bun run verify:seo` 0.116 s (0 errors/warnings); and, after setting
+`$env:CI = 'true'`, `bun run test:functional` 30.532 s (115 passed, Playwright
+26.7 s). The pinned Chromium was already installed on Windows; the Linux-only
+`playwright install --with-deps` step was not run.
 
 Xtask's `process::run` suppresses successful child output. The Rust group log
 therefore proves all five leaves and the final command exit status, while the
