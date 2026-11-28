@@ -119,4 +119,3 @@ Decision requested: authorize a tested in-range ESLint/parser lock refresh to cl
 - Temp logs remain under the executor's local `%TEMP%\sky-auto-player-tr1-20261128-b8a3affc`; only the concise sample table, sanitized negative excerpts and canonical JSON are committed so review does not depend on TEMP access. The F03 trace is local and ignored, with its SHA-256 listed above.
 - No SendInput/gameplay path, live receiver, physical-input/ReceiveOnly qualification, production credential, release, deployment or merge was invoked. Test recovery used mocks. This is source/local verification, not physical-input evidence.
 - Hosted CI was not awaited. The final issue handoff records the workflow/status query immediately after the push; pending/absent checks are not reported as passed.
-
