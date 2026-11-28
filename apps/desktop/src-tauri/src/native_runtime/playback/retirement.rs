@@ -30,9 +30,11 @@ pub(in crate::native_runtime) enum RecoveryForegroundPoll {
 }
 
 #[cfg(all(test, feature = "tauri-test"))]
-static RECOVERY_TEST_POLL_HOOK: Mutex<
-    Option<Arc<dyn Fn(String, RecoveryForegroundPoll, bool) + Send + Sync>>,
-> = Mutex::new(None);
+pub(in crate::native_runtime) type RecoveryPollTestHook =
+    Arc<dyn Fn(String, RecoveryForegroundPoll, bool) + Send + Sync>;
+
+#[cfg(all(test, feature = "tauri-test"))]
+static RECOVERY_TEST_POLL_HOOK: Mutex<Option<RecoveryPollTestHook>> = Mutex::new(None);
 
 #[cfg(test)]
 pub(in crate::native_runtime) fn reset_recovery_test_raw_sends() {
@@ -76,9 +78,7 @@ pub(in crate::native_runtime) fn set_recovery_test_probe_hook(
 }
 
 #[cfg(all(test, feature = "tauri-test"))]
-pub(in crate::native_runtime) fn set_recovery_test_poll_hook(
-    hook: Option<Arc<dyn Fn(String, RecoveryForegroundPoll, bool) + Send + Sync>>,
-) {
+pub(in crate::native_runtime) fn set_recovery_test_poll_hook(hook: Option<RecoveryPollTestHook>) {
     *RECOVERY_TEST_POLL_HOOK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner) = hook;
