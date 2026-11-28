@@ -31,9 +31,8 @@ pub(super) use retirement::{
 };
 #[cfg(all(test, feature = "tauri-test"))]
 pub(super) use retirement::{
-    RecoveryForegroundPoll, recovery_test_attempts, recovery_test_probe_calls,
-    reset_recovery_test_attempts, set_recovery_test_poll_hook, set_recovery_test_probe_hook,
-    set_recovery_test_probe_result,
+    RecoveryForegroundPoll, recovery_test_probe_calls, set_recovery_test_poll_hook,
+    set_recovery_test_probe_hook, set_recovery_test_probe_result,
 };
 #[cfg(test)]
 pub(super) use retirement::{
