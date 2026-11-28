@@ -62,11 +62,47 @@ WinEvent hint source; it never grants sender admission.
 Each state has one owner and each module has a focused invariant:
 
 - `sky_app_core` owns pure application and domain policy (parsing, validation, sheet models). Catalog identity/path normalization and WRatio ranking live in `catalog/identity.rs` and `catalog/ranking.rs`; the legacy song parser, schedule, and risk analysis live in `song/legacy.rs`, `song/schedule.rs`, and `song/risk.rs` behind the existing facades.
-- `sky_native_adapters` encapsulates concrete filesystem, process, and Win32 host adapters. Settings and library persistence live in `settings_store.rs` and `library_store.rs`; the catalog source/composition modules live under `catalog/`; settings and catalog-cache writes share the platform-aware `atomic_file.rs` replacement implementation.
+- `sky_native_adapters` encapsulates concrete filesystem and process adapters. Settings and library persistence live in `settings_store.rs` and `library_store.rs`; the catalog source/composition modules live under `catalog/`; settings and catalog-cache writes share the platform-aware `atomic_file.rs` replacement implementation. Direct Win32 waiting, focus, priority, power and input effects remain in `sky_dispatch_win32`.
 - **sky_player** owns the playback worker, target authority, admission/control, QPC timing, telemetry, and worker cleanup. **sky_desktop_shell** owns playback-service orchestration, ordered worker join and retirement, post-join recovery coordination, and UI publication.
 - `sky_dispatch_core` owns pure onset-plan validation and completion-anchored pulse scheduling policy.
 - `sky_dispatch_win32` owns Windows wait, focus, priority, and `SendInput` boundaries.
 - `sky_desktop_shell` (`apps/desktop/src-tauri`) owns Tauri command decoding, delivery DTO translation, and the Rust-owned `UpdateService` policy boundary. It contains no song scheduling, risk analysis, persisted-settings migration, or realtime dispatch algorithms.
+
+### Source organization conventions
+
+Keep package roots and executable entry points focused on composition and
+routing. Give each policy, state owner, and platform effect one implementation
+owner; retain existing public paths with explicit re-exports instead of a
+second implementation. Migrate callers with an extraction and remove the old
+private implementation and unused wrappers.
+
+Place tests beside their implementation or in a dedicated test owner guarded by
+`cfg(test)`. Production source guards must inspect the physical production
+owner separately from its test owner. Keep runnable commands such as the
+release CLI self-test in production-compiled modules when the CLI exposes them;
+keep their regression suites under `cfg(test)`. The 500-line module target and
+800-line review threshold are guidance for cohesion, not enforced limits.
+
+Workspace dependency inheritance must preserve each dependency's package,
+source, version, optionality, default-feature setting, enabled features, kind,
+and target condition. Verify effective locked metadata and relevant feature
+projections after manifest changes. Keep the existing IPC binding generator and
+check as the source for generated TypeScript contracts. Safety boundaries,
+dependency direction, production features, and package/release checks remain
+enforced contracts.
+
+### Repository tooling owners
+
+- `xtask/src/ci_classifier.rs` owns conservative changed-path lane selection;
+  classifier fixtures live in `ci_classifier/tests.rs` under `cfg(test)`.
+- `xtask/src/release_v4.rs` owns release transaction authority. Its
+  `release_v4/selftest.rs` module is production-compiled so
+  `cargo xtask release-v4 self-test` remains runnable; scenario regression
+  tests live in `release_v4/tests.rs` under `cfg(test)`.
+- `xtask/src/updater_fixture.rs` owns the isolated updater fixture build and
+  source identity; `updater_fixture/http.rs` owns the loopback protocol and
+  `updater_fixture/tests.rs` owns its regressions. The source guards inspect
+  each production and test owner separately.
 
 ## Native desktop ownership
 

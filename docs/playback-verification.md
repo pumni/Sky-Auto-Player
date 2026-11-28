@@ -375,6 +375,11 @@ after its `dispatch_memory` output:
     let memory = prepared.memory_metrics();
     eprintln!("prepared_dispatch_memory chords={chord_count} compiler_phase_peak_capacity_bytes={} prepared_plan_capacity_bytes={} prepare_overlapping_peak_capacity_bytes={}", compile_memory.phase_peak_capacity_bytes, memory.plan_capacity_bytes, memory.overlapping_peak_capacity_bytes);
 
+That frozen baseline predates the root-workspace cutover; its
+`rust/Cargo.toml` and `rust/crates/` paths apply only inside this exact
+disposable baseline checkout. Current source commands use the repository-root
+workspace paths.
+
 Then run the same `SKY_MEMORY_CHORD_COUNT=10000` cargo test command with
 `--manifest-path (Join-Path $baseline 'rust/Cargo.toml')`. Restore only
 `rust/crates/sky_dispatch_core/src/executor/memory_tests.rs` in that disposable
