@@ -479,8 +479,15 @@ Each role's digest and geometry must also equal the immutable expected stream in
 
 Generate the evidence by running the existing no-send test in a clean checkout of each exact source tree, with the pinned toolchain:
 
-    $workspaceManifest = if (Test-Path Cargo.toml) { 'Cargo.toml' } else { 'rust/Cargo.toml' }
-    node scripts/toolchain-pin.mjs exec -- cargo test --manifest-path $workspaceManifest -p sky_player --features real-input-acceptance --bin rt-native-acceptance paired_workloads_match_the_immutable_pr_base_authored_streams
+For a current root-workspace candidate, use its root manifest:
+
+    $workspaceManifest = 'Cargo.toml'
+    node scripts/toolchain-pin.mjs exec -- cargo test --locked --manifest-path $workspaceManifest -p sky_player --features real-input-acceptance --bin rt-native-acceptance paired_workloads_match_the_immutable_pr_base_authored_streams
+
+An immutable pre-root-workspace baseline uses `rust/Cargo.toml` only in that
+revision's own checkout. Keep that historical path explicit and bind its use
+to the recorded baseline revision; current source has no nested-workspace
+fallback.
 
 The test asserts the expected digest and geometry itself and sends no input; record the command, exit code, revision, tree and lock hash per role, and write the object file outside tracked source. Use `ConvertFrom-Json` on that file as `$parityEvidence`. Any new commit invalidates the candidate record; rerun it before reusing the evidence.
 

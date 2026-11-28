@@ -30,7 +30,7 @@ Windows 11 Tauri 2/React desktop with Rust-native sheet playback for Sky.
   Investigate drift. Preserve live public/wire identifiers and behavior, not
   obsolete private names, layouts or implementations. Escalate material
   ambiguity, consequential design decisions or missing required evidence.
-- Rust workspace: `rust/`. From the repo root use
+- Rust workspace: repository root. From the repo root use
   `node scripts/toolchain-pin.mjs exec -- cargo ...` (see [Rust pin](docs/rust-toolchain-policy.md)).
   Desktop and website have independent Bun manifests/locks; use the owning
   app directory and the root `.bun-version`. No Python product runtime or

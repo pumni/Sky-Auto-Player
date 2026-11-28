@@ -9,20 +9,25 @@ no separate scripting runtime in the packaged application.
 ```text
 apps/desktop/       React + Vite frontend and Tauri shell
 apps/website/       independent static Astro site for GitHub Pages
-rust/               Cargo workspace: domain, native adapters, desktop shell, xtask
+crates/             Rust libraries: domain, dispatch, player, adapters, security
+xtask/              Rust repository checks, audits and release tooling
+build_support/      shared Rust build-time support
+supply-chain/       Cargo Vet policy and review data
 songs/              built-in sheet files packaged by the desktop app
 builtin-songs/      immutable built-in catalog manifest and metadata
 scripts/            repository and release qualification helpers
+Cargo.toml          root Cargo workspace manifest
+Cargo.lock          root workspace dependency lock
+rust-toolchain.toml pinned Rust compiler and components
 ```
 
-The Rust workspace remains under `rust/` because its Cargo config, lockfile,
-target directory, and workspace membership define one shared native build
-boundary. The Tauri crate joins that workspace through its path at
-`apps/desktop/src-tauri`; package names such as `sky_desktop_shell` and
-`sky_app_core` remain stable responsibility names used by Cargo commands and
-CI. Desktop and website keep their own `package.json` and `bun.lock` so each
-app has a frozen, independently validated dependency graph. There is no root
-Bun workspace or duplicate root JavaScript manifest.
+The root Cargo manifest defines the single Rust workspace, including the
+libraries, repository tooling, and Tauri shell at `apps/desktop/src-tauri`.
+Package names such as `sky_desktop_shell` and `sky_app_core` remain stable
+responsibility names used by Cargo commands and CI. Desktop and website keep
+their own `package.json` and `bun.lock` so each app has a frozen, independently
+validated dependency graph. There is no root Bun workspace or duplicate root
+JavaScript manifest.
 
 The website builds static Pages output without invoking Cargo or Tauri. The
 desktop Vite bundle is consumed by the Tauri shell, which packages the Rust

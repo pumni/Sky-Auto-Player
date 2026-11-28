@@ -413,10 +413,6 @@ fn classify_path(
         ]);
         return;
     }
-    if path.starts_with("supply-chain/") {
-        classification.add("supply_chain_required");
-        return;
-    }
     if path.starts_with("crates/") {
         classification.add_many(&[
             "rust_required",
@@ -1417,7 +1413,37 @@ mod tests {
         );
         assert_lanes(
             &classify_paths(["supply-chain/config.toml".to_owned()]),
-            &["supply_chain_required"],
+            &LANES,
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn supply_chain_policy_only_change_fails_closed_to_full_validation() {
+        let root = temp_dir("supply-chain-policy-only-classifier");
+        git(&root, &["init"]);
+        git(&root, &["config", "user.name", "Test"]);
+        git(&root, &["config", "user.email", "test@example.invalid"]);
+        fs::create_dir_all(root.join("supply-chain")).unwrap();
+        let policy = root.join("supply-chain/config.toml");
+        fs::write(&policy, "[policy]\nversion = 1\n").unwrap();
+        git(&root, &["add", "supply-chain/config.toml"]);
+        git(&root, &["commit", "-m", "initial supply-chain policy"]);
+        let base = git_sha(&root);
+
+        fs::write(&policy, "[policy]\nversion = 2\n").unwrap();
+        git(&root, &["add", "supply-chain/config.toml"]);
+        git(&root, &["commit", "-m", "change supply-chain policy"]);
+        let head = git_sha(&root);
+
+        let paths = changed_paths_from_git(&root, DiffMode::Push, &base, &head, None).unwrap();
+        assert_eq!(paths, ["supply-chain/config.toml".to_owned()]);
+        let classification = classify_git_paths(paths, DiffMode::Push);
+        assert_lanes(&classification, &LANES);
+        assert!(
+            classification
+                .classification_reason
+                .contains("unknown path requires full validation")
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1756,7 +1782,8 @@ mod tests {
                     "supply_chain_required",
                 ],
             ),
-            ("supply-chain/config.toml", &["supply_chain_required"]),
+            ("supply-chain/config.toml", &LANES),
+            ("build_support/git_metadata.rs", &LANES),
             (
                 "crates/sky_player/Cargo.toml",
                 &[
