@@ -1,0 +1,787 @@
+runner	source	line	column	selector
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > renders the navigator, track browser, utility details, and settings
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > supports keyboard navigation in the virtualized track table
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > focuses the global search input from the keyboard shortcut
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > ignores a malformed keydown event without a string key
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > does not prevent slash input in an editable control
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > opens Settings and toggles the Inspector from documented shortcuts
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > keeps Ctrl+I and Ctrl+, from hijacking an editable field or modal
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > filters library rows from global search input
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > selects the last row on the active Built-in page with End
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > keeps the window available when native startup fails
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > applies the restored palette before revealing the native window
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > waits for the native System theme before first reveal and follows later OS changes
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > reveals the committed fatal bootstrap screen
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > reveals the branded startup screen after the bounded bootstrap delay
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > keeps the 2.5-second fail-open reveal while bootstrap and the native theme getter are pending
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > keeps StrictMode startup to one native subscription and one window reveal
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > ordinary App ignores a forged %s smoke trigger
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > ordinary App ignores a smoke event dispatched before React mounts
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > ordinary App fails closed when bootstrap omits gui_smoke
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > ordinary App fails closed when bootstrap is unavailable
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > isolated smoke hook ignores triggers when authorized is false
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > native-authorized App runs the smoke once from the persistent global
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > flushes the catalog readiness marker before packaged smoke shutdown
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > native-authorized App starts from a post-mount event and stays one-shot
+desktop-vitest-list	src/app/App.test.tsx			desktop application shell > opens the docked utility diagnostics and closes with Escape
+desktop-vitest-list	src/app/ErrorBoundary.test.tsx			ErrorBoundary recovery > renders children when they do not throw
+desktop-vitest-list	src/app/ErrorBoundary.test.tsx			ErrorBoundary recovery > instructs Tauri users to reopen the full application without offering a page reload
+desktop-vitest-list	src/app/ErrorBoundary.test.tsx			ErrorBoundary recovery > retains the page reload action for browser users
+desktop-vitest-list	src/appearance/applyAppearance.test.ts			applyAppearance > applies the resolved mode and saved dark palette while removing legacy theme state
+desktop-vitest-list	src/appearance/graphiteThemeTokens.test.ts			Sky Graphite 2 semantic theme > keeps pre-React first-paint roles synchronized with the runtime themes
+desktop-vitest-list	src/appearance/graphiteThemeTokens.test.ts			Sky Graphite 2 semantic theme > uses the approved Graphite 2 indigo actions and preserves the light pairing
+desktop-vitest-list	src/appearance/graphiteThemeTokens.test.ts			Sky Graphite 2 semantic theme > maps hover, pressed, destructive, and scrim tokens into Tailwind utilities
+desktop-vitest-list	src/appearance/graphiteThemeTokens.test.ts			Sky Graphite 2 semantic theme > keeps text, scrollbar, input, focus, and action pairs above WCAG AA contrast
+desktop-vitest-list	src/appearance/graphiteThemeTokens.test.ts			Sky Graphite 2 semantic theme > keeps all six dark palettes color-only, avoids duplicate Graphite declarations, preserves non-Graphite inherited roles, and matches Settings preview swatches
+desktop-vitest-list	src/appearance/resolveAppearance.test.ts			resolveAppearance > follows the supplied system mode and retains the dark palette
+desktop-vitest-list	src/appearance/resolveAppearance.test.ts			resolveAppearance > lets explicit Light and Dark ignore the system mode
+desktop-vitest-list	src/appearance/useSystemAppearance.test.tsx			useSystemAppearance > shares a single active subscription across multiple components and unregisters on teardown
+desktop-vitest-list	src/appearance/useSystemAppearance.test.tsx			useSystemAppearance > drops stale ready resolution from previous generation when remounted
+desktop-vitest-list	src/appearance/useSystemAppearance.test.tsx			useSystemAppearance > handles ready rejection safely without throwing unhandled errors
+desktop-vitest-list	src/appearance/useSystemAppearance.test.tsx			useSystemAppearance > handles setup -> cleanup -> setup lifecycle without subscription leaks and receives theme updates
+desktop-vitest-list	src/appearance/useSystemAppearance.test.tsx			useSystemAppearance > operates correctly inside React StrictMode wrapper
+desktop-vitest-list	src/bridge/mockBridge.test.ts			mock bridge timing contracts > defaults fresh mock settings to System and keeps the dark palette independent
+desktop-vitest-list	src/bridge/mockBridge.test.ts			mock bridge timing contracts > loads URL release-note fixtures through the browser mock
+desktop-vitest-list	src/bridge/mockBridge.test.ts			mock bridge timing contracts > prefers an explicit update snapshot over a URL release-note fixture
+desktop-vitest-list	src/bridge/mockBridge.test.ts			mock bridge timing contracts > prefers an explicit transport error over a URL error fixture
+desktop-vitest-list	src/bridge/mockBridge.test.ts			mock bridge timing contracts > keeps the default update fixture with no fixture query
+desktop-vitest-list	src/bridge/mockBridge.test.ts			mock bridge timing contracts > emits diagnostics with retired miss counters zeroed
+desktop-vitest-list	src/bridge/mockBridge.test.ts			mock bridge timing contracts > exports the current sender-trace envelope and timing-policy schemas
+desktop-vitest-list	src/bridge/mockUpdateFixtures.test.ts			browser mock update fixtures > creates the $name release-note fixture
+desktop-vitest-list	src/bridge/mockUpdateFixtures.test.ts			browser mock update fixtures > creates the 4,096-character long-error fixture
+desktop-vitest-list	src/bridge/mockUpdateFixtures.test.ts			browser mock update fixtures > ignores unrelated or unsupported update fixture query %s
+desktop-vitest-list	src/bridge/tauriBridge.test.ts			Tauri command bridge > uses the Rust command parameter name for every payload command
+desktop-vitest-list	src/bridge/tauriBridge.test.ts			Tauri command bridge > does not send an argument object for no-parameter commands
+desktop-vitest-list	src/bridge/tauriBridge.test.ts			Tauri command bridge > keeps command argument encoding independently testable
+desktop-vitest-list	src/platform/startupWindowReveal.test.ts			startup window reveal coordinator > coalesces StrictMode-ready and fatal reveal requests into one show
+desktop-vitest-list	src/platform/startupWindowReveal.test.ts			startup window reveal coordinator > reveals once after the slow-bootstrap timeout and cancels later triggers
+desktop-vitest-list	src/platform/startupWindowReveal.test.ts			startup window reveal coordinator > reports an actionable error when the native show request fails
+desktop-vitest-list	src/platform/startupWindowReveal.test.ts			startup window reveal coordinator > preserves the coordinator across HMR module replacement
+desktop-vitest-list	src/platform/startupWindowReveal.test.ts			startup window reveal coordinator > acknowledges the native startup reveal after the window show succeeds
+desktop-vitest-list	src/platform/startupWindowReveal.test.ts			startup window reveal coordinator > keeps native fallback eligible when the completion acknowledgment fails
+desktop-vitest-list	src/platform/startupWindowReveal.test.ts			startup window reveal coordinator > does not call native window APIs or create timers in browser environments
+desktop-vitest-list	src/platform/systemAppearance.test.ts			system appearance subscription > uses the native theme event over a stale asynchronous getter result
+desktop-vitest-list	src/platform/systemAppearance.test.ts			system appearance subscription > cleans up a native theme listener that resolves after unsubscription
+desktop-vitest-list	src/platform/systemAppearance.test.ts			system appearance subscription > tracks browser media changes and removes its listener on cleanup
+desktop-vitest-list	src/platform/systemAppearance.test.ts			system appearance subscription > uses media events if the packaged native theme listener is unavailable
+desktop-vitest-list	src/state/retiredSessions.test.ts			retired session history > keeps a bounded insertion-ordered window large enough for the native event history
+desktop-vitest-list	src/state/store.test.ts			desktop store > checks updates once after bootstrap on each fresh app launch
+desktop-vitest-list	src/state/store.test.ts			desktop store > defaults Shuffle off and persists Auto Play on
+desktop-vitest-list	src/state/store.test.ts			desktop store > drops stale sheet detail responses after a pitch change and revokes old loss proposals
+desktop-vitest-list	src/state/store.test.ts			desktop store > loads authoritative navigation while the first catalog page is still pending
+desktop-vitest-list	src/state/store.test.ts			desktop store > loads native navigation when bootstrap reports that catalog loading is still in progress
+desktop-vitest-list	src/state/store.test.ts			desktop store > ignores older navigation after a catalog generation change and repeated event
+desktop-vitest-list	src/state/store.test.ts			desktop store > refreshes navigation after an older response overlaps a playlist rename
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps pending playlist mutation state and refreshes after stale navigation settles
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps catalog loading and failure states separate from shell readiness
+desktop-vitest-list	src/state/store.test.ts			desktop store > does not overwrite a catalog failure received while bootstrap is loading
+desktop-vitest-list	src/state/store.test.ts			desktop store > uses the authoritative settings snapshot from bootstrap
+desktop-vitest-list	src/state/store.test.ts			desktop store > derives Now Playing from playback identity without changing the selected song
+desktop-vitest-list	src/state/store.test.ts			desktop store > creates a deterministic shuffle permutation that visits every context index once
+desktop-vitest-list	src/state/store.test.ts			desktop store > builds Built-in Shuffle traversal from the full source rather than the visible page
+desktop-vitest-list	src/state/store.test.ts			desktop store > boots, searches, selects a song, and applies a catalog event
+desktop-vitest-list	src/state/store.test.ts			desktop store > retries cached catalog hydration when reconciliation changes the generation mid-search
+desktop-vitest-list	src/state/store.test.ts			desktop store > bounds generation retries and converges through queued catalog changes
+desktop-vitest-list	src/state/store.test.ts			desktop store > discards an older search response
+desktop-vitest-list	src/state/store.test.ts			desktop store > merges a joined in-flight page for the newest A-B-A search token
+desktop-vitest-list	src/state/store.test.ts			desktop store > scopes browser selection to its search while preserving native Now Playing
+desktop-vitest-list	src/state/store.test.ts			desktop store > reuses same-generation search cache and refetches during reload reconciliation
+desktop-vitest-list	src/state/store.test.ts			desktop store > bounds resolved page history across playlist switches and catalog generations
+desktop-vitest-list	src/state/store.test.ts			desktop store > invalidates the Liked Songs projection while preserving unrelated search pages
+desktop-vitest-list	src/state/store.test.ts			desktop store > invalidates playlist membership pages without clearing All Songs pages
+desktop-vitest-list	src/state/store.test.ts			desktop store > reloads the active Liked page after a membership change at a deep viewport
+desktop-vitest-list	src/state/store.test.ts			desktop store > does not reuse an evicted selected ordinal after an earlier Liked member is removed
+desktop-vitest-list	src/state/store.test.ts			desktop store > clears browser selection when its source or playlist-add scope changes
+desktop-vitest-list	src/state/store.test.ts			desktop store > loads and selects a song beyond the native page limit
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps the 96-song catalog complete with a single bounded active page
+desktop-vitest-list	src/state/store.test.ts			desktop store > uses explicit built-in membership instead of the All Songs result set
+desktop-vitest-list	src/state/store.test.ts			desktop store > pages the explicit built-in membership for %i songs in 100-row transfers
+desktop-vitest-list	src/state/store.test.ts			desktop store > commits only the latest built-in page intent in %s context and keeps the prior page visible
+desktop-vitest-list	src/state/store.test.ts			desktop store > drops an older built-in page response after the query changes
+desktop-vitest-list	src/state/store.test.ts			desktop store > drops an older built-in page response after source navigation
+desktop-vitest-list	src/state/store.test.ts			desktop store > preserves selection and detail on page-load failure and retries that target
+desktop-vitest-list	src/state/store.test.ts			desktop store > rejects a page response with a mismatched result count before committing it
+desktop-vitest-list	src/state/store.test.ts			desktop store > bounds a 10,000-song scroll sweep, pins selection/playback, and reloads evicted pages
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps All-page reads and Next moving while a Like write is deferred
+desktop-vitest-list	src/state/store.test.ts			desktop store > rejects a visible range spanning four pages instead of omitting its last page
+desktop-vitest-list	src/state/store.test.ts			desktop store > reuses deep detail from the bounded song cache
+desktop-vitest-list	src/state/store.test.ts			desktop store > does not start another detail request when the selected song is still loading
+desktop-vitest-list	src/state/store.test.ts			desktop store > clears selected detail and rejects an older detail response after catalog.changed
+desktop-vitest-list	src/state/store.test.ts			desktop store > hydrates filtered-result song IDs without confusing them with catalog indices
+desktop-vitest-list	src/state/store.test.ts			desktop store > coalesces only identical in-flight viewport hydration requests
+desktop-vitest-list	src/state/store.test.ts			desktop store > retries a failed viewport hydration on the next identical request
+desktop-vitest-list	src/state/store.test.ts			desktop store > retries an incomplete viewport hydration on the next identical request
+desktop-vitest-list	src/state/store.test.ts			desktop store > retries viewport hydration when a Like mutation overtakes its response
+desktop-vitest-list	src/state/store.test.ts			desktop store > drops viewport hydration from a source that is no longer active
+desktop-vitest-list	src/state/store.test.ts			desktop store > drops an older viewport response after rapid scrolling within one source
+desktop-vitest-list	src/state/store.test.ts			desktop store > persists liked source state through the native bridge contract
+desktop-vitest-list	src/state/store.test.ts			desktop store > serializes repeated Like changes so the latest mutation owns the result
+desktop-vitest-list	src/state/store.test.ts			desktop store > loads playlist navigation summaries and keeps membership out of catalog pages
+desktop-vitest-list	src/state/store.test.ts			desktop store > imports local songs directly into a target playlist without exposing paths
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps the playlist selected while browsing Built-in Songs to add
+desktop-vitest-list	src/state/store.test.ts			desktop store > treats a playlist import cancellation as a no-op
+desktop-vitest-list	src/state/store.test.ts			desktop store > serializes settings mutations in user-intent order and preserves fields
+desktop-vitest-list	src/state/store.test.ts			desktop store > returns null and preserves cached settings when a settings patch fails
+desktop-vitest-list	src/state/store.test.ts			desktop store > preserves a ready plan across palette and combined palette/Auto Play patches
+desktop-vitest-list	src/state/store.test.ts			desktop store > discards an in-flight prepare when the catalog generation changes
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps an in-flight prepare current through a palette patch and accepts its late response
+desktop-vitest-list	src/state/store.test.ts			desktop store > preserves an existing plan when a settings patch is rejected
+desktop-vitest-list	src/state/store.test.ts			desktop store > invalidates preparation for a queued mixed palette and timing patch
+desktop-vitest-list	src/state/store.test.ts			desktop store > detaches a prepared plan when the selected song changes
+desktop-vitest-list	src/state/store.test.ts			desktop store > discards an in-flight prepare after selection changes
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps the prepared/active song title while browsing another song
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps an explicit Now Playing identity when Library selection changes
+desktop-vitest-list	src/state/store.test.ts			desktop store > coalesces concurrent prepare requests for the selected song
+desktop-vitest-list	src/state/store.test.ts			desktop store > coalesces repeated starts of the same prepared playback
+desktop-vitest-list	src/state/store.test.ts			desktop store > does not issue Pause while playback is still starting
+desktop-vitest-list	src/state/store.test.ts			desktop store > clears Pause and Resume operation state only after matching lifecycle events
+desktop-vitest-list	src/state/store.test.ts			desktop store > retires terminal ownership and does not treat a normal finish message as an error
+desktop-vitest-list	src/state/store.test.ts			desktop store > naturally finishes at the context end into a replayable idle state
+desktop-vitest-list	src/state/store.test.ts			desktop store > automatically starts the next context song after natural retirement
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps auto-advance ordered when successor playing arrives before start resolves
+desktop-vitest-list	src/state/store.test.ts			desktop store > does not let an old session playing event clear explicit Next
+desktop-vitest-list	src/state/store.test.ts			desktop store > waits for the Auto Play handoff after natural retirement
+desktop-vitest-list	src/state/store.test.ts			desktop store > starts explicit Next without the natural Auto Play handoff
+desktop-vitest-list	src/state/store.test.ts			desktop store > cancels a pending natural advance when Auto Play is disabled
+desktop-vitest-list	src/state/store.test.ts			desktop store > continues natural Auto Play from its frozen context when Library search changes before finish
+desktop-vitest-list	src/state/store.test.ts			desktop store > continues natural Auto Play when Library search changes during handoff
+desktop-vitest-list	src/state/store.test.ts			desktop store > cancels pending natural Auto Play when playback membership is invalidated
+desktop-vitest-list	src/state/store.test.ts			desktop store > uses the shuffled successor for natural Auto Play
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps dry-run Test playback one-shot when Auto Play is enabled
+desktop-vitest-list	src/state/store.test.ts			desktop store > uses the same shuffled history for Next and Previous, then resumes sequentially when disabled
+desktop-vitest-list	src/state/store.test.ts			desktop store > Shuffle Previous restarts the current shuffled item after three seconds
+desktop-vitest-list	src/state/store.test.ts			desktop store > turning Auto Play off during a song keeps natural finish replayable on that song
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps a prepared plan when Auto Play alone is patched
+desktop-vitest-list	src/state/store.test.ts			desktop store > Next retires the active session before starting its context neighbor
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps dry-run isolation when Previous and Next replace the active session
+desktop-vitest-list	src/state/store.test.ts			desktop store > resolves Next from the frozen source and query without rewriting the current Library view
+desktop-vitest-list	src/state/store.test.ts			desktop store > lazily loads a context page for Next and keeps risk confirmation before starting it
+desktop-vitest-list	src/state/store.test.ts			desktop store > auto-plays across a Built-in Songs page boundary using the full source context
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps a next-song risk confirmation owned until confirm or cancel
+desktop-vitest-list	src/state/store.test.ts			desktop store > Previous restarts after three seconds and selects the prior item near the beginning
+desktop-vitest-list	src/state/store.test.ts			desktop store > does nothing at the traversal origin before the restart threshold, then restarts after it
+desktop-vitest-list	src/state/store.test.ts			desktop store > explicit Stop retires the session without advancing the frozen context
+desktop-vitest-list	src/state/store.test.ts			desktop store > Stop preempts starting after the native session is bound
+desktop-vitest-list	src/state/store.test.ts			desktop store > binds a native session from reconciliation when its start response is delayed
+desktop-vitest-list	src/state/store.test.ts			desktop store > releases a never-resolving start when native status reports no session
+desktop-vitest-list	src/state/store.test.ts			desktop store > does not mistake a retired terminal for a replay of the same song
+desktop-vitest-list	src/state/store.test.ts			desktop store > restores actionable native failure details when the terminal event is missing
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps ownership while status is unknown, then enables Play after authoritative no-session status
+desktop-vitest-list	src/state/store.test.ts			desktop store > reconciles a missing terminal event after Stop from the native retirement status
+desktop-vitest-list	src/state/store.test.ts			desktop store > restores Pause and Resume controls when their confirmation events are missing
+desktop-vitest-list	src/state/store.test.ts			desktop store > invalidates a Liked Songs context when the playing song is unliked
+desktop-vitest-list	src/state/store.test.ts			desktop store > invalidates a Playlist context when its playing song is removed
+desktop-vitest-list	src/state/store.test.ts			desktop store > binds a short session whose events arrive before start resolves
+desktop-vitest-list	src/state/store.test.ts			desktop store > rejects late events from a retired session after browsing another song
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps diagnostic samples and human events bounded without duplicating snapshots
+desktop-vitest-list	src/state/store.test.ts			desktop store > starts a new diagnostic sample history when the native session changes
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps utility presentation state separate from diagnostics data
+desktop-vitest-list	src/state/store.test.ts			desktop store > restores utility open state on Details and persists only the open state
+desktop-vitest-list	src/state/store.test.ts			desktop store > bounds diagnostic event text by UTF-8 bytes
+desktop-vitest-list	src/state/store.test.ts			desktop store > restores Playing and Paused from authoritative Retry status without an error
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps Starting recoverable with Retry status and Stop after reconciliation
+desktop-vitest-list	src/state/store.test.ts			desktop store > keeps the owned session and recovery actions when Retry status also fails
+desktop-vitest-list	src/state/store.test.ts			desktop store > deduplicates Retry status calls and rejects a stale response after a newer session binds
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > manual check opens dialog, calls bridge with manual origin, and presents Current terminal result
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > native updater error emits snapshot, surfaces error code and detail, and updates native error timestamp
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > thrown bridge/IPC failure records transportError without inventing timestamps or corrupting native state
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > background check sends origin background to native bridge
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > background check runs silently and surfaces passive available indicator without modal dialog
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > background check with transient IPC error records transportError and does not open dialog
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > thrown bridge/IPC failure during install handoff records transportError with transportErrorAction install
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > translates physical playback rejection during install handoff to authoritative error state without transportError
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > discards out-of-order update.changed events by monotonic revision
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > accepts monotonic revision progression with constant protocol version v=1
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > copies native cumulative update progress without adding chunks in the frontend
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > does not emit update.changed when background check is disabled by auto_check=false
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > update.changed atomically updates native fields while preserving local dialog state
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > preserves newer native snapshot and suppresses transportError when checkForUpdate rejects late after update.changed
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > preserves newer native snapshot and suppresses transportError when beginUpdateHandoff rejects late after update.changed
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > exercises product install errors via beginUpdateHandoff preserving or clearing candidate metadata according to error type
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > mock candidate invalidation matrix for generic patchSettings
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > mock candidate invalidation matrix for dedicated patchUpdatePreferences
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > delegates background check to bridge on startup respecting auto_check=false
+desktop-vitest-list	src/state/store.test.ts			desktop update UX and native authority > tracks complete install sequence Downloading -> Ready -> Installing with v=1, monotonic revisions, matching operation ID, and candidate metadata
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers stripTechnicalPrefixes > strips error: and technical identifier prefixes
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers stripTechnicalPrefixes > leaves clean strings unchanged
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates playback_active into user-facing copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates update_busy into user-facing copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates closing into user-facing copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates channel_unavailable into user-facing copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates update_service_unavailable into user-facing copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates stale_update into user-facing copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates update_unavailable into user-facing copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates state_persistence_failed into user-facing copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates check_failed with and without detail to stable copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates download_failed with and without detail to stable copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates install_failed with and without detail to stable copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates unknown with and without detail to stable copy
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > translates raw error strings with technical prefix fallback
+desktop-vitest-list	src/state/updateHelpers.test.ts			updateHelpers formatUpdateError > handles null/undefined error gracefully
+desktop-vitest-list	src/testing/baseUiFocusGuardAdjudication.test.ts			Base UI focus guard Axe adjudication > pins the installed packages and direct dependency to the reviewed versions
+desktop-vitest-list	src/testing/baseUiFocusGuardAdjudication.test.ts			Base UI focus guard Axe adjudication > accepts the six reviewed guards with correlated real traversal and destinations
+desktop-vitest-list	src/testing/baseUiFocusGuardAdjudication.test.ts			Base UI focus guard Axe adjudication > fails closed when either reviewed package version drifts
+desktop-vitest-list	src/testing/baseUiFocusGuardAdjudication.test.ts			Base UI focus guard Axe adjudication > blocks missing, extra, mixed, or remapped selectors
+desktop-vitest-list	src/testing/baseUiFocusGuardAdjudication.test.ts			Base UI focus guard Axe adjudication > blocks %s
+desktop-vitest-list	src/testing/baseUiFocusGuardAdjudication.test.ts			Base UI focus guard Axe adjudication > blocks duplicate DOM targets and mixed Axe nodes
+desktop-vitest-list	src/testing/baseUiFocusGuardAdjudication.test.ts			Base UI focus guard Axe adjudication > blocks uncorrelated guard identities and wrong placements during keyboard traversal
+desktop-vitest-list	src/testing/baseUiFocusGuardAdjudication.test.ts			Base UI focus guard Axe adjudication > blocks wrong, missing, hidden, or stuck focus destinations
+desktop-vitest-list	src/testing/baseUiFocusGuardAdjudication.test.ts			Base UI focus guard Axe adjudication > blocks unrelated Axe rules, critical findings, and empty targets
+desktop-vitest-list	src/components/performance/WaveCProfile.test.tsx			Wave C controlled UI profile > $name
+desktop-vitest-list	src/components/chrome/AppTitleBar.test.tsx			AppTitleBar > exposes caption actions, search, and no version label
+desktop-vitest-list	src/components/chrome/AppTitleBar.test.tsx			AppTitleBar > shows a subtle update indicator only when an update is available
+desktop-vitest-list	src/components/chrome/AppTitleBar.test.tsx			AppTitleBar > refreshes the maximize state after resize
+desktop-vitest-list	src/components/chrome/AppTitleBar.test.tsx			AppTitleBar > settles a delayed restore state after the first resize query
+desktop-vitest-list	src/components/chrome/AppTitleBar.test.tsx			AppTitleBar > properly cleans up onResize listener on unmount
+desktop-vitest-list	src/components/chrome/AppTitleBar.test.tsx			AppTitleBar > handles rejections in window control promises without crashing or unhandled errors
+desktop-vitest-list	src/components/chrome/AppTitleBar.test.tsx			AppTitleBar > cleans up delayed onResize registration if component unmounts before onResize resolves
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > publishes the committed query at the 120 ms debounce boundary and retains focus
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > clears an uncommitted draft before debounce without dispatching a search
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > commits clear immediately in flight and rejects the older bridge result
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > keeps a newer queued draft when an older response arrives
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > keeps the latest results through an A-B-A response race
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > cancels a repeated current query instead of scheduling a duplicate request
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > cancels queued typing on external query, source, and playlist-add scope changes
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > cleans up a queued timer under StrictMode and on unmount
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > restores focus after mouse clear with and without the optional ref
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > synchronizes external query changes into the visible input
+desktop-vitest-list	src/components/chrome/GlobalSearch.test.tsx			GlobalSearch > names the active search scope for catalog, playlist, and add-songs mode
+desktop-vitest-list	src/components/library/LibraryNavigator.test.tsx			LibraryNavigator built-in source > starts on Built-in Songs and exposes no All Songs or My Songs destination
+desktop-vitest-list	src/components/library/LibraryNavigator.test.tsx			LibraryNavigator built-in source > does not present the initial false/zero defaults as native unavailability
+desktop-vitest-list	src/components/library/LibraryNavigator.test.tsx			LibraryNavigator built-in source > shows the native available count and explains a genuinely unavailable source
+desktop-vitest-list	src/components/library/LibraryNavigator.test.tsx			LibraryNavigator built-in source > keeps available empty catalogs distinct from unavailable catalogs
+desktop-vitest-list	src/components/library/LibraryNavigator.test.tsx			LibraryNavigator built-in source > offers a working retry after navigation loading fails
+desktop-vitest-list	src/components/library/LibraryNavigator.test.tsx			LibraryNavigator built-in source > keeps collapsed navigation available and retryable when playlist loading fails
+desktop-vitest-list	src/components/library/LibraryNavigator.test.tsx			LibraryNavigator built-in source > keeps empty collapsed playlists truthful and leaves Create playlist fixed
+desktop-vitest-list	src/components/library/LibraryNavigator.test.tsx			LibraryNavigator built-in source > renders %i collapsed playlists as direct, ordered, one-click destinations
+desktop-vitest-list	src/components/library/LibraryNavigator.test.tsx			LibraryNavigator built-in source > uses the generic playlist glyph and accessible fallback for an empty name
+desktop-vitest-list	src/components/settings/DonateSettings.test.tsx			DonateSettings > shows Ko-fi, PayPal and the offline MBBank VietQR without outdated wallet data
+desktop-vitest-list	src/components/settings/DonateSettings.test.tsx			DonateSettings > keeps manual transfer details readable without presenting desktop-only copy actions
+desktop-vitest-list	src/components/settings/SettingsCategoryContent.test.tsx			SettingsCategoryContent > keeps the existing settings category order
+desktop-vitest-list	src/components/settings/SettingsCategoryContent.test.tsx			SettingsCategoryContent > renders the %s section with its accessible name
+desktop-vitest-list	src/components/settings/SettingsCategoryContent.test.tsx			SettingsCategoryContent > keeps the existing six persisted palette IDs and labels
+desktop-vitest-list	src/components/settings/SettingsCategoryContent.test.tsx			SettingsCategoryContent > previews the active appearance separately from the saved dark palette
+desktop-vitest-list	src/components/settings/SettingsCategoryContent.test.tsx			SettingsCategoryContent > uses compact System/Light/Dark radio tiles and keeps Dark palette independent
+desktop-vitest-list	src/components/settings/SettingsCategoryContent.test.tsx			SettingsCategoryContent > uses concise Diagnostics switches linked to one shared truthful note
+desktop-vitest-list	src/components/settings/SettingsCategoryContent.test.tsx			SettingsCategoryContent > renders truthful Updates states, pending handoff, errors, and triggers manual check once
+desktop-vitest-list	src/components/settings/SettingsPanel.test.tsx			SettingsPanel > preserves the manual timing control, timing readout, and unified shell without permanent footer
+desktop-vitest-list	src/components/settings/SettingsPanel.test.tsx			SettingsPanel > resets content scroll to top on category switch and omits permanent persistence footer on all categories
+desktop-vitest-list	src/components/settings/SettingsPanel.test.tsx			SettingsPanel > shows pending status while saving and keeps save errors visible across categories until resolved
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > shows the manual value and steps by the backend increment
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > keeps the compact variant focused on the manual value
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > disables steps at the configured endpoints
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > preserves every rapid step while earlier settings writes are pending
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > resynchronizes to the authoritative value when a settings write fails
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > does not resurrect old optimistic override when authoritative prop changes away and back
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > safely handles unmount during in-flight async update
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > reverts optimistic value when onChange resolves to null
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > reverts optimistic value when onChange rejects
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > handles out-of-order promise completion where older completes after newer
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > mixed two-request completion matrix > newer null first, older success second -> renders older confirmed 900
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > mixed two-request completion matrix > older success first, newer null second -> renders older confirmed 900
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > mixed two-request completion matrix > older null first, newer success second -> renders newer confirmed 1000
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > mixed two-request completion matrix > newer success first, older null second -> renders newer confirmed 1000
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > mixed two-request completion matrix > both null -> settles to authoritative 800
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > mixed two-request completion matrix > older reject, newer success -> renders newer confirmed 1000
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > mixed two-request completion matrix > older success, newer reject -> renders older confirmed 900
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > mixed two-request completion matrix > both reject -> settles to authoritative 800
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > mixed two-request completion matrix > case 8: older success -> newer success -> renders newer 1000
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > mixed two-request completion matrix > case 15: both succeed with different authoritative returned values (older then newer, and newer then older)
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > authoritative prop synchronization > case 16: initial prop 800 -> confirmation 900 -> prop 900
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > authoritative prop synchronization > case 17: prop 800 -> confirmation 900 -> prop 900 -> prop 800
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > authoritative prop synchronization > case 18: prop changes while one mutation is pending (preserves pending intent, settles correctly on fail or success)
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > authoritative prop synchronization > case 19: prop changes while two mutations are pending -> retains latest pending, settles to prop on both fail
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > authoritative prop synchronization > case 20: prop changes while an older confirmation is retained -> clears stale confirmation
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > authoritative prop synchronization > case 21: prop changes to 1100 while a 1000 request is pending -> 1000 fails -> UI must display 1100
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > authoritative prop synchronization > case 22: same as case 21, but pending request rejects instead of resolving null -> UI displays 1100
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > authoritative prop synchronization > case 23: prop changes while pending request succeeds with a different returned value -> displays returned value
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > authoritative prop synchronization > case 24: parent prop A -> B -> A during asynchronous operations -> renders authoritative A
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > authoritative prop synchronization > case 25: no stale optimistic or confirmed state survives after all operations settle
+desktop-vitest-list	src/components/settings/TimingMarginControl.test.tsx			TimingMarginControl > real store serialization integration > serializes sequential timing margin writes through createSettingsSlice
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > shows a target icon next to the count and locates a valid selected song
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > opens an inline page editor for $total songs and navigates to page $target
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > validates and commits an inline page edit for $total songs
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > commits with the inline confirmation button, cancels with Escape and blur, and restores focus
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > does not steal focus moved elsewhere while an inline page navigation is pending
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > resets an editor when the result count changes its page count
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > moves focus between the previous, page indicator and next controls with arrow keys
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > keeps the committed range visible while a requested page is loading
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > retries a failed page and focuses the page indicator after navigation
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > uses the right interaction model for %i built-in songs
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > keeps the unavailable empty state truthful without displaying a zero page
+desktop-vitest-list	src/components/tracks/BuiltinPager.test.tsx			BuiltinPager > does not re-select text during multi-digit typing and cancels with Escape
+desktop-vitest-list	src/components/tracks/PlaylistAddSongsMenu.test.tsx			PlaylistAddSongsMenu > supports keyboard navigation and activation within the menu
+desktop-vitest-list	src/components/tracks/TrackBrowser.test.tsx			TrackBrowser playlist import feedback > keeps the source row and accessible loading status while data is pending
+desktop-vitest-list	src/components/tracks/TrackBrowser.test.tsx			TrackBrowser playlist import feedback > names the empty playlist search scope and lets the user clear it
+desktop-vitest-list	src/components/tracks/TrackBrowser.test.tsx			TrackBrowser playlist import feedback > announces successful import and shows the imported playlist row
+desktop-vitest-list	src/components/tracks/TrackBrowser.test.tsx			TrackBrowser playlist import feedback > explains the native picker zero-result state without claiming success
+desktop-vitest-list	src/components/tracks/TrackBrowser.test.tsx			TrackBrowser playlist import feedback > reports an import failure at the playlist action that produced it
+desktop-vitest-list	src/components/tracks/TrackBrowser.test.tsx			TrackBrowser playlist import feedback > treats a missing import result as a failure and leaves playlist state intact
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > formats duration and exposes note and liked semantics
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > uses the project tooltip only for truncated text and clears it on virtual row reuse
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > renders Now Playing independently alongside selection without changing row geometry
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > formats song counts with singular grammar
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > does not present pending or failed metadata as final risk data
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > shares the same neutral design for metadata review and physical risk
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > renders loading placeholders for unloaded rows
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > keeps table selection updates outside the TrackTable render path
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > returns focus to the grid after a row click and supports the next arrow selection
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > omits the active descendant while its selected virtual row is not mounted
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > does not complete keyboard navigation against a newer search result set
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > anchors rapid ArrowDown navigation to the pending virtual row
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > uses the pending End destination for a rapid ArrowUp before page hydration
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > updates only the previous and next selected virtual rows
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > renders an explicit no-results state
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > clears stale selection on search failure and recovers on a later query
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > renders a real browse CTA for an empty playlist
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > offers a retry for a genuinely unavailable default Built-in catalog
+desktop-vitest-list	src/components/tracks/TrackRow.test.tsx			Track Browser primitives > does not report an empty catalog when native navigation reports Built-in songs
+desktop-vitest-list	src/components/tracks/TrackTable.test.tsx			TrackTable built-in page semantics > uses local grid row indices and global song ordinals on a short final page
+desktop-vitest-list	src/components/tracks/TrackTable.test.tsx			TrackTable built-in page semantics > manages aria-activedescendant correctly based on selected song presence
+desktop-vitest-list	src/components/player/PlaybackAdmission.test.tsx			PlaybackAdmission recovery actions > shows the confirmation warning with nominal slack advisory, Proceed, and Dry Run while preserving settings
+desktop-vitest-list	src/components/player/PlaybackAdmission.test.tsx			PlaybackAdmission recovery actions > keeps Proceed and Dry Run decisions compact and lets Not now dismiss them
+desktop-vitest-list	src/components/player/PlaybackAdmission.test.tsx			PlaybackAdmission recovery actions > keeps an independent timing recommendation available for its separate risk reason
+desktop-vitest-list	src/components/player/PlaybackAdmission.test.tsx			PlaybackAdmission recovery actions > preserves native 3-option order, recommended primary/focus, descriptions, and command dispatch
+desktop-vitest-list	src/components/player/PlaybackAdmission.test.tsx			PlaybackAdmission recovery actions > keeps ready-plan timing data without flashing an advisory before Play
+desktop-vitest-list	src/components/player/PlaybackAdmission.test.tsx			PlaybackAdmission recovery actions > reconciles a recoverable status issue and restores the normal Pause control
+desktop-vitest-list	src/components/player/PlaybackAdmission.test.tsx			PlaybackAdmission recovery actions > keeps a known session owned after status query failure and offers Stop playback
+desktop-vitest-list	src/components/player/PlaybackAdmission.test.tsx			PlaybackAdmission recovery actions > offers status retry without Stop or Try again when native ownership is unknown
+desktop-vitest-list	src/components/player/PlaybackAdmission.test.tsx			PlaybackAdmission recovery actions > keeps %s actionable without showing a misleading Stop action
+desktop-vitest-list	src/components/player/PlayerTools.test.tsx			PlayerTools playback modes and profile > keeps playback tools compact with an accessible profile menu
+desktop-vitest-list	src/components/player/PlayerTools.test.tsx			PlayerTools playback modes and profile > explains and starts the existing dry-run action without physical input
+desktop-vitest-list	src/components/player/PlayerTools.test.tsx			PlayerTools playback modes and profile > does not expose raw profile parameters or a Test button in the player dock
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > shows and likes the active song while the user browses another Library row
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > keeps selection independent across built-in page playback without another locate control
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > uses the pinned selected summary after its browser page is evicted
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > keeps one authoritative status in the track line when an error is shown separately
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > labels the known session song without claiming playback when native status is uncertain
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > gives the Player Dock and Runtime the same status priority for $name
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > shows a library prompt when no song identity is known
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > shows one native %s status
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > keeps dry-run playback and the no-input explanation in one accessible status
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > distinguishes prepared dry-run intent from a confirmed active Test mode session
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > keeps dry-run truth when native status confirmation is uncertain
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > uses the shared $tone badge for $level prepared risk
+desktop-vitest-list	src/components/player/PlayerTrackInfo.test.tsx			PlayerTrackInfo > labels a prepared song and preserves last-played meaning after Stop
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > keeps all five controls visible and allows Stop during starting with a session
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > shows all five controls while starting before a session id exists
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > locks Previous and Next while a risk confirmation owns the prepared song
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > maps playing to Pause, paused to Resume, and keeps Stop discoverable
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > keeps Stop available while native retirement is still pending
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > keeps the five-button layout in idle, failed, and stopping-operation states
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > keeps a disabled primary pending control while playback ownership is uncertain
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > locks navigation while an operation is pending but keeps Stop as a safety control
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > exposes the familiar Previous and Next names and disables Next at the context end
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > enables Previous only when restart or a previous traversal item applies
+desktop-vitest-list	src/components/player/PlayerTransport.test.tsx			PlayerTransport > toggles Shuffle accessibly without changing the current song
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > renders explicit checking state when checking for updates
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > renders explicit \"You're up to date\" state when current
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > renders available state with Update, Later, and Skip this version buttons
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > renders explicit error state with bounded message and Check again button
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > renders Try again button when retryAction is install
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > renders only Close button when retryAction is none
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > surfaces check transportError with Check again button and Update check failed heading
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > surfaces install transportError with Try again button and Update failed heading
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > renders pending handoff as Preparing update… instead of Installing or No update available
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > disables buttons when busy installing or checking
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > renders the native cumulative progress snapshot without recalculating it
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > keeps the $state progress state busy and native-authoritative
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > does not close dialog if skipping version fails to persist
+desktop-vitest-list	src/components/updates/UpdateDialog.test.tsx			UpdateDialog > classifies $errorCode heading as \"$expectedHeading\"
+desktop-vitest-list	src/components/ui/playbackOptionFormatting.test.ts			playback option formatting > formats hold-frame and fps millisecond hints accurately
+desktop-vitest-list	src/components/ui/playbackOptionFormatting.test.ts			playback option formatting > marks the default tempo without adding a redundant hint
+desktop-vitest-list	src/components/ui/select.test.tsx			Base UI Select > opens its listbox, selects an enabled option, and restores trigger focus
+desktop-vitest-list	src/components/ui/select.test.tsx			Base UI Select > supports keyboard dismissal and keeps disabled options unavailable
+desktop-vitest-list	src/components/ui/StatusBadge.test.tsx			StatusBadge > uses semantic neutral styling without inline color overrides
+desktop-vitest-list	src/components/ui/StatusBadge.test.tsx			StatusBadge > retains explicit warning and danger meaning rather than relying on color alone
+desktop-vitest-list	src/components/utility/DiagnosticsEventsPanel.test.tsx			DiagnosticsEventsPanel > presents newest-first events as a labelled tab panel with machine-readable timestamps
+desktop-vitest-list	src/components/utility/DiagnosticsTimingPlot.test.tsx			DiagnosticsTimingPlot > reports dry-run timing as not measured instead of fabricating sender samples
+desktop-vitest-list	src/components/utility/DiagnosticsTimingPlot.test.tsx			DiagnosticsTimingPlot > keeps the timing plot unavailable until native session data is available
+desktop-vitest-list	src/components/utility/DiagnosticsTimingPlot.test.tsx			DiagnosticsTimingPlot > renders Y-axis scale labels, gridlines, and a latest-sample marker when samples exist
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > distinguishes enabled diagnostics with no active session
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > distinguishes prepared dry-run intent from a confirmed active session mode
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > reports an active native session while waiting for its matching snapshot
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > shows a failed target admission as a playback failure
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > labels uncertain native status and keeps dry-run sender metrics unmeasured
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > uses boundary-accurate labels and sender-side timing metrics
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > shows the frozen physical timing floors and configured margin
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > does not present unavailable distribution metrics as zero
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > keeps production pre-call metrics separate from unavailable observer metrics
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > distinguishes an attached physical player with no sender samples yet
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > keeps backend-unavailable distinct from an attached player with no samples
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > reports a sampled zero-microsecond sender lateness as a real measurement
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > reports a physical session without an attached player as an error
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > labels exported session metadata without claiming raw trace availability
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > uses playback lifecycle to hide a completed session
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > keeps optional completion residuals and shows a zero reference line
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > uses backend severity precedence and renders the last error
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > does not report degraded backend health as healthy when counters are zero
+desktop-vitest-list	src/components/utility/DiagnosticsView.test.tsx			DiagnosticsView > removes the fabricated Logs view and timestamps human events
+desktop-vitest-list	src/components/utility/inspectorReadiness.test.ts			Inspector readiness summary > keeps unknown and pending analysis from claiming the sheet is ready
+desktop-vitest-list	src/components/utility/inspectorReadiness.test.ts			Inspector readiness summary > gives a live pending check precedence over an unavailable detail error
+desktop-vitest-list	src/components/utility/inspectorReadiness.test.ts			Inspector readiness summary > reports %s sheets as blocked
+desktop-vitest-list	src/components/utility/inspectorReadiness.test.ts			Inspector readiness summary > keeps conversion consent and timing review as distinct review reasons
+desktop-vitest-list	src/components/utility/inspectorReadiness.test.ts			Inspector readiness summary > clears conversion review only after the source reports consent
+desktop-vitest-list	src/components/utility/inspectorReadiness.test.ts			Inspector readiness summary > does not imply native target or focus qualification
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > shows a centered song-selection cue when Inspector has no selected song
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > keeps the detail skeleton and summary stable while a new song loads
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > keeps the selected song visible after its browser page is evicted
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > shows supported versioned track and pitch controls and refreshes diagnostics on selection
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > presents conversion loss consent separately from preparing the exact plan
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > keeps unsupported schema details visible and blocks conversion controls
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > explains when a versioned sheet uses its assumed source pitch
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > applies recommended hold and tempo defaults from Song Details
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > displays inline error with role=\"alert\" when patchSettings returns null, keeps retry enabled, and succeeds when retried
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > clears recommendation apply error when a different song is selected
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > ignores in-flight recommendation failure or success when song selection changes before response arrives
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > allows applying recommendation on Song B while Song A apply is still pending, applying Song B successfully
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > does not clobber fresh Song A state when switching A -> B -> A and old in-flight request arrives
+desktop-vitest-list	src/components/utility/SongDetailsView.test.tsx			SongDetailsView > safely handles unmount while recommendation apply request is in-flight
+desktop-vitest-list	src/components/utility/UtilityPane.test.tsx			UtilityPane > navigates the utility views through Base UI tabs and loads Diagnostics lazily
+desktop-vitest-list	src/components/utility/UtilityPane.test.tsx			UtilityPane > keeps keyboard tab selection and close focus restoration intact
+desktop-vitest-list	src/components/utility/UtilityPane.test.tsx			UtilityPane > uses Collapse Inspector in docked mode and renders a symmetric 48px icon rail when collapsed
+desktop-vitest-list	src/components/utility/UtilityPane.test.tsx			UtilityPane > keeps Close utility button in overlay mode
+desktop-vitest-list	src/components/utility/UtilityPane.test.tsx			UtilityPane > restores focus to Expand Inspector button when collapsing and to Collapse Inspector button when expanding
+desktop-vitest-list	src/components/utility/UtilityPane.test.tsx			UtilityPane > does not steal focus when collapsed prop changes without focus inside inspector
+desktop-vitest-list	src/components/workbench/ResizableSeparator.test.tsx			separator drag sessions > coalesces a burst into its last value and deduplicates repeated clamped moves
+desktop-vitest-list	src/components/workbench/ResizableSeparator.test.tsx			separator drag sessions > does not cancel or reschedule frames on parent renders and uses the latest callback
+desktop-vitest-list	src/components/workbench/ResizableSeparator.test.tsx			separator drag sessions > keeps unsaturated pointer widths on the visual callback until one final commit
+desktop-vitest-list	src/components/workbench/ResizableSeparator.test.tsx			separator drag sessions > records a deterministic drag update proxy
+desktop-vitest-list	src/components/workbench/ResizableSeparator.test.tsx			separator drag sessions > flushes and commits once on %s despite subsequent end events
+desktop-vitest-list	src/components/workbench/ResizableSeparator.test.tsx			separator drag sessions > rebases pending and already applied widths to changed viewport bounds
+desktop-vitest-list	src/components/workbench/ResizableSeparator.test.tsx			separator drag sessions > unmount cancels pending work without callbacks or commit
+desktop-vitest-list	src/components/workbench/ResizableSeparator.test.tsx			separator drag sessions > ignores other pointers and keeps capture until the owning pointer finishes
+desktop-vitest-list	src/components/workbench/ResizableSeparator.test.tsx			separator drag sessions > preserves keyboard/reset/disabled controls in direction %s
+desktop-vitest-list	src/components/workbench/useWorkbenchLayout.test.tsx			Inspector topology and preference ownership > keeps a completed rebased topology across close/reopen until a real viewport change
+desktop-vitest-list	src/components/workbench/useWorkbenchLayout.test.tsx			Inspector topology and preference ownership > retains effective geometry on release at %s without violating v5
+desktop-vitest-list	src/components/workbench/useWorkbenchLayout.test.tsx			Inspector topology and preference ownership > locks the expanded navigator at viewport %s
+desktop-vitest-list	src/components/workbench/useWorkbenchLayout.test.tsx			Inspector topology and preference ownership > allows an explicit collapsed rail during the session and restores expanded preference after temporary shrink
+desktop-vitest-list	src/components/workbench/useWorkbenchLayout.test.tsx			Inspector topology and preference ownership > adapts a locked session to viewport bounds and discards the lock when separator unmounts
+desktop-vitest-list	src/components/workbench/useWorkbenchLayout.test.tsx			Inspector topology and preference ownership > makes identical queued patches no-ops while still persisting the final width once
+desktop-vitest-list	src/components/workbench/useWorkbenchLayout.test.tsx			Inspector topology and preference ownership > supports collapsing docked Inspector to a 48px rail while preserving expanded utilityWidth
+desktop-vitest-list	src/components/workbench/useWorkbenchLayout.test.tsx			shared palette geometry boundary > keeps palette selectors color-only and the solver palette-independent
+desktop-vitest-list	src/components/workbench/useWorkbenchPreferences.test.tsx			workbench preference persistence > keeps live geometry transient and persists only an explicit final commit
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			ResizableSeparator > supports keyboard resize, clamping, and reset
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			ResizableSeparator > reverses pointer semantics for a pane owned after the separator
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > loads valid v5 values and clamps widths to current bounds
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > soft-migrates valid v4 geometry and defaults utility open to false
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > soft-migrates valid v3 geometry and defaults utility open to false
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > soft-migrates valid v2 geometry and defaults utility open to false
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > soft-migrates v1 geometry and ignores historical utility open state
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > falls back to defaults for malformed or wrong-version values
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > preserves an already persisted utility-open preference during a width update
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > preserves persisted geometry during a utility-open update
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > accounts for padding, separators, and the minimum track browser width
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > uses the shared compact rail width in inspector limits
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > automatically collapses at 640 without persisting or changing the saved preference
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > uses one shared spacing and geometry calculation
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > chooses docked presentation only when the minimum inspector width fits
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > computes a compact overlay width independently from docked width preferences
+desktop-vitest-list	src/components/workbench/Workbench.test.tsx			workbench layout persistence > combines rapid functional updates while persisting only explicit commits
+desktop-vitest-list	src/components/workbench/workbenchDragPolicy.test.ts			workbench drag policy > keeps a live docked drag topology across resize rebases and expires it when docked bounds change after release
+desktop-vitest-list	src/components/workbench/workbenchDragPolicy.test.ts			workbench drag policy > expires an unfinished drag when the docked Inspector becomes an overlay
+desktop-vitest-list	src/components/workbench/workbenchDragPolicy.test.ts			workbench drag policy > updates only a live drag topology for explicit navigator preferences
+desktop-vitest-list	src/components/workbench/workbenchDragPolicy.test.ts			workbench drag policy > uses expanded width limits only while the drag explicitly keeps the navigator expanded
+desktop-vitest-list	src/components/workbench/workbenchDragPolicy.test.ts			workbench drag policy > resolves magnetic collapse, resistance dead-zone, and hysteresis expansion for Library Navigator
+desktop-vitest-list	src/components/workbench/workbenchDragPolicy.test.ts			workbench drag policy > resolves magnetic collapse and hysteresis expansion for docked Inspector
+desktop-playwright-dev-server	design-system-finishing.spec.ts	64	1	contrast accepts opaque Chromium sRGB serialization without rounding
+desktop-playwright-dev-server	design-system-finishing.spec.ts	78	1	contrast rejects unsupported or malformed sRGB serialization
+desktop-playwright-dev-server	design-system-finishing.spec.ts	94	1	Runtime tabs fill the available width and use one raised segmented indicator
+desktop-playwright-dev-server	design-system-finishing.spec.ts	519	3	scrollbar visibility stays correct for the graphite palette
+desktop-playwright-dev-server	design-system-finishing.spec.ts	519	3	scrollbar visibility stays correct for the aurora palette
+desktop-playwright-dev-server	design-system-finishing.spec.ts	519	3	scrollbar visibility stays correct for the minimalist palette
+desktop-playwright-dev-server	design-system-finishing.spec.ts	519	3	scrollbar visibility stays correct for the slate palette
+desktop-playwright-dev-server	design-system-finishing.spec.ts	519	3	scrollbar visibility stays correct for the cyberpunk palette
+desktop-playwright-dev-server	design-system-finishing.spec.ts	519	3	scrollbar visibility stays correct for the classic palette
+desktop-playwright-dev-server	design-system-finishing.spec.ts	524	1	scrollbar visibility remains correct in light and forced colors
+desktop-playwright-dev-server	design-system-finishing.spec.ts	527	1	expanded Playback Profile fits at 800 by 560 and keeps Select inside the viewport
+desktop-playwright-dev-server	design-system-finishing.spec.ts	605	1	Settings scrollbars stay hidden through hover, focus, and an open Select
+desktop-playwright-dev-server	design-system-finishing.spec.ts	638	1	Settings keeps all six category rows vertical and visible at compact supported sizes
+desktop-playwright-dev-server	design-system-finishing.spec.ts	661	1	Previous and Next use filled glyphs with the existing centered transport geometry
+desktop-playwright-dev-server	library-layout.spec.ts	8	1	shared Library and Track Browser geometry stays fixed across palettes
+desktop-playwright-dev-server	library-layout.spec.ts	134	1	Graphite workspace header follows the Track Browser width without changing row height
+desktop-playwright-dev-server	library-layout.spec.ts	280	1	collapsed Library rail stays compact and keyboard-accessible at 800 and 640 widths
+desktop-playwright-dev-server	library-layout.spec.ts	428	1	Graphite Library keeps its headings, rows, actions, dividers, and compact tiles aligned
+desktop-playwright-dev-server	library-layout.spec.ts	724	1	Graphite automatic compact navigation preserves the saved expanded preference
+desktop-playwright-dev-server	library.spec.ts	539	1	mock desktop vertical slice can search and inspect a song
+desktop-playwright-dev-server	library.spec.ts	563	1	startup can recover built-in navigation while the catalog search is delayed
+desktop-playwright-dev-server	library.spec.ts	579	1	Built-in Songs pages keep local row semantics and adapt to the browser container
+desktop-playwright-dev-server	library.spec.ts	774	1	F3.5 two-page Built-in pager spacing stays compact through inline editing and navigation
+desktop-playwright-dev-server	library.spec.ts	865	1	F3.6 pager chevrons stay quiet, accessible, and grouped across navigation
+desktop-playwright-dev-server	library.spec.ts	978	1	page indicator switches between compact view and full-width editing without moving its outer geometry
+desktop-playwright-dev-server	library.spec.ts	1110	1	F3.1 heading typography and pager alignment stay clear at desktop and compact widths
+desktop-playwright-dev-server	library.spec.ts	1380	1	Built-in pager handles the approved result-count boundaries
+desktop-playwright-dev-server	library.spec.ts	1431	1	Built-in pager control centers stay fixed across 9→10 and 99→100
+desktop-playwright-dev-server	library.spec.ts	1454	1	Locate selected follows the selected row without replacing Now Playing
+desktop-playwright-dev-server	library.spec.ts	1520	1	Built-in playback crosses page boundaries without replacing selection
+desktop-playwright-dev-server	library.spec.ts	1591	1	rapid A-B-A search keeps the newest query results visible
+desktop-playwright-dev-server	library.spec.ts	1609	1	search clears browser selection while Now Playing remains on the active song
+desktop-playwright-dev-server	library.spec.ts	1648	1	row selection returns focus to the grid and Like and menu actions stay isolated
+desktop-playwright-dev-server	library.spec.ts	1693	1	playlist onboarding exposes create and import actions in expanded and collapsed layouts
+desktop-playwright-dev-server	library.spec.ts	1745	1	playlist onboarding stays available with either a populated or empty catalog
+desktop-playwright-dev-server	library.spec.ts	1769	1	populated library keeps playlist actions available without repeated onboarding text
+desktop-playwright-dev-server	library.spec.ts	1842	1	compact playlist source keeps Add, Import, Back, long-name access, and hit targets
+desktop-playwright-dev-server	library.spec.ts	2014	1	playlist Built-in picker pages through song 101 and adds it to the same playlist
+desktop-playwright-dev-server	library.spec.ts	2051	1	idle Graphite selection stays distinct from native Now Playing
+desktop-playwright-dev-server	library.spec.ts	2070	1	selected, hovered, and focused rows reveal actions without showing them on every row
+desktop-playwright-dev-server	library.spec.ts	2143	1	Built-in Songs pages beyond the first 200 songs
+desktop-playwright-dev-server	library.spec.ts	2157	1	virtualized grid navigation keeps its active descendant mounted across pages
+desktop-playwright-dev-server	library.spec.ts	2228	1	Built-in Songs clears search while retaining the catalog count
+desktop-playwright-dev-server	library.spec.ts	2240	1	keeps slash local to the New Playlist name field
+desktop-playwright-dev-server	library.spec.ts	2259	1	Liked Songs is a real source with Player Bar save behavior
+desktop-playwright-dev-server	library.spec.ts	2278	1	Playlists support create, rename, delete, and membership actions
+desktop-playwright-dev-server	library.spec.ts	2318	1	Add songs keeps local imports inside the selected playlist
+desktop-playwright-dev-server	library.spec.ts	2398	1	Add songs menu stays non-modal and supports keyboard exit, Escape, and outside interaction
+desktop-playwright-dev-server	library.spec.ts	2464	1	Add songs menu reopens safely while its Base UI exit transition is active
+desktop-playwright-dev-server	library.spec.ts	2527	1	long sheet titles remain contained in the Track Browser, Utility, and Player Bar
+desktop-playwright-dev-server	library.spec.ts	2572	1	F3.2 custom scrollbar and grid geometry stays stable across Built-in page 1 and page 2
+desktop-playwright-dev-server	library.spec.ts	2687	1	F3.2 stable track gutter covers 106, 500, 10000 songs and a one-row search
+desktop-playwright-dev-server	library.spec.ts	2755	1	F3.3 collapsed rail directly lists playlists and scrolls only its playlist region
+desktop-playwright-dev-server	library.spec.ts	2931	1	F3.4 page indicator opens an inline editor at every multi-page count
+desktop-playwright-dev-server	locate-selected.spec.ts	3	1	Built-in pager count has a readable left inset and no duplicate dock locator
+desktop-playwright-dev-server	locate-selected.spec.ts	35	1	Locate selected in the pager footer centers an off-screen row on demand
+desktop-playwright-dev-server	locate-selected.spec.ts	68	1	Locate selected in the pager footer restores the original built-in page
+desktop-playwright-dev-server	playback-confirmation-layout.spec.ts	8	3	risk confirmation stays compact at 1649x927
+desktop-playwright-dev-server	playback-confirmation-layout.spec.ts	8	3	risk confirmation stays compact at 987x691
+desktop-playwright-dev-server	playback-confirmation-layout.spec.ts	8	3	risk confirmation stays compact at 800x560
+desktop-playwright-dev-server	playback-recovery.spec.ts	14	1	status Retry restores Playing and clears the recovery banner without moving the transport
+desktop-playwright-dev-server	playback-recovery.spec.ts	42	1	Stop playback remains explicit and actionable from a recovery banner at 800×560
+desktop-playwright-dev-server	playback-recovery.spec.ts	63	1	authoritative no-session recovery returns to Play and Try again at 800×560
+desktop-playwright-dev-server	playback.spec.ts	17	1	Play skips transient ready-plan popovers while retaining real risk confirmation
+desktop-playwright-dev-server	playback.spec.ts	54	1	Player Bar communicates the no-selection state without actionable playback
+desktop-playwright-dev-server	playback.spec.ts	84	1	five transport controls keep geometry at desktop and Chromium fallback sizes
+desktop-playwright-dev-server	playback.spec.ts	142	1	dock and transport toggles show palette-specific active state without layout movement
+desktop-playwright-dev-server	playback.spec.ts	353	1	Player transport geometry stays fixed when song timing labels appear
+desktop-playwright-dev-server	playback.spec.ts	381	1	natural finish retires the old session and starts the next context song
+desktop-playwright-dev-server	playback.spec.ts	416	1	Auto Play advances while Built-in browsing keeps selection and page separate
+desktop-playwright-dev-server	playback.spec.ts	469	1	natural Auto Play preserves the Built-in page and selection while advancing playback
+desktop-playwright-dev-server	playback.spec.ts	520	1	Now Playing does not pull a browsed search context back to the playback context
+desktop-playwright-dev-server	playback.spec.ts	544	1	natural Auto Play continues its frozen context after browsing a search
+desktop-playwright-dev-server	playback.spec.ts	569	1	natural Auto Play keeps a newly browsed Library source during its handoff
+desktop-playwright-dev-server	playback.spec.ts	775	1	browsing and liking another Library row keeps Player Bar identity on Now Playing
+desktop-playwright-dev-server	playback.spec.ts	812	1	dry-run playback is labeled in the dock and explains that no physical input is sent
+desktop-playwright-dev-server	playback.spec.ts	916	1	physical playback omits the dry-run indicator at responsive viewport sizes
+desktop-playwright-dev-server	playback.spec.ts	932	1	Next waits for retirement and starts the next context song
+desktop-playwright-dev-server	playback.spec.ts	947	1	Shuffle changes Next traversal without repeating visited songs
+desktop-playwright-dev-server	playback.spec.ts	984	1	Auto Play Off stays on the finished song, and a live On toggle advances it
+desktop-playwright-dev-server	playback.spec.ts	1023	1	Auto Play dock toggle mirrors Settings and stays outside the compact profile
+desktop-playwright-dev-server	playback.spec.ts	1058	1	rapid Play and risk confirmation clicks create only one active session
+desktop-playwright-dev-server	playback.spec.ts	1071	1	starting never exposes Pause and transport fits the supported narrow viewport
+desktop-playwright-dev-server	playback.spec.ts	1092	1	target startup failures remain actionable at desktop and Chromium fallback sizes
+desktop-playwright-dev-server	playback.spec.ts	1116	1	Player Bar keeps transport geometry stable through its lifecycle
+desktop-playwright-dev-server	player-dock-density.spec.ts	11	3	player dock and compact pager fit 1649x927
+desktop-playwright-dev-server	player-dock-density.spec.ts	11	3	player dock and compact pager fit 1005x615
+desktop-playwright-dev-server	player-dock-density.spec.ts	11	3	player dock and compact pager fit 987x691
+desktop-playwright-dev-server	player-dock-density.spec.ts	11	3	player dock and compact pager fit 800x560
+desktop-playwright-dev-server	player-dock-density.spec.ts	11	3	player dock and compact pager fit 640x448
+desktop-playwright-dev-server	player-dock-density.spec.ts	176	1	compact dock preserves title, active status, test mode, progress, and centered transport
+desktop-playwright-dev-server	player-dock-density.spec.ts	259	1	compact dock keeps a prepared risk label and confirmation state visible at 800 and 640
+desktop-playwright-dev-server	player-dock-density.spec.ts	327	1	compact dock bounds a long prepared title with fallback fonts at 800 and 640
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	8	1	Playback Profile works through the narrow popover with focus restore
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	74	1	selected Song Detail has no serious accessibility violations
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	81	1	Settings modal has no serious accessibility violations and closes accessibly
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	197	1	Donate shows the offline MBBank VietQR without clipping or native settings footer
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	253	1	Donate prioritizes QR scanning and aligns manual fallback details and GitHub icon
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	354	1	Donate provider rows stack cleanly and align text with Open actions across widths
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	414	1	Playback Behavior stays usable in a compact Settings viewport
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	446	1	Settings backdrop stays within the viewport without outer scrollbars
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	497	1	wide Diagnostics integrates as a workbench pane
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	523	1	all supported palettes round-trip through the settings surface
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	543	1	update indicator and typed update dialog expose safe install states
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	557	1	Diagnostics drawer is bounded and accessible at the minimum viewport
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	584	1	retired calibration controls are not exposed
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	595	1	Settings unified shell, Ctrl+, shortcut, radio arrows, and scroll reset hold across categories
+desktop-playwright-dev-server	settings-diagnostics.spec.ts	717	1	Settings Updates wraps long errors without horizontal overflow at compact widths
+desktop-playwright-dev-server	sheet-compatibility.spec.ts	45	1	legacy flat remains ready in selected-song details
+desktop-playwright-dev-server	sheet-compatibility.spec.ts	52	1	loss proposal requires explicit acceptance before preparing a multitrack plan
+desktop-playwright-dev-server	sheet-compatibility.spec.ts	74	1	unsupported schema is explained and has no active conversion controls
+desktop-playwright-dev-server	sheet-compatibility.spec.ts	83	1	source pitch selection is labeled as an in-game tuning assumption
+desktop-playwright-dev-server	startup-fallback.spec.ts	6	3	static startup fallback › shows a branded dark loading surface when frontend JavaScript cannot run
+desktop-playwright-dev-server	status-badge-theme.spec.ts	4	1	track status badges use semantic warning and danger roles across palettes and Light
+desktop-playwright-dev-server	system-appearance.spec.ts	7	1	fresh System mode follows the OS while manual mode and dark palette stay independent
+desktop-playwright-dev-server	theme-accessibility.spec.ts	394	1	all six dark palettes meet semantic text, action, status, and focus contrast
+desktop-playwright-dev-server	theme-accessibility.spec.ts	463	1	primary and outlined actions use computed theme colors in every dark palette
+desktop-playwright-dev-server	theme-accessibility.spec.ts	535	1	PlayerTransport Play uses the shared primary action states in Dark and Light
+desktop-playwright-dev-server	theme-accessibility.spec.ts	590	1	PlayerTransport Pause and Resume retain the filled shared primary role in a dry run
+desktop-playwright-dev-server	theme-accessibility.spec.ts	632	1	destructive confirmation uses its rest, hover, and pressed theme colors
+desktop-playwright-dev-server	theme-accessibility.spec.ts	687	1	Light appearance stays independent of the saved dark palette and fits desktop sizes
+desktop-playwright-dev-server	theme-accessibility.spec.ts	736	1	Light rendered text remains readable across library, Settings, Diagnostics, recovery, and Update
+desktop-playwright-dev-server	theme-accessibility.spec.ts	820	1	selected and playing rows keep separate accessible surfaces in Dark and Light
+desktop-playwright-dev-server	theme-accessibility.spec.ts	897	1	selected and playing row indicators and actions remain visible without hover
+desktop-playwright-dev-server	theme-accessibility.spec.ts	932	1	forced colors retain control feedback and reduced motion removes overlay movement
+desktop-playwright-dev-server	theme-accessibility.spec.ts	994	1	Light row hover, segmented boundary, forced-colors segmented label, and nested Select border meet design contracts
+desktop-playwright-dev-server	theme-accessibility.spec.ts	1091	1	Graphite 2.0 47-role surfaces, shared Light across all saved palettes, and non-Graphite baseline isolation hold
+desktop-playwright-dev-server	theme-accessibility.spec.ts	1333	1	rendered control contrast, Switch visual cues, M15 child instant switch, and input boundaries hold in Dark and Light
+desktop-playwright-dev-server	theme-accessibility.spec.ts	1472	1	shared primitive motion durations, normal-motion overlay interruption, and reduced motion hold
+desktop-playwright-dev-server	titlebar.spec.ts	13	1	titlebar icon actions expose their update, reload, and settings guidance
+desktop-playwright-dev-server	titlebar.spec.ts	46	1	Global Search keeps one clear affordance, focus, and current results through in-flight clear
+desktop-playwright-dev-server	titlebar.spec.ts	166	1	update dialog owns focus standalone and when opened from Settings
+desktop-playwright-dev-server	titlebar.spec.ts	443	1	Graphite caption roles preserve their hover states over full safe hit targets
+desktop-playwright-dev-server	titlebar.spec.ts	677	1	titlebar stays collision-free and pointer-operable across viewport, update, label, and scale matrices
+desktop-playwright-dev-server	track-title-tooltip.spec.ts	3	1	song title tooltip appears only for clipped text at narrow and wide layouts
+desktop-playwright-dev-server	update-modal-geometry.spec.ts	73	1	update modal adapts to release-note length and viewport geometry
+desktop-playwright-dev-server	update-modal-geometry.spec.ts	308	1	update dialog remains usable at 125% and 150% zoom-equivalent viewports
+desktop-playwright-dev-server	update-modal-geometry.spec.ts	356	1	long update errors scroll without hiding retry or dismissal controls
+desktop-playwright-dev-server	update-modal-geometry.spec.ts	413	1	update dialog traps keyboard focus and restores it after Escape and outside dismissal
+desktop-playwright-dev-server	update-modal-geometry.spec.ts	442	1	lazy update dialog stays mounted through its Base UI exit transition
+desktop-playwright-dev-server	update-modal-geometry.spec.ts	455	1	busy update cannot close from Escape, outside click, or the header button
+desktop-playwright-dev-server	update-modal-geometry.spec.ts	471	1	update notes and actions remain visible with forced colors and reduced motion
+desktop-playwright-dev-server	visual-evidence.spec.ts	456	1	captures selected Graphite workspace evidence views on request
+desktop-playwright-dev-server	workbench-layout.spec.ts	17	1	minimum viewport keeps the workbench and Player Bar bounded
+desktop-playwright-dev-server	workbench-layout.spec.ts	65	1	configured Tauri minimum keeps Inspector docked in the Chromium UI contract check
+desktop-playwright-dev-server	workbench-layout.spec.ts	106	1	Chromium fallback emulation uses overlay below the docked threshold
+desktop-playwright-dev-server	workbench-layout.spec.ts	125	1	Chromium checks layout at Tauri-supported desktop dimensions
+desktop-playwright-dev-server	workbench-layout.spec.ts	173	1	Titlebar Search uses the available center axis and Player controls stay viewport-centered
+desktop-playwright-dev-server	workbench-layout.spec.ts	235	1	Player Bar geometry covers native desktop and Chromium fallback emulation
+desktop-playwright-dev-server	workbench-layout.spec.ts	321	1	separator fills the existing 4px gutter while pane borders and corner shapes remain
+desktop-playwright-dev-server	workbench-layout.spec.ts	410	1	Library separator resizes by pointer and persists after reload
+desktop-playwright-dev-server	workbench-layout.spec.ts	430	1	Diagnostics utility separator follows pointer and keyboard direction
+desktop-playwright-dev-server	workbench-resize.spec.ts	40	3	continuous utility drag keeps CSS, ARIA, focus and preferences synchronized
+desktop-playwright-dev-server	workbench-resize.spec.ts	40	3	continuous navigator drag keeps CSS, ARIA, focus and preferences synchronized
+desktop-playwright-dev-server	workbench-resize.spec.ts	98	1	all palettes preserve Inspector 388/389/388 geometry and persist once
+desktop-playwright-dev-server	workbench-resize.spec.ts	176	1	all palette IDs share workbench geometry across the dock and overlay thresholds
+desktop-playwright-dev-server	workbench-resize.spec.ts	272	3	release preserves docked geometry at 900px and v5 survives reopen
+desktop-playwright-dev-server	workbench-resize.spec.ts	272	3	release preserves docked geometry at 915px and v5 survives reopen
+desktop-playwright-dev-server	workbench-resize.spec.ts	272	3	release preserves docked geometry at 916px and v5 survives reopen
+desktop-playwright-dev-server	workbench-resize.spec.ts	272	3	release preserves docked geometry at 917px and v5 survives reopen
+desktop-playwright-dev-server	workbench-resize.spec.ts	308	1	wide and narrow drag geometry, overlay focus, and v5 preference survive viewport changes
+desktop-playwright-dev-server	workbench-resize.spec.ts	366	1	closing the Inspector during capture cleans up without persisting a stale drag
+desktop-playwright-dev-server	workbench-state-regression.spec.ts	63	1	workbench library, playback safety, keyboard, and diagnostics states remain functional
+desktop-playwright-dev-server	workbench.spec.ts	231	1	Inspector presentation covers desktop sizes and Chromium-only narrow emulation
+desktop-playwright-dev-server	workbench.spec.ts	285	1	Chromium fallback emulation keeps compact Inspector interactions usable
+desktop-playwright-dev-server	workbench.spec.ts	367	1	Inspector header geometry stays stable at desktop and Chromium fallback widths
+desktop-playwright-dev-server	workbench.spec.ts	669	1	compact Player Dock presents one readable dry-run status without moving transport controls
+desktop-playwright-dev-server	workbench.spec.ts	797	1	active Runtime tab and focus survive docked-to-overlay viewport transitions
+desktop-playwright-dev-server	workbench.spec.ts	851	1	resizing never rewrites persisted widths or the user open preference
+desktop-playwright-dev-server	workbench.spec.ts	896	1	Graphite overlay width is responsive and preserves docked width preferences
+desktop-playwright-dev-server	workbench.spec.ts	958	1	long Song Details content scrolls independently in the compact overlay
+desktop-playwright-dev-server	workbench.spec.ts	1007	1	compact Runtime retains live metrics, event history, trace export, and independent scrolling
+desktop-playwright-dev-server	workbench.spec.ts	1100	1	compact Inspector exit is inert, survives a quick reopen, and cleans up after transition end
+desktop-playwright-dev-server	workbench.spec.ts	1139	1	compact Inspector skips exit movement when reduced motion is requested
+desktop-playwright-dev-server	workbench.spec.ts	1153	1	Chromium fallback emulation stays usable at DPR 1.25
+desktop-playwright-production-bundle	bundle.spec.ts	3	1	production bundle boots the mock shell and supports a representative flow
+website-playwright	[chromium] › accessibility.spec.ts	10	5	accessibility and responsive contracts › / has no axe violations
+website-playwright	[chromium] › accessibility.spec.ts	10	5	accessibility and responsive contracts › /faq/ has no axe violations
+website-playwright	[chromium] › accessibility.spec.ts	10	5	accessibility and responsive contracts › /vi/ has no axe violations
+website-playwright	[chromium] › accessibility.spec.ts	10	5	accessibility and responsive contracts › /vi/faq/ has no axe violations
+website-playwright	[chromium] › accessibility.spec.ts	21	5	accessibility and responsive contracts › / keeps the five-chapter narrative, anchors, and release journey
+website-playwright	[chromium] › accessibility.spec.ts	21	5	accessibility and responsive contracts › /vi/ keeps the five-chapter narrative, anchors, and release journey
+website-playwright	[chromium] › accessibility.spec.ts	85	5	accessibility and responsive contracts › 390px fragment links use one header clearance and clamp at the document end
+website-playwright	[chromium] › accessibility.spec.ts	85	5	accessibility and responsive contracts › 1024px fragment links use one header clearance and clamp at the document end
+website-playwright	[chromium] › accessibility.spec.ts	85	5	accessibility and responsive contracts › 1440px fragment links use one header clearance and clamp at the document end
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › / has no horizontal overflow at 320px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › / has no horizontal overflow at 390px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › / has no horizontal overflow at 768px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › / has no horizontal overflow at 1024px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › / has no horizontal overflow at 1152px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › / has no horizontal overflow at 1440px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › / has no horizontal overflow at 1920px
+website-playwright	[chromium] › accessibility.spec.ts	181	5	accessibility and responsive contracts › / keeps the 320px brand and language action visually separate
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › /vi/ has no horizontal overflow at 320px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › /vi/ has no horizontal overflow at 390px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › /vi/ has no horizontal overflow at 768px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › /vi/ has no horizontal overflow at 1024px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › /vi/ has no horizontal overflow at 1152px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › /vi/ has no horizontal overflow at 1440px
+website-playwright	[chromium] › accessibility.spec.ts	168	7	accessibility and responsive contracts › /vi/ has no horizontal overflow at 1920px
+website-playwright	[chromium] › accessibility.spec.ts	181	5	accessibility and responsive contracts › /vi/ keeps the 320px brand and language action visually separate
+website-playwright	[chromium] › accessibility.spec.ts	198	3	accessibility and responsive contracts › Home band spacing, shared alignment, and FAQ spacing hold at responsive widths
+website-playwright	[chromium] › accessibility.spec.ts	268	3	accessibility and responsive contracts › Home composition uses one rail and the approved responsive grouping in both locales
+website-playwright	[chromium] › accessibility.spec.ts	557	3	accessibility and responsive contracts › both locales expose a meaningful portion of the real preview on the opening fold
+website-playwright	[chromium] › accessibility.spec.ts	621	3	accessibility and responsive contracts › short landscape keeps the hero and primary action reachable without overflow
+website-playwright	[chromium] › accessibility.spec.ts	637	3	accessibility and responsive contracts › player view selector commits only the latest loaded preview and keeps links in sync
+website-playwright	[chromium] › accessibility.spec.ts	769	3	accessibility and responsive contracts › slow preview keeps the committed view and cancels when it is reselected
+website-playwright	[chromium] › accessibility.spec.ts	817	3	accessibility and responsive contracts › a failed eager preview offers a focused retry and commits all image metadata
+website-playwright	[chromium] › accessibility.spec.ts	869	3	accessibility and responsive contracts › persisted pagehide cancels pending preview errors and preserves controls on return
+website-playwright	[chromium] › accessibility.spec.ts	914	3	accessibility and responsive contracts › failed capture selection preserves the current image and accessible selection
+website-playwright	[chromium] › accessibility.spec.ts	961	3	accessibility and responsive contracts › Vietnamese player view selector has compact localized names and selected captions
+website-playwright	[chromium] › accessibility.spec.ts	986	3	accessibility and responsive contracts › the desktop browser preview remains contained and the site favicon contract is visible
+website-playwright	[chromium] › accessibility.spec.ts	1016	3	accessibility and responsive contracts › one playback timeline synchronizes its event, timestamp, keys, and accessible progress
+website-playwright	[chromium] › accessibility.spec.ts	1084	3	accessibility and responsive contracts › timeline marker keeps a fixed width and reaches both ends as events advance
+website-playwright	[chromium] › accessibility.spec.ts	1148	3	accessibility and responsive contracts › manual stepping respects boundaries and pauses playback without a cancel control
+website-playwright	[chromium] › accessibility.spec.ts	1193	3	accessibility and responsive contracts › pause, resume, and replay use the same timeline
+website-playwright	[chromium] › accessibility.spec.ts	1228	3	accessibility and responsive contracts › reduced motion preserves manual steps and moves focus when Play disappears in idle and complete states
+website-playwright	[chromium] › accessibility.spec.ts	1265	3	accessibility and responsive contracts › visibility changes and persisted pagehide pause playback without losing controls or auto-resuming
+website-playwright	[chromium] › accessibility.spec.ts	1297	3	accessibility and responsive contracts › static fallback keeps the product capture, event explanation, and navigation usable without JavaScript
+website-playwright	[chromium] › accessibility.spec.ts	1330	3	accessibility and responsive contracts › header sticky behavior begins with desktop navigation
+website-playwright	[chromium] › accessibility.spec.ts	1341	3	accessibility and responsive contracts › homepage remains usable at 200 percent zoom
+website-playwright	[chromium] › accessibility.spec.ts	1351	3	accessibility and responsive contracts › visible microcopy keeps a readable 12px floor
+website-playwright	[chromium] › accessibility.spec.ts	1377	3	accessibility and responsive contracts › keyboard focus stays visible and Vietnamese display text keeps its diacritics
+website-playwright	[chromium] › accessibility.spec.ts	1396	3	accessibility and responsive contracts › both locales explain imports, compatibility and the desktop dry run once
+website-playwright	[chromium] › accessibility.spec.ts	1439	3	accessibility and responsive contracts › download and trust section preserves the current install and safety details
+website-playwright	[chromium] › accessibility.spec.ts	1519	3	accessibility and responsive contracts › published routes do not emit console or page errors
+website-playwright	[chromium] › accessibility.spec.ts	1531	3	accessibility and responsive contracts › FAQ groups are visible on mobile and hash links open the matching answer in both locales
+website-playwright	[chromium] › accessibility.spec.ts	1565	3	accessibility and responsive contracts › FAQ deep links still reach native disclosures without JavaScript
+website-playwright	[chromium] › accessibility.spec.ts	1580	3	accessibility and responsive contracts › guide table of contents follows rendered headings and stays responsive in both locales
+website-playwright	[chromium] › accessibility.spec.ts	1609	3	accessibility and responsive contracts › Markdown tables stay contained and the six-step diagram reflows on mobile
+website-playwright	[chromium] › accessibility.spec.ts	1659	5	accessibility and responsive contracts ›  Guide Hub summaries match the six guide articles
+website-playwright	[chromium] › accessibility.spec.ts	1659	5	accessibility and responsive contracts › /vi Guide Hub summaries match the six guide articles
+website-playwright	[chromium] › accessibility.spec.ts	1682	3	accessibility and responsive contracts › narrow Vietnamese legend gives event labels equal space while the track stays duration-weighted
+website-playwright	[chromium] › accessibility.spec.ts	1703	3	accessibility and responsive contracts › forced colors preserve the playback marker, event and key cues at 320px
+website-playwright	[chromium] › accessibility.spec.ts	1720	3	accessibility and responsive contracts › FAQ pages expose FAQPage JSON-LD and stable fonts
+website-playwright	[chromium] › accessibility.spec.ts	1736	5	accessibility and responsive contracts › /guides/how-it-works/ has no axe violations
+website-playwright	[chromium] › accessibility.spec.ts	1736	5	accessibility and responsive contracts › /guides/security-boundaries/ has no axe violations
+website-playwright	[chromium] › accessibility.spec.ts	1736	5	accessibility and responsive contracts › /vi/guides/how-it-works/ has no axe violations
+website-playwright	[chromium] › accessibility.spec.ts	1736	5	accessibility and responsive contracts › /vi/guides/troubleshooting/ has no axe violations
+website-playwright	[chromium] › accessibility.spec.ts	1743	3	accessibility and responsive contracts › guide page has Article JSON-LD, breadcrumb and evidence section
+website-playwright	[chromium] › locale-switch-contrast.spec.ts	43	5	computed contrast in the localized global shell › / selected language and release action have readable text
+website-playwright	[chromium] › locale-switch-contrast.spec.ts	43	5	computed contrast in the localized global shell › /vi/ selected language and release action have readable text
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › / renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /faq/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /vi/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /vi/faq/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /guides/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /vi/guides/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /guides/how-it-works/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /guides/sheet-formats/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /guides/windows-setup/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /guides/timing-engine/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /guides/security-boundaries/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /guides/troubleshooting/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /vi/guides/how-it-works/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /vi/guides/sheet-formats/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /vi/guides/windows-setup/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /vi/guides/timing-engine/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /vi/guides/security-boundaries/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	31	5	navigation and route contracts › /vi/guides/troubleshooting/ renders with stable canonical metadata
+website-playwright	[chromium] › navigation.spec.ts	52	7	navigation and route contracts › /guides/how-it-works/ guide page has breadcrumb and H1
+website-playwright	[chromium] › navigation.spec.ts	52	7	navigation and route contracts › /vi/guides/how-it-works/ guide page has breadcrumb and H1
+website-playwright	[chromium] › navigation.spec.ts	52	7	navigation and route contracts › /guides/security-boundaries/ guide page has breadcrumb and H1
+website-playwright	[chromium] › navigation.spec.ts	52	7	navigation and route contracts › /vi/guides/security-boundaries/ guide page has breadcrumb and H1
+website-playwright	[chromium] › navigation.spec.ts	72	3	navigation and route contracts › locale switching preserves the current page (FAQ)
+website-playwright	[chromium] › navigation.spec.ts	82	5	navigation and route contracts › / desktop hash navigation stays accessible before route navigation
+website-playwright	[chromium] › navigation.spec.ts	82	5	navigation and route contracts › /vi/ desktop hash navigation stays accessible before route navigation
+website-playwright	[chromium] › navigation.spec.ts	106	5	navigation and route contracts › / mobile hash navigation leaves focus on the destination
+website-playwright	[chromium] › navigation.spec.ts	106	5	navigation and route contracts › /vi/ mobile hash navigation leaves focus on the destination
+website-playwright	[chromium] › navigation.spec.ts	126	5	navigation and route contracts › / mobile disclosure keeps natural keyboard traversal and Escape restores the toggle
+website-playwright	[chromium] › navigation.spec.ts	126	5	navigation and route contracts › /vi/ mobile disclosure keeps natural keyboard traversal and Escape restores the toggle
+website-playwright	[chromium] › navigation.spec.ts	171	5	navigation and route contracts › / mobile outside pointer preserves focusable targets and restores focus for nonfocusable targets
+website-playwright	[chromium] › navigation.spec.ts	171	5	navigation and route contracts › /vi/ mobile outside pointer preserves focusable targets and restores focus for nonfocusable targets
+website-playwright	[chromium] › navigation.spec.ts	206	5	navigation and route contracts › / modified navigation clicks keep the disclosure open
+website-playwright	[chromium] › navigation.spec.ts	206	5	navigation and route contracts › /vi/ modified navigation clicks keep the disclosure open
+website-playwright	[chromium] › navigation.spec.ts	234	5	navigation and route contracts › / mobile rapid toggles, reduced motion changes and history restoration remain coherent
+website-playwright	[chromium] › navigation.spec.ts	234	5	navigation and route contracts › /vi/ mobile rapid toggles, reduced motion changes and history restoration remain coherent
+website-playwright	[chromium] › navigation.spec.ts	273	5	navigation and route contracts › / resize transfers focus to visible navigation and preserves a focused link
+website-playwright	[chromium] › navigation.spec.ts	273	5	navigation and route contracts › /vi/ resize transfers focus to visible navigation and preserves a focused link
+website-playwright	[chromium] › navigation.spec.ts	325	3	navigation and route contracts › Home language switch stays outside the menu and documentation retains the release action
+website-playwright	[chromium] › navigation.spec.ts	350	3	navigation and route contracts › locale switching preserves the guide article route in both languages
+website-playwright	[chromium] › site-contracts.spec.ts	22	5	published route and asset contracts › / returns canonical HTML
+website-playwright	[chromium] › site-contracts.spec.ts	22	5	published route and asset contracts › /faq/ returns canonical HTML
+website-playwright	[chromium] › site-contracts.spec.ts	22	5	published route and asset contracts › /vi/ returns canonical HTML
+website-playwright	[chromium] › site-contracts.spec.ts	22	5	published route and asset contracts › /vi/faq/ returns canonical HTML
+website-playwright	[chromium] › site-contracts.spec.ts	35	3	published route and asset contracts › English and Vietnamese homepage JSON-LD links to the stable release without snapshot metadata
+website-playwright	[chromium] › site-contracts.spec.ts	58	3	published route and asset contracts › localized product pages describe current OS, package trust, imports and timing limits
+website-playwright	[chromium] › site-contracts.spec.ts	137	3	published route and asset contracts › legacy FAQ URLs retain redirect documents
+website-playwright	[chromium] › site-contracts.spec.ts	161	3	published route and asset contracts › stable download actions and release history have distinct destinations
+website-playwright	[chromium] › site-contracts.spec.ts	183	3	published route and asset contracts › text endpoints and verification file are publishable
+website-playwright	[chromium] › site-contracts.spec.ts	209	3	published route and asset contracts › critical assets return 200 and home local URLs are base-aware
+website-bun-test	tests/unit/site-foundation.test.mjs:			English and Vietnamese homepage data keep every section structurally aligned
+website-bun-test	tests/unit/site-foundation.test.mjs:			homepage composes the five approved chapters once in order
+website-bun-test	tests/unit/site-foundation.test.mjs:			the signature demo uses the approved event intervals, keys, and visible time format
+website-bun-test	tests/unit/site-foundation.test.mjs:			the hero leads with concise product value and both locales disclose the release journey
+website-bun-test	tests/unit/site-foundation.test.mjs:			website copy contains no retired instructions, adaptive-lead claims, or unsupported guarantees
+website-bun-test	tests/unit/site-foundation.test.mjs:			every CSS custom property reference resolves to a declared or inline property
+website-bun-test	tests/unit/site-foundation.test.mjs:			every shared foundation token is reachable from a live consumer
+website-bun-test	tests/unit/site-foundation.test.mjs:			fallback colors and the declared cascade remain available before optional OKLCH overrides
+website-bun-test	tests/unit/site-foundation.test.mjs:			localized technical copy follows the current playback, install, import, and safety contracts
+website-bun-test	tests/unit/site-foundation.test.mjs:			localized setup and help copy matches current distribution, import, and safety contracts

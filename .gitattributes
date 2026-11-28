@@ -9,6 +9,7 @@ supply-chain/*.toml text eol=lf
 supply-chain/*.lock text eol=lf
 **/Cargo.toml text eol=lf
 Cargo.toml text eol=lf
+*.rs text eol=lf
 # Keep Windows-generated lifecycle report line endings for its recorded SHA-256.
 docs/evidence/issue-661-m2/dispatch-lifecycle-report.json text eol=crlf
 # Historical byte-identical song fixtures must not gain CRLF on Windows checkouts.

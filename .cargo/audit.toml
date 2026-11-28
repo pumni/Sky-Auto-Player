@@ -8,4 +8,5 @@ fetch = true
 stale = false
 
 [output]
+quiet = false
 show_tree = true
